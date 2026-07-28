@@ -144,7 +144,7 @@ publish = ["pub.dev"]
 [release.cli]                  # tag derives keybay_cli-v{version}
 path = "packages/keybay_cli"
 publish = ["pub.dev", "github-release", "homebrew"]
-binary_platforms = ["linux-gnu-x64", "linux-gnu-arm64", "macos-arm64"]
+binary_platforms = ["linux-x64", "linux-arm64", "macos-arm64"]
 ```
 
 Ten lines, and no `[identity]` block: every identity fact is derived from
@@ -197,7 +197,15 @@ Rules:
   recursive discovery, ever: a project releases only if listed.
 - `publish` is an unordered set of closed channel names; duplicates fail.
 - `binary_platforms` is required by platform-bearing channels and rejected
-  without one.
+  without one. Its vocabulary is closed, small, and enumerable: rk writes
+  the full supported set as a comment when it generates the config, and an
+  unknown value fails with the complete list. Identifiers match the public
+  asset names consumers already see (`linux-x64`, not `linux-gnu-x64`) —
+  the glibc floor and CPU baseline are facts the adapter records, not
+  choices the author makes, since Dart offers no libc selection.
+  Platforms are declared rather than defaulted because the set is a
+  product promise: defaulting it would silently start shipping a new
+  platform the day rk supports one.
 - Archive contents are conventional and not configurable: the executable,
   LICENSE, and README. Shipping a package's `example/` tree wholesale is
   unsafe — keybay's contains a full Flutter app and build artifacts — and
@@ -294,12 +302,12 @@ One verb per moment in a release's life: prepare, validate, authorize,
 execute, prove.
 
 Configuration files have no type checking, so discoverability is a design
-obligation, met three ways: `rk setup` writes the initial config so fields
+obligation, met three ways: `rk init` writes the initial config so fields
 are proposed rather than memorized; fail-closed diagnostics name the
 missing field, why it applies, and the values rk can offer; and a published
 JSON Schema gives editors autocomplete and inline validation.
 
-- **`rk setup`** — onboard a repository, and re-run any time to detect
+- **`rk init`** — onboard a repository, and re-run any time to detect
   drift. It has two phases, chosen by what exists rather than by a flag.
   With no `release.toml`, it analyzes the repository — packages found,
   which declare executables, which are vetoed by `publish_to`, existing
@@ -590,13 +598,13 @@ deferred items name the first credentialed run as their verifier of record.
 - **One secret per environment**; repository visibility is public (GitHub
   Free provides environments for public repositories only — the entire
   enforcement stack silently vanishes if a fleet repo is private on a free
-  plan, so `rk setup` checks visibility).
+  plan, so `rk init` checks visibility).
 - **Tap token** scoped to the tap repository only.
 - **Deferred:** the signing certificate's team equals
   `identity.apple_team`; the notary credential authenticates; the tap token
   opens only the declared tap.
 
-`rk setup` creates what the API allows with the operator's own credentials
+`rk init` creates what the API allows with the operator's own credentials
 (environments, deployment tag policies, rulesets) and prints exact commands
 for the rest (`gh secret set … --env …`, so values flow through `gh` and
 never through rk). It is an **operator-local verb**: `GITHUB_TOKEN` has no
@@ -679,6 +687,24 @@ v1 inventory:
   one environment per credential context and the rk-emitted caller per
   repo; the same binary run TTY-attached locally.
 
+A build adapter declares the complete set of platform identifiers it
+supports, and that set is the answer to "what else could I put here." For
+`dart-cli` v1 it is `linux-x64`, `linux-arm64`, and `macos-arm64`.
+Deliberately outside it, with the reason each is work rather than a flag:
+
+- **`macos-x64`** — Intel Macs, dropped as out of scope; it needs an Intel
+  or CI build host, since it can be neither cross-compiled nor built
+  natively on Apple Silicon.
+- **Windows** — a genuine gap, and the most likely future request. It is a
+  separate signing story (Authenticode, not Developer ID), a separate
+  archive format, and a separate smoke-test host, so it enters as an
+  adapter increment with its own threat review.
+- **`linux-arm` (32-bit), `linux-riscv64`** — Dart cross-compiles both, but
+  neither has a hosted CI runner or a routine emulation path for the
+  acceptance smoke test, and rk does not ship a platform it cannot execute.
+- **musl / Alpine** — not offered: `dart compile exe` links glibc with no
+  libc selection.
+
 A proposed destination adapter must document: verdict semantics, terminal
 act atomicity, post-crash inspectability (a platform that cannot be
 classified after a partial submit fails the proposal), whether a
@@ -699,8 +725,7 @@ The `dart-cli` adapter resolves both per platform and reports the result in
 - **Native** — the host's own OS and architecture. Build and execute
   directly.
 - **Cross-compiled** — `dart compile exe --target-os --target-arch`
-  supports Linux targets only (`linux_x64`, `linux_arm64`, `linux_arm`,
-  `linux_riscv64`), and only for projects with no native assets, since the
+  supports Linux targets only (`linux_x64`, `linux_arm64`, `linux_arm`, `linux_riscv64`), and only for projects with no native assets, since the
   SDK ships no C cross-toolchain. Measured on an Apple Silicon host with
   SDK 3.12.2, both keybay Linux targets cross-compile in seconds and
   produce correct ELF binaries with permissive glibc floors. The adapter
@@ -785,7 +810,7 @@ project tools; product tests stay in product CI.
   for repositories with several packages. Keybay is the latter, and its CLI
   already uses the prefixed form. Migration requires one manual change —
   updating keybay's trusted-publisher tag pattern on pub.dev — which
-  `rk setup` reports as a `manual` item; nothing external references core's
+  `rk init` reports as a `manual` item; nothing external references core's
   tag namespace, since core publishes only to pub.dev.
 - Existing environment names (`pub.dev`, `macos-signing`,
   `macos-notarization`, `homebrew-tap`) and existing secret and variable
@@ -861,5 +886,5 @@ vocabulary and operator-local scoping; corrected pub.dev pinning semantics
 trusted-execution-boundary section; the output contract; and terminology
 fixes. Subsequent austerity passes removed the `[toolchain]`, `[archive]`,
 and `[homebrew]` tables and the required `[identity]` block in favour of
-derivation, and merged config authoring into `rk setup`. Rejected:
+derivation, and merged config authoring into `rk init`. Rejected:
 restoring any mechanism from RFC 0001's ladder — no finding required one.
