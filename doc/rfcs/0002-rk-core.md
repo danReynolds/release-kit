@@ -139,13 +139,13 @@ schema = 1
 [toolchain]
 dart = "3.12.2"                # exact; determinism and feature-tested flags
 
-[release.core]
+[release.core]                 # tag derives keybay-v{version}
 
 [[release.core.project]]
 path = "packages/keybay"
 publish = ["pub.dev"]
 
-[release.cli]                   # single project at root: tag derives v{version}
+[release.cli]                  # tag derives keybay_cli-v{version}
 
 [[release.cli.project]]
 path = "packages/keybay_cli"
@@ -197,7 +197,7 @@ publish = ["pub.dev"]
 
 # … fleury_widgets, fleury_web identically
 
-[release.mcp]                  # single project: tag derives fleury_mcp-v{version}
+[release.mcp]                  # tag derives fleury_mcp-v{version}
 
 [[release.mcp.project]]
 path = "packages/fleury_mcp"
