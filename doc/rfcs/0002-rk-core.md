@@ -288,35 +288,54 @@ offline `rk check` reports identity as unverified rather than pretending.
 `code_id` is semantically unit-scoped and moves under its unit if a
 repository ever ships two signed binaries.
 
-## The six verbs
+## The five verbs
+
+One verb per moment in a release's life: prepare, validate, authorize,
+execute, prove.
 
 Configuration files have no type checking, so discoverability is a design
-obligation, met three ways: `rk init` writes the file so fields are
-proposed rather than memorized; fail-closed diagnostics name the missing
-field, why it applies, and the values rk can offer; and a published JSON
-Schema gives editors autocomplete and inline validation.
+obligation, met three ways: `rk setup` writes the initial config so fields
+are proposed rather than memorized; fail-closed diagnostics name the
+missing field, why it applies, and the values rk can offer; and a published
+JSON Schema gives editors autocomplete and inline validation.
 
-- **`rk init`** — analyze the repository and write a commented
-  `release.toml`: the packages it found, which declare executables, which
-  are vetoed by `publish_to`, existing tags and published releases, and
-  `binary_platforms` prefilled with every target rk can build for this
-  project. It proposes; the human prunes and commits. It never adds a
-  project to an existing file silently.
+- **`rk setup`** — onboard a repository, and re-run any time to detect
+  drift. It has two phases, chosen by what exists rather than by a flag.
+  With no `release.toml`, it analyzes the repository — packages found,
+  which declare executables, which are vetoed by `publish_to`, existing
+  tags and published releases — writes a commented config with
+  `binary_platforms` prefilled with every target rk can build, and stops
+  so the human prunes and commits. It proposes only, and never edits an
+  existing config or adds a project silently. With a config present, it
+  derives the required registrations from the declared channels, creates
+  what the provider API allows using the operator's own credentials
+  (environments, deployment tag policies, rulesets), prints exact commands
+  for what it cannot create, and reports every check as `verified`,
+  `deferred` (provable only inside a credential context, at the first
+  credentialed run), or `manual` (not queryable at all — the exact values
+  to confirm are printed). "Clean" means no queryable check failing.
+  Operator-local by necessity: `GITHUB_TOKEN` has no `administration`
+  permission, so these settings cannot be re-read from inside a release.
 - **`rk check`** — offline validation plus the derived checklist, annotated
   with read-only reality probes. Also verifies the caller workflow on disk
-  byte-matches what rk emits.
+  byte-matches what rk emits. With `--tag`, it is also the status
+  command — there is no separate `rk status`, because status is derived
+  from reality and recomputing it is exactly what checking does.
 - **`rk tag`** — the authorization affordance: run `check`, print exactly
   what the signature will create (unit, version, commit, every public
-  coordinate), confirm, then exec `git tag -s` and `git push`. Signing
-  stays in git; rk touches no key. Refuses off-tip HEADs and any failing
-  check — a typo'd tag is permanent under the creation ruleset.
+  coordinate, and for a first release the identity it establishes),
+  confirm, then exec `git tag -s` and `git push`. Signing stays in git; rk
+  touches no key. Refuses off-tip HEADs and any failing check — a typo'd
+  tag is permanent under the creation ruleset.
 - **`rk run`** — execute the checklist. Inspect before act at every step;
   halt on `conflict` or `undeterminable`; safe to re-run at any point.
-- **`rk verify`** — re-download everything public and compare.
-- **`rk setup`** — operator-local: derive required registrations and
-  secrets from the declared channels, create what the API allows, instruct
-  for the rest, and report each check as `verified`, `deferred`, or
-  `manual`.
+- **`rk verify`** — re-download everything public and compare, with no
+  local state, so anyone can run it at any later date.
+
+Deliberately absent: no `build`, `publish`, or `promote` verbs, because
+exposing steps invites running one out of order; no `status`, because
+`check` derives it; no `clean`, because the workspace deletes itself on
+completion; and no `--force`, `--skip`, or `--retry-anyway`.
 
 ### Output contract
 
