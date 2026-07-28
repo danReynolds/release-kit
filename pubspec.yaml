@@ -1,0 +1,16 @@
+name: rk
+description: >-
+  An austere, fail-closed release tool. Manages the release steps; defers
+  auth to native tooling.
+version: 0.0.1
+publish_to: none
+
+environment:
+  sdk: ^3.5.0
+
+executables:
+  rk:
+
+dev_dependencies:
+  lints: ^5.0.0
+  test: ^1.25.0

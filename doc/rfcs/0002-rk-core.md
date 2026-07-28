@@ -1,0 +1,698 @@
+# RFC 0002: rk core — an austere release tool
+
+- Status: Draft for review
+- Revision: 2 (2026-07-28) — incorporates four adversarial reviews
+- Supersedes: RFC 0001 as build authority; 0001 remains the threat catalog
+  and assurance ladder
+- Initial scope: Dart packages and Dart CLIs on macOS and Linux, publishing
+  to pub.dev, GitHub Releases, and Homebrew
+- Dogfood fleet: keybay, then fleury
+
+## What rk is
+
+rk is a checklist compiler. It reads what native manifests already say plus
+one small file of release intent, derives the complete ordered checklist for
+a release, and executes it with three behaviors a human cannot sustain: it
+validates everything before acting, it inspects reality before every step so
+re-running is always safe, and it refuses to guess.
+
+rk manages the release steps; it defers authentication to the native tools
+that already own it. Much release security lives in scopes the providers
+enforce — per-package trusted publishing, scoped credentials, protected
+environments, tag rules. rk's security contribution is to set those scopes
+up correctly, verify them relentlessly, keep repository code out of
+credentialed contexts, and — because provider scopes are thinner than they
+look — verify identity rather than acceptability at every handoff.
+
+## Principles
+
+1. **One source of truth per fact.** Native manifests own names, versions,
+   executables, and dependencies. `release.toml` owns intent. `[identity]`
+   owns public expectations. The environment owns credentials. Nothing is
+   written twice, so nothing can disagree.
+2. **Reality is the database.** Destinations are inspected, never mirrored
+   into records.
+3. **Inspect, act, verify.** Every step checks reality before acting and
+   confirms reality afterward. Effects are idempotent; resume is re-run.
+4. **Humans authorize; providers enforce.** A signed tag is the release
+   authorization. Provider-side scopes — which no repository commit can
+   edit — are the policy engine, and rk must state honestly where that
+   engine has no teeth.
+5. **Auth defers to native tools.** rk never stores, receives, or prompts
+   for a secret value. It arranges context and lets `dart pub`, `codesign`,
+   `notarytool`, `gh`, and `git` do their native work. Local publishers run
+   attached to the terminal so native MFA/OTP prompts pass through.
+6. **Builds never touch credentials**, and each credentialed step gets
+   exactly one credential and no repository or third-party code.
+7. **Identity, not acceptability.** An artifact is reusable only when it is
+   provably *the* artifact — matching a digest this release produced or an
+   immutable public coordinate. "It looks valid" (right signature, right
+   architecture, right version string) is not identity and never authorizes
+   reuse.
+8. **Fail closed.** Unknown fields, ambiguity, version mismatches, missing
+   credentials, undeterminable state: stop before any effect, with the exact
+   remediation named. No hooks, no templates, no `--force`. Refusal is a
+   feature.
+9. **Verify public state.** Everything published is re-downloaded and
+   compared against what was built.
+10. **Complexity must name its failure.** A mechanism enters this design
+    only by naming the failure it prevents and showing that failure matters
+    for this fleet. RFC 0001 is the priced ladder of deferred mechanisms.
+
+## The failures v1 must address
+
+Ranked by probability times cost for this fleet:
+
+1. **Human error** — wrong version, wrong package, missing step, publishing
+   a back-version. Near-certain over years; pub.dev mistakes are permanent.
+   Addressed by validation, monotonicity, and reality inspection.
+2. **Partial releases** — interrupted CI, scary reruns. Addressed by
+   idempotent resume off the draft, including repair of half-uploaded
+   staging.
+3. **Fleet drift** — bespoke per-repo release code rots independently.
+   Addressed by one engine, a fifteen-line declaration, and a caller
+   workflow rk itself emits and verifies.
+4. **Identity misuse via the repository** — a malicious PR or stolen CI
+   credential publishing under the operator's name. Addressed by
+   provider-side scopes, caller-workflow verification, OIDC self-assertion
+   in credentialed contexts, digest-identity reuse rules, and
+   credential-free execution of all repository and third-party code.
+5. **Exotic threats** — host equivocation, evidence replay, compromised
+   internal principals. Detection only; consult RFC 0001's ladder if the
+   fleet's trust reality ever changes.
+
+## Terminology
+
+- **Release** — one unit at one version, identified by its tag, spanning
+  authorization to verified-public. Never called a workflow or a pipeline.
+- **Unit** — a named set of projects released together at one version under
+  one tag pattern (keybay `core`, keybay `cli`, fleury `framework`).
+  Independently versioned projects belong to different units.
+- **Checklist** — the deterministic, ordered set of steps rk derives for a
+  release from the manifests and `release.toml`. Pure data; identical on
+  every machine.
+- **Step** — one checklist entry, with a stable id. Every step implements
+  inspect, act, verify.
+- **Run** — one invocation of `rk run` executing a release's checklist,
+  locally or in CI. A release completes over one or more runs.
+- **Verdict** — the result of inspecting a coordinate: `absent`, `exact`,
+  `conflict`, or `undeterminable`.
+- **Arc** — a release's position: `declared` → `checked` → `authorized` →
+  `in progress` → `complete`. Status is the arc position plus per-step
+  annotation (`done`, `ready`, `blocked`), always computed from reality,
+  never stored.
+- **Workspace** — the per-release cache of intermediates, keyed
+  `<tag>-<commit>` (`.rk/work/<tag>-<commit>/` locally; run artifacts in
+  CI). Disposable; reuse requires digest identity.
+- **Intermediate** — a non-final artifact in the workspace, input to a
+  later step.
+- **Final asset** — an asset in its shippable form. Produced in the
+  workspace; its durable home is only ever the destination.
+- **Staged asset** — a final asset delivered to a destination's
+  pre-publication area, where one exists (the GitHub draft). A destination
+  without one holds no staged assets: its finals wait in the workspace and
+  are submitted together by the terminal act.
+- **Draft** — the pre-publication GitHub release object: staging and
+  aggregation point, mutable by anyone with `contents: write`, therefore
+  never trusted as an authenticated input (principle 7).
+- **Credential context** — an execution context holding exactly one
+  credential (a GitHub environment in CI; a native store locally).
+  Credential-free steps run in none. Deliberately not called a "lane"
+  (fastlane's term) or an "environment" (GitHub's).
+- **Adapter** — a closed module: ecosystem, build, transform, destination,
+  or provider.
+- **Prerequisite** — a public-reality condition derived from native pins.
+- **Expectations** — the `[identity]` facts checked against reality.
+- **Workflow** — reserved for GitHub Actions files: the **caller workflow**
+  in each repository (emitted and verified by rk) and the reusable
+  **release workflow** shipped by release-kit. The rk lifecycle is never
+  called a workflow.
+
+## Configuration
+
+One file, `release.toml`, at the repository root. Keybay's complete
+configuration:
+
+```toml
+schema = 1
+
+[toolchain]
+dart = "3.12.2"                # exact; determinism and feature-tested flags
+
+[release.core]
+
+[[release.core.project]]
+path = "packages/keybay"
+publish = ["pub.dev"]
+
+[release.cli]
+
+[[release.cli.project]]
+path = "packages/keybay_cli"
+publish = ["pub.dev", "github-release", "homebrew"]
+binary_platforms = [
+  "linux-gnu-x64",
+  "linux-gnu-arm64",
+  "macos-x64",
+  "macos-arm64",
+]
+
+[release.cli.archive]
+files = [                      # exact paths; binary and LICENSE are implicit
+  "README.md",
+  "example/quickstart/README.md",
+  "example/quickstart/secrets.env.example",
+  "example/quickstart/app.sh",
+]
+
+[release.cli.homebrew]
+license    = "MIT"             # pubspec has no license field
+linux_deps = ["libsecret"]     # closed vocabulary; exact platform meaning
+install    = { prefix = ["README.md"], pkgshare = ["example"] }
+
+[identity]
+apple_team   = "5AHFA9FUZG"
+code_id      = "io.github.danreynolds.keybay.cli"
+homebrew_tap = "danReynolds/homebrew-tap"
+tag_signer   = "SHA256:4ozSnfVaMzZ/qrzo51I8FPKawmZSIojAB5Ll+qhguFM"
+```
+
+Fleury's multi-unit shape, for contrast:
+
+```toml
+schema = 1
+
+[toolchain]
+dart = "3.12.2"
+
+[release.framework]
+tag = "fleury-v{version}"      # multi-project: no derivable name
+
+[[release.framework.project]]
+path = "packages/fleury"
+publish = ["pub.dev"]
+
+[[release.framework.project]]
+path = "packages/fleury_test"
+publish = ["pub.dev"]
+
+# … fleury_widgets, fleury_web identically
+
+[release.mcp]                  # single project: tag derives fleury_mcp-v{version}
+
+[[release.mcp.project]]
+path = "packages/fleury_mcp"
+publish = ["pub.dev"]
+```
+
+Rules:
+
+- `schema` is exact; unknown versions and unknown fields anywhere are
+  errors.
+- `[toolchain].dart` is an exact version. It pins the SDK for every build
+  and validation step, and is the version against which the pub archive
+  flags are feature-tested.
+- A unit's `tag` is optional for a single-project unit, deriving
+  `<package>-v{version}` from the native package identity; a multi-project
+  unit declares it explicitly. Patterns are a literal prefix/suffix around
+  exactly one `{version}`; a tag must match exactly one unit; overlaps
+  fail.
+- Project paths are canonicalized; duplicates and nesting fail. No
+  recursive discovery, ever: a project releases only if listed.
+- `publish` is an unordered set of closed channel names; duplicates fail.
+- `binary_platforms` is required by platform-bearing channels and rejected
+  without one.
+- `[release.<unit>.archive].files` are exact repository-relative paths — no
+  globs, no templates. The binary and LICENSE are always included.
+- `[release.<unit>.homebrew]` is a closed vocabulary: `license`,
+  `linux_deps` (closed dependency names), and `install` destinations
+  (`prefix`, `pkgshare`). `desc` and `homepage` derive from the pubspec.
+  The generated formula's test asserts `--version` equals the release
+  version and nothing else; content assertions are commands in disguise.
+- Native vetoes are absolute: `publish_to: none` cannot be overridden.
+- Versions come from manifests; the tag must agree exactly.
+- **Monotonicity:** the release version must exceed every version already
+  published for that package and every existing tag in the unit's
+  namespace. Otherwise `conflict`. Per-coordinate verdicts are structurally
+  blind to "older than what is live"; this rule is what keeps failure #1
+  from publishing a back-version.
+
+`[identity]` holds public expectations only — every line could be printed
+in a public repository (it is one). `tag_signer` is an SSH signing-key
+fingerprint (the fleet signs tags with SSH; `gpg.format=ssh`), verified
+with `ssh-keygen -Y check-novalidate`. Secrets never appear in any rk file.
+
+**`code_id` is authority, not a check** — it parameterizes `codesign`, so
+verifying signed output against it is a tautology, while a wrong value
+permanently breaks Keychain continuity for existing users. It is therefore
+verified against *external* reality: the new binary's designated
+requirement must equal that of the binary in the currently published
+release. `absent` (first release) means the human establishes it by
+tagging; any difference is `conflict`. The same rule applies to every
+`[identity]` value fed to a credentialed tool rather than compared against
+one.
+
+## The five verbs
+
+- **`rk check`** — offline validation plus the derived checklist, annotated
+  with read-only reality probes. Also verifies the caller workflow on disk
+  byte-matches what rk emits.
+- **`rk tag`** — the authorization affordance: run `check`, print exactly
+  what the signature will create (unit, version, commit, every public
+  coordinate), confirm, then exec `git tag -s` and `git push`. Signing
+  stays in git; rk touches no key. Refuses off-tip HEADs and any failing
+  check — a typo'd tag is permanent under the creation ruleset.
+- **`rk run`** — execute the checklist. Inspect before act at every step;
+  halt on `conflict` or `undeterminable`; safe to re-run at any point.
+- **`rk verify`** — re-download everything public and compare.
+- **`rk setup`** — operator-local: derive required registrations and
+  secrets from the declared channels, create what the API allows, instruct
+  for the rest, and report each check as `verified`, `deferred`, or
+  `manual`.
+
+### Output contract
+
+Every step has a stable id: `<unit>/<adapter>/<coordinate>`. `check` and
+`run` emit one line per step, `STATUS  step-id  note`. Exit codes: `0`
+clean or complete, `1` refusal (validation error, `conflict`, or
+`undeterminable`), `2` usage. `blocked` is informational and never nonzero
+by itself.
+
+## Execution model
+
+A release's arc: **declared** → **checked** → **authorized** (the signed
+tag) → **in progress** across one or more runs → **complete**.
+
+The checklist is a deterministic function of the manifests plus
+`release.toml`. Ordering comes from native dependency pins: within a unit,
+publication order follows first-party dependencies; across units, an exact
+first-party pin becomes a public-reality prerequisite. No `requires`
+language exists.
+
+### Verdicts
+
+- `absent` — proceed. Concluded **only from a definitive provider negative**
+  (an authenticated 404 or empty list).
+- `exact` — verified equal; skip and continue.
+- `conflict` — halt loudly; a human decides.
+- `undeterminable` — timeout, 403, 429, 5xx, or network failure. Halt
+  without effect. Never collapsed into `absent`.
+
+After rk's own act on a coordinate, or when an act returns "already
+exists," inspection polls to a bounded deadline before concluding anything
+— destination APIs lag their own writes. Deadline expiry is
+`undeterminable`.
+
+### Identity of reusable artifacts
+
+Principle 7 governs every reuse decision. An artifact — staged or in the
+workspace — is reused only when its digest equals one this release
+produced, or one re-fetched from an immutable public coordinate. Anything
+else is `conflict`. Consequences:
+
+- **Deterministic archives are a requirement, not polish.** Fixed entry
+  order, zeroed mtimes/uid/gid, normalized modes, no gzip timestamp.
+  Without byte-reproducibility, "is this the asset I would have made" is
+  undecidable, and reuse predicates degenerate into acceptability checks.
+- **The draft is not an authenticated input.** Any principal with
+  `contents: write` can create or mutate a draft, and Linux assets carry no
+  signature or team to check. A staged asset whose digest is unknown to
+  this release is `conflict`, never adoption.
+- **No cross-run workspace warming.** The workspace is keyed
+  `<tag>-<commit>` and never warmed from another run — not CI-to-CI, not
+  CI-to-local. A tag deleted and re-pushed at a different commit would
+  otherwise let rk sign and publish binaries from the wrong source while
+  every acceptability check passed. Its only cost is one rebuild, which
+  this design already declares acceptable.
+
+### The draft: adoption, staging, repair, and the flip
+
+- **Adoption.** REST lookup by tag returns published releases only, and
+  GitHub permits multiple drafts sharing one `tag_name`. Adoption therefore
+  lists all releases, filters by `tag_name`, and requires exactly one
+  candidate: zero → create, then immediately re-list and `conflict` if a
+  twin appeared; two or more → `conflict`, naming both ids for human
+  deletion.
+- **Staging is hash-idempotent.** Release assets expose a SHA-256 digest,
+  so `exact` is name plus digest with no download.
+- **Repair is permitted, narrowly.** While the release is still a draft, an
+  asset that is not in state `uploaded`, or whose digest does not match
+  this release's artifact, may be deleted by asset id and re-uploaded.
+  GitHub leaves `starter` corpses after interrupted uploads and rejects
+  same-name re-upload with 422; without this, the most probable failure
+  wedges the release permanently. This is repair of staging, not cleanup of
+  product. rk still never deletes a draft, tag, or published release.
+- **The flip re-verifies against reality, not the workspace.** Immediately
+  before publishing: enumerate the draft's assets, require the exact frozen
+  inventory, confirm every digest, recompute `SHA256SUMS` and the formula
+  from those digests and compare to the staged copies, and require an
+  attestation for every archive digest. Only then publish once. This closes
+  the window in which a racing writer mints a permanently self-inconsistent
+  immutable release.
+- **Attestation verification is pinned** to the release-kit reusable
+  workflow at its pinned commit (`--signer-workflow`); otherwise any
+  workflow in the repository with `attestations: write` can mint an
+  attestation rk would accept.
+- **After publishing, verification failure is terminal.** Immutable
+  releases cannot be edited, and deleting one permanently burns the tag
+  name. rk retries immutability/attestation verification to a bounded
+  deadline (provider state lags the flip), then states the only honest
+  remedy: ship the next version; retract on pub.dev where supported; never
+  delete or re-tag. Because attestations are CI-only, a locally staged
+  release is blocked *before* the flip with "trigger CI to attest the
+  staged digests" rather than published unattestable.
+
+### Concurrency
+
+The Actions concurrency group serializes CI against CI; one human
+serializes local against local. The unserialized pair is local against CI,
+so a local mutating run first probes for an in-progress release workflow
+run for the same tag and refuses to mutate while one exists.
+
+### Workspace and cleanup
+
+The workspace holds no authority: deleting it, or CI artifact expiry, is
+always safe and costs only recomputation. rk keeps no run ledger — status
+is derived fresh on every invocation, so it can never be stale.
+
+Staging is incremental durability: each staged asset banks progress at the
+destination the moment it is done. A stagingless destination gets
+all-or-nothing durability per terminal act, with the workspace as
+accumulator and rebuild as recovery. When a destination offers a
+pre-publication area, its adapter must use it.
+
+Published assets are the product and are never cleaned up. The workspace is
+deleted by the run that brings its release to `complete`; a failed step or
+non-clean verdict keeps it for diagnosis. In CI, provider retention expires
+it. Residue of an abandoned release is surfaced by `rk check` with sizes,
+and deleted only by a human.
+
+### Mutable pointers
+
+The Homebrew formula updates compare-and-swap style: inspect (absent /
+exact / older-clean-base / conflict), apply only if the inspected blob sha
+is still current (Contents API `PUT` with `sha`, 409 on staleness),
+re-read, then install from the public tap as a final check. "Older clean
+base" is derived from reality — the tap formula must byte-equal the
+`keybay.rb` asset of the release it names — so a hand-edited formula
+correctly yields `conflict`. Verification reads via git fetch, never a
+CDN-cached raw path. A 409 is re-inspect-and-reclassify, never a blind
+retry.
+
+## Secrets and auth resolution
+
+Three rules, applied at every step:
+
+1. **Facts** come only from `[identity]`, `[toolchain]`, or the native
+   manifest. Never from the environment, never inferred.
+2. **Secrets and sessions** resolve by one branch — `GITHUB_ACTIONS=true`
+   and nothing else. In CI: the conventional secret names injected by this
+   job's environment. Locally: the platform's native store under a
+   conventional name. No mapping file; no ambient pickup; no interpolation.
+3. **Coherence before use.** Every resolved credential is checked against
+   the declared facts. A wrong credential fails as loudly as a missing one.
+
+Conventional homes, v1. Environment names match what the fleet already
+uses — the pub.dev name in particular is registered on pub.dev's side and
+cannot be renamed unilaterally:
+
+| Need | CI (environment → secrets) | Local |
+|---|---|---|
+| macOS signing | `macos-signing` → `APPLE_CERT_P12_BASE64`, `APPLE_CERT_PASSWORD` | keychain identity matching `identity.apple_team` |
+| Notarization | `macos-notarization` → `ASC_KEY_P8_BASE64` (secret); key id and issuer as variables | `notarytool` profile `rk-notary` |
+| pub.dev publish | `pub.dev` → **no secret**; OIDC exchange (see below) | `dart pub login` session |
+| GitHub release | `publish-github` → per-job `GITHUB_TOKEN` | `gh auth` session |
+| Attestation | **none** (OIDC); CI only | not available locally |
+| Tap update | `homebrew-tap` → `TAP_TOKEN`, a fine-grained token scoped to the tap repository only | normal git auth to the tap |
+| Tag signing | **never in CI** | operator SSH signing key |
+
+Adapter obligations these impose: the certificate is base64 in transit and
+imported into an ephemeral keychain with `set-keychain-settings -lut`,
+`import -T /usr/bin/codesign`, and `set-key-partition-list -S
+apple-tool:,apple:,codesign:` (without which `codesign` hangs on a UI
+prompt on hosted runners), with `--keychain` passed explicitly; the notary
+key is materialized to a file because `notarytool` accepts only a key
+path.
+
+**pub.dev OIDC is not automatic.** `dart pub publish` does not perform the
+GitHub OIDC exchange; the token is minted and registered by the
+`dart-lang/setup-dart` step (or equivalently ~5 lines: fetch the JWT with
+audience `https://pub.dev`, then `dart pub token add`). The `pub-dev`
+adapter's CI path must do this explicitly and require `id-token: write`.
+"Auth defers to native tools" does not mean "no code."
+
+Native login commands (`dart pub login`, `xcrun notarytool
+store-credentials`, later `npm login`, `gem signin`) are named by
+diagnostics, run by the user, never read by rk. Local publishers run
+attached to the terminal so MFA/OTP prompts pass through.
+
+## Trusted execution boundary
+
+A credential context contains only: rk itself, delivered as a prebuilt
+binary verified by digest (never a checkout plus dependency resolution),
+and the native tools it invokes. Concretely:
+
+- **rk's credentialed code paths import only `dart:*` and rk's own
+  sources.** Enforced by a test over the import graph. A single transitive
+  package dependency in the signing path would put every upstream
+  maintainer beside the Developer ID key.
+- **`verify()` never runs in a credential context.** A destination's
+  verification never holds that destination's credential —
+  `brew install` executes tap-authored Ruby, which must never run beside
+  the tap token.
+- **No repository-defined and no third-party-defined commands** run in any
+  credential context.
+
+## Provider-side enforcement
+
+Derived from the declared channels. Each check reports `verified` (queryable
+now), `deferred` (provable only inside a credential context, at the first
+credentialed run), or `manual` (not queryable at all — rk prints the exact
+values to confirm in the UI). "Clean" means no queryable check failing;
+deferred items name the first credentialed run as their verifier of record.
+
+- **pub.dev trusted publishing** — pinned to **repository, tag pattern, and
+  Actions environment**. There is no workflow pinning; pub.dev's own
+  documentation states that anyone with push access can publish, with tag
+  protection and environments as the mitigation. Registration is not
+  readable by any documented API, so this check is `manual`, with the
+  publish step's 403 as the fail-closed runtime check. rk requires the
+  environment field to be set (it is optional, therefore the easy thing to
+  skip, and the only claim distinguishing the publish job from any other)
+  and the tag pattern to equal the unit's derived pattern exactly.
+- **Tag ruleset** restricting *creation* of the release tag namespaces.
+  No provider rule can require a tag be signed — signature verification is
+  rk's own, against `identity.tag_signer`.
+- **Immutable releases** enabled. Not retroactive: pre-rk releases stay
+  mutable and `rk verify` must not expect attestations on them.
+- **Deployment tag policies** on every credentialed environment, restricted
+  to that unit's tag patterns. This is the only provider control here
+  enforced without a human click, and it is load-bearing precisely because
+  the tag ruleset restricts who can create matching tags — the pairing is
+  the mechanism, not belt-and-suspenders.
+- **One secret per environment**; repository visibility is public (GitHub
+  Free provides environments for public repositories only — the entire
+  enforcement stack silently vanishes if a fleet repo is private on a free
+  plan, so `rk setup` checks visibility).
+- **Tap token** scoped to the tap repository only.
+- **Deferred:** the signing certificate's team equals
+  `identity.apple_team`; the notary credential authenticates; the tap token
+  opens only the declared tap.
+
+`rk setup` creates what the API allows with the operator's own credentials
+(environments, deployment tag policies, rulesets) and prints exact commands
+for the rest (`gh secret set … --env …`, so values flow through `gh` and
+never through rk). It is an **operator-local verb**: `GITHUB_TOKEN` has no
+`administration` permission, so these settings cannot be re-read from
+inside a release run, and adding an admin token to a release context would
+place the policy editor inside the context it polices.
+
+### The caller workflow is trusted code
+
+GitHub runs the caller workflow **as defined at the pushed tag's ref**. A
+PR that lands real work plus a rewritten caller — same filename, same
+trigger, its own job body declaring `environment: macos-signing` — steals
+that environment's secret at the next release, with the deployment-approval
+prompt arriving exactly when the operator expects a release. Therefore:
+
+- `rk check` renders the caller workflow rk would emit and byte-diffs it
+  against the file on disk, failing on any difference. This runs *before*
+  the tag exists, and the signed tag covers `.github/workflows/`, which is
+  what makes the signature meaningful.
+- The reusable release workflow is pinned by 40-hex commit SHA, with the
+  version tag in a trailing comment.
+- Inside every credential context, before touching any credential, rk
+  asserts the provider-signed OIDC claims — `repository`, `ref`,
+  `environment`, and `job_workflow_ref` — against the checklist, and halts
+  on mismatch. `job_workflow_ref` names the release-kit reusable workflow
+  at its pinned ref, making this the one assertion a malicious caller
+  cannot forge.
+
+## Adapters
+
+Every adapter step implements inspect, act, verify; destination adapters
+share one interface:
+
+```text
+inspect(coordinate) -> absent | exact | conflict | undeterminable
+stage(final asset)          # only where a staging area exists
+publish()
+verify(public vs expected)  # never in a credential context
+```
+
+v1 inventory:
+
+- **`dart`** (ecosystem): parses pubspec/workspace/lockfile; validates
+  version↔tag agreement, changelog entry, `dart pub get
+  --enforce-lockfile` from a clean resolve, publish dry-run; derives
+  ordering and prerequisites from exact first-party pins.
+- **`dart-cli`** (build): `dart compile exe` per platform on native runners
+  (arm64 Linux runners are GA and free for public repositories;
+  cross-compilation downloads extra SDK components at build time and is not
+  used); smoke-runs the binary.
+- **`macos-sign`** (transform): ephemeral keychain with the incantation
+  above; `codesign` parameterized by `[identity]`; verifies against the
+  published release's designated requirement, not against its own input.
+- **`macos-notarize`** (transform): `notarytool submit --wait`; the notary
+  log ships as a release asset. Default on resume is resubmission —
+  identical bytes may be resubmitted and cost minutes. History-based
+  adoption is optional and legal **only** when a per-submission
+  `notarytool log` reports a sha256 equal to the exact bytes rk holds;
+  name and recency are not evidence. `codesign --check-notarization`
+  remains the binding verification.
+- **`archive` + `checksums`** (transforms): deterministic tar.gz per
+  platform from `[archive].files` plus binary and LICENSE, frozen public
+  names; `SHA256SUMS`.
+- **`pub-dev`** (destination): inspection via the pub.dev API; OIDC mint in
+  CI; publish via `dart pub publish`; post-publish re-download and logical
+  content compare (pub rewraps archives — name, type, mode, size, content;
+  gzip mtime ignored). The exact-archive flags (`--to-archive` /
+  `--from-archive`) are undocumented and pinned-SDK-dependent: feature-test
+  at run start and fail closed with remediation if absent or changed. A
+  package that has never existed yields a fifth outcome, `first-publish`,
+  which prints the ordered interactive bootstrap commands and refuses to
+  act.
+- **`github-release`** (destination): adoption, staging, repair, flip, and
+  verification as specified above.
+- **`homebrew-tap`** (destination): formula from a closed template plus
+  staged digests plus `[identity]`/`[homebrew]`; Contents API CAS; public
+  install check outside any credential context.
+- **`github-actions` / `local`** (glue): the reusable release workflow with
+  one environment per credential context and the rk-emitted caller per
+  repo; the same binary run TTY-attached locally.
+
+A proposed destination adapter must document: verdict semantics, terminal
+act atomicity, post-crash inspectability (a platform that cannot be
+classified after a partial submit fails the proposal), whether a
+pre-publication area exists, and native auth flows in CI and locally.
+
+## Local releases
+
+The local path is first-class, with two honest limits. Platform-bound build
+steps report `blocked: requires <platform> host` — so a package-only unit
+is fully releasable from one machine, while a binary unit needs CI or one
+host per platform. Attestations are CI-only: a release published locally
+has none, `rk verify` reports that as expected-absent rather than
+`conflict`, and the draft flip refuses to publish a release whose archives
+lack attestations when the unit declares them.
+
+## Module layout
+
+```text
+release-kit/
+  bin/rk.dart
+  lib/src/engine/        # toml, checklist, runner, verdicts, diagnostics, setup
+  lib/src/ecosystems/dart/
+  lib/src/builds/dart_cli/
+  lib/src/transforms/    # macos_sign, macos_notarize, archive, checksums
+  lib/src/destinations/  # pub_dev, github_release, homebrew_tap
+  lib/src/providers/     # github_actions, local
+  doc/rfcs/
+  test/                  # black-box fixtures: keybay-shaped, fleury-shaped,
+                         # dune-shaped (must fail); import-graph test for
+                         # credentialed paths
+```
+
+## What rk is not
+
+Not a version bumper, changelog generator, CI system, test runner, task
+runner, or plugin host. No hooks, no templates, no `--force`, no recursive
+discovery, no override of native vetoes. Version preparation stays in
+project tools; product tests stay in product CI.
+
+## Keybay compatibility commitments
+
+- Public asset names frozen: `keybay-<version>-linux-x64.tar.gz` style.
+- The seven-asset layout preserved: four archives, notary log, `keybay.rb`,
+  `SHA256SUMS`.
+- Apple team `5AHFA9FUZG` and code identifier
+  `io.github.danreynolds.keybay.cli` frozen; enforced against the published
+  release's designated requirement.
+- CLI tag namespace `keybay_cli-v{version}` unchanged; core migrates to the
+  derived `keybay-v{version}` going forward.
+- Existing environment names (`pub.dev`, `macos-signing`,
+  `macos-notarization`, `homebrew-tap`) are kept; only `publish-github` is
+  new. Migration note: secret *names* change in the signing and notary
+  environments, and secret values are unreadable, so those must be
+  re-entered from source material.
+- The release body remains `--generate-notes` at creation time. Post-publish
+  editability of an immutable release's body is undocumented and must not be
+  relied upon.
+
+## Dogfood plan
+
+1. Engine + `dart` + `pub-dev` → release keybay core (`keybay-v0.2.x`).
+2. Binary chain + `github-release` + `homebrew-tap` → release keybay cli.
+   Retires the 806-line workflow.
+3. Fleury: `rk check` prints the ordered interactive bootstrap for the five
+   packages (`first-publish`), the human runs them in dependency order,
+   trusted publishers are registered after each package exists, then rk
+   owns every subsequent version.
+4. Dune: only after it meets RFC 0001's hermetic-input admission criteria.
+
+## Deferred by principle 10
+
+Removed from v1, each on RFC 0001's priced ladder: the Release Registry
+(every tier), the protected policy document and policy key, claim/envelope
+identities and DSSE receipts, capability fencing, the multi-party tag
+ceremony, plan admission by a separate control plane, toolchain
+content-addressed materialization, the SQLite state lane, the credential
+mapping file, global identity with overrides, and cross-run workspace
+warming. Any of these returns only by naming the concrete failure it
+prevents.
+
+## Open items
+
+1. Port `tool/compare_pub_archives.py` into the `pub-dev` adapter.
+2. Whether to keep a CI macOS signing context at all. The Developer ID
+   certificate is the one credential whose theft is unrevocable in
+   practice, and local signing is already first-class; the cost of dropping
+   it is that binary releases require the operator's Mac.
+3. `macos-x64` horizon: macOS 26 is Apple's final Intel release; the
+   channel and its hosted runners have a retirement date to track.
+4. `rk doctor` — fleet-consistency checker across `[identity]` blocks;
+   build only when drift is real.
+5. Final name (`rk` is the working name).
+
+## Relationship to RFC 0001
+
+RFC 0001 remains authoritative for the threat model and residual-risk
+analysis, the peer survey with pinned evidence, the Dune admission
+criteria, and the assurance ladder. It is no longer the build plan.
+Promotions from the ladder go through principle 10, recorded here.
+
+## Review history
+
+Revision 2 incorporates four independent adversarial reviews (security,
+reliability, developer experience, platform realism). Findings adopted
+include: the caller workflow as trusted code with byte-diff verification
+and OIDC self-assertion; identity-not-acceptability as a first-class
+principle; draft adoption by enumeration, hash-idempotent staging, narrow
+staging repair, and pre-flip re-verification; deletion of cross-run
+workspace warming; version monotonicity; the `undeterminable` verdict;
+external verification of `code_id`; `rk tag`; the three-outcome setup
+vocabulary and operator-local scoping; corrected pub.dev pinning semantics
+(no workflow field) and explicit OIDC minting; SSH tag signing; the
+trusted-execution-boundary section; `[toolchain]`, `[archive]`, and
+`[homebrew]` tables; the output contract; and terminology fixes. Rejected:
+restoring any mechanism from RFC 0001's ladder — no finding required one.
