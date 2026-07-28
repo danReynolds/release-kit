@@ -103,7 +103,7 @@ Ranked by probability times cost for this fleet:
   never stored.
 - **Workspace** — the per-release cache of intermediates, keyed
   `<tag>-<commit>` (`.rk/work/<tag>-<commit>/` locally; run artifacts in
-  CI). Disposable; reuse requires digest identity.
+  CI). Disposable; only self-authenticating artifacts are reused from it.
 - **Intermediate** — a non-final artifact in the workspace, input to a
   later step.
 - **Final asset** — an asset in its shippable form. Produced in the
@@ -318,13 +318,30 @@ else is `conflict`. Consequences:
   `contents: write` can create or mutate a draft, and Linux assets carry no
   signature or team to check. A staged asset whose digest is unknown to
   this release is `conflict`, never adoption.
-- **The workspace records its own digests.** Each artifact rk produces is
-  recorded in a cache manifest inside the workspace, so a later run can
-  establish digest identity rather than mere acceptability. The manifest is
-  cache metadata, not a ledger: it lives in the workspace, dies with it, is
-  never authoritative for release state, and a missing or mismatched entry
-  means rebuild. Its threat model is the machine it sits on — an attacker
-  who can rewrite both artifact and manifest already owns the build.
+- **Only self-authenticating artifacts are reused.** A file on disk is not
+  evidence of itself, and rk mints no signatures of its own: a manifest of
+  digests written beside the artifacts would be forged by the same attacker
+  who swapped them, and any keyed alternative just moves the question to
+  where the key lives. So reuse is limited to artifacts whose identity an
+  external authority can confirm:
+  - a **signed** macOS binary — `codesign` verification plus team and
+    designated requirement; forging one requires the Developer ID
+    certificate, and an older correctly signed binary fails the embedded
+    version check;
+  - an artifact **staged at a destination** — identity is the digest the
+    destination reports, not the local copy;
+  - **notarization state** — confirmed against Apple, not from local
+    evidence.
+
+  Everything else — unsigned binaries, archives not yet staged, pub
+  package archives — is rebuilt rather than reused. Rebuilding a compiled
+  binary costs a compile; the genuinely expensive steps (notarization,
+  upload) sit downstream of an artifact that is already
+  self-authenticating, so this rule costs almost nothing and removes an
+  entire class of local-tampering question. It also bounds the damage of
+  the residual case honestly: an attacker who can write to the workspace
+  can usually also write to the source, so the workspace is not where that
+  fight is won.
 - **No cross-run workspace warming.** The workspace is keyed
   `<tag>-<commit>`, so successive local runs of the same release share one
   workspace and reuse everything in it; but a workspace is never seeded
@@ -684,7 +701,12 @@ prevents.
    channel and its hosted runners have a retirement date to track.
 4. `rk doctor` — fleet-consistency checker across `[identity]` blocks;
    build only when drift is real.
-5. Final name (`rk` is the working name).
+5. Final name. `release_kit` / `release-kit` / `releasekit` are unclaimed on
+   pub.dev and Homebrew, and no significant project holds them on GitHub;
+   `rk` is unclaimed on pub.dev and Homebrew and is not a common command.
+   The one real consideration is [release-it](https://github.com/release-it/release-it),
+   a popular and adjacent release-automation CLI whose name is one syllable
+   away — worth a deliberate decision before anything is published.
 
 ## Relationship to RFC 0001
 
