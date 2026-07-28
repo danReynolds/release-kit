@@ -861,5 +861,5 @@ vocabulary and operator-local scoping; corrected pub.dev pinning semantics
 trusted-execution-boundary section; the output contract; and terminology
 fixes. Subsequent austerity passes removed the `[toolchain]`, `[archive]`,
 and `[homebrew]` tables and the required `[identity]` block in favour of
-derivation, and added `rk init`. Rejected:
+derivation, and merged config authoring into `rk setup`. Rejected:
 restoring any mechanism from RFC 0001's ladder — no finding required one.
