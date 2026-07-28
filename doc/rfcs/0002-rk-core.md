@@ -259,12 +259,29 @@ external reality rather than against the credential doing the work:
 | Tag signer | the signature on the previous release's tag |
 | Homebrew tap | `<repository owner>/homebrew-tap`, Homebrew's documented convention for a personal tap |
 
-An optional `[identity]` block overrides any of them, and is needed in
-exactly two situations: a **first release**, where no baseline exists — rk
-states plainly what that release will establish and `rk tag` requires
-confirmation — and a **deliberate migration**, such as a new tap or team,
-where the operator is overriding a `conflict` on purpose. Keybay needs
-neither: its 0.1.0 release supplies every baseline.
+An optional `[identity]` block overrides any of them, and matters in
+exactly two situations: a **deliberate migration** — a new tap or team,
+where the operator overrides a `conflict` on purpose — and a **first
+release**, where no baseline exists yet. In that case:
+
+- **Apple team** comes from the keychain, filtered to `Developer ID
+  Application` identities, the only certificate type that can distribute a
+  signed binary outside the App Store. Exactly one is unambiguous; several
+  fail closed with the list; none reports that a certificate must be
+  installed. rk does not read Xcode projects: a repository's `.xcodeproj`
+  files typically belong to example or sample apps whose signing identity
+  is unrelated to the released binary, so scanning for them finds a
+  confident wrong answer.
+- **Code identifier** has no source, because it is a name a human chooses
+  and then cannot change without breaking Keychain continuity for existing
+  users. rk proposes reverse-DNS from the repository and package
+  (`io.github.<owner>.<package>`) and requires it to be confirmed in
+  `[identity]` before a first signed release. This is the one permanent
+  product decision the schema asks for, requested once, at the only moment
+  it can be made.
+
+`rk tag` states plainly what a first release will establish. Keybay needs
+none of this: its 0.1.0 release supplies every baseline.
 
 A derived fact is verified against reality, so it needs the network; an
 offline `rk check` reports identity as unverified rather than pretending.
