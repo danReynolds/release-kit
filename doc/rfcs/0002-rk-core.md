@@ -326,11 +326,16 @@ JSON Schema gives editors autocomplete and inline validation.
   Operator-local by necessity: `GITHUB_TOKEN` has no `administration`
   permission, so these settings cannot be re-read from inside a release.
 - **`rk check`** — offline validation plus the derived checklist, annotated
-  with read-only reality probes. Also verifies the caller workflow on disk
-  byte-matches what rk emits. With `--tag`, it is also the status
+  with read-only reality probes. Where the GitHub Actions provider is in
+  use, it also verifies the caller workflow on disk byte-matches what rk
+  emits. With `--tag`, it is also the status
   command — there is no separate `rk status`, because status is derived
   from reality and recomputing it is exactly what checking does.
-- **`rk tag`** — start a release. It is deliberately not folded into
+- **`rk tag`** — authorize a release by creating and pushing a signed git
+  tag. That is all it does: it starts no job and triggers nothing. If a CI
+  system reacts to the push, that is the user's own configuration doing so,
+  and rk reports it as an observation about the setup rather than as an
+  effect of its own. It is deliberately not folded into
   `rk run`, for three reasons. In CI the two cannot merge at all: the tag
   push *is* what triggers the run, so a run cannot create its own trigger.
   In the normal flow the human only ever runs `rk tag` — CI executes the
@@ -738,6 +743,34 @@ A proposed destination adapter must document: verdict semantics, terminal
 act atomicity, post-crash inspectability (a platform that cannot be
 classified after a partial submit fails the proposal), whether a
 pre-publication area exists, and native auth flows in CI and locally.
+
+## What rk depends on
+
+Only git is assumed. A release is authorized by a signed git tag because
+that artifact is immutable, signable, carries source identity, and is what
+every target registry's automated publishing already binds to. Nothing
+else is structural:
+
+- **The forge is a destination, not a dependency.** GitHub matters only to
+  a unit that declares `github-release`, exactly as pub.dev matters only to
+  one that declares `pub.dev`. A unit publishing solely to a registry
+  touches no forge API.
+- **CI is pluggable, and rk triggers nothing.** `rk run` executes a
+  release for a given tag in any environment: a laptop, GitHub Actions,
+  GitLab CI, Buildkite, a cron job on a private box. What reacts to a tag
+  push is the user's CI configuration.
+- **The provider glue is optional and per-provider.** rk ships maintained
+  glue for GitHub Actions because the fleet uses it: a reusable release
+  workflow, one credential context per environment, and a caller workflow
+  rk emits and byte-diffs. Every part of that — including the
+  caller-workflow verification, which is a GitHub-specific hardening — is
+  scoped to that provider. Another CI system supplies its own thin
+  invocation of `rk run` with credentials in its own contexts, and rk
+  neither knows nor cares which.
+
+Provider-neutrality is a property of the engine, not a promise to maintain
+integrations: v1 maintains one, and the rest of the design must not assume
+it.
 
 ## Local releases
 
