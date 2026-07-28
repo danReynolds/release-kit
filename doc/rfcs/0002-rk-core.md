@@ -317,11 +317,12 @@ JSON Schema gives editors autocomplete and inline validation.
   existing config or adds a project silently. With a config present, it
   derives the required registrations from the declared channels, creates
   what the provider API allows using the operator's own credentials
-  (environments, deployment tag policies, rulesets), prints exact commands
-  for what it cannot create, and reports every check as `verified`,
-  `deferred` (provable only inside a credential context, at the first
-  credentialed run), or `manual` (not queryable at all — the exact values
-  to confirm are printed). "Clean" means no queryable check failing.
+  (environments, deployment tag policies, rulesets), and reports what
+  passed as a count, what needs the human with the exact fix, and what
+  can only be proven when a release first uses it. Registrations that no
+  API can read — pub.dev's trusted publisher — are always in the second
+  group, with the exact values to confirm. rk is "clean" when nothing is
+  in the second group.
   Operator-local by necessity: `GITHUB_TOKEN` has no `administration`
   permission, so these settings cannot be re-read from inside a release.
 - **`rk check`** — offline validation plus the derived checklist, annotated
@@ -347,8 +348,22 @@ completion; and no `--force`, `--skip`, or `--retry-anyway`.
 
 ### Output contract
 
-Every step has a stable id: `<unit>/<adapter>/<coordinate>`. `check` and
-`run` emit one line per step, `STATUS  step-id  note`. Exit codes: `0`
+Default output answers the user's question; `-v` prints the audit trail.
+The internal distinctions rk tracks — which checks are queryable, which are
+provable only inside a credential context — are real, but they are not the
+user's vocabulary. Output is organized by **what the reader must do**:
+
+- what passed, collapsed to a count;
+- what needs the human, listed with the exact fix;
+- what cannot be known yet, stated once as a footnote.
+
+Every command reports **all** problems in one pass rather than stopping at
+the first, so a fix cycle is one edit round rather than several. Every
+problem names its source location where one exists (file, line) and the
+concrete remediation, never just the violated rule.
+
+Machine-readable form is available for every command, and the step id
+(`<unit>/<adapter>/<coordinate>`) is stable across runs. Exit codes: `0`
 clean or complete, `1` refusal (validation error, `conflict`, or
 `undeterminable`), `2` usage. `blocked` is informational and never nonzero
 by itself.
