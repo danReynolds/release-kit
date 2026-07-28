@@ -576,10 +576,10 @@ v1 inventory:
   version↔tag agreement, changelog entry, `dart pub get
   --enforce-lockfile` from a clean resolve, publish dry-run; derives
   ordering and prerequisites from exact first-party pins.
-- **`dart-cli`** (build): `dart compile exe` per platform on native runners
-  (arm64 Linux runners are GA and free for public repositories;
-  cross-compilation downloads extra SDK components at build time and is not
-  used); smoke-runs the binary.
+- **`dart-cli`** (build): `dart compile exe` per platform; native runners in
+  CI (arm64 Linux runners are GA and free for public repositories), and
+  native, cross-compiled, or emulator-assisted locally per the capability
+  resolution above. Always smoke-runs the binary it produced.
 - **`macos-sign`** (transform): ephemeral keychain with the incantation
   above; `codesign` parameterized by `[identity]`; verifies against the
   published release's designated requirement, not against its own input.
@@ -618,13 +618,46 @@ pre-publication area exists, and native auth flows in CI and locally.
 
 ## Local releases
 
-The local path is first-class, with two honest limits. Platform-bound build
-steps report `blocked: requires <platform> host` — so a package-only unit
-is fully releasable from one machine, while a binary unit needs CI or one
-host per platform. Attestations are CI-only: a release published locally
-has none, `rk verify` reports that as expected-absent rather than
-`conflict`, and the draft flip refuses to publish a release whose archives
-lack attestations when the unit declares them.
+The local path is first-class, and a complete multi-platform release from
+one machine is a goal, not an accident. Two independent capabilities decide
+whether a platform is producible on the current host: whether its binary
+can be **built**, and whether that binary can be **executed** for the
+acceptance smoke test. Both are required; a binary that cannot be run
+cannot be accepted, and rk never lowers that bar for local convenience.
+
+The `dart-cli` adapter resolves both per platform and reports the result in
+`rk check`:
+
+- **Native** — the host's own OS and architecture. Build and execute
+  directly.
+- **Cross-compiled** — `dart compile exe --target-os --target-arch`
+  supports Linux targets only (`linux_x64`, `linux_arm64`, `linux_arm`,
+  `linux_riscv64`), and only for projects with no native assets, since the
+  SDK ships no C cross-toolchain. Measured on an Apple Silicon host with
+  SDK 3.12.2, both keybay Linux targets cross-compile in seconds and
+  produce correct ELF binaries with permissive glibc floors. The adapter
+  must feature-detect this rather than assume it: a project with native
+  assets, or a target the SDK declines, is not silently skipped.
+- **Emulated execution** — a cross-compiled binary is smoke-tested through
+  a container runtime (native speed for a matching architecture, emulation
+  otherwise). Without a runtime available, the platform is blocked.
+- **Rosetta-hosted SDK** — an x64 macOS binary cannot be cross-compiled
+  from an arm64 host; the supported path is an x64 Dart SDK of the pinned
+  version run under Rosetta, which builds and executes natively for that
+  architecture. Unverified as of this revision.
+- **Blocked** — anything remaining reports
+  `blocked: <platform> requires <capability>` with the missing capability
+  named, and the release proceeds in CI or from a host that has it.
+
+The capability set is discovered, never declared in `release.toml`:
+platform intent is a product decision, and where a binary can be produced
+is a fact about the machine.
+
+Attestations remain CI-only: a locally published release has none,
+`rk verify` reports that as expected-absent rather than `conflict`, and the
+draft flip refuses to publish archives lacking attestations when the unit
+declares them — so a fully local release is a deliberate, lower-assurance
+mode, honestly labelled.
 
 ## Module layout
 
@@ -693,15 +726,20 @@ prevents.
 ## Open items
 
 1. Port `tool/compare_pub_archives.py` into the `pub-dev` adapter.
-2. Whether to keep a CI macOS signing context at all. The Developer ID
+2. Verify the two unmeasured local-capability paths: container smoke tests
+   for cross-compiled Linux binaries, and an x64 macOS build from a
+   Rosetta-hosted x64 SDK. Also confirm that a cross-compiled Linux binary
+   and a natively built one carry the same glibc floor, since the platform
+   profile fixes that floor as a compatibility contract.
+3. Whether to keep a CI macOS signing context at all. The Developer ID
    certificate is the one credential whose theft is unrevocable in
    practice, and local signing is already first-class; the cost of dropping
    it is that binary releases require the operator's Mac.
-3. `macos-x64` horizon: macOS 26 is Apple's final Intel release; the
+4. `macos-x64` horizon: macOS 26 is Apple's final Intel release; the
    channel and its hosted runners have a retirement date to track.
-4. `rk doctor` — fleet-consistency checker across `[identity]` blocks;
+5. `rk doctor` — fleet-consistency checker across `[identity]` blocks;
    build only when drift is real.
-5. Final name. `release_kit` / `release-kit` / `releasekit` are unclaimed on
+6. Final name. `release_kit` / `release-kit` / `releasekit` are unclaimed on
    pub.dev and Homebrew, and no significant project holds them on GitHub;
    `rk` is unclaimed on pub.dev and Homebrew and is not a common command.
    The one real consideration is [release-it](https://github.com/release-it/release-it),
