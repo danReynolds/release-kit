@@ -318,12 +318,22 @@ else is `conflict`. Consequences:
   `contents: write` can create or mutate a draft, and Linux assets carry no
   signature or team to check. A staged asset whose digest is unknown to
   this release is `conflict`, never adoption.
+- **The workspace records its own digests.** Each artifact rk produces is
+  recorded in a cache manifest inside the workspace, so a later run can
+  establish digest identity rather than mere acceptability. The manifest is
+  cache metadata, not a ledger: it lives in the workspace, dies with it, is
+  never authoritative for release state, and a missing or mismatched entry
+  means rebuild. Its threat model is the machine it sits on — an attacker
+  who can rewrite both artifact and manifest already owns the build.
 - **No cross-run workspace warming.** The workspace is keyed
-  `<tag>-<commit>` and never warmed from another run — not CI-to-CI, not
-  CI-to-local. A tag deleted and re-pushed at a different commit would
-  otherwise let rk sign and publish binaries from the wrong source while
-  every acceptability check passed. Its only cost is one rebuild, which
-  this design already declares acceptable.
+  `<tag>-<commit>`, so successive local runs of the same release share one
+  workspace and reuse everything in it; but a workspace is never seeded
+  from a *different* run's artifact store — not CI-to-CI, not CI-to-local.
+  A tag deleted and re-pushed at a different commit would otherwise let rk
+  sign and publish binaries from the wrong source while every
+  acceptability check passed. The cost is one rebuild per fresh CI run,
+  which this design already declares acceptable; local retries lose
+  nothing.
 
 ### The draft: adoption, staging, repair, and the flip
 
@@ -418,12 +428,12 @@ cannot be renamed unilaterally:
 
 | Need | CI (environment → secrets) | Local |
 |---|---|---|
-| macOS signing | `macos-signing` → `APPLE_CERT_P12_BASE64`, `APPLE_CERT_PASSWORD` | keychain identity matching `identity.apple_team` |
-| Notarization | `macos-notarization` → `ASC_KEY_P8_BASE64` (secret); key id and issuer as variables | `notarytool` profile `rk-notary` |
+| macOS signing | `macos-signing` → `APPLE_CERTIFICATE_P12_BASE64`, `APPLE_CERTIFICATE_PASSWORD` | keychain identity matching `identity.apple_team` |
+| Notarization | `macos-notarization` → `APPLE_NOTARY_KEY_P8_BASE64` (secret); `APPLE_NOTARY_KEY_ID`, `APPLE_NOTARY_ISSUER_ID` (variables) | `notarytool` profile `rk-notary` |
 | pub.dev publish | `pub.dev` → **no secret**; OIDC exchange (see below) | `dart pub login` session |
 | GitHub release | `publish-github` → per-job `GITHUB_TOKEN` | `gh auth` session |
 | Attestation | **none** (OIDC); CI only | not available locally |
-| Tap update | `homebrew-tap` → `TAP_TOKEN`, a fine-grained token scoped to the tap repository only | normal git auth to the tap |
+| Tap update | `homebrew-tap` → `HOMEBREW_TAP_TOKEN`, a fine-grained token scoped to the tap repository only | normal git auth to the tap |
 | Tag signing | **never in CI** | operator SSH signing key |
 
 Adapter obligations these impose: the certificate is base64 in transit and
@@ -452,10 +462,13 @@ A credential context contains only: rk itself, delivered as a prebuilt
 binary verified by digest (never a checkout plus dependency resolution),
 and the native tools it invokes. Concretely:
 
-- **rk's credentialed code paths import only `dart:*` and rk's own
-  sources.** Enforced by a test over the import graph. A single transitive
-  package dependency in the signing path would put every upstream
-  maintainer beside the Developer ID key.
+- **rk has no runtime dependencies at all** — `dart:*` and its own sources,
+  nothing else, enforced by a test over the import graph and by an empty
+  `dependencies:` block. A single transitive package in the signing path
+  would put every upstream maintainer beside the Developer ID key. This
+  also makes rk's own bootstrap trivial: a SHA-pinned checkout resolves
+  nothing from any network, so a credential context can run rk before rk
+  is able to release itself.
 - **`verify()` never runs in a credential context.** A destination's
   verification never holds that destination's credential —
   `brew install` executes tap-authored Ruby, which must never run beside
@@ -631,10 +644,9 @@ project tools; product tests stay in product CI.
 - CLI tag namespace `keybay_cli-v{version}` unchanged; core migrates to the
   derived `keybay-v{version}` going forward.
 - Existing environment names (`pub.dev`, `macos-signing`,
-  `macos-notarization`, `homebrew-tap`) are kept; only `publish-github` is
-  new. Migration note: secret *names* change in the signing and notary
-  environments, and secret values are unreadable, so those must be
-  re-entered from source material.
+  `macos-notarization`, `homebrew-tap`) and existing secret and variable
+  names are kept verbatim, so migration re-enters no secret values; only
+  `publish-github` is new, and it holds no secret.
 - The release body remains `--generate-notes` at creation time. Post-publish
   editability of an immutable release's body is undocumented and must not be
   relied upon.
