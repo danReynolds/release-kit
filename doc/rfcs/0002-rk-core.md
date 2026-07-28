@@ -153,7 +153,6 @@ publish = ["pub.dev", "github-release", "homebrew"]
 binary_platforms = [
   "linux-gnu-x64",
   "linux-gnu-arm64",
-  "macos-x64",
   "macos-arm64",
 ]
 
@@ -641,10 +640,6 @@ The `dart-cli` adapter resolves both per platform and reports the result in
 - **Emulated execution** — a cross-compiled binary is smoke-tested through
   a container runtime (native speed for a matching architecture, emulation
   otherwise). Without a runtime available, the platform is blocked.
-- **Rosetta-hosted SDK** — an x64 macOS binary cannot be cross-compiled
-  from an arm64 host; the supported path is an x64 Dart SDK of the pinned
-  version run under Rosetta, which builds and executes natively for that
-  architecture. Unverified as of this revision.
 - **Blocked** — anything remaining reports
   `blocked: <platform> requires <capability>` with the missing capability
   named, and the release proceeds in CI or from a host that has it.
@@ -652,6 +647,13 @@ The `dart-cli` adapter resolves both per platform and reports the result in
 The capability set is discovered, never declared in `release.toml`:
 platform intent is a product decision, and where a binary can be produced
 is a fact about the machine.
+
+Note the one target this rules out: an x64 macOS binary can be built
+neither natively nor by cross-compilation on an Apple Silicon host, so a
+unit declaring it requires CI or an Intel machine. Keybay does not declare
+it, which is what makes a complete keybay release producible from one
+Apple Silicon Mac — macos-arm64 natively, both Linux targets
+cross-compiled and smoke-tested in containers.
 
 Attestations remain CI-only: a locally published release has none,
 `rk verify` reports that as expected-absent rather than `conflict`, and the
@@ -686,8 +688,16 @@ project tools; product tests stay in product CI.
 ## Keybay compatibility commitments
 
 - Public asset names frozen: `keybay-<version>-linux-x64.tar.gz` style.
-- The seven-asset layout preserved: four archives, notary log, `keybay.rb`,
-  `SHA256SUMS`.
+- **`macos-x64` is dropped** — Intel Macs are out of scope as of this
+  revision. The layout becomes six assets: three archives (linux x64,
+  linux arm64, macos arm64), the notary log, `keybay.rb`, and
+  `SHA256SUMS`. This is a deliberate, consumer-visible narrowing: an Intel
+  Mac has no fallback, since it cannot run arm64 binaries. It is clean to
+  do now because keybay 0.1.0 has no external downloads, and the 0.1.0
+  release already differs from the current layout (it carries ten assets,
+  with per-architecture notary logs and results). Reintroducing the
+  platform later means adding one CI job and an Intel or CI build host —
+  it cannot be produced on an Apple Silicon machine.
 - Apple team `5AHFA9FUZG` and code identifier
   `io.github.danreynolds.keybay.cli` frozen; enforced against the published
   release's designated requirement.
@@ -726,18 +736,15 @@ prevents.
 ## Open items
 
 1. Port `tool/compare_pub_archives.py` into the `pub-dev` adapter.
-2. Verify the two unmeasured local-capability paths: container smoke tests
-   for cross-compiled Linux binaries, and an x64 macOS build from a
-   Rosetta-hosted x64 SDK. Also confirm that a cross-compiled Linux binary
-   and a natively built one carry the same glibc floor, since the platform
-   profile fixes that floor as a compatibility contract.
+2. Verify container smoke tests for cross-compiled Linux binaries, and
+   confirm that a cross-compiled Linux binary and a natively built one
+   carry the same glibc floor, since the platform profile fixes that floor
+   as a compatibility contract.
 3. Whether to keep a CI macOS signing context at all. The Developer ID
    certificate is the one credential whose theft is unrevocable in
    practice, and local signing is already first-class; the cost of dropping
    it is that binary releases require the operator's Mac.
-4. `macos-x64` horizon: macOS 26 is Apple's final Intel release; the
-   channel and its hosted runners have a retirement date to track.
-5. `rk doctor` — fleet-consistency checker across `[identity]` blocks;
+4. `rk doctor` — fleet-consistency checker across `[identity]` blocks;
    build only when drift is real.
 6. Final name. `release_kit` / `release-kit` / `releasekit` are unclaimed on
    pub.dev and Homebrew, and no significant project holds them on GitHub;
