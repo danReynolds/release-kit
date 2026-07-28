@@ -746,31 +746,50 @@ pre-publication area exists, and native auth flows in CI and locally.
 
 ## What rk depends on
 
-Only git is assumed. A release is authorized by a signed git tag because
-that artifact is immutable, signable, carries source identity, and is what
-every target registry's automated publishing already binds to. Nothing
-else is structural:
+rk's model needs four things: a source tree, a version from the native
+manifest, one or more destinations, and an authorization signal. Git is in
+none of them, and neither is a forge or a CI system.
 
-- **The forge is a destination, not a dependency.** GitHub matters only to
-  a unit that declares `github-release`, exactly as pub.dev matters only to
-  one that declares `pub.dev`. A unit publishing solely to a registry
-  touches no forge API.
-- **CI is pluggable, and rk triggers nothing.** `rk run` executes a
-  release for a given tag in any environment: a laptop, GitHub Actions,
-  GitLab CI, Buildkite, a cron job on a private box. What reacts to a tag
-  push is the user's CI configuration.
-- **The provider glue is optional and per-provider.** rk ships maintained
-  glue for GitHub Actions because the fleet uses it: a reusable release
-  workflow, one credential context per environment, and a caller workflow
-  rk emits and byte-diffs. Every part of that — including the
-  caller-workflow verification, which is a GitHub-specific hardening — is
-  scoped to that provider. Another CI system supplies its own thin
-  invocation of `rk run` with credentials in its own contexts, and rk
-  neither knows nor cares which.
+**Authorization is a signal, not an artifact.** What authorizes a release
+is a verifiable statement that a human approved this exact source at this
+exact version. v1 implements exactly one carrier for that signal — a signed
+git tag — chosen for concrete reasons, not by assumption:
 
-Provider-neutrality is a property of the engine, not a promise to maintain
-integrations: v1 maintains one, and the rest of the design must not assume
-it.
+- the signature, not the tag and not push access, is what authorizes;
+  anyone able to write to a repository can create a tag, which is why rk
+  verifies the signature against a known signer rather than trusting that
+  a tag exists;
+- it is durable and independently verifiable years later, by anyone;
+- it binds signature to exact commit and version in one object; and
+- every major registry's trusted-publishing path (pub.dev, npm, PyPI,
+  crates.io) binds to a repository and tag pattern, so a project wanting
+  credential-free publishing needs a tag regardless of rk.
+
+Other carriers are conceivable — a signed statement, a provider approval,
+or simply an operator present at a terminal with publishing credentials,
+which is what implicitly authorizes a local release today. rk does not
+build an abstraction over them: one implementation behind an interface is
+speculative generality. The seam is named here so that a second carrier,
+when it arrives with a real need, has a known place to attach.
+
+**Source identity is a property of the source, not of git.** A release is
+built from a tree whose identity rk can compute directly. Where git is
+present, the commit is recorded as the durable, human-meaningful name for
+that tree; it enriches the record rather than constituting it.
+
+**A forge is a destination.** GitHub matters only to a unit declaring
+`github-release`, exactly as pub.dev matters only to a unit declaring
+`pub.dev`. keybay's `core` unit touches no forge API at all.
+
+**CI is pluggable, and rk triggers nothing.** `rk run` executes a release
+in any environment: a laptop, GitHub Actions, GitLab CI, a cron job on a
+private box. What reacts to a tag push is the user's own configuration. rk
+ships maintained glue for GitHub Actions because the fleet uses it — a
+reusable release workflow, credential contexts mapped to environments, and
+an emitted caller workflow whose byte-diff is a GitHub-specific hardening.
+All of it is scoped to that provider. Provider-neutrality is a property of
+the engine, not a promise to maintain integrations: v1 maintains one, and
+the rest of the design must not assume it.
 
 ## Local releases
 
