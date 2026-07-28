@@ -145,7 +145,7 @@ dart = "3.12.2"                # exact; determinism and feature-tested flags
 path = "packages/keybay"
 publish = ["pub.dev"]
 
-[release.cli]
+[release.cli]                   # single project at root: tag derives v{version}
 
 [[release.cli.project]]
 path = "packages/keybay_cli"
@@ -211,11 +211,12 @@ Rules:
 - `[toolchain].dart` is an exact version. It pins the SDK for every build
   and validation step, and is the version against which the pub archive
   flags are feature-tested.
-- A unit's `tag` is optional for a single-project unit, deriving
-  `<package>-v{version}` from the native package identity; a multi-project
-  unit declares it explicitly. Patterns are a literal prefix/suffix around
-  exactly one `{version}`; a tag must match exactly one unit; overlaps
-  fail.
+- A unit's `tag` is optional for a single-project unit and derives from the
+  **publication target's documented convention**, never from a rule rk
+  invents. An explicit `tag` always wins. A multi-project unit must declare
+  one, because a set of packages has no canonical name. Patterns are a
+  literal prefix/suffix around exactly one `{version}`; a tag must match
+  exactly one unit; overlaps fail. See "Tag conventions" below.
 - Project paths are canonicalized; duplicates and nesting fail. No
   recursive discovery, ever: a project releases only if listed.
 - `publish` is an unordered set of closed channel names; duplicates fail.
@@ -235,6 +236,30 @@ Rules:
   namespace. Otherwise `conflict`. Per-coordinate verdicts are structurally
   blind to "older than what is live"; this rule is what keeps failure #1
   from publishing a back-version.
+
+### Tag conventions
+
+Each ecosystem adapter declares the tag convention its registry documents,
+and rk applies it rather than imposing a house style. The convention is a
+function of the repository's shape, which rk already knows from the
+complete set of project rows:
+
+- **`dart` / pub.dev** — pub.dev documents `v{version}` for a repository
+  publishing one package, and recommends a per-package pattern such as
+  `<package>-v{version}` where a repository publishes several. rk applies
+  exactly that: one declared project in the whole file yields `v{version}`;
+  two or more yields `<package>-v{version}` for every unit.
+- **Binary-only units** (no registry channel, as with a future Dune) follow
+  the GitHub Releases convention, `v{version}`, subject to the same
+  repository-shape rule.
+- **Future adapters** declare their own — npm, RubyGems, and Cargo have
+  their own documented forms, and an adapter that cannot cite one requires
+  an explicit `tag`.
+
+Whether a repository is single- or multi-package is a property of the whole
+`release.toml`, not of one unit, because tags share one namespace per
+repository. If a unit's channels resolve to conflicting conventions, rk
+fails closed and requires an explicit `tag` rather than picking a winner.
 
 `[identity]` holds public expectations only — every line could be printed
 in a public repository (it is one). `tag_signer` is an SSH signing-key
