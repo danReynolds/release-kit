@@ -746,7 +746,7 @@ prevents.
    it is that binary releases require the operator's Mac.
 4. `rk doctor` — fleet-consistency checker across `[identity]` blocks;
    build only when drift is real.
-6. Final name. `release_kit` / `release-kit` / `releasekit` are unclaimed on
+5. Final name. `release_kit` / `release-kit` / `releasekit` are unclaimed on
    pub.dev and Homebrew, and no significant project holds them on GitHub;
    `rk` is unclaimed on pub.dev and Homebrew and is not a common command.
    The one real consideration is [release-it](https://github.com/release-it/release-it),
