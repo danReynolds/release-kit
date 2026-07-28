@@ -27,8 +27,8 @@ look — verify identity rather than acceptability at every handoff.
 ## Principles
 
 1. **One source of truth per fact.** Native manifests own names, versions,
-   executables, and dependencies. `release.toml` owns intent. `[identity]`
-   owns public expectations. The environment owns credentials. Nothing is
+   executables, and dependencies. `release.toml` owns intent. Published
+   reality owns identity. The environment owns credentials. Nothing is
    written twice, so nothing can disagree.
 2. **Reality is the database.** Destinations are inspected, never mirrored
    into records.
@@ -122,7 +122,8 @@ Ranked by probability times cost for this fleet:
 - **Adapter** — a closed module: ecosystem, build, transform, destination,
   or provider.
 - **Prerequisite** — a public-reality condition derived from native pins.
-- **Expectations** — the `[identity]` facts checked against reality.
+- **Expectations** — the identity facts rk holds a release to, derived
+  from the last published release unless overridden.
 - **Workflow** — reserved for GitHub Actions files: the **caller workflow**
   in each repository (emitted and verified by rk) and the reusable
   **release workflow** shipped by release-kit. The rk lifecycle is never
@@ -136,53 +137,23 @@ configuration:
 ```toml
 schema = 1
 
-[toolchain]
-dart = "3.12.2"                # exact; determinism and feature-tested flags
-
 [release.core]                 # tag derives keybay-v{version}
-
-[[release.core.project]]
 path = "packages/keybay"
 publish = ["pub.dev"]
 
 [release.cli]                  # tag derives keybay_cli-v{version}
-
-[[release.cli.project]]
 path = "packages/keybay_cli"
 publish = ["pub.dev", "github-release", "homebrew"]
-binary_platforms = [
-  "linux-gnu-x64",
-  "linux-gnu-arm64",
-  "macos-arm64",
-]
-
-[release.cli.archive]
-files = [                      # exact paths; binary and LICENSE are implicit
-  "README.md",
-  "example/quickstart/README.md",
-  "example/quickstart/secrets.env.example",
-  "example/quickstart/app.sh",
-]
-
-[release.cli.homebrew]
-license    = "MIT"             # pubspec has no license field
-linux_deps = ["libsecret"]     # closed vocabulary; exact platform meaning
-install    = { prefix = ["README.md"], pkgshare = ["example"] }
-
-[identity]
-apple_team   = "5AHFA9FUZG"
-code_id      = "io.github.danreynolds.keybay.cli"
-homebrew_tap = "danReynolds/homebrew-tap"
-tag_signer   = "SHA256:4ozSnfVaMzZ/qrzo51I8FPKawmZSIojAB5Ll+qhguFM"
+binary_platforms = ["linux-gnu-x64", "linux-gnu-arm64", "macos-arm64"]
 ```
+
+Ten lines, and no `[identity]` block: every identity fact is derived from
+the last published release or from the target's convention (see below).
 
 Fleury's multi-unit shape, for contrast:
 
 ```toml
 schema = 1
-
-[toolchain]
-dart = "3.12.2"
 
 [release.framework]
 tag = "fleury-v{version}"      # multi-project: no derivable name
@@ -197,9 +168,7 @@ publish = ["pub.dev"]
 
 # … fleury_widgets, fleury_web identically
 
-[release.mcp]                  # tag derives fleury_mcp-v{version}
-
-[[release.mcp.project]]
+[release.mcp]                  # single project: declared inline
 path = "packages/fleury_mcp"
 publish = ["pub.dev"]
 ```
@@ -208,27 +177,43 @@ Rules:
 
 - `schema` is exact; unknown versions and unknown fields anywhere are
   errors.
-- `[toolchain].dart` is an exact version. It pins the SDK for every build
-  and validation step, and is the version against which the pub archive
-  flags are feature-tested.
+- The toolchain is never declared. rk resolves it from the ecosystem's own
+  files — for Dart, the pubspec SDK constraint, since neither pubspec nor
+  `pubspec.lock` records an exact version by design — verifies the resolved
+  toolchain satisfies that constraint before building, and records which
+  one built each artifact. An ecosystem with a real pin file
+  (`rust-toolchain.toml`, `.nvmrc`, `Gemfile.lock`) is deferred to
+  likewise. To harden the pin, tighten the native constraint.
 - A unit's `tag` is optional for a single-project unit and derives from the
   **publication target's documented convention**, never from a rule rk
   invents. An explicit `tag` always wins. A multi-project unit must declare
   one, because a set of packages has no canonical name. Patterns are a
   literal prefix/suffix around exactly one `{version}`; a tag must match
   exactly one unit; overlaps fail. See "Tag conventions" below.
+- A unit with exactly one project declares it inline on the unit table; a
+  unit with several uses `[[release.<unit>.project]]` rows. Declaring both
+  is an error. No empty unit headers are required.
 - Project paths are canonicalized; duplicates and nesting fail. No
   recursive discovery, ever: a project releases only if listed.
 - `publish` is an unordered set of closed channel names; duplicates fail.
 - `binary_platforms` is required by platform-bearing channels and rejected
   without one.
-- `[release.<unit>.archive].files` are exact repository-relative paths — no
-  globs, no templates. The binary and LICENSE are always included.
-- `[release.<unit>.homebrew]` is a closed vocabulary: `license`,
-  `linux_deps` (closed dependency names), and `install` destinations
-  (`prefix`, `pkgshare`). `desc` and `homepage` derive from the pubspec.
-  The generated formula's test asserts `--version` equals the release
-  version and nothing else; content assertions are commands in disguise.
+- Archive contents are conventional and not configurable: the executable,
+  LICENSE, and README. Shipping a package's `example/` tree wholesale is
+  unsafe — keybay's contains a full Flutter app and build artifacts — and
+  cherry-picking from it is a product choice no rule can infer, so rk ships
+  neither. Test material that a post-install check needs lives in the
+  repository, which that check already has.
+- System runtime dependencies are not declared. Dart manifests cannot
+  express them, users will not know to write them, and modeling them drags
+  rk into a per-platform package vocabulary. An application that needs a
+  system tool reports that itself, at the moment it needs it. Linked
+  libraries are derivable from ELF `DT_NEEDED` entries if this ever earns a
+  mechanism; subprocess dependencies are not detectable by anyone.
+- The generated Homebrew formula takes `desc` and `homepage` from the
+  pubspec, omits `license` (Homebrew does not require it and no Dart
+  manifest holds it), and asserts only that `--version` equals the release
+  version; content assertions are commands in disguise.
 - Native vetoes are absolute: `publish_to: none` cannot be overridden.
 - Versions come from manifests; the tag must agree exactly.
 - **Monotonicity:** the release version must exceed every version already
@@ -261,23 +246,45 @@ Whether a repository is single- or multi-package is a property of the whole
 repository. If a unit's channels resolve to conflicting conventions, rk
 fails closed and requires an explicit `tag` rather than picking a winner.
 
-`[identity]` holds public expectations only — every line could be printed
-in a public repository (it is one). `tag_signer` is an SSH signing-key
-fingerprint (the fleet signs tags with SSH; `gpg.format=ssh`), verified
-with `ssh-keygen -Y check-novalidate`. Secrets never appear in any rk file.
+### Identity: derived, overridable
 
-**`code_id` is authority, not a check** — it parameterizes `codesign`, so
-verifying signed output against it is a tautology, while a wrong value
-permanently breaks Keychain continuity for existing users. It is therefore
-verified against *external* reality: the new binary's designated
-requirement must equal that of the binary in the currently published
-release. `absent` (first release) means the human establishes it by
-tagging; any difference is `conflict`. The same rule applies to every
-`[identity]` value fed to a credentialed tool rather than compared against
-one.
+Identity facts are not declared; they are derived from what you already
+published, which makes the check "this release's identity must match the
+last one" — impossible to typo, self-maintaining, and compared against
+external reality rather than against the credential doing the work:
 
-## The five verbs
+| Fact | Derived from |
+|---|---|
+| Apple team, code identifier | the designated requirement of the macOS binary in the current published release |
+| Tag signer | the signature on the previous release's tag |
+| Homebrew tap | `<repository owner>/homebrew-tap`, Homebrew's documented convention for a personal tap |
 
+An optional `[identity]` block overrides any of them, and is needed in
+exactly two situations: a **first release**, where no baseline exists — rk
+states plainly what that release will establish and `rk tag` requires
+confirmation — and a **deliberate migration**, such as a new tap or team,
+where the operator is overriding a `conflict` on purpose. Keybay needs
+neither: its 0.1.0 release supplies every baseline.
+
+A derived fact is verified against reality, so it needs the network; an
+offline `rk check` reports identity as unverified rather than pretending.
+`code_id` is semantically unit-scoped and moves under its unit if a
+repository ever ships two signed binaries.
+
+## The six verbs
+
+Configuration files have no type checking, so discoverability is a design
+obligation, met three ways: `rk init` writes the file so fields are
+proposed rather than memorized; fail-closed diagnostics name the missing
+field, why it applies, and the values rk can offer; and a published JSON
+Schema gives editors autocomplete and inline validation.
+
+- **`rk init`** — analyze the repository and write a commented
+  `release.toml`: the packages it found, which declare executables, which
+  are vetoed by `publish_to`, existing tags and published releases, and
+  `binary_platforms` prefilled with every target rk can build for this
+  project. It proposes; the human prunes and commits. It never adds a
+  project to an existing file silently.
 - **`rk check`** — offline validation plus the derived checklist, annotated
   with read-only reality probes. Also verifies the caller workflow on disk
   byte-matches what rk emits.
@@ -454,8 +461,8 @@ retry.
 
 Three rules, applied at every step:
 
-1. **Facts** come only from `[identity]`, `[toolchain]`, or the native
-   manifest. Never from the environment, never inferred.
+1. **Facts** come only from the native manifests, published reality, or an
+   explicit `[identity]` override. Never from the environment, never inferred.
 2. **Secrets and sessions** resolve by one branch — `GITHUB_ACTIONS=true`
    and nothing else. In CI: the conventional secret names injected by this
    job's environment. Locally: the platform's native store under a
@@ -605,8 +612,9 @@ v1 inventory:
   native, cross-compiled, or emulator-assisted locally per the capability
   resolution above. Always smoke-runs the binary it produced.
 - **`macos-sign`** (transform): ephemeral keychain with the incantation
-  above; `codesign` parameterized by `[identity]`; verifies against the
-  published release's designated requirement, not against its own input.
+  above; `codesign` parameterized by the derived team and code identifier;
+  verifies against the published release's designated requirement, not
+  against its own input.
 - **`macos-notarize`** (transform): `notarytool submit --wait`; the notary
   log ships as a release asset. Default on resume is resubmission —
   identical bytes may be resubmitted and cost minutes. History-based
@@ -615,7 +623,7 @@ v1 inventory:
   name and recency are not evidence. `codesign --check-notarization`
   remains the binding verification.
 - **`archive` + `checksums`** (transforms): deterministic tar.gz per
-  platform from `[archive].files` plus binary and LICENSE, frozen public
+  platform containing the executable, LICENSE, and README, frozen public
   names; `SHA256SUMS`.
 - **`pub-dev`** (destination): inspection via the pub.dev API; OIDC mint in
   CI; publish via `dart pub publish`; post-publish re-download and logical
@@ -629,7 +637,7 @@ v1 inventory:
 - **`github-release`** (destination): adoption, staging, repair, flip, and
   verification as specified above.
 - **`homebrew-tap`** (destination): formula from a closed template plus
-  staged digests plus `[identity]`/`[homebrew]`; Contents API CAS; public
+  staged digests plus derived identity; Contents API CAS; public
   install check outside any credential context.
 - **`github-actions` / `local`** (glue): the reusable release workflow with
   one environment per credential context and the rk-emitted caller per
@@ -713,6 +721,13 @@ project tools; product tests stay in product CI.
 ## Keybay compatibility commitments
 
 - Public asset names frozen: `keybay-<version>-linux-x64.tar.gz` style.
+- Release archives contain the executable, LICENSE, and README. The
+  `example/quickstart` files the current script packages are dropped, and
+  the generated formula loses its `depends_on "libsecret"` and `license`
+  lines. The post-install acceptance check runs the repository's quickstart
+  against the installed binary instead of one shipped inside the tarball.
+  Linux Homebrew users lose install-time resolution of `libsecret` and rely
+  on keybay's own runtime error, which should name the missing tool.
 - **`macos-x64` is dropped** — Intel Macs are out of scope as of this
   revision. The layout becomes six assets: three archives (linux x64,
   linux arm64, macos arm64), the notary log, `keybay.rb`, and
@@ -777,9 +792,11 @@ prevents.
    certificate is the one credential whose theft is unrevocable in
    practice, and local signing is already first-class; the cost of dropping
    it is that binary releases require the operator's Mac.
-4. `rk doctor` — fleet-consistency checker across `[identity]` blocks;
+4. Publish a JSON Schema for `release.toml` so editors validate and
+   autocomplete it.
+5. `rk doctor` — fleet-consistency checker across repositories;
    build only when drift is real.
-5. Final name. `release_kit` / `release-kit` / `releasekit` are unclaimed on
+6. Final name. `release_kit` / `release-kit` / `releasekit` are unclaimed on
    pub.dev and Homebrew, and no significant project holds them on GitHub;
    `rk` is unclaimed on pub.dev and Homebrew and is not a common command.
    The one real consideration is [release-it](https://github.com/release-it/release-it),
@@ -805,6 +822,8 @@ workspace warming; version monotonicity; the `undeterminable` verdict;
 external verification of `code_id`; `rk tag`; the three-outcome setup
 vocabulary and operator-local scoping; corrected pub.dev pinning semantics
 (no workflow field) and explicit OIDC minting; SSH tag signing; the
-trusted-execution-boundary section; `[toolchain]`, `[archive]`, and
-`[homebrew]` tables; the output contract; and terminology fixes. Rejected:
+trusted-execution-boundary section; the output contract; and terminology
+fixes. Subsequent austerity passes removed the `[toolchain]`, `[archive]`,
+and `[homebrew]` tables and the required `[identity]` block in favour of
+derivation, and added `rk init`. Rejected:
 restoring any mechanism from RFC 0001's ladder — no finding required one.
