@@ -330,7 +330,15 @@ JSON Schema gives editors autocomplete and inline validation.
   byte-matches what rk emits. With `--tag`, it is also the status
   command — there is no separate `rk status`, because status is derived
   from reality and recomputing it is exactly what checking does.
-- **`rk tag`** — the authorization affordance: run `check`, print exactly
+- **`rk tag`** — start a release. It is deliberately not folded into
+  `rk run`, for three reasons. In CI the two cannot merge at all: the tag
+  push *is* what triggers the run, so a run cannot create its own trigger.
+  In the normal flow the human only ever runs `rk tag` — CI executes the
+  release — so merging would conflate "start this release" with "execute
+  it on this machine." And an executor that can mint the authorization it
+  acts on is a confused deputy: keeping them apart is what makes "humans
+  authorize, machines execute" structurally true rather than a convention.
+  Concretely: run `check`, print exactly
   what the signature will create (unit, version, commit, every public
   coordinate, and for a first release the identity it establishes),
   confirm, then exec `git tag -s` and `git push`. Signing stays in git; rk
@@ -361,6 +369,12 @@ Every command reports **all** problems in one pass rather than stopping at
 the first, so a fix cycle is one edit round rather than several. Every
 problem names its source location where one exists (file, line) and the
 concrete remediation, never just the violated rule.
+
+Output is grouped the way the configuration is written — unit, then
+project, then channel, then platform where a channel has several — so a
+reader maps a line of `release.toml` to its consequences without
+translating. A release concerns one unit, so a release view shows that
+unit; a whole-repository view shows every unit it could release.
 
 Machine-readable form is available for every command, and the step id
 (`<unit>/<adapter>/<coordinate>`) is stable across runs. Exit codes: `0`
