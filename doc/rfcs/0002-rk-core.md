@@ -702,7 +702,15 @@ project tools; product tests stay in product CI.
   `io.github.danreynolds.keybay.cli` frozen; enforced against the published
   release's designated requirement.
 - CLI tag namespace `keybay_cli-v{version}` unchanged; core migrates to the
-  derived `keybay-v{version}` going forward.
+  derived `keybay-v{version}` going forward (pre-rk `v{version}` tags remain
+  history). This follows the target's own convention rather than diverging
+  from it: pub.dev documents `v{{version}}` for single-package repositories
+  and recommends a per-package pattern like `my_package_name-v{{version}}`
+  for repositories with several packages. Keybay is the latter, and its CLI
+  already uses the prefixed form. Migration requires one manual change —
+  updating keybay's trusted-publisher tag pattern on pub.dev — which
+  `rk setup` reports as a `manual` item; nothing external references core's
+  tag namespace, since core publishes only to pub.dev.
 - Existing environment names (`pub.dev`, `macos-signing`,
   `macos-notarization`, `homebrew-tap`) and existing secret and variable
   names are kept verbatim, so migration re-enters no secret values; only
