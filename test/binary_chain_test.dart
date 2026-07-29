@@ -1,0 +1,225 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:rk/src/builds/capability.dart';
+import 'package:rk/src/builds/dart_cli.dart';
+import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/transforms/archive.dart';
+import 'package:test/test.dart';
+
+void main() {
+  group('capability is discovered, not declared', () {
+    final onAppleSilicon = HostCapabilities(
+      hostPlatform: 'macos-arm64',
+      hasContainerRuntime: true,
+      hasNativeAssets: false,
+    );
+
+    test('the host platform is native', () {
+      expect(
+        onAppleSilicon.resolve('macos-arm64').capability,
+        Capability.native,
+      );
+    });
+
+    test('linux targets cross-compile', () {
+      expect(
+        onAppleSilicon.resolve('linux-x64').capability,
+        Capability.crossCompiled,
+      );
+      expect(onAppleSilicon.resolve('linux-arm64').canProduce, isTrue);
+    });
+
+    test('without a container runtime a cross-built binary is not shipped',
+        () {
+      final noRuntime = HostCapabilities(
+        hostPlatform: 'macos-arm64',
+        hasContainerRuntime: false,
+        hasNativeAssets: false,
+      );
+      final resolved = noRuntime.resolve('linux-x64');
+      expect(resolved.capability, Capability.buildableButUncheckable);
+      expect(resolved.canProduce, isFalse,
+          reason: 'rk does not ship what it cannot run');
+      expect(resolved.reason, contains('container runtime'));
+    });
+
+    test('native assets block cross-compilation, naming why', () {
+      final withNative = HostCapabilities(
+        hostPlatform: 'macos-arm64',
+        hasContainerRuntime: true,
+        hasNativeAssets: true,
+      );
+      final resolved = withNative.resolve('linux-x64');
+      expect(resolved.capability, Capability.blocked);
+      expect(resolved.reason, contains('C toolchain'));
+    });
+
+    test('an x64 macOS binary needs an x64 macOS host', () {
+      final resolved = onAppleSilicon.resolve('macos-x64');
+      expect(resolved.capability, Capability.blocked);
+      expect(resolved.reason, contains('host'));
+    });
+  });
+
+  group('builds', () {
+    final capabilities = HostCapabilities(
+      hostPlatform: 'macos-arm64',
+      hasContainerRuntime: true,
+      hasNativeAssets: false,
+    );
+
+    test('a native build passes the target flags nowhere', () async {
+      final tools = RecordingTools(results: {
+        'build/keybay --version': ToolResult(
+          exitCode: 0,
+          stdout: 'keybay 0.2.0\n',
+          stderr: '',
+        ),
+      });
+      final outcome = await DartCliBuilder(
+        tools: tools,
+        capabilities: capabilities,
+      ).build(
+        platform: 'macos-arm64',
+        entryPoint: 'bin/keybay.dart',
+        output: 'build/keybay',
+        workingDirectory: '/repo',
+        expectedVersion: '0.2.0',
+      );
+
+      expect(outcome.ok, isTrue, reason: outcome.problem);
+      expect(tools.calls.first, isNot(contains('--target-os')));
+    });
+
+    test('a cross build names the target and checks it in a container',
+        () async {
+      final tools = RecordingTools(results: {
+        'docker run --rm --platform linux/amd64 -v build:/w:ro '
+            'debian:bookworm-slim /w/keybay --version': ToolResult(
+          exitCode: 0,
+          stdout: 'keybay 0.2.0\n',
+          stderr: '',
+        ),
+      });
+      final outcome = await DartCliBuilder(
+        tools: tools,
+        capabilities: capabilities,
+      ).build(
+        platform: 'linux-x64',
+        entryPoint: 'bin/keybay.dart',
+        output: 'build/keybay',
+        workingDirectory: '/repo',
+        expectedVersion: '0.2.0',
+      );
+
+      expect(outcome.ok, isTrue, reason: outcome.problem);
+      expect(tools.calls.first, contains('--target-os=linux'));
+      expect(tools.calls.first, contains('--target-arch=x64'));
+      expect(tools.calls.last, contains('docker run'));
+    });
+
+    test('a binary reporting the wrong version is not accepted', () async {
+      final tools = RecordingTools(results: {
+        'build/keybay --version': ToolResult(
+          exitCode: 0,
+          stdout: 'keybay 0.1.0\n',
+          stderr: '',
+        ),
+      });
+      final outcome = await DartCliBuilder(
+        tools: tools,
+        capabilities: capabilities,
+      ).build(
+        platform: 'macos-arm64',
+        entryPoint: 'bin/keybay.dart',
+        output: 'build/keybay',
+        workingDirectory: '/repo',
+        expectedVersion: '0.2.0',
+      );
+
+      expect(outcome.ok, isFalse);
+      expect(outcome.problem, contains('0.1.0'));
+    });
+
+    test('a platform this host cannot produce is blocked, not attempted',
+        () async {
+      final tools = RecordingTools();
+      final outcome = await DartCliBuilder(
+        tools: tools,
+        capabilities: capabilities,
+      ).build(
+        platform: 'macos-x64',
+        entryPoint: 'bin/keybay.dart',
+        output: 'build/keybay',
+        workingDirectory: '/repo',
+        expectedVersion: '0.2.0',
+      );
+
+      expect(outcome.wasBlocked, isTrue);
+      expect(tools.calls, isEmpty, reason: 'nothing was even started');
+    });
+  });
+
+  group('archives are byte-reproducible', () {
+    List<int> build() => ArchiveBuilder.gzip(ArchiveBuilder.tar([
+          ArchiveEntry(
+            name: 'keybay',
+            bytes: utf8.encode('binary'),
+            executable: true,
+          ),
+          ArchiveEntry(name: 'LICENSE', bytes: utf8.encode('MIT')),
+          ArchiveEntry(name: 'README.md', bytes: utf8.encode('# keybay')),
+        ]));
+
+    test('the same inputs produce the same bytes', () {
+      expect(build(), build());
+    });
+
+    test('the gzip header records no timestamp', () {
+      final bytes = build();
+      expect(bytes.sublist(4, 8), [0, 0, 0, 0]);
+    });
+
+    test('tar records no mtime, uid, or gid', () {
+      final tar = ArchiveBuilder.tar([
+        ArchiveEntry(name: 'a', bytes: utf8.encode('x')),
+      ]);
+      String field(int offset, int length) =>
+          utf8.decode(tar.sublist(offset, offset + length)).trim();
+      expect(int.parse(field(136, 11), radix: 8), 0, reason: 'mtime');
+      expect(int.parse(field(108, 7), radix: 8), 0, reason: 'uid');
+      expect(int.parse(field(116, 7), radix: 8), 0, reason: 'gid');
+    });
+
+    test('an executable entry keeps its bit', () {
+      final tar = ArchiveBuilder.tar([
+        ArchiveEntry(name: 'a', bytes: utf8.encode('x'), executable: true),
+      ]);
+      final mode = utf8.decode(tar.sublist(100, 107)).trim();
+      expect(int.parse(mode, radix: 8), 0x1ed, reason: '0755');
+    });
+
+    test('the result is a real archive that tar can read', () async {
+      final directory = await Directory.systemTemp.createTemp('rk_tar');
+      addTearDown(() => directory.delete(recursive: true));
+
+      final file = File('${directory.path}/test.tar.gz');
+      await file.writeAsBytes(build());
+
+      final listed = await Process.run('tar', ['-tzf', file.path]);
+      expect(listed.exitCode, 0, reason: listed.stderr as String);
+      expect(
+        (listed.stdout as String).split('\n').where((l) => l.isNotEmpty),
+        ['keybay', 'LICENSE', 'README.md'],
+        reason: 'entries keep the order they were given',
+      );
+
+      final extracted = await Process.run(
+        'tar',
+        ['-xzOf', file.path, 'LICENSE'],
+      );
+      expect((extracted.stdout as String).trim(), 'MIT');
+    });
+  });
+}
