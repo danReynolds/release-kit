@@ -189,6 +189,8 @@ void main() {
     );
   });
 
+  _reviewFixes();
+
   test('a package that has never been published reads as ready', () async {
     final text = await statusOf(
       source: tree(),
@@ -197,5 +199,18 @@ void main() {
     );
     expect(text, contains('not published'));
     expect(text, contains('0.2.0 ready'));
+  });
+}
+
+// Regressions from the phase 2-3 review.
+void _reviewFixes() {
+  test('publishing behind what is live is refused', () async {
+    final text = await statusOf(
+      source: tree(coreVersion: '0.2.0'),
+      state: git(),
+      registry: FakeRegistry({'keybay': ['0.1.0', '0.5.0']}),
+    );
+    expect(text, contains('0.5.0 is already published'));
+    expect(text, isNot(contains('rk release')));
   });
 }

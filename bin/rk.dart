@@ -1,6 +1,8 @@
 import 'dart:io';
 
+import 'package:rk/src/commands/release.dart';
 import 'package:rk/src/commands/status.dart';
+import 'package:rk/src/commands/verify.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
@@ -8,6 +10,7 @@ import 'package:rk/src/engine/output.dart';
 import 'package:rk/src/engine/registry.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
+import 'package:rk/src/engine/tools.dart';
 
 const _usage = '''
 rk — an austere release tool
@@ -41,9 +44,17 @@ Future<void> main(List<String> args) async {
   switch (command) {
     case 'status':
       exitCode = await _status(output, target);
-    case 'init' || 'release' || 'verify':
-      output.line('$command is not built yet', mark: Mark.blocked);
-      output.say('rk status works today; see doc/plan.md');
+    case 'verify':
+      exitCode = await _verify(output, target);
+    case 'release':
+      exitCode = await _release(
+        output,
+        target,
+        dryRun: flags.contains('--dry-run'),
+      );
+    case 'init':
+      output.line('init is not built yet', mark: Mark.blocked);
+      output.say('write release.toml by hand for now; see doc/plan.md');
       exitCode = ExitCodes.usage;
     default:
       // A bare unit name is the common slip, so try it as one.
@@ -51,11 +62,51 @@ Future<void> main(List<String> args) async {
   }
 }
 
-Future<int> _status(Output output, String? unit) async {
+Future<int> _release(
+  Output output,
+  String? unit, {
+  required bool dryRun,
+}) async {
+  final prepared = await _prepare(output);
+  if (prepared == null) return ExitCodes.refused;
+  final (resolution, tree, registry) = prepared;
+  try {
+    return await ReleaseCommand(
+      resolution: resolution,
+      tree: tree,
+      git: GitState.read(tree.root),
+      registry: registry,
+      tools: const SystemTools(),
+      output: output,
+      confirm: promptOnTerminal,
+      dryRun: dryRun,
+    ).run(only: unit);
+  } finally {
+    registry.close();
+  }
+}
+
+Future<int> _verify(Output output, String? unit) async {
+  final prepared = await _prepare(output);
+  if (prepared == null) return ExitCodes.refused;
+  final (resolution, _, registry) = prepared;
+  try {
+    return await VerifyCommand(
+      resolution: resolution,
+      registry: registry,
+      output: output,
+    ).run(only: unit);
+  } finally {
+    registry.close();
+  }
+}
+
+/// Reads the repository and its configuration, or reports why it cannot.
+Future<(Resolution, GitSourceTree, Registry)?> _prepare(Output output) async {
   final root = GitSourceTree.findRoot(Directory.current.path);
   if (root == null) {
     output.line('this is not a git repository', mark: Mark.blocked);
-    return ExitCodes.usage;
+    return null;
   }
 
   final tree = GitSourceTree(root);
@@ -65,7 +116,7 @@ Future<int> _status(Output output, String? unit) async {
     output.blank();
     output.line('no release.toml', mark: Mark.blocked);
     output.say('rk init writes one, and changes nothing else.');
-    return ExitCodes.ok;
+    return null;
   }
 
   final diagnostics = Diagnostics();
@@ -78,15 +129,21 @@ Future<int> _status(Output output, String? unit) async {
     output.heading(root.split('/').last);
     output.blank();
     output.problems(diagnostics.found);
-    return ExitCodes.refused;
+    return null;
   }
 
-  final registry = Registry();
+  return (resolution, tree, Registry());
+}
+
+Future<int> _status(Output output, String? unit) async {
+  final prepared = await _prepare(output);
+  if (prepared == null) return ExitCodes.refused;
+  final (resolution, tree, registry) = prepared;
   try {
     return await StatusCommand(
       resolution: resolution,
       tree: tree,
-      git: GitState.read(root),
+      git: GitState.read(tree.root),
       registry: registry,
       output: output,
     ).run(only: unit);

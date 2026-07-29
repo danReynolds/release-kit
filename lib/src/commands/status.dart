@@ -46,12 +46,13 @@ class StatusCommand {
 
     output.heading(_repositoryLine());
 
-    var blocked = false;
     for (final unit in units) {
-      final report = await _unit(unit);
-      blocked = blocked || report;
+      await _unit(unit);
     }
 
+    // Blocked is a state, not a failure: a unit waiting on a changelog entry
+    // is rk working. Only a refusal — configuration rk cannot read — exits
+    // non-zero, and that happens before this command runs.
     return ExitCodes.ok;
   }
 
@@ -65,8 +66,8 @@ class StatusCommand {
     return parts.join(' · ');
   }
 
-  /// Reports one unit, returning whether anything blocks it.
-  Future<bool> _unit(ResolvedUnit unit) async {
+  /// Reports one unit.
+  Future<void> _unit(ResolvedUnit unit) async {
     output.blank();
 
     final problems = Diagnostics();
@@ -85,15 +86,19 @@ class StatusCommand {
       );
     }
 
-    _checkMonotonic(unit, problems);
+    await _checkMonotonic(unit, problems);
     _checkRepositoryState(unit, problems);
 
     final live = _liveSummary(unit, inspections);
-    final released = inspections.values.every((i) => i.isExact);
+
+    // `every` on an empty map is true, which would report a binary-only unit
+    // — one with nothing on a registry — as already released.
+    final released =
+        inspections.isNotEmpty && inspections.values.every((i) => i.isExact);
 
     if (released) {
       output.line(unit.name, note: '$live — nothing to release');
-      return false;
+      return;
     }
 
     if (problems.isNotEmpty) {
@@ -101,7 +106,7 @@ class StatusCommand {
       for (final problem in problems.found) {
         output.problem(problem, depth: 1);
       }
-      return true;
+      return;
     }
 
     output.line(unit.name, note: '$live → ${unit.version} ready');
@@ -113,12 +118,11 @@ class StatusCommand {
           depth: 1,
           note: entry.value.detail,
         );
-        return true;
+        return;
       }
     }
 
     _printPlan(unit);
-    return false;
   }
 
   /// One line describing what is public today.
@@ -153,7 +157,32 @@ class StatusCommand {
 
   /// A version must exceed everything already published, and a tag must
   /// exceed every earlier tag in its namespace.
-  void _checkMonotonic(ResolvedUnit unit, Diagnostics problems) {
+  ///
+  /// The registry half matters most: a tag can be missing entirely, and
+  /// publishing behind what is live is the highest-ranked failure this design
+  /// exists to prevent.
+  Future<void> _checkMonotonic(ResolvedUnit unit, Diagnostics problems) async {
+    for (final project in unit.projects) {
+      if (!project.channels.contains('pub.dev')) continue;
+      final RegistryPackage? published;
+      try {
+        published = await registry.lookup(project.name);
+      } on Object {
+        continue; // unreachable is reported by the inspection instead
+      }
+      final latest = published?.latest;
+      if (latest == null) continue;
+      if (latest.version > project.version) {
+        problems.add(
+          'RK-MONO-002',
+          '${project.name} ${latest.version} is already published, and this '
+              'would publish ${project.version}',
+          source: SourceLocation(project.pubspec.path, project.pubspec.versionLine),
+          remedy: 'a release moves forward — bump past ${latest.version}',
+        );
+      }
+    }
+
     for (final tag in git.tagsMatching(unit.tagPattern)) {
       final raw = GitState.versionIn(tag, unit.tagPattern);
       if (raw == null) continue;
