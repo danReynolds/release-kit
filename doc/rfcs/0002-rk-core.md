@@ -443,6 +443,40 @@ act atomicity, post-crash inspectability (a platform that cannot be
 classified after a partial submit fails the proposal), whether a
 pre-publication area exists, and its native auth flow.
 
+## Agents
+
+rk is used by people at terminals and by agents acting on their behalf, and
+both use **the same CLI**. There is no second surface: an agent-specific
+server would shell out to this engine anyway, so it would add drift between
+two interfaces, a runtime dependency the signing path must not have, and a
+long-running process holding publish authority. If a particular agent host
+needs a protocol adapter later, it belongs in a separate package wrapping
+the CLI, never in rk core.
+
+What makes the CLI sufficient is already required for other reasons:
+
+- **`--json` on every command**, stable, keyed on step id, surviving a
+  non-zero exit and carrying `safe_to_rerun`. An agent decides whether to
+  retry from data rather than by parsing prose.
+- **Read-only verbs are always safe.** `status` and `verify` change
+  nothing, so an agent may run them freely, including across a fleet by
+  invoking rk once per repository.
+- **Idempotence.** Re-running is the resume, so an agent that loses track
+  of a run recovers by running the same command again.
+- **Next actions are data.** `status --json` names the command that would
+  advance the release, so an agent can chain without inferring intent from
+  formatting.
+
+**Authorization is unchanged for agents.** An agent is a non-interactive
+caller, so the confirmation rule applies as written: without a human at the
+terminal, a release proceeds only when an authorizing tag exists and its
+signature verifies. That is the same path CI will take, and it is the point
+of having a durable authorization carrier at all — the human signs, the
+machine executes. There is no agent exemption and no `--yes`: an agent
+running unattended is precisely the case that must fail closed. In
+practice the division is: the agent reports what is ready and why, the
+human authorizes by tagging, and the agent executes and verifies.
+
 ## CI readiness
 
 CI is deferred from the MVP, not designed out. Releasing locally first is
