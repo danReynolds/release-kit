@@ -21,6 +21,13 @@ class ReleaseConfig {
   /// The channels a project may publish to.
   static const channels = {'pub.dev', 'github-release', 'homebrew'};
 
+  /// The closed, enumerable platform vocabulary, matching public asset names.
+  static const supportedPlatformsList = [
+    'linux-x64',
+    'linux-arm64',
+    'macos-arm64',
+  ];
+
   /// Channels that produce per-platform binaries.
   static const platformBearingChannels = {'github-release', 'homebrew'};
 
@@ -492,12 +499,12 @@ class _Reader {
 
     final seen = <String>{};
     for (final platform in value) {
-      if (!supportedPlatforms.contains(platform)) {
+      if (!ReleaseConfig.supportedPlatformsList.contains(platform)) {
         _diagnostics.add(
           'RK-CONF-028',
           'unknown platform "$platform"',
           source: table.locationOf('binary_platforms'),
-          remedy: 'rk builds ${supportedPlatforms.join(', ')}',
+          remedy: 'rk builds ${ReleaseConfig.supportedPlatformsList.join(', ')}',
         );
         return null;
       }
@@ -512,13 +519,6 @@ class _Reader {
     }
     return value;
   }
-
-  /// The closed, enumerable platform vocabulary, matching public asset names.
-  static const supportedPlatforms = [
-    'linux-x64',
-    'linux-arm64',
-    'macos-arm64',
-  ];
 
   IdentityConfig? _identity() {
     final value = _root['identity'];

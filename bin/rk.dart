@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:rk/src/commands/init.dart';
 import 'package:rk/src/commands/release.dart';
 import 'package:rk/src/commands/status.dart';
 import 'package:rk/src/commands/verify.dart';
@@ -65,13 +66,34 @@ Future<void> main(List<String> args) async {
         dryRun: flags.contains('--dry-run'),
       );
     case 'init':
-      output.line('init is not built yet', mark: Mark.blocked);
-      output.say('write release.toml by hand for now; see doc/plan.md');
-      exitCode = ExitCodes.usage;
+      exitCode = await _init(output);
     default:
       // A bare unit name is the common slip, so try it as one.
       exitCode = await _status(output, command);
   }
+}
+
+Future<int> _init(Output output) async {
+  final root = GitSourceTree.findRoot(Directory.current.path);
+  if (root == null) {
+    output.line('this is not a git repository', mark: Mark.blocked);
+    return ExitCodes.usage;
+  }
+  final tree = GitSourceTree(root);
+
+  return InitCommand(
+    tree: tree,
+    output: output,
+    write: (path, contents) =>
+        File('$root/$path').writeAsStringSync(contents),
+    confirm: stdin.hasTerminal
+        ? (prompt) async {
+            stdout.write(prompt);
+            final answer = stdin.readLineSync()?.trim().toLowerCase() ?? '';
+            return answer.isEmpty || answer == 'y' || answer == 'yes';
+          }
+        : null,
+  ).run();
 }
 
 Future<int> _release(
