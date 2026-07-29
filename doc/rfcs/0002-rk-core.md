@@ -288,24 +288,25 @@ release**, where no baseline exists yet. In that case:
   product decision the schema asks for, requested once, at the only moment
   it can be made.
 
-`rk check` states plainly what a first release will establish, and `rk release`
+`rk status` states plainly what a first release will establish, and `rk release`
 requires confirmation before establishing it. Keybay needs
 none of this: its 0.1.0 release supplies every baseline.
 
 A derived fact is verified against reality, so it needs the network; an
-offline `rk check` reports identity as unverified rather than pretending.
+offline `rk status` reports identity as unverified rather than pretending.
 `code_id` is semantically unit-scoped and moves under its unit if a
 repository ever ships two signed binaries.
 
 ## The four verbs
 
-`rk init` · `rk check` · `rk release` · `rk verify` — prepare, validate,
-execute, prove. Bare `rk` runs `check`. rk never creates a git object.
+`rk init` · `rk status` · `rk release` · `rk verify` — prepare, orient,
+execute, prove. Bare `rk` runs `status`. rk never creates a git object.
 
 They divide by effect, which is why none collapses into another: `init`
-creates setup, `check` only reads, `release` changes the world, `verify`
+creates setup, `status` only reads, `release` changes the world, `verify`
 proves the world matches. Names are the user's words rather than the
-engine's — a person who wants to release types `release`.
+engine's — a person who wants to release types `release`, and a person
+wondering where things stand types `status`.
 
 Configuration files have no type checking, so discoverability is a design
 obligation, met three ways: `rk init` writes the initial config so fields
@@ -313,35 +314,50 @@ are proposed rather than memorized; fail-closed diagnostics name the
 missing field, why it applies, and the values rk can offer; and a published
 JSON Schema gives editors autocomplete and inline validation.
 
-- **`rk init`** — onboard a repository; re-run any time to detect drift.
-  Two phases, chosen by what exists rather than by a flag. With no
-  `release.toml`, it analyzes the repository — packages found, which
-  declare executables, which are vetoed by `publish_to`, existing tags and
-  published releases — writes a commented config with `binary_platforms`
-  prefilled with every target rk can build, and stops so the human prunes
-  and commits. It proposes only, never editing an existing config or adding
-  a project silently. With a config present, it derives the required
-  registrations from the declared channels, creates what the provider API
-  allows using the operator's own credentials, and reports what passed as a
+- **`rk init`** — onboard a repository in one run, and re-run any time to
+  reconcile drift. With no `release.toml`, it analyzes the repository —
+  packages found, which declare executables, which are vetoed by
+  `publish_to`, existing tags and published releases — writes a commented
+  config with `binary_platforms` prefilled with every target rk can build,
+  **displays it, and asks to continue**. Continuing provisions the
+  provider-side registrations in the same run; declining leaves the file
+  for editing and a later run picks up from there. It proposes only, never
+  editing an existing config or adding a project silently, and without a
+  human present it writes the file and stops rather than provisioning
+  against unreviewed guesses. Provisioning creates what the provider API
+  allows using the operator's own credentials and reports what passed as a
   count, what needs the human with the exact fix, and what can only be
   proven when a release first uses it. Operator-local by necessity:
   `GITHUB_TOKEN` has no `administration` permission.
-- **`rk check`** — read-only, and the only verb that changes nothing.
-  Validates, derives the checklist, annotates it with reality probes, and
-  answers the three questions a release raises: *am I ready*, *what will
-  happen*, and — with a tag — *where is the one in flight*. When ready it
-  prints the exact command to authorize, including any signing
-  prerequisites git needs configured. Where the GitHub Actions provider is
-  in use, it verifies the caller workflow byte-matches what rk emits.
+- **`rk status`** — read-only, and the only verb that changes nothing. It
+  answers *where does this project stand* by comparing local state against
+  published reality, per unit: the live version at each destination and
+  when it was published, the version the manifests declare, whether local
+  is ahead, how much has changed since the last release, and — when one is
+  in flight — exactly how far it got. It reports anything that would block
+  a release, and when nothing does, the exact command to authorize one.
+  Where the GitHub Actions provider is in use, it verifies the caller
+  workflow byte-matches what rk emits. No flag distinguishes these modes:
+  an in-flight release is a fact about reality, so `status` finds it.
 - **`rk release`** — execute. Re-validates independently rather than
-  trusting `check` was run, verifies the authorization signature where one
+  trusting `status` was run, verifies the authorization signature where one
   exists, then inspects before acting at every step; halts on `conflict` or
   `undeterminable`; safe to re-run at any point. The unit's version comes
-  from its manifest and is never typed: `rk release cli` states the version
-  it read and proceeds under the confirmation rule below.
+  from its manifest and is never typed.
 - **`rk verify`** — re-download everything public and compare, using no
   local state, so anyone can run it against any past release at any later
   date.
+
+### What status reports
+
+Per unit, in configuration order: the live version at each destination with
+its publication date; the local manifest version and whether it is ahead;
+the count of commits since the last release, as the plain answer to "is
+there anything to ship"; any in-flight release and the per-destination
+progress; and any condition that would block — a version and changelog that
+disagree, a dirty working tree, a local commit not on the remote, an
+unsatisfied first-party prerequisite. Identity derived from the published
+release is stated so drift is visible before it becomes a `conflict`.
 
 ### The confirmation rule
 
@@ -361,11 +377,11 @@ authorization; an unattended job without one is exactly the case that
 should fail closed.
 
 Deliberately absent: no `tag`, because creating a git object is the user's
-own tool and `rk release` must validate independently anyway, so a wrapper
-adds a verb without adding a guarantee; no `build`, `publish`, or
-`promote`, because exposing steps invites running one out of order; no
-`status`, because `check` derives it; no `clean`, because the workspace
-deletes itself; and no `--force`, `--skip`, or `--retry-anyway`.
+own tool and `rk release` must validate independently anyway; no `build`,
+`publish`, or `promote`, because exposing steps invites running one out of
+order; no `check` separate from `status`, because readiness is part of
+where things stand; no `clean`, because the workspace deletes itself; and
+no `--force`, `--skip`, or `--retry-anyway`.
 
 ### Output contract
 
@@ -528,7 +544,7 @@ pre-publication area, its adapter must use it.
 Published assets are the product and are never cleaned up. The workspace is
 deleted by the run that brings its release to `complete`; a failed step or
 non-clean verdict keeps it for diagnosis. In CI, provider retention expires
-it. Residue of an abandoned release is surfaced by `rk check` with sizes,
+it. Residue of an abandoned release is surfaced by `rk status` with sizes,
 and deleted only by a human.
 
 ### Mutable pointers
@@ -662,7 +678,7 @@ trigger, its own job body declaring `environment: macos-signing` — steals
 that environment's secret at the next release, with the deployment-approval
 prompt arriving exactly when the operator expects a release. Therefore:
 
-- `rk check` renders the caller workflow rk would emit and byte-diffs it
+- `rk status` renders the caller workflow rk would emit and byte-diffs it
   against the file on disk, failing on any difference. This runs *before*
   the tag exists, and the signed tag covers `.github/workflows/`, which is
   what makes the signature meaningful.
@@ -779,7 +795,7 @@ stored long-lived registry token, which this design avoids. A project
 willing to publish with a stored token or a local login session needs no
 tag at all.
 
-rk therefore **never creates a git object**. `rk check` prints the exact
+rk therefore **never creates a git object**. `rk status` prints the exact
 `git tag` command when a tag is required, `rk release` verifies the resulting
 signature, and git's role stops there.
 
@@ -812,7 +828,7 @@ acceptance smoke test. Both are required; a binary that cannot be run
 cannot be accepted, and rk never lowers that bar for local convenience.
 
 The `dart-cli` adapter resolves both per platform and reports the result in
-`rk check`:
+`rk status`:
 
 - **Native** — the host's own OS and architecture. Build and execute
   directly.
@@ -917,7 +933,7 @@ project tools; product tests stay in product CI.
 1. Engine + `dart` + `pub-dev` → release keybay core (`keybay-v0.2.x`).
 2. Binary chain + `github-release` + `homebrew-tap` → release keybay cli.
    Retires the 806-line workflow.
-3. Fleury: `rk check` prints the ordered interactive bootstrap for the five
+3. Fleury: `rk status` prints the ordered interactive bootstrap for the five
    packages (`first-publish`), the human runs them in dependency order,
    trusted publishers are registered after each package exists, then rk
    owns every subsequent version.
