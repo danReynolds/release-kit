@@ -50,7 +50,7 @@ look — verify identity rather than acceptability at every handoff.
    architecture, right version string) is not identity and never authorizes
    reuse.
 8. **Fail closed.** Unknown fields, ambiguity, version mismatches, missing
-   credentials, undeterminable state: stop before any effect, with the exact
+   credentials, unknown state: stop before any effect, with the exact
    remediation named. No hooks, no templates, no `--force`. Refusal is a
    feature.
 9. **Verify public state.** Everything published is re-downloaded and
@@ -85,9 +85,12 @@ Ranked by probability times cost for this fleet:
 
 - **Release** — one unit at one version, identified by its tag, spanning
   authorization to verified-public. Never called a workflow or a pipeline.
-- **Unit** — a named set of projects released together at one version under
-  one tag pattern (keybay `core`, keybay `cli`, fleury `framework`).
-  Independently versioned projects belong to different units.
+- **Unit** — a named set of projects released together under one tag
+  pattern (keybay `core`, keybay `cli`, fleury `framework`). The tag names
+  the release; each project's version comes from its own manifest. Projects
+  in a unit normally move together, but they are not required to be
+  identical: after a partial publish they cannot be, and recovery must
+  remain possible.
 - **Checklist** — the deterministic, ordered set of steps rk derives for a
   release from the manifests and `release.toml`. Pure data; identical on
   every machine.
@@ -96,7 +99,7 @@ Ranked by probability times cost for this fleet:
 - **Run** — one invocation of `rk release` executing a release's checklist,
   locally or in CI. A release completes over one or more runs.
 - **Verdict** — the result of inspecting a coordinate: `absent`, `exact`,
-  `conflict`, or `undeterminable`.
+  `conflict`, or `unknown`.
 - **Arc** — a release's position: `declared` → `checked` → `authorized` →
   `in progress` → `complete`. Status is the arc position plus per-step
   annotation (`done`, `ready`, `blocked`), always computed from reality,
@@ -224,9 +227,13 @@ Rules:
   version; content assertions are commands in disguise.
 - Native vetoes are absolute: `publish_to: none` cannot be overridden.
 - Versions come from manifests; the tag must agree exactly.
-- **Monotonicity:** the release version must exceed every version already
-  published for that package and every existing tag in the unit's
-  namespace. Otherwise `conflict`. Per-coordinate verdicts are structurally
+- **Monotonicity:** a project's version must exceed every version already
+  published for that package, and the release tag must exceed every earlier
+  tag in the unit's namespace — excluding the tag authorizing this release,
+  so resuming a partially published unit is possible. A project already live
+  at its manifest version inspects as `exact` and is skipped, which is what
+  makes resume work after two of four packages have shipped. Otherwise
+  `conflict`. Per-coordinate verdicts are structurally
   blind to "older than what is live"; this rule is what keeps failure #1
   from publishing a back-version.
 
@@ -280,6 +287,14 @@ release**, where no baseline exists yet. In that case:
   files typically belong to example or sample apps whose signing identity
   is unrelated to the released binary, so scanning for them finds a
   confident wrong answer.
+- **Tag signer**, for a repository whose earlier tags are unsigned or
+  absent, is the key about to sign, confirmed once — the same ceremony as
+  the code identifier. Every project adopting rk after publishing by hand
+  is in this case, so it cannot be left undefined. rk also checks that git
+  signing is configured *before* printing a `git tag -s` command, and
+  prints the SSH signing setup when it is not: most developers have no
+  signing key, and `gpg failed to sign the data` is a dead end with rk's
+  name nowhere in it.
 - **Code identifier** has no source, because it is a name a human chooses
   and then cannot change without breaking Keychain continuity for existing
   users. rk proposes reverse-DNS from the repository and package
@@ -302,62 +317,65 @@ repository ever ships two signed binaries.
 `rk init` · `rk status` · `rk release` · `rk verify` — prepare, orient,
 execute, prove. Bare `rk` runs `status`. rk never creates a git object.
 
-They divide by effect, which is why none collapses into another: `init`
-creates setup, `status` only reads, `release` changes the world, `verify`
-proves the world matches. Names are the user's words rather than the
-engine's — a person who wants to release types `release`, and a person
-wondering where things stand types `status`.
+Every verb takes **one optional positional**: a unit name or a tag. There is
+no `--tag` flag; a tag already maps to exactly one unit by construction, so
+`rk release keybay_cli-v0.2.0` is the same grammar CI uses. Bare invocation
+works in a single-unit repository and, in a multi-unit one, lists the units
+and stops rather than guessing or offering a menu — choosing what to publish
+permanently is not an arrow key.
 
-Configuration files have no type checking, so discoverability is a design
-obligation, met three ways: `rk init` writes the initial config so fields
-are proposed rather than memorized; fail-closed diagnostics name the
-missing field, why it applies, and the values rk can offer; and a published
-JSON Schema gives editors autocomplete and inline validation.
+- **`rk init`** — onboard a repository; re-run any time to reconcile drift.
+  It asks **one question first, because it determines everything else**:
+  will releases run from this machine or from CI? A local answer removes
+  tags, tag signing, trusted publishing, environments, rulesets, immutable
+  releases, attestations, and the caller workflow from the entire
+  experience; `rk init --ci` adds them later, once the user has a successful
+  release behind them and the trade is concrete.
 
-- **`rk init`** — onboard a repository in one run, and re-run any time to
-  reconcile drift. With no `release.toml`, it analyzes the repository —
-  packages found, which declare executables, which are vetoed by
-  `publish_to`, existing tags and published releases — writes a commented
-  config with `binary_platforms` prefilled with every target rk can build,
-  **displays it, and asks to continue**. Continuing provisions the
-  provider-side registrations in the same run; declining leaves the file
-  for editing and a later run picks up from there. It proposes only, never
-  editing an existing config or adding a project silently, and without a
-  human present it writes the file and stops rather than provisioning
-  against unreviewed guesses. Provisioning creates what the provider API
-  allows using the operator's own credentials and reports what passed as a
-  count, what needs the human with the exact fix, and what can only be
-  proven when a release first uses it. Operator-local by necessity:
-  `GITHUB_TOKEN` has no `administration` permission.
+  Then **two separate consents**, never one. First the files — reversible,
+  no network: the proposed `release.toml` shown in full, and for a CI answer
+  the caller workflow it must also write. Then, only for a CI answer, the
+  provider plan — shown **before** it acts, itemized, with the blast radius
+  of each item. Immutable releases is its own line because deleting an
+  immutable release permanently burns the tag name.
+
+  It proposes only: it never edits an existing config, never adds a project
+  silently, scans **git-tracked manifests only**, and does not prefill
+  `binary_platforms` unless a platform-bearing channel is present — the
+  field is rejected without one, so prefilling it writes a file rk's own
+  validator refuses. Nor does it infer a binary channel from an
+  `executables:` block: declaring an executable is how a package says
+  `dart pub global activate` works, not "ship me a signed tarball."
+
+  Where nothing can be provisioned yet — a registry cannot register a
+  trusted publisher for a package that does not exist — it says so and names
+  the bootstrap sequence instead of printing unactionable manual items. A
+  repository with nothing releasable exits **0**: "nothing to release" is a
+  correct answer, not a refusal.
 - **`rk status`** — read-only, and the only verb that changes nothing. It
-  answers *where does this project stand* by comparing local state against
-  published reality, per unit: the live version at each destination and
-  when it was published, the version the manifests declare, whether local
-  is ahead, how much has changed since the last release, and — when one is
-  in flight — exactly how far it got. It reports anything that would block
-  a release, and when nothing does, the exact command to authorize one.
-  Where the GitHub Actions provider is in use, it verifies the caller
-  workflow byte-matches what rk emits. No flag distinguishes these modes:
-  an in-flight release is a fact about reality, so `status` finds it.
-- **`rk release`** — execute. Re-validates independently rather than
-  trusting `status` was run, verifies the authorization signature where one
+  answers *where does this stand* by comparing local state against published
+  reality: the live version and publication date per destination, the
+  manifest version, whether local is ahead, commits since the last release,
+  in-flight progress, and anything blocking. Clean units collapse to one
+  line; only what needs a human expands. When ready it prints the exact
+  authorizing command, and when a release is in flight it prints the exact
+  resume command. `--watch` follows an in-flight release to completion;
+  `--exit-code` makes a blocked unit exit non-zero so CI can gate on it
+  (blocked is otherwise exit 0, since it is a state, not a failure).
+- **`rk release`** — execute. It **refuses at the start any release it
+  cannot finish**, rather than discovering it at the last step: a unit whose
+  archives require attestations cannot complete from a laptop, and that is
+  knowable from configuration before a single byte is compiled. Otherwise it
+  re-validates independently, verifies the authorization signature where one
   exists, then inspects before acting at every step; halts on `conflict` or
-  `undeterminable`; safe to re-run at any point. The unit's version comes
-  from its manifest and is never typed.
-- **`rk verify`** — re-download everything public and compare, using no
-  local state, so anyone can run it against any past release at any later
-  date.
-
-### What status reports
-
-Per unit, in configuration order: the live version at each destination with
-its publication date; the local manifest version and whether it is ahead;
-the count of commits since the last release, as the plain answer to "is
-there anything to ship"; any in-flight release and the per-destination
-progress; and any condition that would block — a version and changelog that
-disagree, a dirty working tree, a local commit not on the remote, an
-unsatisfied first-party prerequisite. Identity derived from the published
-release is stated so drift is visible before it becomes a `conflict`.
+  `unknown`; safe to re-run at any point.
+- **`rk verify`** — takes a **tag**, and resolves `release.toml` and sources
+  **at that tag**, not from the working tree, so verifying an old release
+  against today's configuration is impossible. With no argument it verifies
+  the latest published release of every unit. On success it prints the
+  provenance the operator would otherwise keep records for — when each
+  destination received it, from which commit, signed by whom — and names
+  what is *not* knowable rather than omitting it.
 
 ### The confirmation rule
 
@@ -365,51 +383,85 @@ Whether `rk release` prompts is decided by whether the release is already
 authorized, not by a flag:
 
 - **an authorized tag exists and its signature verifies** — proceed without
-  prompting; the signature is the authorization, and re-asking would be
-  theatre;
-- **no tag, and a human is at the terminal** — prompt with the full
-  consequences; the operator's confirmation, backed by their possession of
-  the publishing credentials, is the authorization;
+  prompting; the signature is the authorization;
+- **no tag, and a human is at the terminal** — prompt; the operator's
+  confirmation, backed by their possession of the publishing credentials, is
+  the authorization. Where the act is permanent, the confirmation is
+  **typing the version**, not a keystroke: "wrong version" is the
+  highest-ranked failure in this design, and it is the only defense that
+  targets it directly;
 - **no tag and no human** — refuse; nothing authorized this.
 
-There is no `--yes`. CI does not need one, because its tag is the
-authorization; an unattended job without one is exactly the case that
-should fail closed.
+There is no `--yes` and no `--force`. Every classic use of a force flag has
+a real path: a permanent registry conflict cannot be forced because the
+permanence is server-side, an `unknown` verdict needs a retry which is free,
+and a wedged draft is unblocked by a command rk prints for the human to run.
 
-Deliberately absent: no `tag`, because creating a git object is the user's
-own tool and `rk release` must validate independently anyway; no `build`,
-`publish`, or `promote`, because exposing steps invites running one out of
-order; no `check` separate from `status`, because readiness is part of
-where things stand; no `clean`, because the workspace deletes itself; and
-no `--force`, `--skip`, or `--retry-anyway`.
+Deliberately absent: no `tag` verb, because creating a git object is the
+user's own tool; no `build`, `publish`, or `promote`, because exposing steps
+invites running one out of order; no `check`, because readiness is part of
+where things stand; no `dry-run`, because `status` is the dry run and the
+prompt is the plan; no `clean`, because the workspace deletes itself.
 
 ### Output contract
 
-Default output answers the user's question; `-v` prints the audit trail.
-The internal distinctions rk tracks — which checks are queryable, which are
-provable only inside a credential context — are real, but they are not the
-user's vocabulary. Output is organized by **what the reader must do**:
+Default output answers the user's question; `-v` prints the audit trail and
+must name what the default collapsed. Internal distinctions — which checks
+are queryable, which are provable only inside a credential context — are
+real but are not the user's vocabulary, and neither are `unit`,
+`coordinate`, `credential context`, or verdict nouns: those belong to `-v`
+and `--json`.
 
-- what passed, collapsed to a count;
-- what needs the human, listed with the exact fix;
-- what cannot be known yet, stated once as a footnote.
+**Collapse.** Anything already true collapses; only what needs a human
+expands. A grouping level with exactly one child collapses onto its parent's
+line, so a single-package repository renders as one line rather than a
+four-level tree for one thing. Genuine austerity is fewer lines *because*
+the clean cases collapse, not fewer words in the lines that matter.
 
-Every command reports **all** problems in one pass rather than stopping at
-the first, so a fix cycle is one edit round rather than several. Every
-problem names its source location where one exists (file, line) and the
-concrete remediation, never just the violated rule.
+**Attention.** The verdict is the first thing on the line, in a gutter, not
+the last thing at column sixty; scanning column zero tells the reader which
+units need them. Glyphs carry meaning with a word beside them, never colour
+alone: `+` will create · `·` already satisfied · `~` in progress · `✓`
+proven · `!` needs a human · `✗` blocked or conflicting · `?` unknown · `–`
+expected absent · `→` your next move. `NO_COLOR` and non-TTY are honoured,
+and progress lines are transient and never written when stdout is not a TTY.
 
-Output is grouped the way the configuration is written — unit, then
-project, then channel, then platform where a channel has several — so a
-reader maps a line of `release.toml` to its consequences without
-translating. A release concerns one unit, so a release view shows that
-unit; a whole-repository view shows every unit it could release.
+**Every halt opens with a plain sentence** answering the only two questions
+an operator has, *before* any verdict noun: did anything happen, and is
+re-running safe. Three sentences cover every case — "rk stopped before
+acting. nothing changed. safe to re-run." / "rk acted, then lost sight of
+the result. an effect may exist. still safe to re-run." / "rk did not act.
+this cannot be fixed by re-running." A halt also states what is **already
+permanent** before its remediation, because that is the question a person
+actually has.
 
-Machine-readable form is available for every command, and the step id
-(`<unit>/<adapter>/<coordinate>`) is stable across runs. Exit codes: `0`
-clean or complete, `1` refusal (validation error, `conflict`, or
-`undeterminable`), `2` usage. `blocked` is informational and never nonzero
-by itself.
+**Every conflict prints the difference, not the fact of one.** A content
+conflict names the differing files and their digests; a formula conflict
+prints the line diff; two drafts print a per-object asset table. "A human
+decides" is only true if the human is given the evidence.
+
+**Refusing to act is not refusing to instruct.** Where rk will not perform a
+destructive step, it prints the exact command the operator can run, with
+identifiers filled in, and the one-line reason rk will not run it itself.
+
+Every command reports **all** problems in one pass, each naming its source
+location and the concrete remediation. Output is grouped the way the
+configuration is written — unit, then project, then channel, then platform —
+subject to the collapse rule.
+
+`--json` is the named machine surface, stable, keyed on the step id
+`<unit>/<adapter>/<coordinate>`, and it survives a non-zero exit, carrying
+`safe_to_rerun` as an explicit field. Exit codes: `0` clean, complete, or
+blocked; `1` refusal (validation error, `conflict`, or `unknown`); `2`
+usage.
+
+**Diagnosis.** Reality records what exists and nothing about why a run
+failed — a notary rejection reason, a 502 sequence, a provider request id.
+On any non-clean exit rk writes `.rk/work/<tag>-<commit>/diagnosis/` with
+the resolved checklist, per-step verdicts and durations, redacted provider
+request metadata, and native tool stderr, and the CI glue uploads it. This
+is not a state store: rk never reads it back, it carries no authority, and
+deleting it is always safe.
 
 ## Execution model
 
@@ -418,9 +470,13 @@ tag) → **in progress** across one or more runs → **complete**.
 
 The checklist is a deterministic function of the manifests plus
 `release.toml`. Ordering comes from native dependency pins: within a unit,
-publication order follows first-party dependencies; across units, an exact
-first-party pin becomes a public-reality prerequisite. No `requires`
-language exists.
+publication order follows first-party dependencies; across units, a
+first-party dependency becomes a public-reality prerequisite. The required
+version comes from the depended-on project's own manifest — never from the
+pin's form — and rk checks that it satisfies the pin. Deriving only from
+exact pins would fire on an unusual `1.2.3` pin and miss the ordinary
+`^1.2.3` that most packages use, silently dropping the prerequisite. No
+`requires` language exists.
 
 ### Verdicts
 
@@ -428,13 +484,17 @@ language exists.
   (an authenticated 404 or empty list).
 - `exact` — verified equal; skip and continue.
 - `conflict` — halt loudly; a human decides.
-- `undeterminable` — timeout, 403, 429, 5xx, or network failure. Halt
-  without effect. Never collapsed into `absent`.
+- `unknown` — rk could not determine the coordinate's state: timeout, 403,
+  429, 5xx, or network failure. Never collapsed into `absent`. Two shapes
+  needing different guidance: **pre-act**, where rk never wrote and the
+  world is unchanged, and **post-act**, where rk wrote and lost the
+  response, so an effect may exist and the next run must classify what it
+  finds rather than blindly retrying.
 
 After rk's own act on a coordinate, or when an act returns "already
 exists," inspection polls to a bounded deadline before concluding anything
 — destination APIs lag their own writes. Deadline expiry is
-`undeterminable`.
+`unknown`.
 
 ### Identity of reusable artifacts
 
@@ -679,7 +739,11 @@ that environment's secret at the next release, with the deployment-approval
 prompt arriving exactly when the operator expects a release. Therefore:
 
 - `rk status` renders the caller workflow rk would emit and byte-diffs it
-  against the file on disk, failing on any difference. This runs *before*
+  against the file on disk, failing on any difference. The emitted file is
+  stamped with the rk version that wrote it and compared against *that*
+  version's template, so upgrading rk mid-incident cannot block every
+  release on a template change — which would otherwise require re-tagging
+  to fix, and a creation-restricting ruleset may forbid it. This runs *before*
   the tag exists, and the signed tag covers `.github/workflows/`, which is
   what makes the signature meaningful.
 - The reusable release workflow is pinned by 40-hex commit SHA, with the
@@ -697,7 +761,7 @@ Every adapter step implements inspect, act, verify; destination adapters
 share one interface:
 
 ```text
-inspect(coordinate) -> absent | exact | conflict | undeterminable
+inspect(coordinate) -> absent | exact | conflict | unknown
 stage(final asset)          # only where a staging area exists
 publish()
 verify(public vs expected)  # never in a credential context
@@ -705,10 +769,18 @@ verify(public vs expected)  # never in a credential context
 
 v1 inventory:
 
-- **`dart`** (ecosystem): parses pubspec/workspace/lockfile; validates
-  version↔tag agreement, changelog entry, `dart pub get
-  --enforce-lockfile` from a clean resolve, publish dry-run; derives
-  ordering and prerequisites from exact first-party pins.
+- **`dart`** (ecosystem): parses pubspec, workspace, lockfile, and any
+  `pubspec_overrides.yaml`; validates version↔tag agreement, changelog
+  entry, and a publish dry-run; derives ordering and prerequisites from
+  first-party dependencies. Two rules learned from real repositories:
+  lockfile enforcement applies to **compiled-binary units only**, because
+  Dart's own guidance tells library authors not to commit a lockfile and
+  requiring one would refuse the most common package shape; and a
+  **consumer resolve** — resolution with development overrides disabled —
+  is mandatory before publishing, because pub excludes
+  `pubspec_overrides.yaml` from the archive but honours it locally, so a
+  dry-run can pass while the published package is unresolvable for
+  everyone else.
 - **`dart-cli`** (build): `dart compile exe` per platform; native runners in
   CI (arm64 Linux runners are GA and free for public repositories), and
   native, cross-compiled, or emulator-assisted locally per the capability
@@ -987,12 +1059,19 @@ include: the caller workflow as trusted code with byte-diff verification
 and OIDC self-assertion; identity-not-acceptability as a first-class
 principle; draft adoption by enumeration, hash-idempotent staging, narrow
 staging repair, and pre-flip re-verification; deletion of cross-run
-workspace warming; version monotonicity; the `undeterminable` verdict;
+workspace warming; version monotonicity; the `unknown` verdict;
 external verification of `code_id`; the three-outcome onboarding
 vocabulary and operator-local scoping; corrected pub.dev pinning semantics
 (no workflow field) and explicit OIDC minting; SSH tag signing; the
 trusted-execution-boundary section; the output contract; and terminology
-fixes. Subsequent austerity passes removed the `[toolchain]`, `[archive]`,
+fixes. A second round of four reviews — CLI design, a first-run newcomer, an
+operator debugging under pressure, and other project shapes — produced the
+local-first onboarding question, per-project versions within a unit,
+prerequisite derivation from the configured project rather than pin form,
+conditional lockfile enforcement, the consumer-resolve check, fail-early
+refusal of impossible releases, the halt sentence, conflict evidence, the
+collapse rule, the `unknown` rename, tag-anchored verification, and the
+diagnosis bundle. Subsequent austerity passes removed the `[toolchain]`, `[archive]`,
 and `[homebrew]` tables and the required `[identity]` block in favour of
 derivation, and merged config authoring into `rk init`. Rejected:
 restoring any mechanism from RFC 0001's ladder — no finding required one.

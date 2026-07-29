@@ -12,8 +12,8 @@ scopes — trusted publishing, scoped credentials, protected environments, tag
 rules — are the policy engine; rk sets them up correctly and verifies them
 relentlessly.
 
-Four verbs: `check`, `run`, `verify`, `setup`. No hooks, no templates, no
-`--force`.
+Four verbs: `rk init`, `rk status`, `rk release`, `rk verify`. No hooks, no
+templates, no `--force`.
 
 Status: pre-implementation. The design is
 [RFC 0002](doc/rfcs/0002-rk-core.md); the threat catalog and assurance
