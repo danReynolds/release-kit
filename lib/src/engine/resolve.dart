@@ -53,12 +53,11 @@ class Resolution {
     _rejectOverlappingPaths(projects, diagnostics);
     _rejectDuplicateNames(projects, diagnostics);
 
-    // The convention is pub.dev's, and counts the packages the repository
-    // publishes *there* — a project that never touches the registry neither
-    // affects the count nor takes its naming from it.
-    final registryProjects =
-        projects.where((p) => p.channels.contains('pub.dev')).length;
-    final publishesSeveral = registryProjects > 1;
+    // Every unit is tagged, so the count that decides the naming is of units,
+    // not of registry packages: counting the latter let a repository with one
+    // pub.dev package and one binary-only CLI derive "v{version}" for both,
+    // and two units cannot hold the same tag.
+    final releasesSeveral = config.units.length > 1;
 
     final units = <ResolvedUnit>[];
     for (final declared in config.units) {
@@ -68,7 +67,7 @@ class Resolution {
         ResolvedUnit(
           name: declared.name,
           tagPattern: declared.tagPattern ??
-              _derivedTagPattern(resolved.single, publishesSeveral),
+              _derivedTagPattern(resolved.single, releasesSeveral),
           tagWasDeclared: declared.tagPattern != null,
           projects: resolved,
           location: declared.location,
@@ -80,6 +79,7 @@ class Resolution {
       _checkUnitVersions(unit, diagnostics);
       _checkOneBinaryProject(unit, diagnostics);
     }
+    _rejectSharedTags(units, diagnostics);
 
     if (diagnostics.isNotEmpty) return null;
     return Resolution(
@@ -89,13 +89,43 @@ class Resolution {
     );
   }
 
-  /// pub.dev documents `v{version}` for a repository publishing one package,
-  /// and a per-package prefix where it publishes several.
+  /// pub.dev documents `v{version}` for a repository releasing one thing, and a
+  /// per-package prefix where it releases several. Package names are unique
+  /// within a repository, so the prefixed form cannot collide.
   static String _derivedTagPattern(
     ResolvedProject project,
-    bool publishesSeveral,
+    bool releasesSeveral,
   ) =>
-      publishesSeveral ? '${project.pubspec.name}-v{version}' : 'v{version}';
+      releasesSeveral ? '${project.pubspec.name}-v{version}' : 'v{version}';
+
+  /// Two units cannot share a tag.
+  ///
+  /// A tag is the record that a version of a unit was released, and a GitHub
+  /// release attaches to one: shared, the second unit would either fail at the
+  /// tag or attach its assets to the first unit's record. Derivation cannot
+  /// produce this, so it is a declaration mistake — which is where it is
+  /// cheapest to say so.
+  static void _rejectSharedTags(
+    List<ResolvedUnit> units,
+    Diagnostics diagnostics,
+  ) {
+    final seen = <String, ResolvedUnit>{};
+    for (final unit in units) {
+      final first = seen[unit.tagPattern];
+      if (first == null) {
+        seen[unit.tagPattern] = unit;
+        continue;
+      }
+      diagnostics.add(
+        'RK-RES-010',
+        'the units "${first.name}" and "${unit.name}" would share the tag '
+            '"${unit.tagPattern}"',
+        source: unit.location,
+        remedy: 'give each unit a tag that names it, as in '
+            'tag = "${unit.name}-v{version}"',
+      );
+    }
+  }
 
   static ResolvedProject? _project(
     UnitConfig unit,
@@ -263,9 +293,17 @@ class Resolution {
     );
   }
 
-  /// Projects in one unit normally move together. They are not required to be
-  /// identical — after a partial publish they cannot be — but a divergence at
-  /// rest is far more likely a mistake than an intent, so it is surfaced.
+  /// Projects in one unit are at one version.
+  ///
+  /// This is not a tidiness rule: a unit is released under a single tag, that
+  /// tag names one version, and [ResolvedUnit.version] reads it from the
+  /// projects on the strength of their agreeing. A divergence has no answer to
+  /// give — not a default one — so it is refused here, before anything reads a
+  /// version that would be arbitrary.
+  ///
+  /// It costs nothing in recovery: a partial publish leaves the manifests
+  /// untouched and is resumed by re-running, which finds what is already live
+  /// and does the rest. Shipping one member alone is a separate unit's job.
   static void _checkUnitVersions(ResolvedUnit unit, Diagnostics diagnostics) {
     if (unit.projects.length < 2) return;
     final versions = unit.projects.map((p) => p.version.canonical).toSet();
@@ -299,13 +337,21 @@ class ResolvedUnit {
   final List<ResolvedProject> projects;
   final SourceLocation location;
 
-  /// The version this unit releases at: its projects', which agree.
-  Version get version => projects.first.version;
+  /// The version this unit releases at.
+  ///
+  /// Its projects agree on it — the resolver refuses a unit whose projects do
+  /// not (RK-RES-008) — so reading the first is reading all of them. The
+  /// assertion keeps that invariant next to the code that depends on it, where
+  /// a unit built by hand in a test would otherwise get an arbitrary answer.
+  Version get version {
+    assert(
+      projects.every((p) => p.version == projects.first.version),
+      'a unit whose projects disagree on the version has no version',
+    );
+    return projects.first.version;
+  }
 
   String get tag => tagPattern.replaceAll('{version}', version.canonical);
-
-  String tagFor(Version version) =>
-      tagPattern.replaceAll('{version}', version.canonical);
 
   bool get shipsBinaries => projects.any((p) => p.config.wantsBinaries);
 }

@@ -47,8 +47,7 @@ class Output {
       sink: stdout.write,
       isTerminal: terminal,
       verbose: verbose,
-      useColor:
-          terminal && !Platform.environment.containsKey('NO_COLOR'),
+      useColor: terminal && !Platform.environment.containsKey('NO_COLOR'),
     );
   }
 
@@ -95,10 +94,11 @@ class Output {
       return;
     }
     if (indented.length >= labelWidth) {
-      // Too long to share a line without pushing the note off the grid, so
-      // the note gets its own, aligned to the column it would have used.
-      sink('$glyph $indented\n');
-      sink('${' ' * (labelWidth + 2)}$note\n');
+      // Too long to keep the note on the grid. It follows the label anyway,
+      // because a note describes the line it is on: given its own line it reads
+      // as a fact about nothing, and "permanent" floating alone is worse than
+      // "permanent" out of column.
+      sink('$glyph $indented $note\n');
       return;
     }
     sink('$glyph ${indented.padRight(labelWidth)} $note\n');

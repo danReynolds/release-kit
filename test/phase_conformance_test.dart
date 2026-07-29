@@ -43,9 +43,11 @@ void main() {
   group('phase 1 — engine core', () {
     test('strict TOML subset parser', () {
       expect(fileExists('lib/src/engine/toml.dart'), isTrue);
+      expect(fileExists('test/toml_test.dart'), isTrue);
     });
 
-    test('pubspec reader covers name, version, publish_to, executables, '
+    test(
+        'pubspec reader covers name, version, publish_to, executables, '
         'dependencies', () {
       final source = File('lib/src/engine/pubspec.dart').readAsStringSync();
       for (final field in [
@@ -65,39 +67,39 @@ void main() {
     });
 
     test('config validation and unit/tag derivation', () {
-      expect(sourceContains('tagPattern'), isTrue);
       expect(sourceContains('_derivedTagPattern'), isTrue);
+      expect(
+        usedOutside('refNameIssue', 'ref_name.dart'),
+        isTrue,
+        reason: 'a tag pattern git would refuse must be caught before work',
+      );
     });
 
     test('checklist derivation with ordering and prerequisites', () {
       final source = File('lib/src/engine/checklist.dart').readAsStringSync();
       expect(source, contains('_publicationOrder'));
       expect(source, contains('externalPrerequisites'));
-    });
-
-    test('fixtures for the three repository shapes', () {
-      // keybay-shaped, fleury-shaped, and dune-shaped, the last of which must
-      // be refused rather than released.
-      final tests = Directory('test')
-          .listSync()
-          .whereType<File>()
-          .map((f) => f.readAsStringSync())
-          .join();
-      expect(tests, contains('keybay'), reason: 'keybay-shaped');
-      expect(tests, contains('fleury'), reason: 'fleury-shaped');
-      expect(tests, contains('dune'), reason: 'dune-shaped');
-      expect(tests, contains('RK-DART-201'), reason: 'dune is refused');
-    });
-
-    test('DONE WHEN: the derived checklist can be printed offline', () {
-      // The phase 1 milestone: the engine produces a checklist without a
-      // network, and something can show it.
       expect(
-        cliAccepts('--offline'),
-        isTrue,
-        reason: 'no command renders the checklist without touching the '
-            'network, so phase 1 cannot be demonstrated on its own',
+        usedOutside('externalPrerequisites', 'checklist.dart'),
+        isFalse,
+        reason: 'callers get prerequisites as steps, not as a separate list',
       );
+    });
+
+    test(
+        'DONE WHEN: the derived checklist is printed offline for all three '
+        'repository shapes', () {
+      // Proof by execution: offline_cli_test.dart builds keybay-, fleury- and
+      // dune-shaped repositories on disk and runs bin/rk.dart against each,
+      // asserting on real stdout and real exit codes. This test only holds it
+      // to being that, because the check it replaced asserted that
+      // bin/rk.dart *contained the string* "--offline".
+      final source = File('test/offline_cli_test.dart').readAsStringSync();
+      expect(source, contains("'run', rk, 'status', '--offline'"));
+      for (final shape in ['keybay', 'fleury', 'dune']) {
+        expect(source, contains("repository('$shape'"), reason: '$shape shape');
+      }
+      expect(source, contains('git'), reason: 'each fixture is a repository');
     });
   });
 

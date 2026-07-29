@@ -117,18 +117,21 @@ void main() {
     final text = await statusOf(
       source: tree(),
       state: git(),
-      registry: FakeRegistry({'keybay': ['0.1.0', '0.2.0']}),
+      registry: FakeRegistry({
+        'keybay': ['0.1.0', '0.2.0']
+      }),
     );
     expect(text, contains('nothing to release'));
     expect(text, isNot(contains('rk release')));
   });
 
-  test('says ready, and names the next command, when local is ahead',
-      () async {
+  test('says ready, and names the next command, when local is ahead', () async {
     final text = await statusOf(
       source: tree(),
       state: git(),
-      registry: FakeRegistry({'keybay': ['0.1.0']}),
+      registry: FakeRegistry({
+        'keybay': ['0.1.0']
+      }),
     );
     expect(text, contains('0.2.0 ready'));
     expect(text, contains('rk release core'));
@@ -139,7 +142,9 @@ void main() {
     final text = await statusOf(
       source: tree(changelog: '## 0.1.0\n'),
       state: git(),
-      registry: FakeRegistry({'keybay': ['0.1.0']}),
+      registry: FakeRegistry({
+        'keybay': ['0.1.0']
+      }),
     );
     expect(text, contains('no entry for 0.2.0'));
     expect(text, contains('## 0.2.0'));
@@ -150,7 +155,9 @@ void main() {
     final text = await statusOf(
       source: tree(),
       state: git(clean: false),
-      registry: FakeRegistry({'keybay': ['0.1.0']}),
+      registry: FakeRegistry({
+        'keybay': ['0.1.0']
+      }),
     );
     expect(text, contains('uncommitted'));
     expect(text, contains('lib/src/args.dart'));
@@ -160,7 +167,9 @@ void main() {
     final text = await statusOf(
       source: tree(),
       state: git(pushed: false),
-      registry: FakeRegistry({'keybay': ['0.1.0']}),
+      registry: FakeRegistry({
+        'keybay': ['0.1.0']
+      }),
     );
     expect(text, contains('not on any remote'));
     expect(text, contains('git push'));
@@ -170,7 +179,9 @@ void main() {
     final text = await statusOf(
       source: tree(),
       state: git(tags: const ['v0.3.0']),
-      registry: FakeRegistry({'keybay': ['0.1.0']}),
+      registry: FakeRegistry({
+        'keybay': ['0.1.0']
+      }),
     );
     expect(text, contains('ahead of 0.2.0'));
   });
@@ -210,7 +221,9 @@ void _reviewFixes() {
     final text = await statusOf(
       source: tree(coreVersion: '0.2.0'),
       state: git(),
-      registry: FakeRegistry({'keybay': ['0.1.0', '0.5.0']}),
+      registry: FakeRegistry({
+        'keybay': ['0.1.0', '0.5.0']
+      }),
     );
     expect(text, contains('0.5.0 is already published'));
     expect(text, isNot(contains('rk release')));
@@ -219,7 +232,8 @@ void _reviewFixes() {
 
 // Regressions from the phase 2-3 review.
 void _phase23Fixes() {
-  test('an unreachable registry never reads as ready, even with other '
+  test(
+      'an unreachable registry never reads as ready, even with other '
       'problems present', () async {
     final text = await statusOf(
       source: tree(),
@@ -237,19 +251,22 @@ void _phase23Fixes() {
     final text = await statusOf(
       source: tree(),
       state: git(),
-      registry: FakeRegistry({'keybay': ['0.1.0']}),
+      registry: FakeRegistry({
+        'keybay': ['0.1.0']
+      }),
     );
     expect(text, contains('0.1.0 published'),
         reason: 'local is 0.2.0; live is 0.1.0');
     expect(text, contains('0.2.0 ready'));
   });
 
-  test('a clean unit with nothing to release ignores worktree state',
-      () async {
+  test('a clean unit with nothing to release ignores worktree state', () async {
     final text = await statusOf(
       source: tree(),
       state: git(clean: false),
-      registry: FakeRegistry({'keybay': ['0.2.0']}),
+      registry: FakeRegistry({
+        'keybay': ['0.2.0']
+      }),
     );
     expect(text, contains('nothing to release'));
     expect(

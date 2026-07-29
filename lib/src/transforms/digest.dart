@@ -55,7 +55,8 @@ class Sha256 {
             padded[at + 3];
       }
       for (var i = 16; i < 64; i++) {
-        final s0 = _rotr(w[i - 15], 7) ^ _rotr(w[i - 15], 18) ^ (w[i - 15] >> 3);
+        final s0 =
+            _rotr(w[i - 15], 7) ^ _rotr(w[i - 15], 18) ^ (w[i - 15] >> 3);
         final s1 = _rotr(w[i - 2], 17) ^ _rotr(w[i - 2], 19) ^ (w[i - 2] >> 10);
         w[i] = _add(_add(w[i - 16], s0), _add(w[i - 7], s1));
       }

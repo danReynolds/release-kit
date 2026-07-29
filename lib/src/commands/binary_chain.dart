@@ -224,7 +224,8 @@ class BinaryChain {
       assetPaths: assets.map((a) => a.path).toList(),
     );
     if (!published.ok) {
-      output.line('github-release', mark: Mark.blocked, note: published.problem);
+      output.line('github-release',
+          mark: Mark.blocked, note: published.problem);
       return null;
     }
     output.line(

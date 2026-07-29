@@ -94,8 +94,7 @@ class RecordingTools implements Tools {
   final List<String> calls = [];
 
   ToolResult _result(String key) =>
-      results[key] ??
-      ToolResult(exitCode: 0, stdout: '', stderr: '');
+      results[key] ?? ToolResult(exitCode: 0, stdout: '', stderr: '');
 
   @override
   Future<ToolResult> run(

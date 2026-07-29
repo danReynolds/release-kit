@@ -1,4 +1,5 @@
 import 'diagnostic.dart';
+import 'ref_name.dart';
 import 'toml.dart';
 
 /// The release intent declared in `release.toml`, structurally validated but
@@ -58,8 +59,6 @@ class UnitConfig {
 
   final List<ProjectConfig> projects;
   final SourceLocation location;
-
-  bool get isSingleProject => projects.length == 1;
 }
 
 class ProjectConfig {
@@ -236,11 +235,11 @@ class _Reader {
 
     final projects = <ProjectConfig>[];
     if (inline) {
-      final project = _project(name, value, location);
+      final project = _project(name, value, location, inline: true);
       if (project != null) projects.add(project);
     } else if (rows is TomlArray) {
       for (final row in rows.tables) {
-        final project = _project(name, row, row.location);
+        final project = _project(name, row, row.location, inline: false);
         if (project != null) projects.add(project);
       }
     } else if (rows != null) {
@@ -314,22 +313,47 @@ class _Reader {
       );
       return null;
     }
+
+    // What git is handed is the pattern with a version in it, so that is what
+    // is checked; every version rk accepts is itself ref-safe.
+    final issue = refNameIssue(value.replaceAll('{version}', '0.0.0'));
+    if (issue != null) {
+      _diagnostics.add(
+        'RK-CONF-033',
+        'git will not accept the tag pattern for "$unit": $issue',
+        source: location,
+        remedy: 'a tag is a git ref, so its name follows git\'s rules',
+      );
+      return null;
+    }
     return value;
   }
 
+  /// Reads one project. [inline] says whether [table] is the unit's own table,
+  /// which also carries the unit-level keys — a distinction that matters
+  /// because a `tag` there belongs to the unit, while a `tag` on a row has
+  /// nowhere to belong and would otherwise be read by nobody.
   ProjectConfig? _project(
     String unit,
     TomlTable table,
-    SourceLocation location,
-  ) {
+    SourceLocation location, {
+    required bool inline,
+  }) {
     const known = {'path', 'publish', 'binary_platforms'};
+    const unitLevel = {'tag', 'project'};
     for (final key in table.keys) {
-      if (known.contains(key) || key == 'tag' || key == 'project') continue;
+      if (known.contains(key)) continue;
+      if (inline && unitLevel.contains(key)) continue;
       _diagnostics.add(
         'RK-CONF-016',
-        'unknown setting "$key" in a project of "$unit"',
+        unitLevel.contains(key)
+            ? '"$key" belongs to the unit "$unit", not to one of its projects'
+            : 'unknown setting "$key" in a project of "$unit"',
         source: table.locationOf(key),
-        remedy: 'a project holds ${known.join(', ')}',
+        remedy: unitLevel.contains(key)
+            ? 'a unit releases its projects under one $key — move it up to '
+                '[release.$unit]'
+            : 'a project holds ${known.join(', ')}',
       );
     }
 
@@ -378,10 +402,8 @@ class _Reader {
   }
 
   static String _canonical(String path) {
-    final parts = path
-        .split('/')
-        .where((p) => p.isNotEmpty && p != '.')
-        .toList();
+    final parts =
+        path.split('/').where((p) => p.isNotEmpty && p != '.').toList();
     return parts.isEmpty ? '.' : parts.join('/');
   }
 
@@ -504,7 +526,8 @@ class _Reader {
           'RK-CONF-028',
           'unknown platform "$platform"',
           source: table.locationOf('binary_platforms'),
-          remedy: 'rk builds ${ReleaseConfig.supportedPlatformsList.join(', ')}',
+          remedy:
+              'rk builds ${ReleaseConfig.supportedPlatformsList.join(', ')}',
         );
         return null;
       }

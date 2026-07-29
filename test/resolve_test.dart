@@ -89,14 +89,16 @@ void main() {
   });
 
   test('derives a bare tag where the repository publishes one package', () {
-    final resolution = resolved('''
+    final resolution = resolved(
+        '''
 schema = 1
 
 [release.lib]
 publish = ["pub.dev"]
-''', MemorySourceTree({
-      'pubspec.yaml': 'name: dart_retry_helper\nversion: 1.5.0\n',
-    }));
+''',
+        MemorySourceTree({
+          'pubspec.yaml': 'name: dart_retry_helper\nversion: 1.5.0\n',
+        }));
     expect(resolution.unit('lib')!.tagPattern, 'v{version}');
     expect(resolution.unit('lib')!.tag, 'v1.5.0');
   });
@@ -152,14 +154,17 @@ publish = ["pub.dev"]
 
     test('publishing a package whose manifest vetoes the registry', () {
       expect(
-        refusedWith('''
+        refusedWith(
+            '''
 schema = 1
 
 [release.cli]
 publish = ["pub.dev"]
-''', MemorySourceTree({
-          'pubspec.yaml': 'name: dune_cli\nversion: 0.0.1\npublish_to: none\n',
-        })),
+''',
+            MemorySourceTree({
+              'pubspec.yaml':
+                  'name: dune_cli\nversion: 0.0.1\npublish_to: none\n',
+            })),
         'RK-RES-003',
       );
     });
@@ -180,21 +185,23 @@ binary_platforms = ["macos-arm64"]
 
     test('binary channels where the package declares several executables', () {
       expect(
-        refusedWith('''
+        refusedWith(
+            '''
 schema = 1
 
 [release.tools]
 publish = ["github-release"]
 binary_platforms = ["macos-arm64"]
-''', MemorySourceTree({
-          'pubspec.yaml': '''
+''',
+            MemorySourceTree({
+              'pubspec.yaml': '''
 name: tools
 version: 1.0.0
 executables:
   one: one
   two: two
 ''',
-        })),
+            })),
         'RK-RES-005',
       );
     });
@@ -218,7 +225,8 @@ publish = ["pub.dev"]
 
     test('a project nested inside another', () {
       expect(
-        refusedWith('''
+        refusedWith(
+            '''
 schema = 1
 
 [release.outer]
@@ -228,17 +236,19 @@ publish = ["pub.dev"]
 [release.inner]
 path = "packages/keybay"
 publish = ["pub.dev"]
-''', MemorySourceTree({
-          'packages/pubspec.yaml': 'name: outer\nversion: 1.0.0\n',
-          'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 1.0.0\n',
-        })),
+''',
+            MemorySourceTree({
+              'packages/pubspec.yaml': 'name: outer\nversion: 1.0.0\n',
+              'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 1.0.0\n',
+            })),
         'RK-RES-006',
       );
     });
 
     test('a unit whose projects are at different versions', () {
       expect(
-        refusedWith('''
+        refusedWith(
+            '''
 schema = 1
 
 [release.framework]
@@ -251,17 +261,19 @@ publish = ["pub.dev"]
 [[release.framework.project]]
 path = "packages/b"
 publish = ["pub.dev"]
-''', MemorySourceTree({
-          'packages/a/pubspec.yaml': 'name: a\nversion: 0.1.0\n',
-          'packages/b/pubspec.yaml': 'name: b\nversion: 0.2.0\n',
-        })),
+''',
+            MemorySourceTree({
+              'packages/a/pubspec.yaml': 'name: a\nversion: 0.1.0\n',
+              'packages/b/pubspec.yaml': 'name: b\nversion: 0.2.0\n',
+            })),
         'RK-RES-008',
       );
     });
   });
 
   test('a multi-project unit resolves every member', () {
-    final resolution = resolved('''
+    final resolution = resolved(
+        '''
 schema = 1
 
 [release.framework]
@@ -274,15 +286,16 @@ publish = ["pub.dev"]
 [[release.framework.project]]
 path = "packages/fleury_test"
 publish = ["pub.dev"]
-''', MemorySourceTree({
-      'packages/fleury/pubspec.yaml': 'name: fleury\nversion: 0.1.0\n',
-      'packages/fleury_test/pubspec.yaml': '''
+''',
+        MemorySourceTree({
+          'packages/fleury/pubspec.yaml': 'name: fleury\nversion: 0.1.0\n',
+          'packages/fleury_test/pubspec.yaml': '''
 name: fleury_test
 version: 0.1.0
 dependencies:
   fleury: ^0.1.0
 ''',
-    }));
+        }));
 
     final framework = resolution.unit('framework')!;
     expect(framework.projects, hasLength(2));

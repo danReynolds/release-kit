@@ -68,7 +68,7 @@ YamlMap? parseYaml(String source, String path, Diagnostics diagnostics) {
 
 class _Parser {
   _Parser(String source, this._path, this._diagnostics)
-    : _lines = source.split('\n');
+      : _lines = source.split('\n');
 
   final List<String> _lines;
   final String _path;
@@ -96,7 +96,18 @@ class _Parser {
 
   /// Reads every entry indented at least [indent], as a map or a sequence
   /// depending on what the first meaningful line looks like.
-  YamlNode? _block(int indent) {
+  ///
+  /// [dashIndent] is the column a block sequence may also begin at, which YAML
+  /// allows to be the parent key's own column:
+  ///
+  ///     topics:
+  ///     - security
+  ///
+  /// Keeping the two thresholds apart is what lets a key at the parent's column
+  /// close the sequence while a key indented *into* it is refused instead of
+  /// escaping to the enclosing map.
+  YamlNode? _block(int indent, {int? dashIndent}) {
+    final dashFrom = dashIndent ?? indent;
     YamlMap? asMap;
     YamlList? asList;
 
@@ -118,17 +129,21 @@ class _Parser {
         );
         return null;
       }
-      if (at < indent) break; // belongs to an enclosing block
 
       final body = text.trim();
+      final isDash = body.startsWith('- ') || body == '-';
 
-      if (body.startsWith('- ') || body == '-') {
+      // Belongs to an enclosing block.
+      if (at < (isDash ? dashFrom : indent)) break;
+
+      if (isDash) {
         asList ??= YamlList(line);
         if (asMap != null) {
           _fail('a block cannot mix map keys and list items', line);
           return null;
         }
         final item = body == '-' ? '' : body.substring(2).trim();
+        if (_isFlow(item, line)) return null;
 
         if (item.isEmpty) {
           _cursor++;
@@ -155,7 +170,19 @@ class _Parser {
         continue;
       }
 
-      if (asList != null) break; // a key after a sequence closes it
+      // A key indented into a sequence's own block is neither an item nor a
+      // sibling of the key that opened it. Letting it break out to the
+      // enclosing map is how a stray `version:` under `topics:` becomes the
+      // package's version, so it is refused where a sibling would have closed
+      // the sequence by being less indented.
+      if (asList != null) {
+        _fail(
+          'a block cannot mix list items and map keys',
+          line,
+          remedy: 'outdent "$body" to end the list above it',
+        );
+        return null;
+      }
 
       final colon = _keyColon(body);
       if (colon < 0) {
@@ -183,9 +210,12 @@ class _Parser {
       }
       _cursor++;
 
+      if (_isFlow(rest, line)) return null;
+
       if (rest.isEmpty) {
-        // A nested block, or a key with no value at all.
-        final nested = _block(at + 1);
+        // A nested block, or a key with no value at all. Its sequence may begin
+        // back at this key's own column.
+        final nested = _block(at + 1, dashIndent: at);
         if (_failed) return null;
         asMap.entries[key] = nested ?? YamlScalar('', line);
       } else if (rest.startsWith('>') || rest.startsWith('|')) {
@@ -198,6 +228,23 @@ class _Parser {
     }
 
     return asMap ?? asList;
+  }
+
+  /// Whether [value] opens a flow collection, refusing it if so.
+  ///
+  /// rk reads no flow collections, and the harm is not that they are unread but
+  /// that they read as *something else*: kept as an opaque scalar, a flow map
+  /// makes `map('dependencies')` answer null, so a package pinned by path — the
+  /// case rk exists to refuse — looks like a package with no dependencies at
+  /// all. A refusal is the only honest answer.
+  bool _isFlow(String value, int line) {
+    if (!value.startsWith('{') && !value.startsWith('[')) return false;
+    _fail(
+      'rk does not read flow collections',
+      line,
+      remedy: 'write it as an indented block instead of "$value"',
+    );
+    return true;
   }
 
   /// Consumes the indented body of a block scalar, joined with spaces.

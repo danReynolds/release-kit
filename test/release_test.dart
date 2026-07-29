@@ -21,8 +21,7 @@ path = "packages/keybay"
 publish = ["pub.dev"]
 ''';
 
-MemorySourceTree _tree({String changelog = '## 0.2.0\n'}) =>
-    MemorySourceTree({
+MemorySourceTree _tree({String changelog = '## 0.2.0\n'}) => MemorySourceTree({
       'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
       'packages/keybay/CHANGELOG.md': changelog,
     }, description: '/repo/keybay');
@@ -72,7 +71,10 @@ Future<Ran> release({
     resolution: resolution,
     tree: tree,
     git: state ?? _git(),
-    registry: registry ?? FakeRegistry({'keybay': ['0.1.0']}),
+    registry: registry ??
+        FakeRegistry({
+          'keybay': ['0.1.0']
+        }),
     tools: recorder,
     output: Output(sink: buffer.write, isTerminal: false, useColor: false),
     confirm: typed == null ? null : (_) async => typed,
@@ -169,7 +171,9 @@ void main() {
 
   test('a release already published does nothing', () async {
     final ran = await release(
-      registry: FakeRegistry({'keybay': ['0.1.0', '0.2.0']}),
+      registry: FakeRegistry({
+        'keybay': ['0.1.0', '0.2.0']
+      }),
       state: _git(tags: const ['v0.2.0']),
     );
     expect(ran.exitCode, ExitCodes.ok);

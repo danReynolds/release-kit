@@ -113,8 +113,8 @@ class GitState {
   /// `owner/name` from either remote form, or null when it is neither.
   static String? _originSlug(String url) {
     if (url.isEmpty) return null;
-    final match =
-        RegExp(r'github\.com[:/]([^/]+)/(.+?)(?:\.git)?$').firstMatch(url.trim());
+    final match = RegExp(r'github\.com[:/]([^/]+)/(.+?)(?:\.git)?$')
+        .firstMatch(url.trim());
     if (match == null) return null;
     return '${match.group(1)}/${match.group(2)}';
   }

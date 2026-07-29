@@ -41,7 +41,7 @@ void main() {
     expect(config.units.map((u) => u.name), ['core', 'cli']);
 
     final core = config.units.first;
-    expect(core.isSingleProject, isTrue);
+    expect(core.projects, hasLength(1));
     expect(core.tagPattern, isNull, reason: 'derived, not declared');
     expect(core.projects.single.path, 'packages/keybay');
     expect(core.projects.single.channels, {'pub.dev'});
@@ -116,8 +116,8 @@ code_id = "io.github.danreynolds.keybay.cli"
 
   group('refuses', () {
     test('a missing schema', () {
-      expect(refusedWith('[release.core]\npublish = ["pub.dev"]'),
-          'RK-CONF-001');
+      expect(
+          refusedWith('[release.core]\npublish = ["pub.dev"]'), 'RK-CONF-001');
     });
 
     test('an unsupported schema', () {
@@ -193,8 +193,8 @@ code_id = "io.github.danreynolds.keybay.cli"
     });
 
     test('a project that publishes nowhere', () {
-      expect(refusedWith('schema = 1\n[release.core]\npath = "a"'),
-          'RK-CONF-019');
+      expect(
+          refusedWith('schema = 1\n[release.core]\npath = "a"'), 'RK-CONF-019');
     });
 
     test('an empty publish list', () {

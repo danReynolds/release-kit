@@ -39,9 +39,11 @@ void main() {
     final (out, captured) = make();
     out.line('cli', depth: 0);
     out.line('pub.dev', depth: 1);
-    expect(captured.lines[0].indexOf('cli'), lessThan(
-      captured.lines[1].indexOf('pub.dev'),
-    ));
+    expect(
+        captured.lines[0].indexOf('cli'),
+        lessThan(
+          captured.lines[1].indexOf('pub.dev'),
+        ));
   });
 
   group('non-terminal output is append-only', () {

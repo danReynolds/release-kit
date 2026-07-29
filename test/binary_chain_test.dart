@@ -30,8 +30,7 @@ void main() {
       expect(onAppleSilicon.resolve('linux-arm64').canProduce, isTrue);
     });
 
-    test('without a container runtime a cross-built binary is not shipped',
-        () {
+    test('without a container runtime a cross-built binary is not shipped', () {
       final noRuntime = HostCapabilities(
         hostPlatform: 'macos-arm64',
         hasContainerRuntime: false,

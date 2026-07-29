@@ -25,9 +25,9 @@ class Checklist {
 
   static Checklist derive(
     ResolvedUnit unit,
-    Resolution resolution, [
-    Diagnostics? diagnostics,
-  ]) {
+    Resolution resolution,
+    Diagnostics diagnostics,
+  ) {
     final steps = <Step>[];
 
     // A tag names the release. It is created for an interactive release and
@@ -45,22 +45,30 @@ class Checklist {
 
     // A dependency released by another unit must already be public, so it is
     // an inspect-only step rather than something this release performs.
-    final external = <String, Step>{};
+    // One step per distinct coordinate — two dependents on the same package
+    // are one fact about the world, not two — and every dependent waits on
+    // each of its own, not merely the last one seen.
+    final byCoordinate = <String, Step>{};
+    final waitsOn = <String, List<String>>{};
+
     for (final prerequisite
         in externalPrerequisites(unit, resolution, diagnostics)) {
-      final step = Step(
-        id: '${unit.name}/requires/${prerequisite.coordinate}',
-        kind: StepKind.prerequisite,
-        unit: unit.name,
-        project: prerequisite.dependent,
-        coordinate: prerequisite.coordinate,
-        summary: '${prerequisite.package} ${prerequisite.version} must be '
-            'live on pub.dev',
-        needs: const [],
+      final id = '${unit.name}/requires/${prerequisite.coordinate}';
+      final step = byCoordinate.putIfAbsent(
+        prerequisite.coordinate,
+        () => Step(
+          id: id,
+          kind: StepKind.prerequisite,
+          unit: unit.name,
+          coordinate: prerequisite.coordinate,
+          summary: '${prerequisite.package} ${prerequisite.version} must be '
+              'live on pub.dev',
+          needs: const [],
+        ),
       );
-      steps.add(step);
-      external[prerequisite.dependent] = step;
+      (waitsOn[prerequisite.dependent] ??= []).add(step.id);
     }
+    steps.addAll(byCoordinate.values);
 
     final publicationOrder = _publicationOrder(unit, diagnostics);
 
@@ -89,8 +97,7 @@ class Checklist {
         final sibling = published[name];
         if (sibling != null && sibling.id != step.id) needs.add(sibling.id);
       }
-      final requires = external[project.name];
-      if (requires != null) needs.add(requires.id);
+      needs.addAll(waitsOn[project.name] ?? const []);
 
       steps.add(step.withNeeds(needs));
     }
@@ -101,10 +108,9 @@ class Checklist {
       steps.addAll(_binarySteps(unit, project, steps.first.id));
     }
 
-    // The invariant holds only for input rk accepted. A refused input — a
-    // dependency circle, say — legitimately has no order, and its diagnostic
-    // is the answer rather than a crash.
-    if (diagnostics == null || diagnostics.isEmpty) _checkGraph(steps);
+    // A refused input — a dependency circle, say — legitimately has no order,
+    // and its diagnostic is the answer rather than a crash.
+    if (diagnostics.isEmpty) _checkGraph(steps);
 
     return Checklist(unit: unit, steps: steps);
   }
@@ -138,9 +144,9 @@ class Checklist {
   /// Within a unit, a project that another depends on publishes first, so the
   /// dependent resolves for consumers the moment it lands.
   static List<ResolvedProject> _publicationOrder(
-    ResolvedUnit unit, [
-    Diagnostics? diagnostics,
-  ]) {
+    ResolvedUnit unit,
+    Diagnostics diagnostics,
+  ) {
     final byName = {for (final p in unit.projects) p.name: p};
     final ordered = <ResolvedProject>[];
     final visiting = <String>{};
@@ -149,7 +155,7 @@ class Checklist {
       if (ordered.contains(project)) return;
       if (!visiting.add(project.name)) {
         // Two packages that require each other cannot both publish second.
-        diagnostics?.add(
+        diagnostics.add(
           'RK-DEP-003',
           'the packages in "${unit.name}" depend on each other in a circle, '
               'so there is no order that publishes them',
@@ -349,8 +355,14 @@ class Step {
       };
 
   /// Whether this step's effect can never be taken back.
+  ///
+  /// Only a registry publication: pub.dev burns a version number forever, so a
+  /// mistake there costs a version rather than a retry. A release, its assets,
+  /// a formula and even a tag can all be removed — rk deletes and recreates a
+  /// wrong draft as a matter of course — and marking those permanent too would
+  /// spend the operator's attention on the steps that do not need it.
   bool get isPermanent => switch (kind) {
-        StepKind.publishRegistry || StepKind.publishRelease => true,
+        StepKind.publishRegistry => true,
         _ => false,
       };
 
@@ -388,9 +400,9 @@ class ExternalPrerequisite {
 /// Prerequisites a unit has on packages released by other units.
 List<ExternalPrerequisite> externalPrerequisites(
   ResolvedUnit unit,
-  Resolution resolution, [
-  Diagnostics? diagnostics,
-]) {
+  Resolution resolution,
+  Diagnostics diagnostics,
+) {
   final result = <ExternalPrerequisite>[];
   final own = {for (final p in unit.projects) p.name};
 
@@ -403,7 +415,14 @@ List<ExternalPrerequisite> externalPrerequisites(
   }
 
   for (final project in unit.projects) {
-    project.pubspec.dependencies.forEach((name, dependency) {
+    // Both kinds: a development dependency orders publication within a unit,
+    // and the consumer resolve a release runs resolves them too, so a
+    // coordinated bump must be refused before the work rather than at publish.
+    final required = {
+      ...project.pubspec.dependencies,
+      ...project.pubspec.devDependencies,
+    };
+    required.forEach((name, dependency) {
       if (own.contains(name)) return; // ordered within the unit instead
       final sibling = firstParty[name];
       if (sibling == null) return; // an ordinary third-party dependency
@@ -411,7 +430,7 @@ List<ExternalPrerequisite> externalPrerequisites(
 
       final satisfied = dependency.satisfiedBy(sibling.version);
       if (satisfied == false) {
-        diagnostics?.add(
+        diagnostics.add(
           'RK-DEP-001',
           '"${project.name}" requires $name ${dependency.constraint}, and '
               'this repository releases $name at ${sibling.version}',
@@ -426,7 +445,7 @@ List<ExternalPrerequisite> externalPrerequisites(
       if (satisfied == null) {
         // Not knowing is not the same as being satisfied. Treating it as
         // satisfied would publish against a requirement rk never checked.
-        diagnostics?.add(
+        diagnostics.add(
           'RK-DEP-002',
           'rk cannot tell whether "${project.name}" accepts $name '
               '${sibling.version}: it requires '

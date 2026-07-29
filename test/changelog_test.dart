@@ -19,8 +19,8 @@ void main() {
       '  ## 0.2.0',
     ]) {
       test('"$heading"', () {
-        expect(Changelog.mentions('$heading\n\n- a change\n', v('0.2.0')),
-            isTrue);
+        expect(
+            Changelog.mentions('$heading\n\n- a change\n', v('0.2.0')), isTrue);
       });
     }
 

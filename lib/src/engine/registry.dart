@@ -65,7 +65,7 @@ abstract class RegistryReader {
 /// timeout is not evidence that a version does not exist.
 class Registry implements RegistryReader {
   Registry({HttpClient? client, this.host = 'pub.dev'})
-    : _client = client ?? HttpClient();
+      : _client = client ?? HttpClient();
 
   final HttpClient _client;
   final String host;

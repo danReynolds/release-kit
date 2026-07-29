@@ -83,7 +83,8 @@ class StatusCommand {
     output.blank();
     output.line(unit.name, note: '${unit.version} → ${unit.tag}');
 
-    final checklist = Checklist.derive(unit, resolution);
+    final problems = Diagnostics();
+    final checklist = Checklist.derive(unit, resolution, problems);
     for (final step in checklist.steps) {
       output.line(
         step.summary,
@@ -91,6 +92,9 @@ class StatusCommand {
         labelWidth: 48,
         note: step.isPermanent ? 'permanent' : null,
       );
+    }
+    for (final problem in problems.found) {
+      output.problem(problem, depth: 1);
     }
     output.say(
       'derived from the manifests alone. Nothing was read from pub.dev,\n'
@@ -157,6 +161,11 @@ class StatusCommand {
       }
     }
 
+    // The checklist's own checks — a first-party pin the release does not
+    // satisfy, a dependency circle — are found by deriving it, so it is
+    // derived before anything is called ready.
+    Checklist.derive(unit, resolution, problems);
+
     final summary = _liveSummary(unit, live);
 
     // Nothing to release settles it: whether the worktree is clean or a later
@@ -181,7 +190,7 @@ class StatusCommand {
     }
 
     output.line(unit.name, note: '$summary → ${unit.version} ready');
-    _printPlan(unit);
+    _printPlan(unit, problems);
     if (unchecked.isNotEmpty) {
       output.say(
         'not checked: ${unchecked.join(', ')} — rk cannot read those yet',
@@ -207,8 +216,8 @@ class StatusCommand {
     return live.entries.map((e) => '${e.key} ${e.value}').join(', ');
   }
 
-  void _printPlan(ResolvedUnit unit) {
-    final checklist = Checklist.derive(unit, resolution);
+  void _printPlan(ResolvedUnit unit, Diagnostics problems) {
+    final checklist = Checklist.derive(unit, resolution, problems);
     final channels = <String>{};
     for (final project in unit.projects) {
       channels.addAll(project.channels);
@@ -243,7 +252,8 @@ class StatusCommand {
           'RK-MONO-002',
           '${project.name} ${latest.version} is already published, and this '
               'would publish ${project.version}',
-          source: SourceLocation(project.pubspec.path, project.pubspec.versionLine),
+          source:
+              SourceLocation(project.pubspec.path, project.pubspec.versionLine),
           remedy: 'a release moves forward — bump past ${latest.version}',
         );
       }

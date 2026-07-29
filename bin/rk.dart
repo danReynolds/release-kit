@@ -95,8 +95,7 @@ Future<int> _init(Output output) async {
   return InitCommand(
     tree: tree,
     output: output,
-    write: (path, contents) =>
-        File('$root/$path').writeAsStringSync(contents),
+    write: (path, contents) => File('$root/$path').writeAsStringSync(contents),
     confirm: stdin.hasTerminal
         ? (prompt) async {
             stdout.write(prompt);
@@ -158,9 +157,9 @@ Future<int> _verify(Output output, String? unit) async {
 class _Prepared {
   _Prepared.ready(this.resolution, this.tree, this.registry) : code = null;
   _Prepared.stopped(this.code)
-    : resolution = null,
-      tree = null,
-      registry = null;
+      : resolution = null,
+        tree = null,
+        registry = null;
 
   final Resolution? resolution;
   final GitSourceTree? tree;
@@ -191,9 +190,8 @@ _Prepared _prepare(Output output) {
 
   final diagnostics = Diagnostics();
   final config = ReleaseConfig.parse(source, 'release.toml', diagnostics);
-  final resolution = config == null
-      ? null
-      : Resolution.resolve(config, tree, diagnostics);
+  final resolution =
+      config == null ? null : Resolution.resolve(config, tree, diagnostics);
 
   if (resolution == null) {
     output.heading(root.split('/').last);

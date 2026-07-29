@@ -82,13 +82,21 @@ class GithubRelease {
     for (final release in existing.where((r) => r.tag == tag && r.isDraft)) {
       final deleted = await tools.run(
         'gh',
-        ['release', 'delete', tag, '--repo', repository, '--yes', '--cleanup-tag=false'],
+        [
+          'release',
+          'delete',
+          tag,
+          '--repo',
+          repository,
+          '--yes',
+          '--cleanup-tag=false'
+        ],
         workingDirectory: workingDirectory,
       );
       if (!deleted.ok) {
         return PublishOutcome.failed(
           'a draft (${release.id}) is in the way and could not be removed: '
-              '${deleted.summary}',
+          '${deleted.summary}',
         );
       }
     }
@@ -183,7 +191,8 @@ class GithubRelease {
             _Release(
               tag: entry['tagName'] as String,
               isDraft: entry['isDraft'] == true,
-              id: entry['name'] is String && (entry['name'] as String).isNotEmpty
+              id: entry['name'] is String &&
+                      (entry['name'] as String).isNotEmpty
                   ? entry['name'] as String
                   : entry['tagName'] as String,
             ),

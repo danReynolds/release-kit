@@ -148,13 +148,12 @@ class Dependency {
   const Dependency._(this.kind, this.constraint, this.location, this.line);
 
   const Dependency.hosted(String constraint, int line)
-    : this._(DependencyKind.hosted, constraint, null, line);
+      : this._(DependencyKind.hosted, constraint, null, line);
 
   const Dependency.path(String location, int line)
-    : this._(DependencyKind.path, null, location, line);
+      : this._(DependencyKind.path, null, location, line);
 
-  const Dependency.git(int line)
-    : this._(DependencyKind.git, null, null, line);
+  const Dependency.git(int line) : this._(DependencyKind.git, null, null, line);
 
   final DependencyKind kind;
 

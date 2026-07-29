@@ -41,7 +41,8 @@ binary_platforms = ["linux-x64", "linux-arm64", "macos-arm64"]
 void main() {
   test('a registry-only unit is a tag and a publish', () {
     final resolution = resolve(keybayConfig, keybayTree);
-    final checklist = Checklist.derive(resolution.unit('core')!, resolution);
+    final checklist =
+        Checklist.derive(resolution.unit('core')!, resolution, Diagnostics());
 
     expect(checklist.steps.map((s) => s.id), [
       'core/tag/keybay-v0.2.0',
@@ -51,7 +52,8 @@ void main() {
 
   test('the binary chain covers every declared platform', () {
     final resolution = resolve(keybayConfig, keybayTree);
-    final checklist = Checklist.derive(resolution.unit('cli')!, resolution);
+    final checklist =
+        Checklist.derive(resolution.unit('cli')!, resolution, Diagnostics());
     final ids = checklist.steps.map((s) => s.id).toList();
 
     expect(ids, contains('cli/build/linux-x64'));
@@ -71,7 +73,8 @@ void main() {
 
   test('signing and notarization sit between build and archive', () {
     final resolution = resolve(keybayConfig, keybayTree);
-    final checklist = Checklist.derive(resolution.unit('cli')!, resolution);
+    final checklist =
+        Checklist.derive(resolution.unit('cli')!, resolution, Diagnostics());
 
     expect(
       checklist['cli/sign/macos-arm64']!.needs,
@@ -94,7 +97,8 @@ void main() {
 
   test('the release waits for every archive and the checksums', () {
     final resolution = resolve(keybayConfig, keybayTree);
-    final checklist = Checklist.derive(resolution.unit('cli')!, resolution);
+    final checklist =
+        Checklist.derive(resolution.unit('cli')!, resolution, Diagnostics());
     final needs = checklist['cli/github-release/keybay_cli-v0.2.0']!.needs;
 
     expect(needs, hasLength(4), reason: '3 archives and SHA256SUMS');
@@ -103,7 +107,8 @@ void main() {
 
   test('the formula waits for the release to be public', () {
     final resolution = resolve(keybayConfig, keybayTree);
-    final checklist = Checklist.derive(resolution.unit('cli')!, resolution);
+    final checklist =
+        Checklist.derive(resolution.unit('cli')!, resolution, Diagnostics());
     expect(
       checklist['cli/homebrew/keybay']!.needs,
       ['cli/github-release/keybay_cli-v0.2.0'],
@@ -112,7 +117,8 @@ void main() {
 
   test('permanent and public steps are marked', () {
     final resolution = resolve(keybayConfig, keybayTree);
-    final checklist = Checklist.derive(resolution.unit('cli')!, resolution);
+    final checklist =
+        Checklist.derive(resolution.unit('cli')!, resolution, Diagnostics());
 
     expect(checklist['cli/pub.dev/keybay_cli@0.2.0']!.isPermanent, isTrue);
     expect(checklist['cli/build/linux-x64']!.isPermanent, isFalse);
@@ -165,8 +171,8 @@ publish = ["pub.dev"]
 
     test('order comes from the manifests, not the file', () {
       final resolution = resolve(config, tree);
-      final checklist =
-          Checklist.derive(resolution.unit('framework')!, resolution);
+      final checklist = Checklist.derive(
+          resolution.unit('framework')!, resolution, Diagnostics());
       final published = checklist.steps
           .where((s) => s.kind == StepKind.publishRegistry)
           .map((s) => s.project)
@@ -181,8 +187,8 @@ publish = ["pub.dev"]
 
     test('a dependent names its sibling as a prerequisite', () {
       final resolution = resolve(config, tree);
-      final checklist =
-          Checklist.derive(resolution.unit('framework')!, resolution);
+      final checklist = Checklist.derive(
+          resolution.unit('framework')!, resolution, Diagnostics());
       expect(
         checklist['framework/pub.dev/fleury_test@0.1.0']!.needs,
         contains('framework/pub.dev/fleury@0.1.0'),
@@ -245,19 +251,21 @@ publish = ["pub.dev"]
     });
 
     test('a third-party dependency is not a prerequisite', () {
-      final resolution = resolve('''
+      final resolution = resolve(
+          '''
 schema = 1
 
 [release.lib]
 publish = ["pub.dev"]
-''', MemorySourceTree({
-        'pubspec.yaml': '''
+''',
+          MemorySourceTree({
+            'pubspec.yaml': '''
 name: lib
 version: 1.0.0
 dependencies:
   ffi: 2.2.0
 ''',
-      }));
+          }));
       final diagnostics = Diagnostics();
       expect(
         externalPrerequisites(
@@ -270,7 +278,8 @@ dependencies:
     });
 
     test('a constraint the release cannot satisfy is refused', () {
-      final resolution = resolve('''
+      final resolution = resolve(
+          '''
 schema = 1
 
 [release.framework]
@@ -280,15 +289,16 @@ publish = ["pub.dev"]
 [release.mcp]
 path = "packages/fleury_mcp"
 publish = ["pub.dev"]
-''', MemorySourceTree({
-        'packages/fleury/pubspec.yaml': 'name: fleury\nversion: 0.2.0\n',
-        'packages/fleury_mcp/pubspec.yaml': '''
+''',
+          MemorySourceTree({
+            'packages/fleury/pubspec.yaml': 'name: fleury\nversion: 0.2.0\n',
+            'packages/fleury_mcp/pubspec.yaml': '''
 name: fleury_mcp
 version: 0.1.0
 dependencies:
   fleury: ^0.1.0
 ''',
-      }));
+          }));
 
       final diagnostics = Diagnostics();
       externalPrerequisites(resolution.unit('mcp')!, resolution, diagnostics);

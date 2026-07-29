@@ -27,7 +27,8 @@ class MacOsSigner {
     for (final line in result.stdout.split('\n')) {
       if (!line.contains('Developer ID Application')) continue;
       final name = RegExp(r'"([^"]+)"').firstMatch(line)?.group(1);
-      final team = RegExp(r'\(([A-Z0-9]{10})\)$').firstMatch(name ?? '')?.group(1);
+      final team =
+          RegExp(r'\(([A-Z0-9]{10})\)$').firstMatch(name ?? '')?.group(1);
       if (name != null && team != null) {
         identities.add(SigningIdentity(name: name, team: team));
       }
@@ -55,7 +56,7 @@ class MacOsSigner {
     if (matching.length > 1) {
       return SignOutcome.failed(
         '${matching.length} certificates for team $team — rk will not guess '
-            'which one distributes this',
+        'which one distributes this',
       );
     }
 
@@ -63,8 +64,10 @@ class MacOsSigner {
       '--force',
       '--timestamp',
       '--options=runtime',
-      '--identifier', codeId,
-      '--sign', matching.single.name,
+      '--identifier',
+      codeId,
+      '--sign',
+      matching.single.name,
       binary,
     ]);
     if (!signed.ok) return SignOutcome.failed(signed.summary);
@@ -92,8 +95,8 @@ class MacOsSigner {
 
   /// Whether Apple has notarized these exact bytes.
   Future<bool> isNotarized(String binary) async {
-    final result =
-        await tools.run('codesign', ['--test-requirement=notarized', '-v', binary]);
+    final result = await tools
+        .run('codesign', ['--test-requirement=notarized', '-v', binary]);
     return result.ok;
   }
 }
@@ -157,7 +160,8 @@ class MacOsNotarizer {
 
     // The submission id is what a later run correlates against, so it is
     // reported even on success.
-    final id = RegExp(r'"id"\s*:\s*"([^"]+)"').firstMatch(result.stdout)?.group(1);
+    final id =
+        RegExp(r'"id"\s*:\s*"([^"]+)"').firstMatch(result.stdout)?.group(1);
     final accepted = result.stdout.contains('"status":"Accepted"') ||
         result.stdout.contains('"status": "Accepted"');
 
@@ -178,7 +182,7 @@ class NotarizeOutcome {
   const NotarizeOutcome._(this.submissionId, this.problem, this.remedy);
   const NotarizeOutcome.accepted(String? id) : this._(id, null, null);
   const NotarizeOutcome.failed(String problem, {String? remedy})
-    : this._(null, problem, remedy);
+      : this._(null, problem, remedy);
 
   final String? submissionId;
   final String? problem;

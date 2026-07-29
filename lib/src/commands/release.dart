@@ -89,7 +89,12 @@ class ReleaseCommand {
       return ExitCodes.refused;
     }
 
-    final checklist = Checklist.derive(unit, resolution);
+    final checklist = Checklist.derive(unit, resolution, problems);
+    if (problems.isNotEmpty) {
+      output.halt(HaltKind.beforeActing);
+      output.problems(problems.found);
+      return ExitCodes.refused;
+    }
     final states = <String, Inspection>{};
 
     // Inspect everything first, so the operator is asked about what is
@@ -157,8 +162,10 @@ class ReleaseCommand {
     output.line('${unit.name} ${unit.version} released', mark: Mark.done);
     for (final project in unit.projects) {
       if (!project.channels.contains('pub.dev')) continue;
-      output.say('pub.dev/packages/${project.name}/versions/'
-          '${project.version}', depth: 1);
+      output.say(
+          'pub.dev/packages/${project.name}/versions/'
+          '${project.version}',
+          depth: 1);
     }
     return ExitCodes.ok;
   }
@@ -348,8 +355,8 @@ class ReleaseCommand {
   Future<bool> _publishRelease(ResolvedUnit unit) async {
     final assets = _produced;
     if (assets == null) {
-      output.line('github-release', mark: Mark.blocked,
-          note: 'nothing was produced to publish');
+      output.line('github-release',
+          mark: Mark.blocked, note: 'nothing was produced to publish');
       return false;
     }
     final repository = _repository();
@@ -371,7 +378,8 @@ class ReleaseCommand {
     if (repository == null) return false;
 
     final identity = resolution.identity;
-    final tap = identity?.homebrewTap ?? '${repository.split('/').first}/homebrew-tap';
+    final tap =
+        identity?.homebrewTap ?? '${repository.split('/').first}/homebrew-tap';
 
     return _chain(unit).updateFormula(
       tap: tap,
@@ -386,8 +394,8 @@ class ReleaseCommand {
   String? _repository() {
     final remote = git.originUrl;
     if (remote == null) {
-      output.line('github-release', mark: Mark.blocked,
-          note: 'this repository has no origin remote');
+      output.line('github-release',
+          mark: Mark.blocked, note: 'this repository has no origin remote');
       return null;
     }
     return remote;
@@ -410,8 +418,7 @@ class ReleaseCommand {
 
     final created = await tools.run('git', args, workingDirectory: git.root);
     if (!created.ok) {
-      output.line('tag ${unit.tag}', mark: Mark.blocked,
-          note: created.summary);
+      output.line('tag ${unit.tag}', mark: Mark.blocked, note: created.summary);
       return false;
     }
 
@@ -422,8 +429,10 @@ class ReleaseCommand {
     );
     if (!pushed.ok) {
       output.line('tag ${unit.tag}', mark: Mark.blocked, note: pushed.summary);
-      output.say('the tag exists locally; push it or delete it before '
-          're-running', depth: 1);
+      output.say(
+          'the tag exists locally; push it or delete it before '
+          're-running',
+          depth: 1);
       return false;
     }
 

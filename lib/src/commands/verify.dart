@@ -149,8 +149,7 @@ class Provenance {
 
   /// What rk cannot know, stated rather than omitted.
   List<String> get unknowable => [
-        if (commit == null)
-          'which commit produced it — no tag records that',
+        if (commit == null) 'which commit produced it — no tag records that',
         if (signer == null) 'who authorised it — the tag is unsigned or absent',
       ];
 }

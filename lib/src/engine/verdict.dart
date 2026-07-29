@@ -26,13 +26,14 @@ class Inspection {
   });
 
   const Inspection.absent({String? detail})
-    : this(Verdict.absent, detail: detail);
+      : this(Verdict.absent, detail: detail);
 
   const Inspection.exact({String? detail})
-    : this(Verdict.exact, detail: detail);
+      : this(Verdict.exact, detail: detail);
 
-  const Inspection.conflict(String detail, {Map<String, String> evidence = const {}})
-    : this(Verdict.conflict, detail: detail, evidence: evidence);
+  const Inspection.conflict(String detail,
+      {Map<String, String> evidence = const {}})
+      : this(Verdict.conflict, detail: detail, evidence: evidence);
 
   /// rk could not determine the state.
   ///
@@ -40,7 +41,7 @@ class Inspection {
   /// never wrote and the world is unchanged, or rk wrote and lost the
   /// response, so the next run must classify what it finds.
   const Inspection.unknown(String detail, {bool actedBefore = false})
-    : this(Verdict.unknown, detail: detail, actedBefore: actedBefore);
+      : this(Verdict.unknown, detail: detail, actedBefore: actedBefore);
 
   final Verdict verdict;
 
