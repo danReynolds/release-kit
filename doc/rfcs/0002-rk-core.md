@@ -324,34 +324,27 @@ works in a single-unit repository and, in a multi-unit one, lists the units
 and stops rather than guessing or offering a menu — choosing what to publish
 permanently is not an arrow key.
 
-- **`rk init`** — onboard a repository; re-run any time to reconcile drift.
-  It asks **one question first, because it determines everything else**:
-  will releases run from this machine or from CI? A local answer removes
-  tags, tag signing, trusted publishing, environments, rulesets, immutable
-  releases, attestations, and the caller workflow from the entire
-  experience; `rk init --ci` adds them later, once the user has a successful
-  release behind them and the trade is concrete.
+- **`rk init`** — write `release.toml`. It reads the repository, shows the
+  config it proposes, and writes it on confirmation. That is all: no
+  network, no settings, nothing irreversible, and no questions — a local
+  release needs no provisioning, so asking up front makes the user decide
+  something that does not need deciding. It proposes only: it never edits
+  an existing config, never adds a project silently, scans **git-tracked
+  manifests only**, does not prefill `binary_platforms` without a
+  platform-bearing channel (the field is invalid without one), and never
+  infers a binary channel from an `executables:` block, since declaring an
+  executable means `dart pub global activate` works, not "ship a signed
+  tarball." A repository with nothing releasable exits **0**.
 
-  Then **two separate consents**, never one. First the files — reversible,
-  no network: the proposed `release.toml` shown in full, and for a CI answer
-  the caller workflow it must also write. Then, only for a CI answer, the
-  provider plan — shown **before** it acts, itemized, with the blast radius
-  of each item. Immutable releases is its own line because deleting an
-  immutable release permanently burns the tag name.
+  **`rk init --ci`** provisions the provider side when — and only when —
+  the user wants releases to run in CI: the caller workflow, environments,
+  deployment tag policies, tag rulesets, and immutable releases. It prints
+  the plan before acting, with the irreversible item on its own line, and
+  is re-runnable to reconcile drift. Where a registration cannot exist yet
+  — a registry will not register a trusted publisher for a package that
+  does not exist — it names the bootstrap sequence rather than printing
+  unactionable items.
 
-  It proposes only: it never edits an existing config, never adds a project
-  silently, scans **git-tracked manifests only**, and does not prefill
-  `binary_platforms` unless a platform-bearing channel is present — the
-  field is rejected without one, so prefilling it writes a file rk's own
-  validator refuses. Nor does it infer a binary channel from an
-  `executables:` block: declaring an executable is how a package says
-  `dart pub global activate` works, not "ship me a signed tarball."
-
-  Where nothing can be provisioned yet — a registry cannot register a
-  trusted publisher for a package that does not exist — it says so and names
-  the bootstrap sequence instead of printing unactionable manual items. A
-  repository with nothing releasable exits **0**: "nothing to release" is a
-  correct answer, not a refusal.
 - **`rk status`** — read-only, and the only verb that changes nothing. It
   answers *where does this stand* by comparing local state against published
   reality: the live version and publication date per destination, the
@@ -414,8 +407,16 @@ and `--json`.
 
 **Collapse.** Anything already true collapses; only what needs a human
 expands. A grouping level with exactly one child collapses onto its parent's
-line, so a single-package repository renders as one line rather than a
-four-level tree for one thing. Genuine austerity is fewer lines *because*
+line, and a level whose children all agree collapses to their shared fact —
+three channels sitting at one version are one line, not three. Detail
+appears where it carries information: a channel that lags, a platform that
+is blocked, a step that failed. A single-package repository renders as one
+line rather than a four-level tree for one thing.
+
+**Terseness.** rk does not narrate itself. Timings, check counts, and
+progress belong to `-v`; the default prints what is true, what needs the
+reader, and the next command. A line that would read the same on every
+successful run is noise. Genuine austerity is fewer lines *because*
 the clean cases collapse, not fewer words in the lines that matter.
 
 **Attention.** The verdict is the first thing on the line, in a gutter, not
