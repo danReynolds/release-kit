@@ -5,9 +5,10 @@
   adversarial reviews
 - Supersedes: RFC 0001 as build authority; 0001 remains the threat catalog
   and assurance ladder
-- Scope: Dart packages and Dart CLIs, released **from the operator's own
-  machine**, to pub.dev, GitHub Releases, and Homebrew
-- Out of scope this revision: CI. See "Deferred: CI".
+- MVP scope: Dart packages and Dart CLIs, released **from the operator's
+  own machine**, to pub.dev, GitHub Releases, and Homebrew
+- CI: designed for, deferred from the MVP. See "CI readiness" — its
+  constraints are binding on the MVP.
 - First demo: keybay
 
 ## What rk is
@@ -442,20 +443,56 @@ act atomicity, post-crash inspectability (a platform that cannot be
 classified after a partial submit fails the proposal), whether a
 pre-publication area exists, and its native auth flow.
 
-## Deferred: CI
+## CI readiness
 
-This revision releases from the operator's machine only. CI is deferred
-whole, and with it: OIDC trusted publishing, GitHub Actions environments as
-credential contexts, a reusable release workflow, a caller workflow and its
-byte-diff, provider-side provisioning, deployment tag policies, tag
-rulesets, build attestations, and the local-versus-CI concurrency probe.
+CI is deferred from the MVP, not designed out. Releasing locally first is
+the right order — it needs no provisioning, no stored secrets, and no
+settings changes, so the engine can be proven end to end against a real
+release before any of that exists. But CI is where this fleet ends up, and
+the MVP's job is to make it a bolt-on rather than a rewrite.
 
-Two consequences are worth naming now. A locally published release carries
-no attestation, so `rk verify` reports attestation as expected-absent
-rather than missing. And local publishing uses stored sessions rather than
-short-lived OIDC tokens — a real assurance difference, recorded honestly
-rather than papered over. Nothing in this revision may assume CI exists;
-when CI returns it must attach without reshaping the engine.
+**What CI adds when it arrives.** OIDC trusted publishing, so no registry
+token is stored anywhere; GitHub Actions environments as credential
+contexts, one credential per context; a reusable release workflow plus a
+thin caller workflow rk emits and byte-diffs; provider-side provisioning
+under a separate verb; deployment tag policies and tag rulesets; build
+attestations binding artifacts to a workflow and commit; and a probe that
+stops a local run from racing a CI run on the same tag. It also promotes
+authorization: locally the operator's presence authorizes a release, while
+in CI a signed tag becomes mandatory — both because the human is absent and
+because trusted publishing binds to a tag pattern.
+
+**The seams the MVP must preserve.** These cost nothing now and are binding
+on the implementation:
+
+1. **No state between steps.** Every step must be executable in isolation
+   from the checklist, its step id, the workspace, and destination reality
+   alone. In CI a step is a separate process on a separate machine; if the
+   MVP passes state in memory from one step to the next, CI cannot split
+   them. This follows from "reality is the database" and must be honoured
+   literally rather than incidentally.
+2. **One credential chokepoint.** Every credential is obtained through a
+   single resolution function keyed by need, never looked up inline by an
+   adapter. The MVP ships one implementation — native stores — and CI adds
+   a second without touching an adapter.
+3. **The workspace is an interface, not a path.** Artifacts are stored and
+   fetched by name through a narrow accessor. Locally it is a directory; in
+   CI it is the run's artifact store.
+4. **Assurance is a recorded fact, not a branch.** How a release was
+   produced — which credentials, which host, whether an attestation
+   exists — is data attached to the release and reported, never a
+   conditional threaded through adapter logic.
+5. **Authorization is a signal with carriers.** The MVP implements operator
+   presence and verifies a signed tag when one exists. Adding "a tag is
+   required here" must be a policy check at one place, not a new code path.
+6. **Optional evidence degrades honestly.** `verify` already distinguishes
+   expected-absent from missing, so attestations attach later as one more
+   evidence type rather than a new concept.
+
+**What CI must not require.** Reshaping the checklist, changing a verdict,
+altering an adapter's inspect/act/verify contract, or introducing state
+that outlives a run. If adding CI needs any of those, the MVP got a seam
+wrong and the seam is the thing to fix.
 
 ## Deferred by principle 8
 
