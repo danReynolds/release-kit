@@ -1,5 +1,4 @@
 import 'diagnostic.dart';
-import 'pubspec.dart';
 import 'resolve.dart';
 import 'version.dart';
 
