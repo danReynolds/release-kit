@@ -93,7 +93,7 @@ Ranked by probability times cost for this fleet:
   every machine.
 - **Step** — one checklist entry, with a stable id. Every step implements
   inspect, act, verify.
-- **Run** — one invocation of `rk run` executing a release's checklist,
+- **Run** — one invocation of `rk release` executing a release's checklist,
   locally or in CI. A release completes over one or more runs.
 - **Verdict** — the result of inspecting a coordinate: `absent`, `exact`,
   `conflict`, or `undeterminable`.
@@ -288,7 +288,7 @@ release**, where no baseline exists yet. In that case:
   product decision the schema asks for, requested once, at the only moment
   it can be made.
 
-`rk check` states plainly what a first release will establish, and `rk run`
+`rk check` states plainly what a first release will establish, and `rk release`
 requires confirmation before establishing it. Keybay needs
 none of this: its 0.1.0 release supplies every baseline.
 
@@ -299,9 +299,13 @@ repository ever ships two signed binaries.
 
 ## The four verbs
 
-One verb per moment: prepare, validate, execute, prove. rk never creates a
-git object; where a tag is the authorization carrier, `rk check` prints the
-exact command and `rk run` verifies the resulting signature.
+`rk init` · `rk check` · `rk release` · `rk verify` — prepare, validate,
+execute, prove. Bare `rk` runs `check`. rk never creates a git object.
+
+They divide by effect, which is why none collapses into another: `init`
+creates setup, `check` only reads, `release` changes the world, `verify`
+proves the world matches. Names are the user's words rather than the
+engine's — a person who wants to release types `release`.
 
 Configuration files have no type checking, so discoverability is a design
 obligation, met three ways: `rk init` writes the initial config so fields
@@ -309,42 +313,59 @@ are proposed rather than memorized; fail-closed diagnostics name the
 missing field, why it applies, and the values rk can offer; and a published
 JSON Schema gives editors autocomplete and inline validation.
 
-- **`rk init`** — onboard a repository, and re-run any time to detect
-  drift. Two phases, chosen by what exists rather than by a flag. With no
+- **`rk init`** — onboard a repository; re-run any time to detect drift.
+  Two phases, chosen by what exists rather than by a flag. With no
   `release.toml`, it analyzes the repository — packages found, which
   declare executables, which are vetoed by `publish_to`, existing tags and
   published releases — writes a commented config with `binary_platforms`
   prefilled with every target rk can build, and stops so the human prunes
-  and commits. It proposes only, and never edits an existing config or adds
+  and commits. It proposes only, never editing an existing config or adding
   a project silently. With a config present, it derives the required
   registrations from the declared channels, creates what the provider API
-  allows using the operator's own credentials (environments, deployment tag
-  policies, rulesets), and reports what passed as a count, what needs the
-  human with the exact fix, and what can only be proven when a release
-  first uses it. Registrations no API can read — pub.dev's trusted
-  publisher — are always in the second group, with the exact values to
-  confirm. Operator-local by necessity: `GITHUB_TOKEN` has no
-  `administration` permission.
-- **`rk check`** — offline validation plus the derived checklist, annotated
-  with read-only reality probes; with `--tag`, also the status command,
-  since status is derived and recomputing it is exactly what checking does.
-  When ready, it prints what a release will do and the exact command to
-  authorize it, including the signing prerequisites git needs configured.
-  Where the GitHub Actions provider is in use, it verifies the caller
-  workflow on disk byte-matches what rk emits.
-- **`rk run`** — execute a release. It re-validates independently rather
-  than trusting that `check` was run, verifies the authorization signature
-  where one exists, then inspects before acting at every step; halts on
-  `conflict` or `undeterminable`; safe to re-run at any point.
-- **`rk verify`** — re-download everything public and compare, with no
-  local state, so anyone can run it at any later date.
+  allows using the operator's own credentials, and reports what passed as a
+  count, what needs the human with the exact fix, and what can only be
+  proven when a release first uses it. Operator-local by necessity:
+  `GITHUB_TOKEN` has no `administration` permission.
+- **`rk check`** — read-only, and the only verb that changes nothing.
+  Validates, derives the checklist, annotates it with reality probes, and
+  answers the three questions a release raises: *am I ready*, *what will
+  happen*, and — with a tag — *where is the one in flight*. When ready it
+  prints the exact command to authorize, including any signing
+  prerequisites git needs configured. Where the GitHub Actions provider is
+  in use, it verifies the caller workflow byte-matches what rk emits.
+- **`rk release`** — execute. Re-validates independently rather than
+  trusting `check` was run, verifies the authorization signature where one
+  exists, then inspects before acting at every step; halts on `conflict` or
+  `undeterminable`; safe to re-run at any point. The unit's version comes
+  from its manifest and is never typed: `rk release cli` states the version
+  it read and proceeds under the confirmation rule below.
+- **`rk verify`** — re-download everything public and compare, using no
+  local state, so anyone can run it against any past release at any later
+  date.
+
+### The confirmation rule
+
+Whether `rk release` prompts is decided by whether the release is already
+authorized, not by a flag:
+
+- **an authorized tag exists and its signature verifies** — proceed without
+  prompting; the signature is the authorization, and re-asking would be
+  theatre;
+- **no tag, and a human is at the terminal** — prompt with the full
+  consequences; the operator's confirmation, backed by their possession of
+  the publishing credentials, is the authorization;
+- **no tag and no human** — refuse; nothing authorized this.
+
+There is no `--yes`. CI does not need one, because its tag is the
+authorization; an unattended job without one is exactly the case that
+should fail closed.
 
 Deliberately absent: no `tag`, because creating a git object is the user's
-own tool and `rk run` must validate independently anyway, so a wrapper adds
-a verb without adding a guarantee; no `build`, `publish`, or `promote`,
-because exposing steps invites running one out of order; no `status`,
-because `check` derives it; no `clean`, because the workspace deletes
-itself; and no `--force`, `--skip`, or `--retry-anyway`.
+own tool and `rk release` must validate independently anyway, so a wrapper
+adds a verb without adding a guarantee; no `build`, `publish`, or
+`promote`, because exposing steps invites running one out of order; no
+`status`, because `check` derives it; no `clean`, because the workspace
+deletes itself; and no `--force`, `--skip`, or `--retry-anyway`.
 
 ### Output contract
 
@@ -759,7 +780,7 @@ willing to publish with a stored token or a local login session needs no
 tag at all.
 
 rk therefore **never creates a git object**. `rk check` prints the exact
-`git tag` command when a tag is required, `rk run` verifies the resulting
+`git tag` command when a tag is required, `rk release` verifies the resulting
 signature, and git's role stops there.
 
 **Source identity is a property of the source, not of git.** A release is
@@ -771,7 +792,7 @@ that tree; it enriches the record rather than constituting it.
 `github-release`, exactly as pub.dev matters only to a unit declaring
 `pub.dev`. keybay's `core` unit touches no forge API at all.
 
-**CI is pluggable, and rk triggers nothing.** `rk run` executes a release
+**CI is pluggable, and rk triggers nothing.** `rk release` executes a release
 in any environment: a laptop, GitHub Actions, GitLab CI, a cron job on a
 private box. What reacts to a tag push is the user's own configuration. rk
 ships maintained glue for GitHub Actions because the fleet uses it — a
