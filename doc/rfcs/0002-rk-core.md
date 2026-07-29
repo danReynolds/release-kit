@@ -21,7 +21,7 @@ re-running is always safe, and it refuses to guess.
 
 rk manages the release steps and defers authentication to the native tools
 that own it — `dart pub`, `codesign`, `notarytool`, `gh`, `git`. It stores
-no secrets, keeps no state, and creates no git objects.
+no secrets and keeps no state.
 
 ## Principles
 
@@ -206,32 +206,31 @@ Where the act is permanent, the confirmation is **typing the version**, not
 a keystroke — "wrong version" is the highest-ranked failure and this is the
 only defence that targets it. Without a human present, rk refuses.
 
-### When a tag is required
+### Tagging
 
-rk does not impose tags; it requires one only where something else already
-does:
+**rk never creates the artifact that authorizes it, and creates the ones
+that merely record it.** Those are different objects, and conflating them
+was an error worth naming: an executor that mints its own authorization is
+a confused deputy, but a record written after the human has authorized is
+not authorization.
 
-- **A destination requires it.** A GitHub Release is attached to a tag —
-  that is what the object is, not rk's preference. Registries have no such
-  requirement, so a unit publishing only to pub.dev, npm, or RubyGems needs
-  no tag at all.
-- **The caller is non-interactive.** An agent or a CI run has no operator
-  presence to authorize with, so a verified tag is the only carrier
-  available. (Registry trusted publishing, when CI arrives, also binds to a
-  tag pattern — again the target's rule, not rk's.)
+- **Interactive release.** The operator's presence and typed confirmation
+  are the authorization, so rk tags on their behalf: an annotated tag at
+  the released commit, named by the unit's derived pattern, signed when git
+  signing is configured and unsigned otherwise, and it says which. This is
+  an ordinary checklist step — inspect (does the tag exist, and at this
+  commit?), act (create and push), verify (confirm it on the remote) — and
+  it runs first, because a GitHub Release attaches to a tag.
+- **Non-interactive release.** An agent or CI run has no operator presence,
+  so the tag *is* the authorization: it must already exist, rk verifies its
+  signature against the expected signer, and rk never creates it. Creating
+  it here would be minting the permission it acts on.
 
-For the common case — a registry-only project, released by a human at their
-own machine — the whole flow is: bump the version, write the changelog,
-`rk release`. No tag, no signing key, no ceremony.
-
-Skipping the tag has exactly one cost, and rk states it rather than
-implying equivalent proof: nothing binds the published version to a commit.
-`rk verify` given a tag resolves configuration and sources at that tag and
-proves what the release was built from; given only a unit it compares
-against the current working tree and says so, because with no state store
-and no tag there is no record of which source produced a published version.
-rk suggests tagging as that record, and never creates one — creating git
-objects is the user's own tool.
+Because every release therefore carries a tag, a published version is
+always bound to a commit, and `rk verify` can resolve configuration and
+sources at that tag rather than comparing against a working tree that may
+have moved on. No project has to remember to tag, and none has to skip the
+proof.
 
 There is no `--yes` and no `--force`. Every classic use has a real path: a
 permanent registry conflict cannot be forced because the permanence is
