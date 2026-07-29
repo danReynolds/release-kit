@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:test/test.dart';
@@ -209,6 +210,117 @@ dependencies:
     test('no checklist is printed for something rk will not release', () {
       expect(run.out, isNot(contains('checksums')));
       expect(run.out, isNot(contains('macos-arm64')));
+    });
+  });
+
+  group('--json is the machine surface, not an addition to the human one', () {
+    ({int code, String out}) json(String dir) {
+      final result = Process.runSync(
+        Platform.resolvedExecutable,
+        ['run', rk, 'status', '--offline', '--json'],
+        workingDirectory: dir,
+      );
+      return (code: result.exitCode, out: result.stdout as String);
+    }
+
+    test('it parses, and carries the checklist keyed by step id', () {
+      final run = json(repository('keybay-json', {
+        'release.toml': '''
+schema = 1
+
+[release.core]
+path = "packages/keybay"
+publish = ["pub.dev"]
+''',
+        'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
+      }));
+
+      expect(run.code, 0, reason: run.out);
+      final document = jsonDecode(run.out) as Map<String, Object?>;
+      expect(document['command'], 'status');
+      expect(document['safe_to_rerun'], isTrue);
+
+      final unit = (document['units'] as List).single as Map;
+      expect(unit['tag'], 'v0.2.0');
+      final ids = (unit['steps'] as List).map((s) => (s as Map)['id']);
+      expect(ids, contains('core/pub.dev/keybay@0.2.0'));
+    });
+
+    test('and prose does not leak into it', () {
+      final run = json(repository('keybay-json-clean', {
+        'release.toml': '''
+schema = 1
+
+[release.core]
+path = "packages/keybay"
+publish = ["pub.dev"]
+''',
+        'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
+      }));
+      expect(run.out.trimLeft(), startsWith('{'));
+      expect(run.out, isNot(contains('derived from the manifests alone')));
+    });
+
+    test('it survives a non-zero exit', () {
+      final run = json(repository('dune-json', {
+        'release.toml': '''
+schema = 1
+
+[release.cli]
+publish = ["github-release"]
+binary_platforms = ["macos-arm64"]
+''',
+        'pubspec.yaml': '''
+name: dune_cli
+version: 0.0.1
+publish_to: none
+executables:
+  dune: dune
+dependencies:
+  dune_core:
+    path: ../dune_core
+''',
+      }));
+
+      expect(run.code, 1);
+      final document = jsonDecode(run.out) as Map<String, Object?>;
+      expect(document['exit'], 1);
+      expect(
+        document['safe_to_rerun'],
+        isTrue,
+        reason: 'fixing the manifest and re-running is the whole recovery',
+      );
+      final problem = (document['problems'] as List).single as Map;
+      expect(problem['code'], 'RK-DART-201');
+    });
+
+    test('a refusal that never reached a step writes no diagnosis', () {
+      final dir = repository('no-diagnosis', {
+        'release.toml': '''
+schema = 1
+
+[release.cli]
+publish = ["github-release"]
+binary_platforms = ["macos-arm64"]
+''',
+        'pubspec.yaml': '''
+name: dune_cli
+version: 0.0.1
+publish_to: none
+executables:
+  dune: dune
+dependencies:
+  dune_core:
+    path: ../dune_core
+''',
+      });
+      expect(status(dir).code, 1);
+      expect(
+        Directory('$dir/.rk').existsSync(),
+        isFalse,
+        reason: 'the problems were already printed; a directory of copies of '
+            'a typo teaches an operator to ignore the directory',
+      );
     });
   });
 

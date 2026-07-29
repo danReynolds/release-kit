@@ -5,6 +5,7 @@ import 'package:rk/src/commands/release.dart';
 import 'package:rk/src/commands/status.dart';
 import 'package:rk/src/commands/verify.dart';
 import 'package:rk/src/engine/config.dart';
+import 'package:rk/src/engine/diagnosis.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/output.dart';
@@ -12,6 +13,7 @@ import 'package:rk/src/engine/registry.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/engine/workspace.dart';
 
 const _usage = '''
 rk — an austere release tool
@@ -23,7 +25,7 @@ Usage: rk [command] [unit]
   release   Execute a release.
   verify    Prove a published release against what it claims.
 
-Bare `rk` runs status.  -v for detail.
+Bare `rk` runs status.  -v for detail, --json for a caller.
 ''';
 
 Future<void> main(List<String> args) async {
@@ -34,6 +36,7 @@ Future<void> main(List<String> args) async {
     '--help',
     '--dry-run',
     '--offline',
+    '--json',
   };
   final flags = args.where((a) => a.startsWith('-')).toSet();
   final positional = args.where((a) => !a.startsWith('-')).toList();
@@ -49,10 +52,6 @@ Future<void> main(List<String> args) async {
     return;
   }
 
-  final output = Output.stdio(
-    verbose: flags.contains('-v') || flags.contains('--verbose'),
-  );
-
   if (flags.contains('-h') || flags.contains('--help')) {
     stdout.write(_usage);
     return;
@@ -60,28 +59,59 @@ Future<void> main(List<String> args) async {
 
   final command = positional.isEmpty ? 'status' : positional.first;
   final target = positional.length > 1 ? positional[1] : null;
+  final json = flags.contains('--json');
 
-  switch (command) {
-    case 'status':
-      exitCode = await _status(
+  final output = Output.stdio(
+    verbose: flags.contains('-v') || flags.contains('--verbose'),
+    json: json,
+    command: command,
+  );
+
+  final code = switch (command) {
+    'status' => await _status(
         output,
         target,
         offline: flags.contains('--offline'),
-      );
-    case 'verify':
-      exitCode = await _verify(output, target);
-    case 'release':
-      exitCode = await _release(
+      ),
+    'verify' => await _verify(output, target),
+    'release' => await _release(
         output,
         target,
         dryRun: flags.contains('--dry-run'),
-      );
-    case 'init':
-      exitCode = await _init(output);
-    default:
-      // A bare unit name is the common slip, so try it as one.
-      exitCode = await _status(output, command);
-  }
+      ),
+    'init' => await _init(output),
+    // A bare unit name is the common slip, so try it as one.
+    _ => await _status(output, command),
+  };
+
+  exitCode = code;
+
+  // The machine surface survives a non-zero exit because it is written here,
+  // after the code is known, rather than by whichever path decided to stop.
+  if (json) stdout.write(output.report.encode(exit: code));
+
+  _recordDiagnosis(output, code);
+}
+
+/// Writes the evidence for a run that got as far as the work and then failed.
+///
+/// Only then: a refusal that never looked at a step — an unreadable
+/// release.toml — has already said everything it knows on stdout, and copying
+/// that into a directory would fill `.rk/diagnosis` with typos while teaching
+/// an operator to ignore it.
+void _recordDiagnosis(Output output, int code) {
+  if (code == ExitCodes.ok || code == ExitCodes.usage) return;
+  if (!output.report.hasSteps) return;
+  final root = GitSourceTree.findRoot(Directory.current.path);
+  if (root == null) return;
+
+  final at = Diagnosis.write(
+    DirectoryWorkspace(root),
+    stamp: DateTime.now().toIso8601String().replaceAll(':', '-'),
+    report: output.report,
+    exit: code,
+  );
+  output.say('what this run saw: $at');
 }
 
 Future<int> _init(Output output) async {
@@ -181,7 +211,7 @@ _Prepared _prepare(Output output) {
   final tree = GitSourceTree(root);
   final source = tree.read('release.toml');
   if (source == null) {
-    output.heading(root.split('/').last);
+    output.repository(name: root.split('/').last);
     output.blank();
     output.line('no release.toml', mark: Mark.none);
     output.say('rk init writes one, and changes nothing else.');
@@ -194,7 +224,7 @@ _Prepared _prepare(Output output) {
       config == null ? null : Resolution.resolve(config, tree, diagnostics);
 
   if (resolution == null) {
-    output.heading(root.split('/').last);
+    output.repository(name: root.split('/').last);
     output.blank();
     output.problems(diagnostics.found);
     return _Prepared.stopped(ExitCodes.refused);

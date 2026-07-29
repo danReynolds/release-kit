@@ -14,14 +14,17 @@ import 'package:test/test.dart';
 /// without the network or a real repository asserts the code path exists and
 /// leaves the live proof to the checkpoint runs recorded in doc/plan.md.
 void main() {
-  final lib = Directory('lib');
-
-  /// Whether any source under lib/ contains [pattern].
-  bool sourceContains(String pattern) => lib
-      .listSync(recursive: true)
+  /// Every Dart file rk ships. bin/ counts: a feature reachable only from the
+  /// entry point is wired, and a check that ignored bin/ would call it dead.
+  final shipped = [Directory('lib'), Directory('bin')]
+      .expand((d) => d.listSync(recursive: true))
       .whereType<File>()
       .where((f) => f.path.endsWith('.dart'))
-      .any((f) => f.readAsStringSync().contains(pattern));
+      .toList();
+
+  /// Whether any shipped source contains [pattern].
+  bool sourceContains(String pattern) =>
+      shipped.any((f) => f.readAsStringSync().contains(pattern));
 
   bool fileExists(String path) => File(path).existsSync();
 
@@ -30,10 +33,8 @@ void main() {
   /// A definition is not a use: matching the declaration of the very thing
   /// being checked is how a conformance test passes while the feature is
   /// unwired, which is the failure this file exists to prevent.
-  bool usedOutside(String pattern, String definedIn) => lib
-      .listSync(recursive: true)
-      .whereType<File>()
-      .where((f) => f.path.endsWith('.dart') && !f.path.endsWith(definedIn))
+  bool usedOutside(String pattern, String definedIn) => shipped
+      .where((f) => !f.path.endsWith(definedIn))
       .any((f) => f.readAsStringSync().contains(pattern));
 
   /// Whether the CLI accepts [flag].
@@ -109,13 +110,18 @@ void main() {
       for (final glyph in ['✓', '·', '✗', '→']) {
         expect(source, contains(glyph));
       }
+      expect(fileExists('test/output_test.dart'), isTrue);
     });
 
     test('non-TTY output is append-only', () {
-      expect(fileExists('test/output_test.dart'), isTrue);
       expect(
         File('test/output_test.dart').readAsStringSync(),
         contains('append-only'),
+      );
+      expect(
+        File('test/liveness_test.dart').readAsStringSync(),
+        contains('a pipe sees no spinner and no counter'),
+        reason: 'asserted against a running Activity, not against the source',
       );
     });
 
@@ -128,31 +134,63 @@ void main() {
 
     test('liveness: a running step expands, a finished one collapses', () {
       expect(
-        sourceContains('elapsed'),
-        isTrue,
-        reason: 'a step that waits on a third party must show how long it '
-            'has waited, or a wait reads as a hang',
+        usedOutside('Activity', 'output.dart'),
+        isFalse,
+        reason: 'nothing has long-running work to report yet; the renderer is '
+            'proved by liveness_test.dart until phase 7 has steps that wait',
       );
+      final live = File('test/liveness_test.dart').readAsStringSync();
+      for (final proof in [
+        'the frame carries the elapsed time',
+        'says how long that usually is',
+        'running past that is itself surfaced',
+        'a duration appears when it is notable',
+        'a failure is marked as one',
+      ]) {
+        expect(live, contains(proof), reason: 'liveness proves: $proof');
+      }
     });
 
     test('--json, stable and surviving a non-zero exit', () {
       expect(cliAccepts('--json'), isTrue, reason: 'the flag is accepted');
+      expect(sourceContains('safe_to_rerun'), isTrue);
       expect(
-        sourceContains('safe_to_rerun'),
+        usedOutside('report.step', 'report.dart'),
         isTrue,
-        reason: 'the agent contract: a caller decides whether to retry from '
-            'data rather than by parsing prose',
+        reason: 'the machine surface is recorded by the code that prints, or '
+            'the two drift',
+      );
+      expect(
+        File('test/offline_cli_test.dart').readAsStringSync(),
+        contains('it survives a non-zero exit'),
+        reason: 'proved by running the CLI on a repository it refuses',
       );
     });
 
     test('diagnostic codes and the diagnosis directory', () {
       expect(sourceContains('RK-'), isTrue, reason: 'codes');
       expect(
-        sourceContains('diagnosis'),
+        usedOutside('Diagnosis.write', 'diagnosis.dart'),
         isTrue,
         reason: 'reality records what exists and nothing about why a run '
-            'failed',
+            'failed, so a failed run must write its own evidence',
       );
+      expect(
+        File('test/report_test.dart').readAsStringSync(),
+        contains('native tool stderr is the diagnosis'),
+      );
+    });
+
+    test(
+        'DONE WHEN: the checklist renders identically to a terminal and a '
+        'pipe', () {
+      // Proved by replaying the writes the way a terminal would — transient
+      // lines erased, escapes stripped — and comparing what is left with what
+      // a pipe was given. See the last group of liveness_test.dart.
+      final live = File('test/liveness_test.dart').readAsStringSync();
+      expect(live, contains('DONE WHEN'));
+      expect(live, contains('render(isTerminal: true)'));
+      expect(live, contains('render(isTerminal: false)'));
     });
   });
 

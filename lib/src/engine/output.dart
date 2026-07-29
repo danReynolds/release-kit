@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'dart:io';
 
+import 'checklist.dart';
 import 'diagnostic.dart';
+import 'report.dart';
 
 /// How a line reads at a glance.
 ///
@@ -38,17 +41,37 @@ class Output {
     required this.isTerminal,
     this.verbose = false,
     this.useColor = true,
-  });
+    Report? report,
+    Elapsed Function()? clock,
+  })  : report = report ?? Report('rk'),
+        _clock = clock ?? _wallClock;
 
   /// Writes to stdout, detecting a terminal and honouring `NO_COLOR`.
-  factory Output.stdio({bool verbose = false}) {
-    final terminal = stdout.hasTerminal;
+  ///
+  /// [json] moves the prose to nowhere: `--json` is the named machine surface
+  /// rather than an addition to the human one, so a caller parsing stdout is
+  /// never handed both. The report is still recorded, because the recording
+  /// happens inside the same calls that would have printed.
+  factory Output.stdio({
+    bool verbose = false,
+    bool json = false,
+    required String command,
+  }) {
+    final terminal = stdout.hasTerminal && !json;
     return Output(
-      sink: stdout.write,
+      sink: json ? _discard : stdout.write,
       isTerminal: terminal,
       verbose: verbose,
       useColor: terminal && !Platform.environment.containsKey('NO_COLOR'),
+      report: Report(command),
     );
+  }
+
+  static void _discard(String _) {}
+
+  static Elapsed _wallClock() {
+    final stopwatch = Stopwatch()..start();
+    return () => stopwatch.elapsed;
   }
 
   final void Function(String) sink;
@@ -59,6 +82,11 @@ class Output {
   final bool verbose;
   final bool useColor;
 
+  /// What a caller is told, recorded by the same calls that print.
+  final Report report;
+
+  final Elapsed Function() _clock;
+
   var _transient = false;
 
   /// A heading, with a blank line before it unless it opens the output.
@@ -66,6 +94,68 @@ class Output {
     _clearTransient();
     sink('$text\n');
   }
+
+  /// The repository line, recorded in parts so a caller is not left parsing
+  /// "keybay · main · 2 uncommitted" back into fields.
+  void repository({required String name, String? branch, int? uncommitted}) {
+    report.repository(name: name, branch: branch, uncommitted: uncommitted);
+    heading([
+      name,
+      if (branch != null) branch,
+      if (uncommitted != null && uncommitted > 0) '$uncommitted uncommitted',
+    ].join(' · '));
+  }
+
+  /// Opens a unit. Steps printed after this belong to it.
+  void unit(String name, {required String version, required String tag}) {
+    report.unit(name: name, version: version, tag: tag);
+    blank();
+    line(name, note: '$version → $tag');
+  }
+
+  /// One step of a checklist, printed and recorded as one act.
+  ///
+  /// Taking the [Step] rather than its parts is what makes the two surfaces
+  /// agree: there is no way to show a person one id and hand a caller another,
+  /// because there is only one call and it reads both from the same object.
+  void step(
+    Step step, {
+    Mark mark = Mark.none,
+    String? note,
+    String verdict = 'unknown',
+    Duration? took,
+    int depth = 1,
+  }) {
+    report.step(
+      id: step.id,
+      unit: step.unit,
+      summary: step.summary,
+      verdict: verdict,
+      permanent: step.isPermanent,
+      public: step.isPublic,
+      needs: step.needs,
+      took: took,
+    );
+    line(
+      step.summary,
+      mark: mark,
+      note: note ?? (step.isPermanent ? 'permanent' : null),
+      depth: depth,
+      labelWidth: 48,
+    );
+  }
+
+  /// Begins a step whose work takes long enough that silence would read as a
+  /// hang. Finish it with [Activity.done] or [Activity.failed].
+  ///
+  /// [typically] is how long this normally takes, which is the difference
+  /// between patience and a cancelled release when the wait is somebody else's.
+  Activity begin(
+    Step step, {
+    Duration? typically,
+    int depth = 1,
+  }) =>
+      Activity._(this, step, typically, depth, _clock());
 
   void blank() {
     _clearTransient();
@@ -134,20 +224,31 @@ class Output {
 
   /// The plain sentence that opens every halt, before any verdict noun.
   void halt(HaltKind kind) {
-    blank();
-    say(switch (kind) {
+    final sentence = switch (kind) {
       HaltKind.beforeActing =>
         'rk stopped before acting. nothing changed. safe to re-run.',
       HaltKind.lostTrack => 'rk acted, then lost sight of the result. '
           'an effect may exist. still safe to re-run.',
       HaltKind.unfixableByRerun =>
         'rk did not act. this cannot be fixed by re-running.',
-    });
+    };
+    report.halt(
+      kind.name,
+      sentence,
+      rerunHelps: kind != HaltKind.unfixableByRerun,
+    );
+    blank();
+    say(sentence);
     blank();
   }
 
   /// A problem, with its remedy and — only under `-v` — its code.
+  ///
+  /// The code is always in the report: a person searching for it wants it out
+  /// of the way until they need it, while a caller keying on it needs it every
+  /// time.
   void problem(Diagnostic diagnostic, {int depth = 0}) {
+    report.problem(diagnostic);
     final where = diagnostic.source == null ? '' : '${diagnostic.source}  ';
     line(
       '$where${diagnostic.message}',
@@ -171,6 +272,7 @@ class Output {
 
   /// The next command, which is what a reader wants after being told to act.
   void next(String command, {int depth = 0}) {
+    report.next(command);
     // Marked by position, not by content: two identical lines are two lines,
     // and only the first is the reader's next move.
     for (final (index, part) in command.split('\n').indexed) {
@@ -213,4 +315,122 @@ class ExitCodes {
 
   /// The command was used incorrectly.
   static const usage = 2;
+}
+
+/// How long something has been running.
+///
+/// A function rather than a `Stopwatch` so liveness can be tested without
+/// waiting: the wall clock is one implementation of it, and a test's counter is
+/// another.
+typedef Elapsed = Duration Function();
+
+/// A step being worked on, so that waiting reads as work rather than as a hang.
+///
+/// The RFC's rule, and the reason this exists at all: a release takes minutes
+/// and some steps are opaque — notarization waits on Apple — and silence during
+/// that is not austerity, it is anxiety. An operator who cannot tell a wait from
+/// a hang cancels the release, which is the expensive outcome.
+///
+/// Nothing here happens off a terminal. A pipe, a log, and an agent get one
+/// line per step, on completion, in the same words the terminal ends up
+/// showing: no spinner, no elapsed counter, no rewriting.
+class Activity {
+  Activity._(
+    this._output,
+    this._step,
+    this._typically,
+    this._depth,
+    this._elapsed,
+  ) {
+    if (_output.isTerminal) {
+      _draw();
+      // The counter has to advance on its own. A step that blocks — a
+      // subprocess, a poll that has not come back — would otherwise show a
+      // frozen spinner, which is indistinguishable from the hang this exists
+      // to rule out.
+      _timer =
+          Timer.periodic(const Duration(milliseconds: 120), (_) => _draw());
+    }
+  }
+
+  final Output _output;
+  final Step _step;
+  final Duration? _typically;
+  final int _depth;
+  final Elapsed _elapsed;
+
+  Timer? _timer;
+  String? _doing;
+  var _spin = 0;
+  var _finished = false;
+
+  static const _frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+  /// A duration worth printing on a finished step. Below this it is noise: the
+  /// reader learns nothing from being told a step took a moment.
+  static const notable = Duration(seconds: 5);
+
+  /// What the step is doing now. Shown while it runs and gone once it has.
+  void update(String doing) {
+    _doing = doing;
+    if (_output.isTerminal) _draw();
+  }
+
+  /// Finished, with [result] as the one line that survives.
+  void done(String result, {Mark mark = Mark.done}) => _finish(mark, result);
+
+  /// Failed. The line stays, and so does whatever the caller prints after it,
+  /// because that detail is the diagnosis.
+  void failed(String result) => _finish(Mark.blocked, result);
+
+  void _finish(Mark mark, String result) {
+    if (_finished) return;
+    _finished = true;
+    _timer?.cancel();
+    final took = _elapsed();
+    _output.step(
+      _step,
+      mark: mark,
+      note: took >= notable ? '$result · ${formatDuration(took)}' : result,
+      verdict: result,
+      took: took,
+      depth: _depth,
+    );
+  }
+
+  /// The line a terminal shows while this runs.
+  ///
+  /// Pure, so what an operator sees during a five-minute wait is asserted in a
+  /// test that takes no time at all.
+  String frame() {
+    final took = _elapsed();
+    final parts = [
+      _step.summary,
+      if (_doing != null) _doing!,
+      formatDuration(took),
+      if (_typically != null && took > _typically!)
+        'longer than the usual ${formatDuration(_typically!)}'
+      else if (_typically != null)
+        'typically ${formatDuration(_typically!)}',
+    ];
+    return '${_frames[_spin % _frames.length]} ${parts.join(' · ')}';
+  }
+
+  void _draw() {
+    _output.progress('${'  ' * _depth}${frame()}');
+    _spin++;
+  }
+}
+
+/// A duration in the coarsest terms that still say something: seconds under a
+/// minute, then minutes, then hours. Nobody waiting on a release needs
+/// milliseconds, and nobody reading "184s" converts it gladly.
+String formatDuration(Duration d) {
+  if (d.inSeconds < 60) return '${d.inSeconds}s';
+  if (d.inMinutes < 60) {
+    final seconds = d.inSeconds % 60;
+    return seconds == 0 ? '${d.inMinutes}m' : '${d.inMinutes}m ${seconds}s';
+  }
+  final minutes = d.inMinutes % 60;
+  return minutes == 0 ? '${d.inHours}h' : '${d.inHours}h ${minutes}m';
 }

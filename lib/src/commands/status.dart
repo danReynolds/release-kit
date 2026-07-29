@@ -52,7 +52,11 @@ class StatusCommand {
       return ExitCodes.usage;
     }
 
-    output.heading(_repositoryLine());
+    output.repository(
+      name: tree.description.split('/').last,
+      branch: git.branch,
+      uncommitted: git.uncommitted.length,
+    );
 
     for (final unit in units) {
       if (offline) {
@@ -68,30 +72,18 @@ class StatusCommand {
     return ExitCodes.ok;
   }
 
-  String _repositoryLine() {
-    final name = tree.description.split('/').last;
-    final parts = <String>[name];
-    if (git.branch != null) parts.add(git.branch!);
-    if (!git.isClean) {
-      parts.add('${git.uncommitted.length} uncommitted');
-    }
-    return parts.join(' · ');
-  }
-
   /// The checklist, with nothing read from anywhere.
   void _offlineUnit(ResolvedUnit unit) {
-    output.blank();
-    output.line(unit.name, note: '${unit.version} → ${unit.tag}');
+    output.unit(
+      unit.name,
+      version: unit.version.canonical,
+      tag: unit.tag,
+    );
 
     final problems = Diagnostics();
     final checklist = Checklist.derive(unit, resolution, problems);
     for (final step in checklist.steps) {
-      output.line(
-        step.summary,
-        depth: 1,
-        labelWidth: 48,
-        note: step.isPermanent ? 'permanent' : null,
-      );
+      output.step(step);
     }
     for (final problem in problems.found) {
       output.problem(problem, depth: 1);
