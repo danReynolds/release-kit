@@ -206,11 +206,32 @@ Where the act is permanent, the confirmation is **typing the version**, not
 a keystroke — "wrong version" is the highest-ranked failure and this is the
 only defence that targets it. Without a human present, rk refuses.
 
-A signed tag is not required for a local release, but where one exists rk
-verifies its signature against the expected signer and records it. Creating
-tags remains the user's own tool; `rk status` prints the exact command, and
-first checks that git signing is configured, since `gpg failed to sign the
-data` is otherwise a dead end with rk's name nowhere in it.
+### When a tag is required
+
+rk does not impose tags; it requires one only where something else already
+does:
+
+- **A destination requires it.** A GitHub Release is attached to a tag —
+  that is what the object is, not rk's preference. Registries have no such
+  requirement, so a unit publishing only to pub.dev, npm, or RubyGems needs
+  no tag at all.
+- **The caller is non-interactive.** An agent or a CI run has no operator
+  presence to authorize with, so a verified tag is the only carrier
+  available. (Registry trusted publishing, when CI arrives, also binds to a
+  tag pattern — again the target's rule, not rk's.)
+
+For the common case — a registry-only project, released by a human at their
+own machine — the whole flow is: bump the version, write the changelog,
+`rk release`. No tag, no signing key, no ceremony.
+
+Skipping the tag has exactly one cost, and rk states it rather than
+implying equivalent proof: nothing binds the published version to a commit.
+`rk verify` given a tag resolves configuration and sources at that tag and
+proves what the release was built from; given only a unit it compares
+against the current working tree and says so, because with no state store
+and no tag there is no record of which source produced a published version.
+rk suggests tagging as that record, and never creates one — creating git
+objects is the user's own tool.
 
 There is no `--yes` and no `--force`. Every classic use has a real path: a
 permanent registry conflict cannot be forced because the permanence is
