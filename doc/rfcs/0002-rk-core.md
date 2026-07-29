@@ -139,6 +139,47 @@ Rules:
   so a partially published unit can resume. A project already live at its
   manifest version inspects as `exact` and is skipped.
 
+### Versions
+
+Versions are compared and rendered often enough — monotonicity, tag
+derivation, coordinates — that the grammar is frozen rather than inherited
+from whatever an SDK happens to accept:
+
+- SemVer 2.0.0 over Dart's three-component form: major, minor, and patch
+  are ASCII decimal integers with no leading zero unless the component is
+  exactly `0`, with optional prerelease and build suffixes using the SemVer
+  identifier grammar.
+- The manifest's version string must already be canonical: parsing and
+  re-serializing it reproduces it exactly. Whitespace, a leading `v`, and
+  omitted components are rejected rather than normalized.
+- The full canonical string, including build metadata, is coordinate
+  identity. SemVer precedence does not make two different coordinate
+  strings the same coordinate.
+- **Prereleases** are ordered by SemVer precedence, so `0.2.0-beta.1`
+  precedes `0.2.0`, and monotonicity uses that ordering. A prerelease is
+  otherwise an ordinary release: it publishes, it is verified, and it is
+  never treated as a draft or a lesser artifact.
+- Frozen parser and comparator test vectors are part of the engine, so two
+  implementations cannot disagree about an ordering.
+
+### Changelog
+
+"Has an entry" means the changelog contains a heading whose text, once
+stripped of leading `#` characters, punctuation, and surrounding
+whitespace, begins with the exact canonical version string. Nothing else is
+inspected: rk does not parse, lint, or generate changelog content, and it
+never edits the file. A missing entry is a blocking problem naming the file
+and the heading rk looked for.
+
+### Diagnostics
+
+Every blocking problem carries a stable code — `RK-<AREA>-<NNN>`, as in
+`RK-DART-201` for a project whose build inputs escape the repository — so a
+failure is greppable, linkable, and stable across releases even as its
+prose improves. Codes are additive and never reused for a different
+meaning. The code is secondary in the output: the human reads the sentence
+and the remediation, and the code exists for search.
+
 ### Identity
 
 Identity facts are derived, not declared, so the check becomes "this
