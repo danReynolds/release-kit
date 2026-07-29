@@ -21,6 +21,7 @@ class StatusCommand {
     required this.git,
     required this.registry,
     required this.output,
+    this.offline = false,
   });
 
   final Resolution resolution;
@@ -28,6 +29,13 @@ class StatusCommand {
   final GitState git;
   final RegistryReader registry;
   final Output output;
+
+  /// Report only what can be derived without a network.
+  ///
+  /// The engine's whole first layer is pure computation, and this is how it is
+  /// demonstrated on its own: the checklist a release would run, with reality
+  /// stated as unread rather than guessed at.
+  final bool offline;
 
   Future<int> run({String? only}) async {
     final units = only == null
@@ -47,7 +55,11 @@ class StatusCommand {
     output.heading(_repositoryLine());
 
     for (final unit in units) {
-      await _unit(unit);
+      if (offline) {
+        _offlineUnit(unit);
+      } else {
+        await _unit(unit);
+      }
     }
 
     // Blocked is a state, not a failure: a unit waiting on a changelog entry
@@ -64,6 +76,27 @@ class StatusCommand {
       parts.add('${git.uncommitted.length} uncommitted');
     }
     return parts.join(' · ');
+  }
+
+  /// The checklist, with nothing read from anywhere.
+  void _offlineUnit(ResolvedUnit unit) {
+    output.blank();
+    output.line(unit.name, note: '${unit.version} → ${unit.tag}');
+
+    final checklist = Checklist.derive(unit, resolution);
+    for (final step in checklist.steps) {
+      output.line(
+        step.summary,
+        depth: 1,
+        labelWidth: 48,
+        note: step.isPermanent ? 'permanent' : null,
+      );
+    }
+    output.say(
+      'derived from the manifests alone. Nothing was read from pub.dev,\n'
+      'the forge, or the tap, so none of this says what is already done.',
+      depth: 1,
+    );
   }
 
   /// Reports one unit.

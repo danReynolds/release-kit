@@ -27,7 +27,14 @@ Bare `rk` runs status.  -v for detail.
 ''';
 
 Future<void> main(List<String> args) async {
-  const known = {'-v', '--verbose', '-h', '--help', '--dry-run'};
+  const known = {
+    '-v',
+    '--verbose',
+    '-h',
+    '--help',
+    '--dry-run',
+    '--offline',
+  };
   final flags = args.where((a) => a.startsWith('-')).toSet();
   final positional = args.where((a) => !a.startsWith('-')).toList();
 
@@ -56,7 +63,11 @@ Future<void> main(List<String> args) async {
 
   switch (command) {
     case 'status':
-      exitCode = await _status(output, target);
+      exitCode = await _status(
+        output,
+        target,
+        offline: flags.contains('--offline'),
+      );
     case 'verify':
       exitCode = await _verify(output, target);
     case 'release':
@@ -194,7 +205,11 @@ _Prepared _prepare(Output output) {
   return _Prepared.ready(resolution, tree, Registry());
 }
 
-Future<int> _status(Output output, String? unit) async {
+Future<int> _status(
+  Output output,
+  String? unit, {
+  bool offline = false,
+}) async {
   final prepared = _prepare(output);
   if (!prepared.isReady) return prepared.code!;
   final resolution = prepared.resolution!;
@@ -207,6 +222,7 @@ Future<int> _status(Output output, String? unit) async {
       git: GitState.read(tree.root),
       registry: registry,
       output: output,
+      offline: offline,
     ).run(only: unit);
   } finally {
     registry.close();
