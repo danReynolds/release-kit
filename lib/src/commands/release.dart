@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import '../builds/capability.dart';
 import '../engine/changelog.dart';
 import '../engine/checklist.dart';
 import '../engine/diagnostic.dart';
@@ -10,6 +11,7 @@ import '../engine/resolve.dart';
 import '../engine/source_tree.dart';
 import '../engine/tools.dart';
 import '../engine/verdict.dart';
+import 'binary_chain.dart';
 
 /// Executes a release: inspect, act, verify, one step at a time.
 ///
@@ -41,6 +43,10 @@ class ReleaseCommand {
 
   /// Show what would happen and stop before the first effect.
   final bool dryRun;
+
+  /// Assets produced during this run, so the steps that ship them do not have
+  /// to rebuild what the step before them just made.
+  List<ReleaseAsset>? _produced;
 
   Future<int> run({String? only}) async {
     final units = only == null
@@ -157,16 +163,29 @@ class ReleaseCommand {
     return ExitCodes.ok;
   }
 
+  /// Refuses what this machine cannot finish, before any work rather than at
+  /// the last step.
   Diagnostic? _refuseIfUnfinishable(ResolvedUnit unit) {
-    if (unit.shipsBinaries) {
-      return const Diagnostic(
-        code: 'RK-REL-001',
-        message: 'binary channels are not built yet',
-        remedy: 'this rk releases packages to pub.dev; the build, signing and '
-            'release chain is the next milestone',
-      );
+    if (!unit.shipsBinaries) return null;
+
+    final capabilities = HostCapabilities.detect();
+    final blocked = <String>[];
+    for (final project in unit.projects) {
+      for (final platform in project.binaryPlatforms) {
+        final resolved = capabilities.resolve(platform);
+        if (!resolved.canProduce) {
+          blocked.add('$platform — ${resolved.reason}');
+        }
+      }
     }
-    return null;
+    if (blocked.isEmpty) return null;
+
+    return Diagnostic(
+      code: 'RK-REL-001',
+      message: 'this machine cannot produce every platform this unit ships',
+      remedy: 'starting anyway would build and sign for minutes and then '
+          'stop before publishing anything:\n  ${blocked.join('\n  ')}',
+    );
   }
 
   void _validate(ResolvedUnit unit, Diagnostics problems) {
@@ -283,10 +302,95 @@ class ReleaseCommand {
         return _publish(step, unit);
       case StepKind.prerequisite:
         return true; // inspected, never performed
-      default:
-        output.line(step.summary, mark: Mark.blocked, note: 'not built yet');
-        return false;
+      case StepKind.build:
+        // The whole chain runs once, at the first build step: signing,
+        // notarizing and archiving are one sequence per platform, and
+        // splitting them here would mean re-reading artifacts between them.
+        return _produce(unit);
+      case StepKind.sign ||
+            StepKind.notarize ||
+            StepKind.archive ||
+            StepKind.checksums:
+        return true; // done by the chain the first build started
+      case StepKind.publishRelease:
+        return _publishRelease(unit);
+      case StepKind.publishFormula:
+        return _publishFormula(unit);
     }
+  }
+
+  BinaryChain _chain(ResolvedUnit unit) => BinaryChain(
+        tools: tools,
+        output: output,
+        workspace: '${git.root}/.rk/work/${unit.tag}-${git.shortHead}',
+        repositoryRoot: git.root,
+        capabilities: HostCapabilities.detect(),
+      );
+
+  ResolvedProject _binaryProject(ResolvedUnit unit) =>
+      unit.projects.firstWhere((p) => p.config.wantsBinaries);
+
+  Future<bool> _produce(ResolvedUnit unit) async {
+    final project = _binaryProject(unit);
+    final identity = resolution.identity;
+
+    final assets = await _chain(unit).produce(
+      unit: unit,
+      project: project,
+      appleTeam: identity?.appleTeam,
+      codeId: identity?.codeId,
+    );
+    if (assets == null) return false;
+    _produced = assets;
+    return true;
+  }
+
+  Future<bool> _publishRelease(ResolvedUnit unit) async {
+    final assets = _produced;
+    if (assets == null) {
+      output.line('github-release', mark: Mark.blocked,
+          note: 'nothing was produced to publish');
+      return false;
+    }
+    final repository = _repository();
+    if (repository == null) return false;
+
+    final url = await _chain(unit).publishRelease(
+      repository: repository,
+      tag: unit.tag,
+      title: '${_binaryProject(unit).name} ${unit.version}',
+      assets: assets,
+    );
+    return url != null;
+  }
+
+  Future<bool> _publishFormula(ResolvedUnit unit) async {
+    final assets = _produced;
+    if (assets == null) return false;
+    final repository = _repository();
+    if (repository == null) return false;
+
+    final identity = resolution.identity;
+    final tap = identity?.homebrewTap ?? '${repository.split('/').first}/homebrew-tap';
+
+    return _chain(unit).updateFormula(
+      tap: tap,
+      repository: repository,
+      tag: unit.tag,
+      project: _binaryProject(unit),
+      assets: assets,
+    );
+  }
+
+  /// The `owner/name` this repository pushes to.
+  String? _repository() {
+    final remote = git.originUrl;
+    if (remote == null) {
+      output.line('github-release', mark: Mark.blocked,
+          note: 'this repository has no origin remote');
+      return null;
+    }
+    return remote;
   }
 
   /// Creates and pushes the tag that records this release.

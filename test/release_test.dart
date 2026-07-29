@@ -42,6 +42,7 @@ GitState _git({
       headIsPushed: pushed,
       tags: tags,
       signingConfigured: signing,
+      originUrl: 'danReynolds/keybay',
     );
 
 class Ran {

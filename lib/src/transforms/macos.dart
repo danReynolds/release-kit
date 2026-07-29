@@ -1,0 +1,188 @@
+import '../engine/tools.dart';
+
+/// Signs and notarizes a macOS binary.
+///
+/// The identity is verified against what is already published rather than
+/// against the certificate doing the signing, because comparing output to the
+/// thing that produced it proves nothing. On macOS the code identity is what
+/// the OS ties Keychain items and permission grants to, so a drift here
+/// silently locks existing users out of their own data.
+class MacOsSigner {
+  MacOsSigner({required this.tools});
+
+  final Tools tools;
+
+  /// The `Developer ID Application` identities in the login keychain.
+  ///
+  /// Filtered to that type: it is the only certificate that can distribute a
+  /// signed binary outside the App Store.
+  Future<List<SigningIdentity>> availableIdentities() async {
+    final result = await tools.run(
+      'security',
+      const ['find-identity', '-v', '-p', 'codesigning'],
+    );
+    if (!result.ok) return const [];
+
+    final identities = <SigningIdentity>[];
+    for (final line in result.stdout.split('\n')) {
+      if (!line.contains('Developer ID Application')) continue;
+      final name = RegExp(r'"([^"]+)"').firstMatch(line)?.group(1);
+      final team = RegExp(r'\(([A-Z0-9]{10})\)$').firstMatch(name ?? '')?.group(1);
+      if (name != null && team != null) {
+        identities.add(SigningIdentity(name: name, team: team));
+      }
+    }
+    return identities;
+  }
+
+  /// Signs [binary] with the identity for [team].
+  Future<SignOutcome> sign({
+    required String binary,
+    required String team,
+    required String codeId,
+  }) async {
+    final identities = await availableIdentities();
+    final matching = identities.where((i) => i.team == team).toList();
+
+    if (matching.isEmpty) {
+      return SignOutcome.failed(
+        identities.isEmpty
+            ? 'no Developer ID Application certificate is installed'
+            : 'no certificate for team $team; this machine has '
+                '${identities.map((i) => i.team).join(', ')}',
+      );
+    }
+    if (matching.length > 1) {
+      return SignOutcome.failed(
+        '${matching.length} certificates for team $team — rk will not guess '
+            'which one distributes this',
+      );
+    }
+
+    final signed = await tools.run('codesign', [
+      '--force',
+      '--timestamp',
+      '--options=runtime',
+      '--identifier', codeId,
+      '--sign', matching.single.name,
+      binary,
+    ]);
+    if (!signed.ok) return SignOutcome.failed(signed.summary);
+
+    final requirement = await designatedRequirement(binary);
+    if (requirement == null) {
+      return SignOutcome.failed('the signature could not be read back');
+    }
+    return SignOutcome.signed(requirement);
+  }
+
+  /// The designated requirement of an already-signed binary.
+  ///
+  /// This is what a release must match: read it from the currently published
+  /// binary, and compare the new one against it.
+  Future<String?> designatedRequirement(String binary) async {
+    final result = await tools.run('codesign', ['-d', '-r-', binary]);
+    if (!result.ok) return null;
+    final text = '${result.stdout}\n${result.stderr}';
+    for (final line in text.split('\n')) {
+      if (line.startsWith('designated =>')) return line.trim();
+    }
+    return null;
+  }
+
+  /// Whether Apple has notarized these exact bytes.
+  Future<bool> isNotarized(String binary) async {
+    final result =
+        await tools.run('codesign', ['--test-requirement=notarized', '-v', binary]);
+    return result.ok;
+  }
+}
+
+class SigningIdentity {
+  const SigningIdentity({required this.name, required this.team});
+
+  /// The full certificate common name, which codesign selects by.
+  final String name;
+  final String team;
+}
+
+class SignOutcome {
+  const SignOutcome._(this.requirement, this.problem);
+  const SignOutcome.signed(String requirement) : this._(requirement, null);
+  const SignOutcome.failed(String problem) : this._(null, problem);
+
+  /// The designated requirement the signature produced.
+  final String? requirement;
+  final String? problem;
+
+  bool get ok => requirement != null;
+}
+
+/// Submits a signed binary to Apple and waits for a verdict.
+class MacOsNotarizer {
+  MacOsNotarizer({required this.tools, this.profile = 'rk-notary'});
+
+  final Tools tools;
+
+  /// The `notarytool` keychain profile rk expects, by convention rather than
+  /// configuration. rk never sees the credential it holds.
+  final String profile;
+
+  /// How long this normally takes, so a wait does not read as a hang.
+  static const typicalWait = '3–5 min';
+
+  Future<NotarizeOutcome> submit(String zipPath) async {
+    final result = await tools.run('xcrun', [
+      'notarytool',
+      'submit',
+      zipPath,
+      '--keychain-profile',
+      profile,
+      '--wait',
+      '--output-format',
+      'json',
+    ]);
+
+    if (!result.ok) {
+      final missing = result.summary.contains('profile') ||
+          result.summary.contains('keychain');
+      return NotarizeOutcome.failed(
+        result.summary,
+        remedy: missing
+            ? 'store the credential once: xcrun notarytool '
+                'store-credentials $profile'
+            : null,
+      );
+    }
+
+    // The submission id is what a later run correlates against, so it is
+    // reported even on success.
+    final id = RegExp(r'"id"\s*:\s*"([^"]+)"').firstMatch(result.stdout)?.group(1);
+    final accepted = result.stdout.contains('"status":"Accepted"') ||
+        result.stdout.contains('"status": "Accepted"');
+
+    if (!accepted) {
+      return NotarizeOutcome.failed(
+        'Apple did not accept it',
+        remedy: id == null
+            ? null
+            : 'the reason is in the log: xcrun notarytool log $id '
+                '--keychain-profile $profile',
+      );
+    }
+    return NotarizeOutcome.accepted(id);
+  }
+}
+
+class NotarizeOutcome {
+  const NotarizeOutcome._(this.submissionId, this.problem, this.remedy);
+  const NotarizeOutcome.accepted(String? id) : this._(id, null, null);
+  const NotarizeOutcome.failed(String problem, {String? remedy})
+    : this._(null, problem, remedy);
+
+  final String? submissionId;
+  final String? problem;
+  final String? remedy;
+
+  bool get ok => problem == null;
+}

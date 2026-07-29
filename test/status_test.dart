@@ -67,6 +67,7 @@ GitState git({
       headIsPushed: pushed,
       tags: tags,
       signingConfigured: true,
+      originUrl: 'danReynolds/keybay',
     );
 
 MemorySourceTree tree({

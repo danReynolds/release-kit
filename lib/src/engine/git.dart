@@ -14,6 +14,7 @@ class GitState {
     required this.headIsPushed,
     required this.tags,
     required this.signingConfigured,
+    required this.originUrl,
   });
 
   final String root;
@@ -36,6 +37,9 @@ class GitState {
   /// Whether `git tag -s` would succeed, so rk can say so before asking for
   /// one rather than letting git fail with rk's name nowhere in it.
   final bool signingConfigured;
+
+  /// `owner/name` for the origin remote, when it is a forge rk knows.
+  final String? originUrl;
 
   String get shortHead => head.length > 7 ? head.substring(0, 7) : head;
 
@@ -102,6 +106,16 @@ class GitState {
       // still would not prove a key exists — so rk claims only what git
       // states, and signs or does not accordingly.
       signingConfigured: signingKey.isNotEmpty,
+      originUrl: _originSlug(_run(root, const ['remote', 'get-url', 'origin'])),
     );
+  }
+
+  /// `owner/name` from either remote form, or null when it is neither.
+  static String? _originSlug(String url) {
+    if (url.isEmpty) return null;
+    final match =
+        RegExp(r'github\.com[:/]([^/]+)/(.+?)(?:\.git)?$').firstMatch(url.trim());
+    if (match == null) return null;
+    return '${match.group(1)}/${match.group(2)}';
   }
 }
