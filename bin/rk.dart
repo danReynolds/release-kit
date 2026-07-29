@@ -26,8 +26,20 @@ Bare `rk` runs status.  -v for detail.
 ''';
 
 Future<void> main(List<String> args) async {
+  const known = {'-v', '--verbose', '-h', '--help', '--dry-run'};
   final flags = args.where((a) => a.startsWith('-')).toSet();
   final positional = args.where((a) => !a.startsWith('-')).toList();
+
+  final unknown = flags.difference(known);
+  if (unknown.isNotEmpty) {
+    // Silently ignoring a flag is worse than refusing it: a caller asking for
+    // something rk does not do should be told, not answered as if it had not
+    // asked.
+    stderr.writeln('rk does not have ${unknown.join(', ')}');
+    stderr.write(_usage);
+    exitCode = ExitCodes.usage;
+    return;
+  }
 
   final output = Output.stdio(
     verbose: flags.contains('-v') || flags.contains('--verbose'),
@@ -67,9 +79,11 @@ Future<int> _release(
   String? unit, {
   required bool dryRun,
 }) async {
-  final prepared = await _prepare(output);
-  if (prepared == null) return ExitCodes.refused;
-  final (resolution, tree, registry) = prepared;
+  final prepared = _prepare(output);
+  if (!prepared.isReady) return prepared.code!;
+  final resolution = prepared.resolution!;
+  final tree = prepared.tree!;
+  final registry = prepared.registry!;
   try {
     return await ReleaseCommand(
       resolution: resolution,
@@ -87,9 +101,10 @@ Future<int> _release(
 }
 
 Future<int> _verify(Output output, String? unit) async {
-  final prepared = await _prepare(output);
-  if (prepared == null) return ExitCodes.refused;
-  final (resolution, _, registry) = prepared;
+  final prepared = _prepare(output);
+  if (!prepared.isReady) return prepared.code!;
+  final resolution = prepared.resolution!;
+  final registry = prepared.registry!;
   try {
     return await VerifyCommand(
       resolution: resolution,
@@ -101,12 +116,34 @@ Future<int> _verify(Output output, String? unit) async {
   }
 }
 
-/// Reads the repository and its configuration, or reports why it cannot.
-Future<(Resolution, GitSourceTree, Registry)?> _prepare(Output output) async {
+/// What reading the repository produced: either everything a command needs,
+/// or the exit code that reading it decided.
+///
+/// Not-onboarded is exit 0, since a repository without a release.toml is a
+/// correct answer rather than a failure — an agent sweeping a fleet must not
+/// see a fault for every repository that simply does not use rk.
+class _Prepared {
+  _Prepared.ready(this.resolution, this.tree, this.registry) : code = null;
+  _Prepared.stopped(this.code)
+    : resolution = null,
+      tree = null,
+      registry = null;
+
+  final Resolution? resolution;
+  final GitSourceTree? tree;
+  final Registry? registry;
+  final int? code;
+
+  bool get isReady => code == null;
+}
+
+_Prepared _prepare(Output output) {
   final root = GitSourceTree.findRoot(Directory.current.path);
   if (root == null) {
     output.line('this is not a git repository', mark: Mark.blocked);
-    return null;
+    output.say('rk releases from a repository, and reads its tags and '
+        'history to know what is already out.');
+    return _Prepared.stopped(ExitCodes.usage);
   }
 
   final tree = GitSourceTree(root);
@@ -114,9 +151,9 @@ Future<(Resolution, GitSourceTree, Registry)?> _prepare(Output output) async {
   if (source == null) {
     output.heading(root.split('/').last);
     output.blank();
-    output.line('no release.toml', mark: Mark.blocked);
+    output.line('no release.toml', mark: Mark.none);
     output.say('rk init writes one, and changes nothing else.');
-    return null;
+    return _Prepared.stopped(ExitCodes.ok);
   }
 
   final diagnostics = Diagnostics();
@@ -129,16 +166,18 @@ Future<(Resolution, GitSourceTree, Registry)?> _prepare(Output output) async {
     output.heading(root.split('/').last);
     output.blank();
     output.problems(diagnostics.found);
-    return null;
+    return _Prepared.stopped(ExitCodes.refused);
   }
 
-  return (resolution, tree, Registry());
+  return _Prepared.ready(resolution, tree, Registry());
 }
 
 Future<int> _status(Output output, String? unit) async {
-  final prepared = await _prepare(output);
-  if (prepared == null) return ExitCodes.refused;
-  final (resolution, tree, registry) = prepared;
+  final prepared = _prepare(output);
+  if (!prepared.isReady) return prepared.code!;
+  final resolution = prepared.resolution!;
+  final tree = prepared.tree!;
+  final registry = prepared.registry!;
   try {
     return await StatusCommand(
       resolution: resolution,

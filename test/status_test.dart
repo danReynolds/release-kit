@@ -190,6 +190,7 @@ void main() {
   });
 
   _reviewFixes();
+  _phase23Fixes();
 
   test('a package that has never been published reads as ready', () async {
     final text = await statusOf(
@@ -212,5 +213,50 @@ void _reviewFixes() {
     );
     expect(text, contains('0.5.0 is already published'));
     expect(text, isNot(contains('rk release')));
+  });
+}
+
+// Regressions from the phase 2-3 review.
+void _phase23Fixes() {
+  test('an unreachable registry never reads as ready, even with other '
+      'problems present', () async {
+    final text = await statusOf(
+      source: tree(),
+      state: git(clean: false),
+      registry: FakeRegistry(const {}, unreachable: true),
+    );
+    expect(text, contains('could not be reached'),
+        reason: 'the unknown must survive alongside another problem');
+    expect(text, contains('is uncommitted'));
+    expect(text, isNot(contains('0.2.0 ready')));
+  });
+
+  test('the live line names the published version, not the local one',
+      () async {
+    final text = await statusOf(
+      source: tree(),
+      state: git(),
+      registry: FakeRegistry({'keybay': ['0.1.0']}),
+    );
+    expect(text, contains('0.1.0 published'),
+        reason: 'local is 0.2.0; live is 0.1.0');
+    expect(text, contains('0.2.0 ready'));
+  });
+
+  test('a clean unit with nothing to release ignores worktree state',
+      () async {
+    final text = await statusOf(
+      source: tree(),
+      state: git(clean: false),
+      registry: FakeRegistry({'keybay': ['0.2.0']}),
+    );
+    expect(text, contains('nothing to release'));
+    expect(
+      text,
+      isNot(contains('files are uncommitted')),
+      reason: 'the header still reports the tree; the unit is not blocked '
+          'by it, because a dirty tree only matters to a release that will '
+          'happen',
+    );
   });
 }

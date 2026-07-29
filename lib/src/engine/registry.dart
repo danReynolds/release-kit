@@ -79,48 +79,66 @@ class Registry implements RegistryReader {
     if (_cache.containsKey(name)) return _cache[name];
 
     final uri = Uri.https(host, '/api/packages/$name');
-    late HttpClientResponse response;
+
+    // Reading the body and making sense of it are as fallible as connecting:
+    // a captive portal answers 200 with HTML, and a truncated response
+    // decodes to nothing. Everything is inside the guard so no failure here
+    // can escape as a crash — the promise this class makes is that rk finds
+    // out or says it could not.
     try {
       final request = await _client.getUrl(uri);
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      response = await request.close().timeout(const Duration(seconds: 20));
+      final response =
+          await request.close().timeout(const Duration(seconds: 20));
+
+      // Only an authenticated negative means "not there".
+      if (response.statusCode == 404) return _cache[name] = null;
+      if (response.statusCode != 200) {
+        throw RegistryUnavailable(
+          '$host answered ${response.statusCode} for $name',
+        );
+      }
+
+      final body = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(seconds: 20));
+
+      final decoded = jsonDecode(body);
+      if (decoded is! Map) {
+        throw RegistryUnavailable('$host returned something unreadable');
+      }
+      final entries = decoded['versions'];
+      if (entries is! List) {
+        throw RegistryUnavailable('$host listed no versions for $name');
+      }
+
+      final versions = <PublishedVersion>[];
+      for (final entry in entries) {
+        if (entry is! Map) continue;
+        final parsed = Version.tryParse(_text(entry['version']) ?? '');
+        if (parsed == null) continue;
+        versions.add(
+          PublishedVersion(
+            version: parsed,
+            published: DateTime.tryParse(_text(entry['published']) ?? ''),
+            archiveUrl: _text(entry['archive_url']),
+            archiveSha256: _text(entry['archive_sha256']),
+          ),
+        );
+      }
+
+      return _cache[name] = RegistryPackage(name: name, versions: versions);
+    } on RegistryUnavailable {
+      rethrow;
     } on Object catch (error) {
-      throw RegistryUnavailable('$host could not be reached: $error');
+      throw RegistryUnavailable('$host could not be read: $error');
     }
-
-    final body = await response.transform(utf8.decoder).join();
-
-    // Only an authenticated negative means "not there". Anything else is a
-    // question rk could not get an answer to.
-    if (response.statusCode == 404) return _cache[name] = null;
-    if (response.statusCode != 200) {
-      throw RegistryUnavailable(
-        '$host answered ${response.statusCode} for $name',
-      );
-    }
-
-    final decoded = jsonDecode(body);
-    if (decoded is! Map<String, Object?>) {
-      throw RegistryUnavailable('$host returned something unreadable');
-    }
-
-    final versions = <PublishedVersion>[];
-    for (final entry in (decoded['versions'] as List? ?? const [])) {
-      if (entry is! Map<String, Object?>) continue;
-      final parsed = Version.tryParse(entry['version'] as String? ?? '');
-      if (parsed == null) continue;
-      versions.add(
-        PublishedVersion(
-          version: parsed,
-          published: DateTime.tryParse(entry['published'] as String? ?? ''),
-          archiveUrl: entry['archive_url'] as String?,
-          archiveSha256: entry['archive_sha256'] as String?,
-        ),
-      );
-    }
-
-    return _cache[name] = RegistryPackage(name: name, versions: versions);
   }
+
+  /// A field only when it really is text, so a number where a string was
+  /// expected does not throw.
+  static String? _text(Object? value) => value is String ? value : null;
 
   /// Classifies the coordinate this release would publish to.
   @override

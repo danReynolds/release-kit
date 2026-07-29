@@ -84,7 +84,6 @@ class GitState {
 
     final branch = _run(root, const ['rev-parse', '--abbrev-ref', 'HEAD']);
 
-    final format = _run(root, const ['config', '--get', 'gpg.format']);
     final signingKey = _run(root, const ['config', '--get', 'user.signingkey']);
 
     return GitState(
@@ -98,15 +97,11 @@ class GitState {
           .split('\n')
           .where((t) => t.trim().isNotEmpty)
           .toList(),
-      // An SSH signing key is what this fleet uses; a GPG key works too, and
-      // git reports neither unless one is configured.
-      signingConfigured: signingKey.isNotEmpty ||
-          (format.isEmpty && _run(root, const ['config', '--get', 'user.email'])
-              .isNotEmpty &&
-              _hasGpgDefault(root)),
+      // A configured signing key, whether SSH or GPG. Inferring one from a
+      // commit-signing *preference* would answer a different question, and
+      // still would not prove a key exists — so rk claims only what git
+      // states, and signs or does not accordingly.
+      signingConfigured: signingKey.isNotEmpty,
     );
   }
-
-  static bool _hasGpgDefault(String root) =>
-      _run(root, const ['config', '--get', 'commit.gpgsign']) == 'true';
 }

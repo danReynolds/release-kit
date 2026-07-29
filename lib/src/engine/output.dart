@@ -85,12 +85,23 @@ class Output {
     int labelWidth = 16,
   }) {
     _clearTransient();
-    final indent = '  ' * depth;
     final glyph = mark == Mark.none ? ' ' : _paint(mark);
-    final padded = note == null ? label : label.padRight(labelWidth);
-    final suffix = note == null ? '' : ' $note';
-    final text = '$glyph $indent$padded$suffix';
-    sink('${text.trimRight()}\n');
+
+    // The indent is part of what is padded, so the note column stays put as
+    // the tree deepens rather than drifting right with it.
+    final indented = '${'  ' * depth}$label';
+    if (note == null) {
+      sink('$glyph $indented\n');
+      return;
+    }
+    if (indented.length >= labelWidth) {
+      // Too long to share a line without pushing the note off the grid, so
+      // the note gets its own, aligned to the column it would have used.
+      sink('$glyph $indented\n');
+      sink('${' ' * (labelWidth + 2)}$note\n');
+      return;
+    }
+    sink('$glyph ${indented.padRight(labelWidth)} $note\n');
   }
 
   /// Free-form prose, wrapped in the same indentation as the tree.
@@ -159,11 +170,11 @@ class Output {
   }
 
   /// The next command, which is what a reader wants after being told to act.
-  void next(String command) {
-    for (final part in command.split('\n')) {
-      line(part, mark: part == command.split('\n').first
-          ? Mark.next
-          : Mark.none);
+  void next(String command, {int depth = 0}) {
+    // Marked by position, not by content: two identical lines are two lines,
+    // and only the first is the reader's next move.
+    for (final (index, part) in command.split('\n').indexed) {
+      line(part, mark: index == 0 ? Mark.next : Mark.none, depth: depth);
     }
   }
 

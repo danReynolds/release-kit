@@ -71,74 +71,107 @@ class StatusCommand {
     output.blank();
 
     final problems = Diagnostics();
-    final inspections = <String, Inspection>{};
+    final live = <String, String>{};
+    var inspected = 0;
+    var exact = 0;
+    final unchecked = <String>{};
 
     for (final project in unit.projects) {
-      if (!project.channels.contains('pub.dev')) continue;
-      inspections[project.name] =
-          await registry.inspect(project.name, project.version);
-      Changelog.check(
-        tree: tree,
-        manifestDirectory: project.pubspec.directory,
-        packageName: project.name,
-        version: project.version,
-        diagnostics: problems,
-      );
+      for (final channel in project.channels) {
+        if (channel != 'pub.dev') {
+          // Saying nothing about a channel rk cannot read would let a
+          // half-finished release look complete.
+          unchecked.add(channel);
+          continue;
+        }
+
+        inspected++;
+        final inspection =
+            await registry.inspect(project.name, project.version);
+
+        switch (inspection.verdict) {
+          case Verdict.exact:
+            exact++;
+            live[project.name] =
+                '${project.version} ${inspection.detail ?? 'published'}';
+          case Verdict.absent:
+            final published = await _latestPublished(project.name);
+            live[project.name] =
+                published == null ? 'not published' : '$published published';
+          case Verdict.unknown:
+            // Not knowing is not permission to publish, so it joins the
+            // problems rather than being reported beside a "ready" line.
+            problems.add(
+              'RK-REG-001',
+              '${project.name}: ${inspection.detail ?? 'pub.dev could not be read'}',
+              remedy: 'rk cannot tell what is published, so it will not say '
+                  'this is ready — try again',
+            );
+          case Verdict.conflict:
+            problems.add(
+              'RK-REG-002',
+              '${project.name}: ${inspection.detail ?? 'differs from this source'}',
+            );
+        }
+
+        Changelog.check(
+          tree: tree,
+          manifestDirectory: project.pubspec.directory,
+          packageName: project.name,
+          version: project.version,
+          diagnostics: problems,
+        );
+      }
+    }
+
+    final summary = _liveSummary(unit, live);
+
+    // Nothing to release settles it: whether the worktree is clean or a later
+    // tag exists only matters to a release that is going to happen.
+    if (problems.isEmpty &&
+        inspected > 0 &&
+        exact == inspected &&
+        unchecked.isEmpty) {
+      output.line(unit.name, note: '$summary — nothing to release');
+      return;
     }
 
     await _checkMonotonic(unit, problems);
     _checkRepositoryState(unit, problems);
 
-    final live = _liveSummary(unit, inspections);
-
-    // `every` on an empty map is true, which would report a binary-only unit
-    // — one with nothing on a registry — as already released.
-    final released =
-        inspections.isNotEmpty && inspections.values.every((i) => i.isExact);
-
-    if (released) {
-      output.line(unit.name, note: '$live — nothing to release');
-      return;
-    }
-
     if (problems.isNotEmpty) {
-      output.line(unit.name, mark: Mark.blocked, note: live);
+      output.line(unit.name, mark: Mark.blocked, note: summary);
       for (final problem in problems.found) {
         output.problem(problem, depth: 1);
       }
       return;
     }
 
-    output.line(unit.name, note: '$live → ${unit.version} ready');
-    for (final entry in inspections.entries) {
-      if (entry.value.verdict == Verdict.unknown) {
-        output.line(
-          entry.key,
-          mark: Mark.blocked,
-          depth: 1,
-          note: entry.value.detail,
-        );
-        return;
-      }
-    }
-
+    output.line(unit.name, note: '$summary → ${unit.version} ready');
     _printPlan(unit);
+    if (unchecked.isNotEmpty) {
+      output.say(
+        'not checked: ${unchecked.join(', ')} — rk cannot read those yet',
+        depth: 1,
+      );
+    }
   }
 
-  /// One line describing what is public today.
-  String _liveSummary(ResolvedUnit unit, Map<String, Inspection> inspections) {
-    final published = <String>[];
-    for (final project in unit.projects) {
-      final inspection = inspections[project.name];
-      if (inspection == null) continue;
-      if (inspection.isExact) {
-        published.add('${project.version} published');
-      }
+  Future<String?> _latestPublished(String name) async {
+    try {
+      final package = await registry.lookup(name);
+      return package?.latest?.version.canonical;
+    } on Object {
+      return null;
     }
-    if (published.isNotEmpty && published.toSet().length == 1) {
-      return published.first;
-    }
-    return 'not published';
+  }
+
+  /// What is public today, named per project unless they all agree.
+  String _liveSummary(ResolvedUnit unit, Map<String, String> live) {
+    if (live.isEmpty) return 'not published';
+    final distinct = live.values.toSet();
+    if (distinct.length == 1) return distinct.single;
+    return live.entries.map((e) => '${e.key} ${e.value}').join(', ');
   }
 
   void _printPlan(ResolvedUnit unit) {
@@ -167,8 +200,8 @@ class StatusCommand {
       final RegistryPackage? published;
       try {
         published = await registry.lookup(project.name);
-      } on Object {
-        continue; // unreachable is reported by the inspection instead
+      } on RegistryUnavailable {
+        continue; // the inspection reports this, with a remedy
       }
       final latest = published?.latest;
       if (latest == null) continue;
@@ -205,7 +238,9 @@ class StatusCommand {
     if (!git.isClean) {
       problems.add(
         'RK-GIT-001',
-        '${git.uncommitted.length} files are uncommitted',
+        git.uncommitted.length == 1
+            ? '1 file is uncommitted'
+            : '${git.uncommitted.length} files are uncommitted',
         remedy: 'a release is of a commit, and these are not in one: '
             '${git.uncommitted.take(3).join(', ')}'
             '${git.uncommitted.length > 3 ? ', …' : ''}',
