@@ -225,8 +225,7 @@ arrow key.
 - **`rk status`** — read-only; the only verb that changes nothing. Compares
   local state against published reality: live version and date per
   destination, manifest version, whether local is ahead, in-flight
-  progress, and anything blocking. Prints the next command. `--watch`
-  follows an in-flight release; `--exit-code` makes blocked non-zero.
+  progress, and anything blocking. Prints the next command.
 - **`rk release`** — execute. Refuses at the start anything it cannot
   finish; re-validates independently rather than trusting `status`;
   verifies the authorizing tag's signature where one exists; then inspects
@@ -289,12 +288,13 @@ version are one line, not three.
 per-step detail belong to `-v`. A line that reads the same on every
 successful run is noise.
 
-**Attention.** The verdict leads the line, in a gutter: `+` will create ·
-`·` already satisfied · `~` in progress · `✓` proven · `!` needs a human ·
-`✗` blocked or conflicting · `?` unknown · `–` expected absent · `→` your
-next move. Glyphs always accompany a word; `NO_COLOR` and non-TTY are
-honoured; progress lines are transient and suppressed when stdout is not a
-TTY.
+**Attention.** The verdict leads the line, in a gutter, and the vocabulary
+is four marks rather than a symbol per state: `✓` done or proven · `·`
+already satisfied, nothing to do · `✗` blocked, conflicting, or failed · `→`
+your next move. A running step shows a spinner in the same column. Anything
+finer — unknown versus conflict, expected-absent versus missing — is carried
+by the words on the line, which the reader has to read anyway. Glyphs never
+appear without a word; `NO_COLOR` and non-TTY are honoured.
 
 **Every halt opens with a plain sentence** answering the only two questions
 an operator has, before any verdict noun: did anything happen, and is
