@@ -402,29 +402,41 @@ check passed.
 
 ### The draft
 
-- **Adoption.** REST lookup by tag returns published releases only, and the
-  forge permits multiple drafts sharing one tag name. Adoption lists all
-  releases, filters by tag, and requires exactly one candidate: zero →
-  create, then re-list and `conflict` if a twin appeared; two or more →
-  `conflict`, naming both ids for human deletion.
-- **Staging is hash-idempotent** — assets expose a digest, so `exact` is
-  name plus digest with no download.
-- **Repair, narrowly.** While still a draft, an asset not in state
-  `uploaded`, or whose digest is not this release's, may be deleted by
-  asset id and re-uploaded. Interrupted uploads leave corpses and same-name
-  re-upload is rejected, so without this the most probable failure wedges
-  the release permanently. This is repair of staging, not cleanup of
-  product; rk still never deletes a draft, tag, or published release.
-  Repair is always announced.
-- **The flip re-verifies against reality.** Immediately before publishing:
-  enumerate the draft's assets, require the exact inventory, confirm every
-  digest, recompute the checksums file and formula from those digests and
-  compare against what is staged. Only then publish once, then verify the
-  release reports immutable.
-- **After publishing, verification failure is terminal.** Immutable
-  releases cannot be edited and deleting one permanently burns the tag
-  name. rk retries verification to a bounded deadline, then states the only
-  honest remedy: ship the next version.
+A forge cannot publish several assets in one atomic act: a release object is
+created, then assets are uploaded to it. An interrupted upload would
+otherwise leave a permanent, immutable release missing files. A draft is
+the fix — fill it privately, verify it, publish once — and that is the
+whole of its job in this revision.
+
+It is deliberately **not** memory. The workspace holds every artifact
+locally, so a draft contains nothing that cannot be rebuilt or re-uploaded,
+which reduces the rule to three cases:
+
+- **no draft** — create it and upload the full inventory;
+- **a draft matching this release exactly** — adopt and publish;
+- **a draft that is anything else** — delete it, recreate, upload the full
+  inventory.
+
+Deleting is safe precisely because the draft is not the only copy. Its
+worst case is re-uploading a few files, which is cheaper than the machinery
+required to repair one in place. Draft deletion is the only deletion rk
+performs, it applies only to unpublished drafts, and it is announced.
+
+**The flip re-verifies against reality**: enumerate the draft's assets,
+require the exact inventory, confirm every digest, recompute the checksums
+file and formula from those digests and compare against what is staged.
+Only then publish once, and confirm the release reports immutable.
+
+**After publishing, verification failure is terminal.** Immutable releases
+cannot be edited and deleting one permanently burns the tag name. rk
+retries verification to a bounded deadline, then states the only honest
+remedy: ship the next version.
+
+When CI arrives, the workspace becomes ephemeral and a half-filled draft
+may be the only surviving copy of expensive work. Only then does the draft
+also become memory, and only then are adoption by enumeration, per-asset
+repair of an interrupted upload, and the concurrent-writer cases worth
+their complexity. Deferring them costs nothing today.
 
 ### Mutable pointers
 
