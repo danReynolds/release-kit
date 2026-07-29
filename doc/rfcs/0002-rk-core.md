@@ -278,6 +278,36 @@ stable, keyed on step id, surviving non-zero exit and carrying
 `safe_to_rerun`. Exit codes: `0` clean, complete, or blocked; `1` refusal;
 `2` usage.
 
+### Liveness
+
+A release takes minutes and some steps are opaque — notarization waits on a
+third party. Silence during that is not austerity, it is anxiety, so rk
+shows what is happening while it happens and collapses it once it has:
+
+- **A running step expands**, with a spinner, the sub-activity it is on,
+  and elapsed time. Its children are visible while they matter — three
+  platform builds are three lines during the build.
+- **A completed step collapses** to one line with its result, and a
+  duration only when the duration is notable. The children that agreed
+  fold into their shared fact. Scrollback is therefore the terse transcript,
+  not a log of everything that scrolled past.
+- **A failed step stays expanded**, because that detail is the diagnosis.
+- **Steps that wait on someone else declare how long that normally takes.**
+  "waiting on Apple · typically 3–5 min" is the difference between patience
+  and a cancelled release, and a step running far past its expectation is
+  itself worth surfacing.
+- **On completion, the public result is printed** — the URLs and install
+  command a person actually wants next — not a count of steps.
+
+None of this applies when stdout is not a TTY. There, each line is printed
+once, on completion, in the same words: no spinners, no cursor movement, no
+rewriting. A log, a pipe, and an agent see a clean append-only transcript
+whose content is identical to what the terminal ended up showing.
+
+This is not the narration terseness forbids. rk still does not report on
+its own internals — reading files, resolving config, counting checks. It
+reports the work, while the work is the thing the user is waiting for.
+
 **Diagnosis.** Reality records what exists and nothing about why a run
 failed. On any non-clean exit rk writes a diagnosis directory inside the
 workspace with the resolved checklist, per-step verdicts and durations,
