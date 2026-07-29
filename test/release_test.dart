@@ -6,8 +6,8 @@ import 'package:rk/src/engine/output.dart';
 import 'package:rk/src/engine/registry.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
-import 'package:rk/src/engine/verdict.dart';
 import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/engine/verdict.dart';
 import 'package:rk/src/engine/version.dart';
 import 'package:test/test.dart';
 
@@ -44,14 +44,14 @@ GitState _git({
       signingConfigured: signing,
     );
 
-class _Ran {
-  _Ran(this.exitCode, this.text, this.calls);
+class Ran {
+  Ran(this.exitCode, this.text, this.calls);
   final int exitCode;
   final String text;
   final List<String> calls;
 }
 
-Future<_Ran> release({
+Future<Ran> release({
   MemorySourceTree? source,
   GitState? state,
   RegistryReader? registry,
@@ -78,7 +78,7 @@ Future<_Ran> release({
     dryRun: dryRun,
   ).run(only: 'core');
 
-  return _Ran(code, buffer.toString(), recorder.calls);
+  return Ran(code, buffer.toString(), recorder.calls);
 }
 
 void main() {
