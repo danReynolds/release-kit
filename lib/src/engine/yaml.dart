@@ -128,13 +128,28 @@ class _Parser {
           _fail('a block cannot mix map keys and list items', line);
           return null;
         }
-        _cursor++;
         final item = body == '-' ? '' : body.substring(2).trim();
+
         if (item.isEmpty) {
+          _cursor++;
           final nested = _block(at + 1);
           if (_failed) return null;
           if (nested != null) asList.items.add(nested);
+        } else if (_keyColon(item) >= 0) {
+          // A map written on the dash line, as pub.dev's screenshots are:
+          //   - description: a shot
+          //     path: doc/shot.png
+          // The remaining keys are indented to where the dash text starts, so
+          // the line is rewritten without its dash and the whole block is read
+          // as one map. Without this the first key becomes a scalar and the
+          // rest are read into the *enclosing* map — which would let an
+          // unrelated field overwrite the package's version.
+          _lines[_cursor] = ' ' * (at + 2) + item;
+          final nested = _block(at + 2);
+          if (_failed) return null;
+          if (nested != null) asList.items.add(nested);
         } else {
+          _cursor++;
           asList.items.add(YamlScalar(_unquote(item), line));
         }
         continue;
@@ -155,6 +170,17 @@ class _Parser {
       final key = _unquote(body.substring(0, colon).trim());
       final rest = body.substring(colon + 1).trim();
       asMap ??= YamlMap(line);
+
+      // YAML forbids duplicate keys, and a manifest with two version: lines is
+      // the fail-closed case rather than a style question.
+      if (asMap.entries.containsKey(key)) {
+        _fail(
+          '"$key" is set more than once',
+          line,
+          remedy: 'the earlier value is at line ${asMap.entries[key]!.line}',
+        );
+        return null;
+      }
       _cursor++;
 
       if (rest.isEmpty) {

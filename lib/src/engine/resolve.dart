@@ -53,9 +53,12 @@ class Resolution {
     _rejectOverlappingPaths(projects, diagnostics);
     _rejectDuplicateNames(projects, diagnostics);
 
-    // The tag convention depends on how many packages the repository
-    // publishes, which is only knowable once every manifest has been read.
-    final publishesSeveral = projects.length > 1;
+    // The convention is pub.dev's, and counts the packages the repository
+    // publishes *there* — a project that never touches the registry neither
+    // affects the count nor takes its naming from it.
+    final registryProjects =
+        projects.where((p) => p.channels.contains('pub.dev')).length;
+    final publishesSeveral = registryProjects > 1;
 
     final units = <ResolvedUnit>[];
     for (final declared in config.units) {
@@ -75,6 +78,7 @@ class Resolution {
 
     for (final unit in units) {
       _checkUnitVersions(unit, diagnostics);
+      _checkOneBinaryProject(unit, diagnostics);
     }
 
     if (diagnostics.isNotEmpty) return null;
@@ -154,6 +158,27 @@ class Resolution {
       return null;
     }
 
+    final escaping = <String>[];
+    pubspec.dependencies.forEach((name, dependency) {
+      if (dependency.escapesRepository) {
+        escaping.add('$name -> ${dependency.describeRequirement()}');
+      }
+    });
+    if (escaping.isNotEmpty) {
+      diagnostics.add(
+        'RK-DART-201',
+        '"${pubspec.name}" is built from sources this repository does not '
+            'contain',
+        source: SourceLocation(manifestPath, pubspec.nameLine),
+        remedy: 'these dependencies come from outside its own history, so a '
+            'release built today and one built next month are different '
+            'programs and nobody can tell which one a published artifact came '
+            'from:\n  ${escaping.join('\n  ')}\n'
+            'publish them, or pin them to a commit.',
+      );
+      return null;
+    }
+
     if (declared.wantsBinaries && pubspec.executables.length > 1) {
       diagnostics.add(
         'RK-RES-005',
@@ -215,6 +240,27 @@ class Resolution {
             'resolve to the same package',
       );
     }
+  }
+
+  /// One project per unit may ship binaries.
+  ///
+  /// Several would share a release, a checksums file, and a formula, with no
+  /// way to tell whose asset is whose — and their steps would collide. A
+  /// second binary product belongs in a unit of its own.
+  static void _checkOneBinaryProject(
+    ResolvedUnit unit,
+    Diagnostics diagnostics,
+  ) {
+    final shipping =
+        unit.projects.where((p) => p.config.wantsBinaries).toList();
+    if (shipping.length < 2) return;
+    diagnostics.add(
+      'RK-RES-009',
+      '${shipping.length} projects in "${unit.name}" ship binaries',
+      source: unit.location,
+      remedy: 'they would share one release and one set of asset names: '
+          '${shipping.map((p) => p.name).join(', ')}. Give each its own unit.',
+    );
   }
 
   /// Projects in one unit normally move together. They are not required to be

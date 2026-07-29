@@ -106,7 +106,9 @@ class Version implements Comparable<Version> {
       if (unit < 0x30 || unit > 0x39) return null;
     }
     if (part.length > 1 && part.startsWith('0')) return null;
-    return int.parse(part);
+    // A component longer than the platform integer is not a version rk can
+    // compare, and must be refused rather than crash the parse.
+    return int.tryParse(part);
   }
 
   static bool _isBuildIdentifier(String id) =>
@@ -153,7 +155,14 @@ class Version implements Comparable<Version> {
   static int _compareIdentifiers(String a, String b) {
     final aNumeric = a.codeUnits.every((u) => u >= 0x30 && u <= 0x39);
     final bNumeric = b.codeUnits.every((u) => u >= 0x30 && u <= 0x39);
-    if (aNumeric && bNumeric) return int.parse(a).compareTo(int.parse(b));
+    if (aNumeric && bNumeric) {
+      // Compared by magnitude without parsing: SemVer bounds identifier
+      // length nowhere, and a prerelease number wider than the platform
+      // integer must order rather than throw. Leading zeros are already
+      // refused, so length is magnitude.
+      if (a.length != b.length) return a.length.compareTo(b.length);
+      return a.compareTo(b);
+    }
     // Numeric identifiers always have lower precedence than alphanumeric.
     if (aNumeric) return -1;
     if (bNumeric) return 1;

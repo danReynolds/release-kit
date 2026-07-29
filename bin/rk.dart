@@ -3,17 +3,17 @@ import 'dart:io';
 const _usage = '''
 rk — an austere release tool
 
-Usage: rk <command>
+Usage: rk [command] [unit-or-tag]
 
-  check    Validate the release and show the derived checklist.
-  run      Execute the checklist. Idempotent; safe to re-run.
-  verify   Re-download published artifacts and compare.
-  setup    Derive and verify provider-side registrations and secrets.
+  init      Write release.toml for this repository.
+  status    Where things stand: live versions, local versions, what is ready.
+  release   Execute a release.
+  verify    Prove a published release against what it claims.
 
-rk is pre-implementation. See doc/rfcs/0002-rk-core.md for the design.
+Bare `rk` runs status. See doc/rfcs/0002-rk-core.md for the design.
 ''';
 
 void main(List<String> args) {
   stderr.write(_usage);
-  exitCode = 64;
+  exitCode = 2;
 }

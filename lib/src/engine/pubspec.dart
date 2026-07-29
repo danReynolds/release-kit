@@ -168,6 +168,18 @@ class Dependency {
 
   bool get isHosted => kind == DependencyKind.hosted;
 
+  /// Whether this dependency's bytes come from outside the repository's own
+  /// history, which is what makes a project impossible to release
+  /// reproducibly.
+  bool get escapesRepository => kind != DependencyKind.hosted;
+
+  /// How the requirement reads, for a message about it.
+  String describeRequirement() => switch (kind) {
+        DependencyKind.hosted => constraint ?? 'any version',
+        DependencyKind.path => 'a directory at $location',
+        DependencyKind.git => 'a git repository',
+      };
+
   /// Whether [version] satisfies this dependency's constraint.
   ///
   /// Supports the constraint forms a first-party dependency is written with:

@@ -8,7 +8,7 @@ re-running is always safe, and refusing to guess.
 
 rk manages the release steps and defers authentication to the native tools
 that own it (`dart pub`, `codesign`, `notarytool`, `gh`, `git`). It stores no
-secrets, keeps no state, and creates no git objects.
+secrets and keeps no state.
 
 Four verbs: `rk init`, `rk status`, `rk release`, `rk verify`. No hooks, no
 templates, no `--force`.
