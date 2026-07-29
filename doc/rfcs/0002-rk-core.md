@@ -288,7 +288,8 @@ release**, where no baseline exists yet. In that case:
   product decision the schema asks for, requested once, at the only moment
   it can be made.
 
-`rk tag` states plainly what a first release will establish. Keybay needs
+`rk check` states plainly what a first release will establish, and `rk run`
+requires confirmation before establishing it. Keybay needs
 none of this: its 0.1.0 release supplies every baseline.
 
 A derived fact is verified against reality, so it needs the network; an
@@ -296,10 +297,11 @@ offline `rk check` reports identity as unverified rather than pretending.
 `code_id` is semantically unit-scoped and moves under its unit if a
 repository ever ships two signed binaries.
 
-## The five verbs
+## The four verbs
 
-One verb per moment in a release's life: prepare, validate, authorize,
-execute, prove.
+One verb per moment: prepare, validate, execute, prove. rk never creates a
+git object; where a tag is the authorization carrier, `rk check` prints the
+exact command and `rk run` verifies the resulting signature.
 
 Configuration files have no type checking, so discoverability is a design
 obligation, met three ways: `rk init` writes the initial config so fields
@@ -308,56 +310,41 @@ missing field, why it applies, and the values rk can offer; and a published
 JSON Schema gives editors autocomplete and inline validation.
 
 - **`rk init`** — onboard a repository, and re-run any time to detect
-  drift. It has two phases, chosen by what exists rather than by a flag.
-  With no `release.toml`, it analyzes the repository — packages found,
-  which declare executables, which are vetoed by `publish_to`, existing
-  tags and published releases — writes a commented config with
-  `binary_platforms` prefilled with every target rk can build, and stops
-  so the human prunes and commits. It proposes only, and never edits an
-  existing config or adds a project silently. With a config present, it
-  derives the required registrations from the declared channels, creates
-  what the provider API allows using the operator's own credentials
-  (environments, deployment tag policies, rulesets), and reports what
-  passed as a count, what needs the human with the exact fix, and what
-  can only be proven when a release first uses it. Registrations that no
-  API can read — pub.dev's trusted publisher — are always in the second
-  group, with the exact values to confirm. rk is "clean" when nothing is
-  in the second group.
-  Operator-local by necessity: `GITHUB_TOKEN` has no `administration`
-  permission, so these settings cannot be re-read from inside a release.
+  drift. Two phases, chosen by what exists rather than by a flag. With no
+  `release.toml`, it analyzes the repository — packages found, which
+  declare executables, which are vetoed by `publish_to`, existing tags and
+  published releases — writes a commented config with `binary_platforms`
+  prefilled with every target rk can build, and stops so the human prunes
+  and commits. It proposes only, and never edits an existing config or adds
+  a project silently. With a config present, it derives the required
+  registrations from the declared channels, creates what the provider API
+  allows using the operator's own credentials (environments, deployment tag
+  policies, rulesets), and reports what passed as a count, what needs the
+  human with the exact fix, and what can only be proven when a release
+  first uses it. Registrations no API can read — pub.dev's trusted
+  publisher — are always in the second group, with the exact values to
+  confirm. Operator-local by necessity: `GITHUB_TOKEN` has no
+  `administration` permission.
 - **`rk check`** — offline validation plus the derived checklist, annotated
-  with read-only reality probes. Where the GitHub Actions provider is in
-  use, it also verifies the caller workflow on disk byte-matches what rk
-  emits. With `--tag`, it is also the status
-  command — there is no separate `rk status`, because status is derived
-  from reality and recomputing it is exactly what checking does.
-- **`rk tag`** — authorize a release by creating and pushing a signed git
-  tag. That is all it does: it starts no job and triggers nothing. If a CI
-  system reacts to the push, that is the user's own configuration doing so,
-  and rk reports it as an observation about the setup rather than as an
-  effect of its own. It is deliberately not folded into
-  `rk run`, for three reasons. In CI the two cannot merge at all: the tag
-  push *is* what triggers the run, so a run cannot create its own trigger.
-  In the normal flow the human only ever runs `rk tag` — CI executes the
-  release — so merging would conflate "start this release" with "execute
-  it on this machine." And an executor that can mint the authorization it
-  acts on is a confused deputy: keeping them apart is what makes "humans
-  authorize, machines execute" structurally true rather than a convention.
-  Concretely: run `check`, print exactly
-  what the signature will create (unit, version, commit, every public
-  coordinate, and for a first release the identity it establishes),
-  confirm, then exec `git tag -s` and `git push`. Signing stays in git; rk
-  touches no key. Refuses off-tip HEADs and any failing check — a typo'd
-  tag is permanent under the creation ruleset.
-- **`rk run`** — execute the checklist. Inspect before act at every step;
-  halt on `conflict` or `undeterminable`; safe to re-run at any point.
+  with read-only reality probes; with `--tag`, also the status command,
+  since status is derived and recomputing it is exactly what checking does.
+  When ready, it prints what a release will do and the exact command to
+  authorize it, including the signing prerequisites git needs configured.
+  Where the GitHub Actions provider is in use, it verifies the caller
+  workflow on disk byte-matches what rk emits.
+- **`rk run`** — execute a release. It re-validates independently rather
+  than trusting that `check` was run, verifies the authorization signature
+  where one exists, then inspects before acting at every step; halts on
+  `conflict` or `undeterminable`; safe to re-run at any point.
 - **`rk verify`** — re-download everything public and compare, with no
   local state, so anyone can run it at any later date.
 
-Deliberately absent: no `build`, `publish`, or `promote` verbs, because
-exposing steps invites running one out of order; no `status`, because
-`check` derives it; no `clean`, because the workspace deletes itself on
-completion; and no `--force`, `--skip`, or `--retry-anyway`.
+Deliberately absent: no `tag`, because creating a git object is the user's
+own tool and `rk run` must validate independently anyway, so a wrapper adds
+a verb without adding a guarantee; no `build`, `publish`, or `promote`,
+because exposing steps invites running one out of order; no `status`,
+because `check` derives it; no `clean`, because the workspace deletes
+itself; and no `--force`, `--skip`, or `--retry-anyway`.
 
 ### Output contract
 
@@ -751,26 +738,29 @@ manifest, one or more destinations, and an authorization signal. Git is in
 none of them, and neither is a forge or a CI system.
 
 **Authorization is a signal, not an artifact.** What authorizes a release
-is a verifiable statement that a human approved this exact source at this
-exact version. v1 implements exactly one carrier for that signal — a signed
-git tag — chosen for concrete reasons, not by assumption:
+is evidence that a human intended this exact source at this exact version.
+Where that evidence comes from depends on where the release happens, and
+neither form is rk's invention:
 
-- the signature, not the tag and not push access, is what authorizes;
-  anyone able to write to a repository can create a tag, which is why rk
-  verifies the signature against a known signer rather than trusting that
-  a tag exists;
-- it is durable and independently verifiable years later, by anyone;
-- it binds signature to exact commit and version in one object; and
-- every major registry's trusted-publishing path (pub.dev, npm, PyPI,
-  crates.io) binds to a repository and tag pattern, so a project wanting
-  credential-free publishing needs a tag regardless of rk.
+- **Locally, the operator is the evidence.** Publishing requires their
+  keychain and login session; a release cannot happen without them being
+  present. No tag is needed, and rk requires none.
+- **In CI the human is absent, so the signal must be durable.** A signed
+  git tag carries it: the signature — not the tag, and not push access,
+  which anyone with write permission has — is what authorizes, which is why
+  rk verifies it against a known signer rather than trusting a tag exists.
 
-Other carriers are conceivable — a signed statement, a provider approval,
-or simply an operator present at a terminal with publishing credentials,
-which is what implicitly authorizes a local release today. rk does not
-build an abstraction over them: one implementation behind an interface is
-speculative generality. The seam is named here so that a second carrier,
-when it arrives with a real need, has a known place to attach.
+A tag becomes mandatory for one concrete reason, and it is the registry's
+rule rather than rk's: credential-free publishing to pub.dev, npm, PyPI, or
+crates.io binds to a repository and tag pattern, and mints a short-lived
+token only when a matching tag triggers the workflow. The alternative is a
+stored long-lived registry token, which this design avoids. A project
+willing to publish with a stored token or a local login session needs no
+tag at all.
+
+rk therefore **never creates a git object**. `rk check` prints the exact
+`git tag` command when a tag is required, `rk run` verifies the resulting
+signature, and git's role stops there.
 
 **Source identity is a property of the source, not of git.** A release is
 built from a tree whose identity rk can compute directly. Where git is
@@ -961,7 +951,7 @@ and OIDC self-assertion; identity-not-acceptability as a first-class
 principle; draft adoption by enumeration, hash-idempotent staging, narrow
 staging repair, and pre-flip re-verification; deletion of cross-run
 workspace warming; version monotonicity; the `undeterminable` verdict;
-external verification of `code_id`; `rk tag`; the three-outcome setup
+external verification of `code_id`; the three-outcome onboarding
 vocabulary and operator-local scoping; corrected pub.dev pinning semantics
 (no workflow field) and explicit OIDC minting; SSH tag signing; the
 trusted-execution-boundary section; the output contract; and terminology
