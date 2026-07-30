@@ -1,345 +1,160 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:test/test.dart';
 
+import 'rk_process.dart';
+
 /// Phase 1's milestone, run rather than inspected.
 ///
-/// "rk parses keybay's release.toml and prints the derived checklist offline"
-/// is a claim about a program, so these build the three repository shapes on
-/// disk and run the real executable against them. The earlier version of this
-/// check asserted that `bin/rk.dart` *contained the string* `--offline`, which
-/// is how a phase passes while its feature is unwired.
+/// "rk parses the release.toml and prints the derived checklist offline" is a
+/// claim about a program, so each of these copies a repository out of
+/// `examples/`, makes it a repository, and runs the real executable against it.
+/// The check this replaced asserted that `bin/rk.dart` *contained the string*
+/// `--offline`.
+///
+/// The examples are named for the shape they are, never for a real project —
+/// see examples/README.md for why that rule exists.
 void main() {
-  final rk = File('bin/rk.dart').absolute.path;
-  late Directory root;
+  late Directory scratch;
 
-  setUpAll(() {
-    root = Directory.systemTemp.createTempSync('rk-offline-');
+  setUpAll(() => scratch = Directory.systemTemp.createTempSync('rk-offline-'));
+  tearDownAll(() => scratch.deleteSync(recursive: true));
+
+  Run offline(String shape) =>
+      Rk.example(scratch, shape)(['status', '--offline']);
+
+  group('single-package', () {
+    late Run run;
+    setUpAll(() => run = offline('single-package'));
+
+    test('it succeeds', () => expect(run.code, 0, reason: run.all));
+
+    test('one package in the repository takes the bare tag', () {
+      expect(
+        run.all,
+        contains('v1.4.0'),
+        reason: "pub.dev documents v{version} where a repository publishes one",
+      );
+      expect(run.all, isNot(contains('retry_helper-v1.4.0')));
+    });
+
+    test('a folded description does not swallow the version after it', () {
+      expect(run.all, contains('1.4.0'));
+    });
   });
 
-  tearDownAll(() => root.deleteSync(recursive: true));
+  group('workspace-with-dependent', () {
+    late Run run;
+    setUpAll(() => run = offline('workspace-with-dependent'));
 
-  /// Writes [files] into a fresh git repository and returns its path.
-  String repository(String name, Map<String, String> files) {
-    final dir = Directory('${root.path}/$name')..createSync(recursive: true);
-    files.forEach((path, contents) {
-      File('${dir.path}/$path')
-        ..createSync(recursive: true)
-        ..writeAsStringSync(contents);
-    });
-    final git =
-        Process.runSync('git', ['init', '-q'], workingDirectory: dir.path);
-    expect(git.exitCode, 0, reason: 'the fixture must be a repository');
-    return dir.path;
-  }
+    test('it succeeds', () => expect(run.code, 0, reason: run.all));
 
-  ({int code, String out}) status(String dir) {
-    final result = Process.runSync(
-      Platform.resolvedExecutable,
-      ['run', rk, 'status', '--offline'],
-      workingDirectory: dir,
-    );
-    return (
-      code: result.exitCode,
-      out: '${result.stdout}${result.stderr}',
-    );
-  }
-
-  group('keybay-shaped: two units, one depending on the other', () {
-    late ({int code, String out}) run;
-
-    setUpAll(() {
-      run = status(repository('keybay', {
-        'release.toml': '''
-schema = 1
-
-[release.core]
-path = "packages/keybay"
-publish = ["pub.dev"]
-
-[release.cli]
-path = "packages/keybay_cli"
-publish = ["pub.dev", "github-release", "homebrew"]
-binary_platforms = ["linux-x64", "linux-arm64", "macos-arm64"]
-''',
-        'pubspec.yaml': '''
-name: keybay_workspace
-publish_to: none
-environment:
-  sdk: ^3.6.0
-workspace:
-  - packages/keybay
-  - packages/keybay_cli
-''',
-        'packages/keybay/pubspec.yaml': '''
-name: keybay
-version: 0.2.0
-environment:
-  sdk: ^3.6.0
-''',
-        'packages/keybay_cli/pubspec.yaml': '''
-name: keybay_cli
-version: 0.2.0
-environment:
-  sdk: ^3.10.0
-dependencies:
-  keybay: 0.2.0
-executables:
-  keybay: keybay
-''',
-      }));
+    test('two units mean each tag names its package', () {
+      expect(run.all, contains('example_core-v0.3.0'));
+      expect(run.all, contains('example_cli-v0.3.0'));
     });
 
-    test('it succeeds', () {
-      expect(run.code, 0, reason: run.out);
+    test('the cross-unit dependency becomes a prerequisite', () {
+      expect(run.all, contains('example_core 0.3.0 must be live on pub.dev'));
     });
 
-    test('each unit is named with the version and tag it would release', () {
-      expect(run.out, contains('keybay-v0.2.0'));
-      expect(run.out, contains('keybay_cli-v0.2.0'));
-    });
-
-    test('the binary chain is shown in full', () {
-      for (final expected in [
-        'linux-x64',
-        'linux-arm64',
-        'macos-arm64',
-        'sign',
-        'notarize',
-        'checksums',
-      ]) {
-        expect(run.out, contains(expected), reason: 'the checklist names it');
-      }
-    });
-
-    test('the cross-unit prerequisite is stated', () {
-      expect(run.out, contains('keybay 0.2.0 must be live on pub.dev'));
+    test('the workspace root is not mistaken for a package', () {
+      expect(run.all, isNot(contains('example_workspace')));
     });
 
     test('it says what it did not read, so nothing reads as done', () {
-      expect(run.out, contains('derived from the manifests alone'));
-      expect(run.out, contains('says what is already done'));
+      expect(run.all, contains('derived from the manifests alone'));
+      expect(run.all, contains('says what is already done'));
     });
   });
 
-  group('fleury-shaped: one unit of several projects', () {
-    late ({int code, String out}) run;
+  group('multi-project-unit', () {
+    late Run run;
+    setUpAll(() => run = offline('multi-project-unit'));
 
-    setUpAll(() {
-      run = status(repository('fleury', {
-        'release.toml': '''
-schema = 1
+    test('it succeeds', () => expect(run.code, 0, reason: run.all));
 
-[release.framework]
-tag = "fleury-v{version}"
-
-[[release.framework.project]]
-path = "packages/fleury_widgets"
-publish = ["pub.dev"]
-
-[[release.framework.project]]
-path = "packages/fleury"
-publish = ["pub.dev"]
-''',
-        'packages/fleury/pubspec.yaml': 'name: fleury\nversion: 0.1.0\n',
-        'packages/fleury_widgets/pubspec.yaml': '''
-name: fleury_widgets
-version: 0.1.0
-dependencies:
-  fleury: ^0.1.0
-''',
-      }));
+    test('the declared tag wins over the convention', () {
+      expect(run.all, contains('framework-v0.2.0'));
     });
 
-    test('it succeeds', () => expect(run.code, 0, reason: run.out));
-
-    test('the declared tag is used', () {
-      expect(run.out, contains('fleury-v0.1.0'));
-    });
-
-    test('the dependency publishes before its dependent', () {
-      final core = run.out.indexOf('publish fleury 0.1.0');
-      final dependent = run.out.indexOf('publish fleury_widgets 0.1.0');
-      expect(core, greaterThan(-1), reason: run.out);
-      expect(
-        core,
-        lessThan(dependent),
-        reason: 'declaration order was the reverse',
-      );
+    test('publication order comes from the manifests, not the file', () {
+      final base = run.all.indexOf('publish example_base');
+      final middle = run.all.indexOf('publish example_middle');
+      final top = run.all.indexOf('publish example_top');
+      expect(base, greaterThan(-1), reason: run.all);
+      expect(base, lessThan(middle), reason: 'declaration order was reversed');
+      expect(middle, lessThan(top), reason: 'a dev dependency orders too');
     });
   });
 
-  group('dune-shaped: built from sources the repository does not contain', () {
-    late ({int code, String out}) run;
-
-    setUpAll(() {
-      run = status(repository('dune', {
-        'release.toml': '''
-schema = 1
-
-[release.cli]
-publish = ["github-release"]
-binary_platforms = ["macos-arm64"]
-''',
-        'pubspec.yaml': '''
-name: dune_cli
-version: 0.0.1
-publish_to: none
-executables:
-  dune: dune
-dependencies:
-  dune_core:
-    path: ../dune_core
-''',
-      }));
-    });
+  group('escapes-repository', () {
+    late Run run;
+    setUpAll(() => run = offline('escapes-repository'));
 
     test('it is refused, not released', () {
-      expect(run.code, 1, reason: run.out);
+      expect(run.code, 1, reason: run.all);
     });
 
-    test('the refusal says what is wrong and names the dependency', () {
+    test('the refusal says what is wrong and names both dependencies', () {
       expect(
-        run.out,
+        run.all,
         contains('built from sources this repository does not contain'),
       );
-      expect(run.out, contains('dune_core'));
+      expect(run.all, contains('sibling_core'));
+      expect(run.all, contains('sibling_io'));
     });
 
     test('no checklist is printed for something rk will not release', () {
-      expect(run.out, isNot(contains('checksums')));
-      expect(run.out, isNot(contains('macos-arm64')));
+      expect(run.all, isNot(contains('checksums')));
+      expect(run.all, isNot(contains('macos-arm64')));
     });
   });
 
-  group('--json is the machine surface, not an addition to the human one', () {
-    ({int code, String out}) json(String dir) {
-      final result = Process.runSync(
-        Platform.resolvedExecutable,
-        ['run', rk, 'status', '--offline', '--json'],
-        workingDirectory: dir,
-      );
-      return (code: result.exitCode, out: result.stdout as String);
-    }
+  group('binary-cli', () {
+    late Run run;
+    setUpAll(() => run = offline('binary-cli'));
 
-    test('it parses, and carries the checklist keyed by step id', () {
-      final run = json(repository('keybay-json', {
-        'release.toml': '''
-schema = 1
+    test('it succeeds', () => expect(run.code, 0, reason: run.all));
 
-[release.core]
-path = "packages/keybay"
-publish = ["pub.dev"]
-''',
-        'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
-      }));
-
-      expect(run.code, 0, reason: run.out);
-      final document = jsonDecode(run.out) as Map<String, Object?>;
-      expect(document['command'], 'status');
-      expect(document['safe_to_rerun'], isTrue);
-
-      final unit = (document['units'] as List).single as Map;
-      expect(unit['tag'], 'v0.2.0');
-      final ids = (unit['steps'] as List).map((s) => (s as Map)['id']);
-      expect(ids, contains('core/pub.dev/keybay@0.2.0'));
+    test('the binary chain is derived in full, in order', () {
+      for (final expected in [
+        'build example-tool for linux-x64',
+        'build example-tool for macos-arm64',
+        'sign macos-arm64',
+        'notarize macos-arm64',
+        'archive macos-arm64',
+        'checksums for 3 archives',
+      ]) {
+        expect(run.all, contains(expected));
+      }
     });
 
-    test('and prose does not leak into it', () {
-      final run = json(repository('keybay-json-clean', {
-        'release.toml': '''
-schema = 1
-
-[release.core]
-path = "packages/keybay"
-publish = ["pub.dev"]
-''',
-        'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
-      }));
-      expect(run.out.trimLeft(), startsWith('{'));
-      expect(run.out, isNot(contains('derived from the manifests alone')));
+    test('only macOS is signed', () {
+      expect(run.all, isNot(contains('sign linux-x64')));
     });
 
-    test('it survives a non-zero exit', () {
-      final run = json(repository('dune-json', {
-        'release.toml': '''
-schema = 1
-
-[release.cli]
-publish = ["github-release"]
-binary_platforms = ["macos-arm64"]
-''',
-        'pubspec.yaml': '''
-name: dune_cli
-version: 0.0.1
-publish_to: none
-executables:
-  dune: dune
-dependencies:
-  dune_core:
-    path: ../dune_core
-''',
-      }));
-
-      expect(run.code, 1);
-      final document = jsonDecode(run.out) as Map<String, Object?>;
-      expect(document['exit'], 1);
-      expect(
-        document['safe_to_rerun'],
-        isTrue,
-        reason: 'fixing the manifest and re-running is the whole recovery',
-      );
-      final problem = (document['problems'] as List).single as Map;
-      expect(problem['code'], 'RK-DART-201');
-    });
-
-    test('a refusal that never reached a step writes no diagnosis', () {
-      final dir = repository('no-diagnosis', {
-        'release.toml': '''
-schema = 1
-
-[release.cli]
-publish = ["github-release"]
-binary_platforms = ["macos-arm64"]
-''',
-        'pubspec.yaml': '''
-name: dune_cli
-version: 0.0.1
-publish_to: none
-executables:
-  dune: dune
-dependencies:
-  dune_core:
-    path: ../dune_core
-''',
-      });
-      expect(status(dir).code, 1);
-      expect(
-        Directory('$dir/.rk').existsSync(),
-        isFalse,
-        reason: 'the problems were already printed; a directory of copies of '
-            'a typo teaches an operator to ignore the directory',
-      );
+    test('the formula waits for the release', () {
+      final release = run.all.indexOf('assets to the');
+      final formula = run.all.indexOf('update the example-tool formula');
+      expect(release, greaterThan(-1), reason: run.all);
+      expect(release, lessThan(formula));
     });
   });
 
   group('a repository rk has nothing to say about', () {
     test('no release.toml is not an error', () {
-      final run = status(repository('bare', {'README.md': 'nothing here\n'}));
+      final bare = Rk.repository(scratch, 'bare', {'README.md': 'nothing\n'});
+      final run = bare(['status', '--offline']);
       expect(run.code, 0, reason: 'absence of intent is not a failure');
-      expect(run.out, contains('release.toml'));
+      expect(run.all, contains('release.toml'));
     });
 
     test('outside a repository is a usage error', () {
-      final dir = Directory('${root.path}/loose')..createSync();
-      File('${dir.path}/release.toml').writeAsStringSync('schema = 1\n');
-      final result = Process.runSync(
-        Platform.resolvedExecutable,
-        ['run', rk, 'status', '--offline'],
-        workingDirectory: dir.path,
-      );
-      expect(result.exitCode, 2, reason: '${result.stdout}${result.stderr}');
+      final loose = Directory('${scratch.path}/loose')..createSync();
+      File('${loose.path}/release.toml').writeAsStringSync('schema = 1\n');
+      final run = Rk(loose.path)(['status', '--offline']);
+      expect(run.code, 2, reason: run.all);
     });
   });
 }

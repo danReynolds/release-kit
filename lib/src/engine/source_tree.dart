@@ -42,7 +42,16 @@ class GitSourceTree implements SourceTree {
   @override
   String? read(String path) {
     final file = File(_resolve(path));
-    return file.existsSync() ? file.readAsStringSync() : null;
+    if (!file.existsSync()) return null;
+    try {
+      return file.readAsStringSync();
+    } on FileSystemException catch (error) {
+      // Not null: null means "there is nothing here", and a file rk is not
+      // allowed to open is not a file that does not exist. Collapsing the two
+      // would answer "no release.toml — run rk init" for a release.toml that
+      // is sitting right there.
+      throw SourceUnreadable(path, error.osError?.message ?? '$error');
+    }
   }
 
   @override
@@ -104,4 +113,19 @@ class MemorySourceTree implements SourceTree {
 
   static String _normalize(String path) =>
       path.split('/').where((p) => p.isNotEmpty && p != '.').join('/');
+}
+
+/// A file that is there and that rk could not read.
+///
+/// Distinct from absence on purpose: the two call for opposite responses, and
+/// telling an operator to create a file they already have is the kind of
+/// answer that costs them an afternoon.
+class SourceUnreadable implements Exception {
+  SourceUnreadable(this.path, this.reason);
+
+  final String path;
+  final String reason;
+
+  @override
+  String toString() => '$path could not be read: $reason';
 }

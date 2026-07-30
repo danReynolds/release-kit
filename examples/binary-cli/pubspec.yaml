@@ -1,0 +1,10 @@
+name: example_tool
+description: A CLI that ships binaries, so the archiver has something to read.
+version: 2.1.0
+repository: https://github.com/example/example_tool
+
+environment:
+  sdk: ^3.6.0
+
+executables:
+  example-tool: example_tool

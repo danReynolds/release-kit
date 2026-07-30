@@ -12,7 +12,35 @@ import 'package:test/test.dart';
 class Rk {
   Rk(this.root);
 
+  /// Copies the example named [shape] into [parent] and makes it a repository.
+  ///
+  /// Copied rather than used in place, so a test that writes into a repository
+  /// — and rk writes `.rk/` into every one it fails in — cannot leave anything
+  /// behind in `examples/`.
+  factory Rk.example(Directory parent, String shape, {String? as}) {
+    final source = Directory('examples/$shape');
+    if (!source.existsSync()) {
+      fail('there is no example named "$shape" — see examples/README.md');
+    }
+    final dir = Directory('${parent.path}/${as ?? shape}')
+      ..createSync(recursive: true);
+    for (final entry in source.listSync(recursive: true)) {
+      final relative = entry.path.substring(source.path.length + 1);
+      if (entry is Directory) {
+        Directory('${dir.path}/$relative').createSync(recursive: true);
+      } else if (entry is File) {
+        final target = File('${dir.path}/$relative')
+          ..parent.createSync(recursive: true);
+        target.writeAsBytesSync(entry.readAsBytesSync());
+      }
+    }
+    return Rk._initialized(dir.path);
+  }
+
   /// Creates a git repository under [parent] containing [files].
+  ///
+  /// For a shape too small or too odd to deserve a directory of its own. A
+  /// shape a reader would want to see written out belongs in `examples/`.
   factory Rk.repository(
     Directory parent,
     String name,
@@ -24,10 +52,26 @@ class Rk {
         ..createSync(recursive: true)
         ..writeAsStringSync(contents);
     });
-    final git =
-        Process.runSync('git', ['init', '-q'], workingDirectory: dir.path);
+    return Rk._initialized(dir.path);
+  }
+
+  factory Rk._initialized(String path) {
+    final git = Process.runSync('git', ['init', '-q'], workingDirectory: path);
     expect(git.exitCode, 0, reason: 'the fixture must be a repository');
-    return Rk(dir.path);
+    return Rk(path);
+  }
+
+  /// Commits everything, so the fixture is a repository with a clean tree —
+  /// which is what rk requires before it will release anything.
+  void commit() {
+    for (final args in [
+      ['config', 'user.email', 'rk@example.test'],
+      ['config', 'user.name', 'rk tests'],
+      ['add', '-A'],
+      ['commit', '-qm', 'the fixture'],
+    ]) {
+      Process.runSync('git', args, workingDirectory: root);
+    }
   }
 
   final String root;
@@ -89,28 +133,3 @@ class Run {
   List<Map<String, Object?>> get problems =>
       ((json['problems'] as List?) ?? const []).cast<Map<String, Object?>>();
 }
-
-/// A keybay-shaped repository: a library and a CLI that depends on it.
-const keybayFiles = {
-  'release.toml': '''
-schema = 1
-
-[release.core]
-path = "packages/keybay"
-publish = ["pub.dev"]
-
-[release.cli]
-path = "packages/keybay_cli"
-publish = ["pub.dev", "github-release", "homebrew"]
-binary_platforms = ["linux-x64", "macos-arm64"]
-''',
-  'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
-  'packages/keybay_cli/pubspec.yaml': '''
-name: keybay_cli
-version: 0.2.0
-dependencies:
-  keybay: 0.2.0
-executables:
-  keybay: keybay
-''',
-};

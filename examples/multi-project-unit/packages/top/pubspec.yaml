@@ -1,0 +1,11 @@
+name: example_top
+version: 0.2.0
+
+environment:
+  sdk: ^3.6.0
+
+dependencies:
+  example_base: ^0.2.0
+
+dev_dependencies:
+  example_middle: ^0.2.0

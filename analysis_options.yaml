@@ -1,1 +1,8 @@
 include: package:lints/recommended.yaml
+
+analyzer:
+  exclude:
+    # Repository fixtures, not code. escapes-repository declares path
+    # dependencies that deliberately do not exist — being unresolvable is the
+    # shape it is there to test.
+    - examples/**

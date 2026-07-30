@@ -279,7 +279,21 @@ _Prepared _prepare(Output output) {
   }
 
   final tree = GitSourceTree(root);
-  final source = tree.read('release.toml');
+  final String? source;
+  try {
+    source = tree.read('release.toml');
+  } on SourceUnreadable catch (error) {
+    output.repository(name: root.split('/').last);
+    output.problem(
+      Diagnostic(
+        code: 'RK-CONF-034',
+        message: 'release.toml is there and rk could not read it',
+        source: SourceLocation('release.toml', 1),
+        remedy: error.reason,
+      ),
+    );
+    return _Prepared.stopped(ExitCodes.refused);
+  }
   if (source == null) {
     output.repository(name: root.split('/').last);
     output.blank();

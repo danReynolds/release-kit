@@ -253,6 +253,10 @@ Recorded because the reviews found them claimed-as-shipped when they are not:
   `rk status --json` currently answers `units: []` in normal use; only
   `--offline` records anything. Confirmed against the real keybay repository,
   not a fixture: the human sees two units and the document carries none.
+- **Phase 3** — a repository-level problem is reported once per unit. Running
+  against the real fleury, which declares six, produced six identical
+  `RK-GIT-001` entries for one uncommitted worktree. A fact about the
+  repository belongs to the repository.
 - **Phase 3** — a blocked unit never says what rk did not read. `_printPlan`
   and the "not checked: github-release, homebrew" line both sit after the
   early return for problems, so a unit blocked on anything at all shows a ✗

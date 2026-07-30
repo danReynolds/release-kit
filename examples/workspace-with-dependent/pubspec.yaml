@@ -1,0 +1,9 @@
+name: example_workspace
+publish_to: none
+
+environment:
+  sdk: ^3.6.0
+
+workspace:
+  - packages/core
+  - packages/cli

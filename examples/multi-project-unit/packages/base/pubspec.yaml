@@ -1,0 +1,5 @@
+name: example_base
+version: 0.2.0
+
+environment:
+  sdk: ^3.6.0

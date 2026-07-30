@@ -1,0 +1,15 @@
+name: example_escapes
+version: 0.0.1
+publish_to: none
+
+environment:
+  sdk: ^3.6.0
+
+executables:
+  escapes: escapes
+
+dependencies:
+  sibling_core:
+    path: ../sibling_core
+  sibling_io:
+    path: ../sibling_io

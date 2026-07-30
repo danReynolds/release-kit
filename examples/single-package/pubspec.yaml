@@ -1,0 +1,15 @@
+name: retry_helper
+description: >-
+  A folded description, because that is how pub.dev wants them written and a
+  parser that mishandles one swallows the keys that follow it.
+version: 1.4.0
+repository: https://github.com/example/retry_helper
+topics:
+  - retry
+  - backoff
+
+environment:
+  sdk: ^3.6.0
+
+dev_dependencies:
+  lints: ^5.0.0

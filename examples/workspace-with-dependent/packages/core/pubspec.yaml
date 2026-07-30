@@ -1,0 +1,7 @@
+name: example_core
+version: 0.3.0
+
+resolution: workspace
+
+environment:
+  sdk: ^3.6.0

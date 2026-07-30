@@ -1,0 +1,16 @@
+schema = 1
+
+[release.framework]
+tag = "framework-v{version}"
+
+[[release.framework.project]]
+path = "packages/top"
+publish = ["pub.dev"]
+
+[[release.framework.project]]
+path = "packages/middle"
+publish = ["pub.dev"]
+
+[[release.framework.project]]
+path = "packages/base"
+publish = ["pub.dev"]

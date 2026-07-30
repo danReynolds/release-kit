@@ -1,0 +1,9 @@
+schema = 1
+
+[release.core]
+path = "packages/core"
+publish = ["pub.dev"]
+
+[release.cli]
+path = "packages/cli"
+publish = ["pub.dev"]

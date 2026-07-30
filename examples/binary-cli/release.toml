@@ -1,0 +1,5 @@
+schema = 1
+
+[release.cli]
+publish = ["pub.dev", "github-release", "homebrew"]
+binary_platforms = ["linux-x64", "linux-arm64", "macos-arm64"]

@@ -87,19 +87,35 @@ void main() {
     });
 
     test(
-        'DONE WHEN: the derived checklist is printed offline for all three '
-        'repository shapes', () {
-      // Proof by execution: offline_cli_test.dart builds keybay-, fleury- and
-      // dune-shaped repositories on disk and runs bin/rk.dart against each,
-      // asserting on real stdout and real exit codes. This test only holds it
-      // to being that, because the check it replaced asserted that
-      // bin/rk.dart *contained the string* "--offline".
-      final source = File('test/offline_cli_test.dart').readAsStringSync();
-      expect(source, contains("'run', rk, 'status', '--offline'"));
-      for (final shape in ['keybay', 'fleury', 'dune']) {
-        expect(source, contains("repository('$shape'"), reason: '$shape shape');
+        'DONE WHEN: the derived checklist is printed offline, for every '
+        'repository shape', () {
+      // Executed. The version this replaced asserted that a file under test/
+      // contained particular strings — the same anti-pattern the phase 2
+      // review found, one level along: rename a test and the phase fails,
+      // delete the feature and it passes.
+      final scratch = Directory.systemTemp.createTempSync('rk-phase1-');
+      addTearDown(() => scratch.deleteSync(recursive: true));
+
+      for (final shape in [
+        'single-package',
+        'workspace-with-dependent',
+        'multi-project-unit',
+        'binary-cli',
+      ]) {
+        final run = Rk.example(scratch, shape)(['status', '--offline']);
+        expect(run.code, 0, reason: '$shape: ${run.all}');
+        expect(
+          run.all,
+          contains('derived from the manifests alone'),
+          reason: '$shape must say what it did not read',
+        );
       }
-      expect(source, contains('git'), reason: 'each fixture is a repository');
+
+      // The shape that must be refused rather than released.
+      final refused =
+          Rk.example(scratch, 'escapes-repository')(['status', '--offline']);
+      expect(refused.code, 1, reason: refused.all);
+      expect(refused.all, contains('does not contain'));
     });
   });
 
@@ -110,17 +126,17 @@ void main() {
     // the phase: --json printing nothing, pipes getting cursor escapes, the
     // diagnosis never being written, and safe_to_rerun never being set.
     late Directory scratch;
-    late Rk keybay;
+    late Rk repo;
 
     setUpAll(() {
       scratch = Directory.systemTemp.createTempSync('rk-phase2-');
-      keybay = Rk.repository(scratch, 'keybay', keybayFiles);
+      repo = Rk.example(scratch, 'workspace-with-dependent');
     });
 
     tearDownAll(() => scratch.deleteSync(recursive: true));
 
     test('the four-glyph gutter, and colour is never the only signal', () {
-      final run = keybay(['status', '--offline']);
+      final run = repo(['status', '--offline']);
       expect(run.code, 0, reason: run.all);
       expect(
         run.all,
@@ -130,18 +146,18 @@ void main() {
     });
 
     test('non-TTY output is append-only: no cursor movement, ever', () {
-      final run = keybay(['status', '--offline']);
+      final run = repo(['status', '--offline']);
       expect(run.all, isNot(contains('\r')));
       expect(run.all, isNot(contains('\x1b[')));
     });
 
     test('--json carries the checklist, keyed by step id', () {
-      final run = keybay(['status', '--offline', '--json']);
+      final run = repo(['status', '--offline', '--json']);
       final steps = run.stepsOf('cli');
       expect(steps, isNotEmpty, reason: 'an empty checklist is not a surface');
       expect(
         steps.map((s) => s['id']),
-        contains('cli/pub.dev/keybay_cli@0.2.0'),
+        contains('cli/pub.dev/example_cli@0.3.0'),
       );
       for (final step in steps) {
         expect(
@@ -154,7 +170,7 @@ void main() {
     });
 
     test('--json is only JSON', () {
-      final run = keybay(['status', '--offline', '--json']);
+      final run = repo(['status', '--offline', '--json']);
       expect(run.stdout.trimLeft(), startsWith('{'));
       expect(run.stdout, isNot(contains('derived from the manifests alone')));
       expect(run.json['safe_to_rerun'], isTrue);
@@ -162,7 +178,7 @@ void main() {
     });
 
     test('a refusal a caller asked for in JSON is answered in JSON', () {
-      final run = keybay(['status', '--json', '--bogus']);
+      final run = repo(['status', '--json', '--bogus']);
       expect(run.code, ExitCodes.usage);
       expect(run.problems.map((p) => p['code']), contains('RK-CLI-001'));
     });
@@ -174,7 +190,7 @@ void main() {
         ['release', 'nosuch', '--json'],
         ['verify', 'nosuch', '--json'],
       ]) {
-        final run = keybay(args);
+        final run = repo(args);
         expect(run.code, isNot(0),
             reason: 'precondition for ${args.join(' ')}');
         expect(
@@ -191,11 +207,20 @@ void main() {
       late Run run;
 
       setUpAll(() {
-        broken = Rk.repository(scratch, 'broken', keybayFiles);
-        // Unreadable, which nothing in rk guards against — the point is a
-        // failure rk did not plan for.
+        // A manifest rk is not allowed to open. This is a real, currently
+        // unhandled failure rather than an injected one — which is the point:
+        // the crash path has to be proved against something that actually
+        // crashes. When rk learns to report this one, this test must be
+        // pointed at another genuine crash, and if none can be found that is
+        // a decision worth making deliberately rather than by deletion.
+        //
+        // multi-project-unit has no root pubspec, so `dart run` does not try
+        // to resolve the fixture as a package and hit the file before rk does.
+        broken = Rk.example(scratch, 'multi-project-unit', as: 'broken');
         Process.runSync(
-            'chmod', ['000', '${broken.root}/packages/keybay/pubspec.yaml']);
+            'chmod', ['000', '${broken.root}/packages/base/pubspec.yaml']);
+        addTearDown(() => Process.runSync(
+            'chmod', ['644', '${broken.root}/packages/base/pubspec.yaml']));
         run = broken(['status', '--json']);
       });
 
@@ -220,7 +245,8 @@ void main() {
     });
 
     test('a clean run writes no diagnosis', () {
-      final clean = Rk.repository(scratch, 'clean', keybayFiles);
+      final clean =
+          Rk.example(scratch, 'workspace-with-dependent', as: 'clean');
       expect(clean(['status', '--offline']).code, 0);
       expect(
         clean.diagnoses(),
@@ -241,7 +267,7 @@ void main() {
         'DONE WHEN: the checklist renders identically to a terminal and a '
         'pipe', () {
       // A pty, so this is the real comparison rather than a replay of it.
-      final piped = keybay(['status', '--offline']).stdout;
+      final piped = repo(['status', '--offline']).stdout;
       final pty = Process.runSync(
         'script',
         [
@@ -253,7 +279,7 @@ void main() {
           'status',
           '--offline',
         ],
-        workingDirectory: keybay.root,
+        workingDirectory: repo.root,
         environment: {'NO_COLOR': '1'},
       );
 
