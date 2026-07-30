@@ -125,3 +125,36 @@ From RFC 0002's CI-readiness section, binding on every phase:
 6. Optional evidence degrades honestly.
 
 Plus: zero runtime dependencies, enforced by a test over the import graph.
+
+## Review record
+
+A phase is done when its group in `test/phase_conformance_test.dart` passes.
+Each phase gets an adversarial review before the next one starts, and what the
+review found is recorded here — the point of writing it down is that "we
+reviewed it" is otherwise indistinguishable from "we meant to".
+
+**Phase 1 — engine core.** Two rounds. Round two found ten, of which two were
+fail-open: `Checklist.derive` took its `Diagnostics` as an optional argument no
+production caller passed, making `RK-DEP-001` — the top-ranked failure class —
+unreachable code; and a pubspec written with flow collections parsed as an
+opaque scalar, so a package pinned by path looked like a package with no
+dependencies and dune, the repository the plan says must be refused, was
+accepted. The rest: shared prerequisites duplicated as steps, a key indented
+into a block sequence escaping to the root map, sequences at their parent key's
+column refused, the tag convention counting registry packages so two units
+could derive one tag, a tag pattern git would refuse caught only at tag time, a
+`tag` on a project row silently ignored, a dependency circle crashing the sort,
+and `permanent` marking steps rk itself deletes and recreates.
+
+**Phase 2 — output.** Five findings. One severe: a repeating timer keeps a Dart
+isolate alive, so a step abandoned by a thrown exception turned a crash into a
+hang. Then: a crash produced no JSON despite `--json`'s one contract being that
+it survives a non-zero exit; `Activity` wrote prose into the `verdict` field a
+caller keys on; `rk init --json` wrote its prompt past the sink `--json`
+silences; and the diagnosis path was announced only in prose. Read-ahead into
+`GithubRelease` found three more cardinal-rule violations, fixed with it.
+
+**A note on what the reviews keep finding.** Both phases' worst findings were
+the same shape: a safety check that could not fire, and a failure path that
+answered with a definite negative. Neither shows up in a passing test suite,
+which is why the review is a phase gate rather than a nicety.
