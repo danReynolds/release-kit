@@ -251,7 +251,15 @@ Recorded because the reviews found them claimed-as-shipped when they are not:
 
 - **Phase 3** — `output.unit`/`output.step` on the *online* status path.
   `rk status --json` currently answers `units: []` in normal use; only
-  `--offline` records anything.
+  `--offline` records anything. Confirmed against the real keybay repository,
+  not a fixture: the human sees two units and the document carries none.
+- **Phase 3** — a blocked unit never says what rk did not read. `_printPlan`
+  and the "not checked: github-release, homebrew" line both sit after the
+  early return for problems, so a unit blocked on anything at all shows a ✗
+  with no hint that two of its three channels were never consulted. The
+  comment in that method says saying nothing about an unreadable channel
+  "would let a half-finished release look complete" — which is what happens in
+  the branch it does not cover. Also found by running against real keybay.
 - **Phase 4** — conflict evidence that prints the difference rather than the
   fact of one. Nothing produces a diff yet. Also the pub.dev `first-publish`
   refusal, which today returns `absent` — "proceed" — for a package that has
