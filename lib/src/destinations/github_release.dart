@@ -28,40 +28,39 @@ class GithubRelease {
   final String workingDirectory;
 
   /// How the release for [tag] stands.
+  ///
+  /// The tag is asked about by name rather than looked for in a list. A listing
+  /// is paged, and a tag missing from the page rk happened to read is not a tag
+  /// that does not exist — concluding absence from it would be exactly the
+  /// collapse rk must never make.
   Future<Inspection> inspect(String tag, Set<String> expectedAssets) async {
-    final listed = await _list();
-    if (listed == null) {
-      return const Inspection.unknown('the forge could not be read');
+    final release = await _view(tag);
+    switch (release) {
+      case _NotFound():
+        return const Inspection.absent();
+      case _Unreadable(:final why):
+        return Inspection.unknown(why);
+      case _Found(:final release):
+        if (release.isDraft) {
+          return Inspection.absent(detail: 'a draft exists with ${release.id}');
+        }
+        final assets = release.assets;
+        if (assets == null) {
+          return const Inspection.unknown(
+            'the release exists but its assets could not be listed',
+          );
+        }
+        final missing = expectedAssets.difference(assets);
+        if (missing.isEmpty) {
+          return const Inspection.exact(detail: 'published');
+        }
+        // A published release cannot be edited, so this is terminal — which is
+        // why it is only ever said about assets rk actually read.
+        return Inspection.conflict(
+          'the published release is missing ${missing.length} of its assets',
+          evidence: {for (final name in missing) name: 'missing'},
+        );
     }
-
-    final matching = listed.where((r) => r.tag == tag).toList();
-    if (matching.isEmpty) return const Inspection.absent();
-
-    if (matching.length > 1) {
-      return Inspection.conflict(
-        '${matching.length} releases carry the tag $tag',
-        evidence: {
-          for (final release in matching)
-            release.id: release.isDraft ? 'draft' : 'published',
-        },
-      );
-    }
-
-    final release = matching.single;
-    if (!release.isDraft) {
-      final assets = await _assets(tag);
-      final missing = expectedAssets.difference(assets.toSet());
-      if (missing.isEmpty) {
-        return const Inspection.exact(detail: 'published');
-      }
-      // A published release cannot be edited, so this is terminal.
-      return Inspection.conflict(
-        'the published release is missing ${missing.length} of its assets',
-        evidence: {for (final name in missing) name: 'missing'},
-      );
-    }
-
-    return Inspection.absent(detail: 'a draft exists with ${release.id}');
   }
 
   /// Creates the release with every asset, published in one act.
@@ -75,11 +74,11 @@ class GithubRelease {
     required String title,
     required List<String> assetPaths,
   }) async {
-    final existing = await _list();
+    final existing = await _drafts(tag);
     if (existing == null) {
       return PublishOutcome.failed('the forge could not be read');
     }
-    for (final release in existing.where((r) => r.tag == tag && r.isDraft)) {
+    for (final release in existing) {
       final deleted = await tools.run(
         'gh',
         [
@@ -119,22 +118,37 @@ class GithubRelease {
     if (!created.ok) return PublishOutcome.failed(created.summary);
 
     // Verify against the forge rather than trusting the command's word.
-    final assets = await _assets(tag);
-    final expected = assetPaths.map(_fileName).toSet();
-    final missing = expected.difference(assets.toSet());
-    if (missing.isNotEmpty) {
-      return PublishOutcome.failed(
-        'the release published without ${missing.join(', ')}',
-      );
+    final url = 'https://github.com/$repository/releases/tag/$tag';
+    final after = await _view(tag);
+    switch (after) {
+      case _Found(:final release) when release.assets != null:
+        final expected = assetPaths.map(_fileName).toSet();
+        final missing = expected.difference(release.assets!);
+        if (missing.isNotEmpty) {
+          return PublishOutcome.failed(
+            'the release published without ${missing.join(', ')}',
+          );
+        }
+        return PublishOutcome.published(url);
+      default:
+        // The create succeeded and the confirming read did not. Something
+        // exists; rk cannot say it is right. Calling that a failure would send
+        // an operator to fix a release that may be complete.
+        return PublishOutcome.lostTrack(
+          'the release was created but could not be read back to confirm its '
+          'assets — re-running will inspect it',
+          url: url,
+        );
     }
-
-    return PublishOutcome.published(
-      'https://github.com/$repository/releases/tag/$tag',
-    );
   }
 
-  /// Asset names on a published release.
-  Future<List<String>> _assets(String tag) async {
+  /// Asks the forge about one tag.
+  ///
+  /// Three answers, kept apart because they mean different things to a caller:
+  /// it is not there, it is there, or rk could not find out. `gh` distinguishes
+  /// the first from the third by message rather than by exit code, so that is
+  /// what is read — and anything unrecognised is unreadable rather than absent.
+  Future<_Lookup> _view(String tag) async {
     final result = await tools.run(
       'gh',
       [
@@ -144,28 +158,49 @@ class GithubRelease {
         '--repo',
         repository,
         '--json',
-        'assets',
+        'tagName,isDraft,name,assets',
       ],
       workingDirectory: workingDirectory,
     );
-    if (!result.ok) return const [];
+
+    if (!result.ok) {
+      final said = result.summary.toLowerCase();
+      if (said.contains('release not found') ||
+          said.contains('no release found')) {
+        return const _NotFound();
+      }
+      return _Unreadable('the forge could not be read: ${result.summary}');
+    }
+
     try {
       final decoded = jsonDecode(result.stdout);
-      if (decoded is! Map) return const [];
+      if (decoded is! Map) {
+        return const _Unreadable('the forge answered something unreadable');
+      }
       final assets = decoded['assets'];
-      if (assets is! List) return const [];
-      return [
-        for (final asset in assets)
-          if (asset is Map && asset['name'] is String) asset['name'] as String,
-      ];
-    } on Object {
-      return const [];
+      return _Found(_Release(
+        tag: decoded['tagName'] is String ? decoded['tagName'] as String : tag,
+        isDraft: decoded['isDraft'] == true,
+        id: decoded['name'] is String && (decoded['name'] as String).isNotEmpty
+            ? decoded['name'] as String
+            : tag,
+        // Null rather than empty when the field is missing or malformed: no
+        // assets and no answer about assets are different facts.
+        assets: assets is List
+            ? {
+                for (final asset in assets)
+                  if (asset is Map && asset['name'] is String)
+                    asset['name'] as String,
+              }
+            : null,
+      ));
+    } on Object catch (error) {
+      return _Unreadable('the forge answered something unreadable: $error');
     }
   }
 
-  /// Every release, drafts included — a lookup by tag returns only published
-  /// ones, so a draft would be invisible to it.
-  Future<List<_Release>?> _list() async {
+  /// Drafts carrying [tag], which a lookup by tag alone would not surface.
+  Future<List<_Release>?> _drafts(String tag) async {
     final result = await tools.run(
       'gh',
       [
@@ -187,14 +222,17 @@ class GithubRelease {
       if (decoded is! List) return null;
       return [
         for (final entry in decoded)
-          if (entry is Map && entry['tagName'] is String)
+          if (entry is Map &&
+              entry['tagName'] == tag &&
+              entry['isDraft'] == true)
             _Release(
-              tag: entry['tagName'] as String,
-              isDraft: entry['isDraft'] == true,
+              tag: tag,
+              isDraft: true,
               id: entry['name'] is String &&
                       (entry['name'] as String).isNotEmpty
                   ? entry['name'] as String
-                  : entry['tagName'] as String,
+                  : tag,
+              assets: null,
             ),
       ];
     } on Object {
@@ -209,18 +247,62 @@ class GithubRelease {
 }
 
 class _Release {
-  _Release({required this.tag, required this.isDraft, required this.id});
+  _Release({
+    required this.tag,
+    required this.isDraft,
+    required this.id,
+    required this.assets,
+  });
+
   final String tag;
   final bool isDraft;
   final String id;
+
+  /// Asset names, or null when rk could not read them.
+  final Set<String>? assets;
 }
 
+/// What asking the forge about one tag produced.
+sealed class _Lookup {
+  const _Lookup();
+}
+
+class _NotFound extends _Lookup {
+  const _NotFound();
+}
+
+class _Found extends _Lookup {
+  const _Found(this.release);
+  final _Release release;
+}
+
+class _Unreadable extends _Lookup {
+  const _Unreadable(this.why);
+  final String why;
+}
+
+/// How an act at the forge ended.
+///
+/// Three outcomes rather than two: an act that succeeded but could not be
+/// confirmed is neither. Reporting it as failure sends an operator to fix
+/// something that may be finished, and reporting it as success claims knowledge
+/// rk does not have.
 class PublishOutcome {
-  const PublishOutcome._(this.url, this.problem);
-  const PublishOutcome.published(String url) : this._(url, null);
-  const PublishOutcome.failed(String problem) : this._(null, problem);
+  const PublishOutcome._(this.url, this.problem, this.confirmed);
+  const PublishOutcome.published(String url) : this._(url, null, true);
+  const PublishOutcome.failed(String problem) : this._(null, problem, false);
+  const PublishOutcome.lostTrack(String problem, {String? url})
+      : this._(url, problem, false);
 
   final String? url;
   final String? problem;
-  bool get ok => url != null;
+
+  /// Whether rk read back what it did.
+  final bool confirmed;
+
+  bool get ok => confirmed;
+
+  /// An effect may exist that rk could not verify, so re-running must inspect
+  /// rather than assume.
+  bool get mayHaveActed => !confirmed && url != null;
 }

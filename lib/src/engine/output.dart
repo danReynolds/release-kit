@@ -123,6 +123,7 @@ class Output {
     Mark mark = Mark.none,
     String? note,
     String verdict = 'unknown',
+    String? detail,
     Duration? took,
     int depth = 1,
   }) {
@@ -131,6 +132,7 @@ class Output {
       unit: step.unit,
       summary: step.summary,
       verdict: verdict,
+      detail: detail,
       permanent: step.isPermanent,
       public: step.isPublic,
       needs: step.needs,
@@ -154,8 +156,27 @@ class Output {
     Step step, {
     Duration? typically,
     int depth = 1,
-  }) =>
-      Activity._(this, step, typically, depth, _clock());
+  }) {
+    // rk works one step at a time, so a live activity here is one whose caller
+    // never finished it. Cancelling it is what keeps a forgotten step from
+    // holding the isolate open forever.
+    _live?.abandon();
+    return _live = Activity._(this, step, typically, depth, _clock());
+  }
+
+  Activity? _live;
+
+  /// Ends the run's rendering.
+  ///
+  /// A repeating timer keeps a Dart isolate alive, so an activity abandoned by
+  /// a thrown exception would leave rk running with nothing to do — a hang,
+  /// which in CI is worse than a crash because nothing reports it. Calling this
+  /// on the way out is what makes that impossible rather than unlikely.
+  void close() {
+    _live?.abandon();
+    _live = null;
+    _clearTransient();
+  }
 
   void blank() {
     _clearTransient();
@@ -377,13 +398,32 @@ class Activity {
   }
 
   /// Finished, with [result] as the one line that survives.
-  void done(String result, {Mark mark = Mark.done}) => _finish(mark, result);
+  ///
+  /// [verdict] is what a caller keys on and stays in the four-word vocabulary;
+  /// [result] is prose for a person. Putting the prose in the verdict would
+  /// hand an agent "Apple rejected the submission" where it expects one of
+  /// absent, exact, conflict, unknown — a machine surface that is only stable
+  /// until someone rewords a sentence.
+  void done(String result, {Mark mark = Mark.done, String verdict = 'exact'}) =>
+      _finish(mark, result, verdict);
 
   /// Failed. The line stays, and so does whatever the caller prints after it,
   /// because that detail is the diagnosis.
-  void failed(String result) => _finish(Mark.blocked, result);
+  ///
+  /// The verdict is `unknown` rather than anything definite: rk tried and did
+  /// not get an answer, which is not the same as having learned that nothing
+  /// is there.
+  void failed(String result, {String verdict = 'unknown'}) =>
+      _finish(Mark.blocked, result, verdict);
 
-  void _finish(Mark mark, String result) {
+  /// Stops rendering without recording an outcome, for a step whose caller
+  /// went away. Nothing is printed: there is no result to report.
+  void abandon() {
+    _finished = true;
+    _timer?.cancel();
+  }
+
+  void _finish(Mark mark, String result, String verdict) {
     if (_finished) return;
     _finished = true;
     _timer?.cancel();
@@ -392,7 +432,8 @@ class Activity {
       _step,
       mark: mark,
       note: took >= notable ? '$result · ${formatDuration(took)}' : result,
-      verdict: result,
+      verdict: verdict,
+      detail: result,
       took: took,
       depth: _depth,
     );
@@ -408,10 +449,10 @@ class Activity {
       _step.summary,
       if (_doing != null) _doing!,
       formatDuration(took),
-      if (_typically != null && took > _typically!)
-        'longer than the usual ${formatDuration(_typically!)}'
+      if (_typically != null && took > _typically)
+        'longer than the usual ${formatDuration(_typically)}'
       else if (_typically != null)
-        'typically ${formatDuration(_typically!)}',
+        'typically ${formatDuration(_typically)}',
     ];
     return '${_frames[_spin % _frames.length]} ${parts.join(' · ')}';
   }

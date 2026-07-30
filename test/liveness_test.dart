@@ -181,7 +181,53 @@ void main() {
       final json = h.output.report.encode(exit: 0);
       expect(json, contains('"id": "cli/notarize/macos-arm64"'));
       expect(json, contains('"took_ms": 90000'));
-      expect(json, contains('"verdict": "accepted"'));
+    });
+
+    test('the verdict stays in its vocabulary and the prose goes beside it',
+        () {
+      final h = Harness();
+      h.output.begin(aStep()).done('Apple accepted the submission');
+
+      final json = h.output.report.encode(exit: 0);
+      expect(
+        json,
+        contains('"verdict": "exact"'),
+        reason: 'a caller keys on the verdict, so it cannot be a sentence '
+            'somebody may reword',
+      );
+      expect(json, contains('"detail": "Apple accepted the submission"'));
+    });
+
+    test('a failure leaves the verdict unknown, not decided', () {
+      final h = Harness();
+      h.output.begin(aStep()).failed('the request timed out');
+
+      expect(
+        h.output.report.encode(exit: 1),
+        contains('"verdict": "unknown"'),
+        reason: 'rk tried and got no answer, which is not the same as having '
+            'learned that nothing is there',
+      );
+    });
+  });
+
+  group('an unfinished step never outlives its run', () {
+    test('closing prints nothing, because there is no result to report', () {
+      final h = Harness(isTerminal: true);
+      h.output.begin(aStep());
+      h.output.close();
+      expect(h.settled.trim(), isEmpty);
+    });
+
+    test('beginning another step abandons the one before it', () {
+      final h = Harness(isTerminal: true);
+      h.output.begin(aStep());
+      h.output.begin(aStep()).done('accepted');
+      expect(
+        h.output.report.encode(exit: 0),
+        isNot(contains('"verdict": "abandoned"')),
+      );
+      expect(h.settled, contains('accepted'));
     });
   });
 

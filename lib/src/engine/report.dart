@@ -115,6 +115,10 @@ class Report {
   /// caller would have to parse back out of prose.
   void next(String command) => _next.add(command);
 
+  /// Where the run's evidence was written, so a caller is told rather than
+  /// left to guess at a path it never saw printed.
+  String? diagnosis;
+
   void halt(String kind, String sentence, {required bool rerunHelps}) {
     _halt = {'kind': kind, 'sentence': sentence};
     if (!rerunHelps) safeToRerun = false;
@@ -132,6 +136,7 @@ class Report {
             'units': _units.values.toList(),
             'problems': _problems,
             'next': _next,
+            if (diagnosis != null) 'diagnosis': diagnosis,
             if (_halt != null) 'halt': _halt,
           })}\n';
 }

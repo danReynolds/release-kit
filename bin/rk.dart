@@ -67,30 +67,55 @@ Future<void> main(List<String> args) async {
     command: command,
   );
 
-  final code = switch (command) {
-    'status' => await _status(
-        output,
-        target,
-        offline: flags.contains('--offline'),
+  int code;
+  String? crash;
+  try {
+    code = switch (command) {
+      'status' => await _status(
+          output,
+          target,
+          offline: flags.contains('--offline'),
+        ),
+      'verify' => await _verify(output, target),
+      'release' => await _release(
+          output,
+          target,
+          dryRun: flags.contains('--dry-run'),
+        ),
+      'init' => await _init(output, interactive: !json),
+      // A bare unit name is the common slip, so try it as one.
+      _ => await _status(output, command),
+    };
+  } on Object catch (error, stack) {
+    // A failure rk did not plan for is still a run rk has to account for. It
+    // reports lost track because that is the truth: rk cannot say from here
+    // whether anything happened, and re-running is what finds out.
+    code = ExitCodes.refused;
+    crash = '$error\n$stack';
+    output.halt(HaltKind.lostTrack);
+    output.problem(
+      Diagnostic(
+        code: 'RK-INT-001',
+        message: 'rk failed in a way it does not have a message for: $error',
+        remedy: 'this is a bug in rk. The run\'s evidence is written beside '
+            'this message, and re-running will inspect what is really there.',
       ),
-    'verify' => await _verify(output, target),
-    'release' => await _release(
-        output,
-        target,
-        dryRun: flags.contains('--dry-run'),
-      ),
-    'init' => await _init(output),
-    // A bare unit name is the common slip, so try it as one.
-    _ => await _status(output, command),
-  };
+    );
+  } finally {
+    // Rendering owns a repeating timer while a step is running, and a timer
+    // keeps the isolate alive. Without this, a thrown exception turns a crash
+    // into a hang.
+    output.close();
+  }
+
+  _recordDiagnosis(output, code, crash: crash);
 
   exitCode = code;
 
-  // The machine surface survives a non-zero exit because it is written here,
-  // after the code is known, rather than by whichever path decided to stop.
+  // The machine surface survives a non-zero exit — including a crash — because
+  // it is written here, after the code is known, rather than by whichever path
+  // decided to stop.
   if (json) stdout.write(output.report.encode(exit: code));
-
-  _recordDiagnosis(output, code);
 }
 
 /// Writes the evidence for a run that got as far as the work and then failed.
@@ -99,9 +124,11 @@ Future<void> main(List<String> args) async {
 /// release.toml — has already said everything it knows on stdout, and copying
 /// that into a directory would fill `.rk/diagnosis` with typos while teaching
 /// an operator to ignore it.
-void _recordDiagnosis(Output output, int code) {
+void _recordDiagnosis(Output output, int code, {String? crash}) {
   if (code == ExitCodes.ok || code == ExitCodes.usage) return;
-  if (!output.report.hasSteps) return;
+  // A crash is always worth recording, even before any step: the stack trace is
+  // the only copy of what went wrong.
+  if (!output.report.hasSteps && crash == null) return;
   final root = GitSourceTree.findRoot(Directory.current.path);
   if (root == null) return;
 
@@ -110,11 +137,13 @@ void _recordDiagnosis(Output output, int code) {
     stamp: DateTime.now().toIso8601String().replaceAll(':', '-'),
     report: output.report,
     exit: code,
+    attachments: {if (crash != null) 'crash.txt': crash},
   );
+  output.report.diagnosis = at;
   output.say('what this run saw: $at');
 }
 
-Future<int> _init(Output output) async {
+Future<int> _init(Output output, {required bool interactive}) async {
   final root = GitSourceTree.findRoot(Directory.current.path);
   if (root == null) {
     output.line('this is not a git repository', mark: Mark.blocked);
@@ -126,7 +155,10 @@ Future<int> _init(Output output) async {
     tree: tree,
     output: output,
     write: (path, contents) => File('$root/$path').writeAsStringSync(contents),
-    confirm: stdin.hasTerminal
+    // A prompt would be written straight to stdout, past the sink that --json
+    // silences, so asking is not an option when a caller is parsing the
+    // answer. init already refuses when nobody can confirm.
+    confirm: interactive && stdin.hasTerminal
         ? (prompt) async {
             stdout.write(prompt);
             final answer = stdin.readLineSync()?.trim().toLowerCase() ?? '';

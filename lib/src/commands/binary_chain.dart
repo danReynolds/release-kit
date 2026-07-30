@@ -226,6 +226,12 @@ class BinaryChain {
     if (!published.ok) {
       output.line('github-release',
           mark: Mark.blocked, note: published.problem);
+      // An act rk could not read back is not an act that failed. Saying so
+      // sends the operator to inspect rather than to fix, and re-running is
+      // what classifies what is actually there.
+      output.halt(
+        published.mayHaveActed ? HaltKind.lostTrack : HaltKind.beforeActing,
+      );
       return null;
     }
     output.line(
