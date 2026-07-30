@@ -8,6 +8,7 @@ import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnosis.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
+import 'package:rk/src/engine/inspect.dart';
 import 'package:rk/src/engine/output.dart';
 import 'package:rk/src/engine/registry.dart';
 import 'package:rk/src/engine/resolve.dart';
@@ -328,11 +329,21 @@ Future<int> _status(
   final tree = prepared.tree!;
   final registry = prepared.registry!;
   try {
+    final git = GitState.read(tree.root);
     return await StatusCommand(
       resolution: resolution,
       tree: tree,
-      git: GitState.read(tree.root),
+      git: git,
       registry: registry,
+      inspector: Inspector(
+        registry: registry,
+        git: git,
+        resolution: resolution,
+        // Read-only, and only when there is a forge to ask about. Without
+        // either, the forge reports as unread rather than as empty.
+        tools: offline ? null : const SystemTools(),
+        repository: offline ? null : git.originUrl,
+      ),
       output: output,
       offline: offline,
     ).run(only: unit);

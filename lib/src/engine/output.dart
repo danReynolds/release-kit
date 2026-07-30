@@ -118,6 +118,12 @@ class Output {
   /// Taking the [Step] rather than its parts is what makes the two surfaces
   /// agree: there is no way to show a person one id and hand a caller another,
   /// because there is only one call and it reads both from the same object.
+  ///
+  /// [show] records without printing, for a step collapse leaves off the
+  /// screen. The asymmetry runs one way only and deliberately: everything
+  /// printed is recorded, while the document may carry more than the terminal
+  /// shows. Terseness is a rule about a person's attention, and a caller
+  /// keying on step ids wants the whole checklist.
   void step(
     Step step, {
     Mark mark = Mark.none,
@@ -126,6 +132,7 @@ class Output {
     String? detail,
     Duration? took,
     int depth = 1,
+    bool show = true,
   }) {
     report.step(
       id: step.id,
@@ -138,6 +145,7 @@ class Output {
       needs: step.needs,
       took: took,
     );
+    if (!show) return;
     line(
       step.summary,
       mark: mark,

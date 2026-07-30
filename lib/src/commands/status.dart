@@ -2,6 +2,7 @@ import '../engine/changelog.dart';
 import '../engine/checklist.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
+import '../engine/inspect.dart';
 import '../engine/output.dart';
 import '../engine/registry.dart';
 import '../engine/resolve.dart';
@@ -20,6 +21,7 @@ class StatusCommand {
     required this.tree,
     required this.git,
     required this.registry,
+    required this.inspector,
     required this.output,
     this.offline = false,
   });
@@ -28,6 +30,11 @@ class StatusCommand {
   final SourceTree tree;
   final GitState git;
   final RegistryReader registry;
+
+  /// Reads reality for a step. The same one `release` uses, so the two cannot
+  /// answer the same question differently.
+  final Inspector inspector;
+
   final Output output;
 
   /// Report only what can be derived without a network.
@@ -60,12 +67,29 @@ class StatusCommand {
       uncommitted: git.uncommitted.length,
     );
 
+    // Read once, before the units, because a unit cannot honestly say "run
+    // rk release" while something about the repository would refuse it — and
+    // printing the instruction above the reason it will not work is worse than
+    // not printing it.
+    final repository = Diagnostics();
+    _checkRepositoryState(repository);
+
+    var anyWouldRelease = false;
     for (final unit in units) {
       if (offline) {
         _offlineUnit(unit);
       } else {
-        await _unit(unit);
+        anyWouldRelease =
+            await _unit(unit, repositoryBlocks: repository.isNotEmpty) ||
+                anyWouldRelease;
       }
+    }
+
+    // Only when something would actually be released: whether the worktree is
+    // clean is of no consequence to a repository with nothing left to publish.
+    if (anyWouldRelease && repository.isNotEmpty) {
+      output.blank();
+      output.problems(repository.found);
     }
 
     // Blocked is a state, not a failure: a unit waiting on a changelog entry
@@ -97,104 +121,165 @@ class StatusCommand {
     );
   }
 
-  /// Reports one unit.
-  Future<void> _unit(ResolvedUnit unit) async {
-    output.blank();
-
+  /// Reports one unit: every step of its checklist, against reality.
+  ///
+  /// The checklist is the structure, not a parallel walk over channels. A
+  /// separate walk is what let status never learn that a unit ships binaries,
+  /// never read the forge, and hand a caller a document with no units in it.
+  Future<bool> _unit(
+    ResolvedUnit unit, {
+    required bool repositoryBlocks,
+  }) async {
     final problems = Diagnostics();
-    final live = <String, String>{};
-    var inspected = 0;
-    var exact = 0;
-    final unchecked = <String>{};
+    final checklist = Checklist.derive(unit, resolution, problems);
 
-    for (final project in unit.projects) {
-      for (final channel in project.channels) {
-        if (channel != 'pub.dev') {
-          // Saying nothing about a channel rk cannot read would let a
-          // half-finished release look complete.
-          unchecked.add(channel);
-          continue;
-        }
-
-        inspected++;
-        final inspection =
-            await registry.inspect(project.name, project.version);
-
-        switch (inspection.verdict) {
-          case Verdict.exact:
-            exact++;
-            live[project.name] =
-                '${project.version} ${inspection.detail ?? 'published'}';
-          case Verdict.absent:
-            final published = await _latestPublished(project.name);
-            live[project.name] =
-                published == null ? 'not published' : '$published published';
-          case Verdict.unknown:
-            // Not knowing is not permission to publish, so it joins the
-            // problems rather than being reported beside a "ready" line.
-            problems.add(
-              'RK-REG-001',
-              '${project.name}: ${inspection.detail ?? 'pub.dev could not be read'}',
-              remedy: 'rk cannot tell what is published, so it will not say '
-                  'this is ready — try again',
-            );
-          case Verdict.conflict:
-            problems.add(
-              'RK-REG-002',
-              '${project.name}: ${inspection.detail ?? 'differs from this source'}',
-            );
-        }
-
-        Changelog.check(
-          tree: tree,
-          manifestDirectory: project.pubspec.directory,
-          packageName: project.name,
-          version: project.version,
-          diagnostics: problems,
-        );
-      }
+    final states = <String, Inspection>{};
+    for (final step in checklist.steps) {
+      states[step.id] = await inspector.inspect(step, unit);
     }
 
-    // The checklist's own checks — a first-party pin the release does not
-    // satisfy, a dependency circle — are found by deriving it, so it is
-    // derived before anything is called ready.
-    Checklist.derive(unit, resolution, problems);
+    final live = <String, String>{};
+    for (final project in unit.projects) {
+      if (!project.channels.contains('pub.dev')) continue;
+      final state = states['${unit.name}/pub.dev/${project.name}'
+          '@${project.version}'];
+      if (state == null) continue;
+      if (state.isExact) {
+        live[project.name] =
+            '${project.version} ${state.detail ?? 'published'}';
+      } else if (state.isAbsent) {
+        final published = await _latestPublished(project.name);
+        live[project.name] =
+            published == null ? 'not published' : '$published published';
+      }
 
-    final summary = _liveSummary(live);
-
-    // Nothing to release settles it: whether the worktree is clean or a later
-    // tag exists only matters to a release that is going to happen.
-    if (problems.isEmpty &&
-        inspected > 0 &&
-        exact == inspected &&
-        unchecked.isEmpty) {
-      output.line(
-        unit.name,
-        mark: Mark.satisfied,
-        note: '$summary — nothing to release',
+      Changelog.check(
+        tree: tree,
+        manifestDirectory: project.pubspec.directory,
+        packageName: project.name,
+        version: project.version,
+        diagnostics: problems,
       );
-      return;
     }
 
     await _checkMonotonic(unit, problems);
-    _checkRepositoryState(unit, problems);
 
-    if (problems.isNotEmpty) {
-      output.line(unit.name, mark: Mark.blocked, note: summary);
-      for (final problem in problems.found) {
-        output.problem(problem, depth: 1);
+    // Not knowing is not permission to publish. A public step rk could not
+    // read, or that conflicts, stops this unit being called ready — but it is
+    // not repeated as a problem, because the step line already says it and the
+    // report already carries it keyed by the step's own id, which is better
+    // machine data than a second entry saying the same thing in prose.
+    final unread = checklist.steps.where((s) {
+      if (!Inspector.isPublic(s.kind)) return false;
+      final verdict = states[s.id]!.verdict;
+      return verdict == Verdict.unknown || verdict == Verdict.conflict;
+    }).toList();
+
+    final done = checklist.steps
+        .where((s) => Inspector.isPublic(s.kind) && states[s.id]!.isExact)
+        .length;
+    final public =
+        checklist.steps.where((s) => Inspector.isPublic(s.kind)).length;
+    final summary = _liveSummary(live);
+
+    final settled =
+        problems.isEmpty && unread.isEmpty && public > 0 && done == public;
+    final ready =
+        !settled && problems.isEmpty && unread.isEmpty && !repositoryBlocks;
+
+    output.unit(
+      unit.name,
+      version: unit.version.canonical,
+      tag: unit.tag,
+    );
+
+    // What is public today, and what would change it.
+    output.line(
+      summary,
+      mark: settled ? Mark.satisfied : Mark.none,
+      depth: 1,
+      labelWidth: 48,
+      note: settled
+          ? 'nothing to release'
+          : ready
+              ? '→ ${unit.version} ready'
+              : null,
+    );
+
+    // A local step whose every downstream public step is already done cannot
+    // be work that is left: nine build and archive lines under a release that
+    // is out are noise, and the RFC's rule is that children which agreed fold
+    // into the fact they agreed on.
+    final moot = _mootSteps(checklist, states);
+    for (final step in checklist.steps) {
+      _reportStep(step, states[step.id]!, show: !moot.contains(step.id));
+    }
+
+    for (final problem in problems.found) {
+      output.problem(problem, depth: 1);
+    }
+
+    if (settled) return false;
+    if (problems.isEmpty && unread.isEmpty && !repositoryBlocks) {
+      output.next('rk release ${unit.name}');
+    }
+    return true;
+  }
+
+  /// Local steps that nothing outstanding depends on.
+  ///
+  /// A step is moot when every public step reachable from it is already exact.
+  /// Walking forwards from a step is walking the `needs` edges backwards, which
+  /// is why this reads them the way it does.
+  Set<String> _mootSteps(Checklist checklist, Map<String, Inspection> states) {
+    final byId = {for (final step in checklist.steps) step.id: step};
+    final moot = <String>{};
+
+    bool everythingAfterIsDone(Step step, Set<String> visiting) {
+      final dependents =
+          checklist.steps.where((s) => s.needs.contains(step.id)).toList();
+      if (dependents.isEmpty) return false;
+      for (final dependent in dependents) {
+        if (!visiting.add(dependent.id)) continue;
+        if (Inspector.isPublic(dependent.kind)) {
+          if (!states[dependent.id]!.isExact) return false;
+        } else if (!everythingAfterIsDone(dependent, visiting)) {
+          return false;
+        }
       }
-      return;
+      return true;
     }
 
-    output.line(unit.name, note: '$summary → ${unit.version} ready');
-    _printPlan(unit, problems);
-    if (unchecked.isNotEmpty) {
-      output.say(
-        'not checked: ${unchecked.join(', ')} — rk cannot read those yet',
-        depth: 1,
-      );
+    for (final step in checklist.steps) {
+      if (Inspector.isPublic(step.kind)) continue;
+      if (everythingAfterIsDone(step, {step.id})) moot.add(step.id);
     }
+    // Named so the map is not merely built and dropped.
+    assert(byId.isNotEmpty || checklist.steps.isEmpty);
+    return moot;
+  }
+
+  /// One step, said in the terms its verdict earns.
+  void _reportStep(Step step, Inspection state, {bool show = true}) {
+    output.step(
+      step,
+      show: show,
+      verdict: state.verdict.name,
+      detail: state.detail,
+      mark: switch (state.verdict) {
+        // Already so, and rk read that it is.
+        Verdict.exact => Mark.satisfied,
+        Verdict.conflict => Mark.blocked,
+        // Absent is work to do, and unknown is work rk could not rule out.
+        // Neither earns a glyph; what separates them is the note.
+        Verdict.absent || Verdict.unknown => Mark.none,
+      },
+      note: switch (state.verdict) {
+        Verdict.exact => state.detail ?? 'done',
+        Verdict.unknown => Inspector.isPublic(step.kind) ? state.detail : null,
+        _ => step.isPermanent ? 'permanent' : null,
+      },
+    );
   }
 
   Future<String?> _latestPublished(String name) async {
@@ -212,20 +297,6 @@ class StatusCommand {
     final distinct = live.values.toSet();
     if (distinct.length == 1) return distinct.single;
     return live.entries.map((e) => '${e.key} ${e.value}').join(', ');
-  }
-
-  void _printPlan(ResolvedUnit unit, Diagnostics problems) {
-    final checklist = Checklist.derive(unit, resolution, problems);
-    final channels = <String>{};
-    for (final project in unit.projects) {
-      channels.addAll(project.channels);
-    }
-    output.line(
-      channels.join(', '),
-      depth: 1,
-      note: '${checklist.steps.length} steps',
-    );
-    output.next('rk release ${unit.name}');
   }
 
   /// A version must exceed everything already published, and a tag must
@@ -275,7 +346,12 @@ class StatusCommand {
     }
   }
 
-  void _checkRepositoryState(ResolvedUnit unit, Diagnostics problems) {
+  /// Facts about the repository, which belong to the repository.
+  ///
+  /// Reported once, not once per unit: real fleury declares six, so a single
+  /// dirty worktree produced six identical entries — the same fact six times
+  /// is five times of teaching the reader to skim.
+  void _checkRepositoryState(Diagnostics problems) {
     if (!git.isClean) {
       problems.add(
         'RK-GIT-001',

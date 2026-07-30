@@ -316,6 +316,11 @@ void main() {
   });
 
   group('phase 3 — probes and rk status', () {
+    late Directory scratch;
+
+    setUpAll(() => scratch = Directory.systemTemp.createTempSync('rk-phase3-'));
+    tearDownAll(() => scratch.deleteSync(recursive: true));
+
     test('pub.dev client with no dependencies', () {
       expect(fileExists('lib/src/engine/registry.dart'), isTrue);
       expect(
@@ -325,38 +330,100 @@ void main() {
       );
     });
 
-    test('git state: tags, cleanliness, HEAD vs remote', () {
+    test('git state is read from a real repository, not a fake', () {
+      // git_test.dart drives GitState.read against repositories it builds.
+      // Before it existed, status_test faked the whole object and the
+      // porcelain parsing — which decides whether rk will release at all —
+      // was exercised by nothing.
+      expect(fileExists('test/git_test.dart'), isTrue);
       final source = File('lib/src/engine/git.dart').readAsStringSync();
       expect(source, contains('tags'));
       expect(source, contains('isClean'));
       expect(source, contains('headIsPushed'));
     });
 
-    test('verdicts, including the definitive-negative rule', () {
-      expect(fileExists('lib/src/engine/verdict.dart'), isTrue);
+    test('the definitive-negative rule, proved against a server', () {
+      // registry_test binds a local HTTP server and drives the real client:
+      // only a 404 concludes absence, and a 500, a captive portal, a
+      // truncated body and a dead socket are every one of them unknown.
+      expect(fileExists('test/registry_test.dart'), isTrue);
       expect(
         File('lib/src/engine/registry.dart').readAsStringSync(),
         contains('404'),
-        reason: 'absent is concluded only from an authenticated negative',
       );
     });
 
-    test('GitHub read API for releases and assets', () {
+    test('one inspector, so status and release cannot disagree', () {
       expect(
-        File('lib/src/commands/status.dart').readAsStringSync(),
-        contains('GithubRelease('),
-        reason: 'rk status must read the forge, or a unit shipping a release '
-            'is reported on without its main channel being consulted',
+        usedOutside('Inspector(', 'engine/inspect.dart'),
+        isTrue,
+        reason: 'a second implementation is a second set of answers to the '
+            'same question, and they drifted before',
+      );
+      // Every step kind is answered explicitly. A default clause here is how
+      // "definitely not there" gets asserted about a destination nobody asked.
+      expect(
+        File('lib/src/engine/inspect.dart').readAsStringSync(),
+        isNot(contains('default:')),
       );
     });
 
-    test('identity derivation from the last published release', () {
+    test('the forge is read, and being unable to read it is not absence', () {
+      final repo = Rk.example(scratch, 'binary-cli', as: 'forge');
+      // An origin that does not exist: gh will fail, which is not a fact
+      // about whether the release is there.
+      Process.runSync(
+        'git',
+        ['remote', 'add', 'origin', 'https://github.com/example/nothing.git'],
+        workingDirectory: repo.root,
+      );
+
+      final run = repo(['status', '--json']);
+      final release = run
+          .stepsOf('cli')
+          .where((s) => (s['id'] as String).contains('github-release'))
+          .toList();
+
+      expect(release, hasLength(1), reason: 'the forge step must be inspected');
+      expect(
+        release.single['verdict'],
+        isNot('absent'),
+        reason: 'a forge rk could not read is not a forge with nothing in it; '
+            'absent is what lets a release proceed',
+      );
+    });
+
+    test('identity is derived from what is published, not from the keychain',
+        () {
+      // identity_test drives PublishedIdentity with scripted tools: it
+      // asserts the command sequence, that `security` is never consulted, and
+      // that "nothing published" and "could not read" stay separate answers.
+      expect(fileExists('test/identity_test.dart'), isTrue);
       expect(
         usedOutside('designatedRequirement(', 'transforms/macos.dart'),
         isTrue,
-        reason: 'identity read from the certificate that signs is a '
-            'tautology; it must come from what is already published',
+        reason: 'read from the certificate that signs, it is a tautology',
       );
+    });
+
+    test('DONE WHEN: status reports a real repository against live reality',
+        () {
+      // Proved by tool/validate.dart, which runs rk against the real
+      // repositories on this machine. It is not a test — real repositories
+      // change — so what is asserted here is that the runner exists and that
+      // status has something to say.
+      expect(fileExists('tool/validate.dart'), isTrue);
+
+      final repo = Rk.example(scratch, 'workspace-with-dependent', as: 'live');
+      final run = repo(['status', '--json']);
+      expect(run.units, hasLength(2), reason: 'the document carries the units');
+      for (final unit in run.units) {
+        expect(
+          (unit['steps'] as List),
+          isNotEmpty,
+          reason: '${unit['name']} has no steps, so a caller sees nothing',
+        );
+      }
     });
   });
 

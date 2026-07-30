@@ -2,6 +2,7 @@ import 'package:rk/src/commands/status.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
+import 'package:rk/src/engine/inspect.dart';
 import 'package:rk/src/engine/output.dart';
 import 'package:rk/src/engine/registry.dart';
 import 'package:rk/src/engine/resolve.dart';
@@ -103,6 +104,13 @@ Future<String> statusOf({
     tree: source,
     git: state,
     registry: registry,
+    // No tools and no repository: the forge reports as unread, which is what
+    // rk says when it has not been given a way to look.
+    inspector: Inspector(
+      registry: registry,
+      git: state,
+      resolution: resolution,
+    ),
     output: Output(
       sink: buffer.write,
       isTerminal: false,
@@ -116,7 +124,7 @@ void main() {
   test('says nothing to release when local matches live', () async {
     final text = await statusOf(
       source: tree(),
-      state: git(),
+      state: git(tags: ['v0.2.0']),
       registry: FakeRegistry({
         'keybay': ['0.1.0', '0.2.0']
       }),
@@ -128,7 +136,7 @@ void main() {
   test('says ready, and names the next command, when local is ahead', () async {
     final text = await statusOf(
       source: tree(),
-      state: git(),
+      state: git(tags: ['v0.2.0']),
       registry: FakeRegistry({
         'keybay': ['0.1.0']
       }),
@@ -141,7 +149,7 @@ void main() {
       () async {
     final text = await statusOf(
       source: tree(changelog: '## 0.1.0\n'),
-      state: git(),
+      state: git(tags: ['v0.2.0']),
       registry: FakeRegistry({
         'keybay': ['0.1.0']
       }),
@@ -220,7 +228,7 @@ void _reviewFixes() {
   test('publishing behind what is live is refused', () async {
     final text = await statusOf(
       source: tree(coreVersion: '0.2.0'),
-      state: git(),
+      state: git(tags: ['v0.2.0']),
       registry: FakeRegistry({
         'keybay': ['0.1.0', '0.5.0']
       }),
@@ -250,7 +258,7 @@ void _phase23Fixes() {
       () async {
     final text = await statusOf(
       source: tree(),
-      state: git(),
+      state: git(tags: ['v0.2.0']),
       registry: FakeRegistry({
         'keybay': ['0.1.0']
       }),
@@ -263,7 +271,7 @@ void _phase23Fixes() {
   test('a clean unit with nothing to release ignores worktree state', () async {
     final text = await statusOf(
       source: tree(),
-      state: git(clean: false),
+      state: git(clean: false, tags: ['v0.2.0']),
       registry: FakeRegistry({
         'keybay': ['0.2.0']
       }),

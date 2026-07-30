@@ -181,7 +181,17 @@ class GithubRelease {
       final said = result.summary.toLowerCase();
       if (said.contains('release not found') ||
           said.contains('no release found')) {
-        return const _NotFound();
+        // gh says exactly this whether the release is missing from a
+        // repository rk can read or the repository itself cannot be seen — a
+        // typo in the origin, a private repo, an expired token. Absence is
+        // what lets a release proceed, so it is only concluded once the
+        // repository has answered for itself.
+        return await _repositoryIsReadable()
+            ? const _NotFound()
+            : _Unreadable(
+                'the repository $repository could not be read, so rk cannot '
+                'tell whether $tag is released',
+              );
       }
       return _Unreadable('the forge could not be read: ${result.summary}');
     }
@@ -211,6 +221,16 @@ class GithubRelease {
     } on Object catch (error) {
       return _Unreadable('the forge answered something unreadable: $error');
     }
+  }
+
+  /// Whether the forge will tell rk about the repository at all.
+  Future<bool> _repositoryIsReadable() async {
+    final result = await tools.run(
+      'gh',
+      ['repo', 'view', repository, '--json', 'name'],
+      workingDirectory: workingDirectory,
+    );
+    return result.ok;
   }
 
   /// Drafts carrying [tag], which a lookup by tag alone would not surface.
