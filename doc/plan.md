@@ -158,3 +158,62 @@ silences; and the diagnosis path was announced only in prose. Read-ahead into
 the same shape: a safety check that could not fire, and a failure path that
 answered with a definite negative. Neither shows up in a passing test suite,
 which is why the review is a phase gate rather than a nicety.
+
+## Assessment of the code phases 3–7 already have
+
+Written before resuming phase 3, from reading what an earlier abandoned run
+left behind. The question for each was: keep, iterate, or rebuild.
+
+**Phase 3 — probes and `rk status`. Iterate.** The registry client is the best
+code in the repository — every failure path becomes `unknown`, only a 404
+concludes absence — and it now has tests against a real server that prove it.
+`StatusCommand`'s shape is right. What is missing is what the plan says:
+nothing reads the forge (every non-pub.dev channel is collected into
+"not checked"), there is no identity derivation, and the online path never
+calls `output.step`, so `rk status --json` returns units with an empty `steps`
+array — the machine surface is empty exactly where a caller needs it.
+
+**Phase 4 — `rk verify`. Rebuild the substance, keep the reporting.** What
+exists asks pub.dev "does this version number exist?" and, if so, prints
+"verified". No archive is downloaded, nothing is compared, no config or source
+is resolved at a tag. `Provenance` is written but never constructed anywhere;
+`latestPublished` is never called. Worse than incomplete, it is dishonest in
+the one direction this tool must never be: an unreadable pub.dev maps to
+`notChecked`, `notChecked` is not counted as a failure, so `rk verify` prints
+`✓ verified` and exits 0 having verified nothing. The `_Check` rendering and
+the "what rk cannot know" idea are worth keeping. The verification is not
+written yet.
+
+**Phase 5 — `rk release`. Substantial iteration; the skeleton survives.**
+validate → inspect → authorize → act is the right shape and the authorization
+flow is real. Three things are wrong underneath it:
+
+- `_inspect` handles three step kinds and answers `default: absent` for the
+  other seven. So a github-release that already exists, a formula already
+  moved, an archive already built are each asserted to be *definitely not
+  there* without anything being asked. "Re-running is the resume" does not
+  hold for any of them, and it is the cardinal rule broken by default clause.
+- A prerequisite that is not published yet is classified `conflict`, which
+  halts with "this cannot be fixed by re-running" — when publishing the
+  dependency and re-running is precisely the fix.
+- The whole binary chain runs inside the first `build` step and the other
+  steps return true, carrying `_produced` between them (seam 1). The checklist
+  promises ten steps and one of them does everything: the per-step verdicts in
+  `--json` are fiction, a mid-chain failure is reported against the wrong
+  step, and CI cannot split what one step does.
+
+**Phase 7 — binary chain. Keep; wire and finish.** Better than expected and
+mostly proven rather than asserted: SHA-256 against the published vectors and
+agreeing with the system tool, `SHA256SUMS` that `shasum -c` reads, archives
+demonstrated byte-reproducible and readable by real `tar`, capability
+resolution that discovers rather than declares, and a formula renderer tested
+against Ruby quote injection. What is outstanding is narrow: signing is not
+checked against the designated requirement derived from what is already
+published, and the chain needs decomposing into the steps the checklist
+already names.
+
+**The common thread.** Everything unreviewed fails the same way: a definite
+negative concluded without evidence — `default: absent`, `notChecked` counted
+as success, an empty asset list standing in for an unread one. The parsers and
+transforms, which were reviewed, do not have this defect anywhere. That is the
+argument for the review being a gate rather than a courtesy.
