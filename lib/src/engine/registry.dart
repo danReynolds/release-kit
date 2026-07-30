@@ -64,11 +64,17 @@ abstract class RegistryReader {
 /// Every failure is reported as [Verdict.unknown] rather than absence — a
 /// timeout is not evidence that a version does not exist.
 class Registry implements RegistryReader {
-  Registry({HttpClient? client, this.host = 'pub.dev'})
+  Registry({HttpClient? client, this.host = 'pub.dev', this.secure = true})
       : _client = client ?? HttpClient();
 
   final HttpClient _client;
   final String host;
+
+  /// Whether to speak TLS. Always true in production; false lets a test point
+  /// rk at a local server and prove the promise this class makes — that a
+  /// failure becomes `unknown` and never `absent` — against the code that
+  /// ships rather than against a fake that hand-writes the answer.
+  final bool secure;
 
   final _cache = <String, RegistryPackage?>{};
 
@@ -78,7 +84,9 @@ class Registry implements RegistryReader {
   Future<RegistryPackage?> lookup(String name) async {
     if (_cache.containsKey(name)) return _cache[name];
 
-    final uri = Uri.https(host, '/api/packages/$name');
+    final uri = secure
+        ? Uri.https(host, '/api/packages/$name')
+        : Uri.http(host, '/api/packages/$name');
 
     // Reading the body and making sense of it are as fallible as connecting:
     // a captive portal answers 200 with HTML, and a truncated response
