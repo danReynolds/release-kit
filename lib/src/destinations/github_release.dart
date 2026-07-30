@@ -100,6 +100,9 @@ class GithubRelease {
       }
     }
 
+    // Past this point an act is in flight: `gh release create` uploads assets
+    // and publishes in one command, so a failure part way through has already
+    // put something at the forge.
     final created = await tools.run(
       'gh',
       [
@@ -115,7 +118,12 @@ class GithubRelease {
       ],
       workingDirectory: workingDirectory,
     );
-    if (!created.ok) return PublishOutcome.failed(created.summary);
+    if (!created.ok) {
+      return PublishOutcome.lostTrack(
+        'creating the release failed part way: ${created.summary}',
+        url: 'https://github.com/$repository/releases/tag/$tag',
+      );
+    }
 
     // Verify against the forge rather than trusting the command's word.
     final url = 'https://github.com/$repository/releases/tag/$tag';
@@ -125,8 +133,14 @@ class GithubRelease {
         final expected = assetPaths.map(_fileName).toSet();
         final missing = expected.difference(release.assets!);
         if (missing.isNotEmpty) {
-          return PublishOutcome.failed(
+          // rk has read this: the release is public, immutable, and short of
+          // what it claims. Reporting it as a failure would print "nothing
+          // changed", which is the opposite of true, and would send the
+          // operator to retry something that cannot be retried.
+          return PublishOutcome.terminal(
             'the release published without ${missing.join(', ')}',
+            url: url,
+            permanent: 'the release at $tag is public and cannot be edited',
           );
         }
         return PublishOutcome.published(url);
@@ -288,11 +302,29 @@ class _Unreadable extends _Lookup {
 /// something that may be finished, and reporting it as success claims knowledge
 /// rk does not have.
 class PublishOutcome {
-  const PublishOutcome._(this.url, this.problem, this.confirmed);
+  const PublishOutcome._(
+    this.url,
+    this.problem,
+    this.confirmed, {
+    this.permanent,
+  });
+
   const PublishOutcome.published(String url) : this._(url, null, true);
+
+  /// Nothing was put anywhere.
   const PublishOutcome.failed(String problem) : this._(null, problem, false);
+
+  /// Something may exist that rk could not read back, so the next run must
+  /// inspect rather than assume.
   const PublishOutcome.lostTrack(String problem, {String? url})
       : this._(url, problem, false);
+
+  /// rk read back what it did and it is wrong, and it cannot be taken back.
+  const PublishOutcome.terminal(
+    String problem, {
+    required String url,
+    required String permanent,
+  }) : this._(url, problem, false, permanent: permanent);
 
   final String? url;
   final String? problem;
@@ -300,9 +332,14 @@ class PublishOutcome {
   /// Whether rk read back what it did.
   final bool confirmed;
 
+  /// What is already public and cannot be undone, stated before any remedy.
+  final String? permanent;
+
   bool get ok => confirmed;
 
-  /// An effect may exist that rk could not verify, so re-running must inspect
-  /// rather than assume.
+  /// An effect may exist that rk could not verify.
   bool get mayHaveActed => !confirmed && url != null;
+
+  /// Re-running cannot resolve this.
+  bool get isTerminal => permanent != null;
 }

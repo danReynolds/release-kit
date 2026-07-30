@@ -160,7 +160,7 @@ class StatusCommand {
     // derived before anything is called ready.
     Checklist.derive(unit, resolution, problems);
 
-    final summary = _liveSummary(unit, live);
+    final summary = _liveSummary(live);
 
     // Nothing to release settles it: whether the worktree is clean or a later
     // tag exists only matters to a release that is going to happen.
@@ -168,7 +168,11 @@ class StatusCommand {
         inspected > 0 &&
         exact == inspected &&
         unchecked.isEmpty) {
-      output.line(unit.name, note: '$summary — nothing to release');
+      output.line(
+        unit.name,
+        mark: Mark.satisfied,
+        note: '$summary — nothing to release',
+      );
       return;
     }
 
@@ -203,7 +207,7 @@ class StatusCommand {
   }
 
   /// What is public today, named per project unless they all agree.
-  String _liveSummary(ResolvedUnit unit, Map<String, String> live) {
+  String _liveSummary(Map<String, String> live) {
     if (live.isEmpty) return 'not published';
     final distinct = live.values.toSet();
     if (distinct.length == 1) return distinct.single;

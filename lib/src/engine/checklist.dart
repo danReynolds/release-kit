@@ -20,9 +20,6 @@ class Checklist {
     return null;
   }
 
-  /// Steps in dependency order, which is the order they may run in.
-  Iterable<Step> get ordered => steps;
-
   static Checklist derive(
     ResolvedUnit unit,
     Resolution resolution,

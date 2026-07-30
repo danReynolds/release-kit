@@ -50,10 +50,13 @@ class Report {
   /// decide" without reading the sentence.
   var rerunHelps = true;
 
-  /// Whether any step was recorded — that is, whether a run got as far as
-  /// looking at the work rather than refusing the request.
-  bool get hasSteps =>
-      _units.values.any((u) => (u['steps'] as List).isNotEmpty);
+  /// Whether this run began changing things.
+  ///
+  /// The signal for whether a failure is worth recording evidence about. It is
+  /// set by the act phase rather than inferred from whether a step was printed:
+  /// inferring it meant no planned failure ever wrote a diagnosis, because the
+  /// only path that printed steps was the offline one, which always succeeds.
+  var acted = false;
 
   /// [uncommitted] is null when the run stopped before reading git, which is
   /// reported as absence rather than as zero — a clean tree and an unread one

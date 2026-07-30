@@ -13,7 +13,6 @@ import 'package:rk/src/engine/registry.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/tools.dart';
-import 'package:rk/src/engine/workspace.dart';
 
 const _usage = '''
 rk — an austere release tool
@@ -141,22 +140,21 @@ Future<void> main(List<String> args) async {
   if (json) stdout.write(output.report.encode(exit: code));
 }
 
-/// Writes the evidence for a run that got as far as the work and then failed.
+/// Writes the evidence for a run that began changing things and then failed.
 ///
-/// Only then: a refusal that never looked at a step — an unreadable
-/// release.toml — has already said everything it knows on stdout, and copying
-/// that into a directory would fill `.rk/diagnosis` with typos while teaching
-/// an operator to ignore it.
+/// Only then: a refusal that never acted — an unreadable release.toml — has
+/// already said everything it knows on stdout, and copying that into a
+/// directory would fill `.rk/diagnosis` with typos while teaching an operator
+/// to ignore it. A crash is recorded whatever it was doing, because the stack
+/// trace is the only copy of what went wrong.
 void _recordDiagnosis(Output output, int code, {String? crash}) {
   if (code == ExitCodes.ok || code == ExitCodes.usage) return;
-  // A crash is always worth recording, even before any step: the stack trace is
-  // the only copy of what went wrong.
-  if (!output.report.hasSteps && crash == null) return;
+  if (!output.report.acted && crash == null) return;
   final root = GitSourceTree.findRoot(Directory.current.path);
   if (root == null) return;
 
   final at = Diagnosis.write(
-    DirectoryWorkspace(root),
+    root,
     stamp: DateTime.now().toIso8601String().replaceAll(':', '-'),
     report: output.report,
     exit: code,

@@ -217,3 +217,56 @@ negative concluded without evidence — `default: absent`, `notChecked` counted
 as success, an empty asset list standing in for an unread one. The parsers and
 transforms, which were reviewed, do not have this defect anywhere. That is the
 argument for the review being a gate rather than a courtesy.
+
+## What "done" means, after the phase 2 review
+
+Two independent reviewers found the same thing, and it is worth stating as a
+rule rather than as a finding. Phase 1's fix replaced "assert a source file
+contains a string" with "assert a *test* file contains a string" — the same
+anti-pattern displaced one level, and strictly weaker, because the matched text
+was test names and comments that nothing executes. Rename a test and the phase
+failed; delete the feature and it passed. A reviewer unwired five of phase 2's
+headline deliverables one at a time and the gate reported done every time.
+
+So, binding from here:
+
+1. **No assertion in `phase_conformance_test.dart` may match the contents of a
+   file under `test/`.** A phase's group runs `bin/rk.dart` and asserts on what
+   comes back.
+2. **The gate is the whole suite plus the phase's group.** The group answers
+   "is this phase's work wired into the product"; the unit tests answer "is it
+   correct". Neither alone is sufficient and pretending otherwise is what
+   produced the last two rounds of findings.
+3. **Every phase ends with a mutation pass.** Pick the two or three invariants
+   the phase exists to protect, break each one in the production code, and
+   require the suite to notice. A green suite proved nothing both times; a
+   deliberate break proved something immediately.
+4. **Reviews are independent.** The phase 2 self-review found five real bugs
+   and missed the structural one, which is exactly the blind spot a self-review
+   has.
+
+## Obligations carried into later phases
+
+Recorded because the reviews found them claimed-as-shipped when they are not:
+
+- **Phase 3** — `output.unit`/`output.step` on the *online* status path.
+  `rk status --json` currently answers `units: []` in normal use; only
+  `--offline` records anything.
+- **Phase 4** — conflict evidence that prints the difference rather than the
+  fact of one. Nothing produces a diff yet. Also the pub.dev `first-publish`
+  refusal, which today returns `absent` — "proceed" — for a package that has
+  never existed.
+- **Phase 5** — the wedged-draft command printed for the operator to run; the
+  public result (URLs and the install command) on completion; and `.rk/` added
+  to the repository's ignore rules by `rk init`.
+- **Phase 7** — wire `Activity` into the binary chain. It is built and tested
+  but has no production caller, while `binary_chain.dart` hand-rolls a worse
+  version for the notarization wait: one static line for a five-minute wait,
+  no spinner, no elapsed time, no "longer than usual". That is precisely the
+  failure `Activity` exists to prevent, live in the product. Also reintroduce
+  a workspace abstraction *there* — the interface was deleted in phase 2
+  because it abstracted a two-file diagnosis writer while the component that
+  actually produces artifacts took a `String` path, which is seam 3 honoured
+  where it does not matter and violated where it does. Also: a failed step
+  must stay expanded; today `Output.line` clears the transient line first, so
+  a failure collapses the detail that is the diagnosis.

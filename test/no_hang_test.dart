@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:test/test.dart';
@@ -10,7 +11,7 @@ import 'package:test/test.dart';
 /// runs a real process, because "does it exit" is not a question a test in the
 /// same isolate can answer.
 void main() {
-  test('an abandoned step does not hold the process open', () {
+  test('an abandoned step does not hold the process open', () async {
     final scratch = Directory('${Directory.current.path}/.dart_tool/rk-hang')
       ..createSync(recursive: true);
     addTearDown(() => scratch.deleteSync(recursive: true));
@@ -39,17 +40,31 @@ void main() {
 }
 ''');
 
-    final result = Process.runSync(
+    // Started rather than run: a synchronous run cannot be interrupted, so
+    // the regression this guards against wedged the test runner instead of
+    // reporting. A guard that hangs CI is the failure it was written to
+    // prevent.
+    final process = await Process.start(
       Platform.resolvedExecutable,
       ['run', '${scratch.path}/main.dart'],
       workingDirectory: Directory.current.path,
     );
+    final out = process.stdout.transform(utf8.decoder).join();
+
+    final code = await process.exitCode.timeout(
+      const Duration(seconds: 45),
+      onTimeout: () {
+        process.kill(ProcessSignal.sigkill);
+        return -1;
+      },
+    );
 
     expect(
-      result.exitCode,
-      0,
-      reason: 'a non-exit shows up here as a timeout, not as a failure',
+      code,
+      isNot(-1),
+      reason: 'rk did not exit: an abandoned step is holding the isolate open',
     );
-    expect(result.stdout, contains('exited cleanly'));
+    expect(code, 0);
+    expect(await out, contains('exited cleanly'));
   });
 }

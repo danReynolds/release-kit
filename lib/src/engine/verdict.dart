@@ -22,7 +22,6 @@ class Inspection {
     this.verdict, {
     this.detail,
     this.evidence = const {},
-    this.actedBefore = false,
   });
 
   const Inspection.absent({String? detail})
@@ -36,12 +35,8 @@ class Inspection {
       : this(Verdict.conflict, detail: detail, evidence: evidence);
 
   /// rk could not determine the state.
-  ///
-  /// [actedBefore] separates the two shapes an operator must tell apart: rk
-  /// never wrote and the world is unchanged, or rk wrote and lost the
-  /// response, so the next run must classify what it finds.
-  const Inspection.unknown(String detail, {bool actedBefore = false})
-      : this(Verdict.unknown, detail: detail, actedBefore: actedBefore);
+  const Inspection.unknown(String detail)
+      : this(Verdict.unknown, detail: detail);
 
   final Verdict verdict;
 
@@ -51,8 +46,6 @@ class Inspection {
   /// What a conflict differs on, so a human is given the evidence rather than
   /// the fact of a difference.
   final Map<String, String> evidence;
-
-  final bool actedBefore;
 
   bool get isAbsent => verdict == Verdict.absent;
   bool get isExact => verdict == Verdict.exact;

@@ -163,6 +163,9 @@ class ReleaseCommand {
     output.blank();
     for (final step in checklist.steps) {
       if (states[step.id]!.isExact) continue;
+      // From here on the world may change, which is what makes a failure
+      // worth recording evidence about.
+      output.report.acted = true;
       final ok = await _act(step, unit);
       if (!ok) return ExitCodes.refused;
     }

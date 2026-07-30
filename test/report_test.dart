@@ -1,10 +1,10 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:rk/src/engine/diagnosis.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/output.dart';
 import 'package:rk/src/engine/report.dart';
-import 'package:rk/src/engine/workspace.dart';
 import 'package:test/test.dart';
 
 Map<String, Object?> decode(Report report, {int exit = 0}) =>
@@ -141,7 +141,8 @@ void main() {
 
   group('the diagnosis directory', () {
     test('holds what the run saw, under the stamp it was given', () {
-      final workspace = MemoryWorkspace();
+      final root = Directory.systemTemp.createTempSync('rk-diag-');
+      addTearDown(() => root.deleteSync(recursive: true));
       final report = Report('release')
         ..unit(name: 'cli', version: '0.2.0', tag: 'keybay_cli-v0.2.0')
         ..step(
@@ -153,7 +154,7 @@ void main() {
         );
 
       final at = Diagnosis.write(
-        workspace,
+        root.path,
         stamp: '2026-07-29T12-00-00',
         report: report,
         exit: 1,
@@ -161,24 +162,28 @@ void main() {
       );
 
       expect(at, contains('2026-07-29T12-00-00'));
-      final run = workspace.entries['diagnosis/2026-07-29T12-00-00/run.json']!;
+      final run = File('$at/run.json').readAsStringSync();
       expect(run, contains('"verdict": "rejected"'));
       expect(run, contains('"took_ms": 240000'), reason: 'durations');
       expect(run, contains('"exit": 1'));
       expect(
-        workspace.entries['diagnosis/2026-07-29T12-00-00/notarytool.stderr'],
+        File('$at/notarytool.stderr').readAsStringSync(),
         'Invalid credentials',
         reason: 'native tool stderr is the diagnosis, not a summary of it',
       );
     });
 
     test('two runs do not overwrite one another', () {
-      final workspace = MemoryWorkspace();
-      Diagnosis.write(workspace,
+      final root = Directory.systemTemp.createTempSync('rk-diag-');
+      addTearDown(() => root.deleteSync(recursive: true));
+      Diagnosis.write(root.path,
           stamp: 'a', report: Report('release'), exit: 1);
-      Diagnosis.write(workspace,
+      Diagnosis.write(root.path,
           stamp: 'b', report: Report('release'), exit: 1);
-      expect(workspace.entries.keys, hasLength(2));
+      expect(
+        Directory('${root.path}/.rk/diagnosis').listSync(),
+        hasLength(2),
+      );
     });
   });
 }

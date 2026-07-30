@@ -226,12 +226,21 @@ class BinaryChain {
     if (!published.ok) {
       output.line('github-release',
           mark: Mark.blocked, note: published.problem);
-      // An act rk could not read back is not an act that failed. Saying so
-      // sends the operator to inspect rather than to fix, and re-running is
-      // what classifies what is actually there.
+      // Three different things, and an operator acts differently on each: rk
+      // never wrote; rk wrote and could not read it back, so re-running
+      // classifies it; or rk read it back and it is permanently wrong, which
+      // re-running cannot touch.
       output.halt(
-        published.mayHaveActed ? HaltKind.lostTrack : HaltKind.beforeActing,
+        published.isTerminal
+            ? HaltKind.unfixableByRerun
+            : published.mayHaveActed
+                ? HaltKind.lostTrack
+                : HaltKind.beforeActing,
       );
+      if (published.permanent != null) {
+        output.say(published.permanent!);
+        output.say('the only way forward is the next version.');
+      }
       return null;
     }
     output.line(

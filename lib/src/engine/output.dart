@@ -89,7 +89,7 @@ class Output {
 
   var _transient = false;
 
-  /// A heading, with a blank line before it unless it opens the output.
+  /// A heading. Callers space their own sections; this adds nothing.
   void heading(String text) {
     _clearTransient();
     sink('$text\n');

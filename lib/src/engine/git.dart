@@ -73,13 +73,30 @@ class GitState {
     return (result.stdout as String).trim();
   }
 
+  /// Paths from `git status --porcelain`, which prefixes every line with two
+  /// status columns and a space.
+  ///
+  /// Read without trimming the whole output first: a worktree-only change is
+  /// reported as `" M path"`, so trimming the block ate the first line's
+  /// leading column and rk named a file that does not exist — `ackages/...`.
+  /// That is the commonest shape this list has, since it is what an
+  /// uncommitted edit looks like.
+  static List<String> _uncommittedIn(String porcelain) => porcelain
+      .split('\n')
+      .where((line) => line.trim().isNotEmpty)
+      // rk's own scratch and evidence directories are not the operator's
+      // uncommitted work. Counting them meant a failed release left debris
+      // that made the next run refuse itself, breaking the resume.
+      .map((line) => line.length > 3 ? line.substring(3) : line.trim())
+      .where((path) => path != '.rk/' && !path.startsWith('.rk/'))
+      .toList();
+
   static GitState read(String root) {
-    final status = _run(root, const ['status', '--porcelain']);
-    final uncommitted = status
-        .split('\n')
-        .where((l) => l.trim().isNotEmpty)
-        .map((l) => l.length > 3 ? l.substring(3) : l)
-        .toList();
+    final result = Process.runSync('git', const ['status', '--porcelain'],
+        workingDirectory: root);
+    final uncommitted = result.exitCode == 0
+        ? _uncommittedIn(result.stdout as String)
+        : const <String>[];
 
     final head = _run(root, const ['rev-parse', 'HEAD']);
 
