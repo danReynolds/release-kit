@@ -40,26 +40,17 @@ Future<void> main(List<String> args) async {
   };
   final flags = args.where((a) => a.startsWith('-')).toSet();
   final positional = args.where((a) => !a.startsWith('-')).toList();
-
-  final unknown = flags.difference(known);
-  if (unknown.isNotEmpty) {
-    // Silently ignoring a flag is worse than refusing it: a caller asking for
-    // something rk does not do should be told, not answered as if it had not
-    // asked.
-    stderr.writeln('rk does not have ${unknown.join(', ')}');
-    stderr.write(_usage);
-    exitCode = ExitCodes.usage;
-    return;
-  }
-
-  if (flags.contains('-h') || flags.contains('--help')) {
-    stdout.write(_usage);
-    return;
-  }
-
-  final command = positional.isEmpty ? 'status' : positional.first;
-  final target = positional.length > 1 ? positional[1] : null;
   final json = flags.contains('--json');
+
+  // A bare unit name is the common slip, so an unrecognised verb is tried as
+  // one — but the verb is decided here, once, so that every path below agrees
+  // on what ran and no flag is quietly dropped by a fallthrough.
+  const verbs = {'status', 'verify', 'release', 'init'};
+  final first = positional.isEmpty ? null : positional.first;
+  final command = first == null || !verbs.contains(first) ? 'status' : first;
+  final target = first != null && !verbs.contains(first)
+      ? first
+      : (positional.length > 1 ? positional[1] : null);
 
   final output = Output.stdio(
     verbose: flags.contains('-v') || flags.contains('--verbose'),
@@ -67,32 +58,64 @@ Future<void> main(List<String> args) async {
     command: command,
   );
 
+  final unknown = flags.difference(known);
+  if (unknown.isNotEmpty) {
+    // Silently ignoring a flag is worse than refusing it: a caller asking for
+    // something rk does not do should be told, not answered as if it had not
+    // asked. It is told through the report as well, so a refusal a caller
+    // asked for in JSON is not answered in prose it cannot read.
+    output.problem(
+      Diagnostic(
+        code: 'RK-CLI-001',
+        message: 'rk does not have ${unknown.join(', ')}',
+        remedy: _usage.trim(),
+      ),
+    );
+    exitCode = ExitCodes.usage;
+    if (json) stdout.write(output.report.encode(exit: ExitCodes.usage));
+    return;
+  }
+
+  if (flags.contains('-h') || flags.contains('--help')) {
+    // Under --json stdout carries the document and nothing else, so the usage
+    // travels inside it rather than beside it.
+    if (json) {
+      output.report.next(_usage.trim());
+      stdout.write(output.report.encode(exit: ExitCodes.ok));
+    } else {
+      stdout.write(_usage);
+    }
+    return;
+  }
+
   int code;
   String? crash;
   try {
     code = switch (command) {
-      'status' => await _status(
-          output,
-          target,
-          offline: flags.contains('--offline'),
-        ),
       'verify' => await _verify(output, target),
       'release' => await _release(
           output,
           target,
           dryRun: flags.contains('--dry-run'),
+          interactive: !json,
         ),
       'init' => await _init(output, interactive: !json),
-      // A bare unit name is the common slip, so try it as one.
-      _ => await _status(output, command),
+      _ => await _status(
+          output,
+          target,
+          offline: flags.contains('--offline'),
+        ),
     };
   } on Object catch (error, stack) {
-    // A failure rk did not plan for is still a run rk has to account for. It
-    // reports lost track because that is the truth: rk cannot say from here
-    // whether anything happened, and re-running is what finds out.
     code = ExitCodes.refused;
     crash = '$error\n$stack';
-    output.halt(HaltKind.lostTrack);
+    // `status` and `verify` change nothing, so a crash in one of them did not
+    // act — saying "an effect may exist" there would teach a reader to
+    // discount the sentence everywhere it is true.
+    const readOnly = {'status', 'verify'};
+    output.halt(
+      readOnly.contains(command) ? HaltKind.beforeActing : HaltKind.lostTrack,
+    );
     output.problem(
       Diagnostic(
         code: 'RK-INT-001',
@@ -146,7 +169,14 @@ void _recordDiagnosis(Output output, int code, {String? crash}) {
 Future<int> _init(Output output, {required bool interactive}) async {
   final root = GitSourceTree.findRoot(Directory.current.path);
   if (root == null) {
-    output.line('this is not a git repository', mark: Mark.blocked);
+    output.problem(
+      Diagnostic(
+        code: 'RK-GIT-002',
+        message: 'this is not a git repository',
+        remedy: 'rk releases from a repository, and reads its tags and '
+            'history to know what is already out.',
+      ),
+    );
     return ExitCodes.usage;
   }
   final tree = GitSourceTree(root);
@@ -172,6 +202,7 @@ Future<int> _release(
   Output output,
   String? unit, {
   required bool dryRun,
+  required bool interactive,
 }) async {
   final prepared = _prepare(output);
   if (!prepared.isReady) return prepared.code!;
@@ -186,7 +217,11 @@ Future<int> _release(
       registry: registry,
       tools: const SystemTools(),
       output: output,
-      confirm: promptOnTerminal,
+      // The prompt is written straight to stdout, past the sink --json
+      // silences: asking would corrupt the document, and the consequences the
+      // prompt exists to disclose would be suppressed while the question was
+      // still asked. release already refuses when nobody can authorize.
+      confirm: interactive ? promptOnTerminal : null,
       dryRun: dryRun,
     ).run(only: unit);
   } finally {
@@ -234,9 +269,14 @@ class _Prepared {
 _Prepared _prepare(Output output) {
   final root = GitSourceTree.findRoot(Directory.current.path);
   if (root == null) {
-    output.line('this is not a git repository', mark: Mark.blocked);
-    output.say('rk releases from a repository, and reads its tags and '
-        'history to know what is already out.');
+    output.problem(
+      Diagnostic(
+        code: 'RK-GIT-002',
+        message: 'this is not a git repository',
+        remedy: 'rk releases from a repository, and reads its tags and '
+            'history to know what is already out.',
+      ),
+    );
     return _Prepared.stopped(ExitCodes.usage);
   }
 

@@ -1,3 +1,4 @@
+import '../engine/diagnostic.dart';
 import '../engine/output.dart';
 import '../engine/registry.dart';
 import '../engine/resolve.dart';
@@ -25,7 +26,14 @@ class VerifyCommand {
         : resolution.units.where((u) => u.name == only).toList();
 
     if (units.isEmpty) {
-      output.line('no unit named "$only"', mark: Mark.blocked);
+      output.problem(
+        Diagnostic(
+          code: 'RK-CLI-003',
+          message: 'no unit named "$only"',
+          remedy: 'this repository releases: '
+              '${resolution.units.map((u) => u.name).join(', ')}',
+        ),
+      );
       return ExitCodes.usage;
     }
 

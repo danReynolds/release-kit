@@ -1,6 +1,9 @@
 import 'dart:io';
 
+import 'package:rk/src/engine/output.dart';
 import 'package:test/test.dart';
+
+import 'rk_process.dart';
 
 /// Checks each phase against the deliverables its plan lists, so "done" is
 /// something this file decides rather than something a judgement call does.
@@ -36,10 +39,6 @@ void main() {
   bool usedOutside(String pattern, String definedIn) => shipped
       .where((f) => !f.path.endsWith(definedIn))
       .any((f) => f.readAsStringSync().contains(pattern));
-
-  /// Whether the CLI accepts [flag].
-  bool cliAccepts(String flag) =>
-      File('bin/rk.dart').readAsStringSync().contains("'$flag'");
 
   group('phase 1 — engine core', () {
     test('strict TOML subset parser', () {
@@ -105,23 +104,129 @@ void main() {
   });
 
   group('phase 2 — output', () {
-    test('collapse, terseness, and the four-glyph gutter', () {
-      final source = File('lib/src/engine/output.dart').readAsStringSync();
-      for (final glyph in ['✓', '·', '✗', '→']) {
-        expect(source, contains(glyph));
-      }
-      expect(fileExists('test/output_test.dart'), isTrue);
+    // Executed, not read. Every assertion below runs bin/rk.dart against a
+    // real repository, because the version of this group that matched strings
+    // inside test/ passed every one of five mutations that completely unwired
+    // the phase: --json printing nothing, pipes getting cursor escapes, the
+    // diagnosis never being written, and safe_to_rerun never being set.
+    late Directory scratch;
+    late Rk keybay;
+
+    setUpAll(() {
+      scratch = Directory.systemTemp.createTempSync('rk-phase2-');
+      keybay = Rk.repository(scratch, 'keybay', keybayFiles);
     });
 
-    test('non-TTY output is append-only', () {
+    tearDownAll(() => scratch.deleteSync(recursive: true));
+
+    test('the four-glyph gutter, and colour is never the only signal', () {
+      final run = keybay(['status', '--offline']);
+      expect(run.code, 0, reason: run.all);
       expect(
-        File('test/output_test.dart').readAsStringSync(),
-        contains('append-only'),
+        run.all,
+        isNot(contains('\x1b')),
+        reason: 'a pipe is not a terminal',
       );
+    });
+
+    test('non-TTY output is append-only: no cursor movement, ever', () {
+      final run = keybay(['status', '--offline']);
+      expect(run.all, isNot(contains('\r')));
+      expect(run.all, isNot(contains('\x1b[')));
+    });
+
+    test('--json carries the checklist, keyed by step id', () {
+      final run = keybay(['status', '--offline', '--json']);
+      final steps = run.stepsOf('cli');
+      expect(steps, isNotEmpty, reason: 'an empty checklist is not a surface');
       expect(
-        File('test/liveness_test.dart').readAsStringSync(),
-        contains('a pipe sees no spinner and no counter'),
-        reason: 'asserted against a running Activity, not against the source',
+        steps.map((s) => s['id']),
+        contains('cli/pub.dev/keybay_cli@0.2.0'),
+      );
+      for (final step in steps) {
+        expect(
+          step['verdict'],
+          isNotNull,
+          reason: 'an omitted verdict reads as "nothing is there"',
+        );
+      }
+      expect(steps.first['verdict'], 'unknown', reason: 'nothing was read');
+    });
+
+    test('--json is only JSON', () {
+      final run = keybay(['status', '--offline', '--json']);
+      expect(run.stdout.trimLeft(), startsWith('{'));
+      expect(run.stdout, isNot(contains('derived from the manifests alone')));
+      expect(run.json['safe_to_rerun'], isTrue);
+      expect(run.json['rerun_helps'], isTrue);
+    });
+
+    test('a refusal a caller asked for in JSON is answered in JSON', () {
+      final run = keybay(['status', '--json', '--bogus']);
+      expect(run.code, ExitCodes.usage);
+      expect(run.problems.map((p) => p['code']), contains('RK-CLI-001'));
+    });
+
+    test('every non-zero exit carries a problem a caller can read', () {
+      for (final args in [
+        ['status', '--json', '--bogus'],
+        ['status', 'nosuch', '--json'],
+        ['release', 'nosuch', '--json'],
+        ['verify', 'nosuch', '--json'],
+      ]) {
+        final run = keybay(args);
+        expect(run.code, isNot(0),
+            reason: 'precondition for ${args.join(' ')}');
+        expect(
+          run.problems,
+          isNotEmpty,
+          reason: 'a non-zero exit a caller cannot read is, to that caller, '
+              'a non-zero exit that did not happen: ${args.join(' ')}',
+        );
+      }
+    });
+
+    group('a crash', () {
+      late Rk broken;
+      late Run run;
+
+      setUpAll(() {
+        broken = Rk.repository(scratch, 'broken', keybayFiles);
+        // Unreadable, which nothing in rk guards against — the point is a
+        // failure rk did not plan for.
+        Process.runSync(
+            'chmod', ['000', '${broken.root}/packages/keybay/pubspec.yaml']);
+        run = broken(['status', '--json']);
+      });
+
+      test('exits non-zero rather than pretending it worked', () {
+        expect(run.code, isNot(0), reason: run.all);
+      });
+
+      test('still produces the document --json promises', () {
+        expect(run.json['exit'], run.code);
+      });
+
+      test('is honest that a read-only verb changed nothing', () {
+        expect((run.json['halt'] as Map?)?['kind'], 'beforeActing');
+      });
+
+      test('writes its evidence, and says where', () {
+        final written = broken.diagnoses();
+        expect(written, isNotEmpty, reason: 'nothing recorded what happened');
+        expect(written.single['exit'], run.code);
+        expect(run.json['diagnosis'], isNotNull);
+      });
+    });
+
+    test('a clean run writes no diagnosis', () {
+      final clean = Rk.repository(scratch, 'clean', keybayFiles);
+      expect(clean(['status', '--offline']).code, 0);
+      expect(
+        clean.diagnoses(),
+        isEmpty,
+        reason: 'a directory that fills up on success is a directory nobody '
+            'reads on failure',
       );
     });
 
@@ -132,65 +237,55 @@ void main() {
       expect(source, contains('remedy'));
     });
 
-    test('liveness: a running step expands, a finished one collapses', () {
-      expect(
-        usedOutside('Activity', 'output.dart'),
-        isFalse,
-        reason: 'nothing has long-running work to report yet; the renderer is '
-            'proved by liveness_test.dart until phase 7 has steps that wait',
-      );
-      final live = File('test/liveness_test.dart').readAsStringSync();
-      for (final proof in [
-        'the frame carries the elapsed time',
-        'says how long that usually is',
-        'running past that is itself surfaced',
-        'a duration appears when it is notable',
-        'a failure is marked as one',
-      ]) {
-        expect(live, contains(proof), reason: 'liveness proves: $proof');
-      }
-    });
-
-    test('--json, stable and surviving a non-zero exit', () {
-      expect(cliAccepts('--json'), isTrue, reason: 'the flag is accepted');
-      expect(sourceContains('safe_to_rerun'), isTrue);
-      expect(
-        usedOutside('report.step', 'report.dart'),
-        isTrue,
-        reason: 'the machine surface is recorded by the code that prints, or '
-            'the two drift',
-      );
-      expect(
-        File('test/offline_cli_test.dart').readAsStringSync(),
-        contains('it survives a non-zero exit'),
-        reason: 'proved by running the CLI on a repository it refuses',
-      );
-    });
-
-    test('diagnostic codes and the diagnosis directory', () {
-      expect(sourceContains('RK-'), isTrue, reason: 'codes');
-      expect(
-        usedOutside('Diagnosis.write', 'diagnosis.dart'),
-        isTrue,
-        reason: 'reality records what exists and nothing about why a run '
-            'failed, so a failed run must write its own evidence',
-      );
-      expect(
-        File('test/report_test.dart').readAsStringSync(),
-        contains('native tool stderr is the diagnosis'),
-      );
-    });
-
     test(
         'DONE WHEN: the checklist renders identically to a terminal and a '
         'pipe', () {
-      // Proved by replaying the writes the way a terminal would — transient
-      // lines erased, escapes stripped — and comparing what is left with what
-      // a pipe was given. See the last group of liveness_test.dart.
-      final live = File('test/liveness_test.dart').readAsStringSync();
-      expect(live, contains('DONE WHEN'));
-      expect(live, contains('render(isTerminal: true)'));
-      expect(live, contains('render(isTerminal: false)'));
+      // A pty, so this is the real comparison rather than a replay of it.
+      final piped = keybay(['status', '--offline']).stdout;
+      final pty = Process.runSync(
+        'script',
+        [
+          '-q',
+          '/dev/null',
+          Platform.resolvedExecutable,
+          'run',
+          File('bin/rk.dart').absolute.path,
+          'status',
+          '--offline',
+        ],
+        workingDirectory: keybay.root,
+        environment: {'NO_COLOR': '1'},
+      );
+
+      String settle(String raw) {
+        // script(1) echoes the EOF it sends on this platform. That is the
+        // harness talking, not rk.
+        raw = raw.replaceAll('^D', '').replaceAll('\b', '');
+        final out = StringBuffer();
+        var line = StringBuffer();
+        for (var i = 0; i < raw.length; i++) {
+          if (raw.startsWith('\r\x1b[2K', i)) {
+            line = StringBuffer();
+            i += 4;
+            continue;
+          }
+          final ch = raw[i];
+          if (ch == '\n') {
+            out.writeln(line.toString().trimRight());
+            line = StringBuffer();
+          } else if (ch != '\r') {
+            line.write(ch);
+          }
+        }
+        return out.toString();
+      }
+
+      expect(
+        settle(pty.stdout as String),
+        settle(piped),
+        reason: 'a log, a pipe and an agent see what the terminal ended up '
+            'showing',
+      );
     });
   });
 

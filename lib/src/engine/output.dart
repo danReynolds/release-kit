@@ -256,7 +256,7 @@ class Output {
     report.halt(
       kind.name,
       sentence,
-      rerunHelps: kind != HaltKind.unfixableByRerun,
+      helps: kind != HaltKind.unfixableByRerun,
     );
     blank();
     say(sentence);

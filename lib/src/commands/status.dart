@@ -43,12 +43,14 @@ class StatusCommand {
         : resolution.units.where((u) => u.name == only).toList();
 
     if (units.isEmpty) {
-      output.line(
-        'no unit named "$only"',
-        mark: Mark.blocked,
+      output.problem(
+        Diagnostic(
+          code: 'RK-CLI-003',
+          message: 'no unit named "$only"',
+          remedy: 'this repository releases: '
+              '${resolution.units.map((u) => u.name).join(', ')}',
+        ),
       );
-      output.say('this repository releases: '
-          '${resolution.units.map((u) => u.name).join(', ')}');
       return ExitCodes.usage;
     }
 

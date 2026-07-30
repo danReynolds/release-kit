@@ -65,30 +65,35 @@ void main() {
     });
   });
 
-  group('safe_to_rerun is data, not prose', () {
-    test('true by default, because re-running is the resume', () {
-      expect(decode(Report('release'))['safe_to_rerun'], isTrue);
+  group('safe and helps are different questions', () {
+    test('both true by default, because re-running is the resume', () {
+      final json = decode(Report('release'));
+      expect(json['safe_to_rerun'], isTrue);
+      expect(json['rerun_helps'], isTrue);
     });
 
-    test('and true after a halt that changed nothing', () {
+    test('a conflict is still safe to re-run — it just will not help', () {
       final report = Report('release')
-        ..halt('beforeActing', 'nothing changed', rerunHelps: true);
-      expect(decode(report)['safe_to_rerun'], isTrue);
-    });
-
-    test('false only when re-running cannot fix it', () {
-      final report = Report('release')
-        ..halt('unfixableByRerun', 'cannot be fixed', rerunHelps: false);
-      expect(decode(report)['safe_to_rerun'], isFalse);
+        ..halt('unfixableByRerun', 'cannot be fixed', helps: false);
+      expect(
+        decode(report)['safe_to_rerun'],
+        isTrue,
+        reason: 'a second run inspects and refuses again; nothing is harmed. '
+            'Reporting it unsafe tells an agent re-running may do damage.',
+      );
+      expect(decode(report)['rerun_helps'], isFalse);
       expect((decode(report)['halt'] as Map)['kind'], 'unfixableByRerun');
     });
 
-    test('a halt cannot be talked back into being safe', () {
+    test('neither can be talked back up', () {
       final report = Report('release')
-        ..halt('unfixableByRerun', 'cannot be fixed', rerunHelps: false)
-        ..halt('beforeActing', 'nothing changed', rerunHelps: true);
+        ..halt('x', 'bad', helps: false, safe: false)
+        ..halt('beforeActing', 'nothing changed', helps: true);
+      final json = decode(report);
+      expect(json['safe_to_rerun'], isFalse);
+      expect(json['rerun_helps'], isFalse);
       expect(
-        decode(report)['safe_to_rerun'],
+        json['safe_to_rerun'],
         isFalse,
         reason: 'the worst answer of the run is the answer for the run',
       );

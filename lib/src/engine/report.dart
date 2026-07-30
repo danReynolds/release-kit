@@ -33,12 +33,22 @@ class Report {
   Map<String, Object?>? _repository;
   Map<String, Object?>? _halt;
 
-  /// Whether running the same command again is safe.
+  /// Whether running the same command again can do harm.
   ///
-  /// True unless a halt says otherwise: re-running is rk's resume, and the one
-  /// case that re-running cannot fix says so explicitly. An agent reads this
-  /// rather than the prose, which is the whole point of having it.
+  /// Two questions, kept apart because conflating them made the flagship field
+  /// wrong on the commonest halt: *is re-running safe* and *will re-running
+  /// help* are different. rk's execution model — inspect, act, verify, with
+  /// reality as the database — makes re-running safe in every case it has,
+  /// including after a conflict, where a second run inspects and refuses
+  /// again. What a conflict changes is that re-running will not fix it.
   var safeToRerun = true;
+
+  /// Whether re-running would move the release forward.
+  ///
+  /// False after a halt that re-running cannot resolve — a conflict at a
+  /// destination — so a caller can tell "try again" from "a human has to
+  /// decide" without reading the sentence.
+  var rerunHelps = true;
 
   /// Whether any step was recorded — that is, whether a run got as far as
   /// looking at the work rather than refusing the request.
@@ -119,9 +129,17 @@ class Report {
   /// left to guess at a path it never saw printed.
   String? diagnosis;
 
-  void halt(String kind, String sentence, {required bool rerunHelps}) {
+  /// Records a halt. [helps] and [safe] only ever narrow: the worst answer of
+  /// a run is the answer for the run.
+  void halt(
+    String kind,
+    String sentence, {
+    required bool helps,
+    bool safe = true,
+  }) {
     _halt = {'kind': kind, 'sentence': sentence};
-    if (!rerunHelps) safeToRerun = false;
+    if (!helps) rerunHelps = false;
+    if (!safe) safeToRerun = false;
   }
 
   /// The document, with [exit] folded in so a caller that captured only stdout
@@ -132,6 +150,7 @@ class Report {
             'command': command,
             'exit': exit,
             'safe_to_rerun': safeToRerun,
+            'rerun_helps': rerunHelps,
             if (_repository != null) 'repository': _repository,
             'units': _units.values.toList(),
             'problems': _problems,

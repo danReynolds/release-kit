@@ -54,15 +54,25 @@ class ReleaseCommand {
         : resolution.units.where((u) => u.name == only).toList();
 
     if (units.isEmpty) {
-      output.line('no unit named "$only"', mark: Mark.blocked);
-      output.say('this repository releases: '
-          '${resolution.units.map((u) => u.name).join(', ')}');
+      output.problem(
+        Diagnostic(
+          code: 'RK-CLI-003',
+          message: 'no unit named "$only"',
+          remedy: 'this repository releases: '
+              '${resolution.units.map((u) => u.name).join(', ')}',
+        ),
+      );
       return ExitCodes.usage;
     }
     if (units.length > 1) {
-      output.line('name the unit to release', mark: Mark.blocked);
-      output.say('this repository releases: '
-          '${units.map((u) => u.name).join(', ')}');
+      output.problem(
+        Diagnostic(
+          code: 'RK-CLI-004',
+          message: 'name the unit to release',
+          remedy: 'this repository releases several, and a release is of one: '
+              '${units.map((u) => u.name).join(', ')}',
+        ),
+      );
       return ExitCodes.usage;
     }
 
@@ -74,8 +84,7 @@ class ReleaseCommand {
     // than at the last step.
     final refusal = _refuseIfUnfinishable(unit);
     if (refusal != null) {
-      output.line(refusal.message, mark: Mark.blocked);
-      if (refusal.remedy != null) output.say(refusal.remedy!, depth: 1);
+      output.problem(refusal);
       return ExitCodes.refused;
     }
 
