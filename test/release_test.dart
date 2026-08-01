@@ -2,6 +2,7 @@ import 'package:rk/src/commands/release.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
+import 'package:rk/src/engine/inspect.dart';
 import 'package:rk/src/engine/output.dart';
 import 'package:rk/src/engine/registry.dart';
 import 'package:rk/src/engine/resolve.dart';
@@ -67,14 +68,19 @@ Future<Ran> release({
   final resolution = Resolution.resolve(parsed, tree, diagnostics)!;
   final recorder = tools ?? RecordingTools();
 
+  final effectiveGit = state ?? _git();
+  final effectiveRegistry = registry ??
+      FakeRegistry({
+        'keybay': ['0.1.0']
+      });
   final code = await ReleaseCommand(
     resolution: resolution,
     tree: tree,
-    git: state ?? _git(),
-    registry: registry ??
-        FakeRegistry({
-          'keybay': ['0.1.0']
-        }),
+    git: effectiveGit,
+    registry: effectiveRegistry,
+    // The same reader the command gets, or the inspection would consult a
+    // different reality than the act.
+    inspector: Inspector(registry: effectiveRegistry, git: effectiveGit),
     tools: recorder,
     output: Output(sink: buffer.write, isTerminal: false, useColor: false),
     confirm: typed == null ? null : (_) async => typed,

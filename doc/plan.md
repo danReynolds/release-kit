@@ -282,3 +282,25 @@ Recorded because the reviews found them claimed-as-shipped when they are not:
   where it does not matter and violated where it does. Also: a failed step
   must stay expanded; today `Output.line` clears the transient line first, so
   a failure collapses the detail that is the diagnosis.
+
+**Phase 3 — probes and status.** Self-audit before the independent review,
+prompted by the question "are we ready for phase 4". The audit found the worst
+kind of finding: the phase 3 commit message claimed release shared the
+Inspector — "that walk is gone" — while release.dart still ran its own
+`_inspect` with the `default: absent` clause. The conformance test passed
+because "any use outside inspect.dart" was satisfied by status alone. Fixed by
+actually wiring it, and the gate now requires both verbs to call
+`inspector.inspect(` and release.dart to not define its own. With the shared
+inspector, release's halting had to learn the distinction the old code
+blurred: local steps answer unknown by design (they are the work), so unknown
+halts only where state was supposed to be readable, and the one absence that
+blocks is a prerequisite — as beforeActing, since publishing the dependency
+and re-running is the fix. Also: two `isPublic`s with different answers
+renamed apart; an unused Inspector field deleted; the verdict at the Output
+boundary is now the Verdict enum, so prose in that field is unrepresentable
+rather than merely wrong. Mutation pass: three invariants broken on purpose;
+two caught, one survived — a prerequisite that is not live reading as live
+broke nothing, because FakeRegistry.lookup answered null for unreachable,
+violating the real client's contract (throw, never null) and teaching callers
+the exact collapse the real client refuses. The fake now throws; the mutation
+now fails seven tests.

@@ -23,14 +23,12 @@ class Inspector {
   Inspector({
     required this.registry,
     required this.git,
-    required this.resolution,
     this.tools,
     this.repository,
   });
 
   final RegistryReader registry;
   final GitState git;
-  final Resolution resolution;
 
   /// Needed to read the forge. Absent means the forge cannot be read, which is
   /// `unknown` — never `absent`.
@@ -41,11 +39,15 @@ class Inspector {
 
   /// Whether this step's state lives somewhere rk can read without acting.
   ///
+  /// Not [Step.isPublic], which says whether *acting* changes the world — the
+  /// two differ on a prerequisite, which is read from pub.dev but performed by
+  /// nobody. One name for both was how they got conflated.
+  ///
   /// The rest — building, signing, notarizing, archiving — are local work
   /// whose results live in a workspace this run may not have. rk does not claim
   /// they are absent, because it has not looked, and a definite negative is
   /// what lets a release proceed.
-  static bool isPublic(StepKind kind) => switch (kind) {
+  static bool hasPublicState(StepKind kind) => switch (kind) {
         StepKind.tag ||
         StepKind.prerequisite ||
         StepKind.publishRegistry ||

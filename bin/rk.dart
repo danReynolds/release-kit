@@ -208,12 +208,19 @@ Future<int> _release(
   final resolution = prepared.resolution!;
   final tree = prepared.tree!;
   final registry = prepared.registry!;
+  final git = GitState.read(tree.root);
   try {
     return await ReleaseCommand(
       resolution: resolution,
       tree: tree,
-      git: GitState.read(tree.root),
+      git: git,
       registry: registry,
+      inspector: Inspector(
+        registry: registry,
+        git: git,
+        tools: const SystemTools(),
+        repository: git.originUrl,
+      ),
       tools: const SystemTools(),
       output: output,
       // The prompt is written straight to stdout, past the sink --json
@@ -338,7 +345,6 @@ Future<int> _status(
       inspector: Inspector(
         registry: registry,
         git: git,
-        resolution: resolution,
         // Read-only, and only when there is a forge to ask about. Without
         // either, the forge reports as unread rather than as empty.
         tools: offline ? null : const SystemTools(),

@@ -170,16 +170,16 @@ class StatusCommand {
     // report already carries it keyed by the step's own id, which is better
     // machine data than a second entry saying the same thing in prose.
     final unread = checklist.steps.where((s) {
-      if (!Inspector.isPublic(s.kind)) return false;
+      if (!Inspector.hasPublicState(s.kind)) return false;
       final verdict = states[s.id]!.verdict;
       return verdict == Verdict.unknown || verdict == Verdict.conflict;
     }).toList();
 
     final done = checklist.steps
-        .where((s) => Inspector.isPublic(s.kind) && states[s.id]!.isExact)
+        .where((s) => Inspector.hasPublicState(s.kind) && states[s.id]!.isExact)
         .length;
     final public =
-        checklist.steps.where((s) => Inspector.isPublic(s.kind)).length;
+        checklist.steps.where((s) => Inspector.hasPublicState(s.kind)).length;
     final summary = _liveSummary(live);
 
     final settled =
@@ -232,7 +232,6 @@ class StatusCommand {
   /// Walking forwards from a step is walking the `needs` edges backwards, which
   /// is why this reads them the way it does.
   Set<String> _mootSteps(Checklist checklist, Map<String, Inspection> states) {
-    final byId = {for (final step in checklist.steps) step.id: step};
     final moot = <String>{};
 
     bool everythingAfterIsDone(Step step, Set<String> visiting) {
@@ -241,7 +240,7 @@ class StatusCommand {
       if (dependents.isEmpty) return false;
       for (final dependent in dependents) {
         if (!visiting.add(dependent.id)) continue;
-        if (Inspector.isPublic(dependent.kind)) {
+        if (Inspector.hasPublicState(dependent.kind)) {
           if (!states[dependent.id]!.isExact) return false;
         } else if (!everythingAfterIsDone(dependent, visiting)) {
           return false;
@@ -251,11 +250,9 @@ class StatusCommand {
     }
 
     for (final step in checklist.steps) {
-      if (Inspector.isPublic(step.kind)) continue;
+      if (Inspector.hasPublicState(step.kind)) continue;
       if (everythingAfterIsDone(step, {step.id})) moot.add(step.id);
     }
-    // Named so the map is not merely built and dropped.
-    assert(byId.isNotEmpty || checklist.steps.isEmpty);
     return moot;
   }
 
@@ -264,7 +261,7 @@ class StatusCommand {
     output.step(
       step,
       show: show,
-      verdict: state.verdict.name,
+      verdict: state.verdict,
       detail: state.detail,
       mark: switch (state.verdict) {
         // Already so, and rk read that it is.
@@ -276,7 +273,8 @@ class StatusCommand {
       },
       note: switch (state.verdict) {
         Verdict.exact => state.detail ?? 'done',
-        Verdict.unknown => Inspector.isPublic(step.kind) ? state.detail : null,
+        Verdict.unknown =>
+          Inspector.hasPublicState(step.kind) ? state.detail : null,
         _ => step.isPermanent ? 'permanent' : null,
       },
     );

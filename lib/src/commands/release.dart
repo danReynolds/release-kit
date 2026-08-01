@@ -6,6 +6,7 @@ import '../engine/checklist.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
 import '../engine/output.dart';
+import '../engine/inspect.dart';
 import '../engine/registry.dart';
 import '../engine/resolve.dart';
 import '../engine/source_tree.dart';
@@ -24,6 +25,7 @@ class ReleaseCommand {
     required this.tree,
     required this.git,
     required this.registry,
+    required this.inspector,
     required this.tools,
     required this.output,
     required this.confirm,
@@ -34,6 +36,12 @@ class ReleaseCommand {
   final SourceTree tree;
   final GitState git;
   final RegistryReader registry;
+
+  /// Reads reality for a step. The same one `status` uses, so the two verbs
+  /// cannot answer the same question differently — release grew its own copy
+  /// once, and it answered `absent` by default for every kind it did not name.
+  final Inspector inspector;
+
   final Tools tools;
   final Output output;
 
@@ -109,10 +117,25 @@ class ReleaseCommand {
     // Inspect everything first, so the operator is asked about what is
     // actually left rather than about the whole checklist.
     for (final step in checklist.steps) {
-      states[step.id] = await _inspect(step, unit);
+      states[step.id] = await inspector.inspect(step, unit);
     }
 
-    final halting = states.entries.where((e) => e.value.halts).toList();
+    // What blocks, before anything acts. Local steps answer unknown by
+    // design — they are the work this run does — so unknown halts only where
+    // the state was supposed to be readable: a destination rk could not reach
+    // is not permission to publish to it. The one absence that blocks is a
+    // prerequisite, and it blocks as something re-running fixes once the
+    // other unit has shipped.
+    final byId = {for (final step in checklist.steps) step.id: step};
+    final halting = states.entries.where((entry) {
+      final step = byId[entry.key]!;
+      return switch (entry.value.verdict) {
+        Verdict.conflict => true,
+        Verdict.unknown => Inspector.hasPublicState(step.kind),
+        Verdict.absent => step.kind == StepKind.prerequisite,
+        Verdict.exact => false,
+      };
+    }).toList();
     if (halting.isNotEmpty) {
       final first = halting.first;
       output.halt(
@@ -120,7 +143,11 @@ class ReleaseCommand {
             ? HaltKind.unfixableByRerun
             : HaltKind.beforeActing,
       );
-      output.line(first.key, mark: Mark.blocked, note: first.value.detail);
+      output.line(
+        byId[first.key]!.summary,
+        mark: Mark.blocked,
+        note: first.value.detail,
+      );
       for (final entry in first.value.evidence.entries) {
         output.say('${entry.key}: ${entry.value}', depth: 1);
       }
@@ -274,43 +301,6 @@ class ReleaseCommand {
       return false;
     }
     return true;
-  }
-
-  Future<Inspection> _inspect(Step step, ResolvedUnit unit) async {
-    switch (step.kind) {
-      case StepKind.tag:
-        return git.hasTag(unit.tag)
-            ? const Inspection.exact(detail: 'already tagged')
-            : const Inspection.absent();
-
-      case StepKind.prerequisite:
-        final coordinate = step.coordinate!.split('/');
-        final name = coordinate[coordinate.length - 2];
-        final version = coordinate.last;
-        final package = await _safeLookup(name);
-        if (package == null) {
-          return Inspection.unknown('$name could not be read on pub.dev');
-        }
-        final has = package.versions.any((v) => v.version.canonical == version);
-        return has
-            ? const Inspection.exact(detail: 'live')
-            : Inspection.conflict('$name $version is not published yet');
-
-      case StepKind.publishRegistry:
-        final project = unit.projects.firstWhere((p) => p.name == step.project);
-        return registry.inspect(project.name, project.version);
-
-      default:
-        return const Inspection.absent();
-    }
-  }
-
-  Future<RegistryPackage?> _safeLookup(String name) async {
-    try {
-      return await registry.lookup(name);
-    } on Object {
-      return null;
-    }
   }
 
   Future<bool> _act(Step step, ResolvedUnit unit) async {

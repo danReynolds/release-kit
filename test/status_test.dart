@@ -22,6 +22,14 @@ class FakeRegistry implements RegistryReader {
 
   @override
   Future<RegistryPackage?> lookup(String name) async {
+    // The real client throws when it cannot find out — null means "has never
+    // existed", and nothing else. A fake that answered null for unreachable
+    // taught callers exactly the collapse the real client refuses, and hid a
+    // mutation: a prerequisite read through it could never exercise the
+    // unreachable path at all.
+    if (unreachable) {
+      throw RegistryUnavailable('pub.dev could not be reached');
+    }
     final versions = published[name];
     if (versions == null) return null;
     return RegistryPackage(
@@ -109,7 +117,6 @@ Future<String> statusOf({
     inspector: Inspector(
       registry: registry,
       git: state,
-      resolution: resolution,
     ),
     output: Output(
       sink: buffer.write,

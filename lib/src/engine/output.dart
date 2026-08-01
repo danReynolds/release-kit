@@ -4,6 +4,7 @@ import 'dart:io';
 import 'checklist.dart';
 import 'diagnostic.dart';
 import 'report.dart';
+import 'verdict.dart';
 
 /// How a line reads at a glance.
 ///
@@ -128,7 +129,7 @@ class Output {
     Step step, {
     Mark mark = Mark.none,
     String? note,
-    String verdict = 'unknown',
+    Verdict verdict = Verdict.unknown,
     String? detail,
     Duration? took,
     int depth = 1,
@@ -138,7 +139,7 @@ class Output {
       id: step.id,
       unit: step.unit,
       summary: step.summary,
-      verdict: verdict,
+      verdict: verdict.name,
       detail: detail,
       permanent: step.isPermanent,
       public: step.isPublic,
@@ -407,12 +408,15 @@ class Activity {
 
   /// Finished, with [result] as the one line that survives.
   ///
-  /// [verdict] is what a caller keys on and stays in the four-word vocabulary;
-  /// [result] is prose for a person. Putting the prose in the verdict would
-  /// hand an agent "Apple rejected the submission" where it expects one of
-  /// absent, exact, conflict, unknown — a machine surface that is only stable
-  /// until someone rewords a sentence.
-  void done(String result, {Mark mark = Mark.done, String verdict = 'exact'}) =>
+  /// [verdict] is what a caller keys on, and it is the [Verdict] type rather
+  /// than a string so the four-word vocabulary is enforced by the compiler:
+  /// prose in this field — "Apple rejected the submission" where a caller
+  /// expects one of four words — is now unrepresentable, not merely wrong.
+  void done(
+    String result, {
+    Mark mark = Mark.done,
+    Verdict verdict = Verdict.exact,
+  }) =>
       _finish(mark, result, verdict);
 
   /// Failed. The line stays, and so does whatever the caller prints after it,
@@ -421,7 +425,7 @@ class Activity {
   /// The verdict is `unknown` rather than anything definite: rk tried and did
   /// not get an answer, which is not the same as having learned that nothing
   /// is there.
-  void failed(String result, {String verdict = 'unknown'}) =>
+  void failed(String result, {Verdict verdict = Verdict.unknown}) =>
       _finish(Mark.blocked, result, verdict);
 
   /// Stops rendering without recording an outcome, for a step whose caller
@@ -431,7 +435,7 @@ class Activity {
     _timer?.cancel();
   }
 
-  void _finish(Mark mark, String result, String verdict) {
+  void _finish(Mark mark, String result, Verdict verdict) {
     if (_finished) return;
     _finished = true;
     _timer?.cancel();

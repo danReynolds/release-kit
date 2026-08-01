@@ -354,11 +354,21 @@ void main() {
     });
 
     test('one inspector, so status and release cannot disagree', () {
+      // Both verbs must ask it — a phase 3 commit claimed release shared the
+      // inspector while release still ran its own copy, and the weaker form
+      // of this test (any use outside inspect.dart) passed on status alone.
+      for (final command in ['status.dart', 'release.dart']) {
+        expect(
+          File('lib/src/commands/$command').readAsStringSync(),
+          contains('inspector.inspect('),
+          reason: '$command must ask the shared inspector',
+        );
+      }
       expect(
-        usedOutside('Inspector(', 'engine/inspect.dart'),
-        isTrue,
-        reason: 'a second implementation is a second set of answers to the '
-            'same question, and they drifted before',
+        File('lib/src/commands/release.dart').readAsStringSync(),
+        isNot(contains('Future<Inspection> _inspect')),
+        reason: 'release grew its own inspector once, and it answered absent '
+            'by default for every step kind it did not name',
       );
       // Every step kind is answered explicitly. A default clause here is how
       // "definitely not there" gets asserted about a destination nobody asked.
