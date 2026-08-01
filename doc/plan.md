@@ -51,7 +51,17 @@ reports core and cli correctly against live pub.dev and GitHub state.
 
 **First keybay checkpoint — read-only, nothing can be published.**
 
-## Phase 4 — `rk verify`
+## Phase 4 — the comparator, worn by `rk verify`
+
+Verify is the core primitive, not a sibling verb: phase 5's post-publish
+check and phase 7's post-flip check are the same comparison. One engine —
+resolve-at-ref via a `SourceTree` reading git blobs, archive-vs-tree logical
+compare — and the `verify` command is its thin CLI face. Release calls the
+same engine, so the two cannot drift the way the two inspectors did.
+
+Hard constraint, named so it cannot erode: verify needs no state, no
+credentials, and no `.rk/` — anyone with a fresh clone can prove a published
+artifact against its tag. That property is the tool's differentiator.
 
 - Download a published pub.dev archive and compare logically (the
   `compare_pub_archives.py` port: name, type, mode, size, content, ignoring
@@ -74,7 +84,13 @@ ever publishes anything.
 - Post-publish re-download and compare.
 - Resume: re-running skips what reality says is done.
 
-**Done when:** keybay core publishes to pub.dev via rk.
+**Done when:** keybay core publishes to pub.dev via rk — and the gate kills
+rk mid-release and re-runs: once after the tag lands and before the publish,
+once after the publish and before the confirming read. "Re-running is the
+resume" is the whole recovery story, and a claim that central is proved by
+execution or not at all. The confirming read itself polls to a bounded
+deadline (the registry may take a moment to list what it just accepted), on
+the invalidated cache — never the memo the pre-act inspection wrote.
 
 **Third keybay checkpoint — the first real release.** Requires a keybay
 core version bump, which is a product decision, not an rk one. Everything
@@ -90,14 +106,40 @@ manifests rather than keybay's two.
 **Milestone 1 complete.** rk can onboard a repository and release a Dart
 package locally, end to end.
 
-## Phase 7 — Binary chain
+## Phase 7a — the local chain
 
+Split from the destinations: this was six subsystems behind one gate, on the
+phase with the most unreviewed code. 7a is everything that happens before a
+destination is touched — and it ends with `--rehearse`: every local step and
+every inspection, stopping before any public act. The failure rehearsal
+prevents is discovering the expired certificate or broken notarization at
+minute 40 of an announced release.
+
+- Decompose the chain into the checklist's steps (no `_produced` carried
+  between them; the workspace interface returns here, around the thing that
+  needs it).
+- Wire `Activity` into the notarization wait — built, tested, and hand-rolled
+  around today.
 - `dart-cli` build with per-platform capability resolution (native,
   cross-compiled, emulated smoke test, blocked).
-- `macos-sign` and `macos-notarize`.
+- `macos-sign` and `macos-notarize`, with the signature compared against the
+  requirement `PublishedIdentity` derives from the release users already
+  installed (its gate is red until this wiring lands).
 - Deterministic `archive` and `checksums`.
-- `github-release`: draft create/adopt/recreate, upload, flip, verify.
+
+## Phase 7b — the destinations
+
+- `github-release`: draft create/adopt/recreate, upload, flip, verify —
+  reading the forge through `gh api` status codes, not porcelain message
+  strings ("release not found" means three different things).
 - `homebrew-tap`: formula render, compare-and-swap, public install check.
+- The expected asset set grows what 7a/7b actually produce — notary log and
+  result, the formula — so the equality check stays equal. Real keybay 0.1.0
+  reads as a conflict today precisely because these are published and rk does
+  not yet count them; the next rk-made release settles it.
+- The changelog entry becomes the release body (drop `--generate-notes`):
+  one source of release prose, so the notes and the CHANGELOG cannot
+  disagree.
 
 **Done when:** keybay cli releases three platforms end to end — signed,
 notarized, published immutable, formula updated, installed from the public
@@ -264,14 +306,24 @@ Recorded because the reviews found them claimed-as-shipped when they are not:
   comment in that method says saying nothing about an unreadable channel
   "would let a half-finished release look complete" — which is what happens in
   the branch it does not cover. Also found by running against real keybay.
-- **Phase 4** — conflict evidence that prints the difference rather than the
-  fact of one. Nothing produces a diff yet. Also the pub.dev `first-publish`
-  refusal, which today returns `absent` — "proceed" — for a package that has
-  never existed.
+- **Phase 4** — conflict evidence that prints the *difference* rather than
+  the fact of one. The forge reader now produces evidence and it reaches the
+  report; what phase 4 adds is content diffs from the comparator. Also the
+  pub.dev `first-publish` refusal, which today returns `absent` — "proceed" —
+  for a package that has never existed. Also: freeze the step-id grammar in
+  the RFC as a compatibility promise with frozen vectors, the way the version
+  grammar is — agents key on ids, and an id that drifts breaks every caller
+  silently. And reconcile RK-RES-008 with the RFC's "projects in a unit are
+  not required to be identical" sentence — the code refuses divergence, the
+  RFC text permits it, and fleury is where the difference will bite.
 - **Phase 5** — the wedged-draft command printed for the operator to run; the
   public result (URLs and the install command) on completion; and `.rk/` added
   to the repository's ignore rules by `rk init`.
-- **Phase 7** — wire `Activity` into the binary chain. It is built and tested
+- **Phase 7a** — `PublishedIdentity` is built and proven but wired to
+  nothing, and the binary chain requires a declared `[identity]` instead of
+  deriving one — the opposite of "identity facts are derived, not declared".
+  Its conformance gate is red until the wiring lands.
+- **Phase 7a** — wire `Activity` into the binary chain. It is built and tested
   but has no production caller, while `binary_chain.dart` hand-rolls a worse
   version for the notarization wait: one static line for a five-minute wait,
   no spinner, no elapsed time, no "longer than usual". That is precisely the
@@ -304,3 +356,51 @@ broke nothing, because FakeRegistry.lookup answered null for unreachable,
 violating the real client's contract (throw, never null) and teaching callers
 the exact collapse the real client refuses. The fake now throws; the mutation
 now fails seven tests.
+
+**Phase 3 — the independent reviews.** Two reviewers, mutation-first and
+spec-fidelity, both against b5f4b97. Twenty mutations: thirteen survived,
+clustering exactly where the self-audit had just changed the code — every
+halting rule in release, the whole forge-reader inspect arm, the moot
+machinery in both directions, and status's blocked-readiness rules. The
+ranked findings, all since fixed:
+
+- The registry cache made release's post-publish verification structurally
+  unable to succeed: the confirming read answered from the memo the pre-act
+  inspection wrote, so every genuinely successful publish would have reported
+  failure — one commit before the first real publish depended on it. The
+  client forgets a package after rk acts on it, and the fake now memoizes
+  like the real one, because a double without the cache cannot reproduce the
+  bug.
+- Monotonicity was enforced only by status, the verb that does not act;
+  release would have run `dart pub publish --force` on a back-version — the
+  tool's #1 ranked failure. It moved into the Inspector and both verbs call
+  it.
+- A halted release was prose-only under `--json`; the checklist with verdicts
+  is now recorded before anything is decided, so a halt is data whatever
+  happens next.
+- status recommended the command release refuses (absent prerequisite), and
+  concluded "not published" from a socket error in its headline while every
+  step line below it was honest. Both verbs now share one blocking
+  classification, and the summary says "could not be read" or says nothing.
+- Forge `exact` meant subset: the real keybay release carries ten assets, rk
+  checked its expected four and said published. Exact means equal now, extras
+  named in evidence.
+- `--offline` was accepted and ignored by release — a live read under a flag
+  promising none, in the file whose own comment calls that worse than an
+  error. Flags are per-verb now.
+- Two hazards no single step could see, found by asking where the tag
+  points (which nothing read before): a fully published version with no tag
+  must not be tagged after the fact at whatever HEAD happens to be, and a tag
+  at another commit with registry work remaining would publish HEAD's content
+  under a name that points elsewhere. Both are guards now, shared by both
+  verbs, refusing with the exact command for the operator to run.
+- `IdentityReading`'s "nothing published" and "could not read" were
+  distinguishable only by prose — the class whose docstring forbids exactly
+  that collapse. It is an enum now.
+
+The survivors became tests: the forge reader's whole arm, the blocking
+classification tables (frozen like the version vectors), the moot fold in
+both directions, isClean's false direction, and the cache-forget contract.
+The phase 7 signing gate was green before its deliverable existed — the
+displaced-string anti-pattern again, an unwired file proving another file is
+used — and is now red until the wiring lands, which is what a gate is for.

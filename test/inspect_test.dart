@@ -17,6 +17,8 @@ import 'status_test.dart' show FakeRegistry;
 /// ordering rule — the dependency publishes before its dependent — was
 /// enforced by no executable test.
 void main() {
+  classificationTables();
+
   late Resolution resolution;
   late ResolvedUnit cli;
   late Step prerequisite;
@@ -51,10 +53,10 @@ dependencies:
     cli = resolution.unit('cli')!;
 
     final checklist = Checklist.derive(cli, resolution, Diagnostics());
-    prerequisite = checklist.steps
-        .firstWhere((s) => s.kind == StepKind.prerequisite);
-    publish = checklist.steps
-        .firstWhere((s) => s.kind == StepKind.publishRegistry);
+    prerequisite =
+        checklist.steps.firstWhere((s) => s.kind == StepKind.prerequisite);
+    publish =
+        checklist.steps.firstWhere((s) => s.kind == StepKind.publishRegistry);
   });
 
   Inspector inspector(FakeRegistry registry) => Inspector(
@@ -142,8 +144,7 @@ executables:
           .steps
           .firstWhere((s) => s.kind == StepKind.publishRelease);
 
-      final state =
-          await inspector(FakeRegistry({})).inspect(release, unit);
+      final state = await inspector(FakeRegistry({})).inspect(release, unit);
       expect(state.verdict, Verdict.unknown);
     });
 
@@ -169,4 +170,148 @@ executables:
     })).inspect(publish, cli);
     expect(state.verdict, Verdict.exact);
   });
+}
+
+/// The classification tables, frozen the way the version vectors are.
+///
+/// These restate the implementation on purpose: they are contracts other code
+/// keys on, and a mutation pass showed each line here can be flipped without
+/// anything else noticing.
+void classificationTables() {
+  test('which step kinds have public state', () {
+    expect(
+      {
+        for (final kind in StepKind.values) kind: Inspector.hasPublicState(kind)
+      },
+      {
+        StepKind.tag: true,
+        StepKind.prerequisite: true,
+        StepKind.publishRegistry: true,
+        StepKind.publishRelease: true,
+        StepKind.publishFormula: true,
+        StepKind.build: false,
+        StepKind.sign: false,
+        StepKind.notarize: false,
+        StepKind.archive: false,
+        StepKind.checksums: false,
+      },
+      reason: 'a prerequisite dropped from this set stops blocking a release '
+          'whose dependency rk could not read',
+    );
+  });
+
+  Step step(StepKind kind) => Step(
+        id: 'u/x/y',
+        unit: 'u',
+        kind: kind,
+        summary: 'x',
+        needs: const [],
+      );
+
+  test('what blocks a release, by verdict and kind', () {
+    // Conflict always blocks; unknown blocks only where the state was
+    // supposed to be readable; the one blocking absence is a prerequisite.
+    expect(
+      Inspector.blocks(
+          step(StepKind.publishRegistry), const Inspection.conflict('differs')),
+      isTrue,
+    );
+    expect(
+      Inspector.blocks(
+          step(StepKind.publishRelease), const Inspection.unknown('unread')),
+      isTrue,
+      reason: 'not knowing is not permission to publish',
+    );
+    expect(
+      Inspector.blocks(step(StepKind.build), const Inspection.unknown('local')),
+      isFalse,
+      reason: 'local steps answer unknown by design — they are the work',
+    );
+    expect(
+      Inspector.blocks(step(StepKind.prerequisite), const Inspection.absent()),
+      isTrue,
+      reason: 'the dependency has not shipped',
+    );
+    expect(
+      Inspector.blocks(
+          step(StepKind.publishRegistry), const Inspection.absent()),
+      isFalse,
+      reason: 'an absent coordinate is the work this release does',
+    );
+    expect(
+      Inspector.blocks(
+          step(StepKind.tag), const Inspection.exact(detail: 'tagged')),
+      isFalse,
+    );
+  });
+
+  test('the formula is unknown until a tap reader exists', () async {
+    final inspector = Inspector(
+      registry: FakeRegistry({}),
+      git: GitState(
+        root: '/repo',
+        head: 'abc123def456',
+        branch: 'main',
+        isClean: true,
+        uncommitted: const [],
+        headIsPushed: true,
+        tags: const [],
+        signingConfigured: false,
+        originUrl: null,
+      ),
+    );
+    final state = await inspector.inspect(
+      Step(
+        id: 'cli/homebrew/tool',
+        unit: 'cli',
+        kind: StepKind.publishFormula,
+        summary: 'update the formula',
+        needs: const [],
+      ),
+      (await _binaryUnit()),
+    );
+    expect(
+      state.verdict,
+      Verdict.unknown,
+      reason: 'absent would report a formula that may already point at this '
+          'release as work still to do',
+    );
+  });
+
+  test('the expected asset set is derived, and derives everything', () async {
+    final unit = await _binaryUnit();
+    expect(
+      Inspector.expectedAssets(unit),
+      {
+        'example-tool-1.0.0-linux-x64.tar.gz',
+        'example-tool-1.0.0-macos-arm64.tar.gz',
+        'SHA256SUMS',
+      },
+      reason: 'emptied, every release inspects exact and nothing notices',
+    );
+  });
+}
+
+Future<ResolvedUnit> _binaryUnit() async {
+  final diagnostics = Diagnostics();
+  final config = ReleaseConfig.parse('''
+schema = 1
+
+[release.cli]
+publish = ["pub.dev", "github-release", "homebrew"]
+binary_platforms = ["linux-x64", "macos-arm64"]
+''', 'release.toml', diagnostics)!;
+  final resolution = Resolution.resolve(
+    config,
+    MemorySourceTree({
+      'pubspec.yaml': '''
+name: example_tool
+version: 1.0.0
+executables:
+  example-tool: example_tool
+''',
+    }),
+    diagnostics,
+  )!;
+  return resolution.unit('cli')!;
 }

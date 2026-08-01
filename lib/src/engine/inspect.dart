@@ -2,9 +2,11 @@ import '../destinations/github_release.dart';
 import 'checklist.dart';
 import 'git.dart';
 import 'registry.dart';
+import 'diagnostic.dart';
 import 'resolve.dart';
 import 'tools.dart';
 import 'verdict.dart';
+import 'version.dart';
 
 /// Reads reality for one step, and nothing else.
 ///
@@ -57,12 +59,55 @@ class Inspector {
         _ => false,
       };
 
+  /// Whether [state] stops a release of [step] before anything acts.
+  ///
+  /// One classification for both verbs. status computed readiness from its own
+  /// rule and recommended `rk release` for a unit release would immediately
+  /// refuse — the drift the shared inspector exists to prevent, one layer up.
+  ///
+  /// Local steps answer unknown by design — they are the work a run does — so
+  /// unknown blocks only where the state was supposed to be readable. The one
+  /// absence that blocks is a prerequisite: the other unit has not shipped,
+  /// and publishing it and re-running is the fix.
+  static bool blocks(Step step, Inspection state) => switch (state.verdict) {
+        Verdict.conflict => true,
+        Verdict.unknown => hasPublicState(step.kind),
+        Verdict.absent => step.kind == StepKind.prerequisite,
+        Verdict.exact => false,
+      };
+
+  /// The asset names a release of [unit] is expected to carry.
+  ///
+  /// Public and static so a test can hold the set itself to account: emptied,
+  /// every release inspects exact, and nothing else notices.
+  static Set<String> expectedAssets(ResolvedUnit unit) {
+    final expected = <String>{};
+    for (final project in unit.projects) {
+      final executable = project.executable;
+      if (executable == null) continue;
+      for (final platform in project.binaryPlatforms) {
+        expected.add('$executable-${project.version}-$platform.tar.gz');
+      }
+      if (project.binaryPlatforms.isNotEmpty) expected.add('SHA256SUMS');
+    }
+    return expected;
+  }
+
   Future<Inspection> inspect(Step step, ResolvedUnit unit) async {
     switch (step.kind) {
       case StepKind.tag:
-        return git.hasTag(unit.tag)
-            ? const Inspection.exact(detail: 'already tagged')
-            : const Inspection.absent();
+        if (!git.hasTag(unit.tag)) return const Inspection.absent();
+        // Where it points is part of the fact. The verdict stays exact — the
+        // tag exists — and the cross-step judgment of whether its placement
+        // endangers this release belongs to [tagGuards], which can see the
+        // other steps.
+        final target = git.tagTarget(unit.tag);
+        if (target == null || target == git.head) {
+          return const Inspection.exact(detail: 'already tagged');
+        }
+        return Inspection.exact(
+          detail: 'already tagged, at ${_short(target)} — not HEAD',
+        );
 
       case StepKind.prerequisite:
         return _prerequisite(step);
@@ -123,15 +168,7 @@ class Inspector {
     if (tools == null || repository == null) {
       return const Inspection.unknown('the forge has not been read');
     }
-    final expected = <String>{};
-    for (final project in unit.projects) {
-      final executable = project.executable;
-      if (executable == null) continue;
-      for (final platform in project.binaryPlatforms) {
-        expected.add('$executable-${project.version}-$platform.tar.gz');
-      }
-      if (project.binaryPlatforms.isNotEmpty) expected.add('SHA256SUMS');
-    }
+    final expected = expectedAssets(unit);
 
     return GithubRelease(
       tools: tools!,
@@ -139,4 +176,120 @@ class Inspector {
       workingDirectory: git.root,
     ).inspect(unit.tag, expected);
   }
+
+  /// A version must exceed everything already published, and a tag must
+  /// exceed every earlier tag in its namespace.
+  ///
+  /// Here rather than in a command: the registry half is the tool's top-ranked
+  /// failure — publishing a back-version is permanent — and it was implemented
+  /// only in status, the verb that does not act. Both verbs call this now, and
+  /// release calls it as part of validating independently rather than
+  /// trusting status.
+  Future<void> monotonicity(ResolvedUnit unit, Diagnostics problems) async {
+    for (final project in unit.projects) {
+      if (!project.channels.contains('pub.dev')) continue;
+      final RegistryPackage? published;
+      try {
+        published = await registry.lookup(project.name);
+      } on RegistryUnavailable {
+        continue; // the step's own inspection reports this, with a remedy
+      }
+      final latest = published?.latest;
+      if (latest == null) continue;
+      if (latest.version > project.version) {
+        problems.add(
+          'RK-MONO-002',
+          '${project.name} ${latest.version} is already published, and this '
+              'would publish ${project.version}',
+          source:
+              SourceLocation(project.pubspec.path, project.pubspec.versionLine),
+          remedy: 'a release moves forward — bump past ${latest.version}',
+        );
+      }
+    }
+
+    for (final tag in git.tagsMatching(unit.tagPattern)) {
+      final raw = GitState.versionIn(tag, unit.tagPattern);
+      if (raw == null) continue;
+      final existing = Version.tryParse(raw);
+      if (existing == null) continue;
+      if (existing == unit.version) continue;
+      if (existing > unit.version) {
+        problems.add(
+          'RK-MONO-001',
+          'the tag $tag is ahead of ${unit.version}, which this release '
+              'would publish',
+          remedy: 'a release moves forward — bump past $raw',
+        );
+        return;
+      }
+    }
+  }
+
+  /// Cross-step judgments about the tag, which no single step can make.
+  ///
+  /// Two hazards, both provenance lies:
+  ///
+  /// - The version is fully published and the tag does not exist. Minting it
+  ///   now would bind the published version to whatever HEAD happens to be,
+  ///   which is not the commit that produced it. rk refuses and instructs —
+  ///   the operator knows which commit released it; rk cannot.
+  /// - The tag exists at another commit while registry work remains. Acting
+  ///   would publish HEAD's content under a name that points somewhere else.
+  List<Diagnostic> tagGuards(
+    ResolvedUnit unit,
+    Checklist checklist,
+    Map<String, Inspection> states,
+  ) {
+    final tagStep = checklist.steps
+        .where((s) => s.kind == StepKind.tag)
+        .map((s) => states[s.id])
+        .whereType<Inspection>()
+        .firstOrNull;
+    if (tagStep == null) return const [];
+
+    final publishes = checklist.steps
+        .where((s) => s.kind == StepKind.publishRegistry)
+        .map((s) => states[s.id])
+        .whereType<Inspection>()
+        .toList();
+    if (publishes.isEmpty) return const [];
+
+    if (tagStep.isAbsent && publishes.every((s) => s.isExact)) {
+      return [
+        Diagnostic(
+          code: 'RK-GIT-004',
+          message: '${unit.version} is already published, and the tag '
+              '${unit.tag} does not exist',
+          remedy: 'rk will not mint it after the fact — that would bind the '
+              'published version to whatever HEAD is now, not to the commit '
+              'that produced it. Tag it yourself, at that commit:\n'
+              '  git tag ${unit.tag} <the commit that released '
+              '${unit.version}>\n'
+              '  git push origin ${unit.tag}',
+        ),
+      ];
+    }
+
+    final target = git.tagTarget(unit.tag);
+    if (tagStep.isExact &&
+        target != null &&
+        target != git.head &&
+        publishes.any((s) => s.isAbsent)) {
+      return [
+        Diagnostic(
+          code: 'RK-GIT-005',
+          message: 'the tag ${unit.tag} points at ${_short(target)}, and this '
+              'release would publish from ${_short(git.head)}',
+          remedy: 'what would be published is not what the tag names. Move '
+              'the tag deliberately, or check out the tagged commit:\n'
+              '  git tag -f ${unit.tag} && git push -f origin ${unit.tag}',
+        ),
+      ];
+    }
+    return const [];
+  }
+
+  static String _short(String sha) =>
+      sha.length > 12 ? sha.substring(0, 12) : sha;
 }

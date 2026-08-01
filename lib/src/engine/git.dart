@@ -13,6 +13,7 @@ class GitState {
     required this.uncommitted,
     required this.headIsPushed,
     required this.tags,
+    this.tagTargets = const {},
     required this.signingConfigured,
     required this.originUrl,
   });
@@ -34,6 +35,13 @@ class GitState {
 
   final List<String> tags;
 
+  /// Tag name to the commit it points at, peeled for annotated tags.
+  ///
+  /// Empty when unread — fixtures that do not care may omit it — and
+  /// [tagTarget] answers null then, which callers treat as "placement
+  /// unknown", never as agreement.
+  final Map<String, String> tagTargets;
+
   /// Whether `git tag -s` would succeed, so rk can say so before asking for
   /// one rather than letting git fail with rk's name nowhere in it.
   final bool signingConfigured;
@@ -44,6 +52,9 @@ class GitState {
   String get shortHead => head.length > 7 ? head.substring(0, 7) : head;
 
   bool hasTag(String tag) => tags.contains(tag);
+
+  /// The commit [tag] points at, or null when rk has not read it.
+  String? tagTarget(String tag) => tagTargets[tag];
 
   /// Tags matching a pattern's literal prefix and suffix around the version.
   List<String> tagsMatching(String pattern) {
@@ -65,6 +76,30 @@ class GitState {
     final end = tag.length - suffix.length;
     if (end <= prefix.length) return null;
     return tag.substring(prefix.length, end);
+  }
+
+  /// `show-ref --tags -d` lines into tag → commit.
+  ///
+  /// An annotated tag appears twice: once as the tag object, once peeled with
+  /// a `^{}` suffix pointing at the commit. The peeled entry wins, because the
+  /// question rk asks is "what source does this tag name", and that is the
+  /// commit — a lightweight tag has only the one entry, already the commit.
+  static Map<String, String> _tagTargets(String showRef) {
+    final targets = <String, String>{};
+    for (final line in showRef.split('\n')) {
+      final parts = line.trim().split(' ');
+      if (parts.length != 2) continue;
+      final sha = parts[0];
+      var ref = parts[1];
+      if (!ref.startsWith('refs/tags/')) continue;
+      ref = ref.substring('refs/tags/'.length);
+      if (ref.endsWith('^{}')) {
+        targets[ref.substring(0, ref.length - 3)] = sha;
+      } else {
+        targets.putIfAbsent(ref, () => sha);
+      }
+    }
+    return targets;
   }
 
   static String _run(String root, List<String> args) {
@@ -118,6 +153,7 @@ class GitState {
           .split('\n')
           .where((t) => t.trim().isNotEmpty)
           .toList(),
+      tagTargets: _tagTargets(_run(root, const ['show-ref', '--tags', '-d'])),
       // A configured signing key, whether SSH or GPG. Inferring one from a
       // commit-signing *preference* would answer a different question, and
       // still would not prove a key exists — so rk claims only what git

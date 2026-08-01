@@ -49,5 +49,4 @@ class Inspection {
 
   bool get isAbsent => verdict == Verdict.absent;
   bool get isExact => verdict == Verdict.exact;
-  bool get halts => verdict == Verdict.conflict || verdict == Verdict.unknown;
 }

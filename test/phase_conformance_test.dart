@@ -403,16 +403,19 @@ void main() {
       );
     });
 
-    test('identity is derived from what is published, not from the keychain',
-        () {
-      // identity_test drives PublishedIdentity with scripted tools: it
-      // asserts the command sequence, that `security` is never consulted, and
-      // that "nothing published" and "could not read" stay separate answers.
-      expect(fileExists('test/identity_test.dart'), isTrue);
+    test('identity derivation exists as a proven component', () {
+      // Phase 3 delivers the derivation; wiring it into signing is phase 7's
+      // gate, which is red until it happens. The assertion this replaces
+      // keyed on designatedRequirement being used outside macos.dart — which
+      // identity.dart satisfies while wired to nothing, an unwired file
+      // proving another file is used.
+      expect(fileExists('lib/src/engine/identity.dart'), isTrue);
       expect(
-        usedOutside('designatedRequirement(', 'transforms/macos.dart'),
+        fileExists('test/identity_test.dart'),
         isTrue,
-        reason: 'read from the certificate that signs, it is a tautology',
+        reason: 'proven by scripted tools: the command sequence, that '
+            '`security` is never consulted, and that "nothing published" '
+            'and "could not read" stay separate answers',
       );
     });
 
@@ -504,11 +507,16 @@ void main() {
     });
 
     test('signing verifies against the published requirement', () {
+      // Red until the wiring lands: PublishedIdentity is built and proven,
+      // and the binary chain requires a declared [identity] instead of
+      // deriving one — the opposite of "identity facts are derived, not
+      // declared". A gate that is green before its deliverable exists is a
+      // safety check that cannot fire.
       expect(
-        usedOutside('designatedRequirement(', 'transforms/macos.dart'),
+        usedOutside('PublishedIdentity(', 'engine/identity.dart'),
         isTrue,
-        reason: 'comparing a signature to the certificate that made it '
-            'proves nothing',
+        reason: 'the requirement must come from the release users already '
+            'installed, and something in the product must ask for it',
       );
     });
 

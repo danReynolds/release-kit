@@ -120,37 +120,62 @@ class ReleaseCommand {
       states[step.id] = await inspector.inspect(step, unit);
     }
 
+    // Everything inspected is recorded before anything is decided, so a halt
+    // is never prose-only: a caller gets the checklist with verdicts keyed by
+    // step id, whatever happens next.
+    for (final step in checklist.steps) {
+      final state = states[step.id]!;
+      output.step(
+        step,
+        verdict: state.verdict,
+        detail: state.detail,
+        evidence: state.evidence,
+        show: false,
+      );
+    }
+
+    // Release validates independently rather than trusting status — and the
+    // top-ranked failure, publishing a back-version, was checked only by the
+    // verb that does not act.
+    await inspector.monotonicity(unit, problems);
+    inspector.tagGuards(unit, checklist, states).forEach(problems.report);
+    if (problems.isNotEmpty) {
+      output.halt(HaltKind.beforeActing);
+      output.problems(problems.found);
+      return ExitCodes.refused;
+    }
+
     // What blocks, before anything acts. Local steps answer unknown by
     // design — they are the work this run does — so unknown halts only where
     // the state was supposed to be readable: a destination rk could not reach
     // is not permission to publish to it. The one absence that blocks is a
     // prerequisite, and it blocks as something re-running fixes once the
     // other unit has shipped.
-    final byId = {for (final step in checklist.steps) step.id: step};
-    final halting = states.entries.where((entry) {
-      final step = byId[entry.key]!;
-      return switch (entry.value.verdict) {
-        Verdict.conflict => true,
-        Verdict.unknown => Inspector.hasPublicState(step.kind),
-        Verdict.absent => step.kind == StepKind.prerequisite,
-        Verdict.exact => false,
-      };
-    }).toList();
+    final halting = checklist.steps
+        .where((s) => Inspector.blocks(s, states[s.id]!))
+        .toList();
     if (halting.isNotEmpty) {
       final first = halting.first;
+      final state = states[first.id]!;
       output.halt(
-        first.value.verdict == Verdict.conflict
+        state.verdict == Verdict.conflict
             ? HaltKind.unfixableByRerun
             : HaltKind.beforeActing,
       );
-      output.line(
-        byId[first.key]!.summary,
-        mark: Mark.blocked,
-        note: first.value.detail,
+      // A problem, not a bare line: the same call records it, so the halt a
+      // person reads is the halt a caller gets.
+      output.problem(
+        Diagnostic(
+          code: 'RK-REL-001',
+          message: '${first.summary}: '
+              '${state.detail ?? state.verdict.name}',
+          remedy: state.evidence.isEmpty
+              ? null
+              : state.evidence.entries
+                  .map((e) => '${e.key}: ${e.value}')
+                  .join('\n'),
+        ),
       );
-      for (final entry in first.value.evidence.entries) {
-        output.say('${entry.key}: ${entry.value}', depth: 1);
-      }
       return ExitCodes.refused;
     }
 
@@ -172,10 +197,13 @@ class ReleaseCommand {
 
     for (final step in checklist.steps) {
       final state = states[step.id]!;
-      output.line(
-        step.summary,
+      output.step(
+        step,
         mark: state.isExact ? Mark.satisfied : Mark.none,
+        verdict: state.verdict,
+        detail: state.detail,
         note: state.isExact ? (state.detail ?? 'already done') : null,
+        depth: 0,
       );
     }
 
@@ -238,13 +266,13 @@ class ReleaseCommand {
     if (!git.isClean) {
       problems.add(
         'RK-GIT-001',
-        '${git.uncommitted.length} files are uncommitted',
+        '${git.uncommitted.length} paths are uncommitted',
         remedy: 'a release is of a commit, and these are not in one',
       );
     }
     if (!git.headIsPushed) {
       problems.add(
-        'RK-GIT-002',
+        'RK-GIT-003',
         '${git.shortHead} is not on any remote',
         remedy: 'git push, so the tag points at something others can fetch',
       );
@@ -476,6 +504,11 @@ class ReleaseCommand {
     }
 
     // Verify against reality rather than trusting the publisher's own word.
+    // rk just acted on this coordinate, so what it knew about the package is
+    // stale by rk's own hand. Without this, the confirming read answers from
+    // the memo the pre-act inspection wrote, and every successful publish
+    // reports failure.
+    registry.forget(project.name);
     final after = await registry.inspect(project.name, project.version);
     if (!after.isExact) {
       output.line(

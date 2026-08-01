@@ -101,6 +101,7 @@ class Report {
     bool? public,
     List<String> needs = const [],
     String? detail,
+    Map<String, String> evidence = const {},
     Duration? took,
   }) {
     (_entry(unit)['steps'] as List<Map<String, Object?>>).add({
@@ -111,6 +112,7 @@ class Report {
       if (public != null) 'public': public,
       if (needs.isNotEmpty) 'needs': needs,
       if (detail != null) 'detail': detail,
+      if (evidence.isNotEmpty) 'evidence': evidence,
       if (took != null) 'took_ms': took.inMilliseconds,
     });
   }

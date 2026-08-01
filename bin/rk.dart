@@ -58,6 +58,16 @@ Future<void> main(List<String> args) async {
     command: command,
   );
 
+  // A flag that exists but does not apply to this verb is refused the same
+  // way as one that does not exist: `rk release --offline` performing live
+  // reads under a flag that promises none is worse than an error.
+  const perVerb = {
+    'status': {'-v', '--verbose', '-h', '--help', '--json', '--offline'},
+    'verify': {'-v', '--verbose', '-h', '--help', '--json'},
+    'release': {'-v', '--verbose', '-h', '--help', '--json', '--dry-run'},
+    'init': {'-v', '--verbose', '-h', '--help', '--json'},
+  };
+  final inapplicable = flags.difference(perVerb[command] ?? known);
   final unknown = flags.difference(known);
   if (unknown.isNotEmpty) {
     // Silently ignoring a flag is worse than refusing it: a caller asking for
@@ -68,6 +78,21 @@ Future<void> main(List<String> args) async {
       Diagnostic(
         code: 'RK-CLI-001',
         message: 'rk does not have ${unknown.join(', ')}',
+        remedy: _usage.trim(),
+      ),
+    );
+    exitCode = ExitCodes.usage;
+    if (json) stdout.write(output.report.encode(exit: ExitCodes.usage));
+    return;
+  }
+
+  if (inapplicable.isNotEmpty &&
+      !flags.contains('-h') &&
+      !flags.contains('--help')) {
+    output.problem(
+      Diagnostic(
+        code: 'RK-CLI-005',
+        message: 'rk $command does not have ${inapplicable.join(', ')}',
         remedy: _usage.trim(),
       ),
     );
@@ -170,7 +195,7 @@ Future<int> _init(Output output, {required bool interactive}) async {
   if (root == null) {
     output.problem(
       Diagnostic(
-        code: 'RK-GIT-002',
+        code: 'RK-CLI-002',
         message: 'this is not a git repository',
         remedy: 'rk releases from a repository, and reads its tags and '
             'history to know what is already out.',
@@ -277,7 +302,7 @@ _Prepared _prepare(Output output) {
   if (root == null) {
     output.problem(
       Diagnostic(
-        code: 'RK-GIT-002',
+        code: 'RK-CLI-002',
         message: 'this is not a git repository',
         remedy: 'rk releases from a repository, and reads its tags and '
             'history to know what is already out.',

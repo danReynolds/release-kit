@@ -2,70 +2,7 @@ import 'package:rk/src/engine/identity.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:test/test.dart';
 
-/// Tools that answer from a script, so the sequence rk runs is asserted rather
-/// than assumed.
-class ScriptedTools implements Tools {
-  ScriptedTools(this.answers);
-
-  /// Keyed by the executable rk invokes.
-  final Map<String, ToolResult> answers;
-
-  /// Every command run, in order.
-  final List<List<String>> calls = [];
-
-  @override
-  Future<ToolResult> run(
-    String executable,
-    List<String> arguments, {
-    String? workingDirectory,
-    Map<String, String>? environment,
-  }) async {
-    calls.add([executable, ...arguments]);
-    return answers[executable] ??
-        ToolResult(exitCode: 127, stdout: '', stderr: '$executable not found');
-  }
-
-  @override
-  Future<int> runInteractive(
-    String executable,
-    List<String> arguments, {
-    String? workingDirectory,
-  }) async =>
-      0;
-}
-
-/// Tools that answer in order, for the paths where rk asks twice.
-class _Sequence implements Tools {
-  _Sequence(this._answers);
-
-  final List<ToolResult> _answers;
-  var _at = 0;
-
-  @override
-  Future<ToolResult> run(
-    String executable,
-    List<String> arguments, {
-    String? workingDirectory,
-    Map<String, String>? environment,
-  }) async =>
-      _at < _answers.length
-          ? _answers[_at++]
-          : ToolResult(exitCode: 127, stdout: '', stderr: 'unscripted');
-
-  @override
-  Future<int> runInteractive(
-    String executable,
-    List<String> arguments, {
-    String? workingDirectory,
-  }) async =>
-      0;
-}
-
-ToolResult ok([String stdout = '']) =>
-    ToolResult(exitCode: 0, stdout: stdout, stderr: '');
-
-ToolResult failed(String stderr) =>
-    ToolResult(exitCode: 1, stdout: '', stderr: stderr);
+import 'scripted_tools.dart';
 
 void main() {
   PublishedIdentity identity(Map<String, ToolResult> answers) =>
@@ -120,7 +57,7 @@ void main() {
       // gh fails the download and succeeds the repo lookup, which is what
       // "the repository is there and has no such asset" looks like.
       final reading = await PublishedIdentity(
-        tools: _Sequence([
+        tools: SequencedTools([
           failed('no assets match the pattern'),
           ok('{"name":"tool"}'),
         ]),
@@ -130,9 +67,10 @@ void main() {
 
       expect(reading.isKnown, isFalse);
       expect(
-        reading.why,
-        contains('no macOS archive is published'),
-        reason: 'the honest state before a first signed release',
+        reading.answer,
+        IdentityAnswer.none,
+        reason: 'the honest state before a first signed release — and data, '
+            'so no caller has to string-match the prose',
       );
     });
 
@@ -141,7 +79,7 @@ void main() {
       // for a real one missing that release. Read as absence, a typo in the
       // origin would let a release sign against no identity at all.
       final reading = await PublishedIdentity(
-        tools: _Sequence([
+        tools: SequencedTools([
           failed('release not found'),
           failed('Could not resolve to a Repository'),
         ]),
@@ -150,8 +88,7 @@ void main() {
       ).read(tag: 'v2.1.0', executable: 'example', into: '/tmp/w');
 
       expect(reading.isKnown, isFalse);
-      expect(reading.why, contains('could not be read'));
-      expect(reading.why, isNot(contains('no macOS archive is published')));
+      expect(reading.answer, IdentityAnswer.unreadable);
     });
 
     test('a network failure is not an absence', () async {
@@ -161,12 +98,11 @@ void main() {
 
       expect(reading.isKnown, isFalse);
       expect(
-        reading.why,
-        contains('could not be downloaded'),
+        reading.answer,
+        IdentityAnswer.unreadable,
         reason: 'read as "nothing is published", an unreachable forge would '
             'let a release sign itself against no identity at all',
       );
-      expect(reading.why, isNot(contains('no macOS archive is published')));
     });
 
     test('an archive that will not open is not an absence', () async {

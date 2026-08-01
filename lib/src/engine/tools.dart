@@ -86,10 +86,15 @@ class SystemTools implements Tools {
 
 /// Records what would have been run, for tests and for a dry run.
 class RecordingTools implements Tools {
-  RecordingTools({this.results = const {}});
+  RecordingTools({this.results = const {}, this.onRun});
 
   /// Keyed by `executable arg1 arg2`, so a test can decide an outcome.
   final Map<String, ToolResult> results;
+
+  /// Called for every invocation, so a test can change the world the way the
+  /// real command would — a publish makes a version live *at the registry*,
+  /// not inside whoever asked.
+  final void Function(String key)? onRun;
 
   final List<String> calls = [];
 
@@ -105,6 +110,7 @@ class RecordingTools implements Tools {
   }) async {
     final key = '$executable ${arguments.join(' ')}';
     calls.add(key);
+    onRun?.call(key);
     return _result(key);
   }
 
@@ -116,6 +122,7 @@ class RecordingTools implements Tools {
   }) async {
     final key = '$executable ${arguments.join(' ')}';
     calls.add(key);
+    onRun?.call(key);
     return _result(key).exitCode;
   }
 }

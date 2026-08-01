@@ -66,6 +66,9 @@ class Diagnostics {
   bool get isNotEmpty => _found.isNotEmpty;
   List<Diagnostic> get found => List.unmodifiable(_found);
 
+  /// A diagnostic built elsewhere — the guards return them ready-made.
+  void report(Diagnostic diagnostic) => _found.add(diagnostic);
+
   void add(
     String code,
     String message, {

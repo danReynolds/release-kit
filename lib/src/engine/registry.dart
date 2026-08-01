@@ -14,8 +14,6 @@ class RegistryPackage {
   /// Published versions, newest publication first.
   final List<PublishedVersion> versions;
 
-  bool get exists => versions.isNotEmpty;
-
   PublishedVersion? get latest {
     PublishedVersion? best;
     for (final published in versions) {
@@ -57,6 +55,15 @@ abstract class RegistryReader {
 
   /// How the coordinate this release would publish to stands.
   Future<Inspection> inspect(String name, Version version);
+
+  /// Discards what is known about [name].
+  ///
+  /// Called after rk itself acts on the package. Successful lookups are
+  /// cached for the run — one inspection sweep should not hammer the registry
+  /// — but after rk publishes, its own knowledge is stale by its own hand,
+  /// and a post-act verification that reads the memo the pre-act inspection
+  /// wrote is a verification that cannot fire.
+  void forget(String name);
 }
 
 /// Reads pub.dev. Read-only: nothing here publishes.
@@ -174,6 +181,9 @@ class Registry implements RegistryReader {
           : 'published ${_ago(published.published!)}',
     );
   }
+
+  @override
+  void forget(String name) => _cache.remove(name);
 
   void close() => _client.close(force: true);
 

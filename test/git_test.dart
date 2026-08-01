@@ -39,6 +39,54 @@ void main() {
     expect(GitState.read(root.path).isClean, isTrue);
   });
 
+  test('a dirty tree is not clean', () {
+    // The false direction: a mutation hardcoding isClean true survived,
+    // because every test read the list and none read the bit that gates a
+    // release.
+    write('a.txt', 'one\n');
+    commit();
+    write('a.txt', 'two\n');
+    expect(GitState.read(root.path).isClean, isFalse);
+  });
+
+  test('a lightweight tag points at its commit', () {
+    write('a.txt', 'one\n');
+    commit();
+    Process.runSync('git', ['tag', 'v1.0.0'], workingDirectory: root.path);
+    final state = GitState.read(root.path);
+    expect(state.tagTarget('v1.0.0'), state.head);
+  });
+
+  test('an annotated tag is peeled to the commit, not the tag object', () {
+    write('a.txt', 'one\n');
+    commit();
+    Process.runSync(
+      'git',
+      ['tag', '-a', 'v1.0.0', '-m', 'release'],
+      workingDirectory: root.path,
+    );
+    final state = GitState.read(root.path);
+    expect(
+      state.tagTarget('v1.0.0'),
+      state.head,
+      reason: 'the question rk asks is which source the tag names, and an '
+          'annotated tag object is not a commit',
+    );
+  });
+
+  test('a tag left behind by history points where it was made', () {
+    write('a.txt', 'one\n');
+    commit();
+    final first = GitState.read(root.path).head;
+    Process.runSync('git', ['tag', 'v1.0.0'], workingDirectory: root.path);
+    write('a.txt', 'two\n');
+    commit();
+
+    final state = GitState.read(root.path);
+    expect(state.tagTarget('v1.0.0'), first);
+    expect(state.tagTarget('v1.0.0'), isNot(state.head));
+  });
+
   test('a modified file keeps its whole name', () {
     write('packages/keybay/CHANGELOG.md', 'one\n');
     commit();

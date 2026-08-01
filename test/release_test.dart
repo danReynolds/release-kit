@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:rk/src/commands/release.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
@@ -8,8 +10,6 @@ import 'package:rk/src/engine/registry.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/tools.dart';
-import 'package:rk/src/engine/verdict.dart';
-import 'package:rk/src/engine/version.dart';
 import 'package:test/test.dart';
 
 import 'status_test.dart' show FakeRegistry;
@@ -45,11 +45,39 @@ GitState _git({
       originUrl: 'danReynolds/keybay',
     );
 
+extension _TagPlacement on GitState {
+  /// The same state with [tag] pointing at [sha].
+  GitState withTagAt(String tag, String sha) => GitState(
+        root: root,
+        head: head,
+        branch: branch,
+        isClean: isClean,
+        uncommitted: uncommitted,
+        headIsPushed: headIsPushed,
+        tags: tags,
+        tagTargets: {...tagTargets, tag: sha},
+        signingConfigured: signingConfigured,
+        originUrl: originUrl,
+      );
+}
+
 class Ran {
-  Ran(this.exitCode, this.text, this.calls);
+  Ran(this.exitCode, this.text, this.calls, this.report);
   final int exitCode;
   final String text;
   final List<String> calls;
+
+  /// The machine surface, decoded — what a --json caller would get.
+  final Map<String, Object?> report;
+
+  List<Map<String, Object?>> get steps => [
+        for (final unit in (report['units'] as List? ?? const []))
+          ...((unit as Map)['steps'] as List? ?? const [])
+              .cast<Map<String, Object?>>(),
+      ];
+
+  List<Map<String, Object?>> get problems =>
+      ((report['problems'] as List?) ?? const []).cast<Map<String, Object?>>();
 }
 
 Future<Ran> release({
@@ -60,11 +88,13 @@ Future<Ran> release({
   bool dryRun = false,
   RecordingTools? tools,
   RegistryReader? afterPublish,
+  String config = _config,
+  String only = 'core',
 }) async {
   final buffer = StringBuffer();
   final diagnostics = Diagnostics();
   final tree = source ?? _tree();
-  final parsed = ReleaseConfig.parse(_config, 'release.toml', diagnostics)!;
+  final parsed = ReleaseConfig.parse(config, 'release.toml', diagnostics)!;
   final resolution = Resolution.resolve(parsed, tree, diagnostics)!;
   final recorder = tools ?? RecordingTools();
 
@@ -73,7 +103,7 @@ Future<Ran> release({
       FakeRegistry({
         'keybay': ['0.1.0']
       });
-  final code = await ReleaseCommand(
+  final command = ReleaseCommand(
     resolution: resolution,
     tree: tree,
     git: effectiveGit,
@@ -85,12 +115,21 @@ Future<Ran> release({
     output: Output(sink: buffer.write, isTerminal: false, useColor: false),
     confirm: typed == null ? null : (_) async => typed,
     dryRun: dryRun,
-  ).run(only: 'core');
+  );
+  final code = await command.run(only: only);
 
-  return Ran(code, buffer.toString(), recorder.calls);
+  return Ran(
+    code,
+    buffer.toString(),
+    recorder.calls,
+    jsonDecode(command.output.report.encode(exit: code))
+        as Map<String, Object?>,
+  );
 }
 
 void main() {
+  reviewRegressions();
+
   test('a dry run shows the plan and starts nothing', () async {
     final ran = await release(dryRun: true);
     expect(ran.exitCode, ExitCodes.ok);
@@ -108,9 +147,15 @@ void main() {
   test('typing the version tags and publishes, in that order', () async {
     // The registry reports the version live once publish has run, which is
     // what the post-publish verification reads.
-    final published = <String>['0.1.0'];
-    final registry = _MutableRegistry(published);
-    final tools = RecordingTools();
+    final registry = _MutableRegistry(<String>['0.1.0']);
+    // Publishing changes the registry, the way the real command does. The
+    // confirming read sees it only through the invalidated cache — if release
+    // stops forgetting first, this test fails with "does not report it yet".
+    final tools = RecordingTools(
+      onRun: (key) {
+        if (key == 'dart pub publish --force') registry.goLive('0.2.0');
+      },
+    );
 
     final ran = await release(
       registry: registry,
@@ -222,21 +267,170 @@ void main() {
 /// A registry that starts with what is published and gains the released
 /// version once `dart pub publish` has been recorded — so the post-publish
 /// verification has something true to read.
+/// A registry whose *world* changes when publish runs.
+///
+/// The answers still go through FakeRegistry's memoization — the same cache
+/// the real client has — so the new version is visible only after the caller
+/// forgets what it knew. The fake this replaced flipped to exact on its
+/// second inspection, a behavior the real client cannot exhibit, and it hid
+/// the bug where the confirming read answered from the pre-act memo and
+/// every successful publish reported failure.
 class _MutableRegistry extends FakeRegistry {
-  _MutableRegistry(this.live) : super({'keybay': live});
+  _MutableRegistry(List<String> live) : super({'keybay': live});
 
-  final List<String> live;
-  var _publishes = 0;
+  /// What `dart pub publish` does at the registry.
+  void goLive(String version) => published['keybay']!.add(version);
+}
 
-  @override
-  Future<Inspection> inspect(String name, Version version) async {
-    // The first inspection is the pre-flight one; afterwards the version is
-    // treated as live, which is what a real registry would report.
-    final result = await super.inspect(name, version);
-    if (result.isAbsent && _publishes > 0) {
-      return const Inspection.exact(detail: 'published just now');
-    }
-    _publishes++;
-    return result;
-  }
+/// Regressions for the phase 3 independent reviews: every halting rule was
+/// documentation, protected by zero tests in either direction, and a halted
+/// release was prose-only under --json.
+void reviewRegressions() {
+  const twoUnits = '''
+schema = 1
+
+[release.core]
+path = "packages/keybay"
+publish = ["pub.dev"]
+
+[release.cli]
+path = "packages/cli"
+publish = ["pub.dev"]
+''';
+
+  MemorySourceTree twoUnitTree() => MemorySourceTree({
+        'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
+        'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
+        'packages/cli/pubspec.yaml': '''
+name: keybay_cli
+version: 0.2.0
+dependencies:
+  keybay: 0.2.0
+''',
+        'packages/cli/CHANGELOG.md': '## 0.2.0\n',
+      }, description: '/repo/keybay');
+
+  test('a prerequisite that is not live halts before acting', () async {
+    final ran = await release(
+      config: twoUnits,
+      source: twoUnitTree(),
+      only: 'cli',
+      registry: FakeRegistry({
+        'keybay': ['0.1.0'], // 0.2.0 is not out
+      }),
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(ran.calls, isEmpty, reason: 'nothing acted');
+    expect(ran.text, contains('nothing changed'), reason: 'beforeActing');
+    expect(ran.text, contains('not published yet'));
+  });
+
+  test('and the halt is data, not only prose', () async {
+    final ran = await release(
+      config: twoUnits,
+      source: twoUnitTree(),
+      only: 'cli',
+      registry: FakeRegistry({
+        'keybay': ['0.1.0'],
+      }),
+    );
+
+    expect(
+      ran.steps,
+      isNotEmpty,
+      reason: 'a --json caller gets the checklist with verdicts, not an '
+          'empty document with a halt in it',
+    );
+    expect(
+      ran.steps.map((s) => s['verdict']),
+      contains('absent'),
+    );
+    expect(ran.problems.map((p) => p['code']), contains('RK-REL-001'));
+  });
+
+  test('publishing a back-version is refused by release itself', () async {
+    final ran = await release(
+      registry: FakeRegistry({
+        'keybay': ['0.5.0'], // ahead of the 0.2.0 in the manifest
+      }),
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(ran.calls, isEmpty);
+    expect(
+      ran.problems.map((p) => p['code']),
+      contains('RK-MONO-002'),
+      reason: 'the top-ranked failure was checked only by the verb that '
+          'does not act',
+    );
+  });
+
+  test('a fully published version with no tag is not tagged after the fact',
+      () async {
+    final ran = await release(
+      registry: FakeRegistry({
+        'keybay': ['0.2.0'], // already out; only the tag step is absent
+      }),
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(ran.calls, isEmpty, reason: 'no retroactive tag was minted');
+    expect(ran.problems.map((p) => p['code']), contains('RK-GIT-004'));
+    expect(
+      ran.text,
+      contains('git tag'),
+      reason: 'refusing to act is not refusing to instruct',
+    );
+  });
+
+  test('a tag at another commit with registry work remaining is a conflict',
+      () async {
+    final ran = await release(
+      state: _git(tags: const ['v0.2.0']).withTagAt('v0.2.0', 'aaaaaaaaaaaa'),
+      registry: FakeRegistry({
+        'keybay': ['0.1.0'], // 0.2.0 still to publish
+      }),
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(ran.calls, isEmpty);
+    expect(ran.problems.map((p) => p['code']), contains('RK-GIT-005'));
+  });
+
+  test('an unreadable public destination halts; local unknowns do not',
+      () async {
+    // A forge unit with no way to read the forge: publishRelease answers
+    // unknown, which blocks. The build steps also answer unknown, which must
+    // not — a release that halted on its own work could never start.
+    final ran = await release(
+      config: '''
+schema = 1
+
+[release.cli]
+path = "packages/keybay"
+publish = ["github-release"]
+binary_platforms = ["macos-arm64"]
+''',
+      source: MemorySourceTree({
+        'packages/keybay/pubspec.yaml': '''
+name: keybay
+version: 0.2.0
+publish_to: none
+executables:
+  keybay: keybay
+''',
+        'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
+      }, description: '/repo/keybay'),
+      only: 'cli',
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(ran.text, contains('nothing changed'));
+    expect(
+      ran.text,
+      isNot(contains('local work')),
+      reason: 'the halt names the unreadable destination, not the work',
+    );
+  });
 }

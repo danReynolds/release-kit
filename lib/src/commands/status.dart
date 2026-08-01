@@ -8,7 +8,6 @@ import '../engine/registry.dart';
 import '../engine/resolve.dart';
 import '../engine/source_tree.dart';
 import '../engine/verdict.dart';
-import '../engine/version.dart';
 
 /// Where a repository stands: what is live, what is local, what is ready, and
 /// what is in the way.
@@ -162,30 +161,35 @@ class StatusCommand {
       );
     }
 
-    await _checkMonotonic(unit, problems);
+    await inspector.monotonicity(unit, problems);
+    inspector.tagGuards(unit, checklist, states).forEach(problems.report);
 
-    // Not knowing is not permission to publish. A public step rk could not
-    // read, or that conflicts, stops this unit being called ready — but it is
-    // not repeated as a problem, because the step line already says it and the
-    // report already carries it keyed by the step's own id, which is better
-    // machine data than a second entry saying the same thing in prose.
-    final unread = checklist.steps.where((s) {
-      if (!Inspector.hasPublicState(s.kind)) return false;
-      final verdict = states[s.id]!.verdict;
-      return verdict == Verdict.unknown || verdict == Verdict.conflict;
-    }).toList();
+    // What stops a release stops readiness — the same classification release
+    // halts on, so status can never recommend the command release refuses.
+    // It is not repeated as a problem, because the step line already says it
+    // and the report carries it keyed by the step's own id.
+    final blocking = checklist.steps
+        .where((s) => Inspector.blocks(s, states[s.id]!))
+        .toList();
 
     final done = checklist.steps
         .where((s) => Inspector.hasPublicState(s.kind) && states[s.id]!.isExact)
         .length;
     final public =
         checklist.steps.where((s) => Inspector.hasPublicState(s.kind)).length;
-    final summary = _liveSummary(live);
+    final registrySteps =
+        checklist.steps.where((s) => s.kind == StepKind.publishRegistry);
+    final summary = _liveSummary(
+      live,
+      hasRegistry: registrySteps.isNotEmpty,
+      registryUnread:
+          registrySteps.any((s) => states[s.id]!.verdict == Verdict.unknown),
+    );
 
     final settled =
-        problems.isEmpty && unread.isEmpty && public > 0 && done == public;
+        problems.isEmpty && blocking.isEmpty && public > 0 && done == public;
     final ready =
-        !settled && problems.isEmpty && unread.isEmpty && !repositoryBlocks;
+        !settled && problems.isEmpty && blocking.isEmpty && !repositoryBlocks;
 
     output.unit(
       unit.name,
@@ -193,18 +197,29 @@ class StatusCommand {
       tag: unit.tag,
     );
 
-    // What is public today, and what would change it.
-    output.line(
-      summary,
-      mark: settled ? Mark.satisfied : Mark.none,
-      depth: 1,
-      labelWidth: 48,
-      note: settled
-          ? 'nothing to release'
-          : ready
-              ? '→ ${unit.version} ready'
-              : null,
-    );
+    // What is public today, and what would change it. No claim at all beats
+    // a wrong one: a unit with no registry channel gets no registry summary.
+    final note = settled
+        ? 'nothing to release'
+        : ready
+            ? '→ ${unit.version} ready'
+            : null;
+    if (summary != null) {
+      output.line(
+        summary,
+        mark: settled ? Mark.satisfied : Mark.none,
+        depth: 1,
+        labelWidth: 48,
+        note: note,
+      );
+    } else if (note != null) {
+      output.line(
+        note,
+        mark: settled ? Mark.satisfied : Mark.none,
+        depth: 1,
+        labelWidth: 48,
+      );
+    }
 
     // A local step whose every downstream public step is already done cannot
     // be work that is left: nine build and archive lines under a release that
@@ -220,8 +235,25 @@ class StatusCommand {
     }
 
     if (settled) return false;
-    if (problems.isEmpty && unread.isEmpty && !repositoryBlocks) {
+    if (problems.isEmpty && blocking.isEmpty && !repositoryBlocks) {
       output.next('rk release ${unit.name}');
+    } else {
+      // A prerequisite that is not live points at the unit that must go
+      // first, and that is the honest next command — not this one, which
+      // release would immediately refuse.
+      for (final step in blocking) {
+        if (step.kind != StepKind.prerequisite) continue;
+        if (!states[step.id]!.isAbsent) continue;
+        final parts = step.coordinate?.split('/') ?? const [];
+        if (parts.length < 3) continue;
+        final declaring = resolution.allProjects
+            .where((p) => p.name == parts[parts.length - 2])
+            .map((p) => p.unitName)
+            .firstOrNull;
+        if (declaring != null && declaring != unit.name) {
+          output.next('rk release $declaring');
+        }
+      }
     }
     return true;
   }
@@ -263,6 +295,7 @@ class StatusCommand {
       show: show,
       verdict: state.verdict,
       detail: state.detail,
+      evidence: state.evidence,
       mark: switch (state.verdict) {
         // Already so, and rk read that it is.
         Verdict.exact => Mark.satisfied,
@@ -290,58 +323,24 @@ class StatusCommand {
   }
 
   /// What is public today, named per project unless they all agree.
-  String _liveSummary(Map<String, String> live) {
-    if (live.isEmpty) return 'not published';
+  ///
+  /// Null when there is nothing honest to say: a unit with no registry
+  /// channel has no registry summary, and a registry rk could not read gets
+  /// "could not be read" — the step lines were honest all along, and this
+  /// line was concluding "not published" from a socket error one line above
+  /// them.
+  String? _liveSummary(
+    Map<String, String> live, {
+    required bool hasRegistry,
+    required bool registryUnread,
+  }) {
+    if (!hasRegistry) return null;
+    if (live.isEmpty) {
+      return registryUnread ? 'pub.dev could not be read' : 'not published';
+    }
     final distinct = live.values.toSet();
     if (distinct.length == 1) return distinct.single;
     return live.entries.map((e) => '${e.key} ${e.value}').join(', ');
-  }
-
-  /// A version must exceed everything already published, and a tag must
-  /// exceed every earlier tag in its namespace.
-  ///
-  /// The registry half matters most: a tag can be missing entirely, and
-  /// publishing behind what is live is the highest-ranked failure this design
-  /// exists to prevent.
-  Future<void> _checkMonotonic(ResolvedUnit unit, Diagnostics problems) async {
-    for (final project in unit.projects) {
-      if (!project.channels.contains('pub.dev')) continue;
-      final RegistryPackage? published;
-      try {
-        published = await registry.lookup(project.name);
-      } on RegistryUnavailable {
-        continue; // the inspection reports this, with a remedy
-      }
-      final latest = published?.latest;
-      if (latest == null) continue;
-      if (latest.version > project.version) {
-        problems.add(
-          'RK-MONO-002',
-          '${project.name} ${latest.version} is already published, and this '
-              'would publish ${project.version}',
-          source:
-              SourceLocation(project.pubspec.path, project.pubspec.versionLine),
-          remedy: 'a release moves forward — bump past ${latest.version}',
-        );
-      }
-    }
-
-    for (final tag in git.tagsMatching(unit.tagPattern)) {
-      final raw = GitState.versionIn(tag, unit.tagPattern);
-      if (raw == null) continue;
-      final existing = Version.tryParse(raw);
-      if (existing == null) continue;
-      if (existing == unit.version) continue;
-      if (existing > unit.version) {
-        problems.add(
-          'RK-MONO-001',
-          'the tag $tag is ahead of ${unit.version}, which this release '
-              'would publish',
-          remedy: 'a release moves forward — bump past $raw',
-        );
-        return;
-      }
-    }
   }
 
   /// Facts about the repository, which belong to the repository.
@@ -354,8 +353,8 @@ class StatusCommand {
       problems.add(
         'RK-GIT-001',
         git.uncommitted.length == 1
-            ? '1 file is uncommitted'
-            : '${git.uncommitted.length} files are uncommitted',
+            ? '1 path is uncommitted'
+            : '${git.uncommitted.length} paths are uncommitted',
         remedy: 'a release is of a commit, and these are not in one: '
             '${git.uncommitted.take(3).join(', ')}'
             '${git.uncommitted.length > 3 ? ', …' : ''}',
@@ -363,7 +362,7 @@ class StatusCommand {
     }
     if (!git.headIsPushed) {
       problems.add(
-        'RK-GIT-002',
+        'RK-GIT-003',
         '${git.shortHead} is not on any remote',
         remedy: 'a tag on it would point at something nobody else can '
             'fetch — git push',

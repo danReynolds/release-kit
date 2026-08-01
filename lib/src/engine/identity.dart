@@ -128,18 +128,38 @@ class PublishedIdentity {
 /// out" call for opposite responses, and collapsing them lets an unreadable
 /// network stand in for a first release.
 class IdentityReading {
-  const IdentityReading._(this.requirement, this.why);
+  const IdentityReading._(this.answer, this.requirement, this.why);
 
-  const IdentityReading.found(String requirement) : this._(requirement, null);
+  const IdentityReading.found(String requirement)
+      : this._(IdentityAnswer.found, requirement, null);
 
   /// Nothing is published to compare against — the honest state before a
   /// first signed release.
-  const IdentityReading.none(String why) : this._(null, why);
+  const IdentityReading.none(String why)
+      : this._(IdentityAnswer.none, null, why);
 
-  const IdentityReading.unreadable(String why) : this._(null, why);
+  const IdentityReading.unreadable(String why)
+      : this._(IdentityAnswer.unreadable, null, why);
+
+  /// Which of the three it is, as data. The two null-requirement cases were
+  /// distinguishable only by their prose, which is an invitation to
+  /// string-match — and the caller that confuses them signs a release against
+  /// no identity at all.
+  final IdentityAnswer answer;
 
   final String? requirement;
   final String? why;
 
-  bool get isKnown => requirement != null;
+  bool get isKnown => answer == IdentityAnswer.found;
+}
+
+enum IdentityAnswer {
+  /// The published binary yielded its requirement.
+  found,
+
+  /// The repository answered, and nothing is published — a first release.
+  none,
+
+  /// rk could not find out, which is never permission to proceed.
+  unreadable,
 }

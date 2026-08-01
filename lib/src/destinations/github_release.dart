@@ -51,14 +51,30 @@ class GithubRelease {
           );
         }
         final missing = expectedAssets.difference(assets);
-        if (missing.isEmpty) {
+        final extra = assets.difference(expectedAssets);
+        if (missing.isEmpty && extra.isEmpty) {
           return const Inspection.exact(detail: 'published');
         }
+        // Exact means equal, not subset. A release carrying assets this
+        // configuration would not produce is not "what this release would put
+        // there" any more than one missing assets is — and reading a superset
+        // as exact would later bless a release whose notary log or formula
+        // went missing, because nothing counted the extras.
+        //
         // A published release cannot be edited, so this is terminal — which is
         // why it is only ever said about assets rk actually read.
         return Inspection.conflict(
-          'the published release is missing ${missing.length} of its assets',
-          evidence: {for (final name in missing) name: 'missing'},
+          missing.isEmpty
+              ? 'the published release carries ${extra.length} assets this '
+                  'configuration would not produce'
+              : 'the published release differs from what this configuration '
+                  'would produce',
+          evidence: {
+            for (final name in missing) name: 'missing',
+            for (final name in extra)
+              name: 'not produced by this '
+                  'configuration',
+          },
         );
     }
   }

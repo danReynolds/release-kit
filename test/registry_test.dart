@@ -174,6 +174,27 @@ void main() {
       expect(package!.latest!.version.canonical, '1.0.0');
     });
 
+    test('a success is cached for the run, and forget discards it', () async {
+      body = '{"versions": []}';
+      expect((await registry.lookup('keybay'))!.versions, isEmpty);
+
+      body = '{"versions": [{"version": "1.0.0"}]}';
+      expect(
+        (await registry.lookup('keybay'))!.versions,
+        isEmpty,
+        reason: 'one inspection sweep should not hammer the registry',
+      );
+
+      registry.forget('keybay');
+      expect(
+        (await registry.lookup('keybay'))!.versions,
+        hasLength(1),
+        reason: 'after rk acts on the package, its own knowledge is stale by '
+            'its own hand — a post-act verification that reads the memo the '
+            'pre-act inspection wrote is a verification that cannot fire',
+      );
+    });
+
     test('an unreadable answer is not cached as a fact', () async {
       status = 500;
       await expectLater(
