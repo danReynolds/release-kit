@@ -86,6 +86,25 @@ class Report {
         () => {'name': name, 'steps': <Map<String, Object?>>[]},
       );
 
+  /// Records what `verify` proved (or could not) about one published subject
+  /// of [unit] — a package at a version, later an asset.
+  void verification(
+    String unit,
+    String subject, {
+    required String verdict,
+    String? detail,
+    Map<String, String> evidence = const {},
+  }) {
+    ((_entry(unit)['verifications'] ??= <Map<String, Object?>>[])
+            as List<Map<String, Object?>>)
+        .add({
+      'subject': subject,
+      'verdict': verdict,
+      if (detail != null) 'detail': detail,
+      if (evidence.isNotEmpty) 'evidence': evidence,
+    });
+  }
+
   /// Records a step under its own unit, keyed by [id].
   /// [verdict] is always written, and defaults to `unknown` rather than to
   /// nothing. An omitted key invites a caller to read "no verdict" as "nothing

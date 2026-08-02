@@ -68,9 +68,13 @@ addressed here beyond fail-closed defaults.
   exists. Never called a workflow or pipeline.
 - **Unit** — a named set of projects released together under one tag
   pattern. The tag names the release; each project's version comes from its
-  own manifest. Projects in a unit normally move together but are not
-  required to be identical — after a partial publish they cannot be, and
-  recovery must stay possible.
+  own manifest, and the manifests of a unit declare one version — a
+  divergence at rest is refused (RK-RES-008), because the tag carries a
+  single `{version}` and a unit whose projects disagree has no version to
+  put in it. What *is* allowed to lag is published reality: after a partial
+  publish some projects are live at the new version and some are not, the
+  manifests never having moved, and re-running completes the release. The
+  manifests agree; the world catches up.
 - **Checklist** — the deterministic ordered set of steps rk derives. Pure
   data, identical on every machine.
 - **Step** — one checklist entry with a stable id
@@ -561,6 +565,26 @@ What makes the CLI sufficient is already required for other reasons:
 - **`--json` on every command**, stable, keyed on step id, surviving a
   non-zero exit and carrying `safe_to_rerun`. An agent decides whether to
   retry from data rather than by parsing prose.
+
+  Step ids are a frozen wire format, like the version grammar: an agent
+  that polled yesterday and diffs against today must see the same id for
+  the same fact, so a change to these forms is a breaking change made
+  deliberately or not at all. The forms, exhaustively:
+
+  ```
+  <unit>/tag/<tag>
+  <unit>/requires/pub.dev/<package>/<version>
+  <unit>/pub.dev/<package>@<version>
+  <unit>/build/<platform>
+  <unit>/sign/<platform>
+  <unit>/notarize/<platform>
+  <unit>/archive/<platform>
+  <unit>/checksums/SHA256SUMS
+  <unit>/github-release/<tag>
+  <unit>/homebrew/<formula>
+  ```
+
+  `test/checklist_test.dart` holds them as frozen vectors.
 - **Read-only verbs are always safe.** `status` and `verify` change
   nothing, so an agent may run them freely, including across a fleet by
   invoking rk once per repository.

@@ -139,6 +139,7 @@ class ReleaseCommand {
     // verb that does not act.
     await inspector.monotonicity(unit, problems);
     inspector.tagGuards(unit, checklist, states).forEach(problems.report);
+    await _refuseFirstPublish(unit, problems);
     if (problems.isNotEmpty) {
       output.halt(HaltKind.beforeActing);
       output.problems(problems.found);
@@ -235,6 +236,38 @@ class ReleaseCommand {
           depth: 1);
     }
     return ExitCodes.ok;
+  }
+
+  /// A package that has never existed is not published by rk.
+  ///
+  /// The first publish is a ceremony — accepting pub.dev's terms, choosing a
+  /// publisher — and running it under --force from an executor would perform
+  /// that ceremony as a side effect, or fail halfway into one. Refusing to
+  /// act is not refusing to instruct: the exact command is printed, and every
+  /// release after the first belongs to rk.
+  Future<void> _refuseFirstPublish(
+    ResolvedUnit unit,
+    Diagnostics problems,
+  ) async {
+    for (final project in unit.projects) {
+      if (!project.channels.contains('pub.dev')) continue;
+      final RegistryPackage? package;
+      try {
+        package = await registry.lookup(project.name);
+      } on RegistryUnavailable {
+        continue; // the step's own inspection already reports this
+      }
+      if (package != null) continue;
+      problems.add(
+        'RK-REG-003',
+        '${project.name} has never been published, and a first publish is '
+            'not rk\'s to perform',
+        remedy: 'the first release accepts the terms and names a publisher, '
+            'which is the author\'s ceremony. Run it once by hand:\n'
+            '  cd ${project.pubspec.directory} && dart pub publish\n'
+            'and every release after it belongs to rk.',
+      );
+    }
   }
 
   /// Refuses what this machine cannot finish, before any work rather than at

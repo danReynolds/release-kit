@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:typed_data';
 import 'dart:convert';
 import 'dart:io';
 
+import '../transforms/digest.dart';
 import 'verdict.dart';
 import 'version.dart';
 
@@ -64,6 +66,15 @@ abstract class RegistryReader {
   /// and a post-act verification that reads the memo the pre-act inspection
   /// wrote is a verification that cannot fire.
   void forget(String name);
+
+  /// The bytes of [version]'s published archive, proven against the digest
+  /// the registry states for it.
+  ///
+  /// Throws [RegistryUnavailable] when rk could not fetch them, and
+  /// [ArchiveTampered] when it could and they do not match the stated digest
+  /// — different failures, opposite instructions: one says try again, the
+  /// other says stop and look.
+  Future<List<int>> archive(PublishedVersion version);
 }
 
 /// Reads pub.dev. Read-only: nothing here publishes.
@@ -185,6 +196,48 @@ class Registry implements RegistryReader {
   @override
   void forget(String name) => _cache.remove(name);
 
+  @override
+  Future<List<int>> archive(PublishedVersion version) async {
+    final url = version.archiveUrl;
+    if (url == null) {
+      throw RegistryUnavailable(
+        '$host lists no archive for ${version.version}',
+      );
+    }
+
+    final List<int> bytes;
+    try {
+      final request = await _client.getUrl(Uri.parse(url));
+      final response =
+          await request.close().timeout(const Duration(seconds: 60));
+      if (response.statusCode != 200) {
+        throw RegistryUnavailable(
+          'the archive answered ${response.statusCode}',
+        );
+      }
+      bytes = await response
+          .fold<BytesBuilder>(BytesBuilder(), (b, chunk) => b..add(chunk))
+          .then((b) => b.takeBytes())
+          .timeout(const Duration(seconds: 120));
+    } on RegistryUnavailable {
+      rethrow;
+    } on Object catch (error) {
+      throw RegistryUnavailable('the archive could not be fetched: $error');
+    }
+
+    final stated = version.archiveSha256;
+    if (stated != null && Sha256.hex(bytes) != stated.toLowerCase()) {
+      // Not unavailability: the registry served bytes that do not match its
+      // own stated digest. Retrying will not help and proceeding would verify
+      // source against content nobody vouches for.
+      throw ArchiveTampered(
+        stated: stated,
+        actual: Sha256.hex(bytes),
+      );
+    }
+    return bytes;
+  }
+
   void close() => _client.close(force: true);
 
   static String _ago(DateTime when) {
@@ -196,6 +249,19 @@ class Registry implements RegistryReader {
     if (months < 24) return '$months months ago';
     return '${days ~/ 365} years ago';
   }
+}
+
+/// The registry served an archive that does not match its own stated digest.
+class ArchiveTampered implements Exception {
+  ArchiveTampered({required this.stated, required this.actual});
+
+  final String stated;
+  final String actual;
+
+  @override
+  String toString() =>
+      'the archive does not match the digest the registry states for it '
+      '(stated $stated, got $actual)';
 }
 
 /// rk could not find out, which is not the same as finding nothing.

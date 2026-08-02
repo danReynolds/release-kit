@@ -440,30 +440,99 @@ void main() {
     });
   });
 
-  group('phase 4 — rk verify', () {
-    test('logical comparison of a published archive', () {
+  group('phase 4 — the comparator, worn by rk verify', () {
+    late Directory scratch;
+
+    setUpAll(() => scratch = Directory.systemTemp.createTempSync('rk-phase4-'));
+    tearDownAll(() => scratch.deleteSync(recursive: true));
+
+    test('one comparator, used by verify — release joins it in phase 5', () {
       expect(
-        sourceContains('compareArchives') || sourceContains('logicalContents'),
-        isTrue,
-        reason: 'the checkpoint exists to prove the comparison against real '
-            'published data before rk ever publishes',
+        File('lib/src/commands/verify.dart').readAsStringSync(),
+        contains('comparator.compare('),
+        reason: 'a second comparison implementation is the two-inspectors '
+            'drift over again',
+      );
+      expect(
+        File('test/compare_test.dart').readAsStringSync(),
+        contains('in the archive, not in the source'),
+        reason: 'both directions are proved: tampering shows up as archive '
+            'extras, loss as source files missing from the archive',
       );
     });
 
-    test('config and sources resolved at the tag', () {
+    test('sources are resolved at the ref, not the worktree', () {
+      // source_tree_test proves GitTreeAtRef against real repositories:
+      // reads at the tag while the worktree has moved on, byte-safe reads,
+      // nothing uncommitted visible.
+      expect(fileExists('test/source_tree_test.dart'), isTrue);
       expect(
-        sourceContains('atTag') || sourceContains('showAtTag'),
-        isTrue,
-        reason: 'verifying an old release against today\'s config is wrong',
+        File('lib/src/commands/verify.dart').readAsStringSync(),
+        contains('treeAt('),
       );
     });
 
-    test('provenance output naming what is not knowable', () {
+    test(
+        'DONE WHEN, refusal half: a version that is not published is '
+        'refused with the reason, in data', () {
+      // Executable against real pub.dev: this package name has never been
+      // published, so verify must refuse — and must say "not published",
+      // never fabricate a pass.
+      final repo = Rk.repository(scratch, 'unpublished', {
+        'release.toml': '''
+schema = 1
+
+[release.lib]
+publish = ["pub.dev"]
+''',
+        'pubspec.yaml': 'name: rk_conformance_never_published\n'
+            'version: 1.0.0\n',
+        'CHANGELOG.md': '## 1.0.0\n',
+      });
+      repo.commit();
+      Process.runSync('git', ['tag', 'v1.0.0'], workingDirectory: repo.root);
+
+      final run = repo(['verify', '--json']);
+      expect(run.code, 1, reason: run.all);
       expect(
-        usedOutside('Provenance(', 'commands/verify.dart'),
-        isTrue,
-        reason: 'the class exists and is never constructed, so no release '
-            'reports where it came from',
+        run.problems.map((p) => p['code']),
+        contains('RK-VER-003'),
+        reason: 'nothing to verify is a refusal, not a quiet pass',
+      );
+    });
+
+    test('a missing tag is no provenance, said plainly', () {
+      final repo = Rk.repository(scratch, 'untagged', {
+        'release.toml': '''
+schema = 1
+
+[release.lib]
+publish = ["pub.dev"]
+''',
+        'pubspec.yaml': 'name: rk_conformance_never_published\n'
+            'version: 1.0.0\n',
+      });
+      repo.commit(); // no tag
+
+      final run = repo(['verify', '--json']);
+      expect(run.code, 1);
+      expect(run.problems.map((p) => p['code']), contains('RK-VER-001'));
+      expect(
+        run.all,
+        contains('--at='),
+        reason: 'the way out is named for a release under an older scheme',
+      );
+    });
+
+    test('DONE WHEN, proof half: recorded checkpoint against real keybay', () {
+      // The exact-path proof runs against the real repository and live
+      // pub.dev — a checkpoint run recorded in doc/plan.md, per the phase 3
+      // precedent, because pinning a test to a third-party service verifying
+      // real content is a test that fails for reasons nobody here caused.
+      expect(
+        File('doc/plan.md').readAsStringSync(),
+        contains('Phase 4 checkpoint'),
+        reason: 'the checkpoint run must be recorded, with its output',
       );
     });
   });

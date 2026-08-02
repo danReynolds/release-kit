@@ -39,6 +39,8 @@ binary_platforms = ["linux-x64", "linux-arm64", "macos-arm64"]
 ''';
 
 void main() {
+  frozenIdVectors();
+
   test('a registry-only unit is a tag and a publish', () {
     final resolution = resolve(keybayConfig, keybayTree);
     final checklist =
@@ -304,5 +306,46 @@ dependencies:
       externalPrerequisites(resolution.unit('mcp')!, resolution, diagnostics);
       expect(diagnostics.found.single.code, 'RK-DEP-001');
     });
+  });
+}
+
+/// The step-id grammar, frozen the way the version vectors are.
+///
+/// Ids are the machine surface's keys: an agent that polled yesterday and
+/// diffs against today must see the same id for the same fact. A change here
+/// is a wire-format break and gets made deliberately or not at all.
+void frozenIdVectors() {
+  test('every id form, spelled out and frozen', () {
+    final tree = MemorySourceTree({
+      'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
+      'packages/keybay_cli/pubspec.yaml': '''
+name: keybay_cli
+version: 0.2.0
+dependencies:
+  keybay: 0.2.0
+executables:
+  keybay: keybay
+''',
+    });
+    final resolution = resolve(keybayConfig, tree);
+    final checklist =
+        Checklist.derive(resolution.unit('cli')!, resolution, Diagnostics());
+
+    expect(checklist.steps.map((s) => s.id).toList(), [
+      'cli/tag/keybay_cli-v0.2.0',
+      'cli/requires/pub.dev/keybay/0.2.0',
+      'cli/pub.dev/keybay_cli@0.2.0',
+      'cli/build/linux-x64',
+      'cli/archive/linux-x64',
+      'cli/build/linux-arm64',
+      'cli/archive/linux-arm64',
+      'cli/build/macos-arm64',
+      'cli/sign/macos-arm64',
+      'cli/notarize/macos-arm64',
+      'cli/archive/macos-arm64',
+      'cli/checksums/SHA256SUMS',
+      'cli/github-release/keybay_cli-v0.2.0',
+      'cli/homebrew/keybay',
+    ]);
   });
 }

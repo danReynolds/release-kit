@@ -158,6 +158,37 @@ class Output {
     );
   }
 
+  /// One verification result, printed and recorded as one act.
+  void verification(
+    String unit,
+    String subject, {
+    required Verdict verdict,
+    String? detail,
+    Map<String, String> evidence = const {},
+  }) {
+    report.verification(
+      unit,
+      subject,
+      verdict: verdict.name,
+      detail: detail,
+      evidence: evidence,
+    );
+    line(
+      subject,
+      mark: switch (verdict) {
+        Verdict.exact => Mark.done,
+        Verdict.conflict => Mark.blocked,
+        _ => Mark.none,
+      },
+      note: detail,
+      depth: 1,
+      labelWidth: 32,
+    );
+    for (final entry in evidence.entries) {
+      line('${entry.key}  ${entry.value}', depth: 2);
+    }
+  }
+
   /// Begins a step whose work takes long enough that silence would read as a
   /// hang. Finish it with [Activity.done] or [Activity.failed].
   ///

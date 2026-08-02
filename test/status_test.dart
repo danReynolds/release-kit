@@ -29,6 +29,9 @@ class FakeRegistry implements RegistryReader {
   /// Packages whose published content differs from this source.
   final Set<String> conflicting;
 
+  /// Archive bytes by "name@version", for the verify paths.
+  final Map<String, List<int>> archives = {};
+
   /// Successful lookups memoized, exactly as the real client memoizes.
   ///
   /// The parity matters: the real cache is why a post-publish verification
@@ -38,6 +41,19 @@ class FakeRegistry implements RegistryReader {
 
   @override
   void forget(String name) => _memo.remove(name);
+
+  @override
+  Future<List<int>> archive(PublishedVersion version) async {
+    if (unreachable) {
+      throw RegistryUnavailable('pub.dev could not be reached');
+    }
+    for (final entry in archives.entries) {
+      if (entry.key.endsWith('@${version.version.canonical}')) {
+        return entry.value;
+      }
+    }
+    throw RegistryUnavailable('no archive scripted for ${version.version}');
+  }
 
   @override
   Future<RegistryPackage?> lookup(String name) async {

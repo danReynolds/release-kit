@@ -404,3 +404,47 @@ both directions, isClean's false direction, and the cache-forget contract.
 The phase 7 signing gate was green before its deliverable existed — the
 displaced-string anti-pattern again, an unwired file proving another file is
 used — and is now red until the wiring lands, which is what a gate is for.
+
+## Phase 4 checkpoint — real keybay, live pub.dev, 2026-07-30
+
+The done-when, run against the real repository (read-only throughout):
+
+```
+$ rk verify
+  core             0.1.0 → keybay-v0.1.0
+✗   the ref keybay-v0.1.0 does not exist, so there is no source to prove
+    the published version against
+      nothing binds the published version to a commit — no tag records it.
+      If it was released under an older tag scheme, name that tag:
+      rk verify core --at=<ref>
+
+  cli              0.1.0 → keybay_cli-v0.1.0
+✓   keybay_cli 0.1.0    82 files, byte-identical against keybay_cli-v0.1.0
+                        · published 2026-07-18
+exit 1
+
+$ rk verify core --at=v0.1.0
+  core             0.1.0 → v0.1.0
+✓   keybay 0.1.0        40 files, byte-identical against v0.1.0
+                        · published 2026-07-18
+exit 0
+```
+
+Both published packages proved byte-for-byte against the tags that released
+them, from the archives pub.dev actually serves, each download verified
+against the digest the registry states. core's default-tag refusal is
+correct: the release predates today's derived scheme, no keybay-v0.1.0
+exists, and minting or guessing would be the provenance lie verify exists to
+catch — `--at=v0.1.0` is the honest path and it proves out.
+
+The run also settled a fact by evidence rather than memory: pub excludes
+`.gitignore`, `pubspec.lock`, `.metadata` and `.pubignore` by basename at
+any depth — the keybay_cli tag tracks all four shapes and its archive
+carries none of them. `Comparator.alwaysExcluded` encodes exactly that,
+with the confirming archive named in the comment; the first run reported
+those six files as honestly unjudgeable, and the refined rule turned the
+verdict into the full byte-identical pass above.
+
+Mutation pass: a differing file reading as identical, tampered bytes handed
+over anyway, the ref tree quietly reading HEAD, and direction two silently
+dropped — every one caught.

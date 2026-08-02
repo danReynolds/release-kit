@@ -4,6 +4,7 @@ import 'package:rk/src/commands/init.dart';
 import 'package:rk/src/commands/release.dart';
 import 'package:rk/src/commands/status.dart';
 import 'package:rk/src/commands/verify.dart';
+import 'package:rk/src/engine/compare.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnosis.dart';
 import 'package:rk/src/engine/diagnostic.dart';
@@ -38,7 +39,17 @@ Future<void> main(List<String> args) async {
     '--offline',
     '--json',
   };
-  final flags = args.where((a) => a.startsWith('-')).toSet();
+  // `--at=<ref>` carries a value, so it is peeled before the set membership
+  // checks that every other flag goes through.
+  String? at;
+  final flags = <String>{};
+  for (final arg in args.where((a) => a.startsWith('-'))) {
+    if (arg.startsWith('--at=')) {
+      at = arg.substring('--at='.length);
+      continue;
+    }
+    flags.add(arg);
+  }
   final positional = args.where((a) => !a.startsWith('-')).toList();
   final json = flags.contains('--json');
 
@@ -67,7 +78,10 @@ Future<void> main(List<String> args) async {
     'release': {'-v', '--verbose', '-h', '--help', '--json', '--dry-run'},
     'init': {'-v', '--verbose', '-h', '--help', '--json'},
   };
-  final inapplicable = flags.difference(perVerb[command] ?? known);
+  final inapplicable = {
+    ...flags.difference(perVerb[command] ?? known),
+    if (at != null && command != 'verify') '--at=<ref>',
+  };
   final unknown = flags.difference(known);
   if (unknown.isNotEmpty) {
     // Silently ignoring a flag is worse than refusing it: a caller asking for
@@ -117,7 +131,7 @@ Future<void> main(List<String> args) async {
   String? crash;
   try {
     code = switch (command) {
-      'verify' => await _verify(output, target),
+      'verify' => await _verify(output, target, at: at),
       'release' => await _release(
           output,
           target,
@@ -260,16 +274,20 @@ Future<int> _release(
   }
 }
 
-Future<int> _verify(Output output, String? unit) async {
+Future<int> _verify(Output output, String? unit, {String? at}) async {
   final prepared = _prepare(output);
   if (!prepared.isReady) return prepared.code!;
   final resolution = prepared.resolution!;
+  final tree = prepared.tree!;
   final registry = prepared.registry!;
   try {
     return await VerifyCommand(
       resolution: resolution,
       registry: registry,
+      comparator: Comparator(tools: const SystemTools()),
+      treeAt: (ref) => GitTreeAtRef.at(tree.root, ref),
       output: output,
+      at: at,
     ).run(only: unit);
   } finally {
     registry.close();

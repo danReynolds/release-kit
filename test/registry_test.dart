@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:rk/src/engine/registry.dart';
+import 'package:rk/src/transforms/digest.dart';
 import 'package:rk/src/engine/verdict.dart';
 import 'package:rk/src/engine/version.dart';
 import 'package:test/test.dart';
@@ -26,16 +27,24 @@ void main() {
   late String body;
   late Duration delay;
 
+  /// Served for any path ending `.tar.gz`, so an archive URL can point here.
+  List<int>? archiveBytes;
+
   setUp(() async {
     status = 200;
     body = '{"versions": []}';
     delay = Duration.zero;
+    archiveBytes = null;
 
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     server.listen((request) async {
       if (delay > Duration.zero) await Future<void>.delayed(delay);
       request.response.statusCode = status;
-      request.response.write(body);
+      if (archiveBytes != null && request.uri.path.endsWith('.tar.gz')) {
+        request.response.add(archiveBytes!);
+      } else {
+        request.response.write(body);
+      }
       await request.response.close();
     });
 
@@ -193,6 +202,57 @@ void main() {
             'its own hand — a post-act verification that reads the memo the '
             'pre-act inspection wrote is a verification that cannot fire',
       );
+    });
+
+    group('the archive fetch', () {
+      PublishedVersion published({String? sha}) => PublishedVersion(
+            version: Version.tryParse('1.0.0')!,
+            published: null,
+            archiveUrl: 'http://${server.address.host}:${server.port}/a.tar.gz',
+            archiveSha256: sha,
+          );
+
+      test('returns the bytes when they match the stated digest', () async {
+        archiveBytes = [1, 2, 3, 4];
+        final bytes = await registry.archive(published(
+          sha: Sha256.hex([1, 2, 3, 4]),
+        ));
+        expect(bytes, [1, 2, 3, 4]);
+      });
+
+      test(
+          'bytes that do not match the stated digest are tampering, not '
+          'unavailability', () async {
+        archiveBytes = [9, 9, 9];
+        await expectLater(
+          registry.archive(published(sha: Sha256.hex([1, 2, 3, 4]))),
+          throwsA(isA<ArchiveTampered>()),
+          reason: 'retrying will not change what the registry serves, and '
+              'proceeding would verify source against content nobody '
+              'vouches for',
+        );
+      });
+
+      test('a non-200 answer is unavailability', () async {
+        status = 503;
+        archiveBytes = [1];
+        await expectLater(
+          registry.archive(published()),
+          throwsA(isA<RegistryUnavailable>()),
+        );
+      });
+
+      test('a version with no archive URL cannot be fetched', () async {
+        await expectLater(
+          registry.archive(PublishedVersion(
+            version: Version.tryParse('1.0.0')!,
+            published: null,
+            archiveUrl: null,
+            archiveSha256: null,
+          )),
+          throwsA(isA<RegistryUnavailable>()),
+        );
+      });
     });
 
     test('an unreadable answer is not cached as a fact', () async {

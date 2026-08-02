@@ -317,6 +317,7 @@ dependencies:
       only: 'cli',
       registry: FakeRegistry({
         'keybay': ['0.1.0'], // 0.2.0 is not out
+        'keybay_cli': ['0.1.0'], // exists, so first-publish is not the issue
       }),
     );
 
@@ -333,6 +334,7 @@ dependencies:
       only: 'cli',
       registry: FakeRegistry({
         'keybay': ['0.1.0'],
+        'keybay_cli': ['0.1.0'],
       }),
     );
 
@@ -347,6 +349,21 @@ dependencies:
       contains('absent'),
     );
     expect(ran.problems.map((p) => p['code']), contains('RK-REL-001'));
+  });
+
+  test('a first publish is the author\'s ceremony, not rk\'s', () async {
+    final ran = await release(
+      registry: FakeRegistry({}), // keybay has never been published
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(ran.calls, isEmpty, reason: 'no publish was attempted');
+    expect(ran.problems.map((p) => p['code']), contains('RK-REG-003'));
+    expect(
+      ran.text,
+      contains('dart pub publish'),
+      reason: 'refusing to act is not refusing to instruct',
+    );
   });
 
   test('publishing a back-version is refused by release itself', () async {
