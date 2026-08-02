@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:rk/src/commands/release.dart';
 import 'package:rk/src/engine/compare.dart';
@@ -98,8 +99,10 @@ Future<Ran> release({
   RegistryReader? registry,
   String? typed = '0.2.0',
   bool dryRun = false,
-  RecordingTools? tools,
-  RegistryReader? afterPublish,
+  Map<String, ToolResult> results = const {},
+  void Function(String key)? onRun,
+  void Function(String key, String? workingDirectory)? probe,
+  Iterable<String> onRemote = const [],
   String config = _config,
   String only = 'core',
 }) async {
@@ -108,7 +111,35 @@ Future<Ran> release({
   final tree = source ?? _tree();
   final parsed = ReleaseConfig.parse(config, 'release.toml', diagnostics)!;
   final resolution = Resolution.resolve(parsed, tree, diagnostics)!;
-  final recorder = tools ?? RecordingTools();
+
+  // Origin lists what has been pushed — before this run ([onRemote]) or
+  // during it. A static script cannot say that, and the remote-verify leg
+  // reads it, so the harness models the one moving fact itself.
+  final remoteTags = <String>{...onRemote};
+  final recorder = RecordingTools(
+    results: results,
+    probe: probe,
+    onRun: (key) {
+      const push = 'git push origin ';
+      if (key.startsWith(push)) {
+        final scripted = results[key];
+        if (scripted == null || scripted.exitCode == 0) {
+          remoteTags.add(key.substring(push.length));
+        }
+      }
+      onRun?.call(key);
+    },
+    answers: (key) {
+      const prefix = 'git ls-remote origin refs/tags/';
+      if (!key.startsWith(prefix)) return null;
+      final tag = key.substring(prefix.length);
+      return ToolResult(
+        exitCode: 0,
+        stdout: remoteTags.contains(tag) ? 'deadbeef refs/tags/$tag' : '',
+        stderr: '',
+      );
+    },
+  );
 
   final effectiveGit = state ?? _git();
   final effectiveRegistry = registry ??
@@ -121,13 +152,22 @@ Future<Ran> release({
     git: effectiveGit,
     registry: effectiveRegistry,
     // The same reader the command gets, or the inspection would consult a
-    // different reality than the act.
-    inspector: Inspector(registry: effectiveRegistry, git: effectiveGit),
+    // different reality than the act — and the same tools, so the tag
+    // step's remote half reads the harness's remote.
+    inspector: Inspector(
+      registry: effectiveRegistry,
+      git: effectiveGit,
+      tools: recorder,
+      repository: 'example/keybay',
+    ),
     // Real tar over fake-served bytes: the confirming compare extracts what
     // the fake registry serves and proves it against the memory tree.
     comparator: Comparator(tools: const SystemTools()),
     tools: recorder,
-    wait: (_) async {},
+    // Yields to the event queue rather than completing in a microtask: a
+    // mutation that unbounded the confirm poll wedged the whole test runner
+    // instead of failing, because even the framework's timeout timer starved.
+    wait: (_) => Future<void>.delayed(Duration.zero),
     output: Output(sink: buffer.write, isTerminal: false, useColor: false),
     confirm: typed == null ? null : (_) async => typed,
     dryRun: dryRun,
@@ -145,6 +185,7 @@ Future<Ran> release({
 
 void main() {
   reviewRegressions();
+  mutationCloseout();
 
   test('a dry run rehearses everything read-only and starts nothing', () async {
     final ran = await release(dryRun: true);
@@ -186,24 +227,20 @@ void main() {
     // confirming read sees both only through the invalidated cache — if
     // release stops forgetting first, this test fails with "does not report
     // it yet" — and then proves the served bytes against this very tree.
-    final tools = RecordingTools(
+    final ran = await release(
+      registry: registry,
       onRun: (key) {
         if (key == 'dart pub publish --force') {
           registry.goLive('0.2.0');
           registry.archives['keybay@0.2.0'] = publishedBytes();
         }
       },
-    );
-
-    final ran = await release(
-      registry: registry,
-      tools: tools,
       typed: '0.2.0',
     );
 
     expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
     expect(
-      tools.calls,
+      ran.calls,
       containsAllInOrder([
         'dart pub publish --dry-run',
         'dart pub get --no-precompile',
@@ -231,7 +268,8 @@ void main() {
     // code alone made rk stricter than the registry it publishes to, and the
     // refusal landed after the signed tag was public.
     final registry = _MutableRegistry(<String>['0.1.0']);
-    final tools = RecordingTools(
+    final ran = await release(
+      registry: registry,
       results: {
         'dart pub publish --dry-run': ToolResult(
           exitCode: 65,
@@ -250,8 +288,6 @@ void main() {
       },
     );
 
-    final ran = await release(registry: registry, tools: tools);
-
     expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
     expect(
       ran.text,
@@ -264,13 +300,13 @@ void main() {
 
   test('validation errors block before anything public exists', () async {
     final ran = await release(
-      tools: RecordingTools(results: {
+      results: {
         'dart pub publish --dry-run': ToolResult(
           exitCode: 65,
           stdout: 'Package has 1 warning and 1 error.',
           stderr: '',
         ),
-      }),
+      },
     );
 
     expect(ran.exitCode, ExitCodes.refused);
@@ -287,10 +323,10 @@ void main() {
   test('a summary rk cannot classify blocks, because it is unrecognised',
       () async {
     final ran = await release(
-      tools: RecordingTools(results: {
+      results: {
         'dart pub publish --dry-run':
             ToolResult(exitCode: 65, stdout: 'something novel', stderr: ''),
-      }),
+      },
     );
     expect(ran.exitCode, ExitCodes.refused);
     expect(ran.problems.map((p) => p['code']), contains('RK-PUB-001'));
@@ -298,16 +334,15 @@ void main() {
 
   test('a failed push removes the local tag, so re-running starts clean',
       () async {
-    final tools = RecordingTools(results: {
-      'git push origin v0.2.0': ToolResult(
-        exitCode: 1,
-        stdout: '',
-        stderr: 'fatal: unable to access origin',
-      ),
-    });
     final ran = await release(
       registry: _MutableRegistry(<String>['0.1.0']),
-      tools: tools,
+      results: {
+        'git push origin v0.2.0': ToolResult(
+          exitCode: 1,
+          stdout: '',
+          stderr: 'fatal: unable to access origin',
+        ),
+      },
     );
 
     expect(ran.exitCode, ExitCodes.refused);
@@ -333,7 +368,7 @@ void main() {
     // say an effect may exist, not spin forever and not report success.
     final ran = await release(
       registry: _MutableRegistry(<String>['0.1.0']),
-      tools: RecordingTools(), // publish "succeeds", nothing goes live
+      // publish "succeeds", nothing goes live
     );
 
     expect(ran.exitCode, ExitCodes.refused);
@@ -346,34 +381,31 @@ void main() {
   });
 
   test('an unsigned repository still tags, and says so', () async {
-    final tools = RecordingTools();
-    await release(
+    final ran = await release(
       state: _git(signing: false),
       registry: _MutableRegistry(<String>['0.1.0']),
-      tools: tools,
     );
     expect(
-      tools.calls.firstWhere((c) => c.startsWith('git tag')),
+      ran.calls.firstWhere((c) => c.startsWith('git tag')),
       contains('git tag -a'),
     );
   });
 
   test('an existing tag is not created twice', () async {
-    final tools = RecordingTools();
-    await release(
+    final ran = await release(
       state: _git(tags: const ['v0.2.0']),
+      onRemote: const ['v0.2.0'],
       registry: _MutableRegistry(<String>['0.1.0']),
-      tools: tools,
     );
     expect(
-      tools.calls.where((c) => c.startsWith('git tag')),
+      ran.calls.where((c) => c.startsWith('git tag')),
       isEmpty,
-      reason: 'inspect saw it and skipped the step',
+      reason: 'inspect saw it locally and on origin, and skipped the step',
     );
   });
 
-  test('a failed dry run stops before publishing', () async {
-    final tools = RecordingTools(results: {
+  test('a failed dry run stops before anything public', () async {
+    final ran = await release(results: {
       'dart pub publish --dry-run': ToolResult(
         exitCode: 1,
         stdout: '',
@@ -381,14 +413,10 @@ void main() {
             'lib/src/private.dart is not in the package',
       ),
     });
-
-    final ran = await release(tools: tools);
     expect(ran.exitCode, ExitCodes.refused);
     expect(ran.text, contains('not in the package'));
-    expect(
-      tools.calls,
-      isNot(contains('dart pub publish --force')),
-    );
+    expect(ran.calls, isNot(contains('dart pub publish --force')));
+    expect(ran.calls.where((c) => c.startsWith('git tag')), isEmpty);
   });
 
   test('a release already published does nothing', () async {
@@ -397,10 +425,15 @@ void main() {
         'keybay': ['0.1.0', '0.2.0']
       }),
       state: _git(tags: const ['v0.2.0']),
+      onRemote: const ['v0.2.0'],
     );
     expect(ran.exitCode, ExitCodes.ok);
     expect(ran.text, contains('already released'));
-    expect(ran.calls, isEmpty);
+    expect(
+      ran.calls.where((c) => !c.startsWith('git ls-remote')),
+      isEmpty,
+      reason: 'reading the remote is inspection; nothing acted',
+    );
   });
 
   test('an unclean worktree halts before acting', () async {
@@ -592,7 +625,11 @@ dependencies:
     );
 
     expect(ran.exitCode, ExitCodes.refused);
-    expect(ran.calls, isEmpty);
+    expect(
+      ran.calls.where((c) => !c.startsWith('git ls-remote')),
+      isEmpty,
+      reason: 'reading the remote is inspection; nothing acted',
+    );
     expect(ran.problems.map((p) => p['code']), contains('RK-GIT-005'));
   });
 
@@ -629,6 +666,169 @@ executables:
       ran.text,
       isNot(contains('local work')),
       reason: 'the halt names the unreadable destination, not the work',
+    );
+  });
+}
+
+/// Closeout for the phase 5 mutation review: nine survivors, clustered on
+/// interruption and reporting.
+void mutationCloseout() {
+  test('a local tag origin lacks is pushed, not skipped', () async {
+    // The reviewer's top finding, reproduced with real git: a push that died
+    // mid-process left a local tag, the next run inspected it as done from
+    // `git tag --list` alone, skipped the step — push included — and
+    // completed the release with the authorizing tag absent from origin,
+    // silently. The inspection now asks origin, and the act pushes what
+    // exists.
+    final registry = _MutableRegistry(<String>['0.1.0']);
+    final ran = await release(
+      state: _git(tags: const ['v0.2.0']), // local tag, no onRemote
+      registry: registry,
+      onRun: (key) {
+        if (key == 'dart pub publish --force') {
+          registry.goLive('0.2.0');
+          registry.archives['keybay@0.2.0'] = publishedBytes();
+        }
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    expect(
+      ran.calls.where((c) => c.startsWith('git tag -s')),
+      isEmpty,
+      reason: 'the tag exists; re-creating it would fail',
+    );
+    expect(
+      ran.calls,
+      contains('git push origin v0.2.0'),
+      reason: 'the half-done step is finished, not skipped',
+    );
+    expect(ran.text, contains('pre-existing local tag'));
+  });
+
+  test('a push that origin does not confirm is lostTrack, not success',
+      () async {
+    // The push exits 0 and ls-remote still lists nothing: the verify leg the
+    // RFC names, which trusting the exit code alone skipped.
+    final ran = await release(
+      registry: _MutableRegistry(<String>['0.1.0']),
+      results: {
+        // A push the harness's world-model does not believe: script the
+        // remote read directly to answer empty despite the "successful" push.
+        'git ls-remote origin refs/tags/v0.2.0':
+            ToolResult(exitCode: 0, stdout: '', stderr: ''),
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(ran.problems.map((p) => p['code']), contains('RK-TAG-003'));
+    expect(ran.text, contains('an effect may exist'));
+  });
+
+  test(
+      'an unreadable archive after a real publish is lostTrack with the '
+      'proof one command away', () async {
+    final registry = _MutableRegistry(<String>['0.1.0']);
+    final ran = await release(
+      registry: registry,
+      onRun: (key) {
+        if (key == 'dart pub publish --force') {
+          registry.goLive('0.2.0');
+          // No archive is ever served: the confirming read finds the
+          // version listed and the bytes unreadable.
+        }
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(ran.problems.map((p) => p['code']), contains('RK-PUB-004'));
+    expect(ran.text, contains('an effect may exist'));
+    expect(
+      (ran.report['next'] as List),
+      contains('rk verify core'),
+      reason: 'the byte proof exists; the caller is pointed at it',
+    );
+  });
+
+  test('tampered bytes after a real publish are acted-and-unfixable', () async {
+    final registry = _MutableRegistry(<String>['0.1.0']);
+    final ran = await release(
+      registry: registry,
+      onRun: (key) {
+        if (key == 'dart pub publish --force') {
+          registry.goLive('0.2.0');
+          registry.archives['keybay@0.2.0'] = publishedBytes();
+          registry.tampered.add('keybay@0.2.0');
+        }
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(ran.problems.map((p) => p['code']), contains('RK-VER-004'));
+    expect(
+      ran.text,
+      contains('rk acted, and what it read back cannot be fixed'),
+      reason: 'the pre-act sentence said "rk did not act" about the worst '
+          'path rk has',
+    );
+    expect(ran.report['rerun_helps'], false);
+  });
+
+  test('the consumer probe is written where and how the check demands',
+      () async {
+    // Three mutations survived because nothing could see the probe: written
+    // without the override, pointed at the wrong path, or run in the package
+    // directory — where pub honours pubspec_overrides.yaml, the exact
+    // failure the check exists for.
+    String? probeCwd;
+    String? probePubspec;
+    final registry = _MutableRegistry(<String>['0.1.0']);
+    final ran = await release(
+      registry: registry,
+      probe: (key, cwd) {
+        if (key == 'dart pub get --no-precompile') {
+          probeCwd = cwd;
+          probePubspec = File('$cwd/pubspec.yaml').readAsStringSync();
+        }
+      },
+      onRun: (key) {
+        if (key == 'dart pub publish --force') {
+          registry.goLive('0.2.0');
+          registry.archives['keybay@0.2.0'] = publishedBytes();
+        }
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    expect(probeCwd, isNotNull);
+    expect(
+      probeCwd,
+      isNot(contains('/repo')),
+      reason: 'run in the package directory, pub honours '
+          'pubspec_overrides.yaml — the exact failure the check exists for',
+    );
+    expect(probePubspec, contains('dependency_overrides'));
+    expect(
+      probePubspec,
+      contains('path: /repo/packages/keybay'),
+      reason: 'the override supplies the not-yet-published root by path',
+    );
+    expect(probePubspec, contains('keybay: 0.2.0'));
+  });
+
+  test('a first publish is refused with its diagnosis even unattended',
+      () async {
+    final ran = await release(
+      registry: FakeRegistry({}),
+      typed: null, // nobody at the terminal
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(
+      ran.problems.map((p) => p['code']),
+      contains('RK-REG-003'),
+      reason: 'the guard runs before authorization, so a --json caller '
+          'learns the real reason, not merely "nobody authorized"',
     );
   });
 }

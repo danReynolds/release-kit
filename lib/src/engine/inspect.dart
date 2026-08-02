@@ -96,18 +96,7 @@ class Inspector {
   Future<Inspection> inspect(Step step, ResolvedUnit unit) async {
     switch (step.kind) {
       case StepKind.tag:
-        if (!git.hasTag(unit.tag)) return const Inspection.absent();
-        // Where it points is part of the fact. The verdict stays exact — the
-        // tag exists — and the cross-step judgment of whether its placement
-        // endangers this release belongs to [tagGuards], which can see the
-        // other steps.
-        final target = git.tagTarget(unit.tag);
-        if (target == null || target == git.head) {
-          return const Inspection.exact(detail: 'already tagged');
-        }
-        return Inspection.exact(
-          detail: 'already tagged, at ${_short(target)} — not HEAD',
-        );
+        return _tag(unit);
 
       case StepKind.prerequisite:
         return _prerequisite(step);
@@ -132,6 +121,46 @@ class Inspector {
             StepKind.checksums:
         return const Inspection.unknown('local work, decided when it runs');
     }
+  }
+
+  /// Local existence is half the fact; the other half is the remote.
+  ///
+  /// A push that died mid-process leaves a local tag nothing else can see,
+  /// and inspecting only `git tag --list` read it as done — so the re-run
+  /// skipped the step and completed the release with the tag absent from
+  /// origin, silently. The step is done when origin lists it; a local-only
+  /// tag is work remaining (the act pushes it), and a remote rk cannot read
+  /// is unknown, which blocks rather than permits.
+  Future<Inspection> _tag(ResolvedUnit unit) async {
+    if (!git.hasTag(unit.tag)) return const Inspection.absent();
+
+    final target = git.tagTarget(unit.tag);
+    final placement = target == null || target == git.head
+        ? ''
+        : ', at ${_short(target)} — not HEAD';
+
+    if (tools == null) {
+      // Nothing to ask the remote with: say exactly how much is known.
+      return Inspection.exact(detail: 'already tagged locally$placement');
+    }
+
+    final remote = await tools!.run(
+      'git',
+      ['ls-remote', 'origin', 'refs/tags/${unit.tag}'],
+      workingDirectory: git.root,
+    );
+    if (!remote.ok) {
+      return Inspection.unknown(
+        'the tag exists locally and origin could not be read: '
+        '${remote.summary}',
+      );
+    }
+    if (!remote.stdout.contains('refs/tags/${unit.tag}')) {
+      return Inspection.absent(
+        detail: 'exists locally, not on origin — acting pushes it',
+      );
+    }
+    return Inspection.exact(detail: 'already tagged, pushed$placement');
   }
 
   /// A package another unit publishes, which must already be live.
@@ -241,12 +270,7 @@ class Inspector {
     Checklist checklist,
     Map<String, Inspection> states,
   ) {
-    final tagStep = checklist.steps
-        .where((s) => s.kind == StepKind.tag)
-        .map((s) => states[s.id])
-        .whereType<Inspection>()
-        .firstOrNull;
-    if (tagStep == null) return const [];
+    if (!checklist.steps.any((s) => s.kind == StepKind.tag)) return const [];
 
     final publishes = checklist.steps
         .where((s) => s.kind == StepKind.publishRegistry)
@@ -255,7 +279,11 @@ class Inspector {
         .toList();
     if (publishes.isEmpty) return const [];
 
-    if (tagStep.isAbsent && publishes.every((s) => s.isExact)) {
+    // Both guards read git directly rather than the step's verdict: the
+    // verdict now folds in the remote, and a local-but-unpushed tag reads
+    // absent — which is work (push it), not the no-tag-at-all case the
+    // retro-tag guard exists for, and not exempt from the placement check.
+    if (!git.hasTag(unit.tag) && publishes.every((s) => s.isExact)) {
       return [
         Diagnostic(
           code: 'RK-GIT-004',
@@ -272,7 +300,7 @@ class Inspector {
     }
 
     final target = git.tagTarget(unit.tag);
-    if (tagStep.isExact &&
+    if (git.hasTag(unit.tag) &&
         target != null &&
         target != git.head &&
         publishes.any((s) => s.isAbsent)) {

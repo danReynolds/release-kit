@@ -315,11 +315,14 @@ class Output {
           'an effect may exist. still safe to re-run.',
       HaltKind.unfixableByRerun =>
         'rk did not act. this cannot be fixed by re-running.',
+      HaltKind.actedAndUnfixable =>
+        'rk acted, and what it read back cannot be fixed by re-running.',
     };
     report.halt(
       kind.name,
       sentence,
-      helps: kind != HaltKind.unfixableByRerun,
+      helps: kind != HaltKind.unfixableByRerun &&
+          kind != HaltKind.actedAndUnfixable,
     );
     blank();
     say(sentence);
@@ -387,6 +390,13 @@ enum HaltKind {
 
   /// Something is wrong that re-running will not resolve.
   unfixableByRerun,
+
+  /// rk acted, read the result back, and the result is permanently wrong.
+  ///
+  /// The pre-act sentence said "rk did not act" about the worst path rk has
+  /// — a mismatch read back one step after a real publish — which answered
+  /// the halt's own first question falsely.
+  actedAndUnfixable,
 }
 
 /// Process exit codes, from the RFC's output contract.

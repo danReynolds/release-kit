@@ -5,6 +5,7 @@ import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
+import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/verdict.dart';
 import 'package:test/test.dart';
 
@@ -18,6 +19,7 @@ import 'status_test.dart' show FakeRegistry;
 /// enforced by no executable test.
 void main() {
   classificationTables();
+  tagRemoteLeg();
 
   late Resolution resolution;
   late ResolvedUnit cli;
@@ -314,4 +316,87 @@ executables:
     diagnostics,
   )!;
   return resolution.unit('cli')!;
+}
+
+/// The tag's remote half — the leg whose absence let a killed push produce a
+/// release whose authorizing tag existed only on one machine.
+void tagRemoteLeg() {
+  GitState gitWith({List<String> tags = const []}) => GitState(
+        root: '/repo',
+        head: 'abc123def456',
+        branch: 'main',
+        isClean: true,
+        uncommitted: const [],
+        headIsPushed: true,
+        tags: tags,
+        signingConfigured: false,
+        originUrl: 'example/keybay',
+      );
+
+  Future<Inspection> inspectTag({
+    required List<String> localTags,
+    required ToolResult remote,
+  }) async {
+    final diagnostics = Diagnostics();
+    final config = ReleaseConfig.parse('''
+schema = 1
+
+[release.core]
+path = "packages/keybay"
+publish = ["pub.dev"]
+''', 'release.toml', diagnostics)!;
+    final resolution = Resolution.resolve(
+      config,
+      MemorySourceTree({
+        'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
+      }),
+      diagnostics,
+    )!;
+    final unit = resolution.unit('core')!;
+    final step = Checklist.derive(unit, resolution, Diagnostics())
+        .steps
+        .firstWhere((s) => s.kind == StepKind.tag);
+
+    return Inspector(
+      registry: FakeRegistry({}),
+      git: gitWith(tags: localTags),
+      tools: RecordingTools(
+        results: {'git ls-remote origin refs/tags/v0.2.0': remote},
+      ),
+      repository: 'example/keybay',
+    ).inspect(step, unit);
+  }
+
+  test('local and on origin is done', () async {
+    final state = await inspectTag(
+      localTags: ['v0.2.0'],
+      remote:
+          ToolResult(exitCode: 0, stdout: 'dead refs/tags/v0.2.0', stderr: ''),
+    );
+    expect(state.verdict, Verdict.exact);
+    expect(state.detail, contains('pushed'));
+  });
+
+  test('local but not on origin is work remaining, not done', () async {
+    final state = await inspectTag(
+      localTags: ['v0.2.0'],
+      remote: ToolResult(exitCode: 0, stdout: '', stderr: ''),
+    );
+    expect(
+      state.verdict,
+      Verdict.absent,
+      reason: 'read as done, a killed push produced a release whose '
+          'authorizing tag existed only on this machine — silently',
+    );
+    expect(state.detail, contains('not on origin'));
+  });
+
+  test('an unreadable origin is unknown, which blocks', () async {
+    final state = await inspectTag(
+      localTags: ['v0.2.0'],
+      remote: ToolResult(
+          exitCode: 128, stdout: '', stderr: 'could not resolve host'),
+    );
+    expect(state.verdict, Verdict.unknown);
+  });
 }

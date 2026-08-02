@@ -343,6 +343,14 @@ Recorded because the reviews found them claimed-as-shipped when they are not:
 - **Phase 5** — the wedged-draft command printed for the operator to run; the
   public result (URLs and the install command) on completion; and `.rk/` added
   to the repository's ignore rules by `rk init`.
+- **Phase 5 residue, second review.** The resume path proves presence, not
+  bytes: a re-run that finds the version published answers "already
+  released" and points at `rk verify` rather than re-running the byte proof
+  itself — an operator caution until an auto-confirm lands. A package with a
+  `.pubignore` can never confirm `exact`, so its first release through this
+  path ends "an effect may exist" and needs the pointed-at verify —
+  keybay_cli has one, so phase 7's cli publish meets this. Both deliberate,
+  both to revisit when release learns to re-verify on resume.
 - **Phase 5 residue, ledgered by the independent review.** The RFC's
   Authorization says release "verifies the authorizing tag's signature where
   one exists"; nothing runs `git tag -v`, and unattended runs simply refuse —
@@ -537,6 +545,10 @@ until the real keybay publish is recorded here as the Phase 5 checkpoint.
 That act is the operator's — permanent, outward-facing, and requiring their
 terminal for the typed confirmation. The path to it, in order:
 
+0. Both phase 5 reviews are addressed; the remaining red gate is this
+   checkpoint. Operator cautions from the mutation review, still true:
+   after any run ending "an effect may exist", run `rk verify` rather than
+   trusting a re-run's "already released".
 1. In keybay: commit `release.toml` (it is untracked, which also defeats
    "anyone with a fresh clone can verify" for keybay itself).
 2. Retro-tag the released 0.1.0 at the commit that produced it, as rk

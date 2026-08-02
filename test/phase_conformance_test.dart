@@ -618,7 +618,30 @@ publish = ["pub.dev"]
         signingConfigured: true,
         originUrl: 'example/keybay',
       );
-      final tools = RecordingTools(results: results, onRun: onRun);
+      final tools = RecordingTools(
+        results: results,
+        onRun: (key) {
+          // A successful push is what puts a tag on origin — the same set
+          // feeds the next run's local tags and the remote's answer, which
+          // is exactly the world after a push: everyone can see it.
+          if (key == 'git push origin v0.2.0' &&
+              (results[key]?.exitCode ?? 0) == 0) {
+            tags.add('v0.2.0');
+          }
+          onRun?.call(key);
+        },
+        // Origin answers from the world: a tag the world holds is listed,
+        // one it does not is not — the remote leg reads reality, and this is
+        // the reality the drive maintains.
+        answers: (key) => key == 'git ls-remote origin refs/tags/v0.2.0'
+            ? ToolResult(
+                exitCode: 0,
+                stdout:
+                    tags.contains('v0.2.0') ? 'deadbeef refs/tags/v0.2.0' : '',
+                stderr: '',
+              )
+            : null,
+      );
       final output =
           Output(sink: buffer.write, isTerminal: false, useColor: false);
 

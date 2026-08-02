@@ -497,6 +497,8 @@ executables:
         'gh': ok('{"tagName":"v0.2.0","isDraft":false,"name":"v0.2.0",'
             '"assets":[{"name":"keybay-0.2.0-macos-arm64.tar.gz"},'
             '{"name":"SHA256SUMS"}]}'),
+        // The tag's remote half reads origin through the same tools.
+        'git': ok('deadbeef refs/tags/v0.2.0'),
       }),
       repository: 'example/keybay',
     );

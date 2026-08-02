@@ -86,7 +86,8 @@ class SystemTools implements Tools {
 
 /// Records what would have been run, for tests and for a dry run.
 class RecordingTools implements Tools {
-  RecordingTools({this.results = const {}, this.onRun});
+  RecordingTools(
+      {this.results = const {}, this.onRun, this.answers, this.probe});
 
   /// Keyed by `executable arg1 arg2`, so a test can decide an outcome.
   final Map<String, ToolResult> results;
@@ -96,10 +97,24 @@ class RecordingTools implements Tools {
   /// not inside whoever asked.
   final void Function(String key)? onRun;
 
+  /// Consulted after [results], for outcomes that depend on the world as it
+  /// stands at call time — a remote that lists the tag only once it has been
+  /// pushed. An explicit script wins over the model, so a test can force the
+  /// one anomalous answer while the model carries the rest. Null falls
+  /// through to the default.
+  final ToolResult? Function(String key)? answers;
+
+  /// Sees the working directory too, so a test can prove *where* a command
+  /// ran and read what rk wrote there — three mutations of the consumer
+  /// probe survived because nothing could.
+  final void Function(String key, String? workingDirectory)? probe;
+
   final List<String> calls = [];
 
   ToolResult _result(String key) =>
-      results[key] ?? ToolResult(exitCode: 0, stdout: '', stderr: '');
+      results[key] ??
+      answers?.call(key) ??
+      ToolResult(exitCode: 0, stdout: '', stderr: '');
 
   @override
   Future<ToolResult> run(
@@ -110,6 +125,7 @@ class RecordingTools implements Tools {
   }) async {
     final key = '$executable ${arguments.join(' ')}';
     calls.add(key);
+    probe?.call(key, workingDirectory);
     onRun?.call(key);
     return _result(key);
   }
@@ -122,6 +138,7 @@ class RecordingTools implements Tools {
   }) async {
     final key = '$executable ${arguments.join(' ')}';
     calls.add(key);
+    probe?.call(key, workingDirectory);
     onRun?.call(key);
     return _result(key).exitCode;
   }

@@ -521,6 +521,15 @@ class ReleaseCommand {
   /// what authorizes.
   Future<bool> _tag(ResolvedUnit unit) async {
     final signed = git.signingConfigured;
+
+    // The step can be half-done: a push that died leaves a local tag, which
+    // the inspection now reports as absent-with-work ("not on origin"). The
+    // act then pushes what exists rather than failing to re-create it.
+    if (git.hasTag(unit.tag)) {
+      output.say('the tag exists locally; pushing it', depth: 1);
+      return _pushTag(unit, signed: signed, preExisting: true);
+    }
+
     final args = [
       'tag',
       if (signed) '-s' else '-a',
@@ -550,9 +559,9 @@ class ReleaseCommand {
     );
     if (!pushed.ok) {
       // A local tag nobody else can see is a trap, not progress: the next run
-      // would inspect it as done, skip it, and publish a version bound to a
-      // commit only this machine knows about. Removing it restores "nothing
-      // changed" honestly, and the re-run starts clean.
+      // would report it as work remaining, but a clean refusal beats a
+      // half-state. Removing what this run created restores "nothing changed"
+      // honestly.
       final removed = await tools.run(
         'git',
         ['tag', '-d', unit.tag],
@@ -573,11 +582,75 @@ class ReleaseCommand {
       output.halt(removed.ok ? HaltKind.beforeActing : HaltKind.lostTrack);
       return false;
     }
+    return _verifyTagOnRemote(unit, signed: signed, preExisting: false);
+  }
+
+  Future<bool> _pushTag(
+    ResolvedUnit unit, {
+    required bool signed,
+    required bool preExisting,
+  }) async {
+    final pushed = await tools.run(
+      'git',
+      ['push', 'origin', unit.tag],
+      workingDirectory: git.root,
+    );
+    if (!pushed.ok) {
+      output.problem(
+        Diagnostic(
+          code: 'RK-TAG-002',
+          message: 'the tag ${unit.tag} could not be pushed',
+          remedy: '${pushed.summary}\nthe tag pre-existed this run, so it '
+              'was left in place — re-running pushes it again',
+        ),
+        unit: unit.name,
+      );
+      output.halt(HaltKind.beforeActing);
+      return false;
+    }
+    return _verifyTagOnRemote(unit, signed: signed, preExisting: preExisting);
+  }
+
+  /// The tag step's verify leg: done means origin lists it.
+  ///
+  /// The push's exit code is the push's own word. Trusting it alone let a
+  /// killed push produce a release whose authorizing tag existed only on this
+  /// machine — and every later inspection, reading local tags, agreed.
+  Future<bool> _verifyTagOnRemote(
+    ResolvedUnit unit, {
+    required bool signed,
+    required bool preExisting,
+  }) async {
+    final remote = await tools.run(
+      'git',
+      ['ls-remote', 'origin', 'refs/tags/${unit.tag}'],
+      workingDirectory: git.root,
+    );
+    if (!remote.ok || !remote.stdout.contains('refs/tags/${unit.tag}')) {
+      output.problem(
+        Diagnostic(
+          code: 'RK-TAG-003',
+          message: 'the push reported success, and origin does not list '
+              '${unit.tag}',
+          remedy: remote.ok
+              ? 're-running pushes it again; if this repeats, look at the '
+                  'remote'
+              : 'origin could not be read back: ${remote.summary}',
+        ),
+        unit: unit.name,
+      );
+      output.halt(HaltKind.lostTrack);
+      return false;
+    }
 
     output.line(
       'tag ${unit.tag}',
       mark: Mark.done,
-      note: signed ? 'signed, pushed' : 'pushed, unsigned',
+      note: [
+        if (signed) 'signed' else 'unsigned',
+        'pushed',
+        if (preExisting) 'pre-existing local tag',
+      ].join(', '),
     );
     return true;
   }
@@ -770,17 +843,22 @@ dependency_overrides:
         ),
         unit: project.unitName,
       );
-      output.halt(HaltKind.unfixableByRerun);
+      output.halt(HaltKind.actedAndUnfixable);
       output.report.rerunHelps = false;
       return false;
     } on RegistryUnavailable catch (error) {
-      output.line(
-        project.name,
-        mark: Mark.blocked,
-        note: 'published, and the archive could not be read back: '
-            '${error.message}',
+      output.problem(
+        Diagnostic(
+          code: 'RK-PUB-004',
+          message: '${project.name} ${project.version}: published, and the '
+              'archive could not be read back',
+          remedy: '${error.message}\nthe byte proof is one command away: '
+              'rk verify',
+        ),
+        unit: project.unitName,
       );
       output.halt(HaltKind.lostTrack);
+      output.next('rk verify ${project.unitName}');
       return false;
     }
 
@@ -825,7 +903,7 @@ dependency_overrides:
         for (final entry in comparison.evidence.entries) {
           output.say('${entry.key}  ${entry.value}', depth: 1);
         }
-        output.halt(HaltKind.unfixableByRerun);
+        output.halt(HaltKind.actedAndUnfixable);
         output.report.rerunHelps = false;
         return false;
     }
