@@ -218,7 +218,10 @@ void _recordDiagnosis(Output output, int code, {String? crash}) {
     stamp: DateTime.now().toIso8601String().replaceAll(':', '-'),
     report: output.report,
     exit: code,
-    attachments: {if (crash != null) 'crash.txt': crash},
+    attachments: {
+      ...output.report.attachments,
+      if (crash != null) 'crash.txt': crash,
+    },
   );
   output.report.diagnosis = at;
   output.say('what this run saw: $at');

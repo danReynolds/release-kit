@@ -283,7 +283,7 @@ class Inspector {
               'release would publish from ${_short(git.head)}',
           remedy: 'what would be published is not what the tag names. Move '
               'the tag deliberately, or check out the tagged commit:\n'
-              '  git tag -f ${unit.tag} && git push -f origin ${unit.tag}',
+              '  git tag -sf ${unit.tag} && git push -f origin ${unit.tag}',
         ),
       ];
     }

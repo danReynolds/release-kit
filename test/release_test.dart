@@ -146,18 +146,35 @@ Future<Ran> release({
 void main() {
   reviewRegressions();
 
-  test('a dry run shows the plan and starts nothing', () async {
+  test('a dry run rehearses everything read-only and starts nothing', () async {
     final ran = await release(dryRun: true);
     expect(ran.exitCode, ExitCodes.ok);
     expect(ran.text, contains('nothing was started'));
-    expect(ran.calls, isEmpty, reason: 'no tool was invoked');
+    expect(
+      ran.calls.where((c) => c.startsWith('git tag')),
+      isEmpty,
+      reason: 'nothing public',
+    );
+    expect(ran.calls.where((c) => c.contains('publish --force')), isEmpty);
+    expect(
+      ran.calls,
+      contains('dart pub publish --dry-run'),
+      reason: 'the rehearsal rehearses: the first real run once discovered '
+          'a validation refusal only after the signed tag was public',
+    );
+    expect(ran.calls, contains('dart pub get --no-precompile'));
   });
 
   test('an unconfirmed release publishes nothing', () async {
     final ran = await release(typed: 'yes');
     expect(ran.exitCode, ExitCodes.refused);
     expect(ran.text, contains('nothing was published'));
-    expect(ran.calls, isEmpty);
+    expect(
+      ran.calls.where(
+          (c) => c.startsWith('git tag') || c.contains('publish --force')),
+      isEmpty,
+      reason: 'read-only preflight may run; nothing public may',
+    );
   });
 
   test('typing the version tags and publishes, in that order', () async {
@@ -188,20 +205,124 @@ void main() {
     expect(
       tools.calls,
       containsAllInOrder([
-        'git tag -s v0.2.0 -m core 0.2.0',
-        'git push origin v0.2.0',
         'dart pub publish --dry-run',
         'dart pub get --no-precompile',
+        'git tag -s v0.2.0 -m core 0.2.0',
+        'git push origin v0.2.0',
         'dart pub publish --force',
       ]),
-      reason: 'the tag records the release before anything is published, and '
-          'the consumer resolve runs before the permanent act',
+      reason: 'everything read-only runs before anything public: the first '
+          'real run once discovered a validation refusal only after the '
+          'signed tag was pushed',
     );
     expect(ran.text, contains('released'));
     expect(
       ran.text,
       contains('byte-identical'),
       reason: 'the version existing is not the right bytes existing',
+    );
+  });
+
+  test('warnings-only validation publishes, with the warnings shown first',
+      () async {
+    // The day-one scenario, verbatim: keybay's deliberate exact pins are
+    // "warnings" to pub, pub exits 65 for warnings and errors alike, and
+    // --force — the actual act — publishes past warnings. Gating on the exit
+    // code alone made rk stricter than the registry it publishes to, and the
+    // refusal landed after the signed tag was public.
+    final registry = _MutableRegistry(<String>['0.1.0']);
+    final tools = RecordingTools(
+      results: {
+        'dart pub publish --dry-run': ToolResult(
+          exitCode: 65,
+          stdout: 'Package validation found the following potential issue:\n'
+              '* Your dependency on keybay is pinned to an exact version.\n'
+              '* Your dependency on ffi is pinned to an exact version.\n'
+              'Package has 2 warnings.',
+          stderr: '',
+        ),
+      },
+      onRun: (key) {
+        if (key == 'dart pub publish --force') {
+          registry.goLive('0.2.0');
+          registry.archives['keybay@0.2.0'] = publishedBytes();
+        }
+      },
+    );
+
+    final ran = await release(registry: registry, tools: tools);
+
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    expect(
+      ran.text,
+      contains('pinned to an exact version'),
+      reason: 'the operator confirms the permanent act having seen the '
+          'warnings pub would have shown',
+    );
+    expect(ran.calls, contains('dart pub publish --force'));
+  });
+
+  test('validation errors block before anything public exists', () async {
+    final ran = await release(
+      tools: RecordingTools(results: {
+        'dart pub publish --dry-run': ToolResult(
+          exitCode: 65,
+          stdout: 'Package has 1 warning and 1 error.',
+          stderr: '',
+        ),
+      }),
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(ran.problems.map((p) => p['code']), contains('RK-PUB-001'));
+    expect(
+      ran.calls.where((c) => c.startsWith('git tag')),
+      isEmpty,
+      reason: 'the refusal costs nothing public — it used to land after the '
+          'signed tag was pushed',
+    );
+    expect(ran.text, contains('nothing changed'));
+  });
+
+  test('a summary rk cannot classify blocks, because it is unrecognised',
+      () async {
+    final ran = await release(
+      tools: RecordingTools(results: {
+        'dart pub publish --dry-run':
+            ToolResult(exitCode: 65, stdout: 'something novel', stderr: ''),
+      }),
+    );
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(ran.problems.map((p) => p['code']), contains('RK-PUB-001'));
+  });
+
+  test('a failed push removes the local tag, so re-running starts clean',
+      () async {
+    final tools = RecordingTools(results: {
+      'git push origin v0.2.0': ToolResult(
+        exitCode: 1,
+        stdout: '',
+        stderr: 'fatal: unable to access origin',
+      ),
+    });
+    final ran = await release(
+      registry: _MutableRegistry(<String>['0.1.0']),
+      tools: tools,
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(
+      ran.calls,
+      contains('git tag -d v0.2.0'),
+      reason: 'a local tag nobody else can see is a trap: the next run '
+          'would inspect it as done and publish a version bound to a commit '
+          'only this machine knows about',
+    );
+    expect(ran.text, contains('nothing changed'));
+    expect(ran.problems.map((p) => p['code']), contains('RK-TAG-002'));
+    expect(
+      ran.calls.where((c) => c.contains('publish --force')),
+      isEmpty,
     );
   });
 
@@ -231,7 +352,10 @@ void main() {
       registry: _MutableRegistry(<String>['0.1.0']),
       tools: tools,
     );
-    expect(tools.calls.first, contains('git tag -a'));
+    expect(
+      tools.calls.firstWhere((c) => c.startsWith('git tag')),
+      contains('git tag -a'),
+    );
   });
 
   test('an existing tag is not created twice', () async {
@@ -307,7 +431,17 @@ void main() {
     final ran = await release(typed: null);
     expect(ran.exitCode, ExitCodes.refused);
     expect(ran.text, contains('nobody is here to authorize'));
-    expect(ran.calls, isEmpty);
+    expect(
+      ran.problems.map((p) => p['code']),
+      contains('RK-AUTH-001'),
+      reason: 'the refusal was prose-only under --json, against the '
+          'project\'s own rule that every non-zero exit carries a problem',
+    );
+    expect(
+      ran.calls.where(
+          (c) => c.startsWith('git tag') || c.contains('publish --force')),
+      isEmpty,
+    );
   });
 }
 

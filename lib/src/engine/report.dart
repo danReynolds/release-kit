@@ -130,7 +130,13 @@ class Report {
     Map<String, String> evidence = const {},
     Duration? took,
   }) {
-    (_entry(unit)['steps'] as List<Map<String, Object?>>).add({
+    // Replace by id rather than append: a step is one fact, and recording it
+    // twice — once at inspection, once after the act — gave a caller two
+    // entries for one id in a document whose contract is "keyed on step id",
+    // with the stale one first. The act's answer supersedes the inspection's.
+    final steps = _entry(unit)['steps'] as List<Map<String, Object?>>;
+    steps.removeWhere((s) => s['id'] == id);
+    steps.add({
       'id': id,
       'summary': summary,
       'verdict': verdict,
@@ -160,6 +166,13 @@ class Report {
   /// Where the run's evidence was written, so a caller is told rather than
   /// left to guess at a path it never saw printed.
   String? diagnosis;
+
+  /// Evidence a failed run should leave behind beside the report — native
+  /// tool output, pub's validation text. The diagnosis writes these; a run
+  /// that ends cleanly discards them.
+  final Map<String, String> attachments = {};
+
+  void attach(String name, String contents) => attachments[name] = contents;
 
   /// Records a halt. [helps] and [safe] only ever narrow: the worst answer of
   /// a run is the answer for the run.

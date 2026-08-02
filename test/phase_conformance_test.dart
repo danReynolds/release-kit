@@ -726,7 +726,7 @@ publish = ["pub.dev"]
       expect(run.code, ExitCodes.refused);
       expect(
         (run.report['problems'] as List).map((p) => (p as Map)['code']),
-        contains('RK-REL-002'),
+        contains('RK-VER-006'),
       );
       expect(run.text, contains('lib/injected.dart'));
       expect(
@@ -830,8 +830,13 @@ publish = ["pub.dev"]
       // test is the forcing function that keeps the phase honest about it.
       expect(
         File('doc/plan.md').readAsStringSync(),
-        contains('Phase 5 checkpoint'),
-        reason: 'the live publish must be recorded, with its output',
+        contains('\n## Phase 5 checkpoint'),
+        reason: 'the live publish must be recorded, with its output — and '
+            'the anchor is a heading at line start, because the plan\'s own '
+            'instruction text mentioning the phrase turned this gate green '
+            'before the act it forces: the displaced-string anti-pattern, '
+            'third appearance, in the gate guarding the most consequential '
+            'claim',
       );
     });
 

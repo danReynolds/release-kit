@@ -209,7 +209,21 @@ class ReleaseCommand {
         mark: Mark.done,
         note: 'already released',
       );
+      // Existence is confirmed here, not byte identity — that proof is one
+      // command away and worth pointing at.
+      output.next('rk verify ${unit.name}');
       return ExitCodes.ok;
+    }
+
+    // The publish preflight, before anything acts and inside --dry-run: pub's
+    // own validation and the consumer resolve are both read-only, and running
+    // them inside the publish step meant the first real run discovered a
+    // validation refusal only after the signed tag was public.
+    for (final step in checklist.steps) {
+      if (step.kind != StepKind.publishRegistry) continue;
+      if (states[step.id]!.isExact) continue;
+      final project = unit.projects.firstWhere((p) => p.name == step.project);
+      if (!await _publishPreflight(project)) return ExitCodes.refused;
     }
 
     output.heading('${unit.name} ${unit.version} → '
@@ -243,6 +257,15 @@ class ReleaseCommand {
       // worth recording evidence about.
       output.report.acted = true;
       final ok = await _act(step, unit);
+      // The act's answer supersedes the inspection's: without this, the
+      // document of a failed run said `absent` about a tag that was already
+      // public — rk acted, and the JSON said nothing had.
+      output.step(
+        step,
+        verdict: ok ? Verdict.exact : Verdict.unknown,
+        detail: ok ? 'done this run' : 'the act did not complete',
+        show: false,
+      );
       if (!ok) return ExitCodes.refused;
     }
 
@@ -308,7 +331,7 @@ class ReleaseCommand {
     if (blocked.isEmpty) return null;
 
     return Diagnostic(
-      code: 'RK-REL-001',
+      code: 'RK-HOST-001',
       message: 'this machine cannot produce every platform this unit ships',
       remedy: 'starting anyway would build and sign for minutes and then '
           'stop before publishing anything:\n  ${blocked.join('\n  ')}',
@@ -363,13 +386,18 @@ class ReleaseCommand {
     }
 
     if (confirm == null) {
-      output.blank();
-      output.line(
-        'nobody is here to authorize this',
-        mark: Mark.blocked,
+      output.problem(
+        Diagnostic(
+          code: 'RK-AUTH-001',
+          message: 'nobody is here to authorize this release',
+          remedy: 'a release from a terminal is authorized by the operator '
+              'confirming it. Unattended, rk needs a signed tag instead — '
+              'and verifying one is on the ledger, so today unattended '
+              'means refused.',
+        ),
+        unit: unit.name,
       );
-      output.say('a release from a terminal is authorized by the operator '
-          'confirming it. Unattended, rk needs a signed tag instead.');
+      output.halt(HaltKind.beforeActing);
       return false;
     }
 
@@ -378,7 +406,9 @@ class ReleaseCommand {
     );
     if (typed?.trim() != unit.version.canonical) {
       output.blank();
-      output.say('stopped. nothing was published.');
+      output.say(typed == null
+          ? 'nobody answered. stopped; nothing was published.'
+          : 'stopped. nothing was published.');
       return false;
     }
     return true;
@@ -501,7 +531,15 @@ class ReleaseCommand {
 
     final created = await tools.run('git', args, workingDirectory: git.root);
     if (!created.ok) {
-      output.line('tag ${unit.tag}', mark: Mark.blocked, note: created.summary);
+      output.problem(
+        Diagnostic(
+          code: 'RK-TAG-001',
+          message: 'the tag ${unit.tag} could not be created',
+          remedy: created.summary,
+        ),
+        unit: unit.name,
+      );
+      output.halt(HaltKind.beforeActing);
       return false;
     }
 
@@ -511,11 +549,28 @@ class ReleaseCommand {
       workingDirectory: git.root,
     );
     if (!pushed.ok) {
-      output.line('tag ${unit.tag}', mark: Mark.blocked, note: pushed.summary);
-      output.say(
-          'the tag exists locally; push it or delete it before '
-          're-running',
-          depth: 1);
+      // A local tag nobody else can see is a trap, not progress: the next run
+      // would inspect it as done, skip it, and publish a version bound to a
+      // commit only this machine knows about. Removing it restores "nothing
+      // changed" honestly, and the re-run starts clean.
+      final removed = await tools.run(
+        'git',
+        ['tag', '-d', unit.tag],
+        workingDirectory: git.root,
+      );
+      output.problem(
+        Diagnostic(
+          code: 'RK-TAG-002',
+          message: 'the tag ${unit.tag} could not be pushed',
+          remedy: removed.ok
+              ? '${pushed.summary}\nthe local tag was removed, so re-running '
+                  'starts clean'
+              : '${pushed.summary}\nand the local tag could not be removed — '
+                  'delete it before re-running: git tag -d ${unit.tag}',
+        ),
+        unit: unit.name,
+      );
+      output.halt(removed.ok ? HaltKind.beforeActing : HaltKind.lostTrack);
       return false;
     }
 
@@ -533,33 +588,28 @@ class ReleaseCommand {
         ? git.root
         : '${git.root}/${project.pubspec.directory}';
 
-    final dry = await tools.run(
-      'dart',
-      const ['pub', 'publish', '--dry-run'],
-      workingDirectory: directory,
-    );
-    if (!dry.ok) {
-      output.line(project.name, mark: Mark.blocked, note: dry.summary);
-      return false;
-    }
-
-    // The consumer resolve: resolution with development overrides disabled —
-    // pub excludes pubspec_overrides.yaml from the archive but honours it
-    // locally, so a dry run can pass while the published package is
-    // unresolvable for everyone else. The probe depends on the package the
-    // way every consumer will, with only the not-yet-published root supplied
-    // by path (a no-overrides stand-in for the version about to exist), so
-    // every transitive constraint resolves from the live registry or not at
-    // all.
-    if (!await _consumerResolve(project, directory)) return false;
-
+    // Validation and the consumer resolve already ran, pre-act, in the
+    // preflight — a refusal there costs nothing public.
     final code = await tools.runInteractive(
       'dart',
       const ['pub', 'publish', '--force'],
       workingDirectory: directory,
     );
     if (code != 0) {
-      output.line(project.name, mark: Mark.blocked, note: 'publish failed');
+      // Non-zero from an interactive publish is ambiguous: an expired session
+      // refused up front, or an upload died after acceptance. rk cannot tell
+      // from here, and saying "failed" would claim it can.
+      output.problem(
+        Diagnostic(
+          code: 'RK-PUB-003',
+          message: '${project.name}: dart pub publish did not complete',
+          remedy: 'if it refused up front (an expired session says run '
+              'dart pub login), fix that and re-run; if it died mid-upload, '
+              're-running inspects what actually landed',
+        ),
+        unit: project.unitName,
+      );
+      output.halt(HaltKind.lostTrack);
       return false;
     }
 
@@ -594,6 +644,61 @@ class ReleaseCommand {
     return _confirmPublishedBytes(project);
   }
 
+  /// pub's validation and the consumer resolve, both read-only.
+  ///
+  /// The gate matches what the act will do. `dart pub publish --dry-run`
+  /// exits non-zero for warnings and for errors alike, while `--force` — the
+  /// actual act — publishes past warnings and refuses errors. Gating on the
+  /// exit code alone made rk stricter than the registry it publishes to:
+  /// keybay's deliberate, test-enforced exact pins are "warnings", pub.dev
+  /// accepted them at 0.1.0, and rk would have refused the release — after
+  /// pushing the tag. Warnings are printed, so the operator confirms the
+  /// permanent act having seen them; errors block; a summary rk cannot
+  /// classify blocks, because fail-closed is for the unrecognised.
+  Future<bool> _publishPreflight(ResolvedProject project) async {
+    final directory = project.pubspec.directory == '.'
+        ? git.root
+        : '${git.root}/${project.pubspec.directory}';
+
+    final dry = await tools.run(
+      'dart',
+      const ['pub', 'publish', '--dry-run'],
+      workingDirectory: directory,
+    );
+    final validation = '${dry.stdout}\n${dry.stderr}'.trim();
+    output.report.attach('pub-dry-run-${project.name}.txt', validation);
+
+    if (!dry.ok) {
+      final summary = RegExp(r'Package has[^\n]*')
+          .allMatches(validation)
+          .map((m) => m.group(0)!)
+          .lastOrNull;
+      final warningsOnly = summary != null &&
+          !summary.toLowerCase().contains('error') &&
+          summary.toLowerCase().contains('warning');
+      if (!warningsOnly) {
+        output.problem(
+          Diagnostic(
+            code: 'RK-PUB-001',
+            message: 'pub refuses to publish ${project.name}',
+            remedy: validation.isEmpty ? dry.summary : validation,
+          ),
+          unit: project.unitName,
+        );
+        output.halt(HaltKind.beforeActing);
+        return false;
+      }
+      // The same warnings pub's interactive publish would have shown, shown —
+      // the operator confirms the permanent act having seen them.
+      output.say('pub warns, and --force will publish past these:', depth: 1);
+      for (final line in validation.split('\n')) {
+        if (line.trimLeft().startsWith('*')) output.say(line.trim(), depth: 2);
+      }
+    }
+
+    return _consumerResolve(project, directory);
+  }
+
   /// Resolution as every consumer will see it. False halts the step.
   Future<bool> _consumerResolve(
     ResolvedProject project,
@@ -618,11 +723,18 @@ dependency_overrides:
         workingDirectory: probe.path,
       );
       if (!resolved.ok) {
-        output.line(
-          project.name,
-          mark: Mark.blocked,
-          note: 'consumers could not resolve this: ${resolved.summary}',
+        output.problem(
+          Diagnostic(
+            code: 'RK-PUB-002',
+            message: '${project.name}: consumers could not resolve this',
+            remedy: '${resolved.summary}\n'
+                'the probe resolves as a Dart consumer on this SDK; a '
+                'package needing Flutter or a newer SDK than the probe '
+                'models is a limit rk has not lifted yet — see the ledger',
+          ),
+          unit: project.unitName,
         );
+        output.halt(HaltKind.beforeActing);
         return false;
       }
       return true;
@@ -651,7 +763,7 @@ dependency_overrides:
     } on ArchiveTampered catch (tampered) {
       output.problem(
         Diagnostic(
-          code: 'RK-REL-003',
+          code: 'RK-VER-004',
           message: '${project.name} ${project.version}: $tampered',
           remedy: 'the registry is serving bytes that do not match its own '
               'digest for what rk just published — stop and look',
@@ -701,7 +813,7 @@ dependency_overrides:
         // succeed.
         output.problem(
           Diagnostic(
-            code: 'RK-REL-002',
+            code: 'RK-VER-006',
             message: '${project.name} ${project.version}: '
                 '${comparison.detail ?? 'differs from this source'}',
             remedy: 'what is published is public and cannot be edited. If '

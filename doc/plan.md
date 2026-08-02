@@ -343,6 +343,17 @@ Recorded because the reviews found them claimed-as-shipped when they are not:
 - **Phase 5** — the wedged-draft command printed for the operator to run; the
   public result (URLs and the install command) on completion; and `.rk/` added
   to the repository's ignore rules by `rk init`.
+- **Phase 5 residue, ledgered by the independent review.** The RFC's
+  Authorization says release "verifies the authorizing tag's signature where
+  one exists"; nothing runs `git tag -v`, and unattended runs simply refuse —
+  fail-closed, but the promise is unimplemented and now recorded. Same for
+  the tag step's remote-verify leg (push is trusted from its exit code; a
+  failed push now deletes the local tag so re-running starts clean, which
+  closes the trap without the leg). The consumer-resolve probe models a Dart
+  consumer on this SDK: a Flutter-constrained package or one requiring a
+  newer SDK than the probe's pubspec is refused with the solver's words and
+  this ledger entry named in the remedy. The diagnosis still lacks per-step
+  durations.
 - **Phase 7a** — `PublishedIdentity` is built and proven but wired to
   nothing, and the binary chain requires a declared `[identity]` instead of
   deriving one — the opposite of "identity facts are derived, not declared".
@@ -535,7 +546,10 @@ terminal for the typed confirmation. The path to it, in order:
    keybay-v0.1.0`. Same for keybay_cli if desired (keybay_cli-v0.1.0
    already exists).
 3. Bump packages/keybay to 0.1.1 (or the intended next), add the CHANGELOG
-   entry, commit, push.
+   entry — and in the same commit, move keybay_cli's exact pin to the new
+   version. The repository is a pub workspace: bumped alone, the workspace no
+   longer solves, and the preflight refuses with pub's solver message. One
+   commit, both files, no trap.
 4. `rk status` — expect core ready with `→ rk release core`.
 5. `rk release core`, type the version at the prompt.
 6. Paste the transcript here as "## Phase 5 checkpoint", which turns the
