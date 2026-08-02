@@ -19,10 +19,19 @@ import 'scripted_tools.dart';
 /// A registry with a fixed idea of what is published, so status can be
 /// exercised without a network.
 class FakeRegistry implements RegistryReader {
-  FakeRegistry(this.published,
-      {this.unreachable = false, this.conflicting = const {}});
+  FakeRegistry(
+    this.published, {
+    this.unreachable = false,
+    this.conflicting = const {},
+    Map<String, List<int>>? archives,
+  }) : archives = archives ?? {};
 
   /// Package name to the versions live on the registry.
+  ///
+  /// Held by reference on purpose: this map is *the world*, and a test that
+  /// models a process restart builds a fresh FakeRegistry — fresh per-process
+  /// memo — around the same world. A memo that survived "restarts" hid a
+  /// double publish: the second run answered from the first run's cache.
   final Map<String, List<String>> published;
   final bool unreachable;
 
@@ -30,7 +39,7 @@ class FakeRegistry implements RegistryReader {
   final Set<String> conflicting;
 
   /// Archive bytes by "name@version", for the verify paths.
-  final Map<String, List<int>> archives = {};
+  final Map<String, List<int>> archives;
 
   /// Coordinates whose archive the registry serves with a wrong digest.
   final Set<String> tampered = {};

@@ -1,9 +1,22 @@
 import 'dart:io';
 
+import 'dart:convert';
+
+import 'package:rk/src/commands/release.dart';
+import 'package:rk/src/engine/compare.dart';
+import 'package:rk/src/engine/config.dart';
+import 'package:rk/src/engine/diagnostic.dart';
+import 'package:rk/src/engine/git.dart';
+import 'package:rk/src/engine/inspect.dart';
 import 'package:rk/src/engine/output.dart';
+import 'package:rk/src/engine/resolve.dart';
+import 'package:rk/src/engine/source_tree.dart';
+import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/transforms/archive.dart';
 import 'package:test/test.dart';
 
 import 'rk_process.dart';
+import 'status_test.dart' show FakeRegistry;
 
 /// Checks each phase against the deliverables its plan lists, so "done" is
 /// something this file decides rather than something a judgement call does.
@@ -555,6 +568,96 @@ publish = ["pub.dev"]
   });
 
   group('phase 5 — rk release for pub.dev', () {
+    // Executed at the command layer with an evolving world: the acts change
+    // the same fake registry and tag set the next inspection reads, which is
+    // what lets a re-run be the resume. Real pub.dev cannot be published to
+    // from a test, so the live half of the DONE WHEN is a recorded
+    // checkpoint, red below until the real publish lands.
+    Future<
+        ({
+          int code,
+          String text,
+          List<String> calls,
+          Map<String, Object?> report,
+          Object? died,
+        })> drive({
+      required Map<String, List<String>> published,
+      required Map<String, List<int>> archives,
+      required Set<String> tags,
+      Map<String, ToolResult> results = const {},
+      void Function(String key)? onRun,
+    }) async {
+      // A fresh registry per drive is a fresh process: the world — what is
+      // published, what archives exist, what tags exist — persists between
+      // runs, and the per-process cache does not. A cache that survived
+      // "restarts" hid a double publish in this very test.
+      final registry = FakeRegistry(published, archives: archives);
+      final buffer = StringBuffer();
+      final diagnostics = Diagnostics();
+      final parsed = ReleaseConfig.parse('''
+schema = 1
+
+[release.core]
+path = "packages/keybay"
+publish = ["pub.dev"]
+''', 'release.toml', diagnostics)!;
+      final tree = MemorySourceTree({
+        'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
+        'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
+      }, description: '/repo/keybay');
+      final resolution = Resolution.resolve(parsed, tree, diagnostics)!;
+      final git = GitState(
+        root: '/repo',
+        head: '9f2c1ab',
+        branch: 'main',
+        isClean: true,
+        uncommitted: const [],
+        headIsPushed: true,
+        tags: tags.toList(),
+        tagTargets: {for (final t in tags) t: '9f2c1ab'},
+        signingConfigured: true,
+        originUrl: 'example/keybay',
+      );
+      final tools = RecordingTools(results: results, onRun: onRun);
+      final output =
+          Output(sink: buffer.write, isTerminal: false, useColor: false);
+
+      var code = ExitCodes.refused;
+      Object? died;
+      try {
+        code = await ReleaseCommand(
+          resolution: resolution,
+          tree: tree,
+          git: git,
+          registry: registry,
+          inspector: Inspector(registry: registry, git: git),
+          comparator: Comparator(tools: const SystemTools()),
+          tools: tools,
+          output: output,
+          confirm: (_) async => '0.2.0',
+          wait: (_) async {},
+        ).run(only: 'core');
+      } on Object catch (error) {
+        died = error;
+      }
+      return (
+        code: code,
+        text: buffer.toString(),
+        calls: tools.calls,
+        report: jsonDecode(output.report.encode(exit: code))
+            as Map<String, Object?>,
+        died: died,
+      );
+    }
+
+    List<int> archiveOfTree() => ArchiveBuilder.gzip(ArchiveBuilder.tar([
+          ArchiveEntry(
+            name: 'pubspec.yaml',
+            bytes: 'name: keybay\nversion: 0.2.0\n'.codeUnits,
+          ),
+          ArchiveEntry(name: 'CHANGELOG.md', bytes: '## 0.2.0\n'.codeUnits),
+        ]));
+
     test('type-the-version confirmation for a permanent act', () {
       expect(sourceContains('type ${'\$'}{unit.version}'), isTrue);
     });
@@ -563,28 +666,174 @@ publish = ["pub.dev"]
       expect(sourceContains('StepKind.tag'), isTrue);
     });
 
-    test('consumer resolve before publishing', () {
-      expect(
-        sourceContains('no-overrides'),
-        isTrue,
-        reason: 'pub excludes pubspec_overrides from the archive but honours '
-            'it locally, so a dry run can pass while the published package '
-            'is unresolvable for everyone else',
+    test('consumer resolve runs before the permanent act, and blocks it',
+        () async {
+      final run = await drive(
+        published: {
+          'keybay': ['0.1.0']
+        },
+        archives: {},
+        tags: {},
+        results: {
+          'dart pub get --no-precompile': ToolResult(
+            exitCode: 1,
+            stdout: '',
+            stderr: 'version solving failed',
+          ),
+        },
       );
-    },
-        skip:
-            'red until phase 5 starts — unskipping this is part of starting it');
 
-    test('post-publish re-download and compare', () {
+      expect(run.code, ExitCodes.refused);
+      expect(run.text, contains('consumers could not resolve this'));
       expect(
-        sourceContains('compareArchives') || sourceContains('logicalContents'),
-        isTrue,
-        reason: 'confirming the version exists is not confirming the right '
-            'bytes were published',
+        run.calls.where((c) => c.contains('publish --force')),
+        isEmpty,
+        reason: 'pub excludes pubspec_overrides.yaml from the archive but '
+            'honours it locally — a dry run can pass while the published '
+            'package is unresolvable for everyone else, so the resolve '
+            'gates the act',
       );
-    },
-        skip:
-            'red until phase 5 starts — unskipping this is part of starting it');
+    });
+
+    test('post-publish re-download and compare, and a mismatch is terminal',
+        () async {
+      final published = {
+        'keybay': ['0.1.0']
+      };
+      final archives = <String, List<int>>{};
+      final run = await drive(
+        published: published,
+        archives: archives,
+        tags: {},
+        onRun: (key) {
+          if (key == 'dart pub publish --force') {
+            published['keybay']!.add('0.2.0');
+            // The registry serves bytes this tree cannot account for.
+            archives['keybay@0.2.0'] = ArchiveBuilder.gzip(ArchiveBuilder.tar([
+              ArchiveEntry(
+                name: 'pubspec.yaml',
+                bytes: 'name: keybay\nversion: 0.2.0\n'.codeUnits,
+              ),
+              ArchiveEntry(
+                name: 'lib/injected.dart',
+                bytes: 'not yours\n'.codeUnits,
+              ),
+            ]));
+          }
+        },
+      );
+
+      expect(run.code, ExitCodes.refused);
+      expect(
+        (run.report['problems'] as List).map((p) => (p as Map)['code']),
+        contains('RK-REL-002'),
+      );
+      expect(run.text, contains('lib/injected.dart'));
+      expect(
+        run.report['rerun_helps'],
+        false,
+        reason: 'an agent must not retry a release that can never succeed',
+      );
+      expect(run.text, contains('cannot be fixed by re-running'));
+    });
+
+    test(
+        'DONE WHEN, resume half: killed after the tag, a re-run finishes '
+        'without re-tagging', () async {
+      final published = {
+        'keybay': ['0.1.0']
+      };
+      final archives = <String, List<int>>{};
+      final tags = <String>{};
+
+      final first = await drive(
+        published: published,
+        archives: archives,
+        tags: tags,
+        results: {
+          'dart pub publish --force':
+              ToolResult(exitCode: 137, stdout: '', stderr: 'Killed: 9'),
+        },
+        onRun: (key) {
+          if (key.startsWith('git tag')) tags.add('v0.2.0');
+        },
+      );
+      expect(first.code, ExitCodes.refused, reason: first.text);
+      expect(tags, contains('v0.2.0'), reason: 'the tag landed before death');
+
+      final second = await drive(
+        published: published,
+        archives: archives,
+        tags: tags,
+        onRun: (key) {
+          if (key == 'dart pub publish --force') {
+            published['keybay']!.add('0.2.0');
+            archives['keybay@0.2.0'] = archiveOfTree();
+          }
+        },
+      );
+
+      expect(second.code, ExitCodes.ok, reason: second.text);
+      expect(
+        second.calls.where((c) => c.startsWith('git tag')),
+        isEmpty,
+        reason: 're-running is the resume: reality says the tag exists',
+      );
+      expect(
+        second.calls.where((c) => c.contains('publish --force')),
+        hasLength(1),
+      );
+      expect(second.text, contains('byte-identical'));
+    });
+
+    test(
+        'DONE WHEN, resume half: killed after the publish, a re-run '
+        'confirms without publishing twice', () async {
+      final published = {
+        'keybay': ['0.1.0']
+      };
+      final archives = <String, List<int>>{};
+      final tags = <String>{'v0.2.0'};
+
+      final first = await drive(
+        published: published,
+        archives: archives,
+        tags: tags,
+        onRun: (key) {
+          if (key == 'dart pub publish --force') {
+            published['keybay']!.add('0.2.0');
+            archives['keybay@0.2.0'] = archiveOfTree();
+            throw StateError('killed between the act and the confirmation');
+          }
+        },
+      );
+      expect(first.died, isNotNull, reason: 'the run died mid-flight');
+
+      final second =
+          await drive(published: published, archives: archives, tags: tags);
+
+      expect(second.code, ExitCodes.ok, reason: second.text);
+      expect(
+        second.calls.where((c) => c.contains('publish --force')),
+        isEmpty,
+        reason: 'pub.dev already lists it; publishing again would be the '
+            'permanent mistake',
+      );
+      expect(second.text, contains('already released'));
+    });
+
+    test(
+        'DONE WHEN, live half: recorded checkpoint of the real keybay '
+        'publish', () {
+      // Red until keybay core publishes through rk for real — a permanent,
+      // outward-facing act that belongs to the operator at a terminal. This
+      // test is the forcing function that keeps the phase honest about it.
+      expect(
+        File('doc/plan.md').readAsStringSync(),
+        contains('Phase 5 checkpoint'),
+        reason: 'the live publish must be recorded, with its output',
+      );
+    });
 
     test('resume skips what reality says is done', () {
       expect(sourceContains('isExact'), isTrue);

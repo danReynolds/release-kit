@@ -6,6 +6,7 @@ import '../engine/checklist.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
 import '../engine/output.dart';
+import '../engine/compare.dart';
 import '../engine/inspect.dart';
 import '../engine/registry.dart';
 import '../engine/resolve.dart';
@@ -26,11 +27,16 @@ class ReleaseCommand {
     required this.git,
     required this.registry,
     required this.inspector,
+    required this.comparator,
     required this.tools,
     required this.output,
     required this.confirm,
     this.dryRun = false,
-  });
+    Future<void> Function(Duration)? wait,
+  }) : _wait = wait ?? _sleep;
+
+  static Future<void> _sleep(Duration duration) =>
+      Future<void>.delayed(duration);
 
   final Resolution resolution;
   final SourceTree tree;
@@ -41,6 +47,20 @@ class ReleaseCommand {
   /// cannot answer the same question differently — release grew its own copy
   /// once, and it answered `absent` by default for every kind it did not name.
   final Inspector inspector;
+
+  /// The same comparator `verify` wears. The post-publish check is a
+  /// verification, and a second comparison implementation would be the
+  /// two-inspectors drift over again.
+  final Comparator comparator;
+
+  /// Waits, injectable so a test proves the polling without living it.
+  final Future<void> Function(Duration) _wait;
+
+  /// How long the confirming read chases a version the registry has accepted
+  /// but does not list yet, and how often it asks. Bounded: an unlisted
+  /// version after a minute is worth a human's eyes, not an infinite loop.
+  static const confirmDeadline = Duration(seconds: 60);
+  static const confirmInterval = Duration(seconds: 5);
 
   final Tools tools;
   final Output output;
@@ -513,9 +533,6 @@ class ReleaseCommand {
         ? git.root
         : '${git.root}/${project.pubspec.directory}';
 
-    // A consumer resolve first: overrides are excluded from the archive but
-    // honoured locally, so a dry run can pass while the published package is
-    // unresolvable for everyone else.
     final dry = await tools.run(
       'dart',
       const ['pub', 'publish', '--dry-run'],
@@ -525,6 +542,16 @@ class ReleaseCommand {
       output.line(project.name, mark: Mark.blocked, note: dry.summary);
       return false;
     }
+
+    // The consumer resolve: resolution with development overrides disabled —
+    // pub excludes pubspec_overrides.yaml from the archive but honours it
+    // locally, so a dry run can pass while the published package is
+    // unresolvable for everyone else. The probe depends on the package the
+    // way every consumer will, with only the not-yet-published root supplied
+    // by path (a no-overrides stand-in for the version about to exist), so
+    // every transitive constraint resolves from the live registry or not at
+    // all.
+    if (!await _consumerResolve(project, directory)) return false;
 
     final code = await tools.runInteractive(
       'dart',
@@ -536,29 +563,160 @@ class ReleaseCommand {
       return false;
     }
 
-    // Verify against reality rather than trusting the publisher's own word.
-    // rk just acted on this coordinate, so what it knew about the package is
-    // stale by rk's own hand. Without this, the confirming read answers from
-    // the memo the pre-act inspection wrote, and every successful publish
-    // reports failure.
-    registry.forget(project.name);
-    final after = await registry.inspect(project.name, project.version);
-    if (!after.isExact) {
+    // Verify against reality rather than trusting the publisher's own word,
+    // polling to a bounded deadline — the registry may take a moment to list
+    // what it just accepted — and always on the invalidated cache: rk just
+    // acted on this coordinate, so what it knew is stale by its own hand.
+    var waited = Duration.zero;
+    Inspection after;
+    while (true) {
+      registry.forget(project.name);
+      after = await registry.inspect(project.name, project.version);
+      if (after.isExact) break;
+      if (waited >= confirmDeadline) {
+        output.line(
+          project.name,
+          mark: Mark.blocked,
+          note: 'published, but pub.dev does not report it after '
+              '${waited.inSeconds}s',
+        );
+        output.halt(HaltKind.lostTrack);
+        output.say('re-run to confirm; nothing else is needed', depth: 1);
+        return false;
+      }
+      await _wait(confirmInterval);
+      waited += confirmInterval;
+    }
+
+    // The version existing is not the right bytes existing: download what
+    // the registry now serves and prove it against this tree, through the
+    // same comparator verify wears.
+    return _confirmPublishedBytes(project);
+  }
+
+  /// Resolution as every consumer will see it. False halts the step.
+  Future<bool> _consumerResolve(
+    ResolvedProject project,
+    String directory,
+  ) async {
+    final probe = Directory.systemTemp.createTempSync('rk-consumer-');
+    try {
+      File('${probe.path}/pubspec.yaml').writeAsStringSync('''
+name: rk_consumer_probe
+publish_to: none
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+dependencies:
+  ${project.name}: ${project.version}
+dependency_overrides:
+  ${project.name}:
+    path: ${directory.replaceAll('\\', '/')}
+''');
+      final resolved = await tools.run(
+        'dart',
+        const ['pub', 'get', '--no-precompile'],
+        workingDirectory: probe.path,
+      );
+      if (!resolved.ok) {
+        output.line(
+          project.name,
+          mark: Mark.blocked,
+          note: 'consumers could not resolve this: ${resolved.summary}',
+        );
+        return false;
+      }
+      return true;
+    } finally {
+      probe.deleteSync(recursive: true);
+    }
+  }
+
+  /// Downloads what the registry serves for the version just published and
+  /// proves it byte-for-byte against this tree.
+  Future<bool> _confirmPublishedBytes(ResolvedProject project) async {
+    RegistryPackage? package;
+    try {
+      package = await registry.lookup(project.name);
+    } on RegistryUnavailable {
+      package = null;
+    }
+    final published = package?.at(project.version);
+
+    final List<int> archive;
+    try {
+      if (published == null) {
+        throw RegistryUnavailable('the version vanished between reads');
+      }
+      archive = await registry.archive(published);
+    } on ArchiveTampered catch (tampered) {
+      output.problem(
+        Diagnostic(
+          code: 'RK-REL-003',
+          message: '${project.name} ${project.version}: $tampered',
+          remedy: 'the registry is serving bytes that do not match its own '
+              'digest for what rk just published — stop and look',
+        ),
+        unit: project.unitName,
+      );
+      output.halt(HaltKind.unfixableByRerun);
+      output.report.rerunHelps = false;
+      return false;
+    } on RegistryUnavailable catch (error) {
       output.line(
         project.name,
         mark: Mark.blocked,
-        note: 'published, but pub.dev does not report it yet',
+        note: 'published, and the archive could not be read back: '
+            '${error.message}',
       );
-      output.say('re-run to confirm; nothing else is needed', depth: 1);
+      output.halt(HaltKind.lostTrack);
       return false;
     }
 
-    output.line(
-      '${project.name} ${project.version}',
-      mark: Mark.done,
-      note: 'published',
+    final comparison = await comparator.compare(
+      archive: archive,
+      tree: tree,
+      packageDirectory: project.pubspec.directory,
     );
-    return true;
+
+    switch (comparison.verdict) {
+      case Verdict.exact:
+        output.line(
+          '${project.name} ${project.version}',
+          mark: Mark.done,
+          note: 'published · ${comparison.detail}',
+        );
+        return true;
+      case Verdict.unknown:
+        output.line(
+          '${project.name} ${project.version}',
+          mark: Mark.blocked,
+          note: 'published, and not fully provable: ${comparison.detail}',
+        );
+        output.halt(HaltKind.lostTrack);
+        return false;
+      case Verdict.conflict || Verdict.absent:
+        // The one unforgivable outcome: the registry serves bytes this tree
+        // cannot account for, one step after rk published. Permanent, and
+        // said as data — an agent must not retry a release that can never
+        // succeed.
+        output.problem(
+          Diagnostic(
+            code: 'RK-REL-002',
+            message: '${project.name} ${project.version}: '
+                '${comparison.detail ?? 'differs from this source'}',
+            remedy: 'what is published is public and cannot be edited. If '
+                'this difference is not yours, treat it as an incident; if '
+                'it is, the only way forward is the next version.',
+          ),
+          unit: project.unitName,
+        );
+        for (final entry in comparison.evidence.entries) {
+          output.say('${entry.key}  ${entry.value}', depth: 1);
+        }
+        output.halt(HaltKind.unfixableByRerun);
+        output.report.rerunHelps = false;
+        return false;
+    }
   }
 }
 

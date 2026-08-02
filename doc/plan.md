@@ -498,3 +498,45 @@ verdict into the full byte-identical pass above.
 Mutation pass: a differing file reading as identical, tampered bytes handed
 over anyway, the ref tree quietly reading HEAD, and direction two silently
 dropped — every one caught.
+
+## Phase 5 — built, awaiting the live checkpoint
+
+Everything but the permanent act is in and proven at the command layer with
+an evolving world — the acts change the same fake registry and tag set the
+next inspection reads, and a fresh drive is a fresh process (the world
+persists; the per-process cache does not — a cache that survived "restarts"
+hid a double publish in the gate's own first draft):
+
+- The consumer resolve gates the permanent act: resolution with development
+  overrides disabled, in a scratch consumer that depends on the package the
+  way everyone else will. A failing resolve blocks the publish.
+- The confirming read polls the invalidated cache to a bounded deadline
+  (60s, every 5s); a version the registry never lists ends in lostTrack —
+  "an effect may exist" — not in a spin and not in a success claim.
+- The version existing is not the right bytes existing: the post-publish
+  check downloads what the registry now serves and proves it byte-for-byte
+  against this tree through the same comparator verify wears. A mismatch is
+  RK-REL-002 — terminal, evidence named, rerun_helps off.
+- Killed after the tag, a re-run finishes without re-tagging. Killed after
+  the publish, a re-run confirms without publishing twice. Both proven by
+  execution in the phase gate.
+
+The one red gate is the forcing function: "DONE WHEN, live half" stays red
+until the real keybay publish is recorded here as the Phase 5 checkpoint.
+That act is the operator's — permanent, outward-facing, and requiring their
+terminal for the typed confirmation. The path to it, in order:
+
+1. In keybay: commit `release.toml` (it is untracked, which also defeats
+   "anyone with a fresh clone can verify" for keybay itself).
+2. Retro-tag the released 0.1.0 at the commit that produced it, as rk
+   instructs: `git tag keybay-v0.1.0 <that commit> && git push origin
+   keybay-v0.1.0` — RK-GIT-004 names it. v0.1.0 exists at the right commit
+   already, so: `git tag keybay-v0.1.0 v0.1.0^{} && git push origin
+   keybay-v0.1.0`. Same for keybay_cli if desired (keybay_cli-v0.1.0
+   already exists).
+3. Bump packages/keybay to 0.1.1 (or the intended next), add the CHANGELOG
+   entry, commit, push.
+4. `rk status` — expect core ready with `→ rk release core`.
+5. `rk release core`, type the version at the prompt.
+6. Paste the transcript here as "## Phase 5 checkpoint", which turns the
+   gate green.

@@ -1,6 +1,8 @@
 import 'dart:convert';
 
 import 'package:rk/src/commands/release.dart';
+import 'package:rk/src/engine/compare.dart';
+import 'package:rk/src/transforms/archive.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
@@ -26,6 +28,16 @@ MemorySourceTree _tree({String changelog = '## 0.2.0\n'}) => MemorySourceTree({
       'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
       'packages/keybay/CHANGELOG.md': changelog,
     }, description: '/repo/keybay');
+
+/// The archive a faithful publish of `_tree()`'s package would produce.
+List<int> publishedBytes({String version = '0.2.0'}) =>
+    ArchiveBuilder.gzip(ArchiveBuilder.tar([
+      ArchiveEntry(
+        name: 'pubspec.yaml',
+        bytes: 'name: keybay\nversion: $version\n'.codeUnits,
+      ),
+      ArchiveEntry(name: 'CHANGELOG.md', bytes: '## $version\n'.codeUnits),
+    ]));
 
 GitState _git({
   bool clean = true,
@@ -111,7 +123,11 @@ Future<Ran> release({
     // The same reader the command gets, or the inspection would consult a
     // different reality than the act.
     inspector: Inspector(registry: effectiveRegistry, git: effectiveGit),
+    // Real tar over fake-served bytes: the confirming compare extracts what
+    // the fake registry serves and proves it against the memory tree.
+    comparator: Comparator(tools: const SystemTools()),
     tools: recorder,
+    wait: (_) async {},
     output: Output(sink: buffer.write, isTerminal: false, useColor: false),
     confirm: typed == null ? null : (_) async => typed,
     dryRun: dryRun,
@@ -148,12 +164,17 @@ void main() {
     // The registry reports the version live once publish has run, which is
     // what the post-publish verification reads.
     final registry = _MutableRegistry(<String>['0.1.0']);
-    // Publishing changes the registry, the way the real command does. The
-    // confirming read sees it only through the invalidated cache — if release
-    // stops forgetting first, this test fails with "does not report it yet".
+    // Publishing changes the registry, the way the real command does: the
+    // version goes live and the registry starts serving its archive. The
+    // confirming read sees both only through the invalidated cache — if
+    // release stops forgetting first, this test fails with "does not report
+    // it yet" — and then proves the served bytes against this very tree.
     final tools = RecordingTools(
       onRun: (key) {
-        if (key == 'dart pub publish --force') registry.goLive('0.2.0');
+        if (key == 'dart pub publish --force') {
+          registry.goLive('0.2.0');
+          registry.archives['keybay@0.2.0'] = publishedBytes();
+        }
       },
     );
 
@@ -170,11 +191,37 @@ void main() {
         'git tag -s v0.2.0 -m core 0.2.0',
         'git push origin v0.2.0',
         'dart pub publish --dry-run',
+        'dart pub get --no-precompile',
         'dart pub publish --force',
       ]),
-      reason: 'the tag records the release before anything is published',
+      reason: 'the tag records the release before anything is published, and '
+          'the consumer resolve runs before the permanent act',
     );
     expect(ran.text, contains('released'));
+    expect(
+      ran.text,
+      contains('byte-identical'),
+      reason: 'the version existing is not the right bytes existing',
+    );
+  });
+
+  test('a version the registry never lists hits the deadline, honestly',
+      () async {
+    // Publish succeeds but the world never changes — the registry keeps
+    // answering absent. The confirming read must give up at the deadline and
+    // say an effect may exist, not spin forever and not report success.
+    final ran = await release(
+      registry: _MutableRegistry(<String>['0.1.0']),
+      tools: RecordingTools(), // publish "succeeds", nothing goes live
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(ran.text, contains('does not report it after'));
+    expect(
+      ran.text,
+      contains('an effect may exist'),
+      reason: 'rk acted and could not confirm — lostTrack, not failure',
+    );
   });
 
   test('an unsigned repository still tags, and says so', () async {

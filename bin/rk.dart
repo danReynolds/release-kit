@@ -280,6 +280,7 @@ Future<int> _release(
         tools: const SystemTools(),
         repository: git.originUrl,
       ),
+      comparator: Comparator(tools: const SystemTools()),
       tools: const SystemTools(),
       output: output,
       // The prompt is written straight to stdout, past the sink --json
