@@ -170,6 +170,18 @@ void main() {
       expect(package!.versions.map((v) => v.version.canonical), ['1.0.0']);
     });
 
+    test('the archive url and digest are read from the wire', () async {
+      // The digest proof is only as real as the field that feeds it: with
+      // archive_sha256 never parsed, the proof never runs and nothing else
+      // notices — a mutation demonstrated exactly that.
+      body = '{"versions": [{"version": "1.0.0", '
+          '"archive_url": "https://x/a.tar.gz", '
+          '"archive_sha256": "AB12cd"}]}';
+      final package = await registry.lookup('keybay');
+      expect(package!.versions.single.archiveUrl, 'https://x/a.tar.gz');
+      expect(package.versions.single.archiveSha256, 'AB12cd');
+    });
+
     test('a number where a string belongs does not throw', () async {
       body = '{"versions": [{"version": "1.0.0", "archive_url": 7}]}';
       final package = await registry.lookup('keybay');

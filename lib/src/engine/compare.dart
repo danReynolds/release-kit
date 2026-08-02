@@ -5,6 +5,11 @@ import 'source_tree.dart';
 import 'tools.dart';
 import 'verdict.dart';
 
+// The comparator answers in the same [Inspection] vocabulary everything else
+// speaks. It had its own result type for a while — field-for-field identical —
+// and the cost of a second type over one vocabulary lands on whoever maps
+// between them, which in phase 5 is the release verb.
+
 /// Compares a published package archive against the source it claims to be.
 ///
 /// This is the tool's core primitive, not a helper of the `verify` command:
@@ -24,30 +29,36 @@ import 'verdict.dart';
 /// What it cannot check, it says: pub's own file selection (`.pubignore`) is
 /// not reinterpreted here, so when one is present the missing-from-archive
 /// direction is reported as not fully checkable rather than guessed at.
+///
+/// Acknowledged partial: file *modes* are not compared — `SourceTree` does
+/// not expose them. Type is (a non-regular entry is a conflict), and mode
+/// verification is recorded for phase 7a, where rk builds the archives whose
+/// modes it controls and the executable bit is load-bearing.
 class Comparator {
   Comparator({required this.tools});
 
   final Tools tools;
 
-  /// Basenames pub excludes from every archive, at any depth, whatever the
-  /// tree tracks.
+  /// Whether pub excludes the file at this package-relative path from every
+  /// archive, whatever the tree tracks: anything hidden — a dot beginning
+  /// any path segment — and `pubspec.lock`.
   ///
-  /// Deliberately tiny, and every entry is a claim about `dart pub publish`
-  /// that a real published archive has confirmed — a wrong entry here
-  /// silently exempts a file from verification. The confirmation: the
-  /// keybay_cli 0.1.0 archive on pub.dev, whose tag tracks `.gitignore` at
-  /// four depths, a nested `pubspec.lock`, a `.metadata`, and its
-  /// `.pubignore`, and carries none of them.
-  static const alwaysExcluded = {
-    'pubspec.lock',
-    '.pubignore',
-    '.gitignore',
-    '.metadata',
-  };
+  /// This is pub's own rule, not rk's judgment, and it is held to by evidence
+  /// in both directions. The keybay_cli 0.1.0 archive carries none of the
+  /// four dotfile shapes its tag tracks; the dart-lang/args 2.5.0 archive
+  /// carries none of the `.github/` workflows its repository tracks — files
+  /// whose *segment*, not basename, is hidden, which is why the rule reads
+  /// the whole path. An earlier version that enumerated four basenames
+  /// accused that genuine release of tampering. A wrong entry here silently
+  /// exempts a file from verification, which is why the rule is a frozen
+  /// predicate with vectors rather than a growable set.
+  static bool pubExcludes(String relativePath) =>
+      relativePath.split('/').any((segment) => segment.startsWith('.')) ||
+      relativePath.split('/').last == 'pubspec.lock';
 
   /// Compares [archive] (a `.tar.gz` as bytes) against the files under
   /// [packageDirectory] in [tree].
-  Future<Comparison> compare({
+  Future<Inspection> compare({
     required List<int> archive,
     required SourceTree tree,
     required String packageDirectory,
@@ -63,10 +74,8 @@ class Comparator {
         ['-xzf', path, '-C', extracted.path],
       );
       if (!opened.ok) {
-        return Comparison(
-          Verdict.unknown,
-          detail: 'the published archive could not be opened: '
-              '${opened.summary}',
+        return Inspection.unknown(
+          'the published archive could not be opened: ${opened.summary}',
         );
       }
 
@@ -76,7 +85,7 @@ class Comparator {
     }
   }
 
-  Comparison _compareExtracted(
+  Inspection _compareExtracted(
     Directory extracted,
     SourceTree tree,
     String packageDirectory,
@@ -86,9 +95,18 @@ class Comparator {
 
     // Direction one: everything published must be accounted for by the tree.
     final inArchive = <String>{};
-    for (final entry in extracted.listSync(recursive: true)) {
-      if (entry is! File) continue;
+    for (final entry
+        in extracted.listSync(recursive: true, followLinks: false)) {
+      if (entry is Directory) continue;
       final relative = entry.path.substring(extracted.path.length + 1);
+      if (entry is! File) {
+        // pub publishes regular files, full stop. A symlink in an archive is
+        // an entry the source cannot account for whatever it points at — and
+        // skipping it made a dangling link invisible, so an archive carrying
+        // one read as byte-identical.
+        evidence[relative] = 'not a regular file — pub never publishes these';
+        continue;
+      }
       inArchive.add(relative);
 
       final atSource = tree.readBytes('$prefix$relative');
@@ -109,7 +127,7 @@ class Comparator {
     for (final tracked in tree.trackedFiles()) {
       if (prefix.isNotEmpty && !tracked.startsWith(prefix)) continue;
       final relative = tracked.substring(prefix.length);
-      if (alwaysExcluded.contains(relative.split('/').last)) continue;
+      if (pubExcludes(relative)) continue;
       if (inArchive.contains(relative)) continue;
       if (pubignore) {
         unverifiable++;
@@ -119,36 +137,23 @@ class Comparator {
     }
 
     if (evidence.isNotEmpty) {
-      return Comparison(
-        Verdict.conflict,
-        detail: 'the published archive is not the source at this ref',
+      return Inspection.conflict(
+        'the published archive is not the source at this ref',
         evidence: evidence,
       );
     }
     if (unverifiable > 0) {
       // Honest partial: the archive-side check passed in full, but rk cannot
       // say whether these files were meant to be excluded or lost.
-      return Comparison(
-        Verdict.unknown,
-        detail: 'every published file matches, and $unverifiable tracked '
-            'file${unverifiable == 1 ? '' : 's'} absent from the archive '
-            'cannot be judged — a .pubignore is present, and rk does not '
-            'reinterpret pub\'s file selection',
+      return Inspection.unknown(
+        'every published file matches, and $unverifiable tracked '
+        'file${unverifiable == 1 ? '' : 's'} absent from the archive '
+        'cannot be judged — a .pubignore is present, and rk does not '
+        'reinterpret pub\'s file selection',
       );
     }
-    return Comparison(
-      Verdict.exact,
+    return Inspection.exact(
       detail: '${inArchive.length} files, byte-identical',
     );
   }
-}
-
-class Comparison {
-  Comparison(this.verdict, {this.detail, this.evidence = const {}});
-
-  final Verdict verdict;
-  final String? detail;
-
-  /// Per-file findings — the difference itself, not the fact of one.
-  final Map<String, String> evidence;
 }

@@ -42,10 +42,12 @@ Future<void> main(List<String> args) async {
   // `--at=<ref>` carries a value, so it is peeled before the set membership
   // checks that every other flag goes through.
   String? at;
+  var atEmpty = false;
   final flags = <String>{};
   for (final arg in args.where((a) => a.startsWith('-'))) {
     if (arg.startsWith('--at=')) {
       at = arg.substring('--at='.length);
+      if (at.isEmpty) atEmpty = true;
       continue;
     }
     flags.add(arg);
@@ -107,6 +109,24 @@ Future<void> main(List<String> args) async {
       Diagnostic(
         code: 'RK-CLI-005',
         message: 'rk $command does not have ${inapplicable.join(', ')}',
+        remedy: _usage.trim(),
+      ),
+    );
+    exitCode = ExitCodes.usage;
+    if (json) stdout.write(output.report.encode(exit: ExitCodes.usage));
+    return;
+  }
+
+  // Misuse is refused, not repaired: an empty ref would be resolved as
+  // something, and a third word would be dropped as if it had not been said.
+  if (atEmpty || positional.length > 2) {
+    output.problem(
+      Diagnostic(
+        code: 'RK-CLI-007',
+        message: atEmpty
+            ? '--at= names no ref'
+            : 'rk takes a verb and a unit, and got '
+                '"${positional.join(' ')}"',
         remedy: _usage.trim(),
       ),
     );

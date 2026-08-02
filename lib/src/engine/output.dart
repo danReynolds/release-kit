@@ -156,28 +156,49 @@ class Output {
       depth: depth,
       labelWidth: 48,
     );
+    // The difference itself, not the fact of one — on the surface a person
+    // reads, not only in the document. status's live forge conflict printed
+    // a bare blocked line while the JSON carried the six-asset table.
+    for (final entry in evidence.entries) {
+      line('${entry.key}  ${entry.value}', depth: depth + 1);
+    }
   }
 
   /// One verification result, printed and recorded as one act.
+  ///
+  /// [id] is the frozen step id for a subject the grammar names, so a caller
+  /// keys verifications the same way it keys steps — free prose was the phase
+  /// 3 "machine surface empty where a caller needs it" finding relocated.
+  /// [counts] is false for a scope disclosure — a subject this command names
+  /// as unexamined rather than one it judged — which reads as unknown but is
+  /// not a failed proof, because it never claimed to be one.
   void verification(
     String unit,
     String subject, {
     required Verdict verdict,
+    String? id,
     String? detail,
     Map<String, String> evidence = const {},
+    bool counts = true,
   }) {
     report.verification(
       unit,
       subject,
+      id: id,
       verdict: verdict.name,
       detail: detail,
       evidence: evidence,
+      counts: counts,
     );
     line(
       subject,
       mark: switch (verdict) {
         Verdict.exact => Mark.done,
+        // A proof that failed — conflicting or not provable — is ✗: the RFC
+        // gives the glyph to "blocked, conflicting, or failed", and a failed
+        // run whose line carries no mark reads as a note.
         Verdict.conflict => Mark.blocked,
+        Verdict.unknown when counts => Mark.blocked,
         _ => Mark.none,
       },
       note: detail,
@@ -310,8 +331,8 @@ class Output {
   /// The code is always in the report: a person searching for it wants it out
   /// of the way until they need it, while a caller keying on it needs it every
   /// time.
-  void problem(Diagnostic diagnostic, {int depth = 0}) {
-    report.problem(diagnostic);
+  void problem(Diagnostic diagnostic, {String? unit, int depth = 0}) {
+    report.problem(diagnostic, unit: unit);
     final where = diagnostic.source == null ? '' : '${diagnostic.source}  ';
     line(
       '$where${diagnostic.message}',

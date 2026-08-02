@@ -142,6 +142,29 @@ void main() {
     });
   });
 
+  group('flags that carry no meaning here are refused, not repaired', () {
+    late Rk repo;
+    setUpAll(() => repo = Rk.example(scratch, 'single-package', as: 'flags'));
+
+    test('--at on a verb that is not verify', () {
+      final run = repo(['status', '--at=v1.0.0', '--json']);
+      expect(run.code, 2, reason: run.all);
+      expect(run.problems.map((p) => p['code']), contains('RK-CLI-005'));
+    });
+
+    test('an empty --at names no ref', () {
+      final run = repo(['verify', '--at=', '--json']);
+      expect(run.code, 2);
+      expect(run.problems.map((p) => p['code']), contains('RK-CLI-007'));
+    });
+
+    test('a third word is refused, not silently dropped', () {
+      final run = repo(['verify', 'lib', 'bogus', '--json']);
+      expect(run.code, 2);
+      expect(run.problems.map((p) => p['code']), contains('RK-CLI-007'));
+    });
+  });
+
   group('a repository rk has nothing to say about', () {
     test('no release.toml is not an error', () {
       final bare = Rk.repository(scratch, 'bare', {'README.md': 'nothing\n'});

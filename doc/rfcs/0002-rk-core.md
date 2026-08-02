@@ -235,12 +235,22 @@ arrow key.
   verifies the authorizing tag's signature where one exists; then inspects
   before acting at every step. Halts on `conflict` or `unknown`; safe to
   re-run at any point.
-- **`rk verify`** — takes a tag and resolves `release.toml` and sources **at
-  that tag**, so an old release is never checked against today's config.
-  With no argument, verifies each unit's latest published release. On
-  success it prints provenance — when each destination received it, from
-  which commit, signed by whom — and names what is not knowable rather than
-  omitting it.
+- **`rk verify`** — proves the version each unit's manifests declare
+  against what the registry serves for it, comparing byte-for-byte with the
+  **sources at the ref** — the derived tag, or one named with `--at=<ref>`
+  for a release made under an older tag scheme. After a completed release
+  the manifest version *is* the latest published one; older releases are
+  reached by naming their tag. Configuration is read from the working tree,
+  deliberately: the version, the sources, and the comparison come from the
+  ref, while `release.toml` locates the packages — a repository's early tags
+  predate its release.toml (keybay's do), and refusing to verify them would
+  make the tool's own history unprovable. What the config supplies is
+  *where to look*, and a package that moved directories is caught by the
+  ref's own manifest being missing there (RK-VER-002). On success it prints
+  provenance — the ref proved against and when the registry received it —
+  and names what is not knowable rather than omitting it: a version with no
+  tag has no commit to bind to, and rk does not pretend otherwise. Signer
+  identity arrives with authorization (phase 5).
 
 ### Authorization
 

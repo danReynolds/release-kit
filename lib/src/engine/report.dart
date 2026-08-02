@@ -92,14 +92,21 @@ class Report {
     String unit,
     String subject, {
     required String verdict,
+    String? id,
     String? detail,
     Map<String, String> evidence = const {},
+    bool counts = true,
   }) {
     ((_entry(unit)['verifications'] ??= <Map<String, Object?>>[])
             as List<Map<String, Object?>>)
         .add({
+      if (id != null) 'id': id,
       'subject': subject,
       'verdict': verdict,
+      // False marks a disclosure: the subject was named as unexamined, not
+      // judged. A caller folding verifications into pass/fail skips these —
+      // they never claimed to be proofs.
+      'counts': counts,
       if (detail != null) 'detail': detail,
       if (evidence.isNotEmpty) 'evidence': evidence,
     });
@@ -136,8 +143,9 @@ class Report {
     });
   }
 
-  void problem(Diagnostic diagnostic) {
+  void problem(Diagnostic diagnostic, {String? unit}) {
     _problems.add({
+      if (unit != null) 'unit': unit,
       'code': diagnostic.code,
       'message': diagnostic.message,
       if (diagnostic.source != null) 'source': diagnostic.source.toString(),

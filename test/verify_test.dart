@@ -71,6 +71,8 @@ Future<({int code, String text, Map<String, Object?> report})> verify({
 }
 
 void main() {
+  reviewRegressions();
+
   test('a published archive matching the tree at the tag verifies', () async {
     final registry = FakeRegistry({
       'keybay': ['0.2.0']
@@ -198,6 +200,180 @@ void main() {
       run.text,
       isNot(contains('not on pub.dev')),
       reason: 'unreachable is not unpublished',
+    );
+  });
+}
+
+/// Closeout regressions from the phase 4 independent reviews: eight mutations
+/// of this verb survived, and two false definite negatives were proven live.
+void reviewRegressions() {
+  test('a quoted version is the version, not a different string', () async {
+    final sources = {
+      'packages/keybay/pubspec.yaml': 'name: keybay\nversion: "0.2.0"\n',
+      'packages/keybay/lib/keybay.dart': 'void main() {}\n',
+    };
+    final registry = FakeRegistry({
+      'keybay': ['0.2.0']
+    })
+      ..archives['keybay@0.2.0'] = _archiveOf(
+        {
+          'packages/keybay/pubspec.yaml': 'name: keybay\nversion: "0.2.0"\n',
+          'packages/keybay/lib/keybay.dart': 'void main() {}\n',
+        },
+        under: 'packages/keybay/',
+      );
+
+    final run = await verify(
+      registry: registry,
+      working: sources,
+      refs: {'v0.2.0': MemorySourceTree(sources)},
+    );
+
+    expect(
+      run.code,
+      ExitCodes.ok,
+      reason: 'a hand-rolled version regex read the quotes as part of the '
+          'version and declared a published release "not on pub.dev": '
+          '${run.text}',
+    );
+  });
+
+  test('a version with a trailing comment is still readable', () async {
+    final sources = {
+      'packages/keybay/pubspec.yaml':
+          'name: keybay\nversion: 0.2.0 # released\n',
+      'packages/keybay/lib/keybay.dart': 'void main() {}\n',
+    };
+    final registry = FakeRegistry({
+      'keybay': ['0.2.0']
+    })
+      ..archives['keybay@0.2.0'] =
+          _archiveOf(sources, under: 'packages/keybay/');
+
+    final run = await verify(
+      registry: registry,
+      working: sources,
+      refs: {'v0.2.0': MemorySourceTree(sources)},
+    );
+    expect(run.code, ExitCodes.ok, reason: run.text);
+  });
+
+  test('a manifest missing at the ref is RK-VER-002, refused', () async {
+    final run = await verify(
+      registry: FakeRegistry({
+        'keybay': ['0.2.0']
+      }),
+      refs: {
+        'v0.2.0': MemorySourceTree(const {'README.md': 'moved\n'})
+      },
+    );
+    expect(run.code, ExitCodes.refused);
+    expect(run.text, contains('no readable version at'));
+  });
+
+  test('the honest partial fails loudly: mark, problem, and no retry',
+      () async {
+    final sources = {
+      ..._sources(),
+      'packages/keybay/.pubignore': 'doc/**\n',
+      'packages/keybay/doc/internal.md': 'excluded on purpose\n',
+    };
+    final registry = FakeRegistry({
+      'keybay': ['0.2.0']
+    })
+      ..archives['keybay@0.2.0'] =
+          _archiveOf(_sources(), under: 'packages/keybay/');
+
+    final run = await verify(
+      registry: registry,
+      working: _sources(),
+      refs: {'v0.2.0': MemorySourceTree(sources)},
+    );
+
+    expect(run.code, ExitCodes.refused);
+    expect(
+      run.text,
+      contains('✗'),
+      reason: 'a failed run whose line carries no mark reads as a note',
+    );
+    expect(
+      (run.report['problems'] as List).map((p) => (p as Map)['code']),
+      contains('RK-VER-005'),
+    );
+    expect(
+      run.report['rerun_helps'],
+      false,
+      reason: 'the .pubignore is part of the package; running again '
+          'changes nothing',
+    );
+  });
+
+  test('a conflict is terminal as data: problem, unit key, no retry', () async {
+    final tampered = _sources();
+    tampered['packages/keybay/lib/keybay.dart'] = 'tampered\n';
+    final registry = FakeRegistry({
+      'keybay': ['0.2.0']
+    })
+      ..archives['keybay@0.2.0'] =
+          _archiveOf(tampered, under: 'packages/keybay/');
+
+    final run = await verify(
+      registry: registry,
+      refs: {'v0.2.0': MemorySourceTree(_sources())},
+    );
+
+    final problems =
+        (run.report['problems'] as List).cast<Map<String, Object?>>();
+    expect(problems.map((p) => p['code']), contains('RK-VER-006'));
+    expect(
+      problems.firstWhere((p) => p['code'] == 'RK-VER-006')['unit'],
+      'core',
+      reason: 'attributable without parsing prose',
+    );
+    expect(run.report['rerun_helps'], false);
+  });
+
+  test('tampered bytes are terminal as data too', () async {
+    final registry = FakeRegistry({
+      'keybay': ['0.2.0']
+    })
+      ..archives['keybay@0.2.0'] = [1, 2, 3]
+      ..tampered.add('keybay@0.2.0');
+
+    final run = await verify(
+      registry: registry,
+      refs: {'v0.2.0': MemorySourceTree(_sources())},
+    );
+
+    expect(run.code, ExitCodes.refused);
+    expect(
+      (run.report['problems'] as List).map((p) => (p as Map)['code']),
+      contains('RK-VER-004'),
+    );
+    expect(run.report['rerun_helps'], false);
+  });
+
+  test('the verification is keyed by the frozen step id', () async {
+    final registry = FakeRegistry({
+      'keybay': ['0.2.0']
+    })
+      ..archives['keybay@0.2.0'] =
+          _archiveOf(_sources(), under: 'packages/keybay/');
+
+    final run = await verify(
+      registry: registry,
+      refs: {'v0.2.0': MemorySourceTree(_sources())},
+    );
+
+    final unit = (run.report['units'] as List).single as Map;
+    final verification = (unit['verifications'] as List)
+        .cast<Map>()
+        .firstWhere((v) => v['counts'] == true);
+    expect(
+      verification['id'],
+      'core/pub.dev/keybay@0.2.0',
+      reason: 'free prose was the "machine surface empty where a caller '
+          'needs it" finding relocated',
     );
   });
 }

@@ -65,6 +65,21 @@ void main() {
     expect(tree.trackedFiles(), ['a.txt']);
   });
 
+  test('lists what the ref tracked, not what HEAD tracks', () {
+    write('a.txt', 'x\n');
+    commit();
+    tag('v1.0.0');
+    write('later.txt', 'added after the release\n');
+    commit('later');
+
+    expect(
+      GitTreeAtRef.at(root.path, 'v1.0.0')!.trackedFiles(),
+      ['a.txt'],
+      reason: 'reading HEAD here would report files the release never had — '
+          'and the missing-from-archive direction would accuse every one',
+    );
+  });
+
   test('bytes are read byte-for-byte, not through text decoding', () {
     File('${root.path}/blob.bin')
         .writeAsBytesSync([0x00, 0xff, 0xfe, 0x0d, 0x0a, 0x1a]);

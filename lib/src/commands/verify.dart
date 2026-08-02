@@ -1,6 +1,7 @@
 import '../engine/compare.dart';
 import '../engine/diagnostic.dart';
 import '../engine/output.dart';
+import '../engine/pubspec.dart';
 import '../engine/registry.dart';
 import '../engine/resolve.dart';
 import '../engine/source_tree.dart';
@@ -61,6 +62,21 @@ class VerifyCommand {
       return ExitCodes.usage;
     }
 
+    if (at != null && only == null && units.length > 1) {
+      // One ref cannot honestly name several units' releases: applying it to
+      // all of them proves each against a tag that released at most one.
+      output.problem(
+        Diagnostic(
+          code: 'RK-CLI-006',
+          message: '--at names one release, and this repository has '
+              '${units.length} units',
+          remedy: 'say which unit the ref belongs to: '
+              'rk verify <unit> --at=$at',
+        ),
+      );
+      return ExitCodes.usage;
+    }
+
     var failed = false;
     for (final unit in units) {
       failed = !await _unit(unit) || failed;
@@ -74,12 +90,28 @@ class VerifyCommand {
 
     final registryProjects =
         unit.projects.where((p) => p.channels.contains('pub.dev')).toList();
-    if (registryProjects.isEmpty) {
-      output.line(
-        'nothing on pub.dev to verify — binary channels are proved by '
-        'their own release assets',
-        depth: 1,
+
+    // What this command does not examine is said, on both surfaces — a unit
+    // that publishes to three channels must not print one bare check mark.
+    // Said as a disclosure, not a failure: nothing below claims these were
+    // proved, so nothing upgrades unknown to a pass, and nothing that *was*
+    // proved is failed for the disclosure's sake.
+    final unexamined = {
+      for (final project in unit.projects)
+        ...project.channels.where((c) => c != 'pub.dev'),
+    };
+    if (unexamined.isNotEmpty) {
+      output.verification(
+        unit.name,
+        unexamined.join(', '),
+        verdict: Verdict.unknown,
+        detail: 'not examined — binary channel verification arrives with '
+            'phase 7b',
+        counts: false,
       );
+    }
+
+    if (registryProjects.isEmpty) {
       return true;
     }
 
@@ -116,16 +148,19 @@ class VerifyCommand {
   ) async {
     // The version under proof is the one the ref's own manifest claims — the
     // working tree may have moved on, and verify answers for the release,
-    // not for today.
+    // not for today. Read through the same parser everything else uses: a
+    // hand-rolled second reader disagreed with it on quoted versions and
+    // trailing comments, and concluded "not published" about a version that
+    // was — the definite negative this tool exists to never state.
     final directory = project.pubspec.directory;
-    final manifest = tree.read(
-      directory == '.' ? 'pubspec.yaml' : '$directory/pubspec.yaml',
-    );
+    final manifestPath =
+        directory == '.' ? 'pubspec.yaml' : '$directory/pubspec.yaml';
+    final manifest = tree.read(manifestPath);
     final atRef = manifest == null
         ? null
-        : RegExp(r'^version:\s*(\S+)\s*$', multiLine: true)
-            .firstMatch(manifest)
-            ?.group(1);
+        : Pubspec.parse(manifest, manifestPath, Diagnostics())
+            ?.version
+            ?.canonical;
     if (atRef == null) {
       output.problem(
         Diagnostic(
@@ -185,8 +220,10 @@ class VerifyCommand {
           remedy: 'stop and look — retrying will not change what the '
               'registry serves',
         ),
+        unit: unit.name,
         depth: 1,
       );
+      output.report.rerunHelps = false;
       return false;
     } on RegistryUnavailable catch (error) {
       output.problem(
@@ -206,11 +243,13 @@ class VerifyCommand {
       packageDirectory: directory,
     );
 
+    final id = '${unit.name}/pub.dev/${project.name}@$atRef';
     switch (comparison.verdict) {
       case Verdict.exact:
         output.verification(
           unit.name,
           '${project.name} $atRef',
+          id: id,
           verdict: Verdict.exact,
           detail: '${comparison.detail} against $ref'
               '${published.published == null ? '' : ' · published '
@@ -218,29 +257,53 @@ class VerifyCommand {
         );
         return true;
       case Verdict.unknown:
-        // Honestly partial is not proven: the exit says so, the detail says
-        // why, and nothing upgrades it to a pass.
+        // Honestly partial is not proven: the exit says so, the problem says
+        // why, and re-running will not change it — the .pubignore is part of
+        // the package.
         output.verification(
           unit.name,
           '${project.name} $atRef',
+          id: id,
           verdict: Verdict.unknown,
           detail: comparison.detail,
         );
+        output.problem(
+          Diagnostic(
+            code: 'RK-VER-005',
+            message: '${project.name} $atRef could not be fully proved',
+            remedy: comparison.detail,
+          ),
+          unit: unit.name,
+          depth: 1,
+        );
+        output.report.rerunHelps = false;
         return false;
       case Verdict.conflict || Verdict.absent:
         output.verification(
           unit.name,
           '${project.name} $atRef',
+          id: id,
           verdict: Verdict.conflict,
           detail: comparison.detail,
           evidence: comparison.evidence,
         );
-        output.say(
-          'what is published is public and cannot be edited. If this '
-          'difference is not yours, treat it as an incident; if it is, the '
-          'only way forward is the next version.',
+        // Terminal, and said as data: an agent keying on rerun_helps or
+        // problems must not read "retry" out of the one finding rk itself
+        // calls unfixable. This is the phase 3 finding — a halt that was
+        // prose-only under --json — kept out of the new verb.
+        output.problem(
+          Diagnostic(
+            code: 'RK-VER-006',
+            message: '${project.name} $atRef: '
+                '${comparison.detail ?? 'differs from the source'}',
+            remedy: 'what is published is public and cannot be edited. If '
+                'this difference is not yours, treat it as an incident; if '
+                'it is, the only way forward is the next version.',
+          ),
+          unit: unit.name,
           depth: 1,
         );
+        output.report.rerunHelps = false;
         return false;
     }
   }

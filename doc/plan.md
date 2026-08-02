@@ -168,6 +168,30 @@ From RFC 0002's CI-readiness section, binding on every phase:
 
 Plus: zero runtime dependencies, enforced by a test over the import graph.
 
+## Review doctrine, amended after phase 4
+
+Three rules added, each from a failure this project had:
+
+1. **Reviewers run in isolated clones, never the shared working tree.** Two
+   phase 4 reviewers ran concurrently in one tree; the mutation reviewer's
+   live mutations were observed by the spec reviewer as an intermittent
+   "conflict read as exact" — three sightings, a preserved artifact whose
+   field combination no shipped branch constructs, and hours spent ruling
+   out the VM before the collision was recognized. The artifact was
+   manufactured by a mutation the mutation reviewer was explicitly
+   instructed to try. An isolated 400-run soak at the same commit was clean.
+   The comparator was sound; the process was not.
+2. **A gate for an unstarted phase is skipped with its reason, and
+   unskipping it is part of starting the phase.** Deliberately-red gates
+   made "is the suite green" a judgment call, which is the ambiguity gates
+   exist to remove.
+3. **Acknowledged partials are written where the code is.** The comparator
+   does not compare file modes (SourceTree exposes none); it says so in its
+   own doc, and mode verification is a 7a obligation, where rk builds the
+   archives whose modes it controls. A crash during a read-only verb writes
+   `.rk/diagnosis` — the one write such a verb may make, because a crash is
+   a bug in rk and the stack is the only copy of what went wrong.
+
 ## Review record
 
 A phase is done when its group in `test/phase_conformance_test.dart` passes.
@@ -356,6 +380,32 @@ broke nothing, because FakeRegistry.lookup answered null for unreachable,
 violating the real client's contract (throw, never null) and teaching callers
 the exact collapse the real client refuses. The fake now throws; the mutation
 now fails seven tests.
+
+**Phase 4 — the independent reviews.** Twenty-five mutations, eight
+survived — down from thirteen of twenty in phase 3 — plus two false definite
+negatives proven live. The engine held ("sound to build phase 5 on"); the
+verb did not, and the survivors clustered on it. Fixed in closeout: the
+version-at-ref regex — a second pubspec reader that read a quoted version's
+quotes as part of the version and declared a published release "not on
+pub.dev" — replaced with the hardened parser; a verify conflict now lands in
+`problems` with the unit named and turns `rerun_helps` off, where before the
+one finding rk itself calls unfixable was reported to a machine as clean and
+retryable; the honest partial fails with a mark, a problem, and no-retry
+instead of reading as a note; `alwaysExcluded` replaced by pub's actual rule
+(any hidden path segment, plus pubspec.lock) as a frozen predicate with
+vectors, after the four-basename version accused the genuine dart-lang/args
+2.5.0 release of tampering — and the closeout's own vector test then caught
+the first replacement checking basenames where the args evidence shows
+segments; a symlink in an archive is a conflict rather than invisible;
+verifications are keyed by the frozen step id; a mixed-channel unit names
+the channels it did not examine on both surfaces as a disclosure that fails
+nothing; --at across several units, an empty --at, and a silently-dropped
+third argument are usage refusals; and the fake registry's archive method —
+the fourth contract divergence in the same fake — now refuses a missing URL
+and can serve tampering, so the whole RK-VER-004 path is executed by tests.
+The conformance group's one test/-file grep (the doctrine's own first rule,
+broken in the first phase gated under it) now reads the engine, and the
+RFC's import-graph promise is a real test.
 
 **Phase 3 — the independent reviews.** Two reviewers, mutation-first and
 spec-fidelity, both against b5f4b97. Twenty mutations: thirteen survived,

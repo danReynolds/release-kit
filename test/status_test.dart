@@ -32,6 +32,9 @@ class FakeRegistry implements RegistryReader {
   /// Archive bytes by "name@version", for the verify paths.
   final Map<String, List<int>> archives = {};
 
+  /// Coordinates whose archive the registry serves with a wrong digest.
+  final Set<String> tampered = {};
+
   /// Successful lookups memoized, exactly as the real client memoizes.
   ///
   /// The parity matters: the real cache is why a post-publish verification
@@ -47,8 +50,16 @@ class FakeRegistry implements RegistryReader {
     if (unreachable) {
       throw RegistryUnavailable('pub.dev could not be reached');
     }
+    // The real contract, held to: no URL is a refusal, and a digest mismatch
+    // is tampering, not unavailability.
+    if (version.archiveUrl == null) {
+      throw RegistryUnavailable('the registry lists no archive');
+    }
     for (final entry in archives.entries) {
       if (entry.key.endsWith('@${version.version.canonical}')) {
+        if (tampered.contains(entry.key)) {
+          throw ArchiveTampered(stated: 'deadbeef', actual: 'cafef00d');
+        }
         return entry.value;
       }
     }
@@ -75,7 +86,14 @@ class FakeRegistry implements RegistryReader {
             (v) => PublishedVersion(
               version: Version.tryParse(v)!,
               published: DateTime.utc(2026, 1, 15),
-              archiveUrl: null,
+              // The real registry lists an archive URL for every published
+              // version, and the real client refuses a version without one —
+              // fakes that answered null here ran every verify test on data
+              // the shipping code rejects, the fourth divergence of this
+              // fake from the contract it stands in for.
+              archiveUrl: archives.containsKey('$name@$v')
+                  ? 'fake://$name/$v.tar.gz'
+                  : null,
               archiveSha256: null,
             ),
           )

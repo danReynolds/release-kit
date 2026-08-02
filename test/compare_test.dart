@@ -1,6 +1,9 @@
+import 'dart:io';
+
 import 'package:rk/src/engine/compare.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/engine/verdict.dart' show Inspection, Verdict;
 import 'package:rk/src/engine/verdict.dart';
 import 'package:rk/src/transforms/archive.dart';
 import 'package:test/test.dart';
@@ -9,6 +12,8 @@ import 'package:test/test.dart';
 /// and opened by the real system tar — a round trip that also proves the
 /// builder writes what tar reads.
 void main() {
+  exclusionVectors();
+
   final comparator = Comparator(tools: const SystemTools());
 
   List<int> archiveOf(Map<String, String> files) => ArchiveBuilder.gzip(
@@ -18,7 +23,7 @@ void main() {
         ]),
       );
 
-  Future<Comparison> compare(
+  Future<Inspection> compare(
     Map<String, String> archive,
     Map<String, String> source, {
     String directory = 'packages/tool',
@@ -123,6 +128,48 @@ void main() {
     );
   });
 
+  test('dotfiles at any depth are pub\'s, not findings', () async {
+    final result = await compare(files, {
+      ...files,
+      '.github/workflows/test.yml': 'on: push\n',
+      '.test_config': '{}\n',
+    });
+    expect(
+      result.verdict,
+      Verdict.exact,
+      reason: 'an earlier four-name rule accused the genuine dart-lang/args '
+          '2.5.0 release of tampering over exactly these shapes',
+    );
+  });
+
+  test('a symlink in the archive is a conflict, not invisible', () async {
+    // Built with the real tar, because rk's own builder refuses to write one.
+    final scratch = Directory.systemTemp.createTempSync('rk-symlink-');
+    addTearDown(() => scratch.deleteSync(recursive: true));
+    final dir = Directory('${scratch.path}/pkg')..createSync();
+    File('${dir.path}/pubspec.yaml')
+        .writeAsStringSync('name: tool\nversion: 1.0.0\n');
+    Link('${dir.path}/lib').createSync('/nowhere/dangling');
+    final made = Process.runSync(
+      'tar',
+      ['-czf', '${scratch.path}/a.tar.gz', '-C', dir.path, '.'],
+    );
+    expect(made.exitCode, 0, reason: made.stderr as String);
+
+    final result = await comparator.compare(
+      archive: File('${scratch.path}/a.tar.gz').readAsBytesSync(),
+      tree: MemorySourceTree({'pubspec.yaml': 'name: tool\nversion: 1.0.0\n'}),
+      packageDirectory: '.',
+    );
+    expect(
+      result.verdict,
+      Verdict.conflict,
+      reason: 'skipped, a dangling link was an archive entry the source '
+          'cannot account for reading as byte-identical',
+    );
+    expect(result.evidence.keys.join(','), contains('lib'));
+  });
+
   test('bytes that are not an archive are unknown, not a conclusion', () async {
     final result = await comparator.compare(
       archive: [1, 2, 3, 4],
@@ -140,5 +187,44 @@ void main() {
       packageDirectory: '.',
     );
     expect(result.verdict, Verdict.exact);
+  });
+}
+
+/// The exclusion rule, frozen as vectors the way the version grammar is.
+///
+/// A mutation pass added 'lib' and 'LICENSE' to the old growable set and
+/// nothing objected — a published package silently missing its LICENSE read
+/// byte-identical. The rule is pub's, held to by evidence in both directions
+/// (keybay_cli 0.1.0 and dart-lang/args 2.5.0), and a change to it is a
+/// deliberate act or nothing.
+void exclusionVectors() {
+  test('what pub excludes, and what it never does', () {
+    for (final excluded in [
+      '.gitignore',
+      '.pubignore',
+      'example/.gitignore',
+      'example/flutter/.metadata',
+      '.github/workflows/test.yml',
+      '.test_config',
+      'pubspec.lock',
+      'example/pubspec.lock',
+    ]) {
+      expect(Comparator.pubExcludes(excluded), isTrue, reason: excluded);
+    }
+    for (final kept in [
+      'LICENSE',
+      'CHANGELOG.md',
+      'README.md',
+      'lib/tool.dart',
+      'pubspec.yaml',
+      'doc/guide.md',
+    ]) {
+      expect(
+        Comparator.pubExcludes(kept),
+        isFalse,
+        reason: '$kept exempted would silently skip its loss from the '
+            'archive',
+      );
+    }
   });
 }
