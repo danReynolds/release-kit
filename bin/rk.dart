@@ -127,15 +127,22 @@ Future<void> main(List<String> args) async {
   }
 
   // Misuse is refused, not repaired: an empty ref would be resolved as
-  // something, and a third word would be dropped as if it had not been said.
-  if (atEmpty || positional.length > 2) {
+  // something, a third word would be dropped as if it had not been said, and
+  // `rk init somepkg` would configure the whole repository while reading as
+  // if it had scoped itself to one unit.
+  if (atEmpty ||
+      positional.length > 2 ||
+      (command == 'init' && target != null)) {
     output.problem(
       Diagnostic(
         code: 'RK-CLI-007',
         message: atEmpty
             ? '--at= names no ref'
-            : 'rk takes a verb and a unit, and got '
-                '"${positional.join(' ')}"',
+            : command == 'init' && positional.length <= 2
+                ? 'rk init takes no unit — it proposes for the whole '
+                    'repository, and got "$target"'
+                : 'rk takes a verb and a unit, and got '
+                    '"${positional.join(' ')}"',
         remedy: _usage.trim(),
       ),
     );
@@ -178,12 +185,14 @@ Future<void> main(List<String> args) async {
   } on Object catch (error, stack) {
     code = ExitCodes.refused;
     crash = '$error\n$stack';
-    // `status` and `verify` change nothing, so a crash in one of them did not
-    // act — saying "an effect may exist" there would teach a reader to
-    // discount the sentence everywhere it is true.
-    const readOnly = {'status', 'verify'};
+    // The report's own acted flag decides the sentence, not the verb: a
+    // release that crashed while still reading has not touched anything, and
+    // an init that crashed after writing has. Keying on the verb made every
+    // init crash claim "an effect may exist" — including the ones that never
+    // reached the write — which teaches a reader to discount the sentence
+    // everywhere it is true.
     output.halt(
-      readOnly.contains(command) ? HaltKind.beforeActing : HaltKind.lostTrack,
+      output.report.acted ? HaltKind.lostTrack : HaltKind.beforeActing,
     );
     output.problem(
       Diagnostic(
@@ -258,12 +267,14 @@ Future<int> _init(Output output, {required bool interactive}) async {
     write: (path, contents) => File('$root/$path').writeAsStringSync(contents),
     // A prompt would be written straight to stdout, past the sink that --json
     // silences, so asking is not an option when a caller is parsing the
-    // answer. init already refuses when nobody can confirm.
+    // answer. init already refuses when nobody can confirm. The answer is
+    // parsed by InitCommand.consented, where EOF is a decline — hasTerminal
+    // alone does not guard that, because macOS reports a terminal for
+    // `rk init < /dev/null`.
     confirm: interactive && stdin.hasTerminal
         ? (prompt) async {
             stdout.write(prompt);
-            final answer = stdin.readLineSync()?.trim().toLowerCase() ?? '';
-            return answer.isEmpty || answer == 'y' || answer == 'yes';
+            return InitCommand.consented(stdin.readLineSync());
           }
         : null,
   ).run();

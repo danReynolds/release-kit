@@ -90,7 +90,16 @@ class GitSourceTree implements SourceTree {
       const ['ls-files', '-z'],
       workingDirectory: root,
     );
-    if (result.exitCode != 0) return _tracked = const [];
+    if (result.exitCode != 0) {
+      // Not an empty list: an empty list is a real answer — "this repository
+      // tracks nothing" — and callers act on it as one. init would propose
+      // nothing and say so; a comparison would call every file untracked. A
+      // listing that failed answered nothing.
+      throw SourceUnreadable(
+        'the repository file list',
+        (result.stderr as String).trim(),
+      );
+    }
     final out = result.stdout as String;
     return _tracked = out.split('\u0000').where((p) => p.isNotEmpty).toList();
   }
@@ -224,7 +233,15 @@ class GitTreeAtRef implements SourceTree {
       ['ls-tree', '-r', '--name-only', '-z', commit],
       workingDirectory: root,
     );
-    if (result.exitCode != 0) return _tracked = const [];
+    if (result.exitCode != 0) {
+      // The commit was verified at construction, so a listing that fails now
+      // is the object store misbehaving — an answer verify must not read as
+      // "this release contained no files".
+      throw SourceUnreadable(
+        'the file list at $ref',
+        (result.stderr as String).trim(),
+      );
+    }
     final out = result.stdout as String;
     return _tracked =
         out.split(String.fromCharCode(0)).where((p) => p.isNotEmpty).toList();

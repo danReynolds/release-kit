@@ -340,9 +340,10 @@ Recorded because the reviews found them claimed-as-shipped when they are not:
   silently. And reconcile RK-RES-008 with the RFC's "projects in a unit are
   not required to be identical" sentence — the code refuses divergence, the
   RFC text permits it, and fleury is where the difference will bite.
-- **Phase 5** — the wedged-draft command printed for the operator to run; the
-  public result (URLs and the install command) on completion; and `.rk/` added
-  to the repository's ignore rules by `rk init`.
+- **Phase 5** — the wedged-draft command printed for the operator to run; and
+  the public result (URLs and the install command) on completion. (`.rk/`
+  added to the repository's ignore rules by `rk init`: shipped in the phase 6
+  closeout, named in the confirm prompt.)
 - **Phase 5 residue, second review.** The resume path proves presence, not
   bytes: a re-run that finds the version published answers "already
   released" and points at `rk verify` rather than re-running the byte proof
@@ -473,6 +474,37 @@ both directions, isClean's false direction, and the cache-forget contract.
 The phase 7 signing gate was green before its deliverable existed — the
 displaced-string anti-pattern again, an unwired file proving another file is
 used — and is now red until the wiring lands, which is what a gate is for.
+
+**Phase 6 — the independent review.** Thirteen mutations, six survived, and
+a "not yet" verdict on the one mutating verb outside release. The high
+finding was real and unattended: `rk init < /dev/null` wrote the file — EOF
+read as null, null collapsed to the empty string, and empty means Yes, while
+macOS reports a terminal for `/dev/null`, so `hasTerminal` never guarded it.
+The parse is now `InitCommand.consented`, where EOF declines; its vectors
+are pinned (a harness cannot fake a terminal at EOF, which is itself why the
+inline closure was untestable), and a gate holds the entry point to routing
+its answer through it. The rest, all since fixed: init's three exit-0 states
+encoded byte-identical empty documents, so already-configured,
+nothing-releasable, and awaiting-a-human are each data now (RK-INIT-002/003,
+the attachment), distinguishable by the fleet-sweeping caller init exists
+for; init bypassed the reading rules every other verb goes through, so an
+unreadable `release.toml` crashed as "a bug in rk" claiming an effect may
+exist — it is RK-CONF-034 now, the crash sentence keys on the report's own
+`acted` flag rather than the verb, and a tracked-but-deleted manifest is
+named instead of skipped in silence; an untracked manifest is named with its
+`git add`, never proposed from; RK-INIT-001 turns `rerun_helps` off (the
+same manifests derive the same refusal) and attaches the refused proposal so
+its problems' line references have a referent, under a name
+(`release.toml.refused`) a caller cannot mistake for the accepted one;
+`rk init somepkg` is a usage refusal instead of a silently unscoped write;
+`trackedFiles` on a repository git cannot list throws instead of answering
+"tracks nothing" (RK-GIT-006 in init; the same lie is now impossible under
+the comparator); and the `.rk/` ignore-rule obligation from the phase 5
+ledger shipped — written with the config, named in the prompt, idempotent.
+The six survivors are tests now: the consent vectors, the refusal document's
+contents, the executable comment's presence and absence, the sanitization
+rules, and — against real repositories, which the memory tree cannot model —
+the untracked and tracked-but-deleted cases.
 
 ## Phase 4 checkpoint — real keybay, live pub.dev, 2026-07-30
 

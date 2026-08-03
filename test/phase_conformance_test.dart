@@ -915,6 +915,57 @@ publish = ["pub.dev"]
       expect(run.all, contains('nothing here can be released'));
     });
 
+    test('init takes no unit, and says so instead of ignoring one', () {
+      final repo = Rk.example(scratch, 'single-package', as: 'stray-arg');
+      final run = repo(['init', 'somepkg']);
+      expect(run.code, isNot(0));
+      expect(
+        run.all,
+        contains('takes no unit'),
+        reason: 'silently configuring the whole repository under an argument '
+            'that reads as a scope is worse than refusing it',
+      );
+    });
+
+    test('the quiet exits are distinguishable by a caller, not only a reader',
+        () {
+      // Review finding: already-configured and nothing-releasable produced
+      // byte-identical empty documents under --json. Each fact is data now.
+      final existing = Rk.example(scratch, 'single-package', as: 'json-exists');
+      final exists = existing(['init', '--json']);
+      expect(exists.code, 0, reason: exists.all);
+      expect(
+        (exists.json['problems'] as List)
+            .map((p) => (p as Map)['code'])
+            .toList(),
+        contains('RK-INIT-002'),
+      );
+
+      final none = Rk.repository(scratch, 'json-none', {
+        'pubspec.yaml': 'name: tool\npublish_to: none\nversion: 1.0.0\n',
+      });
+      none.commit();
+      final nothing = none(['init', '--json']);
+      expect(nothing.code, 0, reason: nothing.all);
+      expect(
+        (nothing.json['problems'] as List)
+            .map((p) => (p as Map)['code'])
+            .toList(),
+        contains('RK-INIT-003'),
+      );
+    });
+
+    test('the CLI parses consent through the one parser that declines EOF', () {
+      // `rk init < /dev/null` wrote the file: EOF read as null, null
+      // collapsed to '', and '' means Yes — while macOS reports /dev/null as
+      // a terminal, so hasTerminal never guarded it. A test harness cannot
+      // reach that state through a real pipe (pipes report no terminal and
+      // take the nobody-to-confirm path), so the gate is that the entry
+      // point routes its answer through InitCommand.consented — whose
+      // vectors, including EOF, are pinned in init_test.dart.
+      expect(usedOutside('InitCommand.consented', 'init.dart'), isTrue);
+    });
+
     test(
         'DONE WHEN: the proposal round-trips through the machine surface '
         'into a releasable repository', () {
