@@ -431,6 +431,15 @@ which reduces the rule to three cases:
 - **a draft that is anything else** — delete it, recreate, upload the full
   inventory.
 
+*Amended (7b, as built):* the middle case is folded into the third — every
+same-tag draft is deleted by id and the release recreated, because with
+the workspace holding every artifact, proving a draft exactly right costs
+more than rebuilding it. Adoption returns when CI makes the draft the only
+copy, per the paragraph below. The create is delegated to
+`gh release create`, which is itself draft-first (draft → upload → publish),
+so the safety outcome — no permanent release ever missing files — holds by
+delegation.
+
 Deleting is safe precisely because the draft is not the only copy. Its
 worst case is re-uploading a few files, which is cheaper than the machinery
 required to repair one in place. Draft deletion is the only deletion rk
@@ -440,6 +449,11 @@ performs, it applies only to unpublished drafts, and it is announced.
 require the exact inventory, confirm every digest, recompute the checksums
 file and formula from those digests and compare against what is staged.
 Only then publish once, and confirm the release reports immutable.
+
+*Amended (7b, as built):* the post-create confirmation compares the asset
+inventory by name; per-asset digest re-proof of a published release belongs
+to `rk verify`, which runs when the assets are public facts — ledgered in
+the plan.
 
 **After publishing, verification failure is terminal.** Immutable releases
 cannot be edited and deleting one permanently burns the tag name. rk
@@ -460,6 +474,15 @@ current, re-read, then install from the public tap as a final check. "Older
 clean base" is derived from reality — the tap formula must byte-equal the
 formula asset of the release it names — so a hand-edited formula correctly
 yields `conflict`. Reads use git fetch, never a CDN path.
+
+*Amended (7b, as built):* the inspection's exactness is the version
+pointer (absent / exact / unknown); the byte-equality that would surface
+`conflict` for a hand-edited formula needs digests of published assets and
+belongs to `rk verify` — ledgered in the plan. The swap applies against a
+fresh `--depth 1` clone (the clone is the read; a rejected push is the CAS
+failing), the act reads the pushed formula back from the public tap
+byte-for-byte, and both reads use the GitHub contents API — REST, not a
+CDN path; the API serves blob content, not cached pages.
 
 ### Cleanup
 

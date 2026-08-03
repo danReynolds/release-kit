@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:rk/src/engine/checklist.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
@@ -9,6 +11,7 @@ import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/verdict.dart';
 import 'package:test/test.dart';
 
+import 'scripted_tools.dart';
 import 'status_test.dart' show FakeRegistry;
 
 /// The shared inspector, driven step by step.
@@ -278,6 +281,94 @@ void classificationTables() {
       reason: 'absent would report a formula that may already point at this '
           'release as work still to do',
     );
+  });
+
+  group('the formula inspection reads the public tap', () {
+    Future<Inspection> formula(ToolResult? Function(String key) answers) async {
+      final inspector = Inspector(
+        registry: FakeRegistry({}),
+        git: GitState(
+          root: '/repo',
+          head: 'abc123def456',
+          branch: 'main',
+          isClean: true,
+          uncommitted: const [],
+          headIsPushed: true,
+          tags: const [],
+          signingConfigured: false,
+          originUrl: 'example/tool',
+        ),
+        tools: RecordingTools(answers: answers),
+        repository: 'example/tool',
+      );
+      return inspector.inspect(
+        Step(
+          id: 'cli/homebrew/example-tool',
+          unit: 'cli',
+          kind: StepKind.publishFormula,
+          summary: 'update the formula',
+          needs: const [],
+        ),
+        (await _binaryUnit()),
+      );
+    }
+
+    String contentsOf(String text) =>
+        '{"content":"${base64Encode(utf8.encode(text))}"}';
+
+    test('a formula naming this version is exact', () async {
+      final state = await formula((key) => key.contains('/contents/')
+          ? ok(contentsOf('class T < Formula\n  version "1.0.0"\nend\n'))
+          : null);
+      expect(state.verdict, Verdict.exact);
+      expect(state.detail, contains('1.0.0'));
+    });
+
+    test('a formula naming an earlier version is absent — the work remains',
+        () async {
+      // Exactness is the version pointer: weakened to "any readable
+      // formula", a tap stuck on the previous release would read satisfied
+      // and a release would complete without ever moving it.
+      final state = await formula((key) => key.contains('/contents/')
+          ? ok(contentsOf('class T < Formula\n  version "0.9.0"\nend\n'))
+          : null);
+      expect(state.verdict, Verdict.absent);
+      expect(state.detail, contains('earlier release'));
+    });
+
+    test('404 with a readable tap is absent; with an unreadable tap, unknown',
+        () async {
+      final missing = await formula((key) {
+        if (key.contains('/contents/')) {
+          return failed('gh: Not Found (HTTP 404)');
+        }
+        if (key.startsWith('gh repo view')) return ok('{"name":"tap"}');
+        return null;
+      });
+      expect(missing.verdict, Verdict.absent);
+
+      final unreadable = await formula((key) {
+        if (key.contains('/contents/')) {
+          return failed('gh: Not Found (HTTP 404)');
+        }
+        if (key.startsWith('gh repo view')) {
+          return failed('Could not resolve to a Repository');
+        }
+        return null;
+      });
+      expect(
+        unreadable.verdict,
+        Verdict.unknown,
+        reason: 'GitHub answers 404 for a tap the token cannot see, and '
+            'absent is what lets the step act',
+      );
+    });
+
+    test('an answer that does not decode is unknown, never absent', () async {
+      final state = await formula(
+          (key) => key.contains('/contents/') ? ok('not json at all') : null);
+      expect(state.verdict, Verdict.unknown);
+    });
   });
 
   test('the expected asset set is derived, and derives everything', () async {

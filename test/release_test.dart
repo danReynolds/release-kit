@@ -213,7 +213,7 @@ publish_to: none
 executables:
   tool: tool
 ''',
-        'packages/tool/CHANGELOG.md': '## 1.0.0\n',
+        'packages/tool/CHANGELOG.md': '## 1.0.0\n\nFirst release.\n',
       }, description: '/repo/tool');
 
   /// The forge as a first-releaseable world: no release at the new tag,
@@ -280,6 +280,62 @@ executables:
       reason: 'nothing may act before the baseline is known',
     );
     expect(ran.text, isNot(contains('RK-INT-001')));
+  });
+
+  test(
+      'a declared identity that disagrees with the published release is '
+      'refused before anything acts', () async {
+    // The declaration says com.example.tool; the release users installed
+    // says io.github.other.tool. Left to the sign step, this surfaced as a
+    // signature mismatch after the tag was public, blaming the keychain.
+    final ran = await release(
+      config: binaryConfig,
+      source: binaryTree(),
+      state: _git(tags: ['v0.9.0']),
+      registry: FakeRegistry({}),
+      typed: '1.0.0',
+      only: 'cli',
+      answers: (key) {
+        if (key.contains('/releases/tags/v0.9.0')) {
+          return ToolResult(
+            exitCode: 0,
+            stdout: '{"assets":[{"name":"tool-0.9.0-macos-arm64.tar.gz"}]}',
+            stderr: '',
+          );
+        }
+        if (key.startsWith('gh release download')) {
+          return ToolResult(exitCode: 0, stdout: '', stderr: '');
+        }
+        if (key.startsWith('sh -c ls ')) {
+          final dir =
+              key.substring('sh -c ls '.length).split('/*.tar.gz').first;
+          return ToolResult(
+            exitCode: 0,
+            stdout: '$dir/tool-0.9.0-macos-arm64.tar.gz\n',
+            stderr: '',
+          );
+        }
+        if (key.startsWith('codesign -d -r-')) {
+          return ToolResult(
+            exitCode: 0,
+            stdout: 'designated => identifier "io.github.other.tool" and '
+                'certificate leaf[subject.OU] = "TEAM123456"',
+            stderr: '',
+          );
+        }
+        return forge(key);
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.refused, reason: ran.text);
+    expect(ran.problems.map((p) => p['code']), contains('RK-SIGN-005'));
+    expect(ran.text, contains('io.github.other.tool'));
+    expect(ran.text, contains('com.example.tool'));
+    expect(
+      ran.calls.where((c) => c.startsWith('git tag')),
+      isEmpty,
+      reason: 'the disagreement is knowable before the first act',
+    );
   });
 
   test('the baseline is read from the newest lower version, not the oldest',

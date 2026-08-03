@@ -122,4 +122,58 @@ void main() {
       expect(diagnostics.found.single.remedy, contains('## 0.2.0'));
     });
   });
+
+  group('the entry — the release body — extracts exactly its own section', () {
+    const multi = '# Changelog\n'
+        '\n'
+        '## 0.2.0\n'
+        '\n'
+        'Newest things.\n'
+        '\n'
+        '### Fixed\n'
+        '\n'
+        '- a bug\n'
+        '\n'
+        '## 0.1.0\n'
+        '\n'
+        'Older things.\n';
+
+    test('stops at the next version heading, not at the end of the file', () {
+      // Left open, the body would carry every older release's notes — a
+      // 0.2.0 announcement quietly republishing the 0.1.0 text below it.
+      final entry = Changelog.entry(multi, v('0.2.0'))!;
+      expect(entry, contains('Newest things.'));
+      expect(entry, isNot(contains('Older things.')));
+      expect(entry, isNot(contains('## 0.1.0')));
+    });
+
+    test('a subsection heading stays inside the entry', () {
+      // Closed by *any* heading, "### Fixed" would truncate the body at
+      // the first subsection — most real changelogs would lose most of
+      // their entry.
+      final entry = Changelog.entry(multi, v('0.2.0'))!;
+      expect(entry, contains('### Fixed'));
+      expect(entry, contains('- a bug'));
+    });
+
+    test('the oldest entry runs to the end of the file', () {
+      expect(Changelog.entry(multi, v('0.1.0')), 'Older things.');
+    });
+
+    test('a decorated heading still opens its entry', () {
+      final entry = Changelog.entry(
+        '## [0.2.0] - 2026-08-03\n\nDated things.\n',
+        v('0.2.0'),
+      );
+      expect(entry, 'Dated things.');
+    });
+
+    test('a bare heading yields the empty entry, not null', () {
+      // '' and null are different answers: null means "no heading" — the
+      // same fact `mentions` reports — while '' means the heading exists
+      // and nobody wrote under it, which release refuses as RK-CHG-004.
+      expect(Changelog.entry('## 0.2.0\n## 0.1.0\nx\n', v('0.2.0')), '');
+      expect(Changelog.entry('## 0.1.0\nx\n', v('0.2.0')), isNull);
+    });
+  });
 }

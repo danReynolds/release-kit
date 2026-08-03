@@ -182,9 +182,19 @@ class HomebrewTap {
       workingDirectory: checkout,
     );
     if (!pushed.ok) {
+      // Only an actual rejection is the compare-and-swap failing; an auth
+      // failure or an unreachable remote wearing "the tap moved" prose
+      // would send the operator hunting for a concurrent writer that does
+      // not exist.
+      final said = pushed.summary.toLowerCase();
+      final rejected = said.contains('non-fast-forward') ||
+          said.contains('fetch first') ||
+          said.contains('rejected');
       return TapOutcome.failed(
-        'the tap moved while rk was working — re-running reads it fresh: '
-        '${pushed.summary}',
+        rejected
+            ? 'the tap moved while rk was working — re-running reads it '
+                'fresh: ${pushed.summary}'
+            : 'the push failed: ${pushed.summary}',
       );
     }
     return const TapOutcome.updated();

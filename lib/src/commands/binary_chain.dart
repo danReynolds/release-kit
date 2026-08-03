@@ -209,6 +209,17 @@ class BinaryChain {
     final team = publishedRequirement != null
         ? _teamOf(publishedRequirement) ?? declaredTeam
         : declaredTeam;
+    // The identifier is an identity fact like the team, and identity facts
+    // are derived from the release users already installed. Signing with
+    // the project name while the published binary carries a reverse-DNS
+    // identifier would produce a different designated requirement — a
+    // mismatch discovered only after signing, for a value rk could read
+    // before it.
+    final codeId = (publishedRequirement != null
+            ? _identifierOf(publishedRequirement)
+            : null) ??
+        declaredCodeId ??
+        project.name;
     if (team == null) {
       output.problem(
         Diagnostic(
@@ -231,7 +242,7 @@ class BinaryChain {
     final signed = await signer.sign(
       binary: workspace.pathOf(name),
       team: team,
-      codeId: declaredCodeId ?? project.name,
+      codeId: codeId,
     );
     if (!signed.ok) {
       output.problem(
@@ -260,9 +271,10 @@ class BinaryChain {
                 'already installed',
             remedy: 'signing with a different certificate ships what '
                 'Gatekeeper treats as a different program under the same '
-                'name. Fix the keychain, or — deliberately, for a planned '
-                'identity change — remove the published baseline from the '
-                'comparison by declaring [identity] anew.',
+                'name. Fix the keychain so the published identity can be '
+                'reproduced; a deliberate identity change is a migration rk '
+                'does not automate, because it ships what macOS treats as a '
+                'new program.',
           ),
           unit: step.unit,
         );
@@ -276,7 +288,11 @@ class BinaryChain {
           },
           show: true,
         );
-        output.halt(HaltKind.unfixableByRerun);
+        // Acted-aware: by the time signing runs, the tag act has usually
+        // already pushed — "rk did not act" would be false there.
+        output.halt(output.report.acted
+            ? HaltKind.actedAndUnfixable
+            : HaltKind.unfixableByRerun);
         return false;
       }
       output.step(
@@ -312,6 +328,19 @@ class BinaryChain {
       RegExp(r'subject\.OU\]\s*=\s*"?([A-Z0-9]+)"?')
           .firstMatch(requirement)
           ?.group(1);
+
+  /// The code identifier inside a designated requirement — always quoted by
+  /// codesign's printer, unlike the OU.
+  static String? _identifierOf(String requirement) =>
+      RegExp(r'identifier "([^"]+)"').firstMatch(requirement)?.group(1);
+
+  /// The identity facts a published requirement carries, for the preflight
+  /// that compares them against a declared `[identity]` before anything
+  /// acts.
+  static ({String? team, String? identifier}) identityOf(
+    String requirement,
+  ) =>
+      (team: _teamOf(requirement), identifier: _identifierOf(requirement));
 
   // ---- notarize ----
 

@@ -198,6 +198,57 @@ void main() {
       expect(outcome.problem, contains('re-running reads it fresh'));
     });
 
+    test('a push that fails for any other reason does not blame a mover',
+        () async {
+      // Auth failures and unreachable remotes wearing compare-and-swap
+      // prose send the operator hunting for a concurrent writer that does
+      // not exist.
+      final checkout = '${scratch.path}/tap';
+      final tools = RecordingTools(
+        answers: (key) => key.startsWith('git push')
+            ? ToolResult(
+                exitCode: 1,
+                stdout: '',
+                stderr: 'fatal: could not read Username',
+              )
+            : null,
+        onRun: (key) {
+          if (key.startsWith('git clone')) {
+            Directory(checkout).createSync(recursive: true);
+          }
+        },
+      );
+      final outcome = await HomebrewTap(
+        tools: tools,
+        tap: 'owner/homebrew-tap',
+        checkout: checkout,
+      ).update(
+        formulaPath: 'Formula/tool.rb',
+        contents: 'new\n',
+        message: 'tool 1.0.0',
+      );
+      expect(outcome.ok, isFalse);
+      expect(outcome.problem, contains('the push failed'));
+      expect(outcome.problem, isNot(contains('the tap moved')));
+    });
+
+    test('same length, different bytes, is still a change', () async {
+      // Version bumps are frequently same-length (0.1.0 → 0.2.0); a
+      // length-only comparison would decide "unchanged" and push nothing,
+      // every run, forever.
+      final (tapUpdate, tools) = tap(
+        inTap: {'Formula/tool.rb': 'version "0.1.0"\n'},
+      );
+      final outcome = await tapUpdate.update(
+        formulaPath: 'Formula/tool.rb',
+        contents: 'version "0.2.0"\n',
+        message: 'tool 0.2.0',
+      );
+      expect(outcome.ok, isTrue);
+      expect(outcome.changed, isTrue);
+      expect(tools.calls.any((c) => c.startsWith('git push')), isTrue);
+    });
+
     test('a stale checkout from an interrupted run is discarded first',
         () async {
       File('${scratch.path}/tap/Formula/stale.rb')

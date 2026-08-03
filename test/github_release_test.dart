@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:rk/src/destinations/github_release.dart';
+import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/verdict.dart';
 import 'package:test/test.dart';
 
@@ -152,6 +153,124 @@ void main() {
         state.verdict,
         Verdict.unknown,
         reason: 'no assets and no answer about assets are different facts',
+      );
+    });
+  });
+
+  group('publish: the sweep, the confirm, and the three outcomes', () {
+    RecordingTools forge({
+      required String slurp,
+      Set<String> readBack = const {'a.tar.gz', 'SHA256SUMS'},
+      bool readBackFails = false,
+    }) =>
+        RecordingTools(
+          answers: (key) {
+            if (key.startsWith('gh api --paginate --slurp')) {
+              return ToolResult(exitCode: 0, stdout: slurp, stderr: '');
+            }
+            if (key.startsWith('gh api -X DELETE')) {
+              return ToolResult(exitCode: 0, stdout: '', stderr: '');
+            }
+            if (key.startsWith('gh release create')) {
+              return ToolResult(exitCode: 0, stdout: '', stderr: '');
+            }
+            if (key.startsWith('gh api repos/example/tool/releases/tags/')) {
+              return readBackFails
+                  ? ToolResult(exitCode: 1, stdout: '', stderr: 'HTTP 500 oops')
+                  : ToolResult(
+                      exitCode: 0,
+                      stdout: jsonEncode({
+                        'tag_name': 'v1.0.0',
+                        'draft': false,
+                        'id': 7,
+                        'assets': [
+                          for (final name in readBack) {'name': name},
+                        ],
+                      }),
+                      stderr: '',
+                    );
+            }
+            return null;
+          },
+        );
+
+    Future<PublishOutcome> publish(RecordingTools tools) => GithubRelease(
+          tools: tools,
+          repository: 'example/tool',
+          workingDirectory: '/repo',
+        ).publish(
+          tag: 'v1.0.0',
+          title: 'tool 1.0.0',
+          notesPath: '/notes.md',
+          assetPaths: const ['/w/a.tar.gz', '/w/SHA256SUMS'],
+        );
+
+    test('same-tag drafts are deleted by id, across pages; nothing else is',
+        () async {
+      // Two drafts carry the tag on different pages — the porcelain delete
+      // addressed whichever it found first, and a single-page read capped
+      // at 100 missed the second entirely. A published release and another
+      // tag's draft must both survive the sweep.
+      final tools = forge(
+        slurp: jsonEncode([
+          [
+            {'tag_name': 'v1.0.0', 'draft': true, 'id': 11},
+            {'tag_name': 'v1.0.0', 'draft': false, 'id': 99},
+          ],
+          [
+            {'tag_name': 'v1.0.0', 'draft': true, 'id': 12},
+            {'tag_name': 'v2.0.0', 'draft': true, 'id': 13},
+          ],
+        ]),
+      );
+      final outcome = await publish(tools);
+      expect(outcome.ok, isTrue, reason: outcome.problem ?? '');
+
+      final deletes =
+          tools.calls.where((c) => c.startsWith('gh api -X DELETE')).toList();
+      expect(deletes, hasLength(2));
+      expect(deletes.any((c) => c.endsWith('/releases/11')), isTrue);
+      expect(deletes.any((c) => c.endsWith('/releases/12')), isTrue);
+      expect(
+        deletes.any((c) => c.endsWith('/releases/13')),
+        isFalse,
+        reason: 'another tag\'s draft is not in the way',
+      );
+      expect(
+        deletes.any((c) => c.endsWith('/releases/99')),
+        isFalse,
+        reason: 'a published release is never swept',
+      );
+    });
+
+    test(
+        'a read-back short of its assets is terminal, with the permanent '
+        'sentence', () async {
+      final outcome = await publish(forge(
+        slurp: '[[]]',
+        readBack: const {'a.tar.gz'}, // SHA256SUMS never arrived
+      ));
+      expect(outcome.ok, isFalse);
+      expect(
+        outcome.isTerminal,
+        isTrue,
+        reason: 'a published release cannot be edited; sending an operator '
+            'to retry it would be the worst instruction rk can give',
+      );
+      expect(outcome.problem, contains('SHA256SUMS'));
+      expect(outcome.permanent, contains('cannot be edited'));
+    });
+
+    test('a read-back that fails is lostTrack, not failure and not success',
+        () async {
+      final outcome = await publish(forge(slurp: '[[]]', readBackFails: true));
+      expect(outcome.ok, isFalse);
+      expect(outcome.isTerminal, isFalse);
+      expect(
+        outcome.mayHaveActed,
+        isTrue,
+        reason: 'the create succeeded; something exists that rk could not '
+            'read back',
       );
     });
   });

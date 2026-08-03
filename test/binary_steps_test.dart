@@ -537,4 +537,135 @@ executables:
     );
     expect(workspace.exists('tool-1.0.0-macos-arm64.notary-log.json'), isTrue);
   });
+
+  test('the derived identifier signs, not the project name', () async {
+    // The published 0.1.0 binary carries a reverse-DNS identifier; signing
+    // with the project-name default would produce a different designated
+    // requirement and fail continuity only after the tag was public.
+    const published = 'designated => identifier "io.github.example.tool" '
+        'and certificate leaf[subject.OU] = "TEAM123456"';
+    final tools = scripted(designatedRequirement: published);
+    await chain(tools).buildStep(
+      step(StepKind.build),
+      project,
+      publishedRequirement: null,
+    );
+
+    final ok = await chain(tools).signStep(
+      step(StepKind.sign),
+      project,
+      publishedRequirement: published,
+      declaredTeam: null,
+      declaredCodeId: 'com.example.tool', // derivation must beat this
+    );
+    expect(ok, isTrue, reason: buffer.toString());
+    final sign = (tools as RecordingTools)
+        .calls
+        .firstWhere((c) => c.startsWith('codesign --force'));
+    expect(
+      sign,
+      contains('--identifier io.github.example.tool'),
+      reason: 'identity facts are derived from the release users already '
+          'installed; the declaration only fills what no release states',
+    );
+  });
+
+  group('the tap read-back', () {
+    /// Tools for updateFormula: scripted git plumbing over a real checkout
+    /// dir, and a contents API answering [publishedText].
+    RecordingTools tapTools({String? publishedText, bool unreadable = false}) =>
+        RecordingTools(
+          answers: (key) {
+            if (key.startsWith('gh api repos/owner/homebrew-tap/contents/')) {
+              if (unreadable) {
+                return ToolResult(
+                    exitCode: 1, stdout: '', stderr: 'HTTP 500 oops');
+              }
+              return ToolResult(
+                exitCode: 0,
+                stdout:
+                    '{"content":"${base64Encode(utf8.encode(publishedText!))}"}',
+                stderr: '',
+              );
+            }
+            return null; // git clone/add/commit/push default ok
+          },
+          onRun: (key) {
+            if (key.startsWith('git clone')) {
+              Directory(key.split(' ').last).createSync(recursive: true);
+            }
+          },
+        );
+
+    Future<bool> update(RecordingTools tools) {
+      workspace.write('tool.rb', utf8.encode('FORMULA v1\n'));
+      return chain(tools).updateFormula(
+        tap: 'owner/homebrew-tap',
+        project: project,
+      );
+    }
+
+    test('what the public tap serves is proven byte-for-byte', () async {
+      final ok = await update(tapTools(publishedText: 'FORMULA v1\n'));
+      expect(ok, isTrue, reason: buffer.toString());
+      expect(buffer.toString(), contains('read back from the public tap'));
+    });
+
+    test('a tap serving different bytes is refused, with rerun the remedy',
+        () async {
+      final ok = await update(tapTools(publishedText: 'SOMETHING ELSE\n'));
+      expect(ok, isFalse);
+      expect(buffer.toString(), contains('does not hold what rk pushed'));
+    });
+
+    test('a tap that cannot be read back is lostTrack, not success', () async {
+      final ok = await update(tapTools(unreadable: true));
+      expect(ok, isFalse);
+      expect(buffer.toString(), contains('could not be read back'));
+      expect(
+        buffer.toString(),
+        contains('lost sight of the result'),
+        reason: 'rk pushed; what a user now installs is unproven',
+      );
+    });
+  });
+
+  test('an accepted submission whose log cannot be fetched fails the step',
+      () async {
+    // The log is a published asset; proceeding without it would ship a
+    // release missing one of its expected files — and the fake-log
+    // alternative would publish evidence nobody issued.
+    final tools = RecordingTools(
+      answers: (key) {
+        if (key.startsWith('codesign --test-requirement')) {
+          return ToolResult(exitCode: 1, stdout: '', stderr: 'no');
+        }
+        if (key.startsWith('xcrun notarytool submit')) {
+          return ToolResult(
+            exitCode: 0,
+            stdout: '{"id": "s-9", "status": "Accepted"}',
+            stderr: '',
+          );
+        }
+        if (key.startsWith('xcrun notarytool log')) {
+          return ToolResult(
+              exitCode: 1, stdout: '', stderr: 'log not available yet');
+        }
+        return null;
+      },
+      onRun: (key) {
+        if (key.startsWith('ditto')) {
+          File(workspace.pathOf(BinaryChain.zipName('macos-arm64', 'tool')))
+            ..parent.createSync(recursive: true)
+            ..writeAsBytesSync(utf8.encode('ZIP'));
+        }
+      },
+    );
+    workspace.write('macos-arm64/tool', utf8.encode('BINARY'));
+
+    final ok =
+        await chain(tools).notarizeStep(step(StepKind.notarize), project);
+    expect(ok, isFalse);
+    expect(buffer.toString(), contains('the log could not be fetched'));
+  });
 }

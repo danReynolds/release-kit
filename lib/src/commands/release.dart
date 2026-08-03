@@ -253,6 +253,32 @@ class ReleaseCommand {
       final baseline = await _signingBaseline(unit);
       if (!baseline.ok) return ExitCodes.refused;
       publishedRequirement = baseline.requirement;
+
+      // A declared [identity] that disagrees with the published one is
+      // refused here, before anything acts. Left to the sign step, the
+      // mismatch surfaced after the tag was public — as RK-SIGN-003, whose
+      // remedy cannot help, because the declaration itself is the drift.
+      if (publishedRequirement != null &&
+          !_declarationAgrees(publishedRequirement)) {
+        return ExitCodes.refused;
+      }
+    }
+
+    // The release body — the changelog entry — is read here too: it is the
+    // last input a publish needs that can refuse, and every one of those
+    // belongs before the first act, not between two of them. Under
+    // --dry-run it is validated and not written: a workspace file is a
+    // local effect, and dry-run promises to stop before the first one.
+    String? notesPath;
+    if (checklist.steps.any(
+        (s) => s.kind == StepKind.publishRelease && !states[s.id]!.isExact)) {
+      final notes = _releaseNotes(_binaryProject(unit));
+      if (notes == null) return ExitCodes.refused;
+      if (!dryRun) {
+        final chain = _chain(unit);
+        chain.workspace.write('release-notes.md', utf8.encode(notes));
+        notesPath = chain.workspace.pathOf('release-notes.md');
+      }
     }
 
     output.heading('${unit.name} ${unit.version} → '
@@ -297,7 +323,7 @@ class ReleaseCommand {
       // From here on the world may change, which is what makes a failure
       // worth recording evidence about. A rehearsal's local acts count too.
       output.report.acted = true;
-      final ok = await _act(step, unit, publishedRequirement);
+      final ok = await _act(step, unit, publishedRequirement, notesPath);
       // The act's answer supersedes the inspection's: without this, the
       // document of a failed run said `absent` about a tag that was already
       // public — rk acted, and the JSON said nothing had.
@@ -480,6 +506,7 @@ class ReleaseCommand {
     Step step,
     ResolvedUnit unit,
     String? publishedRequirement,
+    String? notesPath,
   ) async {
     switch (step.kind) {
       case StepKind.tag:
@@ -509,7 +536,7 @@ class ReleaseCommand {
       case StepKind.checksums:
         return _chain(unit).checksumsStep(step, _binaryProject(unit));
       case StepKind.publishRelease:
-        return _publishRelease(unit, _chain(unit));
+        return _publishRelease(unit, _chain(unit), notesPath);
       case StepKind.publishFormula:
         return _publishFormula(unit, _chain(unit));
     }
@@ -593,7 +620,11 @@ class ReleaseCommand {
     }
   }
 
-  Future<bool> _publishRelease(ResolvedUnit unit, BinaryChain chain) async {
+  Future<bool> _publishRelease(
+    ResolvedUnit unit,
+    BinaryChain chain,
+    String? notesPath,
+  ) async {
     final repository = _repository();
     if (repository == null) return false;
 
@@ -601,12 +632,19 @@ class ReleaseCommand {
     final assets = chain.gatherAssets(project, unit.name);
     if (assets == null) return false;
 
-    // The changelog entry is the release body — one source of release
-    // prose, extracted through the same parse that validated its presence,
-    // so the notes and the CHANGELOG cannot disagree.
-    final notes = _releaseNotes(project);
-    if (notes == null) return false;
-    chain.workspace.write('release-notes.md', utf8.encode(notes));
+    // The body was read and written in preflight — the last refusable
+    // input, resolved before the first act.
+    if (notesPath == null) {
+      output.problem(
+        Diagnostic(
+          code: 'RK-CHG-003',
+          message: 'the release body was not prepared',
+          remedy: 'this is a bug in rk: the preflight prepares it whenever '
+              'a github-release step remains',
+        ),
+      );
+      return false;
+    }
 
     // The formula ships with the release when a tap will point at it, so
     // it is rendered before the create — an immutable release cannot grow
@@ -624,10 +662,55 @@ class ReleaseCommand {
       repository: repository,
       tag: unit.tag,
       title: '${project.name} ${unit.version}',
-      notesPath: chain.workspace.pathOf('release-notes.md'),
+      notesPath: notesPath,
       assets: [...assets, if (formula != null) formula],
     );
     return url != null;
+  }
+
+  /// Whether the declared `[identity]` agrees with the published
+  /// requirement, recording the refusal when it does not.
+  ///
+  /// Derivation wins when nothing is declared; a declaration that
+  /// *contradicts* what users already installed is either a typo or an
+  /// identity migration, and both deserve a refusal naming the two values
+  /// rather than a signature mismatch after the tag is public.
+  bool _declarationAgrees(String publishedRequirement) {
+    final declared = resolution.identity;
+    if (declared == null) return true;
+    final published = BinaryChain.identityOf(publishedRequirement);
+
+    final disagreements = <String, String>{};
+    if (declared.appleTeam != null &&
+        published.team != null &&
+        declared.appleTeam != published.team) {
+      disagreements['apple_team'] =
+          'declared ${declared.appleTeam}, published ${published.team}';
+    }
+    if (declared.codeId != null &&
+        published.identifier != null &&
+        declared.codeId != published.identifier) {
+      disagreements['code_id'] =
+          'declared ${declared.codeId}, published ${published.identifier}';
+    }
+    if (disagreements.isEmpty) return true;
+
+    output.problem(
+      Diagnostic(
+        code: 'RK-SIGN-005',
+        message: 'the declared [identity] disagrees with the release users '
+            'already installed',
+        remedy: 'identity facts are derived from the published release; the '
+            'declaration only fills what no release states yet. Fix or '
+            'remove the declaration:\n'
+            '${disagreements.entries.map((e) => '${e.key}: ${e.value}').join('\n')}\n'
+            'A deliberate identity change is a migration rk does not '
+            'automate, because it ships what macOS treats as a new program.',
+      ),
+      unit: null,
+    );
+    output.halt(HaltKind.beforeActing);
+    return false;
   }
 
   /// The changelog entry for this version, or null with a recorded problem.
@@ -641,6 +724,23 @@ class ReleaseCommand {
     final source = tree.read(path);
     final entry =
         source == null ? null : Changelog.entry(source, project.version);
+    if (entry != null && entry.isEmpty) {
+      // The heading exists — validation passed — and there is nothing under
+      // it. For the verb whose release body *is* this entry, publishing an
+      // empty one silently would be prose nobody wrote shipping as if
+      // someone had.
+      output.problem(
+        Diagnostic(
+          code: 'RK-CHG-004',
+          message: 'the changelog entry for ${project.version} is empty',
+          source: SourceLocation(path, 1),
+          remedy: 'the release body is this entry — write what changed '
+              'under the ${project.version} heading',
+        ),
+      );
+      output.halt(HaltKind.beforeActing);
+      return null;
+    }
     if (entry == null) {
       output.problem(
         Diagnostic(
@@ -652,6 +752,7 @@ class ReleaseCommand {
               'or this is a bug in rk',
         ),
       );
+      output.halt(HaltKind.beforeActing);
       return null;
     }
     return entry;

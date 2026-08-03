@@ -129,9 +129,11 @@ minute 40 of an announced release.
 
 ## Phase 7b — the destinations
 
-- `github-release`: draft create/adopt/recreate, upload, flip, verify —
-  reading the forge through `gh api` status codes, not porcelain message
-  strings ("release not found" means three different things).
+- `github-release`: sweep-and-recreate over same-tag drafts (adoption is
+  deferred to CI per the RFC's own paragraph), create delegated to gh's
+  draft-first create, confirm by read-back — reading the forge through
+  `gh api` status codes, not porcelain message strings ("release not
+  found" means three different things).
 - `homebrew-tap`: formula render, compare-and-swap, public install check.
 - The expected asset set grows what 7a/7b actually produce — notary log and
   result, the formula — so the equality check stays equal. Real keybay 0.1.0
@@ -380,7 +382,10 @@ Recorded because the reviews found them claimed-as-shipped when they are not:
   published archives, formula against what rk would render — belongs to
   `rk verify`, which runs when the assets are published facts. Until then,
   a hand-edited formula that keeps the version line reads `exact` to
-  status.
+  status. The same verify pass owes the release's other assets their digest
+  re-proof (the RFC's flip re-verification, amended in 7b to a
+  name-inventory confirm): download each published asset, prove it against
+  SHA256SUMS, and SHA256SUMS against the archives.
 
 **Phase 3 — probes and status.** Self-audit before the independent review,
 prompted by the question "are we ready for phase 4". The audit found the worst
@@ -477,6 +482,42 @@ both directions, isClean's false direction, and the cache-forget contract.
 The phase 7 signing gate was green before its deliverable existed — the
 displaced-string anti-pattern again, an unwired file proving another file is
 used — and is now red until the wiring lands, which is what a gate is for.
+
+**Phase 7b — the independent review.** Twenty mutations, ten survived —
+the same signature a third time: the paths all behave as documented when
+driven (the reviewer probed every one), and the new safety mechanisms were
+the unpinned ones. The high finding was better than a survivor: **the
+first real keybay cli release would have halted mid-release** — after the
+tag and the pub.dev publish were public — because rk signed with the
+project-name identifier while the published 0.1.0 binary carries
+`io.github.danreynolds.keybay.cli` (read live from the real release), and
+the RK-SIGN-003 halt would then have said "rk did not act", with a remedy
+whose claim ("declare [identity] anew to remove the baseline") no code
+implements. Fixed in closeout, by the doctrine the team id already
+follows: **the identifier is derived from the published requirement**
+(declared `[identity]` only fills what no release states), a declaration
+that *contradicts* the published identity is refused before anything acts
+(RK-SIGN-005, both values named), the RK-SIGN-003 remedy lost its false
+claim, and the sign-mismatch halt is acted-aware. The release body is now
+read in preflight too — the last refusable input, resolved before the
+first act, validated but not written under --dry-run — and an empty
+changelog entry refuses (RK-CHG-004) instead of publishing a body nobody
+wrote. The ten survivors are tests: `Changelog.entry` in both closing
+directions (stop at the next version heading; subsections stay inside)
+plus the bare-heading and decorated-heading vectors; the formula
+inspection's four arms, including exact-only-at-this-version; the draft
+sweep by id across slurped pages with a published release and another
+tag's draft both surviving; the terminal read-back (published short of its
+assets, with the permanent sentence) and the lostTrack read-back; the tap
+read-back in all three directions (proven, mismatched, unreadable);
+RK-NOTARY-003 (an accepted submission whose log cannot be fetched fails
+the step); and same-length-different-bytes is still a change. A push that
+fails for any reason other than a rejection no longer blames "the tap
+moved" (F8). Spec drift was reconciled in the RFC itself, marked *Amended
+(7b, as built)*: sweep-and-recreate instead of adopt (adoption stays
+deferred to CI), name-inventory confirm with per-asset digest re-proof
+ledgered to verify beside the formula byte-proof, and contents-API reads
+in place of git fetch.
 
 **Phase 7b — the destinations, built.** The forge is read through `gh api`
 status codes end to end: existence keys on `(HTTP 404)` — with the
@@ -690,6 +731,15 @@ terminal for the typed confirmation. The path to it, in order:
 5. `rk release core`, type the version at the prompt.
 6. Paste the transcript here as "## Phase 5 checkpoint", which turns the
    gate green.
+7. Then the cli, for the phase 7b checkpoint: bump packages/keybay_cli
+   (with its CHANGELOG entry — the entry becomes the release body), run
+   `rk status`, then `rk release cli --rehearse` (every local step, signing
+   and notarization included, nothing public), then `rk release cli`. No
+   `[identity]` is needed: rk derives the team and the code identifier from
+   the published 0.1.0 binary, and a declaration that contradicted it would
+   be refused before the tag (RK-SIGN-005). After the run: `brew install`
+   from the public tap on a machine that has never seen this repo is the
+   install check. Paste the transcript as "## Phase 7b checkpoint".
 
 **Phase 7a — the local chain, built.** The monolith dissolved: `produce()`
 ran the whole chain inside the first build step and handed `_produced` to
