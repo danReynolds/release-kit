@@ -134,7 +134,14 @@ executables:
       'survives between them', () async {
     final tools = scripted();
 
-    expect(await chain(tools).buildStep(step(StepKind.build), project), isTrue);
+    expect(
+      await chain(tools).buildStep(
+        step(StepKind.build),
+        project,
+        publishedRequirement: null,
+      ),
+      isTrue,
+    );
     expect(
       workspace.exists('macos-arm64/tool'),
       isTrue,
@@ -193,7 +200,11 @@ executables:
       'a signature that does not match the published identity is refused '
       'with both requirements as evidence', () async {
     final tools = scripted(designatedRequirement: 'designated => leaf "NEW"');
-    await chain(tools).buildStep(step(StepKind.build), project);
+    await chain(tools).buildStep(
+      step(StepKind.build),
+      project,
+      publishedRequirement: null,
+    );
 
     final ok = await chain(tools).signStep(
       step(StepKind.sign),
@@ -222,7 +233,11 @@ executables:
       designatedRequirement:
           'designated => certificate leaf[subject.OU] = "TEAM123456"',
     );
-    await chain(tools).buildStep(step(StepKind.build), project);
+    await chain(tools).buildStep(
+      step(StepKind.build),
+      project,
+      publishedRequirement: null,
+    );
 
     final ok = await chain(tools).signStep(
       step(StepKind.sign),
@@ -238,7 +253,11 @@ executables:
   test(
       'no baseline and no declaration refuses with the first-release '
       'instruction', () async {
-    await chain(scripted()).buildStep(step(StepKind.build), project);
+    await chain(scripted()).buildStep(
+      step(StepKind.build),
+      project,
+      publishedRequirement: null,
+    );
     final ok = await chain(scripted()).signStep(
       step(StepKind.sign),
       project,
@@ -251,6 +270,199 @@ executables:
         buffer.toString(),
         contains('the first signed release states it '
             'once'));
+  });
+
+  test(
+      'the team is read from an unquoted OU — codesign only quotes teams '
+      'that need it', () async {
+    // Live evidence: letter-leading team ids print bare
+    // (leaf[subject.OU] = Q6L2SF6YDW), digit-leading print quoted
+    // (= "2DC432GLL2"). The quoted-only parser returned null for every
+    // letter-leading team and misread an established identity as "no team
+    // rk can read".
+    final tools = RecordingTools(
+      answers: (key) {
+        if (key.startsWith('dart compile exe')) {
+          return ToolResult(exitCode: 0, stdout: '', stderr: '');
+        }
+        if (key.startsWith('codesign -d -r-')) {
+          // The leading quoted identifier is a decoy: a parser matching any
+          // quoted uppercase token reads "TOOL" as the team and picks no
+          // certificate at all. Only anchoring on subject.OU finds the team.
+          return ToolResult(
+            exitCode: 0,
+            stdout: 'designated => identifier "TOOL" and certificate '
+                'leaf[subject.OU] = Q6L2SF6YDW',
+            stderr: '',
+          );
+        }
+        if (key.startsWith('security find-identity')) {
+          return ToolResult(
+            exitCode: 0,
+            stdout: '1) ABC "Developer ID Application: Dan (Q6L2SF6YDW)"',
+            stderr: '',
+          );
+        }
+        return null;
+      },
+      onRun: (key) {
+        if (key.startsWith('dart compile exe')) {
+          File(workspace.pathOf(BinaryChain.binaryName('macos-arm64', 'tool')))
+            ..parent.createSync(recursive: true)
+            ..writeAsBytesSync(utf8.encode('BINARY 1.0.0'));
+        }
+      },
+    );
+    await chain(tools).buildStep(
+      step(StepKind.build),
+      project,
+      publishedRequirement: null,
+    );
+
+    final ok = await chain(tools).signStep(
+      step(StepKind.sign),
+      project,
+      publishedRequirement: 'designated => identifier "TOOL" and certificate '
+          'leaf[subject.OU] = Q6L2SF6YDW',
+      declaredTeam: null, // derivation must carry the unquoted team
+      declaredCodeId: 'com.example.tool',
+    );
+    expect(ok, isTrue, reason: buffer.toString());
+    expect(
+      tools.calls.any(
+          (c) => c.contains('codesign --force') && c.contains('(Q6L2SF6YDW)')),
+      isTrue,
+      reason: 'the certificate for the derived team is the one that signs',
+    );
+  });
+
+  group('build reuse is by identity, not acceptability', () {
+    /// A workspace seeded with a binary that claims the right version —
+    /// the foreign-artifact case. `.rk/` is invisible to git status, so
+    /// nothing upstream of this gate would ever notice it.
+    void seed() =>
+        workspace.write('macos-arm64/tool', utf8.encode('FOREIGN BYTES 1.0.0'));
+
+    const published =
+        'designated => certificate leaf[subject.OU] = "TEAM123456"';
+
+    /// Tools where every reuse leg answers as scripted, and any compile is
+    /// recorded so the tests can assert rebuild-vs-reuse.
+    Tools legs({
+      required bool verifyPasses,
+      String? requirement = published,
+    }) =>
+        RecordingTools(
+          answers: (key) {
+            if (key.startsWith('codesign --verify --strict')) {
+              return ToolResult(
+                exitCode: verifyPasses ? 0 : 1,
+                stdout: '',
+                stderr: verifyPasses ? '' : 'invalid signature',
+              );
+            }
+            if (key.startsWith('codesign -d -r-')) {
+              return requirement == null
+                  ? ToolResult(exitCode: 1, stdout: '', stderr: 'not signed')
+                  : ToolResult(exitCode: 0, stdout: requirement, stderr: '');
+            }
+            if (key.startsWith('dart compile exe')) {
+              return ToolResult(exitCode: 0, stdout: '', stderr: '');
+            }
+            if (key.contains('--version')) {
+              return ToolResult(exitCode: 0, stdout: '1.0.0', stderr: '');
+            }
+            return null;
+          },
+          onRun: (key) {
+            if (key.startsWith('dart compile exe')) {
+              File(workspace
+                  .pathOf(BinaryChain.binaryName('macos-arm64', 'tool')))
+                ..parent.createSync(recursive: true)
+                ..writeAsBytesSync(utf8.encode('BINARY 1.0.0'));
+            }
+          },
+        );
+
+    Future<List<String>> build(Tools tools,
+        {String? publishedRequirement = published}) async {
+      final ok = await chain(tools).buildStep(
+        step(StepKind.build),
+        project,
+        publishedRequirement: publishedRequirement,
+      );
+      expect(ok, isTrue, reason: buffer.toString());
+      return (tools as RecordingTools).calls;
+    }
+
+    test('a binary codesign cannot verify is rebuilt', () async {
+      // codesign -d -r- prints the requirement, exit 0, for a binary
+      // modified after signing — the display command must not be the gate.
+      seed();
+      final calls = await build(legs(verifyPasses: false));
+      expect(calls.any((c) => c.startsWith('dart compile exe')), isTrue,
+          reason: 'an unverifiable signature is not an identity');
+    });
+
+    test('a verified signature from the wrong identity is rebuilt', () async {
+      seed();
+      final calls = await build(legs(
+        verifyPasses: true,
+        requirement: 'designated => certificate leaf[subject.OU] = "OTHER"',
+      ));
+      expect(calls.any((c) => c.startsWith('dart compile exe')), isTrue,
+          reason: 'valid bytes signed by someone else are someone else\'s');
+    });
+
+    test('with no published baseline nothing vouches, so it rebuilds',
+        () async {
+      seed();
+      final calls =
+          await build(legs(verifyPasses: true), publishedRequirement: null);
+      expect(calls.any((c) => c.startsWith('dart compile exe')), isTrue,
+          reason: 'reuse exists to stay continuous with a published '
+              'identity; a first release has none');
+    });
+
+    test(
+        'verified bytes, matching identity, right version — the one case '
+        'that reuses', () async {
+      seed();
+      final calls = await build(legs(verifyPasses: true));
+      expect(calls.any((c) => c.startsWith('dart compile exe')), isFalse);
+      expect(buffer.toString(), contains('signature verified'));
+    });
+  });
+
+  test(
+      'a produced requirement that merely extends the published one is '
+      'still a mismatch', () async {
+    // Equality, not prefix: a requirement with extra clauses appended is a
+    // different identity — Gatekeeper evaluates the whole expression — and
+    // a prefix-tolerant comparison would wave it through.
+    const published =
+        'designated => certificate leaf[subject.OU] = "TEAM123456"';
+    final tools = scripted(
+      designatedRequirement: '$published and cdhash H"ABC"',
+    );
+    await chain(tools).buildStep(
+      step(StepKind.build),
+      project,
+      publishedRequirement: null,
+    );
+
+    final ok = await chain(tools).signStep(
+      step(StepKind.sign),
+      project,
+      publishedRequirement: published,
+      declaredTeam: null,
+      declaredCodeId: 'com.example.tool',
+    );
+    expect(ok, isFalse, reason: buffer.toString());
+    expect(
+      buffer.toString(),
+      contains('does not match the identity users already installed'),
+    );
   });
 
   test('a notarized binary is not resubmitted', () async {

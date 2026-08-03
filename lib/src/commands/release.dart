@@ -235,6 +235,17 @@ class ReleaseCommand {
       if (!await _publishPreflight(project)) return ExitCodes.refused;
     }
 
+    // The signing baseline, resolved here for the same reason: it is a
+    // read, and reading it inside the sign step meant an unreadable baseline
+    // surfaced after the tag was public — as a crash claiming a bug in rk.
+    String? publishedRequirement;
+    if (checklist.steps
+        .any((s) => s.kind == StepKind.sign && !states[s.id]!.isExact)) {
+      final baseline = await _signingBaseline(unit);
+      if (!baseline.ok) return ExitCodes.refused;
+      publishedRequirement = baseline.requirement;
+    }
+
     output.heading('${unit.name} ${unit.version} → '
         '${_channels(unit).join(', ')}');
     output.blank();
@@ -277,7 +288,7 @@ class ReleaseCommand {
       // From here on the world may change, which is what makes a failure
       // worth recording evidence about. A rehearsal's local acts count too.
       output.report.acted = true;
-      final ok = await _act(step, unit);
+      final ok = await _act(step, unit, publishedRequirement);
       // The act's answer supersedes the inspection's: without this, the
       // document of a failed run said `absent` about a tag that was already
       // public — rk acted, and the JSON said nothing had.
@@ -287,7 +298,15 @@ class ReleaseCommand {
         detail: ok ? 'done this run' : 'the act did not complete',
         show: false,
       );
-      if (!ok) return ExitCodes.refused;
+      if (!ok) {
+        // Every halt opens with its sentence. The specific ones — a sign
+        // mismatch, a release read back wrong — were recorded where they
+        // were diagnosed; everything else stopped partway through local
+        // work, with a tag possibly already public, so neither "nothing
+        // changed" nor "lost sight of the result" would be true.
+        if (!output.report.halted) output.halt(HaltKind.stoppedPartway);
+        return ExitCodes.refused;
+      }
     }
 
     if (rehearse) {
@@ -447,7 +466,11 @@ class ReleaseCommand {
     return true;
   }
 
-  Future<bool> _act(Step step, ResolvedUnit unit) async {
+  Future<bool> _act(
+    Step step,
+    ResolvedUnit unit,
+    String? publishedRequirement,
+  ) async {
     switch (step.kind) {
       case StepKind.tag:
         return _tag(unit);
@@ -456,12 +479,16 @@ class ReleaseCommand {
       case StepKind.prerequisite:
         return true; // inspected, never performed
       case StepKind.build:
-        return _chain(unit).buildStep(step, _binaryProject(unit));
+        return _chain(unit).buildStep(
+          step,
+          _binaryProject(unit),
+          publishedRequirement: publishedRequirement,
+        );
       case StepKind.sign:
         return _chain(unit).signStep(
           step,
           _binaryProject(unit),
-          publishedRequirement: await _publishedRequirement(unit),
+          publishedRequirement: publishedRequirement,
           declaredTeam: resolution.identity?.appleTeam,
           declaredCodeId: resolution.identity?.codeId,
         );
@@ -499,13 +526,18 @@ class ReleaseCommand {
   ///
   /// Derived, not declared: the previous version's tag names the release
   /// users already installed, and its binary is the only authority on what
-  /// identity this program has. `none` — no earlier signed release — falls
-  /// back to the declared `[identity]`; `unreadable` blocks in the sign
-  /// step, because not knowing the baseline is not permission to ship a new
-  /// one.
-  Future<String?> _publishedRequirement(ResolvedUnit unit) async {
+  /// identity this program has. `none` — no earlier signed release — is a
+  /// null requirement with `ok`, and the sign step falls back to the
+  /// declared `[identity]`. `unreadable` refuses the whole run — before
+  /// anything acts, because the version of this that resolved inside the
+  /// sign step surfaced an unreadable forge as an internal error after the
+  /// tag was already public. Not knowing the baseline is not permission to
+  /// ship a new one, and it is also not a bug in rk.
+  Future<({bool ok, String? requirement})> _signingBaseline(
+    ResolvedUnit unit,
+  ) async {
     final repository = git.originUrl;
-    if (repository == null) return null;
+    if (repository == null) return (ok: true, requirement: null);
 
     Version? best;
     String? bestTag;
@@ -518,7 +550,7 @@ class ReleaseCommand {
         bestTag = tag;
       }
     }
-    if (bestTag == null) return null; // a first signed release
+    if (bestTag == null) return (ok: true, requirement: null); // first release
 
     final reading = await PublishedIdentity(
       tools: tools,
@@ -529,16 +561,26 @@ class ReleaseCommand {
       executable: _binaryProject(unit).executable!,
       into: _chain(unit).workspace.pathOf('published-identity'),
     );
-    return switch (reading.answer) {
-      IdentityAnswer.found => reading.requirement,
-      IdentityAnswer.none => null,
-      // Surfaced as a missing baseline in the sign step's own terms: the
-      // sign act treats a null-with-declared-identity as first-release, so
-      // an unreadable forge must not be allowed to look like one.
-      IdentityAnswer.unreadable => throw StateError(
-          'the published identity could not be read: ${reading.why}',
-        ),
-    };
+    switch (reading.answer) {
+      case IdentityAnswer.found:
+        return (ok: true, requirement: reading.requirement);
+      case IdentityAnswer.none:
+        return (ok: true, requirement: null);
+      case IdentityAnswer.unreadable:
+        output.problem(
+          Diagnostic(
+            code: 'RK-SIGN-004',
+            message: 'the identity users already installed could not be read',
+            remedy: '${reading.why}\n'
+                'rk proves signing continuity against the release at '
+                '$bestTag; until that baseline can be read, a new signature '
+                'cannot be proven continuous with it.',
+          ),
+          unit: unit.name,
+        );
+        output.halt(HaltKind.beforeActing);
+        return (ok: false, requirement: null);
+    }
   }
 
   Future<bool> _publishRelease(ResolvedUnit unit, BinaryChain chain) async {

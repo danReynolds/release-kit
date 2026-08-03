@@ -311,6 +311,8 @@ class Output {
     final sentence = switch (kind) {
       HaltKind.beforeActing =>
         'rk stopped before acting. nothing changed. safe to re-run.',
+      HaltKind.stoppedPartway => 'rk stopped partway. everything already '
+          'done is real and stays done; re-running resumes after it.',
       HaltKind.lostTrack => 'rk acted, then lost sight of the result. '
           'an effect may exist. still safe to re-run.',
       HaltKind.unfixableByRerun =>
@@ -384,6 +386,16 @@ class Output {
 enum HaltKind {
   /// Nothing happened; the world is unchanged.
   beforeActing,
+
+  /// The run stopped between acts; what completed stays done, nothing was
+  /// lost sight of, and the next run continues from what it finds.
+  ///
+  /// Added with the local chain, whose failures — a build that does not
+  /// compile, a notarization Apple rejects — stop a run that may already
+  /// have acted (a pushed tag). "nothing changed" would be false there, and
+  /// "lost sight of the result" would be too: the result was read, and it
+  /// was a refusal.
+  stoppedPartway,
 
   /// Something may have happened; the next run classifies what it finds.
   lostTrack,

@@ -70,7 +70,11 @@ class BinaryChain {
 
   // ---- build ----
 
-  Future<bool> buildStep(Step step, ResolvedProject project) async {
+  Future<bool> buildStep(
+    Step step,
+    ResolvedProject project, {
+    required String? publishedRequirement,
+  }) async {
     final platform = step.platform!;
     final executable = project.executable!;
     final capability = capabilities.resolve(platform);
@@ -88,21 +92,39 @@ class BinaryChain {
 
     final name = binaryName(platform, executable);
 
-    // A signed, verifiable binary at the right version is the one build
-    // output an authority vouches for — rebuilding it would destroy the
-    // signature. Everything unsigned is rebuilt: disk is not evidence.
-    if (platform.startsWith('macos-') && workspace.exists(name)) {
+    // Reuse is by identity, not acceptability, and every leg is an external
+    // authority answering *now*:
+    //
+    //   1. `codesign --verify --strict` — the bytes match the signature. The
+    //      display commands are not this check: `-d -r-` prints the
+    //      requirement, exit 0, for a binary modified after signing.
+    //   2. The designated requirement equals the one users already
+    //      installed. A Developer ID requirement carries no content hash, so
+    //      equality proves who signed; leg 1 proves these bytes are theirs.
+    //   3. The binary reports this release's version.
+    //
+    // No published baseline means no authority to be continuous with, so a
+    // first release always rebuilds — a compile costs seconds, and the
+    // artifact reuse exists for is the one Apple takes minutes to re-vouch,
+    // which stays gated by its own step. What this refuses: a foreign
+    // binary seeded into `.rk/work/` — invisible to git status, since
+    // `.rk/` is ignored — walking out signed and published.
+    if (platform.startsWith('macos-') &&
+        publishedRequirement != null &&
+        workspace.exists(name)) {
       final signer = MacOsSigner(tools: tools);
-      final requirement =
-          await signer.designatedRequirement(workspace.pathOf(name));
-      if (requirement != null &&
+      final path = workspace.pathOf(name);
+      if (await signer.verifies(path) &&
+          await signer.designatedRequirement(path) == publishedRequirement &&
           await _versionMatches(name, project.version.canonical)) {
         output.step(
           step,
           mark: Mark.satisfied,
           verdict: Verdict.exact,
-          detail: 'signed binary in the workspace, verified',
-          note: 'signed binary in the workspace, verified',
+          detail: 'signed binary in the workspace — signature verified, '
+              'identity matches the published release',
+          note: 'signed binary in the workspace — signature verified, '
+              'identity matches the published release',
         );
         return true;
       }
@@ -258,8 +280,16 @@ class BinaryChain {
 
   /// The team id inside a designated requirement, which is the one fact
   /// needed to pick the certificate that can reproduce it.
+  ///
+  /// The quotes are optional because codesign's requirement printer only
+  /// quotes an OU that needs quoting: a team id beginning with a digit
+  /// prints as `leaf[subject.OU] = "2DC432GLL2"`, one beginning with a
+  /// letter as `leaf[subject.OU] = Q6L2SF6YDW` — confirmed against real
+  /// signed apps and a csreq round-trip. The quoted-only version of this
+  /// returned null for every letter-leading team, which misread an
+  /// established identity as "no team rk can read".
   static String? _teamOf(String requirement) =>
-      RegExp(r'subject\.OU\]\s*=\s*"([A-Z0-9]+)"')
+      RegExp(r'subject\.OU\]\s*=\s*"?([A-Z0-9]+)"?')
           .firstMatch(requirement)
           ?.group(1);
 
@@ -547,7 +577,15 @@ class BinaryChain {
     );
 
     if (!result.ok) {
-      output.line('homebrew', mark: Mark.blocked, note: result.problem);
+      // A problem, not a bare line: a formula failure that never reached
+      // `problems` was invisible to every --json caller.
+      output.problem(
+        Diagnostic(
+          code: 'RK-BREW-001',
+          message: 'the tap formula was not updated',
+          remedy: result.problem ?? 'see the tap output',
+        ),
+      );
       return false;
     }
     output.line(

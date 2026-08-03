@@ -102,6 +102,7 @@ Future<Ran> release({
   Map<String, ToolResult> results = const {},
   void Function(String key)? onRun,
   void Function(String key, String? workingDirectory)? probe,
+  ToolResult? Function(String key)? answers,
   Iterable<String> onRemote = const [],
   String config = _config,
   String only = 'core',
@@ -131,13 +132,17 @@ Future<Ran> release({
     },
     answers: (key) {
       const prefix = 'git ls-remote origin refs/tags/';
-      if (!key.startsWith(prefix)) return null;
-      final tag = key.substring(prefix.length);
-      return ToolResult(
-        exitCode: 0,
-        stdout: remoteTags.contains(tag) ? 'deadbeef refs/tags/$tag' : '',
-        stderr: '',
-      );
+      if (key.startsWith(prefix)) {
+        final tag = key.substring(prefix.length);
+        return ToolResult(
+          exitCode: 0,
+          stdout: remoteTags.contains(tag) ? 'deadbeef refs/tags/$tag' : '',
+          stderr: '',
+        );
+      }
+      // The test's own world model, after the harness's: a binary unit's
+      // forge and identity reads live here.
+      return answers?.call(key);
     },
   );
 
@@ -183,9 +188,141 @@ Future<Ran> release({
   );
 }
 
+/// Phase 7a closeout: `_signingBaseline` — the identity read the whole sign
+/// step depends on — had no test at all. Four of the review's surviving
+/// mutations lived in it.
+void signingBaselineRegressions() {
+  const binaryConfig = '''
+schema = 1
+
+[release.cli]
+path = "packages/tool"
+publish = ["github-release"]
+binary_platforms = ["macos-arm64"]
+
+[identity]
+apple_team = "TEAM123456"
+code_id = "com.example.tool"
+''';
+
+  MemorySourceTree binaryTree() => MemorySourceTree({
+        'packages/tool/pubspec.yaml': '''
+name: tool
+version: 1.0.0
+publish_to: none
+executables:
+  tool: tool
+''',
+        'packages/tool/CHANGELOG.md': '## 1.0.0\n',
+      }, description: '/repo/tool');
+
+  /// The forge as a first-releaseable world: no release at the new tag,
+  /// the repository readable.
+  ToolResult? forge(String key) {
+    if (key.startsWith('gh release list')) {
+      return ToolResult(exitCode: 0, stdout: '[]', stderr: '');
+    }
+    if (key.startsWith('gh release view')) {
+      return ToolResult(exitCode: 1, stdout: '', stderr: 'release not found');
+    }
+    if (key.startsWith('gh repo view')) {
+      return ToolResult(exitCode: 0, stdout: '{"name":"keybay"}', stderr: '');
+    }
+    return null;
+  }
+
+  test(
+      'an unreadable published identity refuses before anything acts — '
+      'not as a bug in rk after the tag is public', () async {
+    final ran = await release(
+      config: binaryConfig,
+      source: binaryTree(),
+      state: _git(tags: ['v0.8.0', 'v0.9.0']),
+      registry: FakeRegistry({}),
+      typed: '1.0.0',
+      only: 'cli',
+      answers: (key) {
+        if (key.startsWith('gh release download')) {
+          return ToolResult(
+              exitCode: 1, stdout: '', stderr: 'could not resolve host');
+        }
+        return forge(key);
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.refused, reason: ran.text);
+    expect(
+      ran.problems.map((p) => p['code']),
+      contains('RK-SIGN-004'),
+      reason: 'not knowing the baseline has a name and a remedy; it is not '
+          'RK-INT-001',
+    );
+    expect(
+      (ran.report['halt'] as Map?)?['kind'],
+      'beforeActing',
+      reason: 'resolved in preflight — the version of this that resolved '
+          'inside the sign step surfaced after the tag was public',
+    );
+    expect(
+      ran.calls.where((c) => c.startsWith('git tag')),
+      isEmpty,
+      reason: 'nothing may act before the baseline is known',
+    );
+    expect(ran.text, isNot(contains('RK-INT-001')));
+  });
+
+  test('the baseline is read from the newest lower version, not the oldest',
+      () async {
+    final downloads = <String>[];
+    final ran = await release(
+      config: binaryConfig,
+      source: binaryTree(),
+      state: _git(tags: ['v0.8.0', 'v0.9.0']),
+      registry: FakeRegistry({}),
+      typed: '1.0.0',
+      dryRun: true, // the read happens in preflight, inside --dry-run
+      only: 'cli',
+      answers: (key) {
+        if (key.startsWith('gh release download')) {
+          downloads.add(key);
+          return ToolResult(exitCode: 0, stdout: '', stderr: '');
+        }
+        if (key.startsWith('sh -c ls ')) {
+          final dir =
+              key.substring('sh -c ls '.length).split('/*.tar.gz').first;
+          return ToolResult(
+            exitCode: 0,
+            stdout: '$dir/tool-0.9.0-macos-arm64.tar.gz\n',
+            stderr: '',
+          );
+        }
+        if (key.startsWith('codesign -d -r-')) {
+          return ToolResult(
+            exitCode: 0,
+            stdout: 'designated => certificate '
+                'leaf[subject.OU] = "TEAM123456"',
+            stderr: '',
+          );
+        }
+        return forge(key);
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    expect(downloads, hasLength(1));
+    expect(
+      downloads.single,
+      contains(' v0.9.0 '),
+      reason: 'the release users most recently installed is the identity '
+          'this one must be continuous with',
+    );
+  });
+}
+
 void main() {
   reviewRegressions();
   mutationCloseout();
+  signingBaselineRegressions();
 
   test('a dry run rehearses everything read-only and starts nothing', () async {
     final ran = await release(dryRun: true);

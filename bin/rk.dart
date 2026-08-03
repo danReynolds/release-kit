@@ -151,6 +151,24 @@ Future<void> main(List<String> args) async {
     return;
   }
 
+  // Both flags are individually valid for release, so the pair slips past
+  // the per-verb check — and --dry-run returning first meant --rehearse was
+  // silently ignored, the exact class the comment above forbids.
+  if (flags.contains('--dry-run') && flags.contains('--rehearse')) {
+    output.problem(
+      Diagnostic(
+        code: 'RK-CLI-008',
+        message: 'rk release takes --dry-run or --rehearse, not both',
+        remedy: '--dry-run inspects and stops before any act; --rehearse '
+            'performs every local act and stops before the public ones. '
+            'They are different promises, and rk will not pick one for you.',
+      ),
+    );
+    exitCode = ExitCodes.usage;
+    if (json) stdout.write(output.report.encode(exit: ExitCodes.usage));
+    return;
+  }
+
   if (flags.contains('-h') || flags.contains('--help')) {
     // Under --json stdout carries the document and nothing else, so the usage
     // travels inside it rather than beside it.

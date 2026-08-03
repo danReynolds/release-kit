@@ -175,6 +175,10 @@ class Report {
 
   void attach(String name, String contents) => attachments[name] = contents;
 
+  /// Whether a halt sentence has been recorded, so a generic late halt can
+  /// yield to a specific one already diagnosed.
+  bool get halted => _halt != null;
+
   /// Records a halt. [helps] and [safe] only ever narrow: the worst answer of
   /// a run is the answer for the run.
   void halt(

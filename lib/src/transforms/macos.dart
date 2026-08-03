@@ -83,6 +83,10 @@ class MacOsSigner {
   ///
   /// This is what a release must match: read it from the currently published
   /// binary, and compare the new one against it.
+  ///
+  /// A display, not a verification: `codesign -d` prints the requirement —
+  /// exit 0 and all — for a binary whose code was modified after signing.
+  /// Anything trusting the *bytes* must call [verifies] first.
   Future<String?> designatedRequirement(String binary) async {
     final result = await tools.run('codesign', ['-d', '-r-', binary]);
     if (!result.ok) return null;
@@ -91,6 +95,17 @@ class MacOsSigner {
       if (line.startsWith('designated =>')) return line.trim();
     }
     return null;
+  }
+
+  /// Whether the signature is valid for exactly these bytes.
+  ///
+  /// This is the verification the display commands are not: it fails on a
+  /// binary modified after signing, where `-d -r-` happily prints the
+  /// requirement of the signature the modification broke.
+  Future<bool> verifies(String binary) async {
+    final result =
+        await tools.run('codesign', ['--verify', '--strict', binary]);
+    return result.ok;
   }
 
   /// Whether Apple has notarized these exact bytes.

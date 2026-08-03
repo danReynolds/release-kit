@@ -363,21 +363,19 @@ Recorded because the reviews found them claimed-as-shipped when they are not:
   newer SDK than the probe's pubspec is refused with the solver's words and
   this ledger entry named in the remedy. The diagnosis still lacks per-step
   durations.
-- **Phase 7a** — `PublishedIdentity` is built and proven but wired to
-  nothing, and the binary chain requires a declared `[identity]` instead of
-  deriving one — the opposite of "identity facts are derived, not declared".
-  Its conformance gate is red until the wiring lands.
-- **Phase 7a** — wire `Activity` into the binary chain. It is built and tested
-  but has no production caller, while `binary_chain.dart` hand-rolls a worse
-  version for the notarization wait: one static line for a five-minute wait,
-  no spinner, no elapsed time, no "longer than usual". That is precisely the
-  failure `Activity` exists to prevent, live in the product. Also reintroduce
-  a workspace abstraction *there* — the interface was deleted in phase 2
-  because it abstracted a two-file diagnosis writer while the component that
-  actually produces artifacts took a `String` path, which is seam 3 honoured
-  where it does not matter and violated where it does. Also: a failed step
-  must stay expanded; today `Output.line` clears the transient line first, so
-  a failure collapses the detail that is the diagnosis.
+- **Phase 7a** — done in the 7a build and hardened in its review closeout:
+  `PublishedIdentity` wired (the baseline resolves in preflight, RK-SIGN-004
+  when unreadable), `Activity` carried by the build and the notarization
+  wait, and the workspace interface reintroduced around the binary chain —
+  seam 3 where it matters. Still open from this entry: a failed step must
+  stay expanded (`Output.line` clears the transient line first, collapsing
+  the detail that is the diagnosis).
+- **Phase 7b** — a multi-platform command-layer drive. The 7a reviewer ran a
+  two-platform release by hand and the product is correct — checksums covers
+  both archives, ordering holds — but the suite's only drive declares one
+  platform, which is how a checksums-covers-only-the-first mutation
+  survived. The phase's done-when (three platforms, end to end) subsumes
+  it.
 
 **Phase 3 — probes and status.** Self-audit before the independent review,
 prompted by the question "are we ready for phase 4". The audit found the worst
@@ -474,6 +472,62 @@ both directions, isClean's false direction, and the cache-forget contract.
 The phase 7 signing gate was green before its deliverable existed — the
 displaced-string anti-pattern again, an unwired file proving another file is
 used — and is now red until the wiring lands, which is what a gate is for.
+
+**Phase 7a — the independent review.** Fifteen mutations, nine survived —
+and the split was the finding: all seven mutations in 7a's two *new* safety
+mechanisms survived, while everything they plug into (the frozen inspect
+tables, the rehearse predicate, notarize reuse, naming) caught its
+mutations. The structure was judged sound to build 7b on; the content of
+the new mechanisms was not, and both highs were confirmed against live
+codesign behaviour. Fixed in closeout:
+
+- Build reuse was by acceptability, not identity: the gate was `exists` +
+  `codesign -d -r-` + a version string, and `-d -r-` is a *display* command
+  — it prints the requirement, exit 0, for a binary modified after signing.
+  A foreign binary seeded into `.rk/work/` (invisible to git status, which
+  ignores `.rk/`) walked out signed, notarized, and published. The gate is
+  now three external legs, all mandatory: `codesign --verify --strict`
+  (the bytes match the signature), designated-requirement equality against
+  the identity users already installed (a Developer ID requirement carries
+  no content hash, so equality proves who signed and leg one proves the
+  bytes are theirs), and the version. No published baseline means nothing
+  vouches, so a first release always rebuilds. All four directions are
+  pinned by execution.
+- The team parser required quotes; codesign only quotes an OU that needs
+  quoting, so every letter-leading team id (`= Q6L2SF6YDW`, unquoted —
+  confirmed live) derived no team, and the one repository this was tried
+  on, keybay, has the digit-leading team that happens to work. Both forms
+  parse now, with a decoy-quoted-token vector pinning the anchor and an
+  extends-the-published-requirement vector pinning equality-not-prefix.
+- `_signingBaseline` (né `_publishedRequirement`) had no test at all and
+  resolved *inside the sign step*, so an unreadable published identity
+  surfaced as RK-INT-001 — "a bug in rk" — after the tag was public. It
+  resolves in preflight now, before anything acts and inside `--dry-run`,
+  refusing as RK-SIGN-004 with the baseline tag named; the
+  newest-lower-version selection is pinned by which tag the identity read
+  downloads.
+- Most chain failures exited 1 with no halt sentence and no `halt` key; a
+  formula failure recorded no problem at all. Every act-loop failure now
+  halts — with a fifth sentence, `stoppedPartway` ("everything already done
+  is real and stays done; re-running resumes after it"), because a chain
+  failure after a pushed tag makes both "nothing changed" and "lost sight
+  of the result" false — and specific halts recorded where they were
+  diagnosed win over the default. The formula path records RK-BREW-001.
+- `--dry-run --rehearse` silently ran as a dry run — both flags
+  individually valid, so the pair passed the per-verb check, and the class
+  the CLI's own comment forbids recurred. It is RK-CLI-008 now: two
+  different promises, refused together.
+- The two workspaces disagreed about a file a native tool wrote at
+  `pathOf` before any ingest — which made the reuse branch unreachable
+  under MemoryWorkspace, and was the mechanical reason every reuse
+  mutation survived. They are interchangeable now, under a contract test
+  that runs every assertion against both, including the `..` escape guard
+  MemoryWorkspace lacked.
+
+Ledgered to 7b, whose done-when already demands it: a multi-platform drive
+(the reviewer ran one by hand: the product is correct — checksums covers
+both platforms and the ordering holds — the gap is coverage, not
+behaviour).
 
 **Phase 6 — the independent review.** Thirteen mutations, six survived, and
 a "not yet" verdict on the one mutating verb outside release. The high

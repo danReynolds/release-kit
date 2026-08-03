@@ -1006,12 +1006,20 @@ publish = ["pub.dev"]
 
     /// Drives a full binary-unit release at the command layer, with tools
     /// scripted by prefix and the compiler's output written where the
-    /// workspace says. Returns the run and the calls.
-    Future<({int code, String text, List<String> calls})> binaryDrive({
+    /// workspace says. Returns the run, the calls, and the machine surface.
+    Future<
+        ({
+          int code,
+          String text,
+          List<String> calls,
+          Map<String, Object?> json,
+        })> binaryDrive({
       required bool rehearse,
       Set<String> remoteTags = const {},
+      bool notaryRejects = false,
     }) async {
-      final root = Directory('${scratch.path}/drive-${rehearse ? 'r' : 'f'}')
+      final root = Directory(
+          '${scratch.path}/drive-${rehearse ? 'r' : 'f'}${notaryRejects ? '-nr' : ''}')
         ..createSync(recursive: true);
       final buffer = StringBuffer();
       final diagnostics = Diagnostics();
@@ -1098,11 +1106,17 @@ executables:
             );
           }
           if (key.startsWith('xcrun notarytool submit')) {
-            return ToolResult(
-              exitCode: 0,
-              stdout: '{"id": "s-1", "status": "Accepted"}',
-              stderr: '',
-            );
+            return notaryRejects
+                ? ToolResult(
+                    exitCode: 0,
+                    stdout: '{"id": "s-1", "status": "Invalid"}',
+                    stderr: '',
+                  )
+                : ToolResult(
+                    exitCode: 0,
+                    stdout: '{"id": "s-1", "status": "Accepted"}',
+                    stderr: '',
+                  );
           }
           if (key.contains('--version')) {
             return ToolResult(exitCode: 0, stdout: '1.0.0', stderr: '');
@@ -1156,7 +1170,13 @@ executables:
         rehearse: rehearse,
         wait: (_) => Future<void>.delayed(Duration.zero),
       ).run(only: 'cli');
-      return (code: code, text: buffer.toString(), calls: tools.calls);
+      return (
+        code: code,
+        text: buffer.toString(),
+        calls: tools.calls,
+        json: jsonDecode(output.report.encode(exit: code))
+            as Map<String, Object?>,
+      );
     }
 
     test('capability resolution per platform', () {
@@ -1214,6 +1234,34 @@ executables:
     });
 
     test(
+        'a chain failure halts with its sentence — partway, not "nothing '
+        'changed" and not "lost sight"', () async {
+      // Review finding: most chain failures exited 1 with no halt at all —
+      // no sentence for a person, no `halt` key for a caller. A rejected
+      // notarization is the everyday representative of the class.
+      final run = await binaryDrive(rehearse: true, notaryRejects: true);
+
+      expect(run.code, ExitCodes.refused, reason: run.text);
+      expect(run.text, contains('rk stopped partway.'));
+      expect(
+        (run.json['halt'] as Map?)?['kind'],
+        'stoppedPartway',
+        reason: 'the sentence is data too',
+      );
+      expect(
+        run.json['rerun_helps'],
+        isTrue,
+        reason: 'a rejected submission is fixed and re-run; nothing here is '
+            'terminal',
+      );
+      expect(
+        run.text,
+        contains('notarization did not complete'),
+        reason: 'the problem itself is still named beside the sentence',
+      );
+    });
+
+    test(
         'DONE WHEN, rehearse half: every local step runs for real and '
         'nothing public is touched', () async {
       final run = await binaryDrive(rehearse: true);
@@ -1241,6 +1289,20 @@ executables:
       }
       expect(run.text, contains('rehearsed'));
       expect(run.text, contains('nothing public changed'));
+    });
+
+    test('--dry-run with --rehearse is refused, not silently resolved', () {
+      // Both flags are individually valid for release, so the per-verb check
+      // passed the pair — and --dry-run returned first, so --rehearse was
+      // ignored without a word: the class bin/rk.dart's own comment forbids.
+      final scratchCli = Directory.systemTemp.createTempSync('rk-7a-cli-');
+      addTearDown(() => scratchCli.deleteSync(recursive: true));
+      final repo = Rk.example(scratchCli, 'single-package', as: 'both-flags');
+      final run = repo(['release', '--dry-run', '--rehearse']);
+
+      expect(run.code, ExitCodes.usage, reason: run.all);
+      expect(run.all, contains('not both'));
+      expect(run.all, contains('different promises'));
     });
   });
 }

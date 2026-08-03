@@ -77,35 +77,57 @@ class DirectoryWorkspace implements Workspace {
 
 /// In memory, for tests — with real temp files minted only when a native
 /// tool genuinely needs a path.
+///
+/// Interchangeable with [DirectoryWorkspace] on purpose, including for a
+/// file a native tool wrote at [pathOf] that nothing has ingested yet: the
+/// directory workspace sees it, so this one must too. When it did not, the
+/// reuse branch that consults `exists` before any ingest was unreachable
+/// under the memory workspace — and therefore under every test.
 class MemoryWorkspace implements Workspace {
   MemoryWorkspace();
 
   final Map<String, List<int>> _artifacts = {};
   Directory? _spill;
 
-  @override
-  List<int>? readBytes(String name) => _artifacts[name];
-
-  @override
-  void write(String name, List<int> bytes) => _artifacts[name] = bytes;
-
-  @override
-  void ingest(String name) {
-    final file = File('${_spill?.path}/$name');
-    if (file.existsSync()) _artifacts[name] = file.readAsBytesSync();
+  File? _spilled(String name) {
+    final spill = _spill;
+    if (spill == null) return null;
+    final file = File('${spill.path}/$name');
+    return file.existsSync() ? file : null;
   }
 
   @override
-  bool exists(String name) => _artifacts.containsKey(name);
+  List<int>? readBytes(String name) =>
+      _artifacts[name] ?? _spilled(name)?.readAsBytesSync();
+
+  @override
+  void write(String name, List<int> bytes) => _artifacts[_guard(name)] = bytes;
+
+  @override
+  void ingest(String name) {
+    final file = _spilled(name);
+    if (file != null) _artifacts[name] = file.readAsBytesSync();
+  }
+
+  @override
+  bool exists(String name) =>
+      _artifacts.containsKey(name) || _spilled(name) != null;
 
   @override
   String pathOf(String name) {
     final spill = _spill ??= Directory.systemTemp.createTempSync('rk-ws-');
-    final file = File('${spill.path}/$name')
+    final file = File('${spill.path}/${_guard(name)}')
       ..parent.createSync(recursive: true);
     final bytes = _artifacts[name];
     if (bytes != null) file.writeAsBytesSync(bytes);
     return file.path;
+  }
+
+  static String _guard(String name) {
+    if (name.split('/').contains('..')) {
+      throw ArgumentError('artifact names stay inside the workspace: $name');
+    }
+    return name;
   }
 
   /// What was written, by name — the assertion surface.
