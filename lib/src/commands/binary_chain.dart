@@ -5,19 +5,34 @@ import '../builds/capability.dart';
 import '../builds/dart_cli.dart';
 import '../destinations/github_release.dart';
 import '../destinations/homebrew.dart';
+import '../engine/checklist.dart';
+import '../engine/diagnostic.dart';
 import '../engine/output.dart';
 import '../engine/resolve.dart';
 import '../engine/tools.dart';
+import '../engine/verdict.dart';
+import '../engine/workspace.dart';
 import '../transforms/archive.dart';
 import '../transforms/digest.dart';
 import '../transforms/macos.dart';
 
-/// Produces and ships a unit's binaries.
+/// The local half of shipping binaries, one checklist step at a time.
 ///
-/// Every artifact is built into the workspace, checked, and only then handed
-/// to a destination. The workspace is a cache: it is keyed by release and
-/// commit, deleted when the release completes, and never seeded from another
-/// run.
+/// This used to be one `produce()` that ran the whole chain inside the first
+/// build step and handed a `_produced` list to the steps after it — which
+/// made the checklist's ten steps a fiction: per-step verdicts were
+/// invented, a mid-chain failure was reported against the wrong step, and
+/// CI could never split what one step secretly did. Now each step is its own
+/// act: it reads what it needs from the [Workspace] by name, does one thing,
+/// and writes what it made back by name. Nothing is carried between steps
+/// in memory (CI readiness, seam 1); the workspace is the interface
+/// (seam 3).
+///
+/// Reuse follows the RFC's identity rule, not existence: a file on disk is
+/// not evidence of itself. The only artifacts a re-run may reuse are those
+/// an external authority re-verifies now — a signed binary codesign accepts
+/// at the right version, a zip Apple already notarized. Everything else is
+/// rebuilt.
 class BinaryChain {
   BinaryChain({
     required this.tools,
@@ -29,182 +44,425 @@ class BinaryChain {
 
   final Tools tools;
   final Output output;
-
-  /// Where intermediates live for this release.
-  final String workspace;
-
+  final Workspace workspace;
   final String repositoryRoot;
   final HostCapabilities capabilities;
 
-  /// Builds, signs, notarizes and archives every declared platform.
-  ///
-  /// Returns the finished assets, or null when something stopped it — each
-  /// failure having already been reported where it happened.
-  Future<List<ReleaseAsset>?> produce({
-    required ResolvedUnit unit,
-    required ResolvedProject project,
-    required String? appleTeam,
-    required String? codeId,
-  }) async {
-    Directory(workspace).createSync(recursive: true);
+  // ---- the naming convention, shared with the expected-asset derivation ----
 
-    final builder = DartCliBuilder(tools: tools, capabilities: capabilities);
-    final signer = MacOsSigner(tools: tools);
-    final notarizer = MacOsNotarizer(tools: tools);
+  static String binaryName(String platform, String executable) =>
+      '$platform/$executable';
 
-    final assets = <ReleaseAsset>[];
-    final version = project.version.canonical;
+  static String zipName(String platform, String executable) =>
+      '$platform/$executable.zip';
+
+  static String archiveName(
+    String executable,
+    String version,
+    String platform,
+  ) =>
+      '$executable-$version-$platform.tar.gz';
+
+  String _projectDirectory(ResolvedProject project) =>
+      project.pubspec.directory == '.'
+          ? repositoryRoot
+          : '$repositoryRoot/${project.pubspec.directory}';
+
+  // ---- build ----
+
+  Future<bool> buildStep(Step step, ResolvedProject project) async {
+    final platform = step.platform!;
     final executable = project.executable!;
-    final projectDirectory = project.pubspec.directory == '.'
-        ? repositoryRoot
-        : '$repositoryRoot/${project.pubspec.directory}';
-
-    for (final platform in project.binaryPlatforms) {
-      final capability = capabilities.resolve(platform);
-      if (!capability.canProduce) {
-        output.line(platform, mark: Mark.blocked, note: capability.reason);
-        return null;
-      }
-
-      final binary = '$workspace/$platform/$executable';
-      Directory('$workspace/$platform').createSync(recursive: true);
-
-      output.progress('building $platform');
-      final built = await builder.build(
-        platform: platform,
-        entryPoint: 'bin/$executable.dart',
-        output: binary,
-        workingDirectory: projectDirectory,
-        expectedVersion: version,
+    final capability = capabilities.resolve(platform);
+    if (!capability.canProduce) {
+      output.problem(
+        Diagnostic(
+          code: 'RK-HOST-001',
+          message: 'this machine cannot produce $platform',
+          remedy: capability.reason ?? 'it needs a different host',
+        ),
+        unit: step.unit,
       );
-      if (!built.ok) {
-        output.line(platform, mark: Mark.blocked, note: built.problem);
-        return null;
-      }
-
-      if (platform.startsWith('macos-')) {
-        if (appleTeam == null || codeId == null) {
-          output.line(
-            platform,
-            mark: Mark.blocked,
-            note: 'no signing identity is established for this project',
-          );
-          output.say(
-            'the first signed release states it once: add [identity] with '
-            'apple_team and code_id',
-            depth: 1,
-          );
-          return null;
-        }
-
-        output.progress('signing $platform');
-        final signed = await signer.sign(
-          binary: binary,
-          team: appleTeam,
-          codeId: codeId,
-        );
-        if (!signed.ok) {
-          output.line(platform, mark: Mark.blocked, note: signed.problem);
-          return null;
-        }
-        output.line(platform, mark: Mark.done, note: 'signed · $appleTeam');
-
-        output.progress(
-          'notarizing $platform · typically ${MacOsNotarizer.typicalWait}',
-        );
-        final zip = '$workspace/$platform/$executable.zip';
-        final zipped = await tools.run(
-          'ditto',
-          ['-c', '-k', '--keepParent', binary, zip],
-        );
-        if (!zipped.ok) {
-          output.line(platform, mark: Mark.blocked, note: zipped.summary);
-          return null;
-        }
-
-        final notarized = await notarizer.submit(zip);
-        if (!notarized.ok) {
-          output.line(platform, mark: Mark.blocked, note: notarized.problem);
-          if (notarized.remedy != null) {
-            output.say(notarized.remedy!, depth: 1);
-          }
-          return null;
-        }
-        output.line(platform, mark: Mark.done, note: 'notarized');
-      }
-
-      final asset = await _archive(
-        platform: platform,
-        binary: binary,
-        executable: executable,
-        project: project,
-        version: version,
-      );
-      if (asset == null) return null;
-      assets.add(asset);
-      output.line(platform, mark: Mark.done, note: asset.name);
+      return false;
     }
 
-    // The checksums describe the assets, so they are produced from them.
-    final sums = Checksums.render({
-      for (final asset in assets) asset.name: asset.bytes,
-    });
-    final sumsPath = '$workspace/SHA256SUMS';
-    File(sumsPath).writeAsStringSync(sums);
-    assets.add(
-      ReleaseAsset(
-        name: 'SHA256SUMS',
-        path: sumsPath,
-        bytes: utf8.encode(sums),
-        platform: null,
-      ),
-    );
+    final name = binaryName(platform, executable);
 
+    // A signed, verifiable binary at the right version is the one build
+    // output an authority vouches for — rebuilding it would destroy the
+    // signature. Everything unsigned is rebuilt: disk is not evidence.
+    if (platform.startsWith('macos-') && workspace.exists(name)) {
+      final signer = MacOsSigner(tools: tools);
+      final requirement =
+          await signer.designatedRequirement(workspace.pathOf(name));
+      if (requirement != null &&
+          await _versionMatches(name, project.version.canonical)) {
+        output.step(
+          step,
+          mark: Mark.satisfied,
+          verdict: Verdict.exact,
+          detail: 'signed binary in the workspace, verified',
+          note: 'signed binary in the workspace, verified',
+        );
+        return true;
+      }
+    }
+
+    final activity = output.begin(step);
+    File(workspace.pathOf(name)).parent.createSync(recursive: true);
+    final built = await DartCliBuilder(
+      tools: tools,
+      capabilities: capabilities,
+    ).build(
+      platform: platform,
+      entryPoint: 'bin/$executable.dart',
+      output: workspace.pathOf(name),
+      workingDirectory: _projectDirectory(project),
+      expectedVersion: project.version.canonical,
+    );
+    if (!built.ok) {
+      activity.failed(built.problem ?? 'the build failed');
+      output.problem(
+        Diagnostic(
+          code: 'RK-BUILD-001',
+          message: '$platform: the build did not produce a working binary',
+          remedy: built.problem ?? 'see the compiler output',
+        ),
+        unit: step.unit,
+      );
+      return false;
+    }
+    workspace.ingest(name);
+    activity.done('built');
+    return true;
+  }
+
+  Future<bool> _versionMatches(String name, String version) async {
+    final result = await tools.run(workspace.pathOf(name), ['--version']);
+    return result.ok && result.stdout.contains(version);
+  }
+
+  // ---- sign ----
+
+  /// Signs, then proves the produced identity against [publishedRequirement]
+  /// when one exists.
+  ///
+  /// The requirement is derived from the release users already installed —
+  /// asking the certificate about to sign what it will sign with is a
+  /// tautology. Only a first signed release, which has no published binary
+  /// to derive from, falls back to the declared `[identity]`.
+  Future<bool> signStep(
+    Step step,
+    ResolvedProject project, {
+    required String? publishedRequirement,
+    required String? declaredTeam,
+    required String? declaredCodeId,
+  }) async {
+    final platform = step.platform!;
+    final name = binaryName(platform, project.executable!);
+    if (!workspace.exists(name)) {
+      return _missingArtifact(step, name, 'the build step produces it');
+    }
+
+    final team = publishedRequirement != null
+        ? _teamOf(publishedRequirement) ?? declaredTeam
+        : declaredTeam;
+    if (team == null) {
+      output.problem(
+        Diagnostic(
+          code: 'RK-SIGN-001',
+          message: 'no signing identity is established for this project',
+          remedy: publishedRequirement == null
+              ? 'the first signed release states it once — add [identity] '
+                  'with apple_team and code_id to release.toml. Every '
+                  'release after it derives the identity from what is '
+                  'already published.'
+              : 'the published requirement names no team rk can read, and '
+                  'no [identity] is declared',
+        ),
+        unit: step.unit,
+      );
+      return false;
+    }
+
+    final signer = MacOsSigner(tools: tools);
+    final signed = await signer.sign(
+      binary: workspace.pathOf(name),
+      team: team,
+      codeId: declaredCodeId ?? project.name,
+    );
+    if (!signed.ok) {
+      output.problem(
+        Diagnostic(
+          code: 'RK-SIGN-002',
+          message: '$platform: signing failed',
+          remedy: signed.problem ?? 'see codesign\'s output',
+        ),
+        unit: step.unit,
+      );
+      return false;
+    }
+    workspace.ingest(name);
+
+    // The proof: what was just signed must be the same program identity users
+    // already installed. A new certificate, team, or rebuilt identity passes
+    // every local check and fails only on users' machines — this is where it
+    // fails here instead.
+    if (publishedRequirement != null) {
+      final produced = signed.requirement ?? '(unreadable)';
+      if (produced != publishedRequirement) {
+        output.problem(
+          Diagnostic(
+            code: 'RK-SIGN-003',
+            message: 'the signature does not match the identity users '
+                'already installed',
+            remedy: 'signing with a different certificate ships what '
+                'Gatekeeper treats as a different program under the same '
+                'name. Fix the keychain, or — deliberately, for a planned '
+                'identity change — remove the published baseline from the '
+                'comparison by declaring [identity] anew.',
+          ),
+          unit: step.unit,
+        );
+        output.step(
+          step,
+          mark: Mark.blocked,
+          verdict: Verdict.conflict,
+          evidence: {
+            'published': publishedRequirement,
+            'produced': produced,
+          },
+          show: true,
+        );
+        output.halt(HaltKind.unfixableByRerun);
+        return false;
+      }
+      output.step(
+        step,
+        mark: Mark.done,
+        verdict: Verdict.exact,
+        detail: 'signed · matches the published identity',
+        note: 'signed · matches the published identity',
+      );
+    } else {
+      output.step(
+        step,
+        mark: Mark.done,
+        verdict: Verdict.exact,
+        detail: 'signed · first release, baseline declared',
+        note: 'signed · first release, baseline declared',
+      );
+    }
+    return true;
+  }
+
+  /// The team id inside a designated requirement, which is the one fact
+  /// needed to pick the certificate that can reproduce it.
+  static String? _teamOf(String requirement) =>
+      RegExp(r'subject\.OU\]\s*=\s*"([A-Z0-9]+)"')
+          .firstMatch(requirement)
+          ?.group(1);
+
+  // ---- notarize ----
+
+  Future<bool> notarizeStep(Step step, ResolvedProject project) async {
+    final platform = step.platform!;
+    final executable = project.executable!;
+    final binary = binaryName(platform, executable);
+    if (!workspace.exists(binary)) {
+      return _missingArtifact(
+          step,
+          binary,
+          'the build and sign steps '
+          'produce it');
+    }
+
+    final signer = MacOsSigner(tools: tools);
+    if (await signer.isNotarized(workspace.pathOf(binary))) {
+      output.step(
+        step,
+        mark: Mark.satisfied,
+        verdict: Verdict.exact,
+        detail: 'Apple already notarized these exact bytes',
+        note: 'Apple already notarized these exact bytes',
+      );
+      return true;
+    }
+
+    final zip = zipName(platform, executable);
+    final zipped = await tools.run(
+      'ditto',
+      [
+        '-c',
+        '-k',
+        '--keepParent',
+        workspace.pathOf(binary),
+        workspace.pathOf(zip)
+      ],
+    );
+    if (!zipped.ok) {
+      output.problem(
+        Diagnostic(
+          code: 'RK-NOTARY-001',
+          message: '$platform: the archive for notarization failed',
+          remedy: zipped.summary,
+        ),
+        unit: step.unit,
+      );
+      return false;
+    }
+    workspace.ingest(zip);
+
+    // The wait is Apple's, and silence during it reads as a hang — this is
+    // the step Activity exists for.
+    final activity = output.begin(
+      step,
+      typically: const Duration(minutes: 5),
+    );
+    activity.update('waiting on Apple');
+    final notarized =
+        await MacOsNotarizer(tools: tools).submit(workspace.pathOf(zip));
+    if (!notarized.ok) {
+      activity.failed(notarized.problem ?? 'Apple rejected the submission');
+      output.problem(
+        Diagnostic(
+          code: 'RK-NOTARY-002',
+          message: '$platform: notarization did not complete',
+          remedy: notarized.remedy ?? notarized.problem ?? 'see notarytool',
+        ),
+        unit: step.unit,
+      );
+      return false;
+    }
+    activity.done('notarized');
+    return true;
+  }
+
+  // ---- archive ----
+
+  Future<bool> archiveStep(Step step, ResolvedProject project) async {
+    final platform = step.platform!;
+    final executable = project.executable!;
+    final binary = workspace.readBytes(binaryName(platform, executable));
+    if (binary == null) {
+      return _missingArtifact(
+        step,
+        binaryName(platform, executable),
+        'the build step produces it',
+      );
+    }
+
+    final entries = <ArchiveEntry>[
+      ArchiveEntry(name: executable, bytes: binary, executable: true),
+    ];
+    // LICENSE and README travel with the binary by convention, not by
+    // configuration.
+    final directory = _projectDirectory(project);
+    for (final extra in const ['LICENSE', 'README.md']) {
+      final file = File('$directory/$extra');
+      if (file.existsSync()) {
+        entries.add(ArchiveEntry(name: extra, bytes: file.readAsBytesSync()));
+      }
+    }
+
+    final name = archiveName(
+      executable,
+      project.version.canonical,
+      platform,
+    );
+    workspace.write(name, ArchiveBuilder.gzip(ArchiveBuilder.tar(entries)));
+    output.step(
+      step,
+      mark: Mark.done,
+      verdict: Verdict.exact,
+      detail: name,
+      note: name,
+    );
+    return true;
+  }
+
+  // ---- checksums ----
+
+  Future<bool> checksumsStep(Step step, ResolvedProject project) async {
+    final assets = <String, List<int>>{};
+    for (final platform in project.binaryPlatforms) {
+      final name = archiveName(
+        project.executable!,
+        project.version.canonical,
+        platform,
+      );
+      final bytes = workspace.readBytes(name);
+      if (bytes == null) {
+        return _missingArtifact(step, name, 'the archive steps produce it');
+      }
+      assets[name] = bytes;
+    }
+
+    workspace.write('SHA256SUMS', utf8.encode(Checksums.render(assets)));
+    output.step(
+      step,
+      mark: Mark.done,
+      verdict: Verdict.exact,
+      detail: '${assets.length} archives',
+      note: '${assets.length} archives',
+    );
+    return true;
+  }
+
+  // ---- the public acts, gathering from the workspace by name ----
+
+  /// The asset list a release of [project] ships, from the workspace — or
+  /// null with an honest refusal when something is not there.
+  List<ReleaseAsset>? gatherAssets(ResolvedProject project, String unit) {
+    final assets = <ReleaseAsset>[];
+    for (final platform in project.binaryPlatforms) {
+      final name = archiveName(
+        project.executable!,
+        project.version.canonical,
+        platform,
+      );
+      final bytes = workspace.readBytes(name);
+      if (bytes == null) {
+        output.problem(
+          Diagnostic(
+            code: 'RK-WORK-001',
+            message: 'the workspace has no $name',
+            remedy: 'the archive steps produce it — re-running runs them',
+          ),
+          unit: unit,
+        );
+        return null;
+      }
+      assets.add(ReleaseAsset(
+        name: name,
+        path: workspace.pathOf(name),
+        bytes: bytes,
+        platform: platform,
+      ));
+    }
+
+    final sums = workspace.readBytes('SHA256SUMS');
+    if (sums == null) {
+      output.problem(
+        Diagnostic(
+          code: 'RK-WORK-001',
+          message: 'the workspace has no SHA256SUMS',
+          remedy: 'the checksums step produces it — re-running runs it',
+        ),
+        unit: unit,
+      );
+      return null;
+    }
+    assets.add(ReleaseAsset(
+      name: 'SHA256SUMS',
+      path: workspace.pathOf('SHA256SUMS'),
+      bytes: sums,
+      platform: null,
+    ));
     return assets;
   }
 
-  Future<ReleaseAsset?> _archive({
-    required String platform,
-    required String binary,
-    required String executable,
-    required ResolvedProject project,
-    required String version,
-  }) async {
-    final directory = project.pubspec.directory == '.'
-        ? repositoryRoot
-        : '$repositoryRoot/${project.pubspec.directory}';
-
-    final entries = <ArchiveEntry>[
-      ArchiveEntry(
-        name: executable,
-        bytes: File(binary).readAsBytesSync(),
-        executable: true,
-      ),
-    ];
-
-    // LICENSE and README travel with the binary by convention, not by
-    // configuration.
-    for (final name in const ['LICENSE', 'README.md']) {
-      final file = File('$directory/$name');
-      if (file.existsSync()) {
-        entries.add(ArchiveEntry(name: name, bytes: file.readAsBytesSync()));
-      }
-    }
-
-    final bytes = ArchiveBuilder.gzip(ArchiveBuilder.tar(entries));
-    final name = '$executable-$version-$platform.tar.gz';
-    final path = '$workspace/$name';
-    File(path).writeAsBytesSync(bytes);
-
-    return ReleaseAsset(
-      name: name,
-      path: path,
-      bytes: bytes,
-      platform: platform,
-    );
-  }
-
-  /// Publishes the assets as one immutable release.
+  /// Publishes the gathered assets as one immutable release.
   Future<String?> publishRelease({
     required String repository,
     required String tag,
@@ -232,7 +490,7 @@ class BinaryChain {
       // re-running cannot touch.
       output.halt(
         published.isTerminal
-            ? HaltKind.unfixableByRerun
+            ? HaltKind.actedAndUnfixable
             : published.mayHaveActed
                 ? HaltKind.lostTrack
                 : HaltKind.beforeActing,
@@ -278,11 +536,10 @@ class BinaryChain {
       },
     );
 
-    final checkout = '$workspace/tap';
     final result = await HomebrewTap(
       tools: tools,
       tap: tap,
-      checkout: checkout,
+      checkout: workspace.pathOf('tap'),
     ).update(
       formulaPath: 'Formula/$executable.rb',
       contents: formula,
@@ -300,9 +557,20 @@ class BinaryChain {
     );
     return true;
   }
+
+  bool _missingArtifact(Step step, String name, String producedBy) {
+    output.problem(
+      Diagnostic(
+        code: 'RK-WORK-001',
+        message: 'the workspace has no $name',
+        remedy: '$producedBy — re-running runs it',
+      ),
+      unit: step.unit,
+    );
+    return false;
+  }
 }
 
-/// A finished file a release ships.
 class ReleaseAsset {
   ReleaseAsset({
     required this.name,
@@ -314,7 +582,5 @@ class ReleaseAsset {
   final String name;
   final String path;
   final List<int> bytes;
-
-  /// Null for an asset that is not per-platform, such as the checksums.
   final String? platform;
 }

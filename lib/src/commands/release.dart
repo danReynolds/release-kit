@@ -12,7 +12,10 @@ import '../engine/registry.dart';
 import '../engine/resolve.dart';
 import '../engine/source_tree.dart';
 import '../engine/tools.dart';
+import '../engine/identity.dart';
 import '../engine/verdict.dart';
+import '../engine/version.dart';
+import '../engine/workspace.dart';
 import 'binary_chain.dart';
 
 /// Executes a release: inspect, act, verify, one step at a time.
@@ -32,6 +35,7 @@ class ReleaseCommand {
     required this.output,
     required this.confirm,
     this.dryRun = false,
+    this.rehearse = false,
     Future<void> Function(Duration)? wait,
   }) : _wait = wait ?? _sleep;
 
@@ -72,9 +76,14 @@ class ReleaseCommand {
   /// Show what would happen and stop before the first effect.
   final bool dryRun;
 
-  /// Assets produced during this run, so the steps that ship them do not have
-  /// to rebuild what the step before them just made.
-  List<ReleaseAsset>? _produced;
+  /// Run every local step for real and stop before anything public.
+  ///
+  /// The rehearsal exists so an expired certificate or a broken notarization
+  /// is discovered on a quiet afternoon, not at minute forty of an announced
+  /// release. Public steps — the tag, every publish — are inspected but
+  /// never acted on, and nothing is authorized because nothing permanent
+  /// happens.
+  final bool rehearse;
 
   Future<int> run({String? only}) async {
     final units = only == null
@@ -248,13 +257,25 @@ class ReleaseCommand {
       return ExitCodes.ok;
     }
 
-    if (!await _authorize(unit, remaining)) return ExitCodes.refused;
+    if (!rehearse && !await _authorize(unit, remaining)) {
+      return ExitCodes.refused;
+    }
 
     output.blank();
+    var rehearsed = 0;
     for (final step in checklist.steps) {
       if (states[step.id]!.isExact) continue;
+      if (rehearse && step.isPublic) {
+        rehearsed++;
+        output.step(
+          step,
+          verdict: states[step.id]!.verdict,
+          note: 'rehearsal — not touched',
+        );
+        continue;
+      }
       // From here on the world may change, which is what makes a failure
-      // worth recording evidence about.
+      // worth recording evidence about. A rehearsal's local acts count too.
       output.report.acted = true;
       final ok = await _act(step, unit);
       // The act's answer supersedes the inspection's: without this, the
@@ -267,6 +288,18 @@ class ReleaseCommand {
         show: false,
       );
       if (!ok) return ExitCodes.refused;
+    }
+
+    if (rehearse) {
+      output.blank();
+      output.line(
+        '${unit.name} ${unit.version} rehearsed',
+        mark: Mark.done,
+        note: '$rehearsed public steps untouched',
+      );
+      output.say('every local step ran for real; nothing public changed. '
+          'The release itself is: rk release ${unit.name}');
+      return ExitCodes.ok;
     }
 
     output.blank();
@@ -423,26 +456,37 @@ class ReleaseCommand {
       case StepKind.prerequisite:
         return true; // inspected, never performed
       case StepKind.build:
-        // The whole chain runs once, at the first build step: signing,
-        // notarizing and archiving are one sequence per platform, and
-        // splitting them here would mean re-reading artifacts between them.
-        return _produce(unit);
-      case StepKind.sign ||
-            StepKind.notarize ||
-            StepKind.archive ||
-            StepKind.checksums:
-        return true; // done by the chain the first build started
+        return _chain(unit).buildStep(step, _binaryProject(unit));
+      case StepKind.sign:
+        return _chain(unit).signStep(
+          step,
+          _binaryProject(unit),
+          publishedRequirement: await _publishedRequirement(unit),
+          declaredTeam: resolution.identity?.appleTeam,
+          declaredCodeId: resolution.identity?.codeId,
+        );
+      case StepKind.notarize:
+        return _chain(unit).notarizeStep(step, _binaryProject(unit));
+      case StepKind.archive:
+        return _chain(unit).archiveStep(step, _binaryProject(unit));
+      case StepKind.checksums:
+        return _chain(unit).checksumsStep(step, _binaryProject(unit));
       case StepKind.publishRelease:
-        return _publishRelease(unit);
+        return _publishRelease(unit, _chain(unit));
       case StepKind.publishFormula:
-        return _publishFormula(unit);
+        return _publishFormula(unit, _chain(unit));
     }
   }
 
   BinaryChain _chain(ResolvedUnit unit) => BinaryChain(
         tools: tools,
         output: output,
-        workspace: '${git.root}/.rk/work/${unit.tag}-${git.shortHead}',
+        // Keyed by release and commit, never seeded from another run: a tag
+        // deleted and re-pushed at a different commit gets a fresh workspace,
+        // so nothing signed from the wrong source can be reused.
+        workspace: DirectoryWorkspace(
+          '${git.root}/.rk/work/${unit.tag}-${git.shortHead}',
+        ),
         repositoryRoot: git.root,
         capabilities: HostCapabilities.detect(),
       );
@@ -450,32 +494,61 @@ class ReleaseCommand {
   ResolvedProject _binaryProject(ResolvedUnit unit) =>
       unit.projects.firstWhere((p) => p.config.wantsBinaries);
 
-  Future<bool> _produce(ResolvedUnit unit) async {
-    final project = _binaryProject(unit);
-    final identity = resolution.identity;
+  /// The designated requirement of the newest already-published release,
+  /// which is what this release's signature must reproduce.
+  ///
+  /// Derived, not declared: the previous version's tag names the release
+  /// users already installed, and its binary is the only authority on what
+  /// identity this program has. `none` — no earlier signed release — falls
+  /// back to the declared `[identity]`; `unreadable` blocks in the sign
+  /// step, because not knowing the baseline is not permission to ship a new
+  /// one.
+  Future<String?> _publishedRequirement(ResolvedUnit unit) async {
+    final repository = git.originUrl;
+    if (repository == null) return null;
 
-    final assets = await _chain(unit).produce(
-      unit: unit,
-      project: project,
-      appleTeam: identity?.appleTeam,
-      codeId: identity?.codeId,
+    Version? best;
+    String? bestTag;
+    for (final tag in git.tagsMatching(unit.tagPattern)) {
+      final raw = GitState.versionIn(tag, unit.tagPattern);
+      final version = raw == null ? null : Version.tryParse(raw);
+      if (version == null || version >= unit.version) continue;
+      if (best == null || version > best) {
+        best = version;
+        bestTag = tag;
+      }
+    }
+    if (bestTag == null) return null; // a first signed release
+
+    final reading = await PublishedIdentity(
+      tools: tools,
+      repository: repository,
+      workingDirectory: git.root,
+    ).read(
+      tag: bestTag,
+      executable: _binaryProject(unit).executable!,
+      into: _chain(unit).workspace.pathOf('published-identity'),
     );
-    if (assets == null) return false;
-    _produced = assets;
-    return true;
+    return switch (reading.answer) {
+      IdentityAnswer.found => reading.requirement,
+      IdentityAnswer.none => null,
+      // Surfaced as a missing baseline in the sign step's own terms: the
+      // sign act treats a null-with-declared-identity as first-release, so
+      // an unreadable forge must not be allowed to look like one.
+      IdentityAnswer.unreadable => throw StateError(
+          'the published identity could not be read: ${reading.why}',
+        ),
+    };
   }
 
-  Future<bool> _publishRelease(ResolvedUnit unit) async {
-    final assets = _produced;
-    if (assets == null) {
-      output.line('github-release',
-          mark: Mark.blocked, note: 'nothing was produced to publish');
-      return false;
-    }
+  Future<bool> _publishRelease(ResolvedUnit unit, BinaryChain chain) async {
     final repository = _repository();
     if (repository == null) return false;
 
-    final url = await _chain(unit).publishRelease(
+    final assets = chain.gatherAssets(_binaryProject(unit), unit.name);
+    if (assets == null) return false;
+
+    final url = await chain.publishRelease(
       repository: repository,
       tag: unit.tag,
       title: '${_binaryProject(unit).name} ${unit.version}',
@@ -484,17 +557,18 @@ class ReleaseCommand {
     return url != null;
   }
 
-  Future<bool> _publishFormula(ResolvedUnit unit) async {
-    final assets = _produced;
-    if (assets == null) return false;
+  Future<bool> _publishFormula(ResolvedUnit unit, BinaryChain chain) async {
     final repository = _repository();
     if (repository == null) return false;
+
+    final assets = chain.gatherAssets(_binaryProject(unit), unit.name);
+    if (assets == null) return false;
 
     final identity = resolution.identity;
     final tap =
         identity?.homebrewTap ?? '${repository.split('/').first}/homebrew-tap';
 
-    return _chain(unit).updateFormula(
+    return chain.updateFormula(
       tap: tap,
       repository: repository,
       tag: unit.tag,

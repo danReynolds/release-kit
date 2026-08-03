@@ -566,3 +566,22 @@ terminal for the typed confirmation. The path to it, in order:
 5. `rk release core`, type the version at the prompt.
 6. Paste the transcript here as "## Phase 5 checkpoint", which turns the
    gate green.
+
+**Phase 7a — the local chain, built.** The monolith dissolved: `produce()`
+ran the whole chain inside the first build step and handed `_produced` to
+the steps after it, making the checklist's ten steps a fiction. Each step is
+now its own act over the workspace interface — read by name, do one thing,
+write by name — and the gate proves it by driving a full binary release at
+the command layer with a fresh chain instance per step: build, sign,
+notarize, archive, checksums, publish, each acting separately and in order.
+Reuse follows identity, not existence: only a signed binary codesign
+re-verifies at the right version and a zip Apple already notarized are
+reused; everything else rebuilds. Signing derives its requirement from the
+release users already installed — `PublishedIdentity`, wired at last, with
+the team read out of the published requirement itself — and a signature that
+does not reproduce it is refused with both requirements as evidence, before
+anything public exists. `Activity` finally has its production callers: the
+build and the notarization wait. And `--rehearse` is real: every local step
+runs for real, nothing public is touched, nothing is authorized because
+nothing permanent happens — proved by a gate that counts the tool calls both
+ways.

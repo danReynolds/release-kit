@@ -36,6 +36,7 @@ Future<void> main(List<String> args) async {
     '-h',
     '--help',
     '--dry-run',
+    '--rehearse',
     '--offline',
     '--json',
   };
@@ -77,7 +78,15 @@ Future<void> main(List<String> args) async {
   const perVerb = {
     'status': {'-v', '--verbose', '-h', '--help', '--json', '--offline'},
     'verify': {'-v', '--verbose', '-h', '--help', '--json'},
-    'release': {'-v', '--verbose', '-h', '--help', '--json', '--dry-run'},
+    'release': {
+      '-v',
+      '--verbose',
+      '-h',
+      '--help',
+      '--json',
+      '--dry-run',
+      '--rehearse',
+    },
     'init': {'-v', '--verbose', '-h', '--help', '--json'},
   };
   final inapplicable = {
@@ -156,6 +165,7 @@ Future<void> main(List<String> args) async {
           output,
           target,
           dryRun: flags.contains('--dry-run'),
+          rehearse: flags.contains('--rehearse'),
           interactive: !json,
         ),
       'init' => await _init(output, interactive: !json),
@@ -263,6 +273,7 @@ Future<int> _release(
   Output output,
   String? unit, {
   required bool dryRun,
+  required bool rehearse,
   required bool interactive,
 }) async {
   final prepared = _prepare(output);
@@ -292,6 +303,7 @@ Future<int> _release(
       // still asked. release already refuses when nobody can authorize.
       confirm: interactive ? promptOnTerminal : null,
       dryRun: dryRun,
+      rehearse: rehearse,
     ).run(only: unit);
   } finally {
     registry.close();
