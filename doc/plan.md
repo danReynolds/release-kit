@@ -370,12 +370,17 @@ Recorded because the reviews found them claimed-as-shipped when they are not:
   seam 3 where it matters. Still open from this entry: a failed step must
   stay expanded (`Output.line` clears the transient line first, collapsing
   the detail that is the diagnosis).
-- **Phase 7b** — a multi-platform command-layer drive. The 7a reviewer ran a
-  two-platform release by hand and the product is correct — checksums covers
-  both archives, ordering holds — but the suite's only drive declares one
-  platform, which is how a checksums-covers-only-the-first mutation
-  survived. The phase's done-when (three platforms, end to end) subsumes
-  it.
+- **Phase 7b** — a multi-platform command-layer drive: done, in the 7b
+  build (three platforms, both directions).
+- **Verify, owed by 7b** — the formula inspection's exactness is the
+  version pointer, not bytes: the sha256 values inside a formula are
+  digests of assets a pre-build inspection cannot have. The act compares
+  bytes before pushing and reads the public tap back after, but proving a
+  *previously released* formula byte-faithful — digests against the
+  published archives, formula against what rk would render — belongs to
+  `rk verify`, which runs when the assets are published facts. Until then,
+  a hand-edited formula that keeps the version line reads `exact` to
+  status.
 
 **Phase 3 — probes and status.** Self-audit before the independent review,
 prompted by the question "are we ready for phase 4". The audit found the worst
@@ -472,6 +477,39 @@ both directions, isClean's false direction, and the cache-forget contract.
 The phase 7 signing gate was green before its deliverable existed — the
 displaced-string anti-pattern again, an unwired file proving another file is
 used — and is now red until the wiring lands, which is what a gate is for.
+
+**Phase 7b — the destinations, built.** The forge is read through `gh api`
+status codes end to end: existence keys on `(HTTP 404)` — with the
+404-means-private discipline kept, since GitHub deliberately 404s a
+repository the token cannot see — instead of prose gh rewords between
+versions; drafts are swept with `--paginate --slurp`, killing the silent
+`--limit 100` cap; deletion is by release id, which several same-tag drafts
+made ambiguous by tag. The release body is the changelog entry, extracted
+through the same heading parse that validated its presence — one source of
+release prose, where `--generate-notes` shipped a commit-log digest that
+could disagree with the CHANGELOG. The asset set grew to the real keybay
+0.1.0 ten-asset shape and `gatherAssets` and `expectedAssets` mirror it:
+archives per platform, `.notary-result.json` and `.notary-log.json` per
+macOS platform (the notarize step now publishes Apple's verdict and its
+log, and its skip requires the evidence files, not just Apple's word), the
+formula riding with the release so it is self-describing, and the
+checksums. The formula step got a real inspection — the tap read publicly
+via `gh api contents`, 404-disciplined, exact meaning "points at this
+version" — where the stub answered `unknown` and, once homebrew was
+actually driven, blocked every release carrying it. And `HomebrewTap` held
+two bugs the 7a review never reached because nothing drove it: the formula
+was written with `cat` and no stdin — the `contents` parameter was never
+used, so what it committed was empty — and `git commit -a` never stages a
+new file, so a first-ever formula read as "already current" and pushed
+nothing. It writes for real now, stages by name, decides unchanged by
+bytes, compare-and-swaps against a fresh clone, and reads the formula back
+from the public tap byte-for-byte after pushing (RK-BREW-001/002/003). A
+three-platform drive — native macOS plus two cross-compiled linux targets
+under injected capabilities — proves the whole shape at the command layer,
+in both directions: the full release (seven assets, ordering, notes,
+read-back) and the rehearsal that runs every local step and touches
+nothing public. The DONE-WHEN live gate is deliberately red until the real
+keybay cli release is recorded as "## Phase 7b checkpoint".
 
 **Phase 7a — the independent review.** Fifteen mutations, nine survived —
 and the split was the finding: all seven mutations in 7a's two *new* safety

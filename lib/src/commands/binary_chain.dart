@@ -63,6 +63,26 @@ class BinaryChain {
   ) =>
       '$executable-$version-$platform.tar.gz';
 
+  /// Apple's verdict, verbatim, as a published asset — and its log, which
+  /// says what the verdict covered.
+  static String notaryResultName(
+    String executable,
+    String version,
+    String platform,
+  ) =>
+      '$executable-$version-$platform.notary-result.json';
+
+  static String notaryLogName(
+    String executable,
+    String version,
+    String platform,
+  ) =>
+      '$executable-$version-$platform.notary-log.json';
+
+  /// The formula ships with the release too, so the release is
+  /// self-describing: the tap copy is a pointer, this one is the record.
+  static String formulaName(String executable) => '$executable.rb';
+
   String _projectDirectory(ResolvedProject project) =>
       project.pubspec.directory == '.'
           ? repositoryRoot
@@ -307,8 +327,24 @@ class BinaryChain {
           'produce it');
     }
 
+    final resultName = notaryResultName(
+      executable,
+      project.version.canonical,
+      platform,
+    );
+    final logName = notaryLogName(
+      executable,
+      project.version.canonical,
+      platform,
+    );
+
     final signer = MacOsSigner(tools: tools);
-    if (await signer.isNotarized(workspace.pathOf(binary))) {
+    if (await signer.isNotarized(workspace.pathOf(binary)) &&
+        workspace.exists(resultName) &&
+        workspace.exists(logName)) {
+      // Apple vouches for the bytes; the evidence files vouch for the
+      // release. Both or neither: notarized bytes without the result and
+      // log would publish a release missing two of its expected assets.
       output.step(
         step,
         mark: Mark.satisfied,
@@ -364,6 +400,30 @@ class BinaryChain {
       );
       return false;
     }
+
+    // The verdict and its log become published assets, so a user who
+    // trusts neither can ask Apple with the submission id inside them.
+    workspace.write(resultName, utf8.encode(notarized.raw ?? '{}'));
+    final submission = notarized.submissionId;
+    final log = submission == null
+        ? null
+        : await MacOsNotarizer(tools: tools).log(submission);
+    if (log == null || !log.ok) {
+      activity.failed('the notarization log could not be fetched');
+      output.problem(
+        Diagnostic(
+          code: 'RK-NOTARY-003',
+          message: '$platform: Apple accepted the submission and the log '
+              'could not be fetched',
+          remedy: log == null
+              ? 'the submission id was not in notarytool\'s answer'
+              : log.summary,
+        ),
+        unit: step.unit,
+      );
+      return false;
+    }
+    workspace.write(logName, utf8.encode(log.stdout));
     activity.done('notarized');
     return true;
   }
@@ -443,53 +503,102 @@ class BinaryChain {
 
   /// The asset list a release of [project] ships, from the workspace — or
   /// null with an honest refusal when something is not there.
+  ///
+  /// The set mirrors [Inspector.expectedAssets] by construction: what this
+  /// gathers is what a later inspection expects, and the real keybay 0.1.0
+  /// release is the reference shape — archives, notary evidence per macOS
+  /// platform, the formula, the checksums.
   List<ReleaseAsset>? gatherAssets(ResolvedProject project, String unit) {
     final assets = <ReleaseAsset>[];
-    for (final platform in project.binaryPlatforms) {
-      final name = archiveName(
-        project.executable!,
-        project.version.canonical,
-        platform,
-      );
+    ReleaseAsset? named(String name, String producer, {String? platform}) {
       final bytes = workspace.readBytes(name);
       if (bytes == null) {
         output.problem(
           Diagnostic(
             code: 'RK-WORK-001',
             message: 'the workspace has no $name',
-            remedy: 'the archive steps produce it — re-running runs them',
+            remedy: '$producer — re-running runs it',
           ),
           unit: unit,
         );
         return null;
       }
-      assets.add(ReleaseAsset(
+      return ReleaseAsset(
         name: name,
         path: workspace.pathOf(name),
         bytes: bytes,
         platform: platform,
-      ));
+      );
     }
 
-    final sums = workspace.readBytes('SHA256SUMS');
-    if (sums == null) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-WORK-001',
-          message: 'the workspace has no SHA256SUMS',
-          remedy: 'the checksums step produces it — re-running runs it',
-        ),
-        unit: unit,
+    for (final platform in project.binaryPlatforms) {
+      final executable = project.executable!;
+      final version = project.version.canonical;
+      final archive = named(
+        archiveName(executable, version, platform),
+        'the archive steps produce it',
+        platform: platform,
       );
-      return null;
+      if (archive == null) return null;
+      assets.add(archive);
+
+      if (platform.startsWith('macos-')) {
+        for (final evidence in [
+          notaryResultName(executable, version, platform),
+          notaryLogName(executable, version, platform),
+        ]) {
+          final asset = named(evidence, 'the notarize step produces it');
+          if (asset == null) return null;
+          assets.add(asset);
+        }
+      }
     }
-    assets.add(ReleaseAsset(
-      name: 'SHA256SUMS',
-      path: workspace.pathOf('SHA256SUMS'),
-      bytes: sums,
-      platform: null,
-    ));
+
+    final sums = named('SHA256SUMS', 'the checksums step produces it');
+    if (sums == null) return null;
+    assets.add(sums);
     return assets;
+  }
+
+  /// Renders the formula from the gathered assets and writes it into the
+  /// workspace, returning it as an asset.
+  ///
+  /// Written before the release is created, because it ships with the
+  /// release — and the tap step then reads these same bytes, so the formula
+  /// in the tap and the one in the release cannot differ.
+  ReleaseAsset renderFormula({
+    required ResolvedProject project,
+    required String repository,
+    required String tag,
+    required List<ReleaseAsset> assets,
+  }) {
+    final executable = project.executable!;
+    final contents = HomebrewFormula.render(
+      className: HomebrewFormula.classNameFor(executable),
+      description: 'Released by rk',
+      homepage: 'https://github.com/$repository',
+      version: project.version.canonical,
+      repository: repository,
+      tag: tag,
+      executable: executable,
+      assets: {
+        for (final asset in assets)
+          if (asset.platform != null)
+            asset.platform!: PlatformAsset(
+              name: asset.name,
+              sha256: Sha256.hex(asset.bytes),
+            ),
+      },
+    );
+    final name = formulaName(executable);
+    final bytes = utf8.encode(contents);
+    workspace.write(name, bytes);
+    return ReleaseAsset(
+      name: name,
+      path: workspace.pathOf(name),
+      bytes: bytes,
+      platform: null,
+    );
   }
 
   /// Publishes the gathered assets as one immutable release.
@@ -497,6 +606,7 @@ class BinaryChain {
     required String repository,
     required String tag,
     required String title,
+    required String notesPath,
     required List<ReleaseAsset> assets,
   }) async {
     final release = GithubRelease(
@@ -509,6 +619,7 @@ class BinaryChain {
     final published = await release.publish(
       tag: tag,
       title: title,
+      notesPath: notesPath,
       assetPaths: assets.map((a) => a.path).toList(),
     );
     if (!published.ok) {
@@ -539,40 +650,34 @@ class BinaryChain {
     return published.url;
   }
 
-  /// Moves the tap formula to this release.
+  /// Moves the tap formula to this release — the same bytes the release
+  /// itself shipped, read from the workspace rather than re-rendered, so
+  /// the two copies cannot drift.
   Future<bool> updateFormula({
     required String tap,
-    required String repository,
-    required String tag,
     required ResolvedProject project,
-    required List<ReleaseAsset> assets,
   }) async {
     final executable = project.executable!;
-    final formula = HomebrewFormula.render(
-      className: HomebrewFormula.classNameFor(executable),
-      description: 'Released by rk',
-      homepage: 'https://github.com/$repository',
-      version: project.version.canonical,
-      repository: repository,
-      tag: tag,
-      executable: executable,
-      assets: {
-        for (final asset in assets)
-          if (asset.platform != null)
-            asset.platform!: PlatformAsset(
-              name: asset.name,
-              sha256: Sha256.hex(asset.bytes),
-            ),
-      },
-    );
+    final formula = workspace.readBytes(formulaName(executable));
+    if (formula == null) {
+      output.problem(
+        Diagnostic(
+          code: 'RK-WORK-001',
+          message: 'the workspace has no ${formulaName(executable)}',
+          remedy: 'the github-release step produces it — re-running runs it',
+        ),
+      );
+      return false;
+    }
 
+    final formulaPath = 'Formula/$executable.rb';
     final result = await HomebrewTap(
       tools: tools,
       tap: tap,
       checkout: workspace.pathOf('tap'),
     ).update(
-      formulaPath: 'Formula/$executable.rb',
-      contents: formula,
+      formulaPath: formulaPath,
+      contents: utf8.decode(formula),
       message: '$executable ${project.version}',
     );
 
@@ -588,11 +693,66 @@ class BinaryChain {
       );
       return false;
     }
+
+    // The verify leg: read the formula back from the public tap and prove
+    // it byte-for-byte. This is what a user's `brew install` will fetch —
+    // the push succeeding is rk's word, this is the tap's.
+    final readBack = await tools.run(
+      'gh',
+      ['api', 'repos/$tap/contents/$formulaPath'],
+    );
+    List<int>? published;
+    if (readBack.ok) {
+      try {
+        final decoded = jsonDecode(readBack.stdout);
+        final content = decoded is Map ? decoded['content'] : null;
+        published = content is String
+            ? base64Decode(content.replaceAll(RegExp(r'\s'), ''))
+            : null;
+      } on Object {
+        published = null;
+      }
+    }
+    if (published == null) {
+      output.problem(
+        Diagnostic(
+          code: 'RK-BREW-002',
+          message: 'the tap was updated and could not be read back',
+          remedy: 'what a user installs is unproven until the tap answers — '
+              're-running reads it again: ${readBack.summary}',
+        ),
+      );
+      output.halt(HaltKind.lostTrack);
+      return false;
+    }
+    if (!_sameBytes(published, formula)) {
+      output.problem(
+        Diagnostic(
+          code: 'RK-BREW-003',
+          message: 'the public tap does not hold what rk pushed',
+          remedy: 'something moved the formula between the push and the '
+              'read-back. The tap is mutable, so re-running pushes again on '
+              'top of what is there now.',
+        ),
+      );
+      return false;
+    }
+
     output.line(
       'homebrew',
       mark: Mark.done,
-      note: result.changed ? 'formula updated' : 'formula already current',
+      note: result.changed
+          ? 'formula updated · read back from the public tap'
+          : 'formula already current · read back from the public tap',
     );
+    return true;
+  }
+
+  static bool _sameBytes(List<int> a, List<int> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
     return true;
   }
 

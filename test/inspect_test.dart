@@ -287,9 +287,15 @@ void classificationTables() {
       {
         'example-tool-1.0.0-linux-x64.tar.gz',
         'example-tool-1.0.0-macos-arm64.tar.gz',
+        'example-tool-1.0.0-macos-arm64.notary-result.json',
+        'example-tool-1.0.0-macos-arm64.notary-log.json',
+        'example-tool.rb',
         'SHA256SUMS',
       },
-      reason: 'emptied, every release inspects exact and nothing notices',
+      reason: 'emptied, every release inspects exact and nothing notices — '
+          'and the reference shape is the real keybay 0.1.0 release: '
+          'archives, notary evidence per macOS platform, the formula, the '
+          'checksums',
     );
   });
 }

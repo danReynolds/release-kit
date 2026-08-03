@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import '../builds/capability.dart';
@@ -37,7 +38,9 @@ class ReleaseCommand {
     this.dryRun = false,
     this.rehearse = false,
     Future<void> Function(Duration)? wait,
-  }) : _wait = wait ?? _sleep;
+    HostCapabilities? capabilities,
+  })  : _wait = wait ?? _sleep,
+        _capabilities = capabilities;
 
   static Future<void> _sleep(Duration duration) =>
       Future<void>.delayed(duration);
@@ -72,6 +75,12 @@ class ReleaseCommand {
   /// Asks the operator to type the version. Returns what they typed, or null
   /// when there is nobody to ask.
   final Future<String?> Function(String prompt)? confirm;
+
+  /// What this host can produce — injectable so a drive can span platforms
+  /// the test machine does not have. Null detects lazily, once.
+  HostCapabilities? _capabilities;
+  HostCapabilities get capabilities =>
+      _capabilities ??= HostCapabilities.detect();
 
   /// Show what would happen and stop before the first effect.
   final bool dryRun;
@@ -370,7 +379,8 @@ class ReleaseCommand {
   Diagnostic? _refuseIfUnfinishable(ResolvedUnit unit) {
     if (!unit.shipsBinaries) return null;
 
-    final capabilities = HostCapabilities.detect();
+    // The same capabilities the chain will build with — a second detect()
+    // here let the refusal and the build disagree about what this host is.
     final blocked = <String>[];
     for (final project in unit.projects) {
       for (final platform in project.binaryPlatforms) {
@@ -515,7 +525,7 @@ class ReleaseCommand {
           '${git.root}/.rk/work/${unit.tag}-${git.shortHead}',
         ),
         repositoryRoot: git.root,
-        capabilities: HostCapabilities.detect(),
+        capabilities: capabilities,
       );
 
   ResolvedProject _binaryProject(ResolvedUnit unit) =>
@@ -587,24 +597,69 @@ class ReleaseCommand {
     final repository = _repository();
     if (repository == null) return false;
 
-    final assets = chain.gatherAssets(_binaryProject(unit), unit.name);
+    final project = _binaryProject(unit);
+    final assets = chain.gatherAssets(project, unit.name);
     if (assets == null) return false;
+
+    // The changelog entry is the release body — one source of release
+    // prose, extracted through the same parse that validated its presence,
+    // so the notes and the CHANGELOG cannot disagree.
+    final notes = _releaseNotes(project);
+    if (notes == null) return false;
+    chain.workspace.write('release-notes.md', utf8.encode(notes));
+
+    // The formula ships with the release when a tap will point at it, so
+    // it is rendered before the create — an immutable release cannot grow
+    // it afterwards — and the tap step later pushes these exact bytes.
+    final formula = project.channels.contains('homebrew')
+        ? chain.renderFormula(
+            project: project,
+            repository: repository,
+            tag: unit.tag,
+            assets: assets,
+          )
+        : null;
 
     final url = await chain.publishRelease(
       repository: repository,
       tag: unit.tag,
-      title: '${_binaryProject(unit).name} ${unit.version}',
-      assets: assets,
+      title: '${project.name} ${unit.version}',
+      notesPath: chain.workspace.pathOf('release-notes.md'),
+      assets: [...assets, if (formula != null) formula],
     );
     return url != null;
+  }
+
+  /// The changelog entry for this version, or null with a recorded problem.
+  ///
+  /// Validation already proved the heading exists; extraction failing after
+  /// that is unexpected, and saying so beats publishing with a body that
+  /// silently fell back to something else.
+  String? _releaseNotes(ResolvedProject project) {
+    final directory = project.pubspec.directory;
+    final path = directory == '.' ? 'CHANGELOG.md' : '$directory/CHANGELOG.md';
+    final source = tree.read(path);
+    final entry =
+        source == null ? null : Changelog.entry(source, project.version);
+    if (entry == null) {
+      output.problem(
+        Diagnostic(
+          code: 'RK-CHG-003',
+          message: 'the changelog entry for ${project.version} could not be '
+              'extracted',
+          source: SourceLocation(path, 1),
+          remedy: 'validation saw a heading for it; the file changed since, '
+              'or this is a bug in rk',
+        ),
+      );
+      return null;
+    }
+    return entry;
   }
 
   Future<bool> _publishFormula(ResolvedUnit unit, BinaryChain chain) async {
     final repository = _repository();
     if (repository == null) return false;
-
-    final assets = chain.gatherAssets(_binaryProject(unit), unit.name);
-    if (assets == null) return false;
 
     final identity = resolution.identity;
     final tap =
@@ -612,10 +667,7 @@ class ReleaseCommand {
 
     return chain.updateFormula(
       tap: tap,
-      repository: repository,
-      tag: unit.tag,
       project: _binaryProject(unit),
-      assets: assets,
     );
   }
 

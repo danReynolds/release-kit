@@ -189,19 +189,38 @@ class MacOsNotarizer {
                 '--keychain-profile $profile',
       );
     }
-    return NotarizeOutcome.accepted(id);
+    return NotarizeOutcome.accepted(id, raw: result.stdout);
   }
+
+  /// Apple's log for a submission — the evidence of what was checked.
+  ///
+  /// Published with the release: the result says Accepted, the log says what
+  /// that claim covered, and a user who trusts neither can ask Apple with
+  /// the id inside them.
+  Future<ToolResult> log(String submissionId) => tools.run('xcrun', [
+        'notarytool',
+        'log',
+        submissionId,
+        '--keychain-profile',
+        profile,
+      ]);
 }
 
 class NotarizeOutcome {
-  const NotarizeOutcome._(this.submissionId, this.problem, this.remedy);
-  const NotarizeOutcome.accepted(String? id) : this._(id, null, null);
+  const NotarizeOutcome._(this.submissionId, this.problem, this.remedy,
+      {this.raw});
+  const NotarizeOutcome.accepted(String? id, {String? raw})
+      : this._(id, null, null, raw: raw);
   const NotarizeOutcome.failed(String problem, {String? remedy})
       : this._(null, problem, remedy);
 
   final String? submissionId;
   final String? problem;
   final String? remedy;
+
+  /// notarytool's own words for an accepted submission, kept verbatim
+  /// because they become a published asset.
+  final String? raw;
 
   bool get ok => problem == null;
 }

@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'dart:convert';
 
+import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/commands/release.dart';
 import 'package:rk/src/engine/compare.dart';
 import 'package:rk/src/engine/config.dart';
@@ -998,187 +999,246 @@ publish = ["pub.dev"]
     });
   });
 
-  group('phase 7a — the local chain', () {
-    late Directory scratch;
+  // Shared by the 7a and 7b groups: one scratch, one command-layer drive.
+  late Directory scratch;
+  setUpAll(() => scratch = Directory.systemTemp.createTempSync('rk-7-'));
+  tearDownAll(() => scratch.deleteSync(recursive: true));
 
-    setUpAll(() => scratch = Directory.systemTemp.createTempSync('rk-7a-'));
-    tearDownAll(() => scratch.deleteSync(recursive: true));
-
-    /// Drives a full binary-unit release at the command layer, with tools
-    /// scripted by prefix and the compiler's output written where the
-    /// workspace says. Returns the run, the calls, and the machine surface.
-    Future<
-        ({
-          int code,
-          String text,
-          List<String> calls,
-          Map<String, Object?> json,
-        })> binaryDrive({
-      required bool rehearse,
-      Set<String> remoteTags = const {},
-      bool notaryRejects = false,
-    }) async {
-      final root = Directory(
-          '${scratch.path}/drive-${rehearse ? 'r' : 'f'}${notaryRejects ? '-nr' : ''}')
-        ..createSync(recursive: true);
-      final buffer = StringBuffer();
-      final diagnostics = Diagnostics();
-      final config = ReleaseConfig.parse('''
+  /// Drives a full binary-unit release at the command layer, with tools
+  /// scripted by prefix and the compiler's output written where the
+  /// workspace says. The world moves the way the real one would: the tag
+  /// set grows on push, the forge lists the release after the create with
+  /// exactly the assets the create named, and the tap read-back answers
+  /// with the bytes the push put there.
+  Future<
+      ({
+        int code,
+        String text,
+        List<String> calls,
+        Map<String, Object?> json,
+        String? notes,
+      })> binaryDrive({
+    required bool rehearse,
+    Set<String> remoteTags = const {},
+    bool notaryRejects = false,
+    List<String> platforms = const ['macos-arm64'],
+    bool homebrew = false,
+    String label = '',
+  }) async {
+    final root = Directory('${scratch.path}/drive-${rehearse ? 'r' : 'f'}'
+        '${notaryRejects ? '-nr' : ''}$label')
+      ..createSync(recursive: true);
+    final buffer = StringBuffer();
+    final diagnostics = Diagnostics();
+    final config = ReleaseConfig.parse('''
 schema = 1
 
 [release.cli]
 path = "packages/tool"
-publish = ["github-release"]
-binary_platforms = ["macos-arm64"]
+publish = ["github-release"${homebrew ? ', "homebrew"' : ''}]
+binary_platforms = [${platforms.map((p) => '"$p"').join(', ')}]
 
 [identity]
 apple_team = "TEAM123456"
 code_id = "com.example.tool"
 ''', 'release.toml', diagnostics)!;
-      final tree = MemorySourceTree({
-        'packages/tool/pubspec.yaml': '''
+    final tree = MemorySourceTree({
+      'packages/tool/pubspec.yaml': '''
 name: tool
 version: 1.0.0
 publish_to: none
 executables:
   tool: tool
 ''',
-        'packages/tool/CHANGELOG.md': '## 1.0.0\n',
-      }, description: '$root/tool');
-      final resolution = Resolution.resolve(config, tree, diagnostics)!;
-      final git = GitState(
-        root: root.path,
-        head: '9f2c1ab',
-        branch: 'main',
-        isClean: true,
-        uncommitted: const [],
-        headIsPushed: true,
-        tags: const [],
-        signingConfigured: true,
-        originUrl: 'example/tool',
-      );
-      final binaryPath =
-          '${root.path}/.rk/work/v1.0.0-9f2c1ab/macos-arm64/tool';
+      'packages/tool/CHANGELOG.md': '## 1.0.0\n\nFirst release.\n',
+    }, description: '$root/tool');
+    final resolution = Resolution.resolve(config, tree, diagnostics)!;
+    final git = GitState(
+      root: root.path,
+      head: '9f2c1ab',
+      branch: 'main',
+      isClean: true,
+      uncommitted: const [],
+      headIsPushed: true,
+      tags: const [],
+      signingConfigured: true,
+      originUrl: 'example/tool',
+    );
+    final work = '${root.path}/.rk/work/v1.0.0-9f2c1ab';
 
-      final pushed = <String>{...remoteTags};
-      var released = false;
-      final tools = RecordingTools(
-        onRun: (key) {
-          if (key.startsWith('git push origin ')) {
-            pushed.add(key.substring('git push origin '.length));
+    final pushed = <String>{...remoteTags};
+    final uploaded = <String>{};
+    var released = false;
+    String? notesAtCreate;
+    final tools = RecordingTools(
+      onRun: (key) {
+        if (key.startsWith('git push origin ')) {
+          pushed.add(key.substring('git push origin '.length));
+        }
+        if (key.startsWith('gh release create')) {
+          released = true;
+          // The create names its assets; the forge lists exactly those.
+          final words = key.split(' ');
+          for (final word in words.skip(4)) {
+            if (word.startsWith('--')) break;
+            uploaded.add(word.split('/').last);
           }
-          if (key.startsWith('gh release create')) released = true;
-          if (key.startsWith('dart compile exe')) {
-            File(binaryPath)
-              ..parent.createSync(recursive: true)
-              ..writeAsBytesSync('BINARY 1.0.0'.codeUnits);
+          final notesAt = words.indexOf('--notes-file');
+          if (notesAt > 0) {
+            notesAtCreate = File(words[notesAt + 1]).readAsStringSync();
           }
-          if (key.startsWith('ditto')) {
-            File('$binaryPath.zip')
-              ..parent.createSync(recursive: true)
-              ..writeAsBytesSync('ZIP'.codeUnits);
-          }
-        },
-        answers: (key) {
-          if (key.startsWith('git ls-remote origin refs/tags/')) {
-            final tag = key.substring('git ls-remote origin refs/tags/'.length);
-            return ToolResult(
-              exitCode: 0,
-              stdout: pushed.contains(tag) ? 'dead refs/tags/$tag' : '',
-              stderr: '',
-            );
-          }
-          if (key.startsWith('codesign --test-requirement')) {
-            return ToolResult(exitCode: 1, stdout: '', stderr: 'no');
-          }
-          if (key.startsWith('codesign -d -r-')) {
-            return ToolResult(
-              exitCode: 0,
-              stdout: 'designated => leaf "A"',
-              stderr: '',
-            );
-          }
-          if (key.startsWith('security find-identity')) {
-            return ToolResult(
-              exitCode: 0,
-              stdout: '1) X "Developer ID Application: D (TEAM123456)"',
-              stderr: '',
-            );
-          }
-          if (key.startsWith('xcrun notarytool submit')) {
-            return notaryRejects
-                ? ToolResult(
-                    exitCode: 0,
-                    stdout: '{"id": "s-1", "status": "Invalid"}',
-                    stderr: '',
-                  )
-                : ToolResult(
-                    exitCode: 0,
-                    stdout: '{"id": "s-1", "status": "Accepted"}',
-                    stderr: '',
-                  );
-          }
-          if (key.contains('--version')) {
-            return ToolResult(exitCode: 0, stdout: '1.0.0', stderr: '');
-          }
-          if (key ==
-              'gh release list --repo example/tool --limit 100 '
-                  '--json tagName,isDraft,name') {
-            return ToolResult(exitCode: 0, stdout: '[]', stderr: '');
-          }
-          if (key.startsWith('gh release view')) {
-            // The forge answers from the world: nothing before the create,
-            // the finished release after it.
-            return released
-                ? ToolResult(
-                    exitCode: 0,
-                    stdout: '{"tagName":"v1.0.0","isDraft":false,'
-                        '"name":"v1.0.0",'
-                        '"assets":[{"name":"tool-1.0.0-macos-arm64.tar.gz"},'
-                        '{"name":"SHA256SUMS"}]}',
-                    stderr: '',
-                  )
-                : ToolResult(
-                    exitCode: 1, stdout: '', stderr: 'release not found');
-          }
-          if (key.startsWith('gh repo view')) {
-            return ToolResult(
-                exitCode: 0, stdout: '{"name":"tool"}', stderr: '');
-          }
-          return null;
-        },
-      );
+        }
+        if (key.startsWith('dart compile exe')) {
+          final out = key.split(' -o ').last.split(' ').first;
+          File(out)
+            ..parent.createSync(recursive: true)
+            ..writeAsBytesSync('BINARY 1.0.0'.codeUnits);
+        }
+        if (key.startsWith('ditto')) {
+          final zip = key.split(' ').last;
+          File(zip)
+            ..parent.createSync(recursive: true)
+            ..writeAsBytesSync('ZIP'.codeUnits);
+        }
+        if (key.startsWith('git clone') && key.contains('homebrew-tap')) {
+          Directory(key.split(' ').last).createSync(recursive: true);
+        }
+      },
+      answers: (key) {
+        if (key.startsWith('git ls-remote origin refs/tags/')) {
+          final tag = key.substring('git ls-remote origin refs/tags/'.length);
+          return ToolResult(
+            exitCode: 0,
+            stdout: pushed.contains(tag) ? 'dead refs/tags/$tag' : '',
+            stderr: '',
+          );
+        }
+        if (key.startsWith('codesign --test-requirement')) {
+          return ToolResult(exitCode: 1, stdout: '', stderr: 'no');
+        }
+        if (key.startsWith('codesign -d -r-')) {
+          return ToolResult(
+            exitCode: 0,
+            stdout: 'designated => leaf "A"',
+            stderr: '',
+          );
+        }
+        if (key.startsWith('security find-identity')) {
+          return ToolResult(
+            exitCode: 0,
+            stdout: '1) X "Developer ID Application: D (TEAM123456)"',
+            stderr: '',
+          );
+        }
+        if (key.startsWith('xcrun notarytool submit')) {
+          return notaryRejects
+              ? ToolResult(
+                  exitCode: 0,
+                  stdout: '{"id": "s-1", "status": "Invalid"}',
+                  stderr: '',
+                )
+              : ToolResult(
+                  exitCode: 0,
+                  stdout: '{"id": "s-1", "status": "Accepted"}',
+                  stderr: '',
+                );
+        }
+        if (key.startsWith('xcrun notarytool log')) {
+          return ToolResult(
+            exitCode: 0,
+            stdout: '{"status": "Accepted", "issues": []}',
+            stderr: '',
+          );
+        }
+        if (key.contains('--version')) {
+          return ToolResult(exitCode: 0, stdout: '1.0.0', stderr: '');
+        }
+        if (key == 'gh api --paginate --slurp repos/example/tool/releases') {
+          return ToolResult(exitCode: 0, stdout: '[[]]', stderr: '');
+        }
+        if (key == 'gh api repos/example/tool/releases/tags/v1.0.0') {
+          // The forge answers from the world: 404 before the create, the
+          // finished release — with exactly the created assets — after.
+          return released
+              ? ToolResult(
+                  exitCode: 0,
+                  stdout: jsonEncode({
+                    'tag_name': 'v1.0.0',
+                    'draft': false,
+                    'id': 7,
+                    'assets': [
+                      for (final name in uploaded) {'name': name},
+                    ],
+                  }),
+                  stderr: '',
+                )
+              : ToolResult(
+                  exitCode: 1,
+                  stdout: '',
+                  stderr: 'gh: Not Found (HTTP 404)',
+                );
+        }
+        if (key.startsWith('gh api repos/example/homebrew-tap/contents/')) {
+          // The public tap answers with what the push actually put there.
+          final formula = File('$work/tap/Formula/tool.rb');
+          return formula.existsSync()
+              ? ToolResult(
+                  exitCode: 0,
+                  stdout: jsonEncode({
+                    'content': base64Encode(formula.readAsBytesSync()),
+                  }),
+                  stderr: '',
+                )
+              : ToolResult(
+                  exitCode: 1,
+                  stdout: '',
+                  stderr: 'gh: Not Found (HTTP 404)',
+                );
+        }
+        if (key.startsWith('gh repo view')) {
+          return ToolResult(exitCode: 0, stdout: '{"name":"tool"}', stderr: '');
+        }
+        return null;
+      },
+    );
 
-      final output =
-          Output(sink: buffer.write, isTerminal: false, useColor: false);
-      final registry = FakeRegistry({});
-      final code = await ReleaseCommand(
-        resolution: resolution,
-        tree: tree,
-        git: git,
+    final output =
+        Output(sink: buffer.write, isTerminal: false, useColor: false);
+    final registry = FakeRegistry({});
+    final code = await ReleaseCommand(
+      resolution: resolution,
+      tree: tree,
+      git: git,
+      registry: registry,
+      inspector: Inspector(
         registry: registry,
-        inspector: Inspector(
-          registry: registry,
-          git: git,
-          tools: tools,
-          repository: 'example/tool',
-        ),
-        comparator: Comparator(tools: const SystemTools()),
+        git: git,
         tools: tools,
-        output: output,
-        confirm: (_) async => '1.0.0',
-        rehearse: rehearse,
-        wait: (_) => Future<void>.delayed(Duration.zero),
-      ).run(only: 'cli');
-      return (
-        code: code,
-        text: buffer.toString(),
-        calls: tools.calls,
-        json: jsonDecode(output.report.encode(exit: code))
-            as Map<String, Object?>,
-      );
-    }
+        repository: 'example/tool',
+      ),
+      comparator: Comparator(tools: const SystemTools()),
+      tools: tools,
+      output: output,
+      confirm: (_) async => '1.0.0',
+      rehearse: rehearse,
+      wait: (_) => Future<void>.delayed(Duration.zero),
+      capabilities: HostCapabilities(
+        hostPlatform: 'macos-arm64',
+        hasContainerRuntime: true,
+        hasNativeAssets: false,
+      ),
+    ).run(only: 'cli');
+    return (
+      code: code,
+      text: buffer.toString(),
+      calls: tools.calls,
+      json:
+          jsonDecode(output.report.encode(exit: code)) as Map<String, Object?>,
+      notes: notesAtCreate,
+    );
+  }
 
+  group('phase 7a — the local chain', () {
     test('capability resolution per platform', () {
       expect(fileExists('lib/src/builds/capability.dart'), isTrue);
     });
@@ -1221,6 +1281,7 @@ executables:
         'codesign --force',
         'ditto',
         'xcrun notarytool submit',
+        'xcrun notarytool log',
         'gh release create',
       ];
       var at = -1;
@@ -1229,7 +1290,7 @@ executables:
         expect(index, greaterThan(at), reason: '$prefix in order');
         at = index;
       }
-      expect(run.text, contains('2 assets, immutable'));
+      expect(run.text, contains('4 assets, immutable'));
       expect(run.text, contains('released'));
     });
 
@@ -1303,6 +1364,142 @@ executables:
       expect(run.code, ExitCodes.usage, reason: run.all);
       expect(run.all, contains('not both'));
       expect(run.all, contains('different promises'));
+    });
+  });
+
+  binaryDestinationGates(binaryDrive);
+}
+
+/// Phase 7b — the destinations, driven through the same command-layer world
+/// as 7a: the forge is status-coded, the release carries the full asset
+/// shape, the body is the changelog entry, and the tap is compare-and-swap
+/// with a public read-back.
+void binaryDestinationGates(
+  Future<
+          ({
+            int code,
+            String text,
+            List<String> calls,
+            Map<String, Object?> json,
+            String? notes,
+          })>
+      Function({
+    required bool rehearse,
+    Set<String> remoteTags,
+    bool notaryRejects,
+    List<String> platforms,
+    bool homebrew,
+    String label,
+  }) binaryDrive,
+) {
+  group('phase 7b — the destinations', () {
+    test(
+        'DONE WHEN, drive half: three platforms end to end — signed, '
+        'notarized, published immutable, formula moved and read back',
+        () async {
+      final run = await binaryDrive(
+        rehearse: false,
+        platforms: ['macos-arm64', 'linux-x64', 'linux-arm64'],
+        homebrew: true,
+        label: '-3p',
+      );
+      expect(run.code, 0, reason: run.text);
+
+      // Three builds, two of them cross-compiled for linux.
+      expect(
+        run.calls.where((c) => c.startsWith('dart compile exe')).length,
+        3,
+      );
+      expect(
+        run.calls
+            .where((c) =>
+                c.startsWith('dart compile exe') &&
+                c.contains('--target-os=linux'))
+            .length,
+        2,
+      );
+
+      // The release is one immutable act carrying the whole ten-asset
+      // shape, scaled to this configuration: three archives, notary
+      // evidence for the macOS platform, the formula, the checksums.
+      expect(run.text, contains('7 assets, immutable'), reason: run.text);
+      final create =
+          run.calls.firstWhere((c) => c.startsWith('gh release create'));
+      for (final asset in [
+        'tool-1.0.0-macos-arm64.tar.gz',
+        'tool-1.0.0-linux-x64.tar.gz',
+        'tool-1.0.0-linux-arm64.tar.gz',
+        'tool-1.0.0-macos-arm64.notary-result.json',
+        'tool-1.0.0-macos-arm64.notary-log.json',
+        'tool.rb',
+        'SHA256SUMS',
+      ]) {
+        expect(create, contains(asset));
+      }
+
+      // The body is the changelog entry — one source of release prose.
+      expect(
+        run.notes,
+        'First release.',
+        reason: 'the release body must be the CHANGELOG entry, not a '
+            'commit-log digest',
+      );
+
+      // The formula moves only after the release is public, and what the
+      // public tap serves is read back and proven.
+      final createAt =
+          run.calls.indexWhere((c) => c.startsWith('gh release create'));
+      final tapCloneAt = run.calls.indexWhere(
+          (c) => c.startsWith('git clone') && c.contains('homebrew-tap'));
+      expect(tapCloneAt, greaterThan(createAt),
+          reason: 'a formula pointing at an unpublished release would brew '
+              'a 404');
+      expect(run.text, contains('read back from the public tap'));
+      expect(run.text, contains('released'));
+    });
+
+    test('rehearse spans every platform and still touches nothing public',
+        () async {
+      final run = await binaryDrive(
+        rehearse: true,
+        platforms: ['macos-arm64', 'linux-x64', 'linux-arm64'],
+        homebrew: true,
+        label: '-3pr',
+      );
+      expect(run.code, 0, reason: run.text);
+      expect(
+        run.calls.where((c) => c.startsWith('dart compile exe')).length,
+        3,
+      );
+      for (final public in [
+        'git tag',
+        'git push',
+        'gh release create',
+        'git clone', // the tap
+      ]) {
+        expect(
+          run.calls.any((c) => c.startsWith(public)),
+          isFalse,
+          reason: '$public is public and a rehearsal never touches it',
+        );
+      }
+      expect(run.text, contains('rehearsed'));
+    });
+
+    test(
+        'DONE WHEN, live half: recorded checkpoint of the real keybay cli '
+        'release', () {
+      // Red until keybay cli ships three platforms through rk for real —
+      // signed, notarized, published immutable, formula updated, installed
+      // from the public tap. Milestone 2's permanent act belongs to the
+      // operator at a terminal; this gate is the forcing function that
+      // keeps "done" honest about it, anchored at line start like the
+      // phase 5 gate, for the same displaced-string reason.
+      expect(
+        File('doc/plan.md').readAsStringSync(),
+        contains('\n## Phase 7b checkpoint'),
+        reason: 'the live cli release must be recorded, with its output',
+      );
     });
   });
 }

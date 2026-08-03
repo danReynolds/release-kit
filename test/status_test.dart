@@ -494,8 +494,12 @@ executables:
         'keybay': ['0.2.0']
       }),
       tools: ScriptedTools({
-        'gh': ok('{"tagName":"v0.2.0","isDraft":false,"name":"v0.2.0",'
+        // The REST shape, carrying the full expected set — archive, notary
+        // evidence, checksums — so the release reads exact, not conflicted.
+        'gh': ok('{"tag_name":"v0.2.0","draft":false,"id":1,'
             '"assets":[{"name":"keybay-0.2.0-macos-arm64.tar.gz"},'
+            '{"name":"keybay-0.2.0-macos-arm64.notary-result.json"},'
+            '{"name":"keybay-0.2.0-macos-arm64.notary-log.json"},'
             '{"name":"SHA256SUMS"}]}'),
         // The tag's remote half reads origin through the same tools.
         'git': ok('deadbeef refs/tags/v0.2.0'),

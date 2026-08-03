@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import '../engine/tools.dart';
 
 /// Renders and publishes the formula that points at a release's assets.
@@ -120,11 +122,20 @@ class HomebrewTap {
 
   /// Clones the tap, replaces the formula, and pushes — refusing if the
   /// remote moved under it, which is the compare-and-swap.
+  ///
+  /// The fresh clone *is* the read: what rk pushes is built on the tap as
+  /// it stood moments ago, and a non-fast-forward rejection means it moved
+  /// since — re-running clones the moved tap and rebuilds on top of it.
   Future<TapOutcome> update({
     required String formulaPath,
     required String contents,
     required String message,
   }) async {
+    // A checkout left by an interrupted run is stale by definition; the
+    // compare-and-swap only means anything against a clone made now.
+    final stale = Directory(checkout);
+    if (stale.existsSync()) stale.deleteSync(recursive: true);
+
     final cloned = await tools.run('git', [
       'clone',
       '--depth',
@@ -134,26 +145,37 @@ class HomebrewTap {
     ]);
     if (!cloned.ok) return TapOutcome.failed(cloned.summary);
 
-    final file = '$checkout/$formulaPath';
-    final wrote = await tools.run('sh', ['-c', 'cat > "$file"'],
-        workingDirectory: checkout);
-    if (!wrote.ok) return TapOutcome.failed('the formula could not be written');
+    // Unchanged is decided by bytes, before any git plumbing. The previous
+    // version asked `git commit -a` to decide — which never stages a *new*
+    // file, so a first-ever formula read as "already current" and nothing
+    // was pushed. (It also wrote the file with `cat` and no stdin, so what
+    // it committed was empty — [contents] was never used at all. Both are
+    // why the tap step's test now asserts the pushed bytes.)
+    final file = File('$checkout/$formulaPath');
+    final existing = file.existsSync() ? file.readAsStringSync() : null;
+    if (existing == contents) return const TapOutcome.unchanged();
+
+    try {
+      file.parent.createSync(recursive: true);
+      file.writeAsStringSync(contents);
+    } on FileSystemException catch (error) {
+      return TapOutcome.failed('the formula could not be written: $error');
+    }
+
+    final added = await tools.run(
+      'git',
+      ['add', formulaPath],
+      workingDirectory: checkout,
+    );
+    if (!added.ok) return TapOutcome.failed(added.summary);
 
     final committed = await tools.run(
       'git',
-      ['commit', '-am', message],
+      ['commit', '-m', message],
       workingDirectory: checkout,
     );
-    if (!committed.ok) {
-      // Nothing to commit means the tap already holds this formula.
-      if (committed.stdout.contains('nothing to commit')) {
-        return const TapOutcome.unchanged();
-      }
-      return TapOutcome.failed(committed.summary);
-    }
+    if (!committed.ok) return TapOutcome.failed(committed.summary);
 
-    // A non-fast-forward rejection is the compare-and-swap failing: the tap
-    // moved since it was cloned, so what rk built was based on a stale view.
     final pushed = await tools.run(
       'git',
       const ['push'],
@@ -161,7 +183,8 @@ class HomebrewTap {
     );
     if (!pushed.ok) {
       return TapOutcome.failed(
-        'the tap moved while rk was working: ${pushed.summary}',
+        'the tap moved while rk was working — re-running reads it fresh: '
+        '${pushed.summary}',
       );
     }
     return const TapOutcome.updated();

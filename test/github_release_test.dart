@@ -26,14 +26,16 @@ void main() {
     ).inspect('v1.0.0', expected);
   }
 
+  // The REST shape, not the porcelain's: the reader asks `gh api`, whose
+  // fields are snake_case and whose id is numeric.
   String view({
     bool draft = false,
     List<String> assets = const ['tool-1.0.0-macos-arm64.tar.gz'],
   }) =>
       jsonEncode({
-        'tagName': 'v1.0.0',
-        'isDraft': draft,
-        'name': 'v1.0.0',
+        'tag_name': 'v1.0.0',
+        'draft': draft,
+        'id': 41,
         'assets': [
           for (final name in assets) {'name': name},
         ],
@@ -83,25 +85,35 @@ void main() {
   });
 
   group('absence needs the repository to have answered', () {
-    test('release not found + repository readable → absent', () async {
+    test('HTTP 404 + repository readable → absent', () async {
       final state = await inspect([
-        (code: 1, out: '', err: 'release not found'),
+        (code: 1, out: '', err: 'gh: Not Found (HTTP 404)'),
         (code: 0, out: '{"name":"tool"}', err: ''),
       ]);
       expect(state.verdict, Verdict.absent);
     });
 
-    test('release not found + repository unreadable → unknown', () async {
+    test('HTTP 404 + repository unreadable → unknown', () async {
       final state = await inspect([
-        (code: 1, out: '', err: 'release not found'),
+        (code: 1, out: '', err: 'gh: Not Found (HTTP 404)'),
         (code: 1, out: '', err: 'Could not resolve to a Repository'),
       ]);
       expect(
         state.verdict,
         Verdict.unknown,
-        reason: 'gh says the same words for a missing release and a typo in '
-            'the origin, and absent is what lets a release proceed',
+        reason: 'GitHub answers 404 for a repository the token cannot see, '
+            'deliberately — and absent is what lets a release proceed',
       );
+    });
+
+    test('the porcelain prose alone is never absence', () async {
+      // The old reader keyed on gh's "release not found" wording, which gh
+      // rewords between versions and says for more than one condition. A
+      // failure carrying only prose — no status — is unknown.
+      final state = await inspect([
+        (code: 1, out: '', err: 'release not found'),
+      ]);
+      expect(state.verdict, Verdict.unknown);
     });
   });
 

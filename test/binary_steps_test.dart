@@ -465,7 +465,8 @@ executables:
     );
   });
 
-  test('a notarized binary is not resubmitted', () async {
+  test('a notarized binary with its evidence in hand is not resubmitted',
+      () async {
     final RecordingTools tools = RecordingTools(
       answers: (key) {
         if (key.startsWith('codesign --test-requirement')) {
@@ -475,6 +476,10 @@ executables:
       },
     );
     workspace.write('macos-arm64/tool', utf8.encode('BINARY'));
+    workspace.write('tool-1.0.0-macos-arm64.notary-result.json',
+        utf8.encode('{"status": "Accepted"}'));
+    workspace.write('tool-1.0.0-macos-arm64.notary-log.json',
+        utf8.encode('{"issues": []}'));
 
     final ok =
         await chain(tools).notarizeStep(step(StepKind.notarize), project);
@@ -485,5 +490,51 @@ executables:
       isEmpty,
       reason: 'Apple already vouched for these exact bytes',
     );
+  });
+
+  test('notarized bytes without their evidence files resubmit', () async {
+    // The result and log are published assets; skipping on Apple's word
+    // alone would ship a release missing two of its expected assets.
+    final tools = scripted();
+    // Force the notarized answer while the evidence is absent.
+    final forced = RecordingTools(
+      answers: (key) {
+        if (key.startsWith('codesign --test-requirement')) {
+          return ToolResult(exitCode: 0, stdout: '', stderr: '');
+        }
+        if (key.startsWith('xcrun notarytool submit')) {
+          return ToolResult(
+            exitCode: 0,
+            stdout: '{"id": "abc-1", "status": "Accepted"}',
+            stderr: '',
+          );
+        }
+        if (key.startsWith('xcrun notarytool log')) {
+          return ToolResult(exitCode: 0, stdout: '{"issues": []}', stderr: '');
+        }
+        return (tools as RecordingTools).answers!(key);
+      },
+      onRun: (key) {
+        if (key.startsWith('ditto')) {
+          File(workspace.pathOf(BinaryChain.zipName('macos-arm64', 'tool')))
+            ..parent.createSync(recursive: true)
+            ..writeAsBytesSync(utf8.encode('ZIP'));
+        }
+      },
+    );
+    workspace.write('macos-arm64/tool', utf8.encode('BINARY'));
+
+    final ok =
+        await chain(forced).notarizeStep(step(StepKind.notarize), project);
+    expect(ok, isTrue, reason: buffer.toString());
+    expect(
+      forced.calls.any((c) => c.startsWith('xcrun notarytool submit')),
+      isTrue,
+    );
+    expect(
+      workspace.exists('tool-1.0.0-macos-arm64.notary-result.json'),
+      isTrue,
+    );
+    expect(workspace.exists('tool-1.0.0-macos-arm64.notary-log.json'), isTrue);
   });
 }

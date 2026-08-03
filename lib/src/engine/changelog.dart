@@ -55,6 +55,38 @@ class Changelog {
     }
   }
 
+  /// The body of this version's entry: everything under the heading that
+  /// begins with [version], up to the next version heading or the end.
+  ///
+  /// Null when there is no such heading — the same answer [mentions] gives,
+  /// through the same parse, so "the entry exists" and "the entry can be
+  /// read" cannot drift apart. The heading itself is not included: the
+  /// consumer (a release body) supplies its own title.
+  static String? entry(String source, Version version) {
+    final lines = source.split('\n');
+    var start = -1;
+    for (var i = 0; i < lines.length; i++) {
+      final heading = _headingText(lines[i]);
+      if (heading == null) continue;
+      if (start >= 0) {
+        // The next heading closes the entry only if it is another version's
+        // — a "### Fixed" subsection inside the entry stays inside it.
+        if (_looksLikeVersionHeading(heading)) {
+          return lines.sublist(start, i).join('\n').trim();
+        }
+        continue;
+      }
+      if (_beginsWithVersion(heading, version.canonical)) start = i + 1;
+    }
+    if (start < 0) return null;
+    return lines.sublist(start).join('\n').trim();
+  }
+
+  static bool _looksLikeVersionHeading(String heading) {
+    final cleaned = heading.replaceFirst(RegExp(r'^[\[\("' "'" r']+'), '');
+    return RegExp(r'^\d+\.\d+\.\d+').hasMatch(cleaned);
+  }
+
   /// The text of a Markdown heading, or null when the line is not one.
   ///
   /// Both `# 1.2.3` and a Setext-style line are common; only the ATX form is

@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:rk/src/destinations/homebrew.dart';
+import 'package:rk/src/engine/tools.dart';
 import 'package:test/test.dart';
 
 const _assets = {
@@ -90,6 +93,130 @@ void main() {
     });
     test('a hyphenated name', () {
       expect(HomebrewFormula.classNameFor('my-tool'), 'MyTool');
+    });
+  });
+
+  group('the tap update', () {
+    late Directory scratch;
+    setUp(() => scratch = Directory.systemTemp.createTempSync('rk-tap-'));
+    tearDown(() => scratch.deleteSync(recursive: true));
+
+    /// A tap over scripted git, where the clone materialises [inTap] the way
+    /// a real clone would.
+    (HomebrewTap, RecordingTools) tap({
+      Map<String, String> inTap = const {},
+      bool pushRejected = false,
+    }) {
+      final checkout = '${scratch.path}/tap';
+      final tools = RecordingTools(
+        answers: (key) {
+          if (key.startsWith('git push') && pushRejected) {
+            return ToolResult(
+              exitCode: 1,
+              stdout: '',
+              stderr: 'rejected: fetch first (non-fast-forward)',
+            );
+          }
+          return null; // default ok
+        },
+        onRun: (key) {
+          if (key.startsWith('git clone')) {
+            Directory(checkout).createSync(recursive: true);
+            inTap.forEach((path, contents) {
+              File('$checkout/$path')
+                ..parent.createSync(recursive: true)
+                ..writeAsStringSync(contents);
+            });
+          }
+        },
+      );
+      return (
+        HomebrewTap(
+            tools: tools, tap: 'owner/homebrew-tap', checkout: checkout),
+        tools,
+      );
+    }
+
+    test('a first-ever formula is written, staged, committed, and pushed',
+        () async {
+      // Two bugs lived here at once: the formula was written with `cat` and
+      // no stdin — so the contents parameter was never used and the file
+      // went out empty — and `git commit -a` never stages a new file, so
+      // the empty write then read as "already current" and nothing pushed.
+      final (tapUpdate, tools) = tap();
+      final outcome = await tapUpdate.update(
+        formulaPath: 'Formula/tool.rb',
+        contents: 'class Tool < Formula\nend\n',
+        message: 'tool 1.0.0',
+      );
+
+      expect(outcome.ok, isTrue, reason: outcome.problem ?? '');
+      expect(outcome.changed, isTrue);
+      expect(
+        File('${scratch.path}/tap/Formula/tool.rb').readAsStringSync(),
+        'class Tool < Formula\nend\n',
+        reason: 'the pushed bytes are the contents rk rendered',
+      );
+      expect(
+        tools.calls.any((c) => c == 'git add Formula/tool.rb'),
+        isTrue,
+        reason: 'a new file must be staged by name',
+      );
+      expect(tools.calls.any((c) => c.startsWith('git commit')), isTrue);
+      expect(tools.calls.any((c) => c.startsWith('git push')), isTrue);
+    });
+
+    test('an identical formula is unchanged, by bytes, with no git plumbing',
+        () async {
+      final (tapUpdate, tools) = tap(
+        inTap: {'Formula/tool.rb': 'same\n'},
+      );
+      final outcome = await tapUpdate.update(
+        formulaPath: 'Formula/tool.rb',
+        contents: 'same\n',
+        message: 'tool 1.0.0',
+      );
+      expect(outcome.ok, isTrue);
+      expect(outcome.changed, isFalse);
+      expect(
+        tools.calls.where((c) => c.startsWith('git commit')),
+        isEmpty,
+      );
+      expect(tools.calls.where((c) => c.startsWith('git push')), isEmpty);
+    });
+
+    test('a rejected push is the compare-and-swap failing, and says so',
+        () async {
+      final (tapUpdate, _) = tap(pushRejected: true);
+      final outcome = await tapUpdate.update(
+        formulaPath: 'Formula/tool.rb',
+        contents: 'new\n',
+        message: 'tool 1.0.0',
+      );
+      expect(outcome.ok, isFalse);
+      expect(outcome.problem, contains('the tap moved'));
+      expect(outcome.problem, contains('re-running reads it fresh'));
+    });
+
+    test('a stale checkout from an interrupted run is discarded first',
+        () async {
+      File('${scratch.path}/tap/Formula/stale.rb')
+        ..parent.createSync(recursive: true)
+        ..writeAsStringSync('stale');
+
+      final (tapUpdate, tools) = tap();
+      await tapUpdate.update(
+        formulaPath: 'Formula/tool.rb',
+        contents: 'new\n',
+        message: 'tool 1.0.0',
+      );
+      expect(
+        File('${scratch.path}/tap/Formula/stale.rb').existsSync(),
+        isFalse,
+        reason: 'the compare-and-swap only means anything against a clone '
+            'made now',
+      );
+      expect(tools.calls.any((c) => c.startsWith('git clone')), isTrue);
     });
   });
 }

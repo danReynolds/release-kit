@@ -88,6 +88,7 @@ class GithubRelease {
   Future<PublishOutcome> publish({
     required String tag,
     required String title,
+    required String notesPath,
     required List<String> assetPaths,
   }) async {
     final existing = await _drafts(tag);
@@ -95,17 +96,11 @@ class GithubRelease {
       return PublishOutcome.failed('the forge could not be read');
     }
     for (final release in existing) {
+      // By id, not by tag: several drafts can carry the same tag, and the
+      // porcelain delete addresses whichever one it finds first.
       final deleted = await tools.run(
         'gh',
-        [
-          'release',
-          'delete',
-          tag,
-          '--repo',
-          repository,
-          '--yes',
-          '--cleanup-tag=false'
-        ],
+        ['api', '-X', 'DELETE', 'repos/$repository/releases/${release.id}'],
         workingDirectory: workingDirectory,
       );
       if (!deleted.ok) {
@@ -119,6 +114,9 @@ class GithubRelease {
     // Past this point an act is in flight: `gh release create` uploads assets
     // and publishes in one command, so a failure part way through has already
     // put something at the forge.
+    // The body is the changelog entry, from a file: one source of release
+    // prose, so the notes and the CHANGELOG cannot disagree — which is what
+    // `--generate-notes` (a commit-log digest) quietly did.
     final created = await tools.run(
       'gh',
       [
@@ -130,7 +128,8 @@ class GithubRelease {
         repository,
         '--title',
         title,
-        '--generate-notes',
+        '--notes-file',
+        notesPath,
       ],
       workingDirectory: workingDirectory,
     );
@@ -174,34 +173,26 @@ class GithubRelease {
 
   /// Asks the forge about one tag.
   ///
-  /// Three answers, kept apart because they mean different things to a caller:
-  /// it is not there, it is there, or rk could not find out. `gh` distinguishes
-  /// the first from the third by message rather than by exit code, so that is
-  /// what is read — and anything unrecognised is unreadable rather than absent.
+  /// Three answers, kept apart because they mean different things to a
+  /// caller: it is not there, it is there, or rk could not find out. Read
+  /// through `gh api`, whose error line carries the HTTP status — a code,
+  /// where the porcelain (`gh release view`) says the same "release not
+  /// found" prose for a missing release and for one it hit mid-flight, and
+  /// rewords it between versions. Anything that is not a 404 is unreadable
+  /// rather than absent.
+  ///
+  /// A 404 alone is still not absence: GitHub answers 404 for a repository
+  /// the token cannot see, deliberately. Absence is concluded only once the
+  /// repository has answered for itself.
   Future<_Lookup> _view(String tag) async {
     final result = await tools.run(
       'gh',
-      [
-        'release',
-        'view',
-        tag,
-        '--repo',
-        repository,
-        '--json',
-        'tagName,isDraft,name,assets',
-      ],
+      ['api', 'repos/$repository/releases/tags/$tag'],
       workingDirectory: workingDirectory,
     );
 
     if (!result.ok) {
-      final said = result.summary.toLowerCase();
-      if (said.contains('release not found') ||
-          said.contains('no release found')) {
-        // gh says exactly this whether the release is missing from a
-        // repository rk can read or the repository itself cannot be seen — a
-        // typo in the origin, a private repo, an expired token. Absence is
-        // what lets a release proceed, so it is only concluded once the
-        // repository has answered for itself.
+      if (result.summary.contains('(HTTP 404)')) {
         return await _repositoryIsReadable()
             ? const _NotFound()
             : _Unreadable(
@@ -219,11 +210,10 @@ class GithubRelease {
       }
       final assets = decoded['assets'];
       return _Found(_Release(
-        tag: decoded['tagName'] is String ? decoded['tagName'] as String : tag,
-        isDraft: decoded['isDraft'] == true,
-        id: decoded['name'] is String && (decoded['name'] as String).isNotEmpty
-            ? decoded['name'] as String
-            : tag,
+        tag:
+            decoded['tag_name'] is String ? decoded['tag_name'] as String : tag,
+        isDraft: decoded['draft'] == true,
+        id: '${decoded['id'] ?? tag}',
         // Null rather than empty when the field is missing or malformed: no
         // assets and no answer about assets are different facts.
         assets: assets is List
@@ -249,41 +239,39 @@ class GithubRelease {
     return result.ok;
   }
 
-  /// Drafts carrying [tag], which a lookup by tag alone would not surface.
+  /// Drafts carrying [tag], which a lookup by tag alone would not surface —
+  /// the tags endpoint returns only published releases.
+  ///
+  /// `--paginate` walks every page. The porcelain version of this took
+  /// `--limit 100`, a silent cap: draft number 101 survived the sweep and
+  /// blocked the create it existed to unblock.
   Future<List<_Release>?> _drafts(String tag) async {
     final result = await tools.run(
       'gh',
-      [
-        'release',
-        'list',
-        '--repo',
-        repository,
-        '--limit',
-        '100',
-        '--json',
-        'tagName,isDraft,name',
-      ],
+      ['api', '--paginate', '--slurp', 'repos/$repository/releases'],
       workingDirectory: workingDirectory,
     );
     if (!result.ok) return null;
 
     try {
+      // --slurp wraps the pages as one array of arrays, so the whole answer
+      // decodes as a list of pages — no splicing of page boundaries, which
+      // would corrupt on a body that happens to contain the boundary text.
       final decoded = jsonDecode(result.stdout);
       if (decoded is! List) return null;
       return [
-        for (final entry in decoded)
-          if (entry is Map &&
-              entry['tagName'] == tag &&
-              entry['isDraft'] == true)
-            _Release(
-              tag: tag,
-              isDraft: true,
-              id: entry['name'] is String &&
-                      (entry['name'] as String).isNotEmpty
-                  ? entry['name'] as String
-                  : tag,
-              assets: null,
-            ),
+        for (final page in decoded)
+          if (page is List)
+            for (final entry in page)
+              if (entry is Map &&
+                  entry['tag_name'] == tag &&
+                  entry['draft'] == true)
+                _Release(
+                  tag: tag,
+                  isDraft: true,
+                  id: '${entry['id'] ?? tag}',
+                  assets: null,
+                ),
       ];
     } on Object {
       return null;

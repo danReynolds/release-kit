@@ -322,6 +322,7 @@ Future<int> _release(
         git: git,
         tools: const SystemTools(),
         repository: git.originUrl,
+        tap: resolution.identity?.homebrewTap,
       ),
       comparator: Comparator(tools: const SystemTools()),
       tools: const SystemTools(),
@@ -457,6 +458,7 @@ Future<int> _status(
         // either, the forge reports as unread rather than as empty.
         tools: offline ? null : const SystemTools(),
         repository: offline ? null : git.originUrl,
+        tap: resolution.identity?.homebrewTap,
       ),
       output: output,
       offline: offline,

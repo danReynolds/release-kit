@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import '../destinations/github_release.dart';
 import 'checklist.dart';
 import 'git.dart';
@@ -27,6 +29,7 @@ class Inspector {
     required this.git,
     this.tools,
     this.repository,
+    this.tap,
   });
 
   final RegistryReader registry;
@@ -35,6 +38,10 @@ class Inspector {
   /// Needed to read the forge. Absent means the forge cannot be read, which is
   /// `unknown` — never `absent`.
   final Tools? tools;
+
+  /// `owner/homebrew-tap`, when one is declared; the default is derived
+  /// from [repository]'s owner.
+  final String? tap;
 
   /// `owner/name`, when the repository has an origin to ask about.
   final String? repository;
@@ -87,6 +94,17 @@ class Inspector {
       if (executable == null) continue;
       for (final platform in project.binaryPlatforms) {
         expected.add('$executable-${project.version}-$platform.tar.gz');
+        if (platform.startsWith('macos-')) {
+          // Apple's verdict and its log are published evidence, so they are
+          // expected — a release missing them is not what rk produces.
+          expected
+            ..add('$executable-${project.version}-$platform'
+                '.notary-result.json')
+            ..add('$executable-${project.version}-$platform.notary-log.json');
+        }
+      }
+      if (project.channels.contains('homebrew')) {
+        expected.add('$executable.rb');
       }
       if (project.binaryPlatforms.isNotEmpty) expected.add('SHA256SUMS');
     }
@@ -109,10 +127,7 @@ class Inspector {
         return _release(unit);
 
       case StepKind.publishFormula:
-        // The tap is a repository rk has not been given a way to read here.
-        // Saying so is the honest answer; saying `absent` would report a
-        // formula that may already point at this release as work still to do.
-        return const Inspection.unknown('the tap has not been read');
+        return _formula(unit);
 
       case StepKind.build ||
             StepKind.sign ||
@@ -252,6 +267,62 @@ class Inspector {
         );
         return;
       }
+    }
+  }
+
+  /// The tap's formula, read from the public repository the same way a
+  /// user's `brew install` reads it.
+  ///
+  /// Exactness here is the version pointer, not bytes: the formula's sha256
+  /// values are digests of assets this run may not have built yet, so byte
+  /// equality is only checkable by the act (which compares before pushing)
+  /// and by `verify` after the fact. A formula naming an earlier version is
+  /// `absent` — moving it forward is exactly the work the step does.
+  Future<Inspection> _formula(ResolvedUnit unit) async {
+    if (tools == null || repository == null) {
+      return const Inspection.unknown('the tap has not been read');
+    }
+    final tapRepo = tap ?? '${repository!.split('/').first}/homebrew-tap';
+    final project = unit.projects.firstWhere((p) => p.config.wantsBinaries);
+    final executable = project.executable!;
+
+    final result = await tools!.run(
+      'gh',
+      ['api', 'repos/$tapRepo/contents/Formula/$executable.rb'],
+    );
+    if (!result.ok) {
+      if (result.summary.contains('(HTTP 404)')) {
+        // The same 404 discipline as the forge: GitHub answers 404 for a
+        // repository the token cannot see, so a missing formula is only
+        // concluded once the tap has answered for itself.
+        final readable = await tools!.run(
+          'gh',
+          ['repo', 'view', tapRepo, '--json', 'name'],
+        );
+        return readable.ok
+            ? const Inspection.absent(detail: 'no formula in the tap yet')
+            : Inspection.unknown(
+                'the tap $tapRepo could not be read, so rk cannot tell '
+                'what users install',
+              );
+      }
+      return Inspection.unknown('the tap could not be read: ${result.summary}');
+    }
+
+    try {
+      final decoded = jsonDecode(result.stdout);
+      final content = decoded is Map ? decoded['content'] : null;
+      if (content is! String) {
+        return const Inspection.unknown(
+            'the tap answered something unreadable');
+      }
+      final text =
+          utf8.decode(base64Decode(content.replaceAll(RegExp(r'\s'), '')));
+      return text.contains('version "${unit.version}"')
+          ? Inspection.exact(detail: 'points at ${unit.version}')
+          : const Inspection.absent(detail: 'points at an earlier release');
+    } on Object {
+      return const Inspection.unknown('the tap answered something unreadable');
     }
   }
 

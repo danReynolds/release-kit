@@ -217,13 +217,15 @@ executables:
       }, description: '/repo/tool');
 
   /// The forge as a first-releaseable world: no release at the new tag,
-  /// the repository readable.
+  /// the repository readable — answered in `gh api` status codes, which is
+  /// how the reader now asks.
   ToolResult? forge(String key) {
-    if (key.startsWith('gh release list')) {
-      return ToolResult(exitCode: 0, stdout: '[]', stderr: '');
+    if (key.startsWith('gh api --paginate --slurp')) {
+      return ToolResult(exitCode: 0, stdout: '[[]]', stderr: '');
     }
-    if (key.startsWith('gh release view')) {
-      return ToolResult(exitCode: 1, stdout: '', stderr: 'release not found');
+    if (key.startsWith('gh api repos/') && key.contains('/releases/tags/')) {
+      return ToolResult(
+          exitCode: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)');
     }
     if (key.startsWith('gh repo view')) {
       return ToolResult(exitCode: 0, stdout: '{"name":"keybay"}', stderr: '');
@@ -242,6 +244,15 @@ executables:
       typed: '1.0.0',
       only: 'cli',
       answers: (key) {
+        // The baseline release (v0.9.0) is there and lists its archive; the
+        // download of it is what fails. The new tag (v1.0.0) stays 404.
+        if (key.contains('/releases/tags/v0.9.0')) {
+          return ToolResult(
+            exitCode: 0,
+            stdout: '{"assets":[{"name":"tool-0.9.0-macos-arm64.tar.gz"}]}',
+            stderr: '',
+          );
+        }
         if (key.startsWith('gh release download')) {
           return ToolResult(
               exitCode: 1, stdout: '', stderr: 'could not resolve host');
@@ -283,6 +294,16 @@ executables:
       dryRun: true, // the read happens in preflight, inside --dry-run
       only: 'cli',
       answers: (key) {
+        if (key.contains('/releases/tags/v0.9.0')) {
+          return ToolResult(
+            exitCode: 0,
+            stdout: '{"assets":[{"name":"tool-0.9.0-macos-arm64.tar.gz"}]}',
+            stderr: '',
+          );
+        }
+        if (key.contains('/releases/tags/v0.8.0')) {
+          fail('the baseline is the newest lower version; v0.8.0 is not it');
+        }
         if (key.startsWith('gh release download')) {
           downloads.add(key);
           return ToolResult(exitCode: 0, stdout: '', stderr: '');
