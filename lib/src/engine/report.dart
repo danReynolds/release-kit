@@ -167,9 +167,10 @@ class Report {
   /// left to guess at a path it never saw printed.
   String? diagnosis;
 
-  /// Evidence a failed run should leave behind beside the report — native
-  /// tool output, pub's validation text. The diagnosis writes these; a run
-  /// that ends cleanly discards them.
+  /// Evidence and artifacts that travel with the document — native tool
+  /// output, pub's validation text, a proposed config. The diagnosis writes
+  /// them beside the report on a failed run, and `encode` carries them, so a
+  /// --json caller is never told "the text exists somewhere you cannot see".
   final Map<String, String> attachments = {};
 
   void attach(String name, String contents) => attachments[name] = contents;
@@ -200,6 +201,7 @@ class Report {
             'units': _units.values.toList(),
             'problems': _problems,
             'next': _next,
+            if (attachments.isNotEmpty) 'attachments': attachments,
             if (diagnosis != null) 'diagnosis': diagnosis,
             if (_halt != null) 'halt': _halt,
           })}\n';

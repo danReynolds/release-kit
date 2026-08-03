@@ -2,6 +2,7 @@ import '../engine/config.dart';
 import '../engine/diagnostic.dart';
 import '../engine/output.dart';
 import '../engine/pubspec.dart';
+import '../engine/resolve.dart';
 import '../engine/source_tree.dart';
 
 /// Writes `release.toml`, and nothing else.
@@ -68,6 +69,33 @@ class InitCommand {
     }
 
     final proposal = _propose(found.releasable);
+
+    // Eat the dogfood before serving it: the proposal must be a config rk
+    // itself accepts, resolved against this very tree. Unit names are
+    // sanitized package names, so two packages can collide onto one table —
+    // and a written release.toml that rk then refuses is worse than a
+    // refusal here, because the operator has to debug rk's own output.
+    final problems = Diagnostics();
+    final parsed = ReleaseConfig.parse(proposal, 'release.toml', problems);
+    if (parsed != null) Resolution.resolve(parsed, tree, problems);
+    if (problems.isNotEmpty) {
+      output.blank();
+      output.problem(
+        Diagnostic(
+          code: 'RK-INIT-001',
+          message: 'the config rk would propose is one rk itself refuses',
+          remedy: 'write release.toml by hand — the refusals below say what '
+              'the proposal got wrong',
+        ),
+      );
+      output.problems(problems.found);
+      return ExitCodes.refused;
+    }
+
+    // The proposal reaches the machine surface too: an agent sweeping a
+    // fleet reads it from the document and a human writes it at a terminal.
+    output.report.attach('release.toml', proposal);
+
     output.blank();
     for (final line in proposal.split('\n')) {
       output.say(line, depth: 1);

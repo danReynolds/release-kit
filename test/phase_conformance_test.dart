@@ -868,6 +868,85 @@ publish = ["pub.dev"]
     });
   });
 
+  group('phase 6 — rk init', () {
+    late Directory scratch;
+
+    setUpAll(() => scratch = Directory.systemTemp.createTempSync('rk-phase6-'));
+    tearDownAll(() => scratch.deleteSync(recursive: true));
+
+    test('scans, classifies, proposes — and writes nothing without a human',
+        () {
+      final repo = Rk.example(scratch, 'workspace-with-dependent', as: 'scan');
+      File('${repo.root}/release.toml').deleteSync();
+      repo.commit(); // the scan reads tracked files, and rightly so
+      final run = repo(['init']);
+
+      expect(run.code, 0, reason: run.all);
+      expect(run.all, contains('2 releasable packages'));
+      expect(run.all, contains('example_workspace is a workspace root'));
+      expect(run.all, contains('publish = ["pub.dev"]'));
+      expect(
+        run.all,
+        contains('nobody is here to confirm, so nothing was written'),
+      );
+      expect(
+        File('${repo.root}/release.toml').existsSync(),
+        isFalse,
+        reason: 'proposing is not writing',
+      );
+    });
+
+    test('never edits a config that exists', () {
+      final repo = Rk.example(scratch, 'single-package', as: 'existing');
+      final run = repo(['init']);
+      expect(run.code, 0);
+      expect(run.all, contains('already exists'));
+      expect(run.all, contains('decision already made'));
+    });
+
+    test('a repository with nothing releasable is a correct answer', () {
+      final repo = Rk.repository(scratch, 'none', {
+        'pubspec.yaml': 'name: tool\npublish_to: none\nversion: 1.0.0\n',
+      });
+      repo.commit(); // untracked manifests would give the same words for the
+      // wrong reason — the veto is what this asserts
+      final run = repo(['init']);
+      expect(run.code, 0, reason: 'not a refusal');
+      expect(run.all, contains('nothing here can be released'));
+    });
+
+    test(
+        'DONE WHEN: the proposal round-trips through the machine surface '
+        'into a releasable repository', () {
+      // The dogfood loop, entirely through the CLI: init emits the proposal
+      // as data, the caller writes it, and rk itself must then accept it —
+      // a written config rk refuses would be rk debugging its own output.
+      final repo = Rk.example(scratch, 'multi-project-unit', as: 'loop');
+      File('${repo.root}/release.toml').deleteSync();
+      repo.commit();
+
+      final proposal = repo(['init', '--json']);
+      expect(proposal.code, 0, reason: proposal.all);
+      final config = ((proposal.json['attachments'] as Map?) ??
+          const {})['release.toml'] as String?;
+      expect(
+        config,
+        isNotNull,
+        reason: 'an agent reads the proposal from the document; a human '
+            'writes it at a terminal',
+      );
+
+      File('${repo.root}/release.toml').writeAsStringSync(config!);
+      final status = repo(['status', '--offline', '--json']);
+      expect(status.code, 0, reason: status.all);
+      expect(
+        status.units,
+        hasLength(3),
+        reason: 'what init proposed, status releases',
+      );
+    });
+  });
+
   group('phase 7 — binary chain', () {
     test('capability resolution per platform', () {
       expect(fileExists('lib/src/builds/capability.dart'), isTrue);
