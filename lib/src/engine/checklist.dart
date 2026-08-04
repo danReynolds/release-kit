@@ -256,7 +256,10 @@ class Checklist {
     // each other), so a test pins the summary's number to the set's size.
     final assetCount = built.length +
         1 +
-        2 * project.binaryPlatforms.where((p) => p.startsWith('macos-')).length +
+        2 *
+            project.binaryPlatforms
+                .where((p) => p.startsWith('macos-'))
+                .length +
         (project.channels.contains('homebrew') ? 1 : 0);
     final publish = Step(
       id: '${unit.name}/github-release/${unit.tag}',

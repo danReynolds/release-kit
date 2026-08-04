@@ -233,7 +233,7 @@ void main() {
         'keybay': ['0.1.0']
       }),
     );
-    expect(text, contains('0.2.0 ready'));
+    expect(text, contains('ready'));
     expect(text, contains('rk release core'));
   });
 
@@ -311,7 +311,7 @@ void main() {
       registry: FakeRegistry(const {}),
     );
     expect(text, contains('not published'));
-    expect(text, contains('0.2.0 ready'));
+    expect(text, contains('ready'));
   });
 }
 
@@ -343,7 +343,7 @@ void _phase23Fixes() {
     expect(text, contains('could not be reached'),
         reason: 'the unknown must survive alongside another problem');
     expect(text, contains('is uncommitted'));
-    expect(text, isNot(contains('0.2.0 ready')));
+    expect(text, isNot(contains('ready')));
   });
 
   test('the live line names the published version, not the local one',
@@ -357,7 +357,7 @@ void _phase23Fixes() {
     );
     expect(text, contains('0.1.0 published'),
         reason: 'local is 0.2.0; live is 0.1.0');
-    expect(text, contains('0.2.0 ready'));
+    expect(text, contains('ready'));
   });
 
   test('a clean unit with nothing to release ignores worktree state', () async {
@@ -425,7 +425,11 @@ void statusReviewRegressions() {
       reason: 'the step lines were honest all along; this line was '
           'concluding a definitive negative from a socket error',
     );
-    expect(run.text, contains('could not be read'));
+    expect(
+      run.text,
+      contains('could not be reached'),
+      reason: 'the lane says the read failed, in the words of the failure',
+    );
   });
 
   test(

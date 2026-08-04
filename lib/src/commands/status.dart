@@ -195,39 +195,63 @@ class StatusCommand {
       unit.name,
       version: unit.version.canonical,
       tag: unit.tag,
+      // One word on the header answers the header's question; the verbose
+      // view repeats it on the summary line it already had.
+      state: !output.verbose && ready ? 'ready' : null,
     );
-
-    // What is public today, and what would change it. No claim at all beats
-    // a wrong one: a unit with no registry channel gets no registry summary.
-    final note = settled
-        ? 'nothing to release'
-        : ready
-            ? '→ ${unit.version} ready'
-            : null;
-    if (summary != null) {
-      output.line(
-        summary,
-        mark: settled ? Mark.satisfied : Mark.none,
-        depth: 1,
-        labelWidth: 48,
-        note: note,
-      );
-    } else if (note != null) {
-      output.line(
-        note,
-        mark: settled ? Mark.satisfied : Mark.none,
-        depth: 1,
-        labelWidth: 48,
-      );
-    }
 
     // A local step whose every downstream public step is already done cannot
     // be work that is left: nine build and archive lines under a release that
     // is out are noise, and the RFC's rule is that children which agreed fold
     // into the fact they agreed on.
     final moot = _mootSteps(checklist, states);
-    for (final step in checklist.steps) {
-      _reportStep(step, states[step.id]!, show: !moot.contains(step.id));
+
+    if (output.verbose) {
+      // Per-step detail belongs to -v: every checklist line, in derivation
+      // order, with the live summary above it.
+      final note = settled
+          ? 'nothing to release'
+          : ready
+              ? '→ ${unit.version} ready'
+              : null;
+      if (summary != null) {
+        output.line(
+          summary,
+          mark: settled ? Mark.satisfied : Mark.none,
+          depth: 1,
+          labelWidth: 48,
+          note: note,
+        );
+      } else if (note != null) {
+        output.line(
+          note,
+          mark: settled ? Mark.satisfied : Mark.none,
+          depth: 1,
+          labelWidth: 48,
+        );
+      }
+      for (final step in checklist.steps) {
+        _reportStep(step, states[step.id]!, show: !moot.contains(step.id));
+      }
+    } else {
+      // The reader's question is "what ships where, and what is left" — so
+      // the default view is one lane per destination, the production chain
+      // folded under the destination it feeds. Every step is still recorded:
+      // the document carries the whole checklist keyed by id, whatever the
+      // terminal folds.
+      for (final step in checklist.steps) {
+        _reportStep(step, states[step.id]!, show: false);
+      }
+      if (settled) {
+        output.line(
+          'nothing to release',
+          mark: Mark.satisfied,
+          depth: 1,
+          labelWidth: 48,
+        );
+      } else {
+        _lanes(unit, checklist, states, moot, summary);
+      }
     }
 
     for (final problem in problems.found) {
@@ -286,6 +310,172 @@ class StatusCommand {
       if (everythingAfterIsDone(step, {step.id})) moot.add(step.id);
     }
     return moot;
+  }
+
+  /// The checklist as destination lanes.
+  ///
+  /// The RFC's collapse rule, applied to the reader's question: a lane whose
+  /// destination is already exact folds to one satisfied line; a lane still
+  /// open shows what feeds it — one line per platform, stages named in
+  /// order — and the words on the line carry what the gutter cannot.
+  void _lanes(
+    ResolvedUnit unit,
+    Checklist checklist,
+    Map<String, Inspection> states,
+    Set<String> moot,
+    String? summary,
+  ) {
+    String row(String label, String value) =>
+        value.isEmpty ? label : '${label.padRight(15)}$value';
+
+    Mark markOf(Inspection state) => switch (state.verdict) {
+          Verdict.exact => Mark.satisfied,
+          Verdict.conflict => Mark.blocked,
+          _ => Mark.none,
+        };
+
+    void lane(
+      Step step, {
+      required String label,
+      required String value,
+      String? note,
+    }) {
+      final state = states[step.id]!;
+      output.line(
+        row(label, value),
+        mark: markOf(state),
+        depth: 1,
+        labelWidth: 48,
+        note: note,
+      );
+      if (state.verdict == Verdict.conflict && state.evidence.isNotEmpty) {
+        for (final entry in state.evidence.entries) {
+          output.say('${entry.key}: ${entry.value}', depth: 2);
+        }
+      }
+    }
+
+    // The tag: provenance for everything below it.
+    for (final step in checklist.steps.where((s) => s.kind == StepKind.tag)) {
+      if (moot.contains(step.id)) continue;
+      final state = states[step.id]!;
+      lane(
+        step,
+        label: 'tag',
+        value: unit.tag,
+        note: state.detail ?? (state.isAbsent ? 'not created' : null),
+      );
+    }
+
+    // What another unit must publish first.
+    for (final step
+        in checklist.steps.where((s) => s.kind == StepKind.prerequisite)) {
+      final state = states[step.id]!;
+      lane(
+        step,
+        label: 'needs',
+        value: step.coordinate ?? step.summary,
+        note: state.detail ?? (state.isAbsent ? 'not live yet' : null),
+      );
+    }
+
+    // One registry row per project — the live summary's facts, in the lane.
+    for (final step
+        in checklist.steps.where((s) => s.kind == StepKind.publishRegistry)) {
+      final state = states[step.id]!;
+      final project = unit.projects.firstWhere((p) => p.name == step.project);
+      lane(
+        step,
+        label: 'pub.dev',
+        value: '${project.name} ${project.version}',
+        note: switch (state.verdict) {
+          Verdict.exact => state.detail ?? 'published',
+          Verdict.unknown => state.detail ?? 'could not be read',
+          _ => [
+              if (summary != null) summary else 'not published',
+              'permanent',
+            ].join(' · '),
+        },
+      );
+    }
+
+    // The forge lane, with the chain that feeds it folded underneath: one
+    // line per platform, stages in dependency order, and the checksums the
+    // assets share. All of it disappears once the release is out — the moot
+    // fold — leaving the lane's own satisfied line.
+    for (final step
+        in checklist.steps.where((s) => s.kind == StepKind.publishRelease)) {
+      final state = states[step.id]!;
+      lane(
+        step,
+        label: 'github-release',
+        value: step.summary
+            .replaceFirst('publish ', '')
+            .replaceFirst(' to the ${unit.tag} release', ' at ${unit.tag}'),
+        note: switch (state.verdict) {
+          Verdict.exact => state.detail ?? 'published',
+          Verdict.unknown => state.detail,
+          _ => null,
+        },
+      );
+
+      // Under a conflicted destination the chain is not work that is left —
+      // nothing rk builds can be published into a release that is already
+      // permanently wrong — so the rows fold and the conflict is the story.
+      if (state.verdict == Verdict.conflict) continue;
+
+      final project = unit.projects.firstWhere((p) => p.name == step.project);
+      for (final platform in project.binaryPlatforms) {
+        final stages = checklist.steps
+            .where((s) => s.platform == platform && s.project == project.name)
+            .toList();
+        if (stages.isEmpty || stages.every((s) => moot.contains(s.id))) {
+          continue;
+        }
+        final conflicted = stages
+            .where((s) => states[s.id]!.verdict == Verdict.conflict)
+            .toList();
+        final done =
+            stages.where((s) => states[s.id]!.isExact).map((s) => s.kind.name);
+        output.line(
+          row(platform, stages.map((s) => s.kind.name).join(' → ')),
+          mark: conflicted.isNotEmpty
+              ? Mark.blocked
+              : stages.every((s) => states[s.id]!.isExact)
+                  ? Mark.satisfied
+                  : Mark.none,
+          depth: 2,
+          labelWidth: 46,
+          note: conflicted.isNotEmpty
+              ? states[conflicted.first.id]!.detail
+              : done.isEmpty
+                  ? null
+                  : 'done: ${done.join(', ')}',
+        );
+      }
+      for (final sums in checklist.steps
+          .where((s) => s.kind == StepKind.checksums && !moot.contains(s.id))) {
+        output.line(
+          row('checksums', sums.summary.replaceFirst('checksums for ', '')),
+          mark: markOf(states[sums.id]!),
+          depth: 2,
+          labelWidth: 46,
+        );
+      }
+    }
+
+    // The tap: a pointer, moved after the release it names.
+    for (final step
+        in checklist.steps.where((s) => s.kind == StepKind.publishFormula)) {
+      final state = states[step.id]!;
+      final project = unit.projects.firstWhere((p) => p.name == step.project);
+      lane(
+        step,
+        label: 'homebrew',
+        value: 'Formula/${project.executable}.rb',
+        note: state.detail,
+      );
+    }
   }
 
   /// One step, said in the terms its verdict earns.

@@ -379,11 +379,10 @@ void classificationTables() {
     final resolution = await _binaryResolution();
     final unit = resolution.unit('cli')!;
     final steps = Checklist.derive(unit, resolution, Diagnostics()).steps;
-    final summary = steps
-        .firstWhere((s) => s.kind == StepKind.publishRelease)
-        .summary;
-    final counted =
-        int.parse(RegExp(r'publish (\d+) assets').firstMatch(summary)!.group(1)!);
+    final summary =
+        steps.firstWhere((s) => s.kind == StepKind.publishRelease).summary;
+    final counted = int.parse(
+        RegExp(r'publish (\d+) assets').firstMatch(summary)!.group(1)!);
     expect(counted, Inspector.expectedAssets(unit).length);
   });
 
@@ -407,7 +406,8 @@ void classificationTables() {
   });
 }
 
-Future<ResolvedUnit> _binaryUnit() async => (await _binaryResolution()).unit('cli')!;
+Future<ResolvedUnit> _binaryUnit() async =>
+    (await _binaryResolution()).unit('cli')!;
 
 Future<Resolution> _binaryResolution() async {
   final diagnostics = Diagnostics();

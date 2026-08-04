@@ -108,10 +108,16 @@ class Output {
   }
 
   /// Opens a unit. Steps printed after this belong to it.
-  void unit(String name, {required String version, required String tag}) {
+  void unit(
+    String name, {
+    required String version,
+    required String tag,
+    String? state,
+  }) {
     report.unit(name: name, version: version, tag: tag);
     blank();
-    line(name, note: '$version → $tag');
+    line(name,
+        note: state == null ? '$version → $tag' : '$version → $tag · $state');
   }
 
   /// One step of a checklist, printed and recorded as one act.
