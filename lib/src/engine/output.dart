@@ -30,6 +30,33 @@ enum Mark {
   final String glyph;
 }
 
+/// The colour a word earns from what it says.
+///
+/// The gutter's four marks stay the vocabulary; tones repeat the same
+/// judgment on the words for a reader scanning colour — never carrying
+/// anything the words do not, so `NO_COLOR` loses nothing.
+enum Tone {
+  plain,
+
+  /// A section header: structure, not a fact.
+  header,
+
+  /// Already so; nothing to do here.
+  muted,
+
+  /// Proven or live.
+  good,
+
+  /// Blocked, conflicting, or failed.
+  bad,
+
+  /// rk could not read it, and wants eyes on that.
+  attention,
+
+  /// The next move.
+  next,
+}
+
 /// Everything rk prints goes through here, so terseness, collapse, and the
 /// non-TTY contract are enforced in one place rather than per command.
 ///
@@ -256,12 +283,20 @@ class Output {
   ///
   /// [note] is the fact; [detail] is the part that only matters when it
   /// differs, and is aligned so a column of them stays readable.
+  ///
+  /// Tones colour the words themselves, not only the gutter — a state word
+  /// reads at a glance in the colour its verdict earns. Layout is computed
+  /// on the plain text and colour applied after, so a painted label never
+  /// shifts the column it sits in; `NO_COLOR` and pipes get the same
+  /// characters uncoloured.
   void line(
     String label, {
     Mark mark = Mark.none,
     String? note,
     int depth = 0,
     int labelWidth = 16,
+    Tone tone = Tone.plain,
+    Tone noteTone = Tone.plain,
   }) {
     _clearTransient();
     final glyph = mark == Mark.none ? ' ' : _paint(mark);
@@ -270,7 +305,7 @@ class Output {
     // the tree deepens rather than drifting right with it.
     final indented = '${'  ' * depth}$label';
     if (note == null) {
-      sink('$glyph $indented\n');
+      sink('$glyph ${_tint(indented, tone)}\n');
       return;
     }
     if (indented.length >= labelWidth) {
@@ -278,10 +313,26 @@ class Output {
       // because a note describes the line it is on: given its own line it reads
       // as a fact about nothing, and "permanent" floating alone is worse than
       // "permanent" out of column.
-      sink('$glyph $indented $note\n');
+      sink('$glyph ${_tint(indented, tone)} ${_tint(note, noteTone)}\n');
       return;
     }
-    sink('$glyph ${indented.padRight(labelWidth)} $note\n');
+    final padded = indented.padRight(labelWidth);
+    sink('$glyph ${_tint(padded, tone)} ${_tint(note, noteTone)}\n');
+  }
+
+  /// [text] in [tone]'s colour, or untouched without colour support.
+  String _tint(String text, Tone tone) {
+    if (!useColor || tone == Tone.plain) return text;
+    final code = switch (tone) {
+      Tone.plain => null,
+      Tone.header => '1', // bold
+      Tone.muted => '90', // grey
+      Tone.good => '32', // green
+      Tone.bad => '31', // red
+      Tone.attention => '33', // yellow
+      Tone.next => '36', // cyan
+    };
+    return code == null ? text : '\x1b[${code}m$text\x1b[0m';
   }
 
   /// Free-form prose, wrapped in the same indentation as the tree.
