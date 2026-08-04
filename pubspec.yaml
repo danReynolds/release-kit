@@ -3,7 +3,6 @@ description: >-
   An austere, fail-closed release tool. Manages the release steps; defers
   auth to native tooling.
 version: 0.0.1
-publish_to: none
 
 environment:
   sdk: ^3.5.0

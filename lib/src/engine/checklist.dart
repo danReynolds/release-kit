@@ -250,12 +250,20 @@ class Checklist {
     );
     steps.add(checksums);
 
+    // The count mirrors Inspector.expectedAssets — archives, checksums,
+    // notary evidence per macOS platform, the formula when a tap points at
+    // it. The two cannot share code (checklist and inspector would import
+    // each other), so a test pins the summary's number to the set's size.
+    final assetCount = built.length +
+        1 +
+        2 * project.binaryPlatforms.where((p) => p.startsWith('macos-')).length +
+        (project.channels.contains('homebrew') ? 1 : 0);
     final publish = Step(
       id: '${unit.name}/github-release/${unit.tag}',
       kind: StepKind.publishRelease,
       unit: unit.name,
       project: project.name,
-      summary: 'publish ${built.length + 1} assets to '
+      summary: 'publish $assetCount assets to '
           'the ${unit.tag} release',
       needs: [...built, checksums.id],
     );

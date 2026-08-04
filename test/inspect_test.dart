@@ -371,6 +371,22 @@ void classificationTables() {
     });
   });
 
+  test('the checklist summary counts the same assets the inspector expects',
+      () async {
+    // The two derivations cannot share code without an import cycle, so
+    // this is the pin: a summary telling the operator "publish 4 assets"
+    // while the equality check expects 6 is the mirror drifting.
+    final resolution = await _binaryResolution();
+    final unit = resolution.unit('cli')!;
+    final steps = Checklist.derive(unit, resolution, Diagnostics()).steps;
+    final summary = steps
+        .firstWhere((s) => s.kind == StepKind.publishRelease)
+        .summary;
+    final counted =
+        int.parse(RegExp(r'publish (\d+) assets').firstMatch(summary)!.group(1)!);
+    expect(counted, Inspector.expectedAssets(unit).length);
+  });
+
   test('the expected asset set is derived, and derives everything', () async {
     final unit = await _binaryUnit();
     expect(
@@ -391,7 +407,9 @@ void classificationTables() {
   });
 }
 
-Future<ResolvedUnit> _binaryUnit() async {
+Future<ResolvedUnit> _binaryUnit() async => (await _binaryResolution()).unit('cli')!;
+
+Future<Resolution> _binaryResolution() async {
   final diagnostics = Diagnostics();
   final config = ReleaseConfig.parse('''
 schema = 1
@@ -400,7 +418,7 @@ schema = 1
 publish = ["pub.dev", "github-release", "homebrew"]
 binary_platforms = ["linux-x64", "macos-arm64"]
 ''', 'release.toml', diagnostics)!;
-  final resolution = Resolution.resolve(
+  return Resolution.resolve(
     config,
     MemorySourceTree({
       'pubspec.yaml': '''
@@ -412,7 +430,6 @@ executables:
     }),
     diagnostics,
   )!;
-  return resolution.unit('cli')!;
 }
 
 /// The tag's remote half — the leg whose absence let a killed push produce a

@@ -1,0 +1,13 @@
+schema = 1
+
+[release.rk]                   # tag v{version}
+publish = ["pub.dev", "github-release"]
+binary_platforms = ["macos-arm64", "linux-x64", "linux-arm64"]
+
+# The identity block is checks, never authority: public expectations rk
+# verifies against, used directly only for the first signed release —
+# every release after it derives the team and identifier from the binary
+# users already installed.
+[identity]
+apple_team = "5AHFA9FUZG"
+code_id = "io.github.danreynolds.rk"
