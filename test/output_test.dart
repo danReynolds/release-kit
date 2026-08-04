@@ -120,16 +120,20 @@ void main() {
       expect(captured.text, contains('add publish'));
     });
 
-    test('hide the code by default, since it is for search', () {
+    test('carry the code on the ✗ line, in every mode', () {
+      // Reversed by the persona review: an alert grepping a CI log must not
+      // depend on someone having passed -v, so the code rides the message
+      // it names rather than hiding behind a flag.
       final (out, captured) = make();
       out.problem(diagnostic);
-      expect(captured.text, isNot(contains('RK-CONF-019')));
-    });
+      expect(
+        captured.lines.firstWhere((l) => l.contains('✗')),
+        contains('· RK-CONF-019'),
+      );
 
-    test('show the code under -v', () {
-      final (out, captured) = make(verbose: true);
-      out.problem(diagnostic);
-      expect(captured.text, contains('RK-CONF-019'));
+      final (verbose, verboseCaptured) = make(verbose: true);
+      verbose.problem(diagnostic);
+      expect(verboseCaptured.text, contains('· RK-CONF-019'));
     });
 
     test('are reported in one pass', () {

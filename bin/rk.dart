@@ -19,14 +19,24 @@ import 'package:rk/src/engine/tools.dart';
 const _usage = '''
 rk — an austere release tool
 
-Usage: rk [command] [unit]
+Usage: rk [command] [unit]        a unit is one releasable package
 
-  status    Where things stand: what is live, what is ready, what is blocking.
-  init      Write release.toml for this repository.
-  release   Execute a release.
-  verify    Prove a published release against what it claims.
+  status    Where things stand: what is live, ready, or blocking. Read-only.
+  init      Propose release.toml for this repository; writes only on a yes.
+  release   Plan, confirm, then act — asks before anything permanent.
+  verify    Prove a published release against its tag. Read-only.
 
-Bare `rk` runs status.  -v for detail, --json for a caller.
+Bare `rk` runs status.
+
+Flags
+  -v          every step with its diagnostic codes    --json   the machine surface
+  --offline   status from the manifests alone         --write  accept init's proposal
+  --dry-run   release: inspect and stop before acting
+  --rehearse  release: run every local step, touch nothing public
+  --at=<ref>  verify against a tag or commit
+
+Marks: ✓ done · already satisfied ✗ blocked → your next move
+Exit:  0 clean, complete, or blocked · 1 refused · 2 usage — --json mirrors it in "exit"
 ''';
 
 Future<void> main(List<String> args) async {
@@ -39,6 +49,7 @@ Future<void> main(List<String> args) async {
     '--rehearse',
     '--offline',
     '--json',
+    '--write',
   };
   // `--at=<ref>` carries a value, so it is peeled before the set membership
   // checks that every other flag goes through.
@@ -71,6 +82,14 @@ Future<void> main(List<String> args) async {
     json: json,
     command: command,
   );
+  // The document says how it was asked to read, so a caller can tell
+  // "checked, inconclusive" from "never looked" — an offline run's unknowns
+  // are only interpretable with this beside them.
+  output.report.mode.addAll({
+    'offline': flags.contains('--offline'),
+    'verbose': flags.contains('-v') || flags.contains('--verbose'),
+    if (at != null) 'at': at,
+  });
 
   // A flag that exists but does not apply to this verb is refused the same
   // way as one that does not exist: `rk release --offline` performing live
@@ -87,7 +106,7 @@ Future<void> main(List<String> args) async {
       '--dry-run',
       '--rehearse',
     },
-    'init': {'-v', '--verbose', '-h', '--help', '--json'},
+    'init': {'-v', '--verbose', '-h', '--help', '--json', '--write'},
   };
   final inapplicable = {
     ...flags.difference(perVerb[command] ?? known),
@@ -193,7 +212,11 @@ Future<void> main(List<String> args) async {
           rehearse: flags.contains('--rehearse'),
           interactive: !json,
         ),
-      'init' => await _init(output, interactive: !json),
+      'init' => await _init(
+          output,
+          interactive: !json,
+          write: flags.contains('--write'),
+        ),
       _ => await _status(
           output,
           target,
@@ -264,7 +287,11 @@ void _recordDiagnosis(Output output, int code, {String? crash}) {
   output.say('what this run saw: $at');
 }
 
-Future<int> _init(Output output, {required bool interactive}) async {
+Future<int> _init(
+  Output output, {
+  required bool interactive,
+  required bool write,
+}) async {
   final root = GitSourceTree.findRoot(Directory.current.path);
   if (root == null) {
     output.problem(
@@ -289,12 +316,16 @@ Future<int> _init(Output output, {required bool interactive}) async {
     // parsed by InitCommand.consented, where EOF is a decline — hasTerminal
     // alone does not guard that, because macOS reports a terminal for
     // `rk init < /dev/null`.
-    confirm: interactive && stdin.hasTerminal
-        ? (prompt) async {
-            stdout.write(prompt);
-            return InitCommand.consented(stdin.readLineSync());
-          }
-        : null,
+    // --write is the typed yes, carried as a flag: the door for scripts and
+    // agents, named in the refusal a terminal-less run prints.
+    confirm: write
+        ? (_) async => true
+        : interactive && stdin.hasTerminal
+            ? (prompt) async {
+                stdout.write(prompt);
+                return InitCommand.consented(stdin.readLineSync());
+              }
+            : null,
   ).run();
 }
 
@@ -346,6 +377,17 @@ Future<int> _verify(Output output, String? unit, {String? at}) async {
   final resolution = prepared.resolution!;
   final tree = prepared.tree!;
   final registry = prepared.registry!;
+  // The same header every verb stamps: in a CI log these outputs get
+  // separated from their invocations, and a headerless transcript answers
+  // for no repository in particular.
+  final git = GitState.read(tree.root);
+  output.repository(
+    name: tree.root.split('/').last,
+    branch: git.branch,
+    uncommitted: git.uncommitted.length,
+    head: git.shortHead,
+    remote: git.originUrl,
+  );
   try {
     return await VerifyCommand(
       resolution: resolution,

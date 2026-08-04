@@ -130,6 +130,7 @@ class ReleaseCommand {
     // than at the last step.
     final refusal = _refuseIfUnfinishable(unit);
     if (refusal != null) {
+      output.halt(HaltKind.beforeActing);
       output.problem(refusal);
       return ExitCodes.refused;
     }
@@ -418,11 +419,26 @@ class ReleaseCommand {
     }
     if (blocked.isEmpty) return null;
 
+    // Platforms blocked for the same reason fold onto one line — two
+    // identical sentences are one fact said twice.
+    final byReason = <String, List<String>>{};
+    for (final entry in blocked) {
+      final cut = entry.indexOf(' — ');
+      final platform = cut < 0 ? entry : entry.substring(0, cut);
+      final reason = cut < 0 ? '' : entry.substring(cut + 3);
+      byReason.putIfAbsent(reason, () => []).add(platform);
+    }
+    final folded = byReason.entries
+        .map((e) => '${e.value.join(', ')} — ${e.key}')
+        .toList();
+
     return Diagnostic(
       code: 'RK-HOST-001',
-      message: 'this machine cannot produce every platform this unit ships',
+      message: '${unit.name}: this machine cannot produce every platform '
+          'it ships',
       remedy: 'starting anyway would build and sign for minutes and then '
-          'stop before publishing anything:\n  ${blocked.join('\n  ')}',
+          'stop before publishing anything. Nothing was built.\n'
+          '  ${folded.join('\n  ')}',
     );
   }
 
@@ -434,13 +450,8 @@ class ReleaseCommand {
         remedy: 'a release is of a commit, and these are not in one',
       );
     }
-    if (!git.headIsPushed) {
-      problems.add(
-        'RK-GIT-003',
-        '${git.shortHead} is not on any remote',
-        remedy: 'git push, so the tag points at something others can fetch',
-      );
-    }
+    final unpushed = git.unpushedProblem();
+    if (unpushed != null) problems.report(unpushed);
     for (final project in unit.projects) {
       Changelog.check(
         tree: tree,

@@ -888,7 +888,7 @@ publish = ["pub.dev"]
       expect(run.all, contains('publish = ["pub.dev"]'));
       expect(
         run.all,
-        contains('nobody is here to confirm, so nothing was written'),
+        contains('nothing was written — there is no terminal to confirm in'),
       );
       expect(
         File('${repo.root}/release.toml').existsSync(),

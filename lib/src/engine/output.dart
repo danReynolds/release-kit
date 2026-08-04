@@ -125,12 +125,26 @@ class Output {
 
   /// The repository line, recorded in parts so a caller is not left parsing
   /// "keybay · main · 2 uncommitted" back into fields.
-  void repository({required String name, String? branch, int? uncommitted}) {
-    report.repository(name: name, branch: branch, uncommitted: uncommitted);
+  void repository({
+    required String name,
+    String? branch,
+    int? uncommitted,
+    String? head,
+    String? remote,
+    String? mode,
+  }) {
+    report.repository(
+      name: name,
+      branch: branch,
+      uncommitted: uncommitted,
+      head: head,
+      remote: remote,
+    );
     heading([
       name,
       if (branch != null) branch,
       if (uncommitted != null && uncommitted > 0) '$uncommitted uncommitted',
+      if (mode != null) mode,
     ].join(' · '));
   }
 
@@ -174,6 +188,7 @@ class Output {
       unit: step.unit,
       summary: step.summary,
       verdict: verdict.name,
+      kind: step.kind.name,
       detail: detail,
       evidence: evidence,
       permanent: step.isPermanent,
@@ -396,16 +411,15 @@ class Output {
   void problem(Diagnostic diagnostic, {String? unit, int depth = 0}) {
     report.problem(diagnostic, unit: unit);
     final where = diagnostic.source == null ? '' : '${diagnostic.source}  ';
+    // The code rides the line it names, every mode: an alert grepping a CI
+    // log must not depend on someone having passed -v.
     line(
-      '$where${diagnostic.message}',
+      '$where${diagnostic.message} · ${diagnostic.code}',
       mark: Mark.blocked,
       depth: depth,
     );
     if (diagnostic.remedy != null) {
       say(diagnostic.remedy!, depth: depth + 1);
-    }
-    if (verbose) {
-      say(diagnostic.code, depth: depth + 1);
     }
   }
 

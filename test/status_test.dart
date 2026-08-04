@@ -263,7 +263,8 @@ void main() {
     expect(text, contains('lib/src/args.dart'));
   });
 
-  test('blocks on a commit no remote has', () async {
+  test('blocks on a commit no remote has, with the branch and the fix',
+      () async {
     final text = await statusOf(
       source: tree(),
       state: git(pushed: false),
@@ -271,8 +272,44 @@ void main() {
         'keybay': ['0.1.0']
       }),
     );
-    expect(text, contains('not on any remote'));
+    expect(text, contains('no upstream on origin'));
     expect(text, contains('git push'));
+  });
+
+  test('an unpushed head names how far ahead it is', () async {
+    final state = GitState(
+      root: '/repo',
+      head: '9f2c1ab',
+      branch: 'main',
+      isClean: true,
+      uncommitted: const [],
+      headIsPushed: false,
+      aheadOfUpstream: 3,
+      tags: const [],
+      signingConfigured: true,
+      originUrl: 'example/keybay',
+    );
+    final problem = state.unpushedProblem()!;
+    expect(problem.message, contains('main (9f2c1ab)'));
+    expect(problem.message, contains('ahead of origin/main by 3 commits'));
+  });
+
+  test('no remote at all is its own instruction, not "push"', () async {
+    final state = GitState(
+      root: '/repo',
+      head: '9f2c1ab',
+      branch: 'main',
+      isClean: true,
+      uncommitted: const [],
+      headIsPushed: false,
+      hasRemote: false,
+      tags: const [],
+      signingConfigured: true,
+      originUrl: null,
+    );
+    final problem = state.unpushedProblem()!;
+    expect(problem.message, contains('has no remote'));
+    expect(problem.remedy, contains('git remote add origin'));
   });
 
   test('blocks when a later tag already exists', () async {

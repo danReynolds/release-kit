@@ -50,6 +50,11 @@ class Report {
   /// decide" without reading the sentence.
   var rerunHelps = true;
 
+  /// How the run was asked to read — so a caller can tell "checked, and
+  /// could not conclude" from "never looked". An offline document full of
+  /// unknown verdicts is only interpretable with this beside it.
+  final Map<String, Object> mode = {};
+
   /// Whether this run began changing things.
   ///
   /// The signal for whether a failure is worth recording evidence about. It is
@@ -61,10 +66,18 @@ class Report {
   /// [uncommitted] is null when the run stopped before reading git, which is
   /// reported as absence rather than as zero — a clean tree and an unread one
   /// are different facts.
-  void repository({required String name, String? branch, int? uncommitted}) {
+  void repository({
+    required String name,
+    String? branch,
+    int? uncommitted,
+    String? head,
+    String? remote,
+  }) {
     _repository = {
       'name': name,
       if (branch != null) 'branch': branch,
+      if (head != null) 'head': head,
+      if (remote != null) 'remote': remote,
       if (uncommitted != null) 'uncommitted': uncommitted,
     };
   }
@@ -123,6 +136,7 @@ class Report {
     required String unit,
     required String summary,
     String verdict = 'unknown',
+    String? kind,
     bool? permanent,
     bool? public,
     List<String> needs = const [],
@@ -138,6 +152,7 @@ class Report {
     steps.removeWhere((s) => s['id'] == id);
     steps.add({
       'id': id,
+      if (kind != null) 'kind': kind,
       'summary': summary,
       'verdict': verdict,
       if (permanent != null) 'permanent': permanent,
@@ -148,6 +163,13 @@ class Report {
       if (took != null) 'took_ms': took.inMilliseconds,
     });
   }
+
+  /// Every verification recorded, across units — the tally's source, so a
+  /// summary line cannot disagree with the rows it summarises.
+  List<Map<String, Object?>> get verifications => [
+        for (final unit in _units.values)
+          ...?(unit['verifications'] as List<Map<String, Object?>>?),
+      ];
 
   void problem(Diagnostic diagnostic, {String? unit}) {
     _problems.add({
@@ -198,6 +220,8 @@ class Report {
       '${const JsonEncoder.withIndent('  ').convert({
             'rk': schema,
             'command': command,
+            if (mode.isNotEmpty) 'mode': mode,
+            'observed_at': DateTime.now().toUtc().toIso8601String(),
             'exit': exit,
             'safe_to_rerun': safeToRerun,
             'rerun_helps': rerunHelps,

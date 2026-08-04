@@ -65,10 +65,12 @@ class GithubRelease {
         // why it is only ever said about assets rk actually read.
         return Inspection.conflict(
           missing.isEmpty
-              ? 'the published release carries ${extra.length} assets this '
-                  'configuration would not produce'
-              : 'the published release differs from what this configuration '
-                  'would produce',
+              ? 'carries ${extra.length} assets this configuration would '
+                  'not produce (found ${assets.length}, expected '
+                  '${expectedAssets.length})'
+              : 'differs from what this configuration produces '
+                  '(found ${assets.length}, expected ${expectedAssets.length}'
+                  ', ${missing.length} missing)',
           evidence: {
             for (final name in missing) name: 'missing',
             for (final name in extra)
@@ -93,7 +95,7 @@ class GithubRelease {
   }) async {
     final existing = await _drafts(tag);
     if (existing == null) {
-      return PublishOutcome.failed('the forge could not be read');
+      return PublishOutcome.failed('GitHub could not be read');
     }
     for (final release in existing) {
       // By id, not by tag: several drafts can carry the same tag, and the
@@ -200,13 +202,13 @@ class GithubRelease {
                 'tell whether $tag is released',
               );
       }
-      return _Unreadable('the forge could not be read: ${result.summary}');
+      return _Unreadable('GitHub could not be read: ${result.summary}');
     }
 
     try {
       final decoded = jsonDecode(result.stdout);
       if (decoded is! Map) {
-        return const _Unreadable('the forge answered something unreadable');
+        return const _Unreadable('GitHub answered something unreadable');
       }
       final assets = decoded['assets'];
       return _Found(_Release(
@@ -225,7 +227,7 @@ class GithubRelease {
             : null,
       ));
     } on Object catch (error) {
-      return _Unreadable('the forge answered something unreadable: $error');
+      return _Unreadable('GitHub answered something unreadable: $error');
     }
   }
 

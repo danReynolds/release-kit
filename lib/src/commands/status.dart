@@ -67,7 +67,20 @@ class StatusCommand {
       name: tree.description.split('/').last,
       branch: git.branch,
       uncommitted: git.uncommitted.length,
+      head: git.shortHead,
+      remote: git.originUrl,
+      mode: offline ? 'offline' : null,
     );
+
+    // Belief starts at the top, so the offline caveat goes where the reading
+    // does — before the plan, not trailing it dressed as a step.
+    if (offline) {
+      output.say(
+        'a plan, derived from the manifests alone. Nothing was read from '
+        'pub.dev, GitHub, or the Homebrew tap, so none of this says what '
+        'is already done.',
+      );
+    }
 
     // Read once, before the units, because a unit cannot honestly say "run
     // rk release" while something about the repository would refuse it — and
@@ -87,9 +100,10 @@ class StatusCommand {
       }
     }
 
-    // Only when something would actually be released: whether the worktree is
-    // clean is of no consequence to a repository with nothing left to publish.
-    if (anyWouldRelease && repository.isNotEmpty) {
+    // Repository problems are git facts — local reads, inside the offline
+    // promise — and dropping them offline handed --json callers an empty
+    // problems array for a repository the live view calls blocked.
+    if ((offline || anyWouldRelease) && repository.isNotEmpty) {
       output.blank();
       output.problems(repository.found);
     }
@@ -116,11 +130,6 @@ class StatusCommand {
     for (final problem in problems.found) {
       output.problem(problem, depth: 1);
     }
-    output.say(
-      'derived from the manifests alone. Nothing was read from pub.dev,\n'
-      'the forge, or the tap, so none of this says what is already done.',
-      depth: 1,
-    );
   }
 
   /// Reports one unit: every step of its checklist, against reality.
@@ -255,7 +264,8 @@ class StatusCommand {
           tone: Tone.muted,
         );
       } else {
-        _targets(unit, checklist, states, moot);
+        _targets(unit, checklist, states, moot,
+            repositoryBlocks: repositoryBlocks);
       }
     }
 
@@ -328,8 +338,9 @@ class StatusCommand {
     ResolvedUnit unit,
     Checklist checklist,
     Map<String, Inspection> states,
-    Set<String> moot,
-  ) {
+    Set<String> moot, {
+    required bool repositoryBlocks,
+  }) {
     const noteColumn = 50;
 
     Mark markOf(Inspection state) => switch (state.verdict) {
@@ -417,15 +428,16 @@ class StatusCommand {
           note: switch (state.verdict) {
             Verdict.exact => state.detail ?? 'published',
             Verdict.unknown => state.detail ?? 'could not be read',
-            _ => '${live ?? 'not published'} · permanent',
+            _ => '${live ?? 'not published'} · publishing is permanent',
           },
         );
         // Refusing to act is not refusing to instruct: rk will not perform
         // a first publish, and now — not at the release prompt — is when
         // knowing that is worth something.
-        if (state.isAbsent && live == 'not published') {
+        if (state.isAbsent && live == 'not published' && !repositoryBlocks) {
           output.say(
-            'the first publish is yours: dart pub publish, once',
+            'pub.dev requires the first publish by hand: dart pub publish, '
+            'once.\nrk owns every release after it.',
             depth: 3,
           );
         }
@@ -450,8 +462,17 @@ class StatusCommand {
 
       // Under a conflicted destination the chain is not work that is left —
       // nothing rk builds can enter a release that is already permanently
-      // wrong — so the rows fold and the conflict is the story.
-      if (state.verdict == Verdict.conflict) continue;
+      // wrong — so the rows fold, the conflict is the story, and the story
+      // ends with the two moves a human can actually make.
+      if (state.verdict == Verdict.conflict) {
+        output.say(
+          'if these are strays from an older configuration, delete them on '
+          'the release page;\nif they are wanted, declare their platform in '
+          'release.toml.',
+          depth: 3,
+        );
+        continue;
+      }
 
       final project = unit.projects.firstWhere((p) => p.name == step.project);
       for (final platform in project.binaryPlatforms) {
@@ -572,23 +593,22 @@ class StatusCommand {
   /// is five times of teaching the reader to skim.
   void _checkRepositoryState(Diagnostics problems) {
     if (!git.isClean) {
+      // Few enough to count is few enough to print; only a long list
+      // truncates, with the count and the way to the rest — and -v never
+      // elides, because verbose that elides is not verbose.
+      final paths = output.verbose || git.uncommitted.length <= 8
+          ? git.uncommitted.join(', ')
+          : '${git.uncommitted.take(8).join(', ')} '
+              '…and ${git.uncommitted.length - 8} more (-v shows all)';
       problems.add(
         'RK-GIT-001',
         git.uncommitted.length == 1
             ? '1 path is uncommitted'
             : '${git.uncommitted.length} paths are uncommitted',
-        remedy: 'a release is of a commit, and these are not in one: '
-            '${git.uncommitted.take(3).join(', ')}'
-            '${git.uncommitted.length > 3 ? ', …' : ''}',
+        remedy: 'a release is of a commit, and these are not in one: $paths',
       );
     }
-    if (!git.headIsPushed) {
-      problems.add(
-        'RK-GIT-003',
-        '${git.shortHead} is not on any remote',
-        remedy: 'a tag on it would point at something nobody else can '
-            'fetch — git push',
-      );
-    }
+    final unpushed = git.unpushedProblem();
+    if (unpushed != null) problems.report(unpushed);
   }
 }

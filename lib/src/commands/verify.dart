@@ -81,6 +81,24 @@ class VerifyCommand {
     for (final unit in units) {
       failed = !await _unit(unit) || failed;
     }
+
+    // The tally, computed from the recorded verifications themselves — one
+    // line answering "so, overall?", incapable of disagreeing with the rows.
+    final all = output.report.verifications;
+    final proved = all.where((v) => v['verdict'] == 'exact').length;
+    final disclosed = all.where((v) => v['counts'] == false).length;
+    final unprovable = all.length - proved - disclosed;
+    if (all.isNotEmpty) {
+      output.blank();
+      output.line(
+        [
+          '$proved proved',
+          if (unprovable > 0) '$unprovable not proved',
+          if (disclosed > 0) '$disclosed not examined',
+        ].join(' · '),
+        mark: failed ? Mark.blocked : Mark.done,
+      );
+    }
     return failed ? ExitCodes.refused : ExitCodes.ok;
   }
 
@@ -105,8 +123,7 @@ class VerifyCommand {
         unit.name,
         unexamined.join(', '),
         verdict: Verdict.unknown,
-        detail: 'not examined — binary channel verification arrives with '
-            'phase 7b',
+        detail: 'not examined — rk cannot verify binary channels yet',
         counts: false,
       );
     }

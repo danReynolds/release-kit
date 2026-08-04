@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'diagnostic.dart';
 
 /// The repository facts a release depends on.
 ///
@@ -12,6 +13,8 @@ class GitState {
     required this.isClean,
     required this.uncommitted,
     required this.headIsPushed,
+    this.hasRemote = true,
+    this.aheadOfUpstream,
     required this.tags,
     this.tagTargets = const {},
     required this.signingConfigured,
@@ -32,6 +35,14 @@ class GitState {
   /// Whether [head] exists on the remote. A tag on a commit nobody can fetch
   /// points at nothing for everyone else.
   final bool headIsPushed;
+
+  /// Whether any remote is configured at all — "not pushed" and "nowhere to
+  /// push to" call for different instructions.
+  final bool hasRemote;
+
+  /// Commits HEAD is ahead of its upstream, or null when there is no
+  /// upstream to measure against.
+  final int? aheadOfUpstream;
 
   final List<String> tags;
 
@@ -126,6 +137,38 @@ class GitState {
       .where((path) => path != '.rk/' && !path.startsWith('.rk/'))
       .toList();
 
+  /// The problem an unpushed HEAD is, said with its facts: which branch,
+  /// how far ahead, or that there is nowhere to push to at all. Shared by
+  /// status and release so the two verbs cannot describe it differently.
+  Diagnostic? unpushedProblem() {
+    if (headIsPushed) return null;
+    if (!hasRemote) {
+      return Diagnostic(
+        code: 'RK-GIT-003',
+        message: 'this repository has no remote',
+        remedy: 'rk publishes what others can fetch, and nothing here is '
+            'fetchable yet. git remote add origin <url>, then '
+            'git push -u origin ${branch ?? 'main'}',
+      );
+    }
+    final where = branch == null ? shortHead : '$branch ($shortHead)';
+    final ahead = aheadOfUpstream;
+    if (ahead == null) {
+      return Diagnostic(
+        code: 'RK-GIT-003',
+        message: '$where has no upstream on origin',
+        remedy: 'git push -u origin ${branch ?? 'HEAD'}',
+      );
+    }
+    return Diagnostic(
+      code: 'RK-GIT-003',
+      message: '$where is ahead of origin/$branch by '
+          '$ahead commit${ahead == 1 ? '' : 's'}',
+      remedy: 'a tag here would point at commits origin cannot fetch — '
+          'git push',
+    );
+  }
+
   static GitState read(String root) {
     final result = Process.runSync('git', const ['status', '--porcelain'],
         workingDirectory: root);
@@ -149,6 +192,9 @@ class GitState {
       isClean: uncommitted.isEmpty,
       uncommitted: uncommitted,
       headIsPushed: contains.trim().isNotEmpty,
+      hasRemote: _run(root, const ['remote']).trim().isNotEmpty,
+      aheadOfUpstream: int.tryParse(
+          _run(root, const ['rev-list', '--count', '@{upstream}..HEAD'])),
       tags: _run(root, const ['tag', '--list'])
           .split('\n')
           .where((t) => t.trim().isNotEmpty)

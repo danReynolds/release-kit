@@ -116,7 +116,7 @@ class InitCommand {
         package.name,
         depth: 1,
         labelWidth: 22,
-        note: '${package.version} · ${package.directory}'
+        note: '${package.version} · path ${package.directory}'
             '${package.executables.isEmpty ? '' : ' · executable '
                 '${package.executables.first}'}',
       );
@@ -168,7 +168,10 @@ class InitCommand {
 
     if (confirm == null) {
       output.blank();
-      output.say('nobody is here to confirm, so nothing was written.');
+      // A refusal names its door, and this one has two.
+      output.say('nothing was written — there is no terminal to confirm in.\n'
+          'to accept exactly the above: rk init --write · or run rk init '
+          'at a terminal.');
       return ExitCodes.ok;
     }
 

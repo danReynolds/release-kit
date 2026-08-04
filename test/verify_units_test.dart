@@ -126,7 +126,7 @@ executables:
     expect(disclosure['verdict'], 'unknown');
     expect(
       disclosure['detail'],
-      contains('phase 7b'),
+      contains('cannot verify binary channels yet'),
       reason: 'a disclosure, not a judgment — and it must not fail what '
           'was actually proved',
     );

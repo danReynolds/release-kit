@@ -152,7 +152,7 @@ class Inspector {
     final target = git.tagTarget(unit.tag);
     final placement = target == null || target == git.head
         ? ''
-        : ', at ${_short(target)} — not HEAD';
+        : ', at ${_short(target)} — HEAD has moved on, expected';
 
     if (tools == null) {
       // Nothing to ask the remote with: say exactly how much is known.
@@ -209,8 +209,14 @@ class Inspector {
   }
 
   Future<Inspection> _release(ResolvedUnit unit) async {
-    if (tools == null || repository == null) {
-      return const Inspection.unknown('the forge has not been read');
+    // Two different reasons rk cannot answer, each said as itself: offline
+    // was asked for, while a missing origin is a fact about the repository
+    // the reader can change.
+    if (tools == null) {
+      return const Inspection.unknown('not read: --offline');
+    }
+    if (repository == null) {
+      return const Inspection.unknown('no origin remote to ask');
     }
     final expected = expectedAssets(unit);
 
@@ -279,8 +285,11 @@ class Inspector {
   /// and by `verify` after the fact. A formula naming an earlier version is
   /// `absent` — moving it forward is exactly the work the step does.
   Future<Inspection> _formula(ResolvedUnit unit) async {
-    if (tools == null || repository == null) {
-      return const Inspection.unknown('the tap has not been read');
+    if (tools == null) {
+      return const Inspection.unknown('not read: --offline');
+    }
+    if (repository == null) {
+      return const Inspection.unknown('no origin remote to ask');
     }
     final tapRepo = tap ?? '${repository!.split('/').first}/homebrew-tap';
     final project = unit.projects.firstWhere((p) => p.config.wantsBinaries);
@@ -365,7 +374,10 @@ class Inspector {
               'that produced it. Tag it yourself, at that commit:\n'
               '  git tag ${unit.tag} <the commit that released '
               '${unit.version}>\n'
-              '  git push origin ${unit.tag}',
+              '  git push origin ${unit.tag}\n'
+              'find it: git log --oneline -S "version: ${unit.version}" — '
+              'and prove a candidate before pushing: '
+              'rk verify ${unit.name} --at=<sha>',
         ),
       ];
     }
