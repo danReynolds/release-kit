@@ -30,17 +30,38 @@ void main() {
       expect(onAppleSilicon.resolve('linux-arm64').canProduce, isTrue);
     });
 
-    test('without a container runtime a cross-built binary is not shipped', () {
+    test('without a container runtime a cross-built binary ships unproven', () {
+      // Producing and proving are separate answers. A missing daemon is not
+      // a reason to refuse the release; it is a reason to ship the artifact
+      // with its smoke test's absence stated — optional evidence degrading
+      // honestly, which is CI-readiness constraint 6.
       final noRuntime = HostCapabilities(
         hostPlatform: 'macos-arm64',
         containerRuntime: null,
         hasNativeAssets: false,
       );
       final resolved = noRuntime.resolve('linux-x64');
-      expect(resolved.capability, Capability.buildableButUncheckable);
-      expect(resolved.canProduce, isFalse,
-          reason: 'rk does not ship what it cannot run');
+      expect(resolved.capability, Capability.buildableUnproven);
+      expect(resolved.canProduce, isTrue);
+      expect(
+        resolved.canProve,
+        isFalse,
+        reason: 'rk will not claim a binary runs when nothing here ran it',
+      );
       expect(resolved.reason, contains('container runtime'));
+    });
+
+    test('the native platform is always provable, runtime or not', () {
+      final noRuntime = HostCapabilities(
+        hostPlatform: 'macos-arm64',
+        containerRuntime: null,
+        hasNativeAssets: false,
+      );
+      final resolved = noRuntime.resolve('macos-arm64');
+      expect(resolved.canProve, isTrue,
+          reason: 'the host runs its own binaries for free, and that check '
+              'catches the commonest failure — a stale artifact reporting '
+              'the wrong version');
     });
 
     test('native assets block cross-compilation, naming why', () {
@@ -254,5 +275,32 @@ void main() {
       reason: 'the smoke test runs on whichever runtime detection found',
     );
     expect(tools.calls.any((c) => c.startsWith('docker run')), isFalse);
+  });
+
+  test('a target nothing can run is built, and says it was not executed',
+      () async {
+    final tools = RecordingTools();
+    final outcome = await DartCliBuilder(
+      tools: tools,
+      capabilities: HostCapabilities(
+        hostPlatform: 'macos-arm64',
+        containerRuntime: null,
+        hasNativeAssets: false,
+      ),
+    ).build(
+      platform: 'linux-x64',
+      entryPoint: 'bin/tool.dart',
+      output: '/w/tool',
+      workingDirectory: '/repo',
+      expectedVersion: '2.0.0',
+    );
+
+    expect(outcome.ok, isTrue, reason: outcome.problem ?? '');
+    expect(outcome.unproven, contains('container runtime'));
+    expect(
+      tools.calls.any((c) => c.contains('--version')),
+      isFalse,
+      reason: 'nothing here could run it, so nothing pretended to',
+    );
   });
 }

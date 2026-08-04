@@ -175,9 +175,33 @@ class BinaryChain {
       return false;
     }
     workspace.ingest(name);
+
+    // The proof's absence travels with the artifact. `built` alone would
+    // read as "checked", which is the claim rk must not make for a binary
+    // nothing here could run.
+    final unproven = built.unproven;
+    if (unproven != null) {
+      unprovenPlatforms.add(platform);
+      activity.done('built, not executed');
+      output.step(
+        step,
+        mark: Mark.done,
+        verdict: Verdict.exact,
+        detail: 'built, not executed — $unproven',
+        note: 'built, not executed — $unproven',
+        show: false,
+      );
+      return true;
+    }
     activity.done('built');
     return true;
   }
+
+  /// Platforms whose binary was built and never run, in this process.
+  ///
+  /// Read by the authorize prompt, so the operator accepts the weaker
+  /// assurance knowingly rather than discovering it in the release notes.
+  final unprovenPlatforms = <String>{};
 
   Future<bool> _versionMatches(String name, String version) async {
     final result = await tools.run(workspace.pathOf(name), ['--version']);

@@ -121,7 +121,7 @@ minute 40 of an announced release.
 - Wire `Activity` into the notarization wait — built, tested, and hand-rolled
   around today.
 - `dart-cli` build with per-platform capability resolution (native,
-  cross-compiled, emulated smoke test, blocked).
+  cross-compiled, emulated smoke test, buildable-unproven, blocked).
 - `macos-sign` and `macos-notarize`, with the signature compared against the
   requirement `PublishedIdentity` derives from the release users already
   installed (its gate is red until this wiring lands).
@@ -374,6 +374,11 @@ Recorded because the reviews found them claimed-as-shipped when they are not:
   the detail that is the diagnosis).
 - **Phase 7b** — a multi-platform command-layer drive: done, in the 7b
   build (three platforms, both directions).
+- **Verify, owed by the unproven-platform change** — a release whose
+  Linux binaries shipped unexecuted carries that fact only in the run's
+  own output. `rk verify` should say it too, per platform, so a reader
+  months later learns which artifacts were ever run. The natural home is
+  the same pass that owes binary-channel verification.
 - **Verify, owed by 7b** — the formula inspection's exactness is the
   version pointer, not bytes: the sha256 values inside a formula are
   digests of assets a pre-build inspection cannot have. The act compares

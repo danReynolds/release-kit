@@ -543,7 +543,17 @@ verify(public vs expected)
   native assets, since the SDK ships no C cross-toolchain; **emulated
   execution** through a container runtime for smoke-testing a
   cross-compiled binary; **blocked** otherwise, naming the missing
-  capability. An x64 macOS binary can be neither cross-compiled nor built
+  capability.
+
+  *Amended (as built):* producing and proving are separate answers. The
+  host's own platform always smoke-runs, because that costs nothing and
+  catches the commonest real failure — a binary that compiles and reports
+  the wrong version. A cross-compiled target with no runtime to execute it
+  is **buildable-unproven**, not blocked: it ships with the smoke test's
+  absence stated on its step, at the confirmation prompt, and in the
+  document. Refusing the release instead made a daemon that is not running
+  a hard blocker on shipping, which is a heavier claim than an optional
+  check earns — and constraint 6 says optional evidence degrades honestly. An x64 macOS binary can be neither cross-compiled nor built
   natively on Apple Silicon. Capabilities are discovered, never declared:
   which platforms to ship is a product decision, where a binary can be
   produced is a fact about the machine.

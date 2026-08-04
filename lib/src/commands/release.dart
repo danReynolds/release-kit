@@ -442,6 +442,24 @@ class ReleaseCommand {
     );
   }
 
+  /// Platforms this host can build but not execute, as the prompt says it.
+  ///
+  /// Read from the same capability resolution the chain builds with, before
+  /// anything acts, so the operator sees it in the plan rather than after.
+  List<String> _unprovable(ResolvedUnit unit) {
+    if (!unit.shipsBinaries) return const [];
+    final unprovable = <String>[];
+    for (final project in unit.projects) {
+      for (final platform in project.binaryPlatforms) {
+        final resolved = capabilities.resolve(platform);
+        if (resolved.canProduce && !resolved.canProve) {
+          unprovable.add('$platform — ${resolved.reason}');
+        }
+      }
+    }
+    return unprovable;
+  }
+
   void _validate(ResolvedUnit unit, Diagnostics problems) {
     if (!git.isClean) {
       problems.add(
@@ -486,6 +504,19 @@ class ReleaseCommand {
           'retracted, which hides it and removes nothing.\n'
           'everything before this yes re-runs safely. after it, the first '
           'permanent step is: ${permanent.first.summary}.');
+    }
+
+    // Weaker assurance is accepted knowingly or not at all: a platform
+    // nothing here can run ships with its smoke test missing, and that is
+    // said before the version is typed, not discovered afterwards.
+    final unprovable = _unprovable(unit);
+    if (unprovable.isNotEmpty) {
+      output.blank();
+      output.say('these ship built but never executed — rk cannot prove '
+          'they run or report ${unit.version}:');
+      for (final platform in unprovable) {
+        output.say(platform, depth: 1);
+      }
     }
 
     if (confirm == null) {

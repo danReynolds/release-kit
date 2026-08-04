@@ -1024,6 +1024,7 @@ publish = ["pub.dev"]
     List<String> platforms = const ['macos-arm64'],
     bool homebrew = false,
     String label = '',
+    String? containerRuntime = 'docker',
   }) async {
     final root = Directory('${scratch.path}/drive-${rehearse ? 'r' : 'f'}'
         '${notaryRejects ? '-nr' : ''}$label')
@@ -1224,7 +1225,7 @@ executables:
       wait: (_) => Future<void>.delayed(Duration.zero),
       capabilities: HostCapabilities(
         hostPlatform: 'macos-arm64',
-        containerRuntime: 'docker',
+        containerRuntime: containerRuntime,
         hasNativeAssets: false,
       ),
     ).run(only: 'cli');
@@ -1390,6 +1391,7 @@ void binaryDestinationGates(
     List<String> platforms,
     bool homebrew,
     String label,
+    String? containerRuntime,
   }) binaryDrive,
 ) {
   group('phase 7b — the destinations', () {
@@ -1484,6 +1486,42 @@ void binaryDestinationGates(
         );
       }
       expect(run.text, contains('rehearsed'));
+    });
+
+    test(
+        'a platform nothing can run still ships — built, not executed, and '
+        'disclosed before the version is typed', () async {
+      // Optional evidence degrades honestly (CI-readiness constraint 6). A
+      // missing container runtime used to refuse the whole release: a
+      // daemon that is not running became a hard blocker on shipping,
+      // which is a heavier claim than the smoke test earns.
+      final run = await binaryDrive(
+        rehearse: false,
+        platforms: ['macos-arm64', 'linux-x64'],
+        label: '-unproven',
+        containerRuntime: null,
+      );
+
+      expect(run.code, 0, reason: run.text);
+      expect(
+        run.calls.any((c) => c.startsWith('docker run')),
+        isFalse,
+        reason: 'nothing here could run it, so nothing pretended to',
+      );
+      expect(
+        run.text,
+        contains('built but never executed'),
+        reason: 'the operator accepts the weaker assurance knowingly, at '
+            'the prompt, before the version is typed',
+      );
+      expect(run.text, contains('linux-x64'));
+      expect(
+        run.text,
+        isNot(contains('macos-arm64 — no container runtime')),
+        reason: 'the host runs its own binaries for free; only the '
+            'cross-compiled target is unproven',
+      );
+      expect(run.text, contains('released'));
     });
 
     test(

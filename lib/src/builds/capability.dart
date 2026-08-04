@@ -4,8 +4,17 @@ import 'dart:io';
 ///
 /// Discovered rather than declared: which platforms a project ships is a
 /// product decision, and where a binary can be produced is a fact about the
-/// machine. rk never ships what it cannot execute, so building and
-/// smoke-testing are resolved together.
+/// machine.
+///
+/// Producing and *proving* are separate answers. rk runs what it builds
+/// wherever running is possible — the smoke test catches the commonest real
+/// failure, a binary that compiles and reports the wrong version — but a
+/// cross-compiled target with no way to execute it is not a reason to
+/// refuse the release. It is optional evidence, and optional evidence
+/// degrades honestly (CI-readiness constraint 6): the artifact ships
+/// marked `built, not executed`, disclosed on its step, at the
+/// confirmation prompt, and in the document. Refusing instead made a
+/// missing daemon a hard blocker on shipping.
 enum Capability {
   /// The host's own OS and architecture: build and run directly.
   native,
@@ -14,8 +23,9 @@ enum Capability {
   /// result for the acceptance check.
   crossCompiled,
 
-  /// It could be built here, but nothing can run it, so rk will not ship it.
-  buildableButUncheckable,
+  /// It can be built here, and nothing here can run it. It ships with the
+  /// smoke test's absence stated rather than not shipping at all.
+  buildableUnproven,
 
   /// Neither.
   blocked,
@@ -31,6 +41,13 @@ class PlatformCapability {
   final String? reason;
 
   bool get canProduce =>
+      capability == Capability.native ||
+      capability == Capability.crossCompiled ||
+      capability == Capability.buildableUnproven;
+
+  /// Whether the binary can be executed here to prove it runs and reports
+  /// the right version.
+  bool get canProve =>
       capability == Capability.native || capability == Capability.crossCompiled;
 }
 
@@ -92,10 +109,9 @@ class HostCapabilities {
     if (!hasContainerRuntime) {
       return PlatformCapability(
         platform,
-        Capability.buildableButUncheckable,
-        reason: 'cross-compiles here, but cannot be run to '
-            'check: no container runtime is running (docker). '
-            'Start Docker or colima, then rerun',
+        Capability.buildableUnproven,
+        reason: 'no container runtime here to run it in — start Docker or '
+            'colima to have rk prove it runs',
       );
     }
 

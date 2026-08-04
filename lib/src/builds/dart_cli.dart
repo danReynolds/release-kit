@@ -3,8 +3,10 @@ import 'capability.dart';
 
 /// Builds a Dart executable for one platform, and runs what it produced.
 ///
-/// A binary rk cannot execute is a binary rk will not ship, so the smoke test
-/// is part of building rather than a later step someone could skip.
+/// The smoke test is part of building rather than a later step someone
+/// could skip — and where the host cannot run the result at all, the build
+/// succeeds with [BuildOutcome.unproven] set rather than failing. What rk
+/// will not do is claim a binary was checked when it was not.
 class DartCliBuilder {
   DartCliBuilder({
     required this.tools,
@@ -45,6 +47,15 @@ class DartCliBuilder {
     );
 
     if (!compiled.ok) return BuildOutcome.failed(compiled.summary);
+
+    if (!capability.canProve) {
+      // Built, and nothing here can run it. The absence of the proof is
+      // carried forward rather than swallowed or treated as a failure.
+      return BuildOutcome.built(
+        output,
+        unproven: capability.reason ?? 'nothing here can run it',
+      );
+    }
 
     final smoke = await _smokeTest(
       platform: platform,
@@ -118,14 +129,20 @@ class DartCliBuilder {
 }
 
 class BuildOutcome {
-  const BuildOutcome._(this.path, this.problem, this.wasBlocked);
+  const BuildOutcome._(this.path, this.problem, this.wasBlocked,
+      {this.unproven});
 
-  const BuildOutcome.built(String path) : this._(path, null, false);
+  const BuildOutcome.built(String path, {String? unproven})
+      : this._(path, null, false, unproven: unproven);
   const BuildOutcome.failed(String problem) : this._(null, problem, false);
   const BuildOutcome.blocked(String problem) : this._(null, problem, true);
 
   final String? path;
   final String? problem;
+
+  /// Why the binary was never executed, when it was not. Null means it ran
+  /// and reported the version it should — the only case rk calls proven.
+  final String? unproven;
 
   /// Whether this host simply cannot produce it, as opposed to trying and
   /// failing.
