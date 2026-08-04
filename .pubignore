@@ -1,0 +1,6 @@
+# What pub ships is the tool, its docs, and its metadata — not the harness
+# that proves it. rk reads this file when it verifies its own releases, so
+# every pattern here must be one rk's matcher understands.
+test/
+examples/
+tool/

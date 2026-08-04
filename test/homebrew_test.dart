@@ -1,7 +1,7 @@
 import 'dart:io';
 
-import 'package:rk/src/destinations/homebrew.dart';
-import 'package:rk/src/engine/tools.dart';
+import 'package:release_kit/src/destinations/homebrew.dart';
+import 'package:release_kit/src/engine/tools.dart';
 import 'package:test/test.dart';
 
 const _assets = {

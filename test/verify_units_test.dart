@@ -1,13 +1,13 @@
 import 'dart:convert';
 
-import 'package:rk/src/commands/verify.dart';
-import 'package:rk/src/engine/compare.dart';
-import 'package:rk/src/engine/config.dart';
-import 'package:rk/src/engine/diagnostic.dart';
-import 'package:rk/src/engine/output.dart';
-import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/source_tree.dart';
-import 'package:rk/src/engine/tools.dart';
+import 'package:release_kit/src/commands/verify.dart';
+import 'package:release_kit/src/engine/compare.dart';
+import 'package:release_kit/src/engine/config.dart';
+import 'package:release_kit/src/engine/diagnostic.dart';
+import 'package:release_kit/src/engine/output.dart';
+import 'package:release_kit/src/engine/resolve.dart';
+import 'package:release_kit/src/engine/source_tree.dart';
+import 'package:release_kit/src/engine/tools.dart';
 import 'package:test/test.dart';
 
 import 'status_test.dart' show FakeRegistry;

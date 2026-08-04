@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:rk/src/engine/source_tree.dart';
+import 'package:release_kit/src/engine/source_tree.dart';
 import 'package:test/test.dart';
 
 /// `GitTreeAtRef` against real repositories.

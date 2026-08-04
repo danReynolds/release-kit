@@ -1,9 +1,9 @@
 import 'dart:io';
 
-import 'package:rk/src/engine/registry.dart';
-import 'package:rk/src/transforms/digest.dart';
-import 'package:rk/src/engine/verdict.dart';
-import 'package:rk/src/engine/version.dart';
+import 'package:release_kit/src/engine/registry.dart';
+import 'package:release_kit/src/transforms/digest.dart';
+import 'package:release_kit/src/engine/verdict.dart';
+import 'package:release_kit/src/engine/version.dart';
 import 'package:test/test.dart';
 
 /// The pub.dev client, against a real server rather than a fake.

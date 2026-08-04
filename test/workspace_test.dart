@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:rk/src/engine/workspace.dart';
+import 'package:release_kit/src/engine/workspace.dart';
 import 'package:test/test.dart';
 
 /// One contract, two implementations — every test runs against both.

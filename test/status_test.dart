@@ -1,17 +1,17 @@
 import 'dart:convert';
 
-import 'package:rk/src/commands/status.dart';
-import 'package:rk/src/engine/config.dart';
-import 'package:rk/src/engine/diagnostic.dart';
-import 'package:rk/src/engine/git.dart';
-import 'package:rk/src/engine/inspect.dart';
-import 'package:rk/src/engine/output.dart';
-import 'package:rk/src/engine/registry.dart';
-import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/source_tree.dart';
-import 'package:rk/src/engine/tools.dart';
-import 'package:rk/src/engine/verdict.dart';
-import 'package:rk/src/engine/version.dart';
+import 'package:release_kit/src/commands/status.dart';
+import 'package:release_kit/src/engine/config.dart';
+import 'package:release_kit/src/engine/diagnostic.dart';
+import 'package:release_kit/src/engine/git.dart';
+import 'package:release_kit/src/engine/inspect.dart';
+import 'package:release_kit/src/engine/output.dart';
+import 'package:release_kit/src/engine/registry.dart';
+import 'package:release_kit/src/engine/resolve.dart';
+import 'package:release_kit/src/engine/source_tree.dart';
+import 'package:release_kit/src/engine/tools.dart';
+import 'package:release_kit/src/engine/verdict.dart';
+import 'package:release_kit/src/engine/version.dart';
 import 'package:test/test.dart';
 
 import 'scripted_tools.dart';

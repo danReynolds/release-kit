@@ -1,10 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:rk/src/builds/capability.dart';
-import 'package:rk/src/builds/dart_cli.dart';
-import 'package:rk/src/engine/tools.dart';
-import 'package:rk/src/transforms/archive.dart';
+import 'package:release_kit/src/builds/capability.dart';
+import 'package:release_kit/src/builds/dart_cli.dart';
+import 'package:release_kit/src/engine/tools.dart';
+import 'package:release_kit/src/transforms/archive.dart';
 import 'package:test/test.dart';
 
 void main() {

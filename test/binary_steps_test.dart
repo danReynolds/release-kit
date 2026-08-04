@@ -1,16 +1,16 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:rk/src/builds/capability.dart';
-import 'package:rk/src/commands/binary_chain.dart';
-import 'package:rk/src/engine/checklist.dart';
-import 'package:rk/src/engine/config.dart';
-import 'package:rk/src/engine/diagnostic.dart';
-import 'package:rk/src/engine/output.dart';
-import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/source_tree.dart';
-import 'package:rk/src/engine/tools.dart';
-import 'package:rk/src/engine/workspace.dart';
+import 'package:release_kit/src/builds/capability.dart';
+import 'package:release_kit/src/commands/binary_chain.dart';
+import 'package:release_kit/src/engine/checklist.dart';
+import 'package:release_kit/src/engine/config.dart';
+import 'package:release_kit/src/engine/diagnostic.dart';
+import 'package:release_kit/src/engine/output.dart';
+import 'package:release_kit/src/engine/resolve.dart';
+import 'package:release_kit/src/engine/source_tree.dart';
+import 'package:release_kit/src/engine/tools.dart';
+import 'package:release_kit/src/engine/workspace.dart';
 import 'package:test/test.dart';
 
 /// The chain, one step at a time — each step gets a FRESH chain instance

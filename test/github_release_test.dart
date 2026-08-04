@@ -1,8 +1,8 @@
 import 'dart:convert';
 
-import 'package:rk/src/destinations/github_release.dart';
-import 'package:rk/src/engine/tools.dart';
-import 'package:rk/src/engine/verdict.dart';
+import 'package:release_kit/src/destinations/github_release.dart';
+import 'package:release_kit/src/engine/tools.dart';
+import 'package:release_kit/src/engine/verdict.dart';
 import 'package:test/test.dart';
 
 import 'scripted_tools.dart';

@@ -2,18 +2,18 @@ import 'dart:io';
 
 import 'dart:convert';
 
-import 'package:rk/src/builds/capability.dart';
-import 'package:rk/src/commands/release.dart';
-import 'package:rk/src/engine/compare.dart';
-import 'package:rk/src/engine/config.dart';
-import 'package:rk/src/engine/diagnostic.dart';
-import 'package:rk/src/engine/git.dart';
-import 'package:rk/src/engine/inspect.dart';
-import 'package:rk/src/engine/output.dart';
-import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/source_tree.dart';
-import 'package:rk/src/engine/tools.dart';
-import 'package:rk/src/transforms/archive.dart';
+import 'package:release_kit/src/builds/capability.dart';
+import 'package:release_kit/src/commands/release.dart';
+import 'package:release_kit/src/engine/compare.dart';
+import 'package:release_kit/src/engine/config.dart';
+import 'package:release_kit/src/engine/diagnostic.dart';
+import 'package:release_kit/src/engine/git.dart';
+import 'package:release_kit/src/engine/inspect.dart';
+import 'package:release_kit/src/engine/output.dart';
+import 'package:release_kit/src/engine/resolve.dart';
+import 'package:release_kit/src/engine/source_tree.dart';
+import 'package:release_kit/src/engine/tools.dart';
+import 'package:release_kit/src/transforms/archive.dart';
 import 'package:test/test.dart';
 
 import 'rk_process.dart';
@@ -352,7 +352,7 @@ void main() {
           final target = match?.group(1);
           if (target == null) continue;
           if (target.startsWith('dart:')) continue;
-          if (target.startsWith('package:rk/')) continue;
+          if (target.startsWith('package:release_kit/')) continue;
           if (!target.contains(':')) continue; // relative
           foreign.add('${entity.path}: $target');
         }

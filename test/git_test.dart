@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:rk/src/engine/git.dart';
+import 'package:release_kit/src/engine/git.dart';
 import 'package:test/test.dart';
 
 /// `GitState.read` against real repositories.

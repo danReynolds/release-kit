@@ -1,14 +1,14 @@
 import 'dart:convert';
 
-import 'package:rk/src/commands/verify.dart';
-import 'package:rk/src/engine/compare.dart';
-import 'package:rk/src/engine/config.dart';
-import 'package:rk/src/engine/diagnostic.dart';
-import 'package:rk/src/engine/output.dart';
-import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/source_tree.dart';
-import 'package:rk/src/engine/tools.dart';
-import 'package:rk/src/transforms/archive.dart';
+import 'package:release_kit/src/commands/verify.dart';
+import 'package:release_kit/src/engine/compare.dart';
+import 'package:release_kit/src/engine/config.dart';
+import 'package:release_kit/src/engine/diagnostic.dart';
+import 'package:release_kit/src/engine/output.dart';
+import 'package:release_kit/src/engine/resolve.dart';
+import 'package:release_kit/src/engine/source_tree.dart';
+import 'package:release_kit/src/engine/tools.dart';
+import 'package:release_kit/src/transforms/archive.dart';
 import 'package:test/test.dart';
 
 import 'status_test.dart' show FakeRegistry;
@@ -275,7 +275,9 @@ void reviewRegressions() {
       () async {
     final sources = {
       ..._sources(),
-      'packages/keybay/.pubignore': 'doc/**\n',
+      // A pattern rk refuses to guess at — the honest-partial path. A
+      // .pubignore it understands now proves exact, which compare_test pins.
+      'packages/keybay/.pubignore': 'doc/**\nweird\\#name\n',
       'packages/keybay/doc/internal.md': 'excluded on purpose\n',
     };
     final registry = FakeRegistry({

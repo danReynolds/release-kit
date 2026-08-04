@@ -1,5 +1,5 @@
-import 'package:rk/src/engine/diagnostic.dart';
-import 'package:rk/src/engine/toml.dart';
+import 'package:release_kit/src/engine/diagnostic.dart';
+import 'package:release_kit/src/engine/toml.dart';
 import 'package:test/test.dart';
 
 TomlDocument? parse(String source, [Diagnostics? into]) {

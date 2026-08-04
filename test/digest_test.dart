@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:rk/src/transforms/digest.dart';
+import 'package:release_kit/src/transforms/digest.dart';
 import 'package:test/test.dart';
 
 void main() {

@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import '../transforms/digest.dart';
+import 'pub_ignore.dart';
 import 'source_tree.dart';
 import 'tools.dart';
 import 'verdict.dart';
@@ -121,15 +122,25 @@ class Comparator {
     }
 
     // Direction two: everything the source has must have been published —
-    // unless pub's own selection excludes it, which rk does not reinterpret.
-    final pubignore = tree.exists('$prefix.pubignore');
+    // unless pub's own selection excludes it. A `.pubignore` is read and
+    // applied when rk understands every pattern in it, and declared
+    // unjudgeable when it does not: guessing at a pattern would silence a
+    // file that is genuinely missing, which is the one direction of error
+    // this comparison must never make.
+    final pubignoreSource = tree.read('$prefix.pubignore');
+    final pubignore =
+        pubignoreSource == null ? null : PubIgnore.parse(pubignoreSource);
+    final readable = pubignore == null || pubignore.isComplete;
     var unverifiable = 0;
     for (final tracked in tree.trackedFiles()) {
       if (prefix.isNotEmpty && !tracked.startsWith(prefix)) continue;
       final relative = tracked.substring(prefix.length);
       if (pubExcludes(relative)) continue;
       if (inArchive.contains(relative)) continue;
-      if (pubignore) {
+      if (pubignore != null && readable && pubignore.excludes(relative)) {
+        continue;
+      }
+      if (pubignore != null && !readable) {
         unverifiable++;
         continue;
       }
@@ -148,8 +159,8 @@ class Comparator {
       return Inspection.unknown(
         'every published file matches, and $unverifiable tracked '
         'file${unverifiable == 1 ? '' : 's'} absent from the archive '
-        'cannot be judged — a .pubignore is present, and rk does not '
-        'reinterpret pub\'s file selection',
+        'cannot be judged — the .pubignore uses patterns rk will not guess '
+        'at: ${pubignore!.unsupported.join(', ')}',
       );
     }
     return Inspection.exact(

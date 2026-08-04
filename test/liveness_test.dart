@@ -1,5 +1,5 @@
-import 'package:rk/src/engine/checklist.dart';
-import 'package:rk/src/engine/output.dart';
+import 'package:release_kit/src/engine/checklist.dart';
+import 'package:release_kit/src/engine/output.dart';
 import 'package:test/test.dart';
 
 /// A step to hang liveness off. The checklist's own derivation is tested

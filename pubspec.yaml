@@ -1,14 +1,17 @@
-name: rk
+name: release_kit
 description: >-
   An austere, fail-closed release tool. Manages the release steps; defers
   auth to native tooling.
 version: 0.0.1
+repository: https://github.com/danReynolds/release-kit
 
 environment:
   sdk: ^3.5.0
 
 executables:
-  rk:
+  # The package is searchable; the command is short. Same split keybay_cli
+  # uses for the keybay command.
+  rk: rk
 
 dev_dependencies:
   lints: ^5.0.0

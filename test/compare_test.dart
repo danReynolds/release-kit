@@ -1,10 +1,10 @@
 import 'dart:io';
 
-import 'package:rk/src/engine/compare.dart';
-import 'package:rk/src/engine/source_tree.dart';
-import 'package:rk/src/engine/tools.dart';
-import 'package:rk/src/engine/verdict.dart';
-import 'package:rk/src/transforms/archive.dart';
+import 'package:release_kit/src/engine/compare.dart';
+import 'package:release_kit/src/engine/source_tree.dart';
+import 'package:release_kit/src/engine/tools.dart';
+import 'package:release_kit/src/engine/verdict.dart';
+import 'package:release_kit/src/transforms/archive.dart';
 import 'package:test/test.dart';
 
 /// The comparator, against archives built by rk's own deterministic builder
@@ -99,19 +99,50 @@ void main() {
     );
   });
 
-  test('with a .pubignore, missing files are honestly unjudgeable', () async {
+  test('a .pubignore rk understands keeps the proof whole', () async {
+    // The lean-package case: a file deliberately excluded is not a finding,
+    // and the release still proves exact. Before rk read the file, every
+    // package with one was stuck at an honest partial forever.
     final result = await compare(files, {
       ...files,
       '.pubignore': 'doc/**\n',
       'doc/internal.md': 'not published on purpose\n',
     });
+    expect(result.verdict, Verdict.exact, reason: result.detail);
+  });
+
+  test('a .pubignore rk will not guess at stays honestly unjudgeable',
+      () async {
+    // An escape is syntax this parser refuses rather than approximates:
+    // guessing would either bless a lost file or accuse an excluded one, so
+    // the whole file is declared unreadable and the old partial returns.
+    final result = await compare(files, {
+      ...files,
+      '.pubignore': 'doc/**\nweird\\#name\n',
+      'doc/internal.md': 'not published on purpose\n',
+    });
+    expect(result.verdict, Verdict.unknown);
+    expect(result.detail, contains('will not guess at'));
     expect(
-      result.verdict,
-      Verdict.unknown,
-      reason: 'rk does not reinterpret pub\'s file selection, and guessing '
-          'would either bless a lost file or accuse an excluded one',
+      result.detail,
+      contains('weird'),
+      reason: 'the pattern it refused is named, so the operator can fix it',
     );
-    expect(result.detail, contains('.pubignore'));
+  });
+
+  test('an excluded file that is present anyway is still compared', () async {
+    // Exclusion is about absence. A file pub shipped is proved whatever
+    // the .pubignore says, or a stray pattern would blind the comparison.
+    final result = await compare(
+      {...files, 'doc/internal.md': 'source version\n'},
+      {
+        ...files,
+        '.pubignore': 'doc/**\n',
+        'doc/internal.md': 'archive version\n',
+      },
+    );
+    expect(result.verdict, Verdict.conflict);
+    expect(result.evidence['doc/internal.md'], 'differs');
   });
 
   test('but a changed published file still conflicts past a .pubignore',

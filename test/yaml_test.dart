@@ -1,5 +1,5 @@
-import 'package:rk/src/engine/diagnostic.dart';
-import 'package:rk/src/engine/yaml.dart';
+import 'package:release_kit/src/engine/diagnostic.dart';
+import 'package:release_kit/src/engine/yaml.dart';
 import 'package:test/test.dart';
 
 YamlMap parse(String source) {

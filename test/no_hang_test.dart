@@ -17,8 +17,8 @@ void main() {
     addTearDown(() => scratch.deleteSync(recursive: true));
 
     File('${scratch.path}/main.dart').writeAsStringSync('''
-import 'package:rk/src/engine/checklist.dart';
-import 'package:rk/src/engine/output.dart';
+import 'package:release_kit/src/engine/checklist.dart';
+import 'package:release_kit/src/engine/output.dart';
 
 void main() {
   final output = Output(sink: (_) {}, isTerminal: true, useColor: false);
