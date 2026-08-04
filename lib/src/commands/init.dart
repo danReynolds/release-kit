@@ -170,8 +170,9 @@ class InitCommand {
       output.blank();
       // A refusal names its door, and this one has two.
       output.say('nothing was written — there is no terminal to confirm in.\n'
-          'to accept exactly the above: rk init --write · or run rk init '
-          'at a terminal.');
+          'to accept: rk init --write — writes the above and adds .rk/ '
+          '(rk\'s local\nwork files, never a source of truth) to .gitignore '
+          '— or run rk init at a terminal.');
       return ExitCodes.ok;
     }
 

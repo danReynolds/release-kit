@@ -275,7 +275,23 @@ class StatusCommand {
 
     if (settled) return false;
     if (problems.isEmpty && blocking.isEmpty && !repositoryBlocks) {
-      output.next('rk release ${unit.name}');
+      // Status must never recommend the command release refuses — the
+      // phase-3 rule, and a first publish is release's own refusal
+      // (RK-REG-003): the honest next move on a never-published package is
+      // the manual publish, with rk taking over from the release after it.
+      final firstPublish = unit.projects
+          .where((p) =>
+              p.channels.contains('pub.dev') &&
+              _live[p.name] == 'not published')
+          .firstOrNull;
+      if (firstPublish != null) {
+        final directory = firstPublish.pubspec.directory;
+        output.next(directory == '.'
+            ? 'dart pub publish'
+            : 'cd $directory && dart pub publish');
+      } else {
+        output.next('rk release ${unit.name}');
+      }
     } else {
       // A prerequisite that is not live points at the unit that must go
       // first, and that is the honest next command — not this one, which

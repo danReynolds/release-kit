@@ -517,6 +517,17 @@ Ledgered from the reviews, deliberately not squeezed into the polish:
   scariest chore.
 - A one-line gloss for sign/notarize where --rehearse mentions them.
 
+Sign-offs, round 3: the first-timer — "no warning label"; the maintainer —
+"ship, and stop polishing"; the release engineer — status and verify
+org-wide via --json, blocker cleared by doc/json.md (the schema, the
+verdict enum, and the blessed gate rule: problems[] empty, no conflict
+verdicts, unknown never auto-proceeds, offline gates nothing). Their final
+catches landed: status no longer recommends the command release refuses on
+a never-published package (the next move is the manual dart pub publish);
+drift is recorded as RK-DRIFT-001 in problems[] as well as on its step and
+tagged on the ✗ row; the last inline → became ›; the authorize decline and
+init's --write door say their whole truth.
+
 **Phase 7b — the independent review.** Twenty mutations, ten survived —
 the same signature a third time: the paths all behave as documented when
 driven (the reviewer probed every one), and the new safety mechanisms were

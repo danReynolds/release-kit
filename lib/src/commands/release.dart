@@ -282,7 +282,7 @@ class ReleaseCommand {
       }
     }
 
-    output.heading('${unit.name} ${unit.version} → '
+    output.heading('${unit.name} ${unit.version} › '
         '${_channels(unit).join(', ')}');
     output.blank();
 
@@ -510,7 +510,8 @@ class ReleaseCommand {
     if (typed?.trim() != unit.version.canonical) {
       output.blank();
       output.say(typed == null
-          ? 'nobody answered. stopped; nothing was published.'
+          ? 'no terminal to answer on — stopped; nothing was published. '
+              'A release is authorized at a terminal.'
           : 'stopped. nothing was published.');
       return false;
     }

@@ -92,8 +92,12 @@ class VerifyCommand {
     // a summary that omits the failures is worse than no summary.
     final all = output.report.verifications;
     final proved = all.where((v) => v['verdict'] == 'exact').length;
-    final disclosed = all.where((v) => v['counts'] == false).length;
-    final unproved = all.length - proved - disclosed + failedUnits;
+    // A disclosure row can cover several channels; the tally counts what
+    // was not examined, not how many lines said so.
+    final disclosureRows = all.where((v) => v['counts'] == false);
+    final disclosed = disclosureRows.fold<int>(
+        0, (sum, v) => sum + ('${v['subject']}'.split(', ').length));
+    final unproved = all.length - proved - disclosureRows.length + failedUnits;
     if (all.isNotEmpty || failedUnits > 0) {
       output.blank();
       output.line(

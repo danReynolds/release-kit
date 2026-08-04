@@ -30,6 +30,7 @@ Bare `rk` runs status.
 
 Flags
   -v          the per-step checklist view             --json   the machine surface
+                                                               (doc/json.md)
   --offline   status from the manifests alone         --write  accept init's proposal
   --dry-run   release: inspect and stop before acting
   --rehearse  release: run every local step, touch nothing public
