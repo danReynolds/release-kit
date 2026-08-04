@@ -483,6 +483,40 @@ The phase 7 signing gate was green before its deliverable existed — the
 displaced-string anti-pattern again, an unwired file proving another file is
 used — and is now red until the wiring lands, which is what a gate is for.
 
+**The output review — three developer personas, three rounds.** After the
+operator called the status output messy, three persona reviewers (a
+package maintainer, a release engineer, a first-time user) reviewed real
+transcripts of all four verbs, three rounds, fixes between each. Round 1
+landed the convergent findings: init's refusal was the only one in the
+tool without a door (--write is the flag-shaped yes now); diagnostic codes
+ride every ✗ line in every mode; offline --json silently dropped
+repository problems (a real parity bug, found from the outside);
+'permanent' stopped parsing as 'permanently not published'; roadmap-speak
+and forge/tap jargon left the output; -h grew flags, exit codes, a mark
+legend, and a definition of 'unit'. Round 2's meta-finding, named by all
+three independently: the review pack's changelog claimed fixes its
+transcripts did not demonstrate — fixtures had drifted. Round 3 fixed the
+remainder (the verify tally counts the failure it omitted, failures
+first; inline arrows became › so the gutter's → means only 'your next
+move'; exit 3 = rk itself crashed; found/expected counts on the asset
+conflict; the authorize screen marks the permanence boundary) and
+regenerated everything on frozen fixtures, adding the two screens no
+round had shown: the happy path and the confirmation moment.
+
+Ledgered from the reviews, deliberately not squeezed into the polish:
+- Per-step `cause` on unknown verdicts pointing at an existing problem
+  code (design agreed with the release-engineer persona; needs Inspection
+  to carry it through every inspect arm — landing it half-wired would be
+  the claims-outrun-evidence pattern again).
+- The release record: an NDJSON step-event stream during `rk release`
+  and a final digested record (HEAD, digests, notary ids, URLs, timings)
+  that `rk verify` re-proves — the org-rollout capability.
+- Tag excavation: when the tag is missing, walk candidate commits and
+  byte-compare against the published archive, printing the proven commit
+  instead of a placeholder — verify's machinery, pointed at the operator's
+  scariest chore.
+- A one-line gloss for sign/notarize where --rehearse mentions them.
+
 **Phase 7b — the independent review.** Twenty mutations, ten survived —
 the same signature a third time: the paths all behave as documented when
 driven (the reviewer probed every one), and the new safety mechanisms were
