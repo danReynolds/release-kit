@@ -11,7 +11,7 @@ void main() {
   group('capability is discovered, not declared', () {
     final onAppleSilicon = HostCapabilities(
       hostPlatform: 'macos-arm64',
-      hasContainerRuntime: true,
+      containerRuntime: 'docker',
       hasNativeAssets: false,
     );
 
@@ -33,7 +33,7 @@ void main() {
     test('without a container runtime a cross-built binary is not shipped', () {
       final noRuntime = HostCapabilities(
         hostPlatform: 'macos-arm64',
-        hasContainerRuntime: false,
+        containerRuntime: null,
         hasNativeAssets: false,
       );
       final resolved = noRuntime.resolve('linux-x64');
@@ -46,7 +46,7 @@ void main() {
     test('native assets block cross-compilation, naming why', () {
       final withNative = HostCapabilities(
         hostPlatform: 'macos-arm64',
-        hasContainerRuntime: true,
+        containerRuntime: 'docker',
         hasNativeAssets: true,
       );
       final resolved = withNative.resolve('linux-x64');
@@ -64,7 +64,7 @@ void main() {
   group('builds', () {
     final capabilities = HostCapabilities(
       hostPlatform: 'macos-arm64',
-      hasContainerRuntime: true,
+      containerRuntime: 'docker',
       hasNativeAssets: false,
     );
 
@@ -220,5 +220,39 @@ void main() {
       );
       expect((extracted.stdout as String).trim(), 'MIT');
     });
+  });
+
+  test('the runtime that answered is the runtime that runs it', () async {
+    // Detection accepted docker or podman while the smoke test ran docker
+    // regardless: a podman-only machine passed the capability check and
+    // then failed the build on a command it does not have — a check that
+    // passes where the act fails.
+    final tools = RecordingTools(
+      answers: (key) => key.contains('--version')
+          ? ToolResult(exitCode: 0, stdout: '2.0.0', stderr: '')
+          : null,
+    );
+    final outcome = await DartCliBuilder(
+      tools: tools,
+      capabilities: HostCapabilities(
+        hostPlatform: 'macos-arm64',
+        containerRuntime: 'podman',
+        hasNativeAssets: false,
+      ),
+    ).build(
+      platform: 'linux-x64',
+      entryPoint: 'bin/tool.dart',
+      output: '/w/tool',
+      workingDirectory: '/repo',
+      expectedVersion: '2.0.0',
+    );
+
+    expect(outcome.ok, isTrue, reason: outcome.problem ?? '');
+    expect(
+      tools.calls.any((c) => c.startsWith('podman run')),
+      isTrue,
+      reason: 'the smoke test runs on whichever runtime detection found',
+    );
+    expect(tools.calls.any((c) => c.startsWith('docker run')), isFalse);
   });
 }

@@ -73,7 +73,14 @@ class DartCliBuilder {
       result = await tools.run(binary, const ['--version']);
     } else {
       final target = _target(platform);
-      result = await tools.run('docker', [
+      final runtime = capabilities.containerRuntime;
+      if (runtime == null) {
+        // Unreachable through the capability gate, and stated rather than
+        // assumed: the alternative is a null-check crash at the one step
+        // whose whole job is to prove the binary runs.
+        return 'no container runtime is available to run it';
+      }
+      result = await tools.run(runtime, [
         'run',
         '--rm',
         '--platform',

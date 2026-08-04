@@ -1224,7 +1224,7 @@ executables:
       wait: (_) => Future<void>.delayed(Duration.zero),
       capabilities: HostCapabilities(
         hostPlatform: 'macos-arm64',
-        hasContainerRuntime: true,
+        containerRuntime: 'docker',
         hasNativeAssets: false,
       ),
     ).run(only: 'cli');

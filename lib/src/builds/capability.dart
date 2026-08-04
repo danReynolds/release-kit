@@ -38,7 +38,7 @@ class PlatformCapability {
 class HostCapabilities {
   HostCapabilities({
     required this.hostPlatform,
-    required this.hasContainerRuntime,
+    required this.containerRuntime,
     required this.hasNativeAssets,
   });
 
@@ -46,7 +46,16 @@ class HostCapabilities {
   final String hostPlatform;
 
   /// Whether a Linux binary can be executed here for its smoke test.
-  final bool hasContainerRuntime;
+  /// The container runtime that answered — `docker`, `podman`, or null.
+  ///
+  /// The name, not a boolean: detection accepted either while the smoke
+  /// test ran `docker` regardless, so a podman-only machine passed the
+  /// capability check and then failed the build on a command it does not
+  /// have. A check that passes where the act fails is the one thing rk's
+  /// preflight exists to prevent.
+  final String? containerRuntime;
+
+  bool get hasContainerRuntime => containerRuntime != null;
 
   /// Whether the project compiles native code, which the SDK cannot
   /// cross-compile because it ships no C toolchain for another target.
@@ -107,20 +116,23 @@ class HostCapabilities {
 
     return HostCapabilities(
       hostPlatform: '$os-$arch',
-      hasContainerRuntime: _containerRuntimeRunning(),
+      containerRuntime: _containerRuntimeRunning(),
       hasNativeAssets: hasNativeAssets,
     );
   }
 
-  static bool _containerRuntimeRunning() {
+  /// The first runtime that answers, by name — docker first because it is
+  /// what most machines have, podman because it is the common daemonless
+  /// replacement and its CLI takes the same arguments rk uses.
+  static String? _containerRuntimeRunning() {
     for (final runtime in const ['docker', 'podman']) {
       try {
         final result = Process.runSync(runtime, const ['info']);
-        if (result.exitCode == 0) return true;
+        if (result.exitCode == 0) return runtime;
       } on Object {
         continue; // not installed
       }
     }
-    return false;
+    return null;
   }
 }

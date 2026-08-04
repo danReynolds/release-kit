@@ -71,7 +71,7 @@ executables:
         repositoryRoot: scratch.path,
         capabilities: HostCapabilities(
           hostPlatform: 'macos-arm64',
-          hasContainerRuntime: false,
+          containerRuntime: null,
           hasNativeAssets: false,
         ),
       );
