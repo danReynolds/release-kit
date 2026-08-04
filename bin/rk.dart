@@ -29,14 +29,16 @@ Usage: rk [command] [unit]        a unit is one releasable package
 Bare `rk` runs status.
 
 Flags
-  -v          every step with its diagnostic codes    --json   the machine surface
+  -v          the per-step checklist view             --json   the machine surface
   --offline   status from the manifests alone         --write  accept init's proposal
   --dry-run   release: inspect and stop before acting
   --rehearse  release: run every local step, touch nothing public
   --at=<ref>  verify against a tag or commit
 
-Marks: ✓ done · already satisfied ✗ blocked → your next move
-Exit:  0 clean, complete, or blocked · 1 refused · 2 usage — --json mirrors it in "exit"
+Marks: ✓ done,  · already satisfied,  ✗ blocked,  → your next move,
+       unmarked pending
+Exit:  0 clean or complete (status: blocked counts too), 1 refused or failed,
+       2 usage, 3 rk itself crashed — --json mirrors it in "exit"
 ''';
 
 Future<void> main(List<String> args) async {
@@ -224,7 +226,9 @@ Future<void> main(List<String> args) async {
         ),
     };
   } on Object catch (error, stack) {
-    code = ExitCodes.refused;
+    // Its own exit class: an agent must tell "refused — remedy, then retry"
+    // from "rk broke — a diagnosis was written and a human should hear".
+    code = ExitCodes.crashed;
     crash = '$error\n$stack';
     // The report's own acted flag decides the sentence, not the verb: a
     // release that crashed while still reading has not touched anything, and
@@ -385,7 +389,7 @@ Future<int> _verify(Output output, String? unit, {String? at}) async {
     name: tree.root.split('/').last,
     branch: git.branch,
     uncommitted: git.uncommitted.length,
-    head: git.shortHead,
+    head: git.head,
     remote: git.originUrl,
   );
   try {

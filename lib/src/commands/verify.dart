@@ -78,22 +78,28 @@ class VerifyCommand {
     }
 
     var failed = false;
+    var failedUnits = 0;
     for (final unit in units) {
-      failed = !await _unit(unit) || failed;
+      final ok = await _unit(unit);
+      if (!ok) failedUnits++;
+      failed = !ok || failed;
     }
 
     // The tally, computed from the recorded verifications themselves — one
     // line answering "so, overall?", incapable of disagreeing with the rows.
+    // Failures first — a unit that could not be proved at all (no source,
+    // no tag) never records a verification, so the unit count carries it;
+    // a summary that omits the failures is worse than no summary.
     final all = output.report.verifications;
     final proved = all.where((v) => v['verdict'] == 'exact').length;
     final disclosed = all.where((v) => v['counts'] == false).length;
-    final unprovable = all.length - proved - disclosed;
-    if (all.isNotEmpty) {
+    final unproved = all.length - proved - disclosed + failedUnits;
+    if (all.isNotEmpty || failedUnits > 0) {
       output.blank();
       output.line(
         [
+          if (unproved > 0) '$unproved not proved',
           '$proved proved',
-          if (unprovable > 0) '$unprovable not proved',
           if (disclosed > 0) '$disclosed not examined',
         ].join(' · '),
         mark: failed ? Mark.blocked : Mark.done,

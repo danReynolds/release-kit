@@ -84,9 +84,9 @@ class HostCapabilities {
       return PlatformCapability(
         platform,
         Capability.buildableButUncheckable,
-        reason: 'it can be cross-compiled here, but nothing can run it to '
-            'check it — no container runtime is running (docker); '
-            'start Docker or colima, then rerun',
+        reason: 'cross-compiles here, but cannot be run to '
+            'check it: no container runtime is running (docker). '
+            'Start Docker or colima, then rerun',
       );
     }
 

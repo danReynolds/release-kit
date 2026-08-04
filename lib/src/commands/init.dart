@@ -183,11 +183,18 @@ class InitCommand {
         !gitignore.split('\n').any((l) => l.trim() == '.rk/');
 
     output.blank();
+    if (needsIgnore) {
+      output.say('.rk/ holds rk\'s local work files — never a source of '
+          'truth, always safe to delete.');
+    }
     final prompt = needsIgnore
         ? 'write release.toml and add .rk/ to .gitignore? [Y/n] '
         : 'write release.toml? [Y/n] ';
     if (!await confirm!(prompt)) {
-      output.say('nothing was written.');
+      // A decline and an EOF land here alike, and both deserve the doors:
+      // the answer may have been "not like this", not "never".
+      output.say('nothing was written. To accept exactly the proposal '
+          'above: rk init --write');
       return ExitCodes.ok;
     }
 

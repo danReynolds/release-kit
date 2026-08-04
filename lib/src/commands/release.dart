@@ -437,7 +437,7 @@ class ReleaseCommand {
       message: '${unit.name}: this machine cannot produce every platform '
           'it ships',
       remedy: 'starting anyway would build and sign for minutes and then '
-          'stop before publishing anything. Nothing was built.\n'
+          'stop before publishing anything:\n'
           '  ${folded.join('\n  ')}',
     );
   }
@@ -480,8 +480,12 @@ class ReleaseCommand {
     if (permanent.isEmpty) {
       output.say('nothing here is permanent.');
     } else {
+      // The ground, marked where it matters: everything before the yes is
+      // resumable; the first permanent step after it is not.
       output.say('pub.dev never deletes a version. a version can be '
-          'retracted, which hides it and removes nothing.');
+          'retracted, which hides it and removes nothing.\n'
+          'everything before this yes re-runs safely. after it, the first '
+          'permanent step is: ${permanent.first.summary}.');
     }
 
     if (confirm == null) {

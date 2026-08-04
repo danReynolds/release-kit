@@ -73,11 +73,14 @@ class Report {
     String? head,
     String? remote,
   }) {
+    // remote is null-when-absent rather than absent-when-absent: an
+    // absent key and a null value are a parser fork forty repos would
+    // otherwise each decide alone.
     _repository = {
       'name': name,
       if (branch != null) 'branch': branch,
       if (head != null) 'head': head,
-      if (remote != null) 'remote': remote,
+      'remote': remote,
       if (uncommitted != null) 'uncommitted': uncommitted,
     };
   }

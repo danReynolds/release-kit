@@ -375,7 +375,8 @@ class Inspector {
               '  git tag ${unit.tag} <the commit that released '
               '${unit.version}>\n'
               '  git push origin ${unit.tag}\n'
-              'find it: git log --oneline -S "version: ${unit.version}" — '
+              'find it: git log --oneline -S "version: ${unit.version}" '
+              '-- ${unit.projects.first.pubspec.directory}/pubspec.yaml — '
               'and prove a candidate before pushing: '
               'rk verify ${unit.name} --at=<sha>',
         ),

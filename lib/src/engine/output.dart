@@ -157,8 +157,11 @@ class Output {
   }) {
     report.unit(name: name, version: version, tag: tag);
     blank();
+    // › for becomes and for sequence, everywhere inline: the gutter's → is
+    // reserved for "your next move", and three reviewers independently
+    // caught it moonlighting.
     line(name,
-        note: state == null ? '$version → $tag' : '$version → $tag · $state');
+        note: state == null ? '$version › $tag' : '$version › $tag · $state');
   }
 
   /// One step of a checklist, printed and recorded as one act.
@@ -492,6 +495,10 @@ class ExitCodes {
 
   /// The command was used incorrectly.
   static const usage = 2;
+
+  /// rk itself failed — not a refusal, and worth different handling: a
+  /// refusal has a remedy, a crash has a diagnosis directory and a bug.
+  static const crashed = 3;
 }
 
 /// How long something has been running.

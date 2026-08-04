@@ -67,7 +67,7 @@ class StatusCommand {
       name: tree.description.split('/').last,
       branch: git.branch,
       uncommitted: git.uncommitted.length,
-      head: git.shortHead,
+      head: git.head,
       remote: git.originUrl,
       mode: offline ? 'offline' : null,
     );
@@ -229,7 +229,7 @@ class StatusCommand {
               : null;
       if (summary != null) {
         output.line(
-          summary,
+          'live: $summary',
           mark: settled ? Mark.satisfied : Mark.none,
           depth: 1,
           labelWidth: 48,
@@ -378,8 +378,15 @@ class StatusCommand {
         noteTone: toneOf(state),
       );
       if (state.verdict == Verdict.conflict && state.evidence.isNotEmpty) {
+        // Names sharing a reason fold onto it — the same sentence three
+        // times is one fact said three times.
+        final byReason = <String, List<String>>{};
         for (final entry in state.evidence.entries) {
-          output.say('${entry.key}: ${entry.value}', depth: depth + 1);
+          byReason.putIfAbsent(entry.value, () => []).add(entry.key);
+        }
+        for (final entry in byReason.entries) {
+          output.say('${entry.value.join('\n')}\n  — ${entry.key}',
+              depth: depth + 1);
         }
       }
     }
@@ -455,8 +462,7 @@ class StatusCommand {
             .replaceFirst(' to the ${unit.tag} release', ' at ${unit.tag}'),
         note: switch (state.verdict) {
           Verdict.exact => state.detail ?? 'published',
-          Verdict.unknown => state.detail,
-          _ => null,
+          _ => state.detail,
         },
       );
 
@@ -466,9 +472,9 @@ class StatusCommand {
       // ends with the two moves a human can actually make.
       if (state.verdict == Verdict.conflict) {
         output.say(
-          'if these are strays from an older configuration, delete them on '
-          'the release page;\nif they are wanted, declare their platform in '
-          'release.toml.',
+          'strays from an older configuration can be removed: '
+          'gh release delete-asset ${unit.tag} <name>\n'
+          'wanted assets get their platform declared in release.toml.',
           depth: 3,
         );
         continue;
@@ -489,7 +495,7 @@ class StatusCommand {
             stages.where((s) => states[s.id]!.isExact).map((s) => s.kind.name);
         output.line(
           '${platform.padRight(14)}'
-          '${stages.map((s) => s.kind.name).join(' → ')}',
+          '${stages.map((s) => s.kind.name).join(' › ')}',
           mark: conflicted.isNotEmpty
               ? Mark.blocked
               : stages.every((s) => states[s.id]!.isExact)
