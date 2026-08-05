@@ -271,7 +271,7 @@ class ReleaseCommand {
     String? notesPath;
     if (checklist.steps.any(
         (s) => s.kind == StepKind.publishRelease && !states[s.id]!.isExact)) {
-      final notes = _releaseNotes(_binaryProject(unit));
+      final notes = _releaseNotes(unit.binaryProject);
       if (notes == null) return ExitCodes.refused;
       // Validated always — that refusal belongs before any act — but written
       // only when something will read it: under a dry run the release step
@@ -565,22 +565,22 @@ class ReleaseCommand {
       case StepKind.build:
         return _chain(unit).buildStep(
           step,
-          _binaryProject(unit),
+          unit.binaryProject,
           publishedRequirement: publishedRequirement,
         );
       case StepKind.sign:
         return _chain(unit).signStep(
           step,
-          _binaryProject(unit),
+          unit.binaryProject,
           publishedRequirement: publishedRequirement,
           declaredCodeId: unit.codeId,
         );
       case StepKind.notarize:
-        return _chain(unit).notarizeStep(step, _binaryProject(unit));
+        return _chain(unit).notarizeStep(step, unit.binaryProject);
       case StepKind.archive:
-        return _chain(unit).archiveStep(step, _binaryProject(unit));
+        return _chain(unit).archiveStep(step, unit.binaryProject);
       case StepKind.checksums:
-        return _chain(unit).checksumsStep(step, _binaryProject(unit));
+        return _chain(unit).checksumsStep(step, unit.binaryProject);
       case StepKind.publishRelease:
         return _publishRelease(unit, _chain(unit), notesPath);
       case StepKind.publishFormula:
@@ -600,9 +600,6 @@ class ReleaseCommand {
         repositoryRoot: git.root,
         capabilities: capabilities,
       );
-
-  ResolvedProject _binaryProject(ResolvedUnit unit) =>
-      unit.projects.firstWhere((p) => p.config.wantsBinaries);
 
   /// The designated requirement of the newest already-published release,
   /// which is what this release's signature must reproduce.
@@ -641,7 +638,7 @@ class ReleaseCommand {
       workingDirectory: git.root,
     ).read(
       tag: bestTag,
-      executable: _binaryProject(unit).executable!,
+      executable: unit.binaryProject.executable!,
       into: _chain(unit).workspace.pathOf('published-identity'),
     );
     switch (reading.answer) {
@@ -674,7 +671,7 @@ class ReleaseCommand {
     final repository = _repository('github-release');
     if (repository == null) return false;
 
-    final project = _binaryProject(unit);
+    final project = unit.binaryProject;
     final assets = chain.gatherAssets(project, unit.name);
     if (assets == null) return false;
 
@@ -749,8 +746,7 @@ class ReleaseCommand {
   /// that is unexpected, and saying so beats publishing with a body that
   /// silently fell back to something else.
   String? _releaseNotes(ResolvedProject project) {
-    final directory = project.pubspec.directory;
-    final path = directory == '.' ? 'CHANGELOG.md' : '$directory/CHANGELOG.md';
+    final path = project.fileAt('CHANGELOG.md');
     final source = tree.read(path);
     final entry =
         source == null ? null : Changelog.entry(source, project.version);
@@ -792,12 +788,11 @@ class ReleaseCommand {
     final repository = _repository('homebrew');
     if (repository == null) return false;
 
-    final tap =
-        unit.homebrewTap ?? '${repository.split('/').first}/homebrew-tap';
+    final tap = unit.tapFor(repository);
 
     return chain.updateFormula(
       tap: tap,
-      project: _binaryProject(unit),
+      project: unit.binaryProject,
     );
   }
 

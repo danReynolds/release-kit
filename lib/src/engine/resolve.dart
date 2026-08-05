@@ -355,6 +355,22 @@ class ResolvedUnit {
   String get tag => tagPattern.replaceAll('{version}', version.canonical);
 
   bool get shipsBinaries => projects.any((p) => p.config.wantsBinaries);
+
+  /// The one project whose binaries this unit ships.
+  ///
+  /// An invariant rather than a search: RK-RES-009 refuses a unit with two
+  /// binary projects, so this returns what the resolver already promised.
+  /// Derived in two files before, both by a `firstWhere` that throws
+  /// StateError — a crash at exit 3 — for a shape that cannot get past
+  /// resolution.
+  ResolvedProject get binaryProject =>
+      projects.firstWhere((p) => p.config.wantsBinaries);
+
+  /// The tap this unit's formula goes to, declared or by Homebrew's
+  /// convention. Derived twice before, and a drift there means rk inspects
+  /// one tap and pushes to another.
+  String tapFor(String repository) =>
+      homebrewTap ?? '${repository.split('/').first}/homebrew-tap';
 }
 
 class ResolvedProject {
@@ -376,4 +392,15 @@ class ResolvedProject {
   /// The single executable a binary channel ships, when there is one.
   String? get executable =>
       pubspec.executables.isEmpty ? null : pubspec.executables.first;
+
+  /// A file inside this project, tree-relative — for reading through a
+  /// [SourceTree], which is always rooted at the repository.
+  String fileAt(String name) =>
+      pubspec.directory == '.' ? name : '${pubspec.directory}/$name';
+
+  /// This project's directory under an absolute [root] — a different rule
+  /// from [fileAt], and conflating the two puts a repository-absolute path
+  /// where a tree-relative one belongs.
+  String directoryIn(String root) =>
+      pubspec.directory == '.' ? root : '$root/${pubspec.directory}';
 }

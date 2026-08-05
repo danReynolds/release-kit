@@ -301,9 +301,8 @@ class Inspector {
     }
     // Per unit: a tap is where this unit's formula goes, and a repository
     // with two binary units can point them at two taps.
-    final tapRepo =
-        unit.homebrewTap ?? '${repository!.split('/').first}/homebrew-tap';
-    final project = unit.projects.firstWhere((p) => p.config.wantsBinaries);
+    final tapRepo = unit.tapFor(repository!);
+    final project = unit.binaryProject;
     final executable = project.executable!;
 
     final result = await tools!.run(

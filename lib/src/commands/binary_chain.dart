@@ -83,11 +83,6 @@ class BinaryChain {
   /// self-describing: the tap copy is a pointer, this one is the record.
   static String formulaName(String executable) => '$executable.rb';
 
-  String _projectDirectory(ResolvedProject project) =>
-      project.pubspec.directory == '.'
-          ? repositoryRoot
-          : '$repositoryRoot/${project.pubspec.directory}';
-
   // ---- build ----
 
   Future<bool> buildStep(
@@ -159,7 +154,7 @@ class BinaryChain {
       platform: platform,
       entryPoint: 'bin/$executable.dart',
       output: workspace.pathOf(name),
-      workingDirectory: _projectDirectory(project),
+      workingDirectory: project.directoryIn(repositoryRoot),
       expectedVersion: project.version.canonical,
     );
     if (!built.ok) {
@@ -490,7 +485,7 @@ class BinaryChain {
     ];
     // LICENSE and README travel with the binary by convention, not by
     // configuration.
-    final directory = _projectDirectory(project);
+    final directory = project.directoryIn(repositoryRoot);
     for (final extra in const ['LICENSE', 'README.md']) {
       final file = File('$directory/$extra');
       if (file.existsSync()) {
