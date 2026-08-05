@@ -455,13 +455,8 @@ class ReleaseCommand {
   }
 
   void _validate(ResolvedUnit unit, Diagnostics problems) {
-    if (!git.isClean) {
-      problems.add(
-        'RK-GIT-001',
-        '${git.uncommitted.length} paths are uncommitted',
-        remedy: 'a release is of a commit, and these are not in one',
-      );
-    }
+    final uncommitted = git.uncommittedProblem();
+    if (uncommitted != null) problems.report(uncommitted);
     final unpushed = git.unpushedProblem();
     if (unpushed != null) problems.report(unpushed);
     for (final project in unit.projects) {

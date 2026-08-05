@@ -506,22 +506,8 @@ class StatusCommand {
   /// dirty worktree produced six identical entries — the same fact six times
   /// is five times of teaching the reader to skim.
   void _checkRepositoryState(Diagnostics problems) {
-    if (!git.isClean) {
-      // Few enough to count is few enough to print; only a long list
-      // truncates, with the count and the way to the rest — and -v never
-      // elides, because verbose that elides is not verbose.
-      final paths = git.uncommitted.length <= 8
-          ? git.uncommitted.join(', ')
-          : '${git.uncommitted.take(8).join(', ')} '
-              '…and ${git.uncommitted.length - 8} more (-v shows all)';
-      problems.add(
-        'RK-GIT-001',
-        git.uncommitted.length == 1
-            ? '1 path is uncommitted'
-            : '${git.uncommitted.length} paths are uncommitted',
-        remedy: 'a release is of a commit, and these are not in one: $paths',
-      );
-    }
+    final uncommitted = git.uncommittedProblem();
+    if (uncommitted != null) problems.report(uncommitted);
     final unpushed = git.unpushedProblem();
     if (unpushed != null) problems.report(unpushed);
   }
