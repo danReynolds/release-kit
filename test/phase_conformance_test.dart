@@ -1049,6 +1049,7 @@ publish = ["pub.dev"]
         List<String> calls,
         Map<String, Object?> json,
         String? notes,
+        Set<String> expected,
       })> binaryDrive({
     required bool dryRun,
     Set<String> remoteTags = const {},
@@ -1264,6 +1265,7 @@ executables:
       json:
           jsonDecode(output.report.encode(exit: code)) as Map<String, Object?>,
       notes: notesAtCreate,
+      expected: Inspector.expectedAssets(resolution.unit('cli')!),
     );
   }
 
@@ -1459,6 +1461,98 @@ executables:
         contains('\n## Phase 7b checkpoint'),
         reason: 'the live cli release must be recorded, with its output',
       );
+    });
+  });
+
+  /// Phase 7b — the destinations, driven through the same command-layer world
+  /// as 7a: the release carries the full asset shape, the body is the
+  /// changelog entry, and the tap moves only after the release is public.
+  ///
+  /// This group was deleted as collateral when `--rehearse` was cut, and the
+  /// commit that did it never said so. What it guards is the one seam
+  /// `engine/assets.dart` does *not* close: `expectedFor` unified the
+  /// expectation side, but the producer still gathers archives and notary
+  /// evidence in `gatherAssets` and splices the formula in by hand. So the
+  /// two can still disagree — and `GithubRelease.publish` verifies only
+  /// against what it just uploaded, never against the expected set. One name
+  /// out of step publishes green, and the *next* inspect returns
+  /// `Verdict.conflict` on a release that cannot be edited: permanently
+  /// unfixable, against a release rk made itself.
+  ///
+  /// Mutation-proven, both directions: dropping the formula from the upload
+  /// list, and replacing the body with anything but the changelog entry,
+  /// each pass the whole suite without this group.
+  group('phase 7b — the destinations', () {
+    test(
+        'DONE WHEN, drive half: what the release publishes is exactly what '
+        'the inspector will expect, and the body is the changelog entry',
+        () async {
+      final run = await binaryDrive(
+        dryRun: false,
+        platforms: ['macos-arm64', 'linux-x64', 'linux-arm64'],
+        homebrew: true,
+        label: '-3p',
+      );
+      expect(run.code, 0, reason: run.text);
+
+      // Three builds, two of them cross-compiled for linux.
+      expect(
+        run.calls.where((c) => c.startsWith('dart compile exe')).length,
+        3,
+      );
+      expect(
+        run.calls
+            .where((c) =>
+                c.startsWith('dart compile exe') &&
+                c.contains('--target-os=linux'))
+            .length,
+        2,
+      );
+
+      // Set equality against the derivation, not against a literal list.
+      // A literal would pin the producer to a spelling; this pins it to the
+      // inspector, which is the party it has to agree with. Both sides move
+      // together or this fails.
+      final create =
+          run.calls.firstWhere((c) => c.startsWith('gh release create'));
+      final uploaded = create
+          .split(' ')
+          .skip(4)
+          .takeWhile((w) => !w.startsWith('--'))
+          .map((w) => w.split('/').last)
+          .toSet();
+
+      expect(
+        uploaded,
+        equals(run.expected),
+        reason: 'the release publishes exactly the set Inspector.'
+            'expectedAssets derives — any difference is a conflict verdict '
+            'on the next run, and a published release cannot be edited',
+      );
+      // The formula is the name the producer splices in by hand, so it is
+      // the one most able to drift. Named to say so.
+      expect(run.expected, contains('tool.rb'));
+      expect(run.text, contains('7 assets, immutable'), reason: run.text);
+
+      // The body is the changelog entry — one source of release prose.
+      expect(
+        run.notes,
+        'First release.',
+        reason: 'the release body must be the CHANGELOG entry, not a '
+            'commit-log digest',
+      );
+
+      // The formula moves only after the release is public, and what the
+      // public tap serves is read back and proven.
+      final createAt =
+          run.calls.indexWhere((c) => c.startsWith('gh release create'));
+      final tapCloneAt = run.calls.indexWhere(
+          (c) => c.startsWith('git clone') && c.contains('homebrew-tap'));
+      expect(tapCloneAt, greaterThan(createAt),
+          reason: 'a formula pointing at an unpublished release would brew '
+              'a 404');
+      expect(run.text, contains('read back from the public tap'));
+      expect(run.text, contains('released'));
     });
   });
 }

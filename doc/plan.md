@@ -499,7 +499,14 @@ Recorded because the reviews found them claimed-as-shipped when they are not:
   stay expanded (`Output.line` clears the transient line first, collapsing
   the detail that is the diagnosis).
 - **Phase 7b** — a multi-platform command-layer drive: done, in the 7b
-  build (three platforms, both directions).
+  build (three platforms, both directions). Deleted as collateral when
+  `--rehearse` was cut — it sat beside the flag test it shared a group
+  with, and the commit enumerated every flag it removed without ever
+  saying a DONE WHEN gate went with them. These two lines went on
+  asserting it existed. Restored, and rebuilt to assert set equality
+  against the derivation rather than a literal list. The lesson is in the
+  review record below: a stage gated on a *count* cannot tell coverage
+  that moved from coverage that was deleted.
 - **Verify, owed by the unproven-platform change** — a release whose
   Linux binaries shipped unexecuted carries that fact only in the run's
   own output. `rk verify` should say it too, per platform, so a reader
@@ -724,8 +731,11 @@ from the public tap byte-for-byte after pushing (RK-BREW-001/002/003). A
 three-platform drive — native macOS plus two cross-compiled linux targets
 under injected capabilities — proves the whole shape at the command layer,
 in both directions: the full release (seven assets, ordering, notes,
-read-back) and the rehearsal that runs every local step and touches
-nothing public. The DONE-WHEN live gate is deliberately red until the real
+read-back) and the dry run that runs every local step and touches nothing
+public. The published set is asserted as *set equality against
+`Inspector.expectedAssets`* rather than against a literal list, so the
+producer is pinned to the party it has to agree with rather than to a
+spelling. The DONE-WHEN live gate is deliberately red until the real
 keybay cli release is recorded as "## Phase 7b checkpoint".
 
 **Phase 7a — the independent review.** Fifteen mutations, nine survived —
