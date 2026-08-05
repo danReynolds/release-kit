@@ -67,7 +67,6 @@ class Output {
   Output({
     required this.sink,
     required this.isTerminal,
-    this.verbose = false,
     this.useColor = true,
     Report? report,
     Elapsed Function()? clock,
@@ -80,16 +79,11 @@ class Output {
   /// rather than an addition to the human one, so a caller parsing stdout is
   /// never handed both. The report is still recorded, because the recording
   /// happens inside the same calls that would have printed.
-  factory Output.stdio({
-    bool verbose = false,
-    bool json = false,
-    required String command,
-  }) {
+  factory Output.stdio({bool json = false, required String command}) {
     final terminal = stdout.hasTerminal && !json;
     return Output(
       sink: json ? _discard : stdout.write,
       isTerminal: terminal,
-      verbose: verbose,
       useColor: terminal && !Platform.environment.containsKey('NO_COLOR'),
       report: Report(command),
     );
@@ -107,7 +101,6 @@ class Output {
   /// Spinners, transient lines, and cursor movement happen only here.
   final bool isTerminal;
 
-  final bool verbose;
   final bool useColor;
 
   /// What a caller is told, recorded by the same calls that print.

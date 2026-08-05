@@ -36,7 +36,6 @@ class ReleaseCommand {
     required this.output,
     required this.confirm,
     this.dryRun = false,
-    this.rehearse = false,
     Future<void> Function(Duration)? wait,
     HostCapabilities? capabilities,
   })  : _wait = wait ?? _sleep,
@@ -82,17 +81,15 @@ class ReleaseCommand {
   HostCapabilities get capabilities =>
       _capabilities ??= HostCapabilities.detect();
 
-  /// Show what would happen and stop before the first effect.
-  final bool dryRun;
-
   /// Run every local step for real and stop before anything public.
   ///
-  /// The rehearsal exists so an expired certificate or a broken notarization
-  /// is discovered on a quiet afternoon, not at minute forty of an announced
-  /// release. Public steps — the tag, every publish — are inspected but
-  /// never acted on, and nothing is authorized because nothing permanent
-  /// happens.
-  final bool rehearse;
+  /// One flag, because there were two and the weaker one duplicated
+  /// `rk status`: inspecting and stopping before any act says what status
+  /// already says. What has no other way to be asked is "does this machine
+  /// actually work" — so a dry run compiles, signs, notarizes, archives and
+  /// checksums for real, and touches no tag, no registry, no forge, no tap.
+  /// Nothing is authorized because nothing permanent happens.
+  final bool dryRun;
 
   Future<int> run({String? only}) async {
     final units = only == null
@@ -275,6 +272,9 @@ class ReleaseCommand {
         (s) => s.kind == StepKind.publishRelease && !states[s.id]!.isExact)) {
       final notes = _releaseNotes(_binaryProject(unit));
       if (notes == null) return ExitCodes.refused;
+      // Validated always — that refusal belongs before any act — but written
+      // only when something will read it. Under a dry run the release step
+      // is skipped, so the file would have no consumer.
       if (!dryRun) {
         final chain = _chain(unit);
         chain.workspace.write('release-notes.md', utf8.encode(notes));
@@ -298,13 +298,7 @@ class ReleaseCommand {
       );
     }
 
-    if (dryRun) {
-      output.blank();
-      output.say('nothing was started.');
-      return ExitCodes.ok;
-    }
-
-    if (!rehearse && !await _authorize(unit, remaining)) {
+    if (!dryRun && !await _authorize(unit, remaining)) {
       return ExitCodes.refused;
     }
 
@@ -312,12 +306,12 @@ class ReleaseCommand {
     var rehearsed = 0;
     for (final step in checklist.steps) {
       if (states[step.id]!.isExact) continue;
-      if (rehearse && step.isPublic) {
+      if (dryRun && step.isPublic) {
         rehearsed++;
         output.step(
           step,
           verdict: states[step.id]!.verdict,
-          note: 'rehearsal — not touched',
+          note: 'dry run — not touched',
         );
         continue;
       }
@@ -345,10 +339,10 @@ class ReleaseCommand {
       }
     }
 
-    if (rehearse) {
+    if (dryRun) {
       output.blank();
       output.line(
-        '${unit.name} ${unit.version} rehearsed',
+        '${unit.name} ${unit.version} dry run complete',
         mark: Mark.done,
         note: '$rehearsed public steps untouched',
       );

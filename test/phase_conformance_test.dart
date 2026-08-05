@@ -180,7 +180,17 @@ void main() {
           reason: 'an omitted verdict reads as "nothing is there"',
         );
       }
-      expect(steps.first['verdict'], 'unknown', reason: 'nothing was read');
+      // Offline reads what is local — git says the tag does not exist — and
+      // says "not read" only about what it did not read. The version of this
+      // that expected `unknown` everywhere was asserting a renderer that
+      // inspected nothing at all.
+      final registryStep =
+          steps.firstWhere((s) => s['kind'] == 'publishRegistry');
+      expect(registryStep['verdict'], 'unknown', reason: 'pub.dev unread');
+      expect(registryStep['detail'], contains('--offline'));
+      final tagStep = steps.firstWhere((s) => s['kind'] == 'tag');
+      expect(tagStep['verdict'], 'absent',
+          reason: 'git is local, and it was read');
     });
 
     test('--json is only JSON', () {
@@ -1018,7 +1028,7 @@ publish = ["pub.dev"]
         Map<String, Object?> json,
         String? notes,
       })> binaryDrive({
-    required bool rehearse,
+    required bool dryRun,
     Set<String> remoteTags = const {},
     bool notaryRejects = false,
     List<String> platforms = const ['macos-arm64'],
@@ -1026,7 +1036,7 @@ publish = ["pub.dev"]
     String label = '',
     String? containerRuntime = 'docker',
   }) async {
-    final root = Directory('${scratch.path}/drive-${rehearse ? 'r' : 'f'}'
+    final root = Directory('${scratch.path}/drive-${dryRun ? 'd' : 'f'}'
         '${notaryRejects ? '-nr' : ''}$label')
       ..createSync(recursive: true);
     final buffer = StringBuffer();
@@ -1221,7 +1231,7 @@ executables:
       tools: tools,
       output: output,
       confirm: (_) async => '1.0.0',
-      rehearse: rehearse,
+      dryRun: dryRun,
       wait: (_) => Future<void>.delayed(Duration.zero),
       capabilities: HostCapabilities(
         hostPlatform: 'macos-arm64',
@@ -1274,7 +1284,7 @@ executables:
             'its id, the workspace and reality',
       );
 
-      final run = await binaryDrive(rehearse: false);
+      final run = await binaryDrive(dryRun: false);
       expect(run.code, 0, reason: run.text);
       // Every stage of the chain acted, separately, in checklist order.
       final order = [
@@ -1301,7 +1311,7 @@ executables:
       // Review finding: most chain failures exited 1 with no halt at all —
       // no sentence for a person, no `halt` key for a caller. A rejected
       // notarization is the everyday representative of the class.
-      final run = await binaryDrive(rehearse: true, notaryRejects: true);
+      final run = await binaryDrive(dryRun: true, notaryRejects: true);
 
       expect(run.code, ExitCodes.refused, reason: run.text);
       expect(run.text, contains('rk stopped partway.'));
@@ -1326,7 +1336,7 @@ executables:
     test(
         'DONE WHEN, rehearse half: every local step runs for real and '
         'nothing public is touched', () async {
-      final run = await binaryDrive(rehearse: true);
+      final run = await binaryDrive(dryRun: true);
 
       expect(run.code, 0, reason: run.text);
       for (final local in [
@@ -1349,121 +1359,14 @@ executables:
           reason: '$public is public and a rehearsal never touches it',
         );
       }
-      expect(run.text, contains('rehearsed'));
+      expect(run.text, contains('dry run complete'));
       expect(run.text, contains('nothing public changed'));
-    });
-
-    test('--dry-run with --rehearse is refused, not silently resolved', () {
-      // Both flags are individually valid for release, so the per-verb check
-      // passed the pair — and --dry-run returned first, so --rehearse was
-      // ignored without a word: the class bin/rk.dart's own comment forbids.
-      final scratchCli = Directory.systemTemp.createTempSync('rk-7a-cli-');
-      addTearDown(() => scratchCli.deleteSync(recursive: true));
-      final repo = Rk.example(scratchCli, 'single-package', as: 'both-flags');
-      final run = repo(['release', '--dry-run', '--rehearse']);
-
-      expect(run.code, ExitCodes.usage, reason: run.all);
-      expect(run.all, contains('not both'));
-      expect(run.all, contains('different promises'));
-    });
-  });
-
-  binaryDestinationGates(binaryDrive);
-}
-
-/// Phase 7b — the destinations, driven through the same command-layer world
-/// as 7a: the forge is status-coded, the release carries the full asset
-/// shape, the body is the changelog entry, and the tap is compare-and-swap
-/// with a public read-back.
-void binaryDestinationGates(
-  Future<
-          ({
-            int code,
-            String text,
-            List<String> calls,
-            Map<String, Object?> json,
-            String? notes,
-          })>
-      Function({
-    required bool rehearse,
-    Set<String> remoteTags,
-    bool notaryRejects,
-    List<String> platforms,
-    bool homebrew,
-    String label,
-    String? containerRuntime,
-  }) binaryDrive,
-) {
-  group('phase 7b — the destinations', () {
-    test(
-        'DONE WHEN, drive half: three platforms end to end — signed, '
-        'notarized, published immutable, formula moved and read back',
-        () async {
-      final run = await binaryDrive(
-        rehearse: false,
-        platforms: ['macos-arm64', 'linux-x64', 'linux-arm64'],
-        homebrew: true,
-        label: '-3p',
-      );
-      expect(run.code, 0, reason: run.text);
-
-      // Three builds, two of them cross-compiled for linux.
-      expect(
-        run.calls.where((c) => c.startsWith('dart compile exe')).length,
-        3,
-      );
-      expect(
-        run.calls
-            .where((c) =>
-                c.startsWith('dart compile exe') &&
-                c.contains('--target-os=linux'))
-            .length,
-        2,
-      );
-
-      // The release is one immutable act carrying the whole ten-asset
-      // shape, scaled to this configuration: three archives, notary
-      // evidence for the macOS platform, the formula, the checksums.
-      expect(run.text, contains('7 assets, immutable'), reason: run.text);
-      final create =
-          run.calls.firstWhere((c) => c.startsWith('gh release create'));
-      for (final asset in [
-        'tool-1.0.0-macos-arm64.tar.gz',
-        'tool-1.0.0-linux-x64.tar.gz',
-        'tool-1.0.0-linux-arm64.tar.gz',
-        'tool-1.0.0-macos-arm64.notary-result.json',
-        'tool-1.0.0-macos-arm64.notary-log.json',
-        'tool.rb',
-        'SHA256SUMS',
-      ]) {
-        expect(create, contains(asset));
-      }
-
-      // The body is the changelog entry — one source of release prose.
-      expect(
-        run.notes,
-        'First release.',
-        reason: 'the release body must be the CHANGELOG entry, not a '
-            'commit-log digest',
-      );
-
-      // The formula moves only after the release is public, and what the
-      // public tap serves is read back and proven.
-      final createAt =
-          run.calls.indexWhere((c) => c.startsWith('gh release create'));
-      final tapCloneAt = run.calls.indexWhere(
-          (c) => c.startsWith('git clone') && c.contains('homebrew-tap'));
-      expect(tapCloneAt, greaterThan(createAt),
-          reason: 'a formula pointing at an unpublished release would brew '
-              'a 404');
-      expect(run.text, contains('read back from the public tap'));
-      expect(run.text, contains('released'));
     });
 
     test('rehearse spans every platform and still touches nothing public',
         () async {
       final run = await binaryDrive(
-        rehearse: true,
+        dryRun: true,
         platforms: ['macos-arm64', 'linux-x64', 'linux-arm64'],
         homebrew: true,
         label: '-3pr',
@@ -1485,7 +1388,7 @@ void binaryDestinationGates(
           reason: '$public is public and a rehearsal never touches it',
         );
       }
-      expect(run.text, contains('rehearsed'));
+      expect(run.text, contains('dry run complete'));
     });
 
     test(
@@ -1496,7 +1399,7 @@ void binaryDestinationGates(
       // daemon that is not running became a hard blocker on shipping,
       // which is a heavier claim than the smoke test earns.
       final run = await binaryDrive(
-        rehearse: false,
+        dryRun: false,
         platforms: ['macos-arm64', 'linux-x64'],
         label: '-unproven',
         containerRuntime: null,

@@ -110,7 +110,7 @@ package locally, end to end.
 
 Split from the destinations: this was six subsystems behind one gate, on the
 phase with the most unreviewed code. 7a is everything that happens before a
-destination is touched — and it ends with `--rehearse`: every local step and
+destination is touched — and it ends with `--dry-run`: every local step and
 every inspection, stopping before any public act. The failure rehearsal
 prevents is discovering the expired certificate or broken notarization at
 minute 40 of an announced release.
@@ -155,6 +155,32 @@ Bootstrap its packages by hand (pub.dev requires an interactive first
 publish), then rk owns every subsequent version. Exercises multi-project
 units, derived ordering, and cross-unit prerequisites — the paths keybay
 never touches.
+
+## The austerity pass on the surface
+
+Two ways to ask one question is a bug in the surface, so the flags were
+held to the same test the code is: **name the failure it prevents that
+nothing else prevents.**
+
+- `--rehearse` and `--dry-run` were two flags for one job, and the weaker
+  one duplicated a whole verb: "inspect and stop before acting" is what
+  `rk status` says. One flag survives, `--dry-run`, with the semantics
+  worth having — every local act for real, nothing public touched.
+- `-v` / `--verbose` was a second, worse rendering of the default view: it
+  carried *less* verdict information than the lanes it replaced, and the
+  diagnostic codes it used to gate now ride every problem line in every
+  mode. `--json` is the surface for everything-at-once. Cut, along with the
+  renderer behind it.
+- `--offline` survives, and the test says why: nothing else gives a
+  network-free answer. It stopped being a mode the verb branches on,
+  though — it is now wiring (a null registry and null tools, exactly like
+  an absent forge), so offline renders through the same lanes as a live
+  run and says "not read: --offline" where it did not read. The
+  offline-only renderer went with the branch, and offline gained honesty:
+  it reads git, so a missing tag reads `absent` rather than shrugging.
+
+What is left is one flag per job: `--json`, `--dry-run`, `--offline`,
+`--write`, `--at=<ref>`, `-h`.
 
 ## Constraints to hold throughout
 
@@ -520,7 +546,7 @@ Ledgered from the reviews, deliberately not squeezed into the polish:
   byte-compare against the published archive, printing the proven commit
   instead of a placeholder — verify's machinery, pointed at the operator's
   scariest chore.
-- A one-line gloss for sign/notarize where --rehearse mentions them.
+- A one-line gloss for sign/notarize where --dry-run mentions them.
 
 Sign-offs, round 3: the first-timer — "no warning label"; the maintainer —
 "ship, and stop polishing"; the release engineer — status and verify
@@ -783,7 +809,7 @@ terminal for the typed confirmation. The path to it, in order:
    gate green.
 7. Then the cli, for the phase 7b checkpoint: bump packages/keybay_cli
    (with its CHANGELOG entry — the entry becomes the release body), run
-   `rk status`, then `rk release cli --rehearse` (every local step, signing
+   `rk status`, then `rk release cli --dry-run` (every local step, signing
    and notarization included, nothing public), then `rk release cli`. No
    `[identity]` is needed: rk derives the team and the code identifier from
    the published 0.1.0 binary, and a declaration that contradicted it would

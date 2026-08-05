@@ -22,13 +22,14 @@ class StatusCommand {
     required this.registry,
     required this.inspector,
     required this.output,
-    this.offline = false,
   });
 
   final Resolution resolution;
   final SourceTree tree;
   final GitState git;
-  final RegistryReader registry;
+
+  /// Absent when the registry was not read; the verdicts say so themselves.
+  final RegistryReader? registry;
 
   /// Reads reality for a step. The same one `release` uses, so the two cannot
   /// answer the same question differently.
@@ -38,13 +39,6 @@ class StatusCommand {
 
   /// What is public per project, for the target rows — filled per unit.
   final _live = <String, String>{};
-
-  /// Report only what can be derived without a network.
-  ///
-  /// The engine's whole first layer is pure computation, and this is how it is
-  /// demonstrated on its own: the checklist a release would run, with reality
-  /// stated as unread rather than guessed at.
-  final bool offline;
 
   Future<int> run({String? only}) async {
     final units = only == null
@@ -69,12 +63,12 @@ class StatusCommand {
       uncommitted: git.uncommitted.length,
       head: git.head,
       remote: git.originUrl,
-      mode: offline ? 'offline' : null,
+      mode: registry == null ? 'offline' : null,
     );
 
-    // Belief starts at the top, so the offline caveat goes where the reading
-    // does — before the plan, not trailing it dressed as a step.
-    if (offline) {
+    // Belief starts at the top, so the caveat goes where the reading does —
+    // before the plan, not trailing it dressed as a step.
+    if (registry == null) {
       output.say(
         'a plan, derived from the manifests alone. Nothing was read from '
         'pub.dev, GitHub, or the Homebrew tap, so none of this says what '
@@ -91,19 +85,15 @@ class StatusCommand {
 
     var anyWouldRelease = false;
     for (final unit in units) {
-      if (offline) {
-        _offlineUnit(unit);
-      } else {
-        anyWouldRelease =
-            await _unit(unit, repositoryBlocks: repository.isNotEmpty) ||
-                anyWouldRelease;
-      }
+      anyWouldRelease =
+          await _unit(unit, repositoryBlocks: repository.isNotEmpty) ||
+              anyWouldRelease;
     }
 
-    // Repository problems are git facts — local reads, inside the offline
-    // promise — and dropping them offline handed --json callers an empty
-    // problems array for a repository the live view calls blocked.
-    if ((offline || anyWouldRelease) && repository.isNotEmpty) {
+    // Repository problems are git facts — local reads, true offline too —
+    // and dropping them handed --json callers an empty problems array for a
+    // repository the live view calls blocked.
+    if ((registry == null || anyWouldRelease) && repository.isNotEmpty) {
       output.blank();
       output.problems(repository.found);
     }
@@ -112,24 +102,6 @@ class StatusCommand {
     // is rk working. Only a refusal — configuration rk cannot read — exits
     // non-zero, and that happens before this command runs.
     return ExitCodes.ok;
-  }
-
-  /// The checklist, with nothing read from anywhere.
-  void _offlineUnit(ResolvedUnit unit) {
-    output.unit(
-      unit.name,
-      version: unit.version.canonical,
-      tag: unit.tag,
-    );
-
-    final problems = Diagnostics();
-    final checklist = Checklist.derive(unit, resolution, problems);
-    for (final step in checklist.steps) {
-      output.step(step);
-    }
-    for (final problem in problems.found) {
-      output.problem(problem, depth: 1);
-    }
   }
 
   /// Reports one unit: every step of its checklist, against reality.
@@ -190,15 +162,6 @@ class StatusCommand {
         .length;
     final public =
         checklist.steps.where((s) => Inspector.hasPublicState(s.kind)).length;
-    final registrySteps =
-        checklist.steps.where((s) => s.kind == StepKind.publishRegistry);
-    final summary = _liveSummary(
-      live,
-      hasRegistry: registrySteps.isNotEmpty,
-      registryUnread:
-          registrySteps.any((s) => states[s.id]!.verdict == Verdict.unknown),
-    );
-
     final settled =
         problems.isEmpty && blocking.isEmpty && public > 0 && done == public;
     final ready =
@@ -210,7 +173,7 @@ class StatusCommand {
       tag: unit.tag,
       // One word on the header answers the header's question; the verbose
       // view repeats it on the summary line it already had.
-      state: !output.verbose && ready ? 'ready' : null,
+      state: ready ? 'ready' : null,
     );
 
     // A local step whose every downstream public step is already done cannot
@@ -219,54 +182,26 @@ class StatusCommand {
     // into the fact they agreed on.
     final moot = _mootSteps(checklist, states);
 
-    if (output.verbose) {
-      // Per-step detail belongs to -v: every checklist line, in derivation
-      // order, with the live summary above it.
-      final note = settled
-          ? 'nothing to release'
-          : ready
-              ? '→ ${unit.version} ready'
-              : null;
-      if (summary != null) {
-        output.line(
-          'live: $summary',
-          mark: settled ? Mark.satisfied : Mark.none,
-          depth: 1,
-          labelWidth: 48,
-          note: note,
-        );
-      } else if (note != null) {
-        output.line(
-          note,
-          mark: settled ? Mark.satisfied : Mark.none,
-          depth: 1,
-          labelWidth: 48,
-        );
-      }
-      for (final step in checklist.steps) {
-        _reportStep(step, states[step.id]!, show: !moot.contains(step.id));
-      }
+    // One rendering, not two: the reader's question is "what ships where,
+    // and what is left", answered by a header per destination with the
+    // production chain folded under the one it feeds. The per-step view
+    // that used to live behind -v was a second, worse answer to the same
+    // question — every step is still recorded, and --json carries the whole
+    // checklist keyed by id for anyone who wants it all.
+    for (final step in checklist.steps) {
+      _reportStep(step, states[step.id]!, show: false);
+    }
+    if (settled) {
+      output.line(
+        'nothing to release',
+        mark: Mark.satisfied,
+        depth: 2,
+        labelWidth: 48,
+        tone: Tone.muted,
+      );
     } else {
-      // The reader's question is "what ships where, and what is left" — so
-      // the default view is one lane per destination, the production chain
-      // folded under the destination it feeds. Every step is still recorded:
-      // the document carries the whole checklist keyed by id, whatever the
-      // terminal folds.
-      for (final step in checklist.steps) {
-        _reportStep(step, states[step.id]!, show: false);
-      }
-      if (settled) {
-        output.line(
-          'nothing to release',
-          mark: Mark.satisfied,
-          depth: 2,
-          labelWidth: 48,
-          tone: Tone.muted,
-        );
-      } else {
-        _targets(unit, checklist, states, moot,
-            repositoryBlocks: repositoryBlocks);
-      }
+      _targets(unit, checklist, states, moot,
+          repositoryBlocks: repositoryBlocks);
     }
 
     for (final problem in problems.found) {
@@ -579,33 +514,13 @@ class StatusCommand {
   }
 
   Future<String?> _latestPublished(String name) async {
+    if (registry == null) return null;
     try {
-      final package = await registry.lookup(name);
+      final package = await registry!.lookup(name);
       return package?.latest?.version.canonical;
     } on Object {
       return null;
     }
-  }
-
-  /// What is public today, named per project unless they all agree.
-  ///
-  /// Null when there is nothing honest to say: a unit with no registry
-  /// channel has no registry summary, and a registry rk could not read gets
-  /// "could not be read" — the step lines were honest all along, and this
-  /// line was concluding "not published" from a socket error one line above
-  /// them.
-  String? _liveSummary(
-    Map<String, String> live, {
-    required bool hasRegistry,
-    required bool registryUnread,
-  }) {
-    if (!hasRegistry) return null;
-    if (live.isEmpty) {
-      return registryUnread ? 'pub.dev could not be read' : 'not published';
-    }
-    final distinct = live.values.toSet();
-    if (distinct.length == 1) return distinct.single;
-    return live.entries.map((e) => '${e.key} ${e.value}').join(', ');
   }
 
   /// Facts about the repository, which belong to the repository.
@@ -618,7 +533,7 @@ class StatusCommand {
       // Few enough to count is few enough to print; only a long list
       // truncates, with the count and the way to the rest — and -v never
       // elides, because verbose that elides is not verbose.
-      final paths = output.verbose || git.uncommitted.length <= 8
+      final paths = git.uncommitted.length <= 8
           ? git.uncommitted.join(', ')
           : '${git.uncommitted.take(8).join(', ')} '
               '…and ${git.uncommitted.length - 8} more (-v shows all)';

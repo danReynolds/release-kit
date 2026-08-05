@@ -11,7 +11,7 @@ rides in `"rk"` and is bumped only when a key changes meaning.
 |---|---|
 | `rk` | schema version (currently `1`) |
 | `command` | the verb that ran |
-| `mode` | how the run was asked to read: `{offline, verbose, at?}`. An offline document full of `unknown` verdicts is only interpretable with this beside it |
+| `mode` | how the run was asked to read: `{dry_run, offline, at?}`. An offline document's `unknown` verdicts are only interpretable with this beside them |
 | `observed_at` | UTC ISO 8601 — when rk read the world |
 | `exit` | mirrors the process exit code |
 | `safe_to_rerun` | whether running the same command again can do harm (rk's model makes this true in every case it has) |
@@ -45,8 +45,9 @@ For CI gating on `rk status --json`, the blessed rule is all three of:
 1. `problems` is empty. Drift on a published release is recorded here as
    `RK-DRIFT-001` as well as on its step, so `problems` alone catches it.
 2. No step has `verdict == "conflict"` — belt to problems' braces.
-3. `unknown` never auto-proceeds. If `mode.offline` is true every verdict
-   is `unknown` by construction; an offline document gates nothing.
+3. `unknown` never auto-proceeds. Under `mode.offline` every destination
+   verdict is `unknown` by construction — local facts like the tag are
+   still read from git — so an offline document gates nothing.
 
 Exit codes (also in `-h`): `0` clean or complete — for `status`, blocked
 counts, because reporting a blockage is a successful report; `1` refused

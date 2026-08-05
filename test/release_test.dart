@@ -45,9 +45,10 @@ GitState _git({
   bool pushed = true,
   List<String> tags = const [],
   bool signing = true,
+  String root = '/repo',
 }) =>
     GitState(
-      root: '/repo',
+      root: root,
       head: '9f2c1ab',
       branch: 'main',
       isClean: clean,
@@ -340,14 +341,22 @@ executables:
 
   test('the baseline is read from the newest lower version, not the oldest',
       () async {
+    // A writable root: preflight writes the release body into the workspace
+    // before anything acts, so even a run that stops at authorize touches
+    // the filesystem.
+    final root = Directory.systemTemp.createTempSync('rk-baseline-');
+    addTearDown(() => root.deleteSync(recursive: true));
     final downloads = <String>[];
     final ran = await release(
       config: binaryConfig,
       source: binaryTree(),
-      state: _git(tags: ['v0.8.0', 'v0.9.0']),
+      state: _git(tags: ['v0.8.0', 'v0.9.0'], root: root.path),
       registry: FakeRegistry({}),
-      typed: '1.0.0',
-      dryRun: true, // the read happens in preflight, inside --dry-run
+      // Nobody to authorize: the baseline is resolved in preflight, so the
+      // read this test is about has already happened when the run stops.
+      // (--dry-run would run the whole local chain now, which is a
+      // different test.)
+      typed: null,
       only: 'cli',
       answers: (key) {
         if (key.contains('/releases/tags/v0.9.0')) {
@@ -385,7 +394,7 @@ executables:
       },
     );
 
-    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    expect(ran.exitCode, ExitCodes.refused, reason: 'nobody authorized it');
     expect(downloads, hasLength(1));
     expect(
       downloads.single,
@@ -401,10 +410,11 @@ void main() {
   mutationCloseout();
   signingBaselineRegressions();
 
-  test('a dry run rehearses everything read-only and starts nothing', () async {
+  test('a dry run does every local act and nothing public', () async {
     final ran = await release(dryRun: true);
-    expect(ran.exitCode, ExitCodes.ok);
-    expect(ran.text, contains('nothing was started'));
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    expect(ran.text, contains('dry run complete'));
+    expect(ran.text, contains('nothing public changed'));
     expect(
       ran.calls.where((c) => c.startsWith('git tag')),
       isEmpty,

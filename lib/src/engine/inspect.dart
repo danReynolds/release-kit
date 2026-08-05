@@ -32,7 +32,11 @@ class Inspector {
     this.tap,
   });
 
-  final RegistryReader registry;
+  /// Absent means the registry was not read — `--offline`, exactly like a
+  /// null [tools] means the forge was not read. Null rather than a flag: a
+  /// verb cannot then branch on a mode, so there is one rendering of one
+  /// set of verdicts, and "not read" is a verdict like any other.
+  final RegistryReader? registry;
   final GitState git;
 
   /// Needed to read the forge. Absent means the forge cannot be read, which is
@@ -121,7 +125,11 @@ class Inspector {
 
       case StepKind.publishRegistry:
         final project = unit.projects.firstWhere((p) => p.name == step.project);
-        return registry.inspect(project.name, project.version);
+        final reader = registry;
+        if (reader == null) {
+          return const Inspection.unknown('not read: --offline');
+        }
+        return reader.inspect(project.name, project.version);
 
       case StepKind.publishRelease:
         return _release(unit);
@@ -180,6 +188,9 @@ class Inspector {
 
   /// A package another unit publishes, which must already be live.
   Future<Inspection> _prerequisite(Step step) async {
+    if (registry == null) {
+      return const Inspection.unknown('not read: --offline');
+    }
     // The coordinate is carried by the step so nothing here has to know how an
     // id is spelled: `pub.dev/<package>/<version>`.
     final parts = step.coordinate!.split('/');
@@ -191,7 +202,7 @@ class Inspector {
 
     final RegistryPackage? package;
     try {
-      package = await registry.lookup(name);
+      package = await registry!.lookup(name);
     } on RegistryUnavailable catch (error) {
       return Inspection.unknown(error.message);
     }
@@ -236,11 +247,13 @@ class Inspector {
   /// release calls it as part of validating independently rather than
   /// trusting status.
   Future<void> monotonicity(ResolvedUnit unit, Diagnostics problems) async {
+    // Nothing to be monotonic against when the registry was not read.
+    if (registry == null) return;
     for (final project in unit.projects) {
       if (!project.channels.contains('pub.dev')) continue;
       final RegistryPackage? published;
       try {
-        published = await registry.lookup(project.name);
+        published = await registry!.lookup(project.name);
       } on RegistryUnavailable {
         continue; // the step's own inspection reports this, with a remedy
       }
