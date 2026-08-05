@@ -207,6 +207,81 @@ The same test, applied to `release.toml`, found three things:
 `tag`/`path`/`publish`/`binary_platforms`/`code_id`/`homebrew_tap`, and
 `[[release.<unit>.project]]` rows for a unit with several projects.
 
+### …and on the code, by workflow
+
+Eleven agents surveyed the codebase, proposed three decompositions of
+`release.dart` independently, judged them by austerity, spec-fidelity and
+risk, and synthesised one staged plan. **The minimal-cut proposal won**,
+two judges of three ranking it first. Six stages landed, each gated at
+579 passing / 2 deliberate reds; `release.dart` went 1226 → 1200, which
+was not the point.
+
+What actually moved:
+
+- **`engine/assets.dart`** — the published asset grammar was spelled in
+  four places. That is a latent, permanently unfixable failure, not
+  untidiness: `GithubRelease.inspect` calls *any* expected-vs-published
+  difference a conflict, a published release cannot be edited, and the
+  publish step's verify leg compares only against what it just uploaded.
+  One name out of step between producer and inspector lets rk publish a
+  release and read it back, next run, as an unfixable conflict against a
+  release it made itself. The comment claiming the checklist and the
+  inspector "cannot share code (they would import each other)" was
+  written during the asset-count fix and was false — verified before
+  deletion.
+- **`GitState.uncommittedProblem()`** — RK-GIT-001 meant two `--json`
+  payloads: status pluralized and named up to eight paths, release said
+  "1 paths are uncommitted" and named none. `unpushedProblem`'s own doc,
+  one method away, already forbade exactly this.
+- **`RK-GIT-002`** — a missing origin refused through `Output.line`, which
+  writes only to the sink, so a `--json` caller got an empty `problems`
+  array. Same invisibility RK-BREW-001 was created to end.
+- **Four derivations onto the resolved model** — `binaryProject`,
+  `tapFor`, `fileAt`, `directoryIn`, replacing ten sites, two of which
+  were `firstWhere` calls throwing StateError (a crash at exit 3) for an
+  invariant RK-RES-009 already refuses.
+- **`destinations/git_tag.dart`** — the git protocol leaves the verb, with
+  a sealed three-way presence type so "unknown never collapses into
+  absent" is structural for the tag rather than a discipline each caller
+  remembers.
+
+**What was refused, and why it is worth recording.** `_release` stays one
+ordered pipeline: the proposed preflight/execute split formalises the
+CI-seam-1 violation instead of removing it, and the three wires it
+re-plumbs are pinned by nothing (every sign step in the suite receives a
+null `publishedRequirement`, and `notes` is read by no test), so under a
+frozen tally the pins cannot be added first. `_authorize` stays welded to
+the pipeline — every disclosure is computed at the point of the decision
+it discloses, and separated, the reason a sentence is true stops being
+visible beside it. The pub.dev block stays: RFC 0002 assigns the publish
+dry-run and the consumer resolve to the **ecosystem** adapter, not the
+destination, so extracting them would put ninety lines in the module the
+spec says they do not belong to.
+
+### Deferred, with the condition each waits on
+
+1. **`destinations/pub_dev.dart`, partial** — `_publish`,
+   `_refuseFirstPublish`, `_confirmPublishedBytes` and the poll policy.
+   Condition: the tally may move, so RK-PUB-002/003 become directly
+   testable, which is the only thing the extraction buys.
+2. **Pins for four blind spots** — RK-HOST-001 through injected
+   capabilities; a *non-null* `publishedRequirement` at the sign step;
+   `notes` against the CHANGELOG body; RK-TAG-001 by code. Plus a
+   `git_tag_test.dart`. Condition: consent to raise the count.
+3. **`_act`'s two out-of-band parameters** — reading the baseline from the
+   workspace by name would make "no earlier signed release" and "the
+   baseline was never written" the same observation, and the second
+   silently *skips* the signing proof. Unknown collapsing into absent, at
+   the signing gate. Needs an explicit no-baseline record and pin 2 first.
+4. **`engine/forge.dart`** — three implementations of the gh-404
+   definitive-negative rule, and two divergent contents decoders, one of
+   which (`binary_chain`'s tap read-back) collapses every failure to null.
+   The honest justification is fixing that collapse, which is a behaviour
+   change no test distinguishes.
+5. **The first-publish fact, derived four ways** — already ledgered above.
+6. **`report.acted` / `report.halted` as an out-of-band return channel** —
+   `_act` returns bool, which cannot say *which* halt occurred.
+
 ## Constraints to hold throughout
 
 From RFC 0002's CI-readiness section, binding on every phase:
