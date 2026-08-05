@@ -671,7 +671,7 @@ class ReleaseCommand {
     BinaryChain chain,
     String? notesPath,
   ) async {
-    final repository = _repository();
+    final repository = _repository('github-release');
     if (repository == null) return false;
 
     final project = _binaryProject(unit);
@@ -789,7 +789,7 @@ class ReleaseCommand {
   }
 
   Future<bool> _publishFormula(ResolvedUnit unit, BinaryChain chain) async {
-    final repository = _repository();
+    final repository = _repository('homebrew');
     if (repository == null) return false;
 
     final tap =
@@ -802,11 +802,27 @@ class ReleaseCommand {
   }
 
   /// The `owner/name` this repository pushes to.
-  String? _repository() {
+  /// The `owner/name` this repository pushes to, or null with the refusal
+  /// recorded.
+  ///
+  /// A problem, not a bare line: `Output.line` writes only to the sink, so a
+  /// run stopped here handed a --json caller an empty problems array — the
+  /// same invisibility the formula step's RK-BREW-001 was built to end.
+  /// [step] names the destination that wanted it, because the message was
+  /// hardcoded to github-release while the tap step calls this too.
+  String? _repository(String step) {
     final remote = git.originUrl;
     if (remote == null) {
-      output.line('github-release',
-          mark: Mark.blocked, note: 'this repository has no origin remote');
+      output.problem(
+        Diagnostic(
+          code: 'RK-GIT-002',
+          message: '$step needs an origin remote, and this repository has none',
+          remedy: 'rk publishes what others can fetch, and reads back what it '
+              'published. git remote add origin <url>, then git push -u '
+              'origin ${git.branch ?? 'main'}',
+        ),
+      );
+      output.halt(HaltKind.beforeActing);
       return null;
     }
     return remote;
