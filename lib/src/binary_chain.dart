@@ -1,23 +1,34 @@
 import 'dart:convert';
 import 'dart:io';
 
-import '../builds/capability.dart';
-import '../builds/dart_cli.dart';
-import '../destinations/github_release.dart';
-import '../destinations/homebrew.dart';
-import '../engine/assets.dart';
-import '../engine/checklist.dart';
-import '../engine/diagnostic.dart';
-import '../output/output.dart';
-import '../engine/resolve.dart';
-import '../engine/tools.dart';
-import '../engine/verdict.dart';
-import '../engine/workspace.dart';
-import '../transforms/archive.dart';
-import '../transforms/digest.dart';
-import '../transforms/macos.dart';
+import 'builds/capability.dart';
+import 'builds/dart_cli.dart';
+import 'destinations/github_release.dart';
+import 'destinations/homebrew.dart';
+import 'engine/assets.dart';
+import 'engine/checklist.dart';
+import 'engine/diagnostic.dart';
+import 'output/output.dart';
+import 'engine/resolve.dart';
+import 'engine/tools.dart';
+import 'engine/verdict.dart';
+import 'engine/workspace.dart';
+import 'transforms/archive.dart';
+import 'transforms/digest.dart';
+import 'transforms/macos.dart';
 
 /// The local half of shipping binaries, one checklist step at a time.
+///
+/// It sits at the top of `lib/src` because it belongs to none of the
+/// directories below it. It is not a verb — no argument parsing, no exit
+/// codes; its API is buildStep, signStep, notarizeStep, archiveStep,
+/// checksumsStep, each called by `commands/release.dart`. And it is not an
+/// adapter by this codebase's own test, the one `destinations/git_tag.dart`
+/// states: it holds an [Output] at thirty-odd sites, where every file in
+/// `builds/`, `transforms/` and `destinations/` holds one at zero.
+///
+/// It lived in `commands/` until `ls` there said five against a README and
+/// an RFC heading that both say four verbs.
 ///
 /// This used to be one `produce()` that ran the whole chain inside the first
 /// build step and handed a `_produced` list to the steps after it — which

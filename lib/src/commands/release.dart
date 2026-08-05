@@ -19,7 +19,7 @@ import '../engine/version.dart';
 import '../engine/workspace.dart';
 import '../transforms/macos.dart';
 import '../destinations/git_tag.dart';
-import 'binary_chain.dart';
+import '../binary_chain.dart';
 
 /// Executes a release: inspect, act, verify, one step at a time — and
 /// decides everything rk refuses.

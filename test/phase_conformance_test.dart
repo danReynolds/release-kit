@@ -1277,7 +1277,7 @@ executables:
             'installed, and something in the product must ask for it',
       );
       expect(
-        File('lib/src/commands/binary_chain.dart').readAsStringSync(),
+        File('lib/src/binary_chain.dart').readAsStringSync(),
         contains('publishedRequirement'),
       );
     });

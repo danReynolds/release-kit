@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:release_kit/src/builds/capability.dart';
-import 'package:release_kit/src/commands/binary_chain.dart';
+import 'package:release_kit/src/binary_chain.dart';
 import 'package:release_kit/src/engine/checklist.dart';
 import 'package:release_kit/src/engine/config.dart';
 import 'package:release_kit/src/engine/diagnostic.dart';
