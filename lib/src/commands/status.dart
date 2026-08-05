@@ -171,8 +171,8 @@ class StatusCommand {
       unit.name,
       version: unit.version.canonical,
       tag: unit.tag,
-      // One word on the header answers the header's question; the verbose
-      // view repeats it on the summary line it already had.
+      // One word on the header answers the header's question, and the
+      // lanes below say the rest — so it is stated once, here.
       state: ready ? 'ready' : null,
     );
 

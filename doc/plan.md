@@ -247,10 +247,23 @@ What actually moved:
 
 **What was refused, and why it is worth recording.** `_release` stays one
 ordered pipeline: the proposed preflight/execute split formalises the
-CI-seam-1 violation instead of removing it, and the three wires it
-re-plumbs are pinned by nothing (every sign step in the suite receives a
-null `publishedRequirement`, and `notes` is read by no test), so under a
-frozen tally the pins cannot be added first. `_authorize` stays welded to
+CI-seam-1 violation instead of removing it.
+
+*Corrected after review.* The original entry justified this on a second
+ground — that the wires the split re-plumbs "are pinned by nothing (every
+sign step in the suite receives a null `publishedRequirement`, and `notes`
+is read by no test)". Both clauses were wrong, and wrong in the two ways
+that matter. `publishedRequirement` was simply false:
+`test/binary_steps_test.dart` passes non-null values at five call sites,
+including the gate that refuses a mismatched signature with both
+requirements as evidence. And `notes` was read by no test *because this
+same branch had deleted the test that read it* — a fact the branch
+manufactured, presented as one it found. A refusal recorded on false
+grounds is worse than an unrecorded one, because it will be trusted. The
+refusal stands on the first ground alone, which is the real one. `notes`
+has a reader again, and so does the wire that carries first-ness.
+
+`_authorize` stays welded to
 the pipeline — every disclosure is computed at the point of the decision
 it discloses, and separated, the reason a sentence is true stops being
 visible beside it. The pub.dev block stays: RFC 0002 assigns the publish
@@ -780,8 +793,10 @@ codesign behaviour. Fixed in closeout:
   diagnosed win over the default. The formula path records RK-BREW-001.
 - `--dry-run --rehearse` silently ran as a dry run — both flags
   individually valid, so the pair passed the per-verb check, and the class
-  the CLI's own comment forbids recurred. It is RK-CLI-008 now: two
-  different promises, refused together.
+  the CLI's own comment forbids recurred. Refused together, as two
+  different promises — and then made unrepresentable by the austerity
+  pass, which merged `--rehearse` into `--dry-run`. The refusal and its
+  code went with the flag.
 - The two workspaces disagreed about a file a native tool wrote at
   `pathOf` before any ingest — which made the reuse branch unreachable
   under MemoryWorkspace, and was the mechanical reason every reuse

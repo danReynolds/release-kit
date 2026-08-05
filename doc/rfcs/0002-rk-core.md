@@ -204,15 +204,23 @@ keychain rule below was always the specification, and requiring the
 declaration was drift. `tag_signer` is gone too — it was accepted,
 stored, and read by nothing.
 
-The remaining override matters in two cases. A **deliberate migration** — a new tap or team — overrides a
-`conflict` on purpose. A **first release** has no baseline: the Apple team
+The remaining override matters in two cases. A **deliberate migration** —
+a new tap — overrides a `conflict` on purpose. A new *team* is not
+overridable as built: a signature that disagrees with the published
+identity is refused (RK-SIGN-003), and a `code_id` that disagrees with it
+is refused before anything acts (RK-SIGN-005). Changing the team that
+distributes a program breaks Keychain continuity for existing users, so it
+is a refusal rather than a setting. A **first release** has no baseline: the Apple team
 comes from the keychain, filtered to `Developer ID Application` identities
 (one is unambiguous; several fail closed with the list; none reports that a
 certificate must be installed), and rk does not read `.xcodeproj` files,
 which in practice belong to example apps with unrelated identities. The
 code identifier has no source, because it is a name a human chooses and
-cannot change without breaking Keychain continuity for existing users; rk
-proposes reverse-DNS and requires confirmation once. A tag signer, where
+cannot change without breaking Keychain continuity for existing users. As
+built rk proposes nothing: `code_id` is declared on the unit or the
+package name is used, and the first signing makes that choice permanent —
+which is disclosed at the prompt, with the certificate, before the version
+is typed. A tag signer, where
 earlier tags are unsigned or absent, is the key about to sign, confirmed
 once. Keybay needs none of this: its 0.1.0 release supplies every baseline.
 

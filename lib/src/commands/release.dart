@@ -686,7 +686,7 @@ class ReleaseCommand {
   /// users already installed, and its binary is the only authority on what
   /// identity this program has. `none` — no earlier signed release — is a
   /// null requirement with `ok`, and the sign step falls back to the
-  /// declared `[identity]`. `unreadable` refuses the whole run — before
+  /// unit's declared `code_id`. `unreadable` refuses the whole run — before
   /// anything acts, because the version of this that resolved inside the
   /// sign step surfaced an unreadable forge as an internal error after the
   /// tag was already public. Not knowing the baseline is not permission to
@@ -789,7 +789,7 @@ class ReleaseCommand {
     return url != null;
   }
 
-  /// Whether the declared `[identity]` agrees with the published
+  /// Whether the unit's declared `code_id` agrees with the published
   /// requirement, recording the refusal when it does not.
   ///
   /// Derivation wins when nothing is declared; a declaration that

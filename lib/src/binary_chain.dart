@@ -192,7 +192,7 @@ class BinaryChain {
   /// The requirement is derived from the release users already installed —
   /// asking the certificate about to sign what it will sign with is a
   /// tautology. Only a first signed release, which has no published binary
-  /// to derive from, falls back to the declared `[identity]`.
+  /// to derive from, falls back to the unit's declared `code_id`.
   Future<bool> signStep(
     Step step,
     ResolvedProject project, {
@@ -581,7 +581,8 @@ class BinaryChain {
       }
     }
 
-    final sums = named('SHA256SUMS', 'the checksums step produces it');
+    final sums =
+        named(ReleaseAssets.checksums, 'the checksums step produces it');
     if (sums == null) return null;
     assets.add(sums);
     return assets;

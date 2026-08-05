@@ -255,12 +255,13 @@ executables:
     // not a demand for configuration but a statement of what became
     // permanent — the certificate, and the identifier every later release
     // must reproduce.
-    await chain(scripted()).buildStep(
+    final tools = scripted();
+    await chain(tools).buildStep(
       step(StepKind.build),
       project,
       publishedRequirement: null,
     );
-    final ok = await chain(scripted()).signStep(
+    final ok = await chain(tools).signStep(
       step(StepKind.sign),
       project,
       publishedRequirement: null,
@@ -269,10 +270,20 @@ executables:
     expect(ok, isTrue, reason: buffer.toString());
     expect(buffer.toString(), contains('first release'));
     expect(buffer.toString(), contains('Developer ID Application: Dan'));
+    // Asserted on the argv, not on the buffer. `contains('tool')` was
+    // satisfied by the build line `build tool for macos-arm64` that the
+    // step above had already written into the same buffer, so the whole
+    // assertion held with the fallback mutated to 'zz.mutation' — and this
+    // is the value that becomes the permanent designated requirement.
+    final sign = (tools as RecordingTools)
+        .calls
+        .firstWhere((c) => c.startsWith('codesign --force'));
     expect(
-      buffer.toString(),
-      contains('tool'),
-      reason: 'the identifier defaults to the package name and is stated',
+      sign,
+      contains('--identifier tool'),
+      reason: 'with nothing published and nothing declared, the identifier '
+          'is the package name — and this signing is what makes it '
+          'permanent',
     );
   });
 

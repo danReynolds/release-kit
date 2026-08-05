@@ -9,9 +9,11 @@ They are declared where they fire, not in a central table — each producer
 names its own, and all are reported in one pass. This index exists because
 search cost is not a failure but an unindexed vocabulary is.
 
-Regenerate with `dart run tool/validate.dart --codes`.
+Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
+declared code missing from this table fails, a row here that nothing declares
+fails, and the count below is checked against the rows.
 
-104 codes across 25 families.
+109 codes across 25 families.
 
 
 ## RK-AUTH — Authorization

@@ -45,9 +45,12 @@ For CI gating on `rk status --json`, the blessed rule is all three of:
 1. `problems` is empty. Drift on a published release is recorded here as
    `RK-DRIFT-001` as well as on its step, so `problems` alone catches it.
 2. No step has `verdict == "conflict"` — belt to problems' braces.
-3. `unknown` never auto-proceeds. Under `mode.offline` every destination
-   verdict is `unknown` by construction — local facts like the tag are
-   still read from git — so an offline document gates nothing.
+3. `unknown` never auto-proceeds. Under `mode.offline` no destination is
+   ever `exact`: every one rk did not read answers `unknown`, and the
+   local half of the tag — created but not known to be pushed — answers
+   `unknown` too. A tag git does not hold is `absent`, which is work
+   remaining, not work done. So an offline document gates nothing: every
+   registry step is unknown, and unknown blocks.
 
 Exit codes (also in `-h`): `0` clean or complete — for `status`, blocked
 counts, because reporting a blockage is a successful report; `1` refused

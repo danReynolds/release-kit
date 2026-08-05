@@ -137,9 +137,31 @@ bool codesIndexIsCurrent() {
     stderr.writeln('doc/codes.md is missing');
     return false;
   }
-  final listed = index.readAsStringSync();
-  final missing = declared.where((c) => !listed.contains(c)).toList()..sort();
-  if (missing.isEmpty) return true;
-  stderr.writeln('doc/codes.md does not list: ${missing.join(', ')}');
-  return false;
+  final source = index.readAsStringSync();
+  final listed = RegExp(r'`(RK-[A-Z]+-\d+)`')
+      .allMatches(source)
+      .map((m) => m.group(1)!)
+      .toSet();
+
+  final missing = declared.difference(listed).toList()..sort();
+  // Both directions. Checking only that every declared code is listed lets a
+  // row for a deleted code survive forever — and a vocabulary index whose
+  // entries may not exist is worse than none, because it is read as
+  // authoritative. The count below is a claim too, so it is checked.
+  final stale = listed.difference(declared).toList()..sort();
+  final claimed = RegExp(r'(\d+) codes across').firstMatch(source);
+
+  if (missing.isNotEmpty) {
+    stderr.writeln('doc/codes.md does not list: ${missing.join(', ')}');
+  }
+  if (stale.isNotEmpty) {
+    stderr.writeln('doc/codes.md lists codes nothing declares: '
+        '${stale.join(', ')}');
+  }
+  if (claimed != null && int.parse(claimed.group(1)!) != listed.length) {
+    stderr.writeln('doc/codes.md says ${claimed.group(1)} codes and lists '
+        '${listed.length}');
+    return false;
+  }
+  return missing.isEmpty && stale.isEmpty;
 }
