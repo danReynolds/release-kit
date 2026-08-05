@@ -91,6 +91,8 @@ Regenerate with `dart run tool/validate.dart --codes`.
 | `RK-CONF-032` | $key must be text | `lib/src/engine/config.dart` |
 | `RK-CONF-033` | git will not accept the tag pattern for "$unit": $issue | `lib/src/engine/config.dart` |
 | `RK-CONF-034` | release.toml is there and rk could not read it | `bin/rk.dart` |
+| `RK-CONF-035` | unit "$name" declares code_id but signs nothing | `lib/src/engine/config.dart` |
+| `RK-CONF-036` | unit "$name" declares homebrew_tap but does not publish to  homebrew | `lib/src/engine/config.dart` |
 
 ## RK-DART — Dart-specific facts
 

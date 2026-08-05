@@ -156,7 +156,18 @@ class _Reader {
         'RK-CONF-003',
         'unknown setting "$key"',
         source: _root.locationOf(key),
-        remedy: 'release.toml holds only ${known.join(', ')}',
+        // `[identity]` is named because it is the one that used to be
+        // valid, and a remedy that only says what is allowed leaves an
+        // operator holding a file rk wrote no path forward. Two of its
+        // four settings moved and two were deleted; a remedy that named
+        // none of them is how a breaking change becomes a puzzle.
+        remedy: key == 'identity'
+            ? 'release.toml holds only ${known.join(', ')}. [identity] is '
+                'gone: code_id and homebrew_tap moved onto the unit that '
+                'reads them, and apple_team and tag_signer were removed — '
+                'the certificate is derived from the release users already '
+                'installed, and the tag signer from git.'
+            : 'release.toml holds only ${known.join(', ')}',
       );
     }
   }
@@ -286,6 +297,39 @@ class _Reader {
         source: location,
         remedy: 'a set of packages has no canonical name — declare one, as in '
             'tag = "$name-v{version}"',
+      );
+      return null;
+    }
+
+    // A setting nothing in this unit can read is refused, the same way a
+    // project naming platforms it does not ship gets RK-CONF-026 two hundred
+    // lines down. Both were repository-global under `[identity]`; moving
+    // them onto the unit made *which* unit a choice, and in a two-unit repo
+    // it is a coin flip. Put `code_id` on the wrong one and it parses
+    // clean, `_declarationAgrees` never fires — there is no sign step on
+    // that unit to fire it — and the binary unit's first signed release
+    // falls back to the package name, permanently, with nothing said.
+    final signs = projects.any(
+      (p) => p.binaryPlatforms.any((platform) => platform.startsWith('macos-')),
+    );
+    if (!signs && value.has('code_id')) {
+      _diagnostics.add(
+        'RK-CONF-035',
+        'unit "$name" declares code_id but signs nothing',
+        source: value.locationOf('code_id'),
+        remedy: 'code_id is the macOS program identity, read only when a '
+            'macOS binary is signed — move it to the unit whose '
+            'binary_platforms name a macos- target, or remove it',
+      );
+      return null;
+    }
+    if (value.has('homebrew_tap') &&
+        !projects.any((p) => p.channels.contains('homebrew'))) {
+      _diagnostics.add(
+        'RK-CONF-036',
+        'unit "$name" declares homebrew_tap but does not publish to homebrew',
+        source: value.locationOf('homebrew_tap'),
+        remedy: 'add "homebrew" to its publish list, or remove homebrew_tap',
       );
       return null;
     }

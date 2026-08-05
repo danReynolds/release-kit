@@ -106,12 +106,72 @@ publish = ["pub.dev"]
 schema = 1
 
 [release.cli]
-publish = ["pub.dev"]
+publish = ["github-release", "homebrew"]
+binary_platforms = ["macos-arm64"]
 code_id = "io.github.danreynolds.keybay.cli"
 homebrew_tap = "danReynolds/homebrew-tools"
 ''');
     expect(config.units.single.codeId, 'io.github.danreynolds.keybay.cli');
     expect(config.units.single.homebrewTap, 'danReynolds/homebrew-tools');
+  });
+
+  group('a setting nothing in the unit can read is refused', () {
+    // The migration hazard the move created. `[identity]` was repository
+    // global, so "which unit" had no answer to get wrong; now it does, and
+    // a two-unit repository makes it a coin flip. Silently accepting the
+    // wrong one lets the binary unit fall back to the package name as its
+    // program identity — permanently, on the first signing.
+    test('code_id on a unit that signs nothing', () {
+      expect(
+        refusedWith('schema = 1\n[release.core]\npublish = ["pub.dev"]\n'
+            'code_id = "io.github.danreynolds.keybay"\n'),
+        'RK-CONF-035',
+      );
+    });
+
+    test('code_id on a unit whose binaries are all linux', () {
+      // Narrower than "ships binaries": sign steps exist only for macos-
+      // targets, so a linux-only unit cannot read it either.
+      expect(
+        refusedWith('schema = 1\n[release.cli]\n'
+            'publish = ["github-release"]\n'
+            'binary_platforms = ["linux-x64"]\n'
+            'code_id = "io.github.danreynolds.keybay.cli"\n'),
+        'RK-CONF-035',
+      );
+    });
+
+    test('homebrew_tap on a unit that does not publish to homebrew', () {
+      expect(
+        refusedWith('schema = 1\n[release.cli]\n'
+            'publish = ["github-release"]\n'
+            'binary_platforms = ["macos-arm64"]\n'
+            'homebrew_tap = "danReynolds/homebrew-tools"\n'),
+        'RK-CONF-036',
+      );
+    });
+  });
+
+  test('the [identity] refusal names where its settings went', () {
+    // A breaking change whose remedy lists only what is still allowed
+    // leaves the operator holding a file with no path forward.
+    final problems = Diagnostics();
+    ReleaseConfig.parse(
+      'schema = 1\n[release.core]\npublish = ["pub.dev"]\n'
+          '[identity]\ncode_id = "io.github.danreynolds.keybay"\n',
+      'release.toml',
+      problems,
+    );
+    final remedy = problems.found.single.remedy!;
+    for (final moved in [
+      'code_id',
+      'homebrew_tap',
+      'apple_team',
+      'tag_signer'
+    ]) {
+      expect(remedy, contains(moved),
+          reason: 'all four settings must be accounted for');
+    }
   });
 
   test('there is no team to declare, and no identity table to declare it in',
