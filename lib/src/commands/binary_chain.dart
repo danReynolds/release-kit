@@ -8,7 +8,7 @@ import '../destinations/homebrew.dart';
 import '../engine/assets.dart';
 import '../engine/checklist.dart';
 import '../engine/diagnostic.dart';
-import '../engine/output.dart';
+import '../output/output.dart';
 import '../engine/resolve.dart';
 import '../engine/tools.dart';
 import '../engine/verdict.dart';

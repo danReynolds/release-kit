@@ -9,7 +9,7 @@ import 'package:release_kit/src/engine/config.dart';
 import 'package:release_kit/src/engine/diagnostic.dart';
 import 'package:release_kit/src/engine/git.dart';
 import 'package:release_kit/src/engine/inspect.dart';
-import 'package:release_kit/src/engine/output.dart';
+import 'package:release_kit/src/output/output.dart';
 import 'package:release_kit/src/engine/resolve.dart';
 import 'package:release_kit/src/engine/source_tree.dart';
 import 'package:release_kit/src/engine/tools.dart';
@@ -293,7 +293,7 @@ void main() {
     });
 
     test('halt sentences, conflict evidence, remediation', () {
-      final source = File('lib/src/engine/output.dart').readAsStringSync();
+      final source = File('lib/src/output/output.dart').readAsStringSync();
       expect(source, contains('HaltKind'));
       expect(sourceContains('evidence'), isTrue);
       expect(source, contains('remedy'));

@@ -1,5 +1,5 @@
 import 'package:release_kit/src/engine/diagnostic.dart';
-import 'package:release_kit/src/engine/output.dart';
+import 'package:release_kit/src/output/output.dart';
 import 'package:test/test.dart';
 
 /// Captures what rk would print, so the contract can be asserted rather than

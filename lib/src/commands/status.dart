@@ -3,7 +3,7 @@ import '../engine/checklist.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
 import '../engine/inspect.dart';
-import '../engine/output.dart';
+import '../output/output.dart';
 import '../engine/registry.dart';
 import '../engine/resolve.dart';
 import '../engine/source_tree.dart';

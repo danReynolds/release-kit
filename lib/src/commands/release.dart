@@ -6,7 +6,7 @@ import '../engine/changelog.dart';
 import '../engine/checklist.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
-import '../engine/output.dart';
+import '../output/output.dart';
 import '../engine/compare.dart';
 import '../engine/inspect.dart';
 import '../engine/registry.dart';

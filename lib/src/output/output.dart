@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'checklist.dart';
-import 'diagnostic.dart';
+import '../engine/checklist.dart';
+import '../engine/diagnostic.dart';
 import 'report.dart';
-import 'verdict.dart';
+import '../engine/verdict.dart';
 
 /// How a line reads at a glance.
 ///
