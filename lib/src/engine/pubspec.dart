@@ -165,8 +165,6 @@ class Dependency {
 
   final int line;
 
-  bool get isHosted => kind == DependencyKind.hosted;
-
   /// Whether this dependency's bytes come from outside the repository's own
   /// history, which is what makes a project impossible to release
   /// reproducibly.

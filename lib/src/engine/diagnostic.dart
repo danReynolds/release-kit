@@ -84,9 +84,4 @@ class Diagnostics {
       ),
     );
   }
-
-  /// Raises everything collected, or returns if nothing was found.
-  void throwIfAny() {
-    if (_found.isNotEmpty) throw RkFailure(found);
-  }
 }

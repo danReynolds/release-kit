@@ -189,7 +189,7 @@ class StatusCommand {
     // question — every step is still recorded, and --json carries the whole
     // checklist keyed by id for anyone who wants it all.
     for (final step in checklist.steps) {
-      _reportStep(step, states[step.id]!, show: false);
+      _record(step, states[step.id]!);
     }
     if (settled) {
       output.line(
@@ -294,19 +294,6 @@ class StatusCommand {
   }) {
     const noteColumn = 50;
 
-    Mark markOf(Inspection state) => switch (state.verdict) {
-          Verdict.exact => Mark.satisfied,
-          Verdict.conflict => Mark.blocked,
-          _ => Mark.none,
-        };
-
-    Tone toneOf(Inspection state) => switch (state.verdict) {
-          Verdict.exact => Tone.muted,
-          Verdict.conflict => Tone.bad,
-          Verdict.unknown => Tone.attention,
-          Verdict.absent => Tone.plain,
-        };
-
     void header(String target) => output.line(
           target,
           depth: 1,
@@ -322,11 +309,11 @@ class StatusCommand {
       final state = states[step.id]!;
       output.line(
         subject,
-        mark: markOf(state),
+        mark: Mark.of(state.verdict),
         depth: depth,
         labelWidth: noteColumn,
         note: note,
-        noteTone: toneOf(state),
+        noteTone: Tone.of(state.verdict),
       );
       if (state.verdict == Verdict.conflict && state.evidence.isNotEmpty) {
         // Names sharing a reason fold onto it — the same sentence three
@@ -467,7 +454,7 @@ class StatusCommand {
         output.line(
           '${'checksums'.padRight(14)}'
           '${sums.summary.replaceFirst('checksums for ', '')}',
-          mark: markOf(states[sums.id]!),
+          mark: Mark.of(states[sums.id]!.verdict),
           depth: 2,
           labelWidth: noteColumn,
         );
@@ -488,28 +475,18 @@ class StatusCommand {
     }
   }
 
-  /// One step, said in the terms its verdict earns.
-  void _reportStep(Step step, Inspection state, {bool show = true}) {
+  /// Records a step without printing it.
+  ///
+  /// The lanes are the rendering; this is the document. It carries the
+  /// whole checklist keyed by step id whatever the terminal folds, which
+  /// is the one asymmetry the two surfaces are allowed.
+  void _record(Step step, Inspection state) {
     output.step(
       step,
-      show: show,
+      show: false,
       verdict: state.verdict,
       detail: state.detail,
       evidence: state.evidence,
-      mark: switch (state.verdict) {
-        // Already so, and rk read that it is.
-        Verdict.exact => Mark.satisfied,
-        Verdict.conflict => Mark.blocked,
-        // Absent is work to do, and unknown is work rk could not rule out.
-        // Neither earns a glyph; what separates them is the note.
-        Verdict.absent || Verdict.unknown => Mark.none,
-      },
-      note: switch (state.verdict) {
-        Verdict.exact => state.detail ?? 'done',
-        Verdict.unknown =>
-          Inspector.hasPublicState(step.kind) ? state.detail : null,
-        _ => step.isPermanent ? 'permanent' : null,
-      },
     );
   }
 

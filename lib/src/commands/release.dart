@@ -733,7 +733,7 @@ class ReleaseCommand {
   bool _declarationAgrees(ResolvedUnit unit, String publishedRequirement) {
     final declared = unit.codeId;
     if (declared == null) return true;
-    final published = BinaryChain.identityOf(publishedRequirement).identifier;
+    final published = BinaryChain.identifierOf(publishedRequirement);
     if (published == null || declared == published) return true;
 
     output.problem(

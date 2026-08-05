@@ -181,7 +181,6 @@ class BinaryChain {
     // nothing here could run.
     final unproven = built.unproven;
     if (unproven != null) {
-      unprovenPlatforms.add(platform);
       activity.done('built, not executed');
       output.step(
         step,
@@ -196,12 +195,6 @@ class BinaryChain {
     activity.done('built');
     return true;
   }
-
-  /// Platforms whose binary was built and never run, in this process.
-  ///
-  /// Read by the authorize prompt, so the operator accepts the weaker
-  /// assurance knowingly rather than discovering it in the release notes.
-  final unprovenPlatforms = <String>{};
 
   Future<bool> _versionMatches(String name, String version) async {
     final result = await tools.run(workspace.pathOf(name), ['--version']);
@@ -359,13 +352,9 @@ class BinaryChain {
   static String? _identifierOf(String requirement) =>
       RegExp(r'identifier "([^"]+)"').firstMatch(requirement)?.group(1);
 
-  /// The identity facts a published requirement carries, for the preflight
-  /// that compares them against a declared `[identity]` before anything
-  /// acts.
-  static ({String? team, String? identifier}) identityOf(
-    String requirement,
-  ) =>
-      (team: _teamOf(requirement), identifier: _identifierOf(requirement));
+  /// The code identifier a published requirement carries, for the preflight
+  /// that compares it against a declared one before anything acts.
+  static String? identifierOf(String requirement) => _identifierOf(requirement);
 
   // ---- notarize ----
 

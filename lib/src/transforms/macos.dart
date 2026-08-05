@@ -165,9 +165,6 @@ class MacOsNotarizer {
   /// configuration. rk never sees the credential it holds.
   final String profile;
 
-  /// How long this normally takes, so a wait does not read as a hang.
-  static const typicalWait = '3–5 min';
-
   Future<NotarizeOutcome> submit(String zipPath) async {
     final result = await tools.run('xcrun', [
       'notarytool',

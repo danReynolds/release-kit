@@ -28,6 +28,19 @@ enum Mark {
 
   const Mark(this.glyph);
   final String glyph;
+
+  /// The mark a verdict earns.
+  ///
+  /// One definition, because two commands mapping this themselves is how
+  /// the line a person reads and the document a caller keys on end up
+  /// disagreeing about severity.
+  static Mark of(Verdict verdict) => switch (verdict) {
+        Verdict.exact => satisfied,
+        Verdict.conflict => blocked,
+        // Absent is work to do and unknown is work rk could not rule out.
+        // Neither earns a glyph; the words separate them.
+        Verdict.absent || Verdict.unknown => none,
+      };
 }
 
 /// The colour a word earns from what it says.
@@ -44,17 +57,19 @@ enum Tone {
   /// Already so; nothing to do here.
   muted,
 
-  /// Proven or live.
-  good,
-
   /// Blocked, conflicting, or failed.
   bad,
 
   /// rk could not read it, and wants eyes on that.
-  attention,
+  attention;
 
-  /// The next move.
-  next,
+  /// The tone a verdict earns, beside [Mark.of].
+  static Tone of(Verdict verdict) => switch (verdict) {
+        Verdict.exact => muted,
+        Verdict.conflict => bad,
+        Verdict.unknown => attention,
+        Verdict.absent => plain,
+      };
 }
 
 /// Everything rk prints goes through here, so terseness, collapse, and the
@@ -338,10 +353,8 @@ class Output {
       Tone.plain => null,
       Tone.header => '1', // bold
       Tone.muted => '90', // grey
-      Tone.good => '32', // green
       Tone.bad => '31', // red
       Tone.attention => '33', // yellow
-      Tone.next => '36', // cyan
     };
     return code == null ? text : '\x1b[${code}m$text\x1b[0m';
   }

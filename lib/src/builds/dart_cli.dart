@@ -24,10 +24,9 @@ class DartCliBuilder {
     required String workingDirectory,
     required String expectedVersion,
   }) async {
+    // The caller refuses an unproducible platform with a diagnostic before
+    // reaching here, so this asks only *how* to produce it.
     final capability = capabilities.resolve(platform);
-    if (!capability.canProduce) {
-      return BuildOutcome.blocked(capability.reason ?? 'not possible here');
-    }
 
     final target = _target(platform);
     final compiled = await tools.run(
@@ -129,13 +128,11 @@ class DartCliBuilder {
 }
 
 class BuildOutcome {
-  const BuildOutcome._(this.path, this.problem, this.wasBlocked,
-      {this.unproven});
+  const BuildOutcome._(this.path, this.problem, {this.unproven});
 
   const BuildOutcome.built(String path, {String? unproven})
-      : this._(path, null, false, unproven: unproven);
-  const BuildOutcome.failed(String problem) : this._(null, problem, false);
-  const BuildOutcome.blocked(String problem) : this._(null, problem, true);
+      : this._(path, null, unproven: unproven);
+  const BuildOutcome.failed(String problem) : this._(null, problem);
 
   final String? path;
   final String? problem;
@@ -143,10 +140,6 @@ class BuildOutcome {
   /// Why the binary was never executed, when it was not. Null means it ran
   /// and reported the version it should — the only case rk calls proven.
   final String? unproven;
-
-  /// Whether this host simply cannot produce it, as opposed to trying and
-  /// failing.
-  final bool wasBlocked;
 
   bool get ok => path != null;
 }
