@@ -205,6 +205,9 @@ Regenerate with `dart run tool/validate.dart --codes`.
 | `RK-SIGN-003` | the signature does not match the identity users  already installed | `lib/src/binary_chain.dart` |
 | `RK-SIGN-004` | the identity users already installed could not be read | `lib/src/commands/release.dart` |
 | `RK-SIGN-005` | code_id disagrees with the release users already installed | `lib/src/commands/release.dart` |
+| `RK-SIGN-006` | the login keychain could not be read | `lib/src/commands/release.dart` |
+| `RK-SIGN-007` | no Developer ID Application certificate is installed | `lib/src/commands/release.dart` |
+| `RK-SIGN-008` | this machine has ${certificates.length} Developer ID  certificates and nothing published says which distributes this | `lib/src/commands/release.dart` |
 
 ## RK-TAG — The tag
 

@@ -1058,6 +1058,9 @@ publish = ["pub.dev"]
     bool homebrew = false,
     String label = '',
     String? containerRuntime = 'docker',
+    int certificates = 1,
+    bool keychainReadable = true,
+    String? previousTag,
   }) async {
     final root = Directory('${scratch.path}/drive-${dryRun ? 'd' : 'f'}'
         '${notaryRejects ? '-nr' : ''}$label')
@@ -1090,7 +1093,9 @@ executables:
       isClean: true,
       uncommitted: const [],
       headIsPushed: true,
-      tags: const [],
+      // An earlier tag is what makes this a *later* release: the signing
+      // baseline is read from the release published at it.
+      tags: [if (previousTag != null) previousTag],
       signingConfigured: true,
       originUrl: 'example/tool',
     );
@@ -1147,16 +1152,34 @@ executables:
           return ToolResult(exitCode: 1, stdout: '', stderr: 'no');
         }
         if (key.startsWith('codesign -d -r-')) {
+          // A real designated requirement, carrying the identifier and the
+          // team OU that signing continuity is derived from. The version
+          // that read `designated => leaf "A"` carried neither, so any
+          // drive with a published baseline refused at RK-SIGN-001 — which
+          // is why no drive had ever modelled a later release.
           return ToolResult(
             exitCode: 0,
-            stdout: 'designated => leaf "A"',
+            stdout: 'designated => identifier "tool" and certificate '
+                'leaf[subject.OU] = "TEAM123456"',
             stderr: '',
           );
         }
         if (key.startsWith('security find-identity')) {
+          // A non-zero exit is an unreadable keychain, which is not the
+          // same fact as one holding no certificate.
+          if (!keychainReadable) {
+            return ToolResult(
+              exitCode: 1,
+              stdout: '',
+              stderr: 'security: failed to open the login keychain',
+            );
+          }
           return ToolResult(
             exitCode: 0,
-            stdout: '1) X "Developer ID Application: D (TEAM123456)"',
+            stdout: [
+              for (var i = 0; i < certificates; i++)
+                '${i + 1}) X "Developer ID Application: D (TEAM12345${i + 6})"',
+            ].join('\n'),
             stderr: '',
           );
         }
@@ -1185,6 +1208,32 @@ executables:
         }
         if (key == 'gh api --paginate --slurp repos/example/tool/releases') {
           return ToolResult(exitCode: 0, stdout: '[[]]', stderr: '');
+        }
+        if (previousTag != null) {
+          // The release the identity baseline is read from: its asset list,
+          // then the download, then the `ls` that finds what landed. The
+          // extraction and the `codesign -d -r-` fall through to the
+          // defaults above, which is where the requirement comes from.
+          if (key == 'gh api repos/example/tool/releases/tags/$previousTag') {
+            return ToolResult(
+              exitCode: 0,
+              stdout: jsonEncode({
+                'tag_name': previousTag,
+                'assets': [
+                  {'name': 'tool-0.9.0-macos-arm64.tar.gz'},
+                ],
+              }),
+              stderr: '',
+            );
+          }
+          if (key.startsWith('sh -c ls ') &&
+              key.contains('published-identity')) {
+            return ToolResult(
+              exitCode: 0,
+              stdout: '$work/published-identity/tool-0.9.0-macos-arm64.tar.gz',
+              stderr: '',
+            );
+          }
         }
         if (key == 'gh api repos/example/tool/releases/tags/v1.0.0') {
           // The forge answers from the world: 404 before the create, the
@@ -1553,6 +1602,104 @@ executables:
               'a 404');
       expect(run.text, contains('read back from the public tap'));
       expect(run.text, contains('released'));
+    });
+
+    // This unit publishes to no registry, so nothing in it is permanent by
+    // `Step.isPermanent`. That is exactly the shape the old gating was
+    // silent on: it required `permanent.isNotEmpty`, which is "a pub.dev
+    // publish remains" — a fact about pub.dev, not about signing.
+    test('a genuine first signing names the certificate before the yes',
+        () async {
+      final run = await binaryDrive(dryRun: false, label: '-first');
+
+      expect(run.code, 0, reason: run.text);
+      expect(
+        run.text,
+        contains('this is a first signed release'),
+        reason: 'the identity about to become permanent is disclosed at the '
+            'prompt, and this unit has nothing permanent in the pub.dev '
+            'sense — which is what used to silence it',
+      );
+      expect(run.text, contains('Developer ID Application: D (TEAM123456)'));
+    });
+
+    test('a later release does not claim to be a first one', () async {
+      // The common false positive, and rk's own shape: one certificate
+      // installed, a release already published. The old gate asked
+      // `permanent.isNotEmpty && certificates.length == 1` — neither of
+      // which is first-ness — so rk downloaded the published archive, read
+      // its identity, and then told the operator that identity did not
+      // exist yet.
+      final run = await binaryDrive(
+        dryRun: false,
+        label: '-later',
+        previousTag: 'v0.9.0',
+      );
+
+      expect(run.code, 0, reason: run.text);
+      expect(
+        run.calls.any((c) => c.startsWith('codesign -d -r-')),
+        isTrue,
+        reason: 'the baseline was read, so there is a published identity',
+      );
+      expect(
+        run.text,
+        isNot(contains('first signed release')),
+        reason: 'there is an identity to reproduce, and it was just read',
+      );
+    });
+
+    group('the keychain is read before anything acts, not midway', () {
+      test('an unreadable keychain is not an absent certificate', () async {
+        final run = await binaryDrive(
+          dryRun: false,
+          label: '-nokc',
+          keychainReadable: false,
+        );
+
+        expect(run.code, ExitCodes.refused, reason: run.text);
+        expect(run.text, contains('RK-SIGN-006'));
+        expect(
+          run.text,
+          isNot(contains('no Developer ID Application certificate')),
+          reason: 'telling an operator to install a certificate is wrong '
+              'advice when rk never managed to look',
+        );
+        expect((run.json['halt']! as Map)['kind'], 'beforeActing');
+        expect(
+          run.calls.any((c) => c.startsWith('git push origin')),
+          isFalse,
+          reason: 'the whole point is refusing before the tag is public',
+        );
+      });
+
+      test('no certificate refuses before the tag, not after', () async {
+        final run = await binaryDrive(
+          dryRun: false,
+          label: '-nocert',
+          certificates: 0,
+        );
+
+        expect(run.code, ExitCodes.refused, reason: run.text);
+        expect(run.text, contains('RK-SIGN-007'));
+        expect((run.json['halt']! as Map)['kind'], 'beforeActing');
+        expect(run.calls.any((c) => c.startsWith('git push origin')), isFalse);
+      });
+
+      test('an ambiguous first signing refuses, naming the teams', () async {
+        final run = await binaryDrive(
+          dryRun: false,
+          label: '-twocerts',
+          certificates: 2,
+        );
+
+        expect(run.code, ExitCodes.refused, reason: run.text);
+        expect(run.text, contains('RK-SIGN-008'));
+        expect(run.text, contains('TEAM123456'));
+        expect(run.text, contains('TEAM123457'));
+        expect((run.json['halt']! as Map)['kind'], 'beforeActing');
+        expect(run.calls.any((c) => c.startsWith('git push origin')), isFalse);
+      });
     });
   });
 }

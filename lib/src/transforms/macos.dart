@@ -12,16 +12,23 @@ class MacOsSigner {
 
   final Tools tools;
 
-  /// The `Developer ID Application` identities in the login keychain.
+  /// The `Developer ID Application` identities in the login keychain, or
+  /// null when the keychain could not be read at all.
   ///
   /// Filtered to that type: it is the only certificate that can distribute a
   /// signed binary outside the App Store.
-  Future<List<SigningIdentity>> availableIdentities() async {
+  ///
+  /// Null rather than empty for an unreadable keychain, because they are
+  /// different facts with different remedies — "install a Developer ID
+  /// certificate" is wrong advice on a host that has no `security` at all —
+  /// and collapsing them is the same mistake as an absent verdict for a
+  /// destination nobody asked.
+  Future<List<SigningIdentity>?> availableIdentities() async {
     final result = await tools.run(
       'security',
       const ['find-identity', '-v', '-p', 'codesigning'],
     );
-    if (!result.ok) return const [];
+    if (!result.ok) return null;
 
     final identities = <SigningIdentity>[];
     for (final line in result.stdout.split('\n')) {
@@ -46,6 +53,9 @@ class MacOsSigner {
     required String codeId,
   }) async {
     final identities = await availableIdentities();
+    if (identities == null) {
+      return SignOutcome.failed('the login keychain could not be read');
+    }
     if (identities.isEmpty) {
       return SignOutcome.failed(
         'no Developer ID Application certificate is installed',

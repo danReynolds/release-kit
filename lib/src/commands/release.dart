@@ -255,13 +255,15 @@ class ReleaseCommand {
     // read, and reading it inside the sign step meant an unreadable baseline
     // surfaced after the tag was public — as a crash claiming a bug in rk.
     String? publishedRequirement;
-    if (checklist.steps
-        .any((s) => s.kind == StepKind.sign && !states[s.id]!.isExact)) {
+    String? firstCertificate;
+    final willSign = checklist.steps
+        .any((s) => s.kind == StepKind.sign && !states[s.id]!.isExact);
+    if (willSign) {
       final baseline = await _signingBaseline(unit);
       if (!baseline.ok) return ExitCodes.refused;
       publishedRequirement = baseline.requirement;
 
-      // A declared [identity] that disagrees with the published one is
+      // A declared `code_id` that disagrees with the published one is
       // refused here, before anything acts. Left to the sign step, the
       // mismatch surfaced after the tag was public — as RK-SIGN-003, whose
       // remedy cannot help, because the declaration itself is the drift.
@@ -269,6 +271,10 @@ class ReleaseCommand {
           !_declarationAgrees(unit, publishedRequirement)) {
         return ExitCodes.refused;
       }
+
+      final keychain = await _signingCertificate(unit, publishedRequirement);
+      if (!keychain.ok) return ExitCodes.refused;
+      firstCertificate = keychain.firstCertificate;
     }
 
     // The release body — the changelog entry — is read here too: it is the
@@ -307,7 +313,8 @@ class ReleaseCommand {
       );
     }
 
-    if (!dryRun && !await _authorize(unit, remaining)) {
+    if (!dryRun &&
+        !await _authorize(unit, remaining, firstCertificate: firstCertificate)) {
       return ExitCodes.refused;
     }
 
@@ -478,9 +485,71 @@ class ReleaseCommand {
     }
   }
 
+  /// Whether this machine can sign, resolved before anything acts.
+  ///
+  /// Returns the certificate a *first* signed release will make permanent,
+  /// or null when there is a published identity to reproduce instead. The
+  /// keychain used to be read at the prompt and its answer discarded in
+  /// exactly the two cases that fail: none installed, and several with
+  /// nothing published to say which. `MacOsSigner.sign` refuses both — but
+  /// it runs after the tag is pushed and pub.dev has published, so a fact
+  /// available before the first act became a halt in the middle of one.
+  Future<({bool ok, String? firstCertificate})> _signingCertificate(
+    ResolvedUnit unit,
+    String? publishedRequirement,
+  ) async {
+    final certificates = await MacOsSigner(tools: tools).availableIdentities();
+    Diagnostic? refusal;
+
+    if (certificates == null) {
+      refusal = Diagnostic(
+        code: 'RK-SIGN-006',
+        message: 'the login keychain could not be read',
+        remedy: 'signing needs `security find-identity -v -p codesigning` to '
+            'answer. This is not the same as having no certificate, and rk '
+            'will not guess which it is.',
+      );
+    } else if (certificates.isEmpty) {
+      refusal = Diagnostic(
+        code: 'RK-SIGN-007',
+        message: 'no Developer ID Application certificate is installed',
+        remedy: 'a signed release needs one in the login keychain — it is '
+            'the only certificate that distributes outside the App Store.',
+      );
+    } else if (publishedRequirement == null && certificates.length > 1) {
+      // With a published requirement the team is derived from it and the
+      // sign step picks by that, so several certificates are fine. Without
+      // one, nothing says which of them distributes this — and the first
+      // signing is what makes the answer permanent.
+      refusal = Diagnostic(
+        code: 'RK-SIGN-008',
+        message: 'this machine has ${certificates.length} Developer ID '
+            'certificates and nothing published says which distributes this',
+        remedy: 'release once from a machine with one '
+            '(${certificates.map((c) => c.team).join(', ')}), and every '
+            'release after derives it from what users installed.',
+      );
+    }
+
+    if (refusal != null) {
+      output.problem(refusal, unit: unit.name);
+      output.halt(HaltKind.beforeActing);
+      return (ok: false, firstCertificate: null);
+    }
+    return (
+      ok: true,
+      firstCertificate:
+          publishedRequirement == null ? certificates!.single.name : null,
+    );
+  }
+
   /// The operator's presence and typed confirmation are the authorization for
   /// a local release. Where a tag already exists, its signature is.
-  Future<bool> _authorize(ResolvedUnit unit, List<Step> remaining) async {
+  Future<bool> _authorize(
+    ResolvedUnit unit,
+    List<Step> remaining, {
+    required String? firstCertificate,
+  }) async {
     final permanent = remaining.where((s) => s.isPermanent).toList();
 
     output.blank();
@@ -498,15 +567,21 @@ class ReleaseCommand {
     // A first signed release establishes an identity every later release
     // must reproduce, so the operator sees which certificate is about to
     // become permanent before consenting rather than after.
-    if (unit.shipsBinaries && permanent.isNotEmpty) {
-      final certificates =
-          await MacOsSigner(tools: tools).availableIdentities();
-      if (certificates.length == 1) {
-        output.blank();
-        output.say('this is a first signed release. It will sign with '
-            '${certificates.single.name}, and every later release must '
-            'reproduce that identity.');
-      }
+    //
+    // Gated on the fact that decides it. This read `shipsBinaries &&
+    // permanent.isNotEmpty && certificates.length == 1`, and none of those
+    // three is first-ness: `isPermanent` is `publishRegistry` alone, so it
+    // meant "a pub.dev publish remains" — true of every release of a pub.dev
+    // unit, which is rk's own shape. It therefore announced a first signing
+    // on every later release from a one-certificate machine, and stayed
+    // silent on a genuine first release of a binaries-only unit, which has
+    // nothing permanent in it at all. `publishedRequirement == null` is the
+    // fact, and the sign step has always branched on it one layer down.
+    if (firstCertificate != null) {
+      output.blank();
+      output.say('this is a first signed release. It will sign with '
+          '$firstCertificate, and every later release must reproduce that '
+          'identity.');
     }
 
     // Weaker assurance is accepted knowingly or not at all: a platform
