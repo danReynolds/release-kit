@@ -18,6 +18,7 @@ import '../engine/verdict.dart';
 import '../engine/version.dart';
 import '../engine/workspace.dart';
 import '../transforms/macos.dart';
+import '../destinations/git_tag.dart';
 import 'binary_chain.dart';
 
 /// Executes a release: inspect, act, verify, one step at a time.
@@ -818,6 +819,9 @@ class ReleaseCommand {
     return remote;
   }
 
+  /// The tag destination, spoken to through git.
+  GitTag get _tags => GitTag(tools: tools, root: git.root);
+
   /// Creates and pushes the tag that records this release.
   ///
   /// A record written after the operator authorized, not the authorization
@@ -834,15 +838,11 @@ class ReleaseCommand {
       return _pushTag(unit, signed: signed, preExisting: true);
     }
 
-    final args = [
-      'tag',
-      if (signed) '-s' else '-a',
+    final created = await _tags.create(
       unit.tag,
-      '-m',
-      '${unit.name} ${unit.version}',
-    ];
-
-    final created = await tools.run('git', args, workingDirectory: git.root);
+      signed: signed,
+      message: '${unit.name} ${unit.version}',
+    );
     if (!created.ok) {
       output.problem(
         Diagnostic(
@@ -856,21 +856,13 @@ class ReleaseCommand {
       return false;
     }
 
-    final pushed = await tools.run(
-      'git',
-      ['push', 'origin', unit.tag],
-      workingDirectory: git.root,
-    );
+    final pushed = await _tags.push(unit.tag);
     if (!pushed.ok) {
       // A local tag nobody else can see is a trap, not progress: the next run
       // would report it as work remaining, but a clean refusal beats a
       // half-state. Removing what this run created restores "nothing changed"
       // honestly.
-      final removed = await tools.run(
-        'git',
-        ['tag', '-d', unit.tag],
-        workingDirectory: git.root,
-      );
+      final removed = await _tags.deleteLocal(unit.tag);
       output.problem(
         Diagnostic(
           code: 'RK-TAG-002',
@@ -894,11 +886,7 @@ class ReleaseCommand {
     required bool signed,
     required bool preExisting,
   }) async {
-    final pushed = await tools.run(
-      'git',
-      ['push', 'origin', unit.tag],
-      workingDirectory: git.root,
-    );
+    final pushed = await _tags.push(unit.tag);
     if (!pushed.ok) {
       output.problem(
         Diagnostic(
@@ -925,21 +913,18 @@ class ReleaseCommand {
     required bool signed,
     required bool preExisting,
   }) async {
-    final remote = await tools.run(
-      'git',
-      ['ls-remote', 'origin', 'refs/tags/${unit.tag}'],
-      workingDirectory: git.root,
-    );
-    if (!remote.ok || !remote.stdout.contains('refs/tags/${unit.tag}')) {
+    final presence = await _tags.onOrigin(unit.tag);
+    if (presence is! TagListed) {
       output.problem(
         Diagnostic(
           code: 'RK-TAG-003',
           message: 'the push reported success, and origin does not list '
               '${unit.tag}',
-          remedy: remote.ok
-              ? 're-running pushes it again; if this repeats, look at the '
-                  'remote'
-              : 'origin could not be read back: ${remote.summary}',
+          remedy: switch (presence) {
+            TagUnreadable(:final why) => 'origin could not be read back: $why',
+            _ => 're-running pushes it again; if this repeats, look at the '
+                'remote',
+          },
         ),
         unit: unit.name,
       );
