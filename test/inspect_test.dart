@@ -251,6 +251,59 @@ void classificationTables() {
     );
   });
 
+  group('an unread tag target is not agreement', () {
+    Future<List<Diagnostic>> guardsFor({
+      required Map<String, String> tagTargets,
+    }) async {
+      final unit = await _binaryUnit(); // 1.0.0, tag v1.0.0
+      final git = GitState(
+        root: '/repo',
+        head: 'abc123def456',
+        branch: 'main',
+        isClean: true,
+        uncommitted: const [],
+        headIsPushed: true,
+        tags: const ['v1.0.0'],
+        tagTargets: tagTargets,
+        signingConfigured: false,
+        originUrl: 'example/tool',
+      );
+      final inspector = Inspector(registry: FakeRegistry({}), git: git);
+      final checklist =
+          Checklist.derive(unit, await _binaryResolution(), Diagnostics());
+      // The version is not published yet, so the publish step is absent —
+      // which is what arms both placement guards.
+      final states = {
+        for (final s in checklist.steps) s.id: const Inspection.absent(),
+      };
+      return inspector.tagGuards(unit, checklist, states);
+    }
+
+    test('unread refuses rather than reading as "at HEAD"', () async {
+      // One unreachable tag object anywhere empties the whole map, so this
+      // is reachable without the tag rk cares about being broken. Silent,
+      // it publishes from a commit the tag does not name — and a burned
+      // pub.dev version is what re-running cannot fix.
+      final found = await guardsFor(tagTargets: const {});
+
+      expect(found.map((d) => d.code), contains('RK-GIT-007'));
+    });
+
+    test('read and elsewhere still names the commit', () async {
+      final found =
+          await guardsFor(tagTargets: const {'v1.0.0': 'fedcba987654'});
+
+      expect(found.map((d) => d.code), contains('RK-GIT-005'));
+    });
+
+    test('read and at HEAD is quiet', () async {
+      final found =
+          await guardsFor(tagTargets: const {'v1.0.0': 'abc123def456'});
+
+      expect(found, isEmpty);
+    });
+  });
+
   group('monotonicity keeps the half it can compute offline', () {
     Future<List<Diagnostic>> problemsFor({
       required RegistryReader? registry,

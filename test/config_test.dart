@@ -141,6 +141,29 @@ homebrew_tap = "danReynolds/homebrew-tools"
       );
     });
 
+    test('but not when a project row failed to parse — that is unknown', () {
+      // The signing project is dropped by a typo'd platform, so `signs`
+      // used to read false and accuse a correctly placed code_id. An
+      // operator following that remedy deletes a correct declaration.
+      final problems = Diagnostics();
+      ReleaseConfig.parse(
+        'schema = 1\n[release.cli]\n'
+            'publish = ["github-release"]\n'
+            'binary_platforms = ["macos-arm65"]\n'
+            'code_id = "io.github.danreynolds.keybay.cli"\n',
+        'release.toml',
+        problems,
+      );
+      final codes = problems.found.map((d) => d.code);
+      expect(codes, contains('RK-CONF-028'), reason: 'the real problem');
+      expect(
+        codes,
+        isNot(contains('RK-CONF-035')),
+        reason: 'rk could not read the project, which is not the same as '
+            'reading it and finding it signs nothing',
+      );
+    });
+
     test('an empty value, which is not the same as an absent one', () {
       // Verified against the real tool: `codesign -i ""` does not refuse, it
       // silently substitutes a filename-derived default — so a blank

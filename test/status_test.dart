@@ -181,6 +181,9 @@ GitState git({
       uncommitted: clean ? const [] : const ['lib/src/args.dart'],
       headIsPushed: pushed,
       tags: tags,
+      // Stated rather than omitted, for the reason RK-GIT-007 exists: an
+      // unread target is not "at HEAD".
+      tagTargets: {for (final t in tags) t: '9f2c1abcdef'},
       signingConfigured: true,
       originUrl: 'danReynolds/keybay',
     );

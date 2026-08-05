@@ -134,10 +134,15 @@ class Inspector {
   Future<Inspection> _tag(ResolvedUnit unit) async {
     if (!git.hasTag(unit.tag)) return const Inspection.absent();
 
+    // Three cases, not two: read-and-agrees is silent, read-and-differs says
+    // where, and unread says it is unread. Folding unread in with agreement
+    // is the same collapse `tagGuards` makes below, one surface along.
     final target = git.tagTarget(unit.tag);
-    final placement = target == null || target == git.head
+    final placement = target == git.head
         ? ''
-        : ', at ${_short(target)} — HEAD has moved on, expected';
+        : target == null
+            ? ', at a commit rk could not read'
+            : ', at ${_short(target)} — HEAD has moved on, expected';
 
     if (tools == null) {
       // A local tag is not a pushed tag, and offline cannot tell them apart.
@@ -391,6 +396,36 @@ class Inspector {
     }
 
     final target = git.tagTarget(unit.tag);
+
+    // Unread is not agreement. `tagTargets`' own docstring says so — "callers
+    // treat as placement unknown, never as agreement" — and both callers
+    // broke the contract by folding null into "at HEAD, nothing to say".
+    //
+    // One unreachable tag object anywhere in the repository empties the whole
+    // map (`git show-ref --tags -d` fails whole, and the failure is
+    // swallowed), so this is reachable without any tag rk cares about being
+    // broken. The consequence is the guard below going *silent*: rk reports
+    // ready, `problems` is empty, all three clauses of the blessed CI gate
+    // rule pass, and the release pushes the tag and publishes the version —
+    // from a commit the tag does not name. A burned pub.dev version is the
+    // one outcome re-running cannot fix.
+    if (git.hasTag(unit.tag) &&
+        target == null &&
+        publishes.any((s) => s.isAbsent)) {
+      return [
+        Diagnostic(
+          code: 'RK-GIT-007',
+          message: 'the tag ${unit.tag} exists, and rk could not read which '
+              'commit it names',
+          remedy: 'rk proves the tag names the commit it is about to publish '
+              'from, and it cannot prove that here — so it will not publish. '
+              'One unreachable tag object breaks the read for every tag:\n'
+              '  git show-ref --tags -d   (must exit 0)\n'
+              '  git fsck --tags          (names what is unreachable)',
+        ),
+      ];
+    }
+
     if (git.hasTag(unit.tag) &&
         target != null &&
         target != git.head &&

@@ -278,10 +278,18 @@ class _Reader {
     }
 
     final projects = <ProjectConfig>[];
+    // How many rows were *attempted*, so a row that failed to parse can be
+    // told apart from a row that is absent. `_project` returns null on any
+    // validation failure and the row is silently dropped, so without this
+    // count "rk could not read this project" becomes "this unit has no such
+    // project" — the same collapse the verdicts are built to prevent.
+    var attempted = 0;
     if (inline) {
+      attempted = 1;
       final project = _project(name, value, location, inline: true);
       if (project != null) projects.add(project);
     } else if (rows is TomlArray) {
+      attempted = rows.tables.length;
       for (final row in rows.tables) {
         final project = _project(name, row, row.location, inline: false);
         if (project != null) projects.add(project);
@@ -325,9 +333,17 @@ class _Reader {
     // clean, `_declarationAgrees` never fires — there is no sign step on
     // that unit to fire it — and the binary unit's first signed release
     // falls back to the package name, permanently, with nothing said.
-    final signs = projects.any(
-      (p) => p.binaryPlatforms.any((platform) => platform.startsWith('macos-')),
-    );
+    // Only ask "can this unit read the setting" when every row parsed. One
+    // typo'd platform name used to drop the signing project and then accuse
+    // a correctly placed `code_id` of sitting on a unit that signs nothing —
+    // a remedy that, followed, deletes a correct declaration. Both readings
+    // resume once the real diagnostic beside them is fixed.
+    final complete = projects.length == attempted;
+    final signs = !complete ||
+        projects.any(
+          (p) => p.binaryPlatforms
+              .any((platform) => platform.startsWith('macos-')),
+        );
     if (!signs && value.has('code_id')) {
       _diagnostics.add(
         'RK-CONF-035',
@@ -339,7 +355,8 @@ class _Reader {
       );
       return null;
     }
-    if (value.has('homebrew_tap') &&
+    if (complete &&
+        value.has('homebrew_tap') &&
         !projects.any((p) => p.channels.contains('homebrew'))) {
       _diagnostics.add(
         'RK-CONF-036',

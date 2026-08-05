@@ -55,6 +55,11 @@ GitState _git({
       uncommitted: clean ? const [] : const ['lib/x.dart'],
       headIsPushed: pushed,
       tags: tags,
+      // Stated, not omitted. These fixtures used to leave it empty and lean
+      // on `tagTarget` answering null reading as "at HEAD" — the very
+      // collapse RK-GIT-007 now refuses. A fixture that means "the tag is at
+      // HEAD" should say so.
+      tagTargets: {for (final t in tags) t: '9f2c1ab'},
       signingConfigured: signing,
       originUrl: 'danReynolds/keybay',
     );

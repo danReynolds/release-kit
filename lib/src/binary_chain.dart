@@ -214,7 +214,7 @@ class BinaryChain {
     // Nothing is declared: a team a user types can only ever agree with the
     // certificate they have or contradict it.
     final team =
-        publishedRequirement == null ? null : _teamOf(publishedRequirement);
+        publishedRequirement == null ? null : teamOf(publishedRequirement);
 
     if (publishedRequirement != null && team == null) {
       output.problem(
@@ -320,7 +320,7 @@ class BinaryChain {
   /// signed apps and a csreq round-trip. The quoted-only version of this
   /// returned null for every letter-leading team, which misread an
   /// established identity as "no team rk can read".
-  static String? _teamOf(String requirement) =>
+  static String? teamOf(String requirement) =>
       RegExp(r'subject\.OU\]\s*=\s*"?([A-Z0-9]+)"?')
           .firstMatch(requirement)
           ?.group(1);

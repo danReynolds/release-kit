@@ -311,6 +311,22 @@ used to silently sign the package name; under a derivation they would
 silently sign a derived value; now they hit RK-SIGN-009 and refuse.
 Fail-safe rather than fail-permanent.
 
+### Two claims corrected after the second review
+
+`111a2a7`'s message says its three mutations "each passed the whole suite
+before this commit". True of two. The third — `formulaName` dropped from
+`expectedFor`, so producer and inspector drift *together* — was already
+caught at the parent by two `inspect_test.dart` assertions. The design
+reason for set equality over a literal list stands; the novelty claim does
+not.
+
+`596643a`'s message says "a gate now checks that no shipped document names
+a flag `bin/rk.dart` refuses". It checks the backticked mentions in three
+documents — the ones describing rk's current surface. Widening it to every
+shipped markdown was tried and reverted: `doc/plan.md` legitimately records
+flags that were *cut*, and both RFCs quote other tools' flags. The test's
+own name is scoped correctly; the message was not.
+
 ### Deferred, with the condition each waits on
 
 - **`_signingBaseline`'s four unknown-into-absent collapses** — it reads
@@ -1014,7 +1030,7 @@ release users already installed — `PublishedIdentity`, wired at last, with
 the team read out of the published requirement itself — and a signature that
 does not reproduce it is refused with both requirements as evidence, before
 anything public exists. `Activity` finally has its production callers: the
-build and the notarization wait. And `--rehearse` is real: every local step
-runs for real, nothing public is touched, nothing is authorized because
+build and the notarization wait. And the rehearsal was real: every local
+step ran for real, nothing public was touched, nothing is authorized because
 nothing permanent happens — proved by a gate that counts the tool calls both
 ways.

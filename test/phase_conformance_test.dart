@@ -917,12 +917,20 @@ publish = ["pub.dev"]
         .toSet();
     expect(accepted, contains('--dry-run'), reason: 'the scrape still works');
 
+    // Exactly the documents that describe rk's *current* surface. Widening
+    // this to every shipped markdown was tried and is wrong: `doc/plan.md`
+    // is a history that legitimately records `--rehearse` and `--verbose` as
+    // flags that were cut, and both RFCs quote other tools' flags
+    // (`gh --generate-notes`, `--paginate`, `--limit`) and flags that were
+    // proposed and never built. A gate that fails on those trains people to
+    // silence it.
     for (final path in ['CHANGELOG.md', 'README.md', 'doc/json.md']) {
+      final file = File(path);
       // "no `--force`" is a promise about what rk deliberately lacks, which
       // is the opposite of advertising it. Everything else is a claim that
       // the flag works.
       final named = RegExp(r'(no )?`(--[a-z-]+)')
-          .allMatches(File(path).readAsStringSync())
+          .allMatches(file.readAsStringSync())
           .where((m) => m.group(1) == null)
           .map((m) => m.group(2)!)
           .toSet();
@@ -1094,6 +1102,7 @@ publish = ["pub.dev"]
     String label = '',
     String? containerRuntime = 'docker',
     int certificates = 1,
+    List<String>? certTeams,
     bool keychainReadable = true,
     String? previousTag,
     bool declaresCodeId = true,
@@ -1211,11 +1220,16 @@ executables:
               stderr: 'security: failed to open the login keychain',
             );
           }
+          // Teams are scriptable so a keychain can hold a certificate that
+          // is not the one the published release names — the likeliest
+          // signing failure of all, and the one the preflight learned last.
+          final teams = certTeams ??
+              [for (var i = 0; i < certificates; i++) 'TEAM12345${i + 6}'];
           return ToolResult(
             exitCode: 0,
             stdout: [
-              for (var i = 0; i < certificates; i++)
-                '${i + 1}) X "Developer ID Application: D (TEAM12345${i + 6})"',
+              for (var i = 0; i < teams.length; i++)
+                '${i + 1}) X "Developer ID Application: D (${teams[i]})"',
             ].join('\n'),
             stderr: '',
           );
@@ -1759,6 +1773,43 @@ executables:
 
         expect(run.code, ExitCodes.refused, reason: run.text);
         expect(run.text, contains('RK-SIGN-007'));
+        expect((run.json['halt']! as Map)['kind'], 'beforeActing');
+        expect(run.calls.any((c) => c.startsWith('git push origin')), isFalse);
+      });
+
+      test('a certificate for the wrong team refuses before the publish',
+          () async {
+        // The likeliest signing failure there is, and the costliest to catch
+        // late: `publishRegistry` is emitted before `build`, so for every
+        // unit in this fleet a signing problem the preflight misses costs a
+        // permanently burned version number. MacOsSigner.sign refuses this —
+        // after the tag is public and pub.dev has published.
+        final run = await binaryDrive(
+          dryRun: false,
+          label: '-wrongteam',
+          previousTag: 'v0.9.0',
+          certTeams: ['TEAMZZZZZZ'],
+        );
+
+        expect(run.code, ExitCodes.refused, reason: run.text);
+        expect(run.text, contains('RK-SIGN-010'));
+        expect(run.text, contains('TEAM123456'),
+            reason: 'the team users installed');
+        expect(run.text, contains('TEAMZZZZZZ'), reason: 'and the one here');
+        expect((run.json['halt']! as Map)['kind'], 'beforeActing');
+        expect(run.calls.any((c) => c.startsWith('git push origin')), isFalse);
+      });
+
+      test('several certificates for the published team refuses too', () async {
+        final run = await binaryDrive(
+          dryRun: false,
+          label: '-dupeteam',
+          previousTag: 'v0.9.0',
+          certTeams: ['TEAM123456', 'TEAM123456'],
+        );
+
+        expect(run.code, ExitCodes.refused, reason: run.text);
+        expect(run.text, contains('RK-SIGN-011'));
         expect((run.json['halt']! as Map)['kind'], 'beforeActing');
         expect(run.calls.any((c) => c.startsWith('git push origin')), isFalse);
       });

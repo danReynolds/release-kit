@@ -564,6 +564,39 @@ class ReleaseCommand {
         remedy: 'a signed release needs one in the login keychain — it is '
             'the only certificate that distributes outside the App Store.',
       );
+    } else if (publishedRequirement != null &&
+        BinaryChain.teamOf(publishedRequirement) != null &&
+        certificates
+            .where((c) => c.team == BinaryChain.teamOf(publishedRequirement))
+            .isEmpty) {
+      // The likeliest signing failure of all — a machine that has a
+      // certificate, just not the one the published release names — and the
+      // last one this preflight learned to catch. `MacOsSigner.sign` refuses
+      // it, but sign runs *after* the pub.dev publish for every unit in this
+      // fleet (`publishRegistry` is emitted before `build`), so the cost of
+      // catching it late is a permanently burned version number.
+      refusal = Diagnostic(
+        code: 'RK-SIGN-010',
+        message: 'no certificate for the team the published release names',
+        remedy: 'users installed a binary signed by team '
+            '${BinaryChain.teamOf(publishedRequirement)}; this machine has '
+            '${certificates.map((c) => c.team).join(', ')}. Signing with a '
+            'different team ships what macOS treats as a new program.',
+      );
+    } else if (publishedRequirement != null &&
+        certificates
+                .where(
+                    (c) => c.team == BinaryChain.teamOf(publishedRequirement))
+                .length >
+            1) {
+      refusal = Diagnostic(
+        code: 'RK-SIGN-011',
+        message: 'several certificates for team '
+            '${BinaryChain.teamOf(publishedRequirement)}, and rk will not '
+            'guess which one distributes this',
+        remedy: 'leave one Developer ID Application certificate for that '
+            'team in the login keychain.',
+      );
     } else if (publishedRequirement == null && certificates.length > 1) {
       // With a published requirement the team is derived from it and the
       // sign step picks by that, so several certificates are fine. Without
