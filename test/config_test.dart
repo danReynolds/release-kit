@@ -141,6 +141,19 @@ homebrew_tap = "danReynolds/homebrew-tools"
       );
     });
 
+    test('an empty value, which is not the same as an absent one', () {
+      // Verified against the real tool: `codesign -i ""` does not refuse, it
+      // silently substitutes a filename-derived default — so a blank
+      // code_id ships a permanent identifier nobody chose.
+      expect(
+        refusedWith('schema = 1\n[release.cli]\n'
+            'publish = ["github-release"]\n'
+            'binary_platforms = ["macos-arm64"]\n'
+            'code_id = "   "\n'),
+        'RK-CONF-037',
+      );
+    });
+
     test('homebrew_tap on a unit that does not publish to homebrew', () {
       expect(
         refusedWith('schema = 1\n[release.cli]\n'

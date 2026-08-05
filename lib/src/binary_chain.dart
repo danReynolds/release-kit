@@ -191,13 +191,18 @@ class BinaryChain {
   ///
   /// The requirement is derived from the release users already installed —
   /// asking the certificate about to sign what it will sign with is a
-  /// tautology. Only a first signed release, which has no published binary
-  /// to derive from, falls back to the unit's declared `code_id`.
+  /// tautology.
+  ///
+  /// [codeId] is resolved by the caller, before anything acts, and is
+  /// non-null by construction: it is read off the published binary, or
+  /// declared, or the release was refused (RK-SIGN-009). This step used to
+  /// resolve it itself and fall back to the package name — inventing, at the
+  /// one moment that makes the answer permanent, a value nothing had stated.
   Future<bool> signStep(
     Step step,
     ResolvedProject project, {
     required String? publishedRequirement,
-    required String? declaredCodeId,
+    required String codeId,
   }) async {
     final platform = step.platform!;
     final name = binaryName(platform, project.executable!);
@@ -210,17 +215,7 @@ class BinaryChain {
     // certificate they have or contradict it.
     final team =
         publishedRequirement == null ? null : _teamOf(publishedRequirement);
-    // The identifier is an identity fact like the team, and identity facts
-    // are derived from the release users already installed. Signing with
-    // the project name while the published binary carries a reverse-DNS
-    // identifier would produce a different designated requirement — a
-    // mismatch discovered only after signing, for a value rk could read
-    // before it.
-    final codeId = (publishedRequirement != null
-            ? identifierOf(publishedRequirement)
-            : null) ??
-        declaredCodeId ??
-        project.name;
+
     if (publishedRequirement != null && team == null) {
       output.problem(
         Diagnostic(

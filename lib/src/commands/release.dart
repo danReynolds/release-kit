@@ -256,6 +256,7 @@ class ReleaseCommand {
     // surfaced after the tag was public — as a crash claiming a bug in rk.
     String? publishedRequirement;
     String? firstCertificate;
+    String? codeId;
     final willSign = checklist.steps
         .any((s) => s.kind == StepKind.sign && !states[s.id]!.isExact);
     if (willSign) {
@@ -275,6 +276,47 @@ class ReleaseCommand {
       final keychain = await _signingCertificate(unit, publishedRequirement);
       if (!keychain.ok) return ExitCodes.refused;
       firstCertificate = keychain.firstCertificate;
+
+      // What the binary will be called, resolved once, here. It used to fall
+      // back to the package name inside the sign step — a value that is
+      // wrong on both of this fleet's repositories (`release_kit` for a
+      // command called `rk`), because it answers "what is this called on
+      // pub.dev" for a question about which executable macOS is running.
+      //
+      // rk will not choose one instead. Nothing in the system states it:
+      // not the keychain, not the pubspec, not the forge. A rule like
+      // `io.github.<owner>.<executable>` looks like derivation and is
+      // invention — it collides two real packages by one owner that both
+      // declare `executables: cli`, and every sidekick-generated CLI on
+      // `main`. And the first signature is what makes the answer permanent:
+      // macOS stores the designated requirement in the ACL of every
+      // Keychain item the program creates, so a wrong one means an auth
+      // dialog on every access, forever.
+      //
+      // So: read it off the release users installed, or be told. Never
+      // guessed.
+      codeId = publishedRequirement == null
+          ? unit.codeId
+          : BinaryChain.identifierOf(publishedRequirement) ?? unit.codeId;
+      if (codeId == null) {
+        output.problem(
+          Diagnostic(
+            code: 'RK-SIGN-009',
+            message: 'no release states what this program is called',
+            remedy: 'rk signs macOS binaries under an identifier macOS binds '
+                'Keychain items to. Nothing is published to read it from, so '
+                'rk will not choose one — the first signature makes it '
+                'permanent.\n'
+                'Add to [release.${unit.name}]: code_id = '
+                '"${_conventionalCodeId(unit)}" — a conventional choice, '
+                'io.github.<owner>.<command>. Any unique string works; it can '
+                'never change.',
+          ),
+          unit: unit.name,
+        );
+        output.halt(HaltKind.beforeActing);
+        return ExitCodes.refused;
+      }
     }
 
     // The release body — the changelog entry — is read here too: it is the
@@ -314,7 +356,12 @@ class ReleaseCommand {
     }
 
     if (!dryRun &&
-        !await _authorize(unit, remaining, firstCertificate: firstCertificate)) {
+        !await _authorize(
+          unit,
+          remaining,
+          firstCertificate: firstCertificate,
+          codeId: codeId,
+        )) {
       return ExitCodes.refused;
     }
 
@@ -334,7 +381,8 @@ class ReleaseCommand {
       // From here on the world may change, which is what makes a failure
       // worth recording evidence about. A rehearsal's local acts count too.
       output.report.acted = true;
-      final ok = await _act(step, unit, publishedRequirement, notesPath);
+      final ok =
+          await _act(step, unit, publishedRequirement, codeId, notesPath);
       // The act's answer supersedes the inspection's: without this, the
       // document of a failed run said `absent` about a tag that was already
       // public — rk acted, and the JSON said nothing had.
@@ -549,6 +597,7 @@ class ReleaseCommand {
     ResolvedUnit unit,
     List<Step> remaining, {
     required String? firstCertificate,
+    required String? codeId,
   }) async {
     final permanent = remaining.where((s) => s.isPermanent).toList();
 
@@ -580,8 +629,8 @@ class ReleaseCommand {
     if (firstCertificate != null) {
       output.blank();
       output.say('this is a first signed release. It will sign with '
-          '$firstCertificate, and every later release must reproduce that '
-          'identity.');
+          '$firstCertificate as $codeId, and every later release must '
+          'reproduce that identity.');
     }
 
     // Weaker assurance is accepted knowingly or not at all: a platform
@@ -631,6 +680,7 @@ class ReleaseCommand {
     Step step,
     ResolvedUnit unit,
     String? publishedRequirement,
+    String? codeId,
     String? notesPath,
   ) async {
     switch (step.kind) {
@@ -651,7 +701,7 @@ class ReleaseCommand {
           step,
           unit.binaryProject,
           publishedRequirement: publishedRequirement,
-          declaredCodeId: unit.codeId,
+          codeId: codeId!,
         );
       case StepKind.notarize:
         return _chain(unit).notarizeStep(step, unit.binaryProject);
@@ -787,6 +837,25 @@ class ReleaseCommand {
       assets: [...assets, if (formula != null) formula],
     );
     return url != null;
+  }
+
+  /// A conventional identifier to *suggest*, never to use.
+  ///
+  /// `io.github.<owner>.<command>` is what a human usually picks for
+  /// GitHub-hosted software with no domain, and rk offers it in RK-SIGN-009's
+  /// remedy as text to read and edit. It is deliberately not a fallback: the
+  /// rule reproduces rk's own declared identifier exactly, and misses
+  /// keybay's — where the `.cli` suffix was chosen so one signed program in a
+  /// two-unit repository would not claim the bare product name. A rule that
+  /// reproduces the less considered choice and misses the more considered one
+  /// is a suggestion, not a derivation. Two real packages by one owner that
+  /// both declare `executables: cli` collide under it outright.
+  String _conventionalCodeId(ResolvedUnit unit) {
+    final executable = unit.binaryProject.executable ?? unit.name;
+    final owner = git.originUrl?.split('/').first.toLowerCase();
+    return owner == null || owner.isEmpty
+        ? executable
+        : 'io.github.$owner.$executable';
   }
 
   /// Whether the unit's declared `code_id` agrees with the published

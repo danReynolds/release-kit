@@ -195,6 +195,13 @@ release matches the last one" — impossible to typo and self-maintaining:
 | Tag signer | the signature on the previous release's tag |
 | Homebrew tap | `<repository owner>/homebrew-tap`, Homebrew's convention |
 
+There is deliberately no `code_id` row. The tap convention is *resolved by
+`brew tap`*, so deferring to it defers to a system that enforces it, and a
+wrong tap fails loudly and is fixable. Nothing resolves
+`io.github.<owner>.<command>`; a wrong identifier is silent, permanent, and
+sealed into every Keychain ACL the program creates. rk suggests it and
+refuses to choose it.
+
 *Amended (as built):* there is no `[identity]` block. Two optional
 settings live on the unit that owns them — `code_id` and `homebrew_tap` —
 because a program identity and a tap belong to what is being shipped, and
@@ -215,12 +222,18 @@ comes from the keychain, filtered to `Developer ID Application` identities
 (one is unambiguous; several fail closed with the list; none reports that a
 certificate must be installed), and rk does not read `.xcodeproj` files,
 which in practice belong to example apps with unrelated identities. The
-code identifier has no source, because it is a name a human chooses and
-cannot change without breaking Keychain continuity for existing users. As
-built rk proposes nothing: `code_id` is declared on the unit or the
-package name is used, and the first signing makes that choice permanent —
-which is disclosed at the prompt, with the certificate, before the version
-is typed. A tag signer, where
+code identifier has no source *in the system*, because it is a name a
+human chooses and cannot change without breaking Keychain continuity for
+existing users. So on a first signed release `code_id` is **required**, not
+optional: rk refuses (RK-SIGN-009) and offers `io.github.<owner>.<command>`
+in the remedy as text to read and edit. It offers rather than derives,
+because the rule reproduces rk's own declared identifier exactly and misses
+keybay's — where `.cli` was chosen so one signed program in a two-unit
+repository would not claim the bare product name — and because two real
+packages by one owner that both declare `executables: cli` collide under
+it. Every release after the first reads the identifier off the binary users
+installed. The prompt names both halves of what becomes permanent, the
+certificate and the identifier, before the version is typed. A tag signer, where
 earlier tags are unsigned or absent, is the key about to sign, confirmed
 once. Keybay needs none of this: its 0.1.0 release supplies every baseline.
 

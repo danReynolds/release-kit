@@ -1096,6 +1096,7 @@ publish = ["pub.dev"]
     int certificates = 1,
     bool keychainReadable = true,
     String? previousTag,
+    bool declaresCodeId = true,
   }) async {
     final root = Directory('${scratch.path}/drive-${dryRun ? 'd' : 'f'}'
         '${notaryRejects ? '-nr' : ''}$label')
@@ -1109,6 +1110,7 @@ schema = 1
 path = "packages/tool"
 publish = ["github-release"${homebrew ? ', "homebrew"' : ''}]
 binary_platforms = [${platforms.map((p) => '"$p"').join(', ')}]
+${declaresCodeId ? 'code_id = "io.github.example.tool"' : ''}
 ''', 'release.toml', diagnostics)!;
     final tree = MemorySourceTree({
       'packages/tool/pubspec.yaml': '''
@@ -1194,8 +1196,8 @@ executables:
           // is why no drive had ever modelled a later release.
           return ToolResult(
             exitCode: 0,
-            stdout: 'designated => identifier "tool" and certificate '
-                'leaf[subject.OU] = "TEAM123456"',
+            stdout: 'designated => identifier "io.github.example.tool" and '
+                'certificate leaf[subject.OU] = "TEAM123456"',
             stderr: '',
           );
         }
@@ -1656,6 +1658,13 @@ executables:
             'sense — which is what used to silence it',
       );
       expect(run.text, contains('Developer ID Application: D (TEAM123456)'));
+      expect(
+        run.text,
+        contains('io.github.example.tool'),
+        reason: 'the identifier is half of what becomes permanent, and the '
+            'RFC already claimed this sentence named it — it named only the '
+            'certificate',
+      );
     });
 
     test('a later release does not claim to be a first one', () async {
@@ -1682,6 +1691,39 @@ executables:
         isNot(contains('first signed release')),
         reason: 'there is an identity to reproduce, and it was just read',
       );
+    });
+
+    test('nothing published and nothing declared is refused, not guessed',
+        () async {
+      // The identifier used to fall back to the pub package name, chosen at
+      // the one moment that makes it permanent: macOS stores the designated
+      // requirement in the ACL of every Keychain item the program creates,
+      // so a wrong one is an auth dialog on every access, forever. Nothing
+      // in the system states it — not the keychain, not the pubspec, not the
+      // forge — so rk refuses and suggests instead of choosing.
+      final run = await binaryDrive(
+        dryRun: false,
+        label: '-nocodeid',
+        declaresCodeId: false,
+      );
+
+      expect(run.code, ExitCodes.refused, reason: run.text);
+      expect(run.text, contains('RK-SIGN-009'));
+      expect((run.json['halt']! as Map)['kind'], 'beforeActing');
+      expect(
+        run.calls.any((c) => c.startsWith('git push origin')),
+        isFalse,
+        reason: 'refused before the tag is public',
+      );
+      expect(
+        run.calls.any((c) => c.startsWith('codesign --force')),
+        isFalse,
+        reason: 'and before anything is signed under a guessed name',
+      );
+      // The remedy offers the convention as text to read and edit. It is a
+      // suggestion, never a fallback — the rule reproduces rk's own declared
+      // identifier and misses keybay's deliberate `.cli` suffix.
+      expect(run.text, contains('code_id = "io.github.example.tool"'));
     });
 
     group('the keychain is read before anything acts, not midway', () {

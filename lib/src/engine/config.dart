@@ -117,7 +117,23 @@ class _Reader {
   String? _unitText(TomlTable value, String key) {
     if (!value.has(key)) return null;
     final entry = value[key];
-    if (entry is String) return entry;
+    if (entry is String) {
+      // Empty is not the same as omitted, and for `code_id` the difference is
+      // permanent: `codesign -i ""` does not refuse, it silently substitutes a
+      // filename-derived default, so a blank declaration ships a signature
+      // nobody chose under an identifier nobody can predict.
+      if (entry.trim().isEmpty) {
+        _diagnostics.add(
+          'RK-CONF-037',
+          '$key is empty',
+          source: value.locationOf(key),
+          remedy: 'give it a value or remove the line — a blank setting is '
+              'not the same as an absent one',
+        );
+        return null;
+      }
+      return entry;
+    }
     _diagnostics.add(
       'RK-CONF-032',
       '$key must be text',

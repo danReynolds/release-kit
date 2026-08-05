@@ -271,7 +271,65 @@ dry-run and the consumer resolve to the **ecosystem** adapter, not the
 destination, so extracting them would put ninety lines in the module the
 spec says they do not belong to.
 
+### The code identifier: rejected alternative, and why
+
+Asked whether `code_id` should be **derived** rather than declared, on the
+austerity principle that removed `apple_team`. It should not, and the
+distinction is the whole answer: `security find-identity` *literally
+returns* the team, so deference was available and the declaration was
+drift. Nothing returns the code identifier — not the keychain, not the
+pubspec, not the forge. A rule would be rk inventing a convention and
+calling it derivation.
+
+`io.github.<owner>.<command>` was the candidate, and the evidence against
+it is specific:
+
+- It reproduces rk's own declared `io.github.danreynolds.rk` **exactly**,
+  and **misses** keybay's `io.github.danreynolds.keybay.cli` — where the
+  `.cli` suffix was chosen so one signed program in a two-unit repository
+  would not claim the bare product name. A rule that reproduces the less
+  considered choice and misses the more considered one is a suggestion.
+- It collides live: `erikas-taroza/audiotags` and `erikas-taroza/
+  simple_audio` both declare `executables: cli`, so both derive
+  `io.github.erikas-taroza.cli`. Every `sidekick_core`-generated CLI
+  hard-codes `executables: main`, so all of them derive
+  `io.github.<owner>.main`.
+- Apple's own `codesign --prefix` documentation has the *signer* supply the
+  prefix and names `com.domain.`. Apple cannot name `io.github.<owner>`,
+  because Apple does not know what a forge is.
+
+What *was* drift is the third leg: `?? project.name`. It answered "what is
+this called on pub.dev" for a question about which executable macOS is
+running — wrong on both of this fleet's repositories — and it did so at the
+one moment that makes the answer permanent. Deleted. rk refuses with
+RK-SIGN-009 and offers the convention in the remedy, as text a human reads
+and edits. Nothing becomes permanent without being typed.
+
+A useful side effect: every unknown-collapses-into-absent hole in
+`_signingBaseline` (below) stops being able to cause permanent harm. They
+used to silently sign the package name; under a derivation they would
+silently sign a derived value; now they hit RK-SIGN-009 and refuse.
+Fail-safe rather than fail-permanent.
+
 ### Deferred, with the condition each waits on
+
+- **`_signingBaseline`'s four unknown-into-absent collapses** — it reads
+  local `git tag --list` rather than asking the forge, walks only the
+  single best earlier tag, hardcodes `macos-arm64` when matching the
+  published asset, and treats a changed tag pattern or renamed executable
+  as "no earlier release". Each now produces a *refusal* (RK-SIGN-009)
+  rather than a silent permanent identifier, so they are friction rather
+  than harm. Waits on: a release that actually hits one, or the CI pass —
+  the fix must fail *open* on an inconclusive forge answer (403, rate
+  limit) so a genuine first release is not blocked by GitHub having a bad
+  minute.
+- **`GitState._originSlug` hygiene** — accepts five mirror-path spellings
+  (`https://gitlab.com/github.com/acme/tool.git`), lookalike hosts
+  (`evilgithub.com`), and eats the port in `ssh://git@github.com:22/o/r`,
+  while rejecting `https://GitHub.com/...` and GitHub's own documented
+  SSH-over-443 host `ssh.github.com`. Now ordinary hygiene rather than a
+  precondition: nothing permanent depends on it, since it feeds only the
+  RK-SIGN-009 suggestion and `gh`, which fails loudly.
 
 1. **`destinations/pub_dev.dart`, partial** — `_publish`,
    `_refuseFirstPublish`, `_confirmPublishedBytes` and the poll policy.

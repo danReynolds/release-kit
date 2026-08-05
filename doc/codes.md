@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-109 codes across 25 families.
+111 codes across 25 families.
 
 
 ## RK-AUTH — Authorization
@@ -95,6 +95,7 @@ fails, and the count below is checked against the rows.
 | `RK-CONF-034` | release.toml is there and rk could not read it | `bin/rk.dart` |
 | `RK-CONF-035` | unit "$name" declares code_id but signs nothing | `lib/src/engine/config.dart` |
 | `RK-CONF-036` | unit "$name" declares homebrew_tap but does not publish to  homebrew | `lib/src/engine/config.dart` |
+| `RK-CONF-037` | $key is empty | `lib/src/engine/config.dart` |
 
 ## RK-DART — Dart-specific facts
 
@@ -212,6 +213,7 @@ fails, and the count below is checked against the rows.
 | `RK-SIGN-006` | the login keychain could not be read | `lib/src/commands/release.dart` |
 | `RK-SIGN-007` | no Developer ID Application certificate is installed | `lib/src/commands/release.dart` |
 | `RK-SIGN-008` | this machine has ${certificates.length} Developer ID  certificates and nothing published says which distributes this | `lib/src/commands/release.dart` |
+| `RK-SIGN-009` | no release states what this program is called | `lib/src/commands/release.dart` |
 
 ## RK-TAG — The tag
 
