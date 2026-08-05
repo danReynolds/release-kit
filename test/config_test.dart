@@ -98,20 +98,32 @@ publish = ["pub.dev"]
     expect(config.units.single.projects.single.path, 'packages/keybay');
   });
 
-  test('identity overrides are read when present', () {
+  test('the two identity overrides live on the unit that owns them', () {
+    // Per unit, not per repository: a repository with two binary units has
+    // two program identities and possibly two taps, and the global
+    // [identity] table this replaced would have signed both as one program.
     final config = accepted('''
 schema = 1
 
-[release.core]
+[release.cli]
 publish = ["pub.dev"]
-
-[identity]
-apple_team = "5AHFA9FUZG"
 code_id = "io.github.danreynolds.keybay.cli"
+homebrew_tap = "danReynolds/homebrew-tools"
 ''');
-    expect(config.identity!.appleTeam, '5AHFA9FUZG');
-    expect(config.identity!.codeId, 'io.github.danreynolds.keybay.cli');
-    expect(config.identity!.homebrewTap, isNull);
+    expect(config.units.single.codeId, 'io.github.danreynolds.keybay.cli');
+    expect(config.units.single.homebrewTap, 'danReynolds/homebrew-tools');
+  });
+
+  test('there is no team to declare, and no identity table to declare it in',
+      () {
+    // apple_team was discoverable all along — a machine with one Developer
+    // ID certificate has nothing to say — and tag_signer was accepted,
+    // stored, and read by nothing at all.
+    expect(
+      refusedWith('schema = 1\n[release.core]\npublish = ["pub.dev"]\n'
+          '[identity]\napple_team = "5AHFA9FUZG"\n'),
+      'RK-CONF-003',
+    );
   });
 
   group('refuses', () {
@@ -248,11 +260,11 @@ code_id = "io.github.danreynolds.keybay.cli"
       );
     });
 
-    test('an unknown identity override', () {
+    test('an unknown setting on a unit', () {
       expect(
         refusedWith('schema = 1\n[release.core]\npublish = ["pub.dev"]\n'
-            '[identity]\nsigning_key = "x"'),
-        'RK-CONF-031',
+            'signing_key = "x"'),
+        'RK-CONF-008',
       );
     });
   });

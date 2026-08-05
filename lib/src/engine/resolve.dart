@@ -7,14 +7,9 @@ import 'version.dart';
 /// Release intent resolved against the repository: what the author asked for,
 /// joined to what the manifests say.
 class Resolution {
-  Resolution({
-    required this.units,
-    required this.identity,
-    required this.tree,
-  });
+  Resolution({required this.units, required this.tree});
 
   final List<ResolvedUnit> units;
-  final IdentityConfig? identity;
   final SourceTree tree;
 
   ResolvedUnit? unit(String name) {
@@ -69,6 +64,8 @@ class Resolution {
           tagPattern: declared.tagPattern ??
               _derivedTagPattern(resolved.single, releasesSeveral),
           tagWasDeclared: declared.tagPattern != null,
+          codeId: declared.codeId,
+          homebrewTap: declared.homebrewTap,
           projects: resolved,
           location: declared.location,
         ),
@@ -82,11 +79,7 @@ class Resolution {
     _rejectSharedTags(units, diagnostics);
 
     if (diagnostics.isNotEmpty) return null;
-    return Resolution(
-      units: units,
-      identity: config.identity,
-      tree: tree,
-    );
+    return Resolution(units: units, tree: tree);
   }
 
   /// pub.dev documents `v{version}` for a repository releasing one thing, and a
@@ -326,6 +319,8 @@ class ResolvedUnit {
     required this.tagWasDeclared,
     required this.projects,
     required this.location,
+    this.codeId,
+    this.homebrewTap,
   });
 
   final String name;
@@ -333,6 +328,12 @@ class ResolvedUnit {
   /// Declared, or derived from the publication target's convention.
   final String tagPattern;
   final bool tagWasDeclared;
+
+  /// The macOS code identifier for a first signed release, and the tap when
+  /// it is not the conventional one — per unit, because a program identity
+  /// and a tap belong to what is being shipped, not to the repository.
+  final String? codeId;
+  final String? homebrewTap;
 
   final List<ResolvedProject> projects;
   final SourceLocation location;

@@ -29,7 +29,6 @@ class Inspector {
     required this.git,
     this.tools,
     this.repository,
-    this.tap,
   });
 
   /// Absent means the registry was not read — `--offline`, exactly like a
@@ -42,10 +41,6 @@ class Inspector {
   /// Needed to read the forge. Absent means the forge cannot be read, which is
   /// `unknown` — never `absent`.
   final Tools? tools;
-
-  /// `owner/homebrew-tap`, when one is declared; the default is derived
-  /// from [repository]'s owner.
-  final String? tap;
 
   /// `owner/name`, when the repository has an origin to ask about.
   final String? repository;
@@ -304,7 +299,10 @@ class Inspector {
     if (repository == null) {
       return const Inspection.unknown('no origin remote to ask');
     }
-    final tapRepo = tap ?? '${repository!.split('/').first}/homebrew-tap';
+    // Per unit: a tap is where this unit's formula goes, and a repository
+    // with two binary units can point them at two taps.
+    final tapRepo =
+        unit.homebrewTap ?? '${repository!.split('/').first}/homebrew-tap';
     final project = unit.projects.firstWhere((p) => p.config.wantsBinaries);
     final executable = project.executable!;
 

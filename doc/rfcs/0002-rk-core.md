@@ -195,8 +195,16 @@ release matches the last one" — impossible to typo and self-maintaining:
 | Tag signer | the signature on the previous release's tag |
 | Homebrew tap | `<repository owner>/homebrew-tap`, Homebrew's convention |
 
-An optional `[identity]` block overrides any of them, and matters in two
-cases. A **deliberate migration** — a new tap or team — overrides a
+*Amended (as built):* there is no `[identity]` block. Two optional
+settings live on the unit that owns them — `code_id` and `homebrew_tap` —
+because a program identity and a tap belong to what is being shipped, and
+a repository with two binary units has two of each; a single global table
+would have signed both as one program. `apple_team` is gone entirely: the
+keychain rule below was always the specification, and requiring the
+declaration was drift. `tag_signer` is gone too — it was accepted,
+stored, and read by nothing.
+
+The remaining override matters in two cases. A **deliberate migration** — a new tap or team — overrides a
 `conflict` on purpose. A **first release** has no baseline: the Apple team
 comes from the keychain, filtered to `Developer ID Application` identities
 (one is unambiguous; several fail closed with the list; none reports that a
@@ -494,7 +502,7 @@ surfaced by `status` with sizes and deleted only by a human.
 ## Credentials
 
 Two rules. **Facts** come from the manifests, published reality, or an
-explicit `[identity]` override — never from the environment. **Secrets and
+explicit override on the unit — never from the environment. **Secrets and
 sessions** resolve from the platform's native store under a conventional
 name, with no mapping file, no ambient pickup, and no interpolation; every
 resolved credential is checked against the declared facts before use, so a

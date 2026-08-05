@@ -153,7 +153,6 @@ executables:
         step(StepKind.sign),
         project,
         publishedRequirement: null,
-        declaredTeam: 'TEAM123456',
         declaredCodeId: 'com.example.tool',
       ),
       isTrue,
@@ -211,7 +210,6 @@ executables:
       project,
       publishedRequirement: 'designated => certificate '
           'leaf[subject.OU] = "TEAM123456" and leaf "OLD"',
-      declaredTeam: null,
       declaredCodeId: 'com.example.tool',
     );
 
@@ -243,16 +241,20 @@ executables:
       step(StepKind.sign),
       project,
       publishedRequirement:
-          'designated => certificate leaf[subject.OU] = "TEAM123456"',
-      declaredTeam: null, // nothing declared: derivation must carry it
+          'designated => certificate leaf[subject.OU] = "TEAM123456"', // nothing declared: derivation must carry it
       declaredCodeId: 'com.example.tool',
     );
     expect(ok, isTrue, reason: buffer.toString());
   });
 
   test(
-      'no baseline and no declaration refuses with the first-release '
-      'instruction', () async {
+      'a first release discovers the one certificate, and names the '
+      'identity it just made permanent', () async {
+    // Nothing to declare: capabilities are discovered, and a machine with
+    // one Developer ID has exactly one answer. What rk owes the operator is
+    // not a demand for configuration but a statement of what became
+    // permanent — the certificate, and the identifier every later release
+    // must reproduce.
     await chain(scripted()).buildStep(
       step(StepKind.build),
       project,
@@ -262,14 +264,44 @@ executables:
       step(StepKind.sign),
       project,
       publishedRequirement: null,
-      declaredTeam: null,
+      declaredCodeId: null,
+    );
+    expect(ok, isTrue, reason: buffer.toString());
+    expect(buffer.toString(), contains('first release'));
+    expect(buffer.toString(), contains('Developer ID Application: Dan'));
+    expect(
+      buffer.toString(),
+      contains('tool'),
+      reason: 'the identifier defaults to the package name and is stated',
+    );
+  });
+
+  test('several certificates and nothing published is a refusal, not a guess',
+      () async {
+    final tools = RecordingTools(
+      answers: (key) {
+        if (key.startsWith('security find-identity')) {
+          return ToolResult(
+            exitCode: 0,
+            stdout: '1) A "Developer ID Application: One (TEAM111111)"\n'
+                '2) B "Developer ID Application: Two (TEAM222222)"',
+            stderr: '',
+          );
+        }
+        return null;
+      },
+    );
+    workspace.write('macos-arm64/tool', utf8.encode('BINARY'));
+
+    final ok = await chain(tools).signStep(
+      step(StepKind.sign),
+      project,
+      publishedRequirement: null,
       declaredCodeId: null,
     );
     expect(ok, isFalse);
-    expect(
-        buffer.toString(),
-        contains('the first signed release states it '
-            'once'));
+    expect(buffer.toString(), contains('TEAM111111'));
+    expect(buffer.toString(), contains('TEAM222222'));
   });
 
   test(
@@ -323,8 +355,7 @@ executables:
       step(StepKind.sign),
       project,
       publishedRequirement: 'designated => identifier "TOOL" and certificate '
-          'leaf[subject.OU] = Q6L2SF6YDW',
-      declaredTeam: null, // derivation must carry the unquoted team
+          'leaf[subject.OU] = Q6L2SF6YDW', // derivation must carry the unquoted team
       declaredCodeId: 'com.example.tool',
     );
     expect(ok, isTrue, reason: buffer.toString());
@@ -455,7 +486,6 @@ executables:
       step(StepKind.sign),
       project,
       publishedRequirement: published,
-      declaredTeam: null,
       declaredCodeId: 'com.example.tool',
     );
     expect(ok, isFalse, reason: buffer.toString());
@@ -555,7 +585,6 @@ executables:
       step(StepKind.sign),
       project,
       publishedRequirement: published,
-      declaredTeam: null,
       declaredCodeId: 'com.example.tool', // derivation must beat this
     );
     expect(ok, isTrue, reason: buffer.toString());

@@ -17,6 +17,7 @@ import '../engine/identity.dart';
 import '../engine/verdict.dart';
 import '../engine/version.dart';
 import '../engine/workspace.dart';
+import '../transforms/macos.dart';
 import 'binary_chain.dart';
 
 /// Executes a release: inspect, act, verify, one step at a time.
@@ -257,7 +258,7 @@ class ReleaseCommand {
       // mismatch surfaced after the tag was public — as RK-SIGN-003, whose
       // remedy cannot help, because the declaration itself is the drift.
       if (publishedRequirement != null &&
-          !_declarationAgrees(publishedRequirement)) {
+          !_declarationAgrees(unit, publishedRequirement)) {
         return ExitCodes.refused;
       }
     }
@@ -500,6 +501,20 @@ class ReleaseCommand {
           'permanent step is: ${permanent.first.summary}.');
     }
 
+    // A first signed release establishes an identity every later release
+    // must reproduce, so the operator sees which certificate is about to
+    // become permanent before consenting rather than after.
+    if (unit.shipsBinaries && permanent.isNotEmpty) {
+      final certificates =
+          await MacOsSigner(tools: tools).availableIdentities();
+      if (certificates.length == 1) {
+        output.blank();
+        output.say('this is a first signed release. It will sign with '
+            '${certificates.single.name}, and every later release must '
+            'reproduce that identity.');
+      }
+    }
+
     // Weaker assurance is accepted knowingly or not at all: a platform
     // nothing here can run ships with its smoke test missing, and that is
     // said before the version is typed, not discovered afterwards.
@@ -567,8 +582,7 @@ class ReleaseCommand {
           step,
           _binaryProject(unit),
           publishedRequirement: publishedRequirement,
-          declaredTeam: resolution.identity?.appleTeam,
-          declaredCodeId: resolution.identity?.codeId,
+          declaredCodeId: unit.codeId,
         );
       case StepKind.notarize:
         return _chain(unit).notarizeStep(step, _binaryProject(unit));
@@ -716,39 +730,23 @@ class ReleaseCommand {
   /// *contradicts* what users already installed is either a typo or an
   /// identity migration, and both deserve a refusal naming the two values
   /// rather than a signature mismatch after the tag is public.
-  bool _declarationAgrees(String publishedRequirement) {
-    final declared = resolution.identity;
+  bool _declarationAgrees(ResolvedUnit unit, String publishedRequirement) {
+    final declared = unit.codeId;
     if (declared == null) return true;
-    final published = BinaryChain.identityOf(publishedRequirement);
-
-    final disagreements = <String, String>{};
-    if (declared.appleTeam != null &&
-        published.team != null &&
-        declared.appleTeam != published.team) {
-      disagreements['apple_team'] =
-          'declared ${declared.appleTeam}, published ${published.team}';
-    }
-    if (declared.codeId != null &&
-        published.identifier != null &&
-        declared.codeId != published.identifier) {
-      disagreements['code_id'] =
-          'declared ${declared.codeId}, published ${published.identifier}';
-    }
-    if (disagreements.isEmpty) return true;
+    final published = BinaryChain.identityOf(publishedRequirement).identifier;
+    if (published == null || declared == published) return true;
 
     output.problem(
       Diagnostic(
         code: 'RK-SIGN-005',
-        message: 'the declared [identity] disagrees with the release users '
-            'already installed',
-        remedy: 'identity facts are derived from the published release; the '
-            'declaration only fills what no release states yet. Fix or '
-            'remove the declaration:\n'
-            '${disagreements.entries.map((e) => '${e.key}: ${e.value}').join('\n')}\n'
+        message: 'code_id disagrees with the release users already installed',
+        remedy: 'the identity is derived from the published binary; the '
+            'declaration only fills what no release states yet.\n'
+            'declared $declared, published $published\n'
             'A deliberate identity change is a migration rk does not '
             'automate, because it ships what macOS treats as a new program.',
       ),
-      unit: null,
+      unit: unit.name,
     );
     output.halt(HaltKind.beforeActing);
     return false;
@@ -803,9 +801,8 @@ class ReleaseCommand {
     final repository = _repository();
     if (repository == null) return false;
 
-    final identity = resolution.identity;
     final tap =
-        identity?.homebrewTap ?? '${repository.split('/').first}/homebrew-tap';
+        unit.homebrewTap ?? '${repository.split('/').first}/homebrew-tap';
 
     return chain.updateFormula(
       tap: tap,

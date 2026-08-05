@@ -200,9 +200,6 @@ schema = 1
 path = "packages/tool"
 publish = ["github-release"]
 binary_platforms = ["macos-arm64"]
-
-[identity]
-apple_team = "TEAM123456"
 code_id = "com.example.tool"
 ''';
 

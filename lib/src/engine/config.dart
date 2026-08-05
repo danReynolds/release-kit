@@ -8,13 +8,10 @@ import 'toml.dart';
 /// This layer knows nothing about packages or versions: it holds what the
 /// author asked for. Native facts arrive later, when project paths are read.
 class ReleaseConfig {
-  ReleaseConfig._(this.units, this.identity);
+  ReleaseConfig._(this.units);
 
   /// Release units in declaration order, though order carries no meaning.
   final List<UnitConfig> units;
-
-  /// Overrides for facts rk otherwise derives from published reality.
-  final IdentityConfig? identity;
 
   /// The only schema version this build understands.
   static const supportedSchema = 1;
@@ -49,6 +46,8 @@ class UnitConfig {
     required this.tagPattern,
     required this.projects,
     required this.location,
+    this.codeId,
+    this.homebrewTap,
   });
 
   final String name;
@@ -56,6 +55,19 @@ class UnitConfig {
   /// The declared tag pattern, or null when it should be derived from the
   /// publication target's convention once package names are known.
   final String? tagPattern;
+
+  /// The macOS code identifier for this unit's binary, for the one release
+  /// that has no published binary to derive it from.
+  ///
+  /// Per unit, not per repository: a repository with two binary units has
+  /// two program identities, and a single global value would have signed
+  /// both as the same program. Every release after the first derives this
+  /// from the binary users already installed, so a declaration that ever
+  /// disagrees with what is published is refused rather than obeyed.
+  final String? codeId;
+
+  /// `owner/homebrew-tap` when the tap is not the conventional one.
+  final String? homebrewTap;
 
   final List<ProjectConfig> projects;
   final SourceLocation location;
@@ -83,20 +95,6 @@ class ProjectConfig {
       channels.any(ReleaseConfig.platformBearingChannels.contains);
 }
 
-class IdentityConfig {
-  IdentityConfig({
-    this.appleTeam,
-    this.codeId,
-    this.homebrewTap,
-    this.tagSigner,
-  });
-
-  final String? appleTeam;
-  final String? codeId;
-  final String? homebrewTap;
-  final String? tagSigner;
-}
-
 class _Reader {
   _Reader(this._root, this._path, this._diagnostics);
 
@@ -111,10 +109,21 @@ class _Reader {
     _unknownTopLevel();
 
     final units = _units();
-    final identity = _identity();
-
     if (_diagnostics.isNotEmpty) return null;
-    return ReleaseConfig._(units, identity);
+    return ReleaseConfig._(units);
+  }
+
+  /// An optional text setting on a unit table.
+  String? _unitText(TomlTable value, String key) {
+    if (!value.has(key)) return null;
+    final entry = value[key];
+    if (entry is String) return entry;
+    _diagnostics.add(
+      'RK-CONF-032',
+      '$key must be text',
+      source: value.locationOf(key),
+    );
+    return null;
   }
 
   void _schema() {
@@ -140,7 +149,7 @@ class _Reader {
   }
 
   void _unknownTopLevel() {
-    const known = {'schema', 'release', 'identity'};
+    const known = {'schema', 'release'};
     for (final key in _root.keys) {
       if (known.contains(key)) continue;
       _diagnostics.add(
@@ -203,7 +212,15 @@ class _Reader {
       return null;
     }
 
-    const known = {'tag', 'path', 'publish', 'binary_platforms', 'project'};
+    const known = {
+      'tag',
+      'path',
+      'publish',
+      'binary_platforms',
+      'project',
+      'code_id',
+      'homebrew_tap',
+    };
     for (final key in value.keys) {
       if (known.contains(key)) continue;
       _diagnostics.add(
@@ -276,6 +293,8 @@ class _Reader {
     return UnitConfig(
       name: name,
       tagPattern: tag,
+      codeId: _unitText(value, 'code_id'),
+      homebrewTap: _unitText(value, 'homebrew_tap'),
       projects: projects,
       location: location,
     );
@@ -340,7 +359,7 @@ class _Reader {
     required bool inline,
   }) {
     const known = {'path', 'publish', 'binary_platforms'};
-    const unitLevel = {'tag', 'project'};
+    const unitLevel = {'tag', 'project', 'code_id', 'homebrew_tap'};
     for (final key in table.keys) {
       if (known.contains(key)) continue;
       if (inline && unitLevel.contains(key)) continue;
@@ -541,48 +560,5 @@ class _Reader {
       }
     }
     return value;
-  }
-
-  IdentityConfig? _identity() {
-    final value = _root['identity'];
-    if (value == null) return null;
-    if (value is! TomlTable) {
-      _diagnostics.add(
-        'RK-CONF-030',
-        '"identity" must be a table',
-        source: _root.locationOf('identity'),
-      );
-      return null;
-    }
-
-    const known = {'apple_team', 'code_id', 'homebrew_tap', 'tag_signer'};
-    for (final key in value.keys) {
-      if (known.contains(key)) continue;
-      _diagnostics.add(
-        'RK-CONF-031',
-        'unknown identity override "$key"',
-        source: value.locationOf(key),
-        remedy: 'identity holds ${known.join(', ')}',
-      );
-    }
-
-    String? text(String key) {
-      if (!value.has(key)) return null;
-      final entry = value[key];
-      if (entry is String) return entry;
-      _diagnostics.add(
-        'RK-CONF-032',
-        'identity.$key must be text',
-        source: value.locationOf(key),
-      );
-      return null;
-    }
-
-    return IdentityConfig(
-      appleTeam: text('apple_team'),
-      codeId: text('code_id'),
-      homebrewTap: text('homebrew_tap'),
-      tagSigner: text('tag_signer'),
-    );
   }
 }

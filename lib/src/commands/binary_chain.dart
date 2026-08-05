@@ -221,7 +221,6 @@ class BinaryChain {
     Step step,
     ResolvedProject project, {
     required String? publishedRequirement,
-    required String? declaredTeam,
     required String? declaredCodeId,
   }) async {
     final platform = step.platform!;
@@ -230,9 +229,11 @@ class BinaryChain {
       return _missingArtifact(step, name, 'the build step produces it');
     }
 
-    final team = publishedRequirement != null
-        ? _teamOf(publishedRequirement) ?? declaredTeam
-        : declaredTeam;
+    // Derived when a release exists to derive from; discovered otherwise.
+    // Nothing is declared: a team a user types can only ever agree with the
+    // certificate they have or contradict it.
+    final team =
+        publishedRequirement == null ? null : _teamOf(publishedRequirement);
     // The identifier is an identity fact like the team, and identity facts
     // are derived from the release users already installed. Signing with
     // the project name while the published binary carries a reverse-DNS
@@ -244,18 +245,13 @@ class BinaryChain {
             : null) ??
         declaredCodeId ??
         project.name;
-    if (team == null) {
+    if (publishedRequirement != null && team == null) {
       output.problem(
         Diagnostic(
           code: 'RK-SIGN-001',
-          message: 'no signing identity is established for this project',
-          remedy: publishedRequirement == null
-              ? 'the first signed release states it once — add [identity] '
-                  'with apple_team and code_id to release.toml. Every '
-                  'release after it derives the identity from what is '
-                  'already published.'
-              : 'the published requirement names no team rk can read, and '
-                  'no [identity] is declared',
+          message: 'the published release names no team rk can read',
+          remedy: 'its designated requirement carries no subject.OU, so rk '
+              'cannot tell which certificate reproduces it',
         ),
         unit: step.unit,
       );
@@ -327,12 +323,17 @@ class BinaryChain {
         note: 'signed · matches the published identity',
       );
     } else {
+      // A first signed release makes an identity permanent, so it is named
+      // rather than assumed: the certificate that signed and the identifier
+      // every later release must reproduce.
       output.step(
         step,
         mark: Mark.done,
         verdict: Verdict.exact,
-        detail: 'signed · first release, baseline declared',
-        note: 'signed · first release, baseline declared',
+        detail: 'signed · first release · ${signed.certificate ?? 'unknown '
+            'certificate'} · $codeId',
+        note: 'signed · first release · ${signed.certificate ?? 'unknown '
+            'certificate'} · $codeId',
       );
     }
     return true;

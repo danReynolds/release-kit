@@ -1048,10 +1048,6 @@ schema = 1
 path = "packages/tool"
 publish = ["github-release"${homebrew ? ', "homebrew"' : ''}]
 binary_platforms = [${platforms.map((p) => '"$p"').join(', ')}]
-
-[identity]
-apple_team = "TEAM123456"
-code_id = "com.example.tool"
 ''', 'release.toml', diagnostics)!;
     final tree = MemorySourceTree({
       'packages/tool/pubspec.yaml': '''

@@ -4,10 +4,7 @@ schema = 1
 publish = ["pub.dev", "github-release"]
 binary_platforms = ["macos-arm64", "linux-x64", "linux-arm64"]
 
-# The identity block is checks, never authority: public expectations rk
-# verifies against, used directly only for the first signed release —
-# every release after it derives the team and identifier from the binary
-# users already installed.
-[identity]
-apple_team = "5AHFA9FUZG"
+# The macOS program identity, for the one release that has no published
+# binary to derive it from. Every release after this reads it back off the
+# binary users installed, and refuses a declaration that disagrees.
 code_id = "io.github.danreynolds.rk"

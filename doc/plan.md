@@ -182,6 +182,31 @@ nothing else prevents.**
 What is left is one flag per job: `--json`, `--dry-run`, `--offline`,
 `--write`, `--at=<ref>`, `-h`.
 
+### …and on the config
+
+The same test, applied to `release.toml`, found three things:
+
+- **`tag_signer` was dead.** Accepted by the parser, stored on the config
+  object, read by nothing. A promise with no implementation is the worst
+  kind of surface. Cut.
+- **`apple_team` was drift, not design.** The RFC always specified the
+  keychain rule — one Developer ID certificate is unambiguous, several
+  fail closed with the list, none says a certificate must be installed —
+  and the implementation had grown a declaration requirement instead. rk
+  discovers it again, so the key is gone, and a first signed release now
+  *states* which certificate it made permanent rather than asking to be
+  told.
+- **`[identity]` was a modelling footgun.** It was global; a code
+  identifier is per-unit. A repository with two binary units would have
+  signed both as the same program. The table is gone: `code_id` and
+  `homebrew_tap` are unit settings now, both optional, and `code_id` is
+  consulted only for the one release that has no published binary to
+  derive it from.
+
+`release.toml` is now: `schema`, `[release.<unit>]` with
+`tag`/`path`/`publish`/`binary_platforms`/`code_id`/`homebrew_tap`, and
+`[[release.<unit>.project]]` rows for a unit with several projects.
+
 ## Constraints to hold throughout
 
 From RFC 0002's CI-readiness section, binding on every phase:

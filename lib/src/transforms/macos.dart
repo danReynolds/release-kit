@@ -36,27 +36,41 @@ class MacOsSigner {
     return identities;
   }
 
-  /// Signs [binary] with the identity for [team].
+  /// Signs [binary]. [team] selects the certificate when the published
+  /// release names one; without it the certificate is discovered, because
+  /// capabilities are discovered and never declared — and a machine with
+  /// one Developer ID has nothing to declare.
   Future<SignOutcome> sign({
     required String binary,
-    required String team,
+    required String? team,
     required String codeId,
   }) async {
     final identities = await availableIdentities();
-    final matching = identities.where((i) => i.team == team).toList();
+    if (identities.isEmpty) {
+      return SignOutcome.failed(
+        'no Developer ID Application certificate is installed',
+      );
+    }
+
+    final matching = team == null
+        ? identities
+        : identities.where((i) => i.team == team).toList();
 
     if (matching.isEmpty) {
       return SignOutcome.failed(
-        identities.isEmpty
-            ? 'no Developer ID Application certificate is installed'
-            : 'no certificate for team $team; this machine has '
-                '${identities.map((i) => i.team).join(', ')}',
+        'no certificate for team $team; this machine has '
+        '${identities.map((i) => i.team).join(', ')}',
       );
     }
     if (matching.length > 1) {
       return SignOutcome.failed(
-        '${matching.length} certificates for team $team — rk will not guess '
-        'which one distributes this',
+        team == null
+            ? 'this machine has ${matching.length} Developer ID certificates '
+                '(${matching.map((i) => i.team).join(', ')}) and nothing '
+                'published says which one distributes this — release once '
+                'from a machine with one, and every release after derives it'
+            : '${matching.length} certificates for team $team — rk will not '
+                'guess which one distributes this',
       );
     }
 
@@ -76,7 +90,7 @@ class MacOsSigner {
     if (requirement == null) {
       return SignOutcome.failed('the signature could not be read back');
     }
-    return SignOutcome.signed(requirement);
+    return SignOutcome.signed(requirement, certificate: matching.single.name);
   }
 
   /// The designated requirement of an already-signed binary.
@@ -125,13 +139,18 @@ class SigningIdentity {
 }
 
 class SignOutcome {
-  const SignOutcome._(this.requirement, this.problem);
-  const SignOutcome.signed(String requirement) : this._(requirement, null);
+  const SignOutcome._(this.requirement, this.problem, {this.certificate});
+  const SignOutcome.signed(String requirement, {String? certificate})
+      : this._(requirement, null, certificate: certificate);
   const SignOutcome.failed(String problem) : this._(null, problem);
 
   /// The designated requirement the signature produced.
   final String? requirement;
   final String? problem;
+
+  /// The certificate that signed, named so a first release can show which
+  /// identity it just made permanent.
+  final String? certificate;
 
   bool get ok => requirement != null;
 }

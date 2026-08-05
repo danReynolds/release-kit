@@ -318,7 +318,6 @@ Future<int> _release(
         git: git,
         tools: const SystemTools(),
         repository: git.originUrl,
-        tap: resolution.identity?.homebrewTap,
       ),
       comparator: Comparator(tools: const SystemTools()),
       tools: const SystemTools(),
@@ -465,7 +464,6 @@ Future<int> _status(
         // the same paths and the same rendering as a live run.
         tools: offline ? null : const SystemTools(),
         repository: offline ? null : git.originUrl,
-        tap: resolution.identity?.homebrewTap,
       ),
       output: output,
     ).run(only: unit);
