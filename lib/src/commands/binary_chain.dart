@@ -5,6 +5,7 @@ import '../builds/capability.dart';
 import '../builds/dart_cli.dart';
 import '../destinations/github_release.dart';
 import '../destinations/homebrew.dart';
+import '../engine/assets.dart';
 import '../engine/checklist.dart';
 import '../engine/diagnostic.dart';
 import '../engine/output.dart';
@@ -48,40 +49,16 @@ class BinaryChain {
   final String repositoryRoot;
   final HostCapabilities capabilities;
 
-  // ---- the naming convention, shared with the expected-asset derivation ----
+  // ---- workspace-internal names ----
+  //
+  // These two are not public asset names: they name what lives under
+  // `.rk/work/` between steps. The published grammar is ReleaseAssets.
 
   static String binaryName(String platform, String executable) =>
       '$platform/$executable';
 
   static String zipName(String platform, String executable) =>
       '$platform/$executable.zip';
-
-  static String archiveName(
-    String executable,
-    String version,
-    String platform,
-  ) =>
-      '$executable-$version-$platform.tar.gz';
-
-  /// Apple's verdict, verbatim, as a published asset — and its log, which
-  /// says what the verdict covered.
-  static String notaryResultName(
-    String executable,
-    String version,
-    String platform,
-  ) =>
-      '$executable-$version-$platform.notary-result.json';
-
-  static String notaryLogName(
-    String executable,
-    String version,
-    String platform,
-  ) =>
-      '$executable-$version-$platform.notary-log.json';
-
-  /// The formula ships with the release too, so the release is
-  /// self-describing: the tap copy is a pointer, this one is the record.
-  static String formulaName(String executable) => '$executable.rb';
 
   // ---- build ----
 
@@ -365,12 +342,12 @@ class BinaryChain {
           'produce it');
     }
 
-    final resultName = notaryResultName(
+    final resultName = ReleaseAssets.notaryResultName(
       executable,
       project.version.canonical,
       platform,
     );
-    final logName = notaryLogName(
+    final logName = ReleaseAssets.notaryLogName(
       executable,
       project.version.canonical,
       platform,
@@ -493,7 +470,7 @@ class BinaryChain {
       }
     }
 
-    final name = archiveName(
+    final name = ReleaseAssets.archiveName(
       executable,
       project.version.canonical,
       platform,
@@ -514,7 +491,7 @@ class BinaryChain {
   Future<bool> checksumsStep(Step step, ResolvedProject project) async {
     final assets = <String, List<int>>{};
     for (final platform in project.binaryPlatforms) {
-      final name = archiveName(
+      final name = ReleaseAssets.archiveName(
         project.executable!,
         project.version.canonical,
         platform,
@@ -526,7 +503,8 @@ class BinaryChain {
       assets[name] = bytes;
     }
 
-    workspace.write('SHA256SUMS', utf8.encode(Checksums.render(assets)));
+    workspace.write(
+        ReleaseAssets.checksums, utf8.encode(Checksums.render(assets)));
     output.step(
       step,
       mark: Mark.done,
@@ -573,7 +551,7 @@ class BinaryChain {
       final executable = project.executable!;
       final version = project.version.canonical;
       final archive = named(
-        archiveName(executable, version, platform),
+        ReleaseAssets.archiveName(executable, version, platform),
         'the archive steps produce it',
         platform: platform,
       );
@@ -582,8 +560,8 @@ class BinaryChain {
 
       if (platform.startsWith('macos-')) {
         for (final evidence in [
-          notaryResultName(executable, version, platform),
-          notaryLogName(executable, version, platform),
+          ReleaseAssets.notaryResultName(executable, version, platform),
+          ReleaseAssets.notaryLogName(executable, version, platform),
         ]) {
           final asset = named(evidence, 'the notarize step produces it');
           if (asset == null) return null;
@@ -628,7 +606,7 @@ class BinaryChain {
             ),
       },
     );
-    final name = formulaName(executable);
+    final name = ReleaseAssets.formulaName(executable);
     final bytes = utf8.encode(contents);
     workspace.write(name, bytes);
     return ReleaseAsset(
@@ -696,12 +674,13 @@ class BinaryChain {
     required ResolvedProject project,
   }) async {
     final executable = project.executable!;
-    final formula = workspace.readBytes(formulaName(executable));
+    final formula = workspace.readBytes(ReleaseAssets.formulaName(executable));
     if (formula == null) {
       output.problem(
         Diagnostic(
           code: 'RK-WORK-001',
-          message: 'the workspace has no ${formulaName(executable)}',
+          message:
+              'the workspace has no ${ReleaseAssets.formulaName(executable)}',
           remedy: 'the github-release step produces it — re-running runs it',
         ),
       );

@@ -373,9 +373,11 @@ void classificationTables() {
 
   test('the checklist summary counts the same assets the inspector expects',
       () async {
-    // The two derivations cannot share code without an import cycle, so
-    // this is the pin: a summary telling the operator "publish 4 assets"
-    // while the equality check expects 6 is the mirror drifting.
+    // Both derivations read ReleaseAssets now, so comparing them to each
+    // other would compare a thing to itself. The pin is the literal: this
+    // fixture's frozen six-name vector lives in the sibling test below, and
+    // a summary that says any other number has drifted from the grammar
+    // whatever the grammar says.
     final resolution = await _binaryResolution();
     final unit = resolution.unit('cli')!;
     final steps = Checklist.derive(unit, resolution, Diagnostics()).steps;
@@ -383,7 +385,7 @@ void classificationTables() {
         steps.firstWhere((s) => s.kind == StepKind.publishRelease).summary;
     final counted = int.parse(
         RegExp(r'publish (\d+) assets').firstMatch(summary)!.group(1)!);
-    expect(counted, Inspector.expectedAssets(unit).length);
+    expect(counted, 6);
   });
 
   test('the expected asset set is derived, and derives everything', () async {

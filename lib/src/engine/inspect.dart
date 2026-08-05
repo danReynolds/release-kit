@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../destinations/github_release.dart';
+import 'assets.dart';
 import 'checklist.dart';
 import 'git.dart';
 import 'registry.dart';
@@ -86,29 +87,10 @@ class Inspector {
   ///
   /// Public and static so a test can hold the set itself to account: emptied,
   /// every release inspects exact, and nothing else notices.
-  static Set<String> expectedAssets(ResolvedUnit unit) {
-    final expected = <String>{};
-    for (final project in unit.projects) {
-      final executable = project.executable;
-      if (executable == null) continue;
-      for (final platform in project.binaryPlatforms) {
-        expected.add('$executable-${project.version}-$platform.tar.gz');
-        if (platform.startsWith('macos-')) {
-          // Apple's verdict and its log are published evidence, so they are
-          // expected — a release missing them is not what rk produces.
-          expected
-            ..add('$executable-${project.version}-$platform'
-                '.notary-result.json')
-            ..add('$executable-${project.version}-$platform.notary-log.json');
-        }
-      }
-      if (project.channels.contains('homebrew')) {
-        expected.add('$executable.rb');
-      }
-      if (project.binaryPlatforms.isNotEmpty) expected.add('SHA256SUMS');
-    }
-    return expected;
-  }
+  static Set<String> expectedAssets(ResolvedUnit unit) => {
+        for (final project in unit.projects)
+          ...ReleaseAssets.expectedFor(project),
+      };
 
   Future<Inspection> inspect(Step step, ResolvedUnit unit) async {
     switch (step.kind) {
