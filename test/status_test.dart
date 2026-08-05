@@ -16,6 +16,46 @@ import 'package:test/test.dart';
 
 import 'scripted_tools.dart';
 
+/// An origin that lists exactly the tags git holds locally.
+///
+/// The ordinary world, and the default one: a tag that was created was also
+/// pushed. Status used to model this by passing no [Tools] at all, which was
+/// not the same thing — it meant "origin was never asked", and the tag step
+/// answered `unknown`. A test asserting "nothing to release" through a
+/// toolless inspector was asserting that an unread origin counts as read.
+/// Tests that want a divergent world pass their own tools.
+class OriginAgreeing implements Tools {
+  OriginAgreeing(this.tags);
+
+  final List<String> tags;
+
+  @override
+  Future<ToolResult> run(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+    Map<String, String>? environment,
+  }) async {
+    if (executable == 'git' && arguments.first == 'ls-remote') {
+      final ref = arguments.last;
+      return ToolResult(
+        exitCode: 0,
+        stdout: tags.any((t) => ref == 'refs/tags/$t') ? 'deadbeef $ref' : '',
+        stderr: '',
+      );
+    }
+    return ToolResult(exitCode: 127, stdout: '', stderr: 'not scripted');
+  }
+
+  @override
+  Future<int> runInteractive(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+  }) async =>
+      0;
+}
+
 /// A registry with a fixed idea of what is published, so status can be
 /// exercised without a network.
 class FakeRegistry implements RegistryReader {
@@ -193,12 +233,13 @@ Future<({String text, Map<String, Object?> report})> statusRun({
     tree: source,
     git: state,
     registry: registry,
-    // Without tools and a repository the forge reports as unread, which is
-    // what rk says when it has not been given a way to look.
+    // Origin agrees with local unless a test says otherwise; without a
+    // repository the forge still reports as unread, which is what rk says
+    // when it has not been given a way to look.
     inspector: Inspector(
       registry: registry,
       git: state,
-      tools: tools,
+      tools: tools ?? OriginAgreeing(state.tags),
       repository: repository,
     ),
     output: output,

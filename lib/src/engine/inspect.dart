@@ -140,8 +140,16 @@ class Inspector {
         : ', at ${_short(target)} — HEAD has moved on, expected';
 
     if (tools == null) {
-      // Nothing to ask the remote with: say exactly how much is known.
-      return Inspection.exact(detail: 'already tagged locally$placement');
+      // A local tag is not a pushed tag, and offline cannot tell them apart.
+      // This branch answered `exact` — the satisfied mark — which made *not
+      // reading* the more confident verdict than reading: online, the same
+      // repository answers `absent` ("exists locally, not on origin"). That
+      // is the failure in the paragraph above, arrived at from the other
+      // side. The siblings that cannot read their destination — `_release`,
+      // `_formula` — all answer `unknown` here, and so does this.
+      return Inspection.unknown(
+        'the tag exists locally; origin was not read: --offline',
+      );
     }
 
     final remote = await tools!.run(
@@ -224,27 +232,34 @@ class Inspector {
   /// release calls it as part of validating independently rather than
   /// trusting status.
   Future<void> monotonicity(ResolvedUnit unit, Diagnostics problems) async {
-    // Nothing to be monotonic against when the registry was not read.
-    if (registry == null) return;
-    for (final project in unit.projects) {
-      if (!project.channels.contains('pub.dev')) continue;
-      final RegistryPackage? published;
-      try {
-        published = await registry!.lookup(project.name);
-      } on RegistryUnavailable {
-        continue; // the step's own inspection reports this, with a remedy
-      }
-      final latest = published?.latest;
-      if (latest == null) continue;
-      if (latest.version > project.version) {
-        problems.add(
-          'RK-MONO-002',
-          '${project.name} ${latest.version} is already published, and this '
-              'would publish ${project.version}',
-          source:
-              SourceLocation(project.pubspec.path, project.pubspec.versionLine),
-          remedy: 'a release moves forward — bump past ${latest.version}',
-        );
+    // Only the registry half needs the registry. The guard used to sit above
+    // both loops, which silently dropped RK-MONO-001 — a refusal computed
+    // entirely from local git — whenever `--offline` was passed, handing
+    // `--json` callers an empty problems array for a repository whose tags
+    // are ahead of its manifests.
+    if (registry != null) {
+      for (final project in unit.projects) {
+        if (!project.channels.contains('pub.dev')) continue;
+        final RegistryPackage? published;
+        try {
+          published = await registry!.lookup(project.name);
+        } on RegistryUnavailable {
+          continue; // the step's own inspection reports this, with a remedy
+        }
+        final latest = published?.latest;
+        if (latest == null) continue;
+        if (latest.version > project.version) {
+          problems.add(
+            'RK-MONO-002',
+            '${project.name} ${latest.version} is already published, and this '
+                'would publish ${project.version}',
+            source: SourceLocation(
+              project.pubspec.path,
+              project.pubspec.versionLine,
+            ),
+            remedy: 'a release moves forward — bump past ${latest.version}',
+          );
+        }
       }
     }
 

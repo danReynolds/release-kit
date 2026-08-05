@@ -676,7 +676,17 @@ publish = ["pub.dev"]
           tree: tree,
           git: git,
           registry: registry,
-          inspector: Inspector(registry: registry, git: git),
+          // The same tools the command gets, which is what `bin/rk.dart`
+          // does — release never builds a toolless inspector. Without them
+          // the tag step could not reach the `answers:` leg above, so the
+          // drive maintained a faithful remote and then inspected a
+          // different reality than the one it acted on.
+          inspector: Inspector(
+            registry: registry,
+            git: git,
+            tools: tools,
+            repository: 'example/keybay',
+          ),
           comparator: Comparator(tools: const SystemTools()),
           tools: tools,
           output: output,
