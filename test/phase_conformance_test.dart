@@ -901,6 +901,41 @@ publish = ["pub.dev"]
     });
   });
 
+  test('no shipped document names a flag rk does not accept', () {
+    // CHANGELOG.md is not just documentation: `Changelog.entry` reads it,
+    // `_releaseNotes` writes it to the workspace, and `GithubRelease` passes
+    // it as `--notes-file`. So its text *becomes* the published release body,
+    // and it ships in the pub.dev tarball to render on the Changelog tab.
+    // Neither can be edited afterwards.
+    //
+    // It advertised `--rehearse` for a whole branch after that flag started
+    // exiting 2 — the one document the cut never touched, and the one where
+    // being wrong is permanent.
+    final accepted = RegExp('r?\'(--[a-z-]+)')
+        .allMatches(File('bin/rk.dart').readAsStringSync())
+        .map((m) => m.group(1)!)
+        .toSet();
+    expect(accepted, contains('--dry-run'), reason: 'the scrape still works');
+
+    for (final path in ['CHANGELOG.md', 'README.md', 'doc/json.md']) {
+      // "no `--force`" is a promise about what rk deliberately lacks, which
+      // is the opposite of advertising it. Everything else is a claim that
+      // the flag works.
+      final named = RegExp(r'(no )?`(--[a-z-]+)')
+          .allMatches(File(path).readAsStringSync())
+          .where((m) => m.group(1) == null)
+          .map((m) => m.group(2)!)
+          .toSet();
+      for (final flag in named) {
+        expect(
+          accepted,
+          contains(flag),
+          reason: '$path names $flag, which rk refuses with RK-CLI-001',
+        );
+      }
+    }
+  });
+
   group('phase 6 — rk init', () {
     late Directory scratch;
 
