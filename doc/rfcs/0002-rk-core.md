@@ -738,17 +738,46 @@ unchanged and core migrates to the derived `keybay-v{version}`;
 
 ## Module layout
 
+*Amended (as built).* The block below described a tree that never existed —
+it named `ecosystems/dart/`, `builds/dart_cli/` as a directory, four
+`transforms/` modules none of which is a filename, and `pub_dev` under
+destinations while omitting `git_tag`. Documentation contradicting
+structure is the failure this section is supposed to prevent, so the rule
+is stated once and applied: **where the code is right, move the spec;
+where the spec is right, move the code.**
+
 ```text
 release-kit/
-  bin/rk.dart
-  lib/src/engine/        # toml, pubspec, checklist, verdicts, output, diagnosis
-  lib/src/ecosystems/dart/
-  lib/src/builds/dart_cli/
-  lib/src/transforms/    # macos_sign, macos_notarize, archive, checksums
-  lib/src/destinations/  # pub_dev, github_release, homebrew_tap
-  doc/rfcs/
-  test/                  # black-box fixtures: keybay-, fleury-, dune-shaped
+  bin/rk.dart            # the entry point, and the composition root
+  lib/src/
+    binary_chain.dart    # the local production chain: neither verb nor adapter
+    commands/            # the four verbs: init, status, release, verify
+    destinations/        # git_tag, github_release, homebrew — see below
+    builds/              # capability, dart_cli
+    transforms/          # archive, digest, macos
+    output/              # output, report, diagnosis — the two surfaces
+    engine/              # the model and the readers: config, resolve,
+                         # checklist, inspect, compare, registry, git,
+                         # identity, assets, and the format parsers
+  doc/rfcs/  doc/plan.md  doc/json.md
+  examples/              # five repository shapes the tests drive end to end
+  test/                  # flat, deliberately: mirroring couples test paths
+                         # to source paths and doubles every future move
+  tool/                  # validate.dart, outside the test tally
 ```
+
+Two adjudications the rule forces. **`pub.dev` is absent from
+`destinations/`** and that is honest, not an omission: its read half is
+`engine/registry.dart`, parameterised over host rather than named for one,
+and its act half is in `commands/release.dart`. `doc/plan.md` carries the
+extraction and the condition it waits on. **`ecosystems/` is removed from
+this block rather than created on disk** — a directory hosting a taxonomy
+with one member and no second member in sight is complexity naming no
+failure.
+
+`engine/` is the residue by design. It is the largest directory and the
+vaguest name, and it stays that way: a directory name that is wrong
+excludes falsely, which is worse than one that merely fails to narrow.
 
 rk has **no runtime dependencies** — `dart:*` and its own sources only,
 enforced by a test over the import graph and an empty `dependencies:`

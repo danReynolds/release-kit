@@ -1,3 +1,6 @@
+/// A blocking problem, carrying a stable code — every one of them indexed
+/// in `doc/codes.md`, which `tool/validate.dart` keeps current.
+///
 /// A blocking problem, carrying a stable code so it stays greppable as its
 /// prose improves.
 ///
