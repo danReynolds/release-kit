@@ -1,3 +1,17 @@
+/// rk's entry point, and its composition root.
+///
+/// Everything a run needs is built here and nowhere else: this file finds the
+/// git root, reads and parses `release.toml`, resolves it against the
+/// repository, and constructs the `Registry`, `SystemTools`, `Comparator` and
+/// `Output` the verbs are handed. It then dispatches to one of the four verbs
+/// and, on a run that failed after acting, writes the diagnosis.
+///
+/// So the answer to "where does rk read release.toml?" is `_prepare` below,
+/// not a file under `lib/`. Reading files and deciding exit codes is
+/// composition-root work; pushing it down would put `dart:io` in the layer
+/// `engine/source_tree.dart` exists to keep testable.
+library;
+
 import 'dart:io';
 
 import 'package:release_kit/src/commands/init.dart';

@@ -21,7 +21,14 @@ import '../transforms/macos.dart';
 import '../destinations/git_tag.dart';
 import 'binary_chain.dart';
 
-/// Executes a release: inspect, act, verify, one step at a time.
+/// Executes a release: inspect, act, verify, one step at a time — and
+/// decides everything rk refuses.
+///
+/// The second half is easy to miss and is most of the file: the refusal
+/// ladder lives here, not in the engine. An unfinishable host, a dirty
+/// worktree, an unpushed HEAD, a back-version, a misplaced tag, a first
+/// publish, an unreadable signing baseline, a missing changelog entry, an
+/// unauthorized run — each is refused here, before anything acts.
 ///
 /// Every step is decided from its own inspection of reality, never from what a
 /// previous step left behind — which is what makes re-running the resume, and

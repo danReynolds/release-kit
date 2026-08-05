@@ -46,7 +46,9 @@ class PublishedVersion {
   final String? archiveSha256;
 }
 
-/// Reads a package registry. Read-only: nothing here publishes.
+/// Reads a package registry. Read-only: nothing here publishes. The act is `_publish` in
+/// `commands/release.dart`, gated by `_publishPreflight`, with the
+/// first-publish refusal in `_refuseFirstPublish`.
 ///
 /// An interface so a command can be exercised without a network, and so a
 /// second registry — npm, RubyGems — attaches later without touching the
@@ -77,7 +79,9 @@ abstract class RegistryReader {
   Future<List<int>> archive(PublishedVersion version);
 }
 
-/// Reads pub.dev. Read-only: nothing here publishes.
+/// Reads pub.dev. Read-only: nothing here publishes. The act is `_publish` in
+/// `commands/release.dart`, gated by `_publishPreflight`, with the
+/// first-publish refusal in `_refuseFirstPublish`.
 ///
 /// Every failure is reported as [Verdict.unknown] rather than absence — a
 /// timeout is not evidence that a version does not exist.

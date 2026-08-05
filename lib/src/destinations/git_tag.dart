@@ -2,11 +2,16 @@ import '../engine/tools.dart';
 
 /// The git tag as a destination, spoken to through git.
 ///
-/// A fourth destination beside `github_release.dart` and `homebrew.dart`,
-/// and it keeps their convention exactly: it takes [Tools] and coordinates,
-/// never an [Output]. That is the test for whether a cut is a destination at
-/// all — prose about what happened belongs to the verb, because only the
-/// verb knows what the operator is being told and in what order.
+/// One of the destinations in this directory, beside `github_release.dart`
+/// and `homebrew.dart` — and the directory is not the whole set. **pub.dev
+/// has no file here**: its read half is `engine/registry.dart` and its act
+/// half is `_publish` in `commands/release.dart`. `doc/plan.md` carries the
+/// deferred extraction and the condition it waits on.
+///
+/// It keeps the convention the other two keep: it takes [Tools] and
+/// coordinates, never an [Output]. That is the test for whether a cut is a
+/// destination at all — prose about what happened belongs to the verb,
+/// because only the verb knows what the operator is being told, and when.
 ///
 /// The protocol is here; the halting policy is not. Which halt sentence a
 /// failed push earns, and whether the local tag is removed, are decisions
