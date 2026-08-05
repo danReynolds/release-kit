@@ -274,7 +274,7 @@ class ReleaseCommand {
       final notes = _releaseNotes(_binaryProject(unit));
       if (notes == null) return ExitCodes.refused;
       // Validated always — that refusal belongs before any act — but written
-      // only when something will read it. Under a dry run the release step
+      // only when something will read it: under a dry run the release step
       // is skipped, so the file would have no consumer.
       if (!dryRun) {
         final chain = _chain(unit);
@@ -284,7 +284,7 @@ class ReleaseCommand {
     }
 
     output.heading('${unit.name} ${unit.version} › '
-        '${_channels(unit).join(', ')}');
+        '${unit.projects.expand((p) => p.channels).toSet().join(', ')}');
     output.blank();
 
     for (final step in checklist.steps) {
@@ -403,26 +403,25 @@ class ReleaseCommand {
 
     // The same capabilities the chain will build with — a second detect()
     // here let the refusal and the build disagree about what this host is.
-    final blocked = <String>[];
+    //
+    // Platforms blocked for the same reason fold onto one line: two
+    // identical sentences are one fact said twice. Grouped as they are
+    // found, because the version that encoded '$platform — $reason' into a
+    // list and parsed it back apart two lines later carried an arm for a
+    // shape its own encoder could not produce.
+    final byReason = <String, List<String>>{};
     for (final project in unit.projects) {
       for (final platform in project.binaryPlatforms) {
         final resolved = capabilities.resolve(platform);
         if (!resolved.canProduce) {
-          blocked.add('$platform — ${resolved.reason}');
+          byReason
+              .putIfAbsent(
+                  resolved.reason ?? 'it needs a different host', () => [])
+              .add(platform);
         }
       }
     }
-    if (blocked.isEmpty) return null;
-
-    // Platforms blocked for the same reason fold onto one line — two
-    // identical sentences are one fact said twice.
-    final byReason = <String, List<String>>{};
-    for (final entry in blocked) {
-      final cut = entry.indexOf(' — ');
-      final platform = cut < 0 ? entry : entry.substring(0, cut);
-      final reason = cut < 0 ? '' : entry.substring(cut + 3);
-      byReason.putIfAbsent(reason, () => []).add(platform);
-    }
+    if (byReason.isEmpty) return null;
     final folded = byReason.entries
         .map((e) => '${e.value.join(', ')} — ${e.key}')
         .toList();
@@ -474,14 +473,6 @@ class ReleaseCommand {
         diagnostics: problems,
       );
     }
-  }
-
-  Set<String> _channels(ResolvedUnit unit) {
-    final channels = <String>{};
-    for (final project in unit.projects) {
-      channels.addAll(project.channels);
-    }
-    return channels;
   }
 
   /// The operator's presence and typed confirmation are the authorization for
@@ -1215,12 +1206,4 @@ dependency_overrides:
         return false;
     }
   }
-}
-
-/// Reads a confirmation from the terminal, or nothing when there is no
-/// terminal to read from.
-Future<String?> promptOnTerminal(String prompt) async {
-  if (!stdin.hasTerminal) return null;
-  stdout.write(prompt);
-  return stdin.readLineSync();
 }

@@ -326,12 +326,23 @@ Future<int> _release(
       // silences: asking would corrupt the document, and the consequences the
       // prompt exists to disclose would be suppressed while the question was
       // still asked. release already refuses when nobody can authorize.
-      confirm: interactive ? promptOnTerminal : null,
+      confirm: interactive ? _promptOnTerminal : null,
       dryRun: dryRun,
     ).run(only: unit);
   } finally {
     registry.close();
   }
+}
+
+/// Asks at the terminal, or answers null when there is none.
+///
+/// Lives at the entry point rather than in a command file: reading a line
+/// from a person is this program's edge, and a verb that could reach for
+/// stdin is a verb that could ask a question no caller can answer.
+Future<String?> _promptOnTerminal(String prompt) async {
+  if (!stdin.hasTerminal) return null;
+  stdout.write(prompt);
+  return stdin.readLineSync();
 }
 
 Future<int> _verify(Output output, String? unit, {String? at}) async {

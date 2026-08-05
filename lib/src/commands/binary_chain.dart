@@ -234,7 +234,7 @@ class BinaryChain {
     // mismatch discovered only after signing, for a value rk could read
     // before it.
     final codeId = (publishedRequirement != null
-            ? _identifierOf(publishedRequirement)
+            ? identifierOf(publishedRequirement)
             : null) ??
         declaredCodeId ??
         project.name;
@@ -349,12 +349,12 @@ class BinaryChain {
 
   /// The code identifier inside a designated requirement — always quoted by
   /// codesign's printer, unlike the OU.
-  static String? _identifierOf(String requirement) =>
+  ///
+  /// Public because the preflight compares it against a declared one before
+  /// anything acts; it had a one-line public forwarder around it for that,
+  /// which is a module punched through for a single caller.
+  static String? identifierOf(String requirement) =>
       RegExp(r'identifier "([^"]+)"').firstMatch(requirement)?.group(1);
-
-  /// The code identifier a published requirement carries, for the preflight
-  /// that compares it against a declared one before anything acts.
-  static String? identifierOf(String requirement) => _identifierOf(requirement);
 
   // ---- notarize ----
 
