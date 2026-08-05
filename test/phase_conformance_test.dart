@@ -50,9 +50,21 @@ void main() {
   /// A definition is not a use: matching the declaration of the very thing
   /// being checked is how a conformance test passes while the feature is
   /// unwired, which is the failure this file exists to prevent.
-  bool usedOutside(String pattern, String definedIn) => shipped
-      .where((f) => !f.path.endsWith(definedIn))
-      .any((f) => f.readAsStringSync().contains(pattern));
+  ///
+  /// A [definedIn] that names no shipped file is an error, not a no-op: the
+  /// exclusion would stop excluding, the declaration alone would satisfy the
+  /// check, and a green gate would mean nothing. That is a live trap for
+  /// every file move, and this test has already suffered the failure it
+  /// describes once.
+  bool usedOutside(String pattern, String definedIn) {
+    final others = shipped.where((f) => !f.path.endsWith(definedIn)).toList();
+    expect(
+      others.length,
+      shipped.length - 1,
+      reason: '$definedIn matches no shipped file',
+    );
+    return others.any((f) => f.readAsStringSync().contains(pattern));
+  }
 
   group('phase 1 — engine core', () {
     test('strict TOML subset parser', () {
