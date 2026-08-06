@@ -120,7 +120,7 @@ fails, and the count below is checked against the rows.
 | `RK-GIT-003` | this repository has no remote | `lib/src/engine/git.dart` |
 | `RK-GIT-004` | ${unit.version} is already published, and the tag  ${unit.tag} does not exist | `lib/src/engine/inspect.dart` |
 | `RK-GIT-005` | the tag ${unit.tag} points at ${_short(target)}, and this  release would publish from ${… | `lib/src/engine/inspect.dart` |
-| `RK-GIT-007` | the tag ${unit.tag} exists, and rk could not read which  commit it names | `lib/src/engine/inspect.dart` |
+| `RK-GIT-007` | the tag exists, and rk could not read which commit it names | `lib/src/engine/inspect.dart` |
 | `RK-GIT-006` | the repository could not be listed | `lib/src/commands/init.dart` |
 
 ## RK-HOST — What this machine can produce
@@ -216,7 +216,7 @@ fails, and the count below is checked against the rows.
 | `RK-SIGN-008` | this machine has ${certificates.length} Developer ID  certificates and nothing published says which distributes this | `lib/src/commands/release.dart` |
 | `RK-SIGN-009` | no release states what this program is called | `lib/src/commands/release.dart` |
 | `RK-SIGN-010` | no certificate for the team the published release names | `lib/src/commands/release.dart` |
-| `RK-SIGN-011` | several certificates for team ${BinaryChain.teamOf(publishedRequirement)}, and rk will not  guess which one distributes this | `lib/src/commands/release.dart` |
+| `RK-SIGN-011` | several certificates for the published team | `lib/src/commands/release.dart` |
 
 ## RK-TAG — The tag
 

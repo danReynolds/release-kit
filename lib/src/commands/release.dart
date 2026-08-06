@@ -565,6 +565,18 @@ class ReleaseCommand {
             'the only certificate that distributes outside the App Store.',
       );
     } else if (publishedRequirement != null &&
+        BinaryChain.teamOf(publishedRequirement) == null) {
+      // The sign step refuses this as RK-SIGN-001 — after the tag is public.
+      // The requirement is in hand here, so the question "can rk tell which
+      // certificate reproduces this?" is answerable before acting, and the
+      // answer does not change by waiting.
+      refusal = Diagnostic(
+        code: 'RK-SIGN-001',
+        message: 'the published release names no team rk can read',
+        remedy: 'its designated requirement carries no subject.OU, so rk '
+            'cannot tell which certificate reproduces it.',
+      );
+    } else if (publishedRequirement != null &&
         BinaryChain.teamOf(publishedRequirement) != null &&
         certificates
             .where((c) => c.team == BinaryChain.teamOf(publishedRequirement))

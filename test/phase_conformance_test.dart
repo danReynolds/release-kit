@@ -1106,6 +1106,7 @@ publish = ["pub.dev"]
     bool keychainReadable = true,
     String? previousTag,
     bool declaresCodeId = true,
+    bool publishedNamesTeam = true,
   }) async {
     final root = Directory('${scratch.path}/drive-${dryRun ? 'd' : 'f'}'
         '${notaryRejects ? '-nr' : ''}$label')
@@ -1142,6 +1143,10 @@ executables:
       // An earlier tag is what makes this a *later* release: the signing
       // baseline is read from the release published at it.
       tags: [if (previousTag != null) previousTag],
+      // Stated, like the fixtures in status_test and release_test: an unread
+      // target is not "at HEAD". Inert while previousTag is never the unit's
+      // own tag, and the collapse comes back the moment that changes.
+      tagTargets: {if (previousTag != null) previousTag: '9f2c1ab'},
       signingConfigured: true,
       originUrl: 'example/tool',
     );
@@ -1196,6 +1201,19 @@ executables:
         }
         if (key.startsWith('codesign --test-requirement')) {
           return ToolResult(exitCode: 1, stdout: '', stderr: 'no');
+        }
+        if (key.startsWith('codesign -d -r-') &&
+            key.contains('published-identity') &&
+            !publishedNamesTeam) {
+          // A published requirement rk cannot read a team out of. Only the
+          // published read loses its OU — the freshly-signed binary keeps
+          // one, so this models an unreadable baseline rather than a
+          // codesign that has stopped working.
+          return ToolResult(
+            exitCode: 0,
+            stdout: 'designated => identifier "io.github.example.tool"',
+            stderr: '',
+          );
         }
         if (key.startsWith('codesign -d -r-')) {
           // A real designated requirement, carrying the identifier and the
@@ -1671,10 +1689,14 @@ executables:
             'prompt, and this unit has nothing permanent in the pub.dev '
             'sense — which is what used to silence it',
       );
-      expect(run.text, contains('Developer ID Application: D (TEAM123456)'));
+      // Anchored to the disclosure sentence, contiguously. Matching the two
+      // strings separately over the whole buffer was satisfied by the sign
+      // step's own note, which prints the identifier *after* consent — the
+      // one place it is too late to matter.
       expect(
         run.text,
-        contains('io.github.example.tool'),
+        contains('Developer ID Application: D (TEAM123456) as '
+            'io.github.example.tool'),
         reason: 'the identifier is half of what becomes permanent, and the '
             'RFC already claimed this sentence named it — it named only the '
             'certificate',
@@ -1775,6 +1797,39 @@ executables:
         expect(run.text, contains('RK-SIGN-007'));
         expect((run.json['halt']! as Map)['kind'], 'beforeActing');
         expect(run.calls.any((c) => c.startsWith('git push origin')), isFalse);
+      });
+
+      test('a published release naming no readable team refuses before acting',
+          () async {
+        // The sign step refuses this as RK-SIGN-001 — after the tag is
+        // public. The requirement is in hand during preflight, and the
+        // answer does not change by waiting.
+        final run = await binaryDrive(
+          dryRun: false,
+          label: '-noteam',
+          previousTag: 'v0.9.0',
+          publishedNamesTeam: false,
+        );
+
+        expect(run.code, ExitCodes.refused, reason: run.text);
+        expect(run.text, contains('RK-SIGN-001'));
+        expect((run.json['halt']! as Map)['kind'], 'beforeActing');
+        expect(run.calls.any((c) => c.startsWith('git push origin')), isFalse);
+      });
+
+      test('a dry run still refuses when nothing states the program name',
+          () async {
+        // --dry-run signs for real, so it needs a real identifier. The
+        // refusal is gated on `willSign`, never on dryRun.
+        final run = await binaryDrive(
+          dryRun: true,
+          label: '-drynoid',
+          declaresCodeId: false,
+        );
+
+        expect(run.code, ExitCodes.refused, reason: run.text);
+        expect(run.text, contains('RK-SIGN-009'));
+        expect(run.calls.any((c) => c.startsWith('codesign --force')), isFalse);
       });
 
       test('a certificate for the wrong team refuses before the publish',
