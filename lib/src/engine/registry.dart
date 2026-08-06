@@ -46,9 +46,8 @@ class PublishedVersion {
   final String? archiveSha256;
 }
 
-/// Reads a package registry. Read-only: nothing here publishes. The act is `_publish` in
-/// `commands/release.dart`, gated by `_publishPreflight`, with the
-/// first-publish refusal in `_refuseFirstPublish`.
+/// Reads a package registry. Read-only: nothing here publishes. The act is
+/// `_publish` in `commands/release.dart`, gated by `_publishPreflight`.
 ///
 /// An interface so a command can be exercised without a network, and so a
 /// second registry — npm, RubyGems — attaches later without touching the
@@ -79,9 +78,8 @@ abstract class RegistryReader {
   Future<List<int>> archive(PublishedVersion version);
 }
 
-/// Reads pub.dev. Read-only: nothing here publishes. The act is `_publish` in
-/// `commands/release.dart`, gated by `_publishPreflight`, with the
-/// first-publish refusal in `_refuseFirstPublish`.
+/// Reads pub.dev. Read-only: nothing here publishes. The act is `_publish`
+/// in `commands/release.dart`, gated by `_publishPreflight`.
 ///
 /// Every failure is reported as [Verdict.unknown] rather than absence — a
 /// timeout is not evidence that a version does not exist.
@@ -181,8 +179,8 @@ class Registry implements RegistryReader {
     }
 
     if (package == null) {
-      // pub.dev accepts a package's first version only from an interactive
-      // publish, so this is a fact about the ceremony, not a version check.
+      // Absent, and the detail says which kind: the package itself is not
+      // there, so releasing claims the name as well as the version.
       return const Inspection.absent(detail: 'the package does not exist yet');
     }
 

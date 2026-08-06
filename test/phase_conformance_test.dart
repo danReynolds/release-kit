@@ -1730,7 +1730,7 @@ executables:
       );
       expect(
         run.text,
-        isNot(contains('first signed release')),
+        isNot(contains('this release claims, for the first time:')),
         reason: 'there is an identity to reproduce, and it was just read',
       );
     });
@@ -1821,6 +1821,17 @@ executables:
         expect(run.text, contains('RK-SIGN-001'));
         expect((run.json['halt']! as Map)['kind'], 'beforeActing');
         expect(run.calls.any((c) => c.startsWith('git push origin')), isFalse);
+      });
+
+      test('a rehearsal shows the names the real run will claim', () async {
+        // The names are exactly what a rehearsal is for reading before they
+        // become unreclaimable, and they used to appear for the first time
+        // only at the real prompt, after the version was typed.
+        final run = await binaryDrive(dryRun: true, label: '-dryclaim');
+
+        expect(run.code, ExitCodes.ok, reason: run.text);
+        expect(run.text, contains('this release claims, for the first time:'));
+        expect(run.text, contains('macOS identity   io.github.example.tool'));
       });
 
       test('a dry run still refuses when nothing states the program name',

@@ -357,6 +357,13 @@ class ReleaseCommand {
       );
     }
 
+    // The rehearsal shows what the real run will claim. It skips
+    // authorization — nothing permanent happens, so there is nothing to
+    // authorize — but the names are exactly what a rehearsal is for reading
+    // before they become unreclaimable, and they were visible for the first
+    // time only at the real prompt, after the version was typed.
+    if (dryRun) _sayClaims(claims, firstCertificate, codeId);
+
     if (!dryRun &&
         !await _authorize(
           unit,
@@ -430,13 +437,6 @@ class ReleaseCommand {
     return ExitCodes.ok;
   }
 
-  /// A package that has never existed is not published by rk.
-  ///
-  /// The first publish is a ceremony — accepting pub.dev's terms, choosing a
-  /// publisher — and running it under --force from an executor would perform
-  /// that ceremony as a side effect, or fail halfway into one. Refusing to
-  /// act is not refusing to instruct: the exact command is printed, and every
-  /// release after the first belongs to rk.
   /// Package names this release claims for the first time.
   ///
   /// rk used to refuse a first publish outright (RK-REG-003), on the stated
@@ -445,9 +445,11 @@ class ReleaseCommand {
   /// first-time branch at all: `--force` skips only the confirmation prompt,
   /// the prompt text is identical for a new name, there is no terms
   /// acceptance in the flow, and a verified publisher is configured on the
-  /// website afterwards or not at all. RFC 0002 never asked for the refusal
-  /// either — it arrived with the implementation, the same way `apple_team`
-  /// did, and it was refusing on a reason that does not exist.
+  /// website afterwards or not at all. RFC 0002 *did* ask for the refusal —
+  /// and asked for it on the same false premise, that "pub.dev accepts a
+  /// first version only from an interactive publish". The spec is amended
+  /// where it said so, per its own rule: where the code is right, move the
+  /// spec.
   ///
   /// What IS true is narrower and worth saying out loud: a pub.dev package
   /// name is claimed permanently. It cannot be renamed, moved to another
@@ -673,49 +675,7 @@ class ReleaseCommand {
           'permanent step is: ${permanent.first.summary}.');
     }
 
-    // Names this release takes for good, gathered into one block rather
-    // than scattered across the steps that take them. Each line is a
-    // different registrar with a different notion of permanence, so each
-    // says its own — a reader who skims still sees the name itself, which
-    // is the thing a typo gets wrong.
-    // Continuations align under the value column, so the names read down a
-    // single edge — the name is the thing a typo gets wrong, and it should
-    // not have to be hunted for.
-    final firstOf = <String>[
-      for (final name in claims)
-        'pub.dev          $name\n'
-            '                 permanent: a package name cannot be renamed, '
-            'reassigned,\n'
-            '                 or released back',
-      if (firstCertificate != null)
-        'macOS identity   $codeId\n'
-            '                 permanent: sealed into the designated '
-            'requirement, and into\n'
-            '                 every Keychain item this program creates. '
-            'Signed by\n'
-            '                 $firstCertificate',
-    ];
-    if (firstOf.isNotEmpty) {
-      output.blank();
-      output.say('this release claims, for the first time:');
-      for (final line in firstOf) {
-        output.say(line, depth: 1);
-      }
-    }
-
-    // A first signed release establishes an identity every later release
-    // must reproduce, so the operator sees which certificate is about to
-    // become permanent before consenting rather than after.
-    //
-    // Gated on the fact that decides it. This read `shipsBinaries &&
-    // permanent.isNotEmpty && certificates.length == 1`, and none of those
-    // three is first-ness: `isPermanent` is `publishRegistry` alone, so it
-    // meant "a pub.dev publish remains" — true of every release of a pub.dev
-    // unit, which is rk's own shape. It therefore announced a first signing
-    // on every later release from a one-certificate machine, and stayed
-    // silent on a genuine first release of a binaries-only unit, which has
-    // nothing permanent in it at all. `publishedRequirement == null` is the
-    // fact, and the sign step has always branched on it one layer down.
+    _sayClaims(claims, firstCertificate, codeId);
 
     // Weaker assurance is accepted knowingly or not at all: a platform
     // nothing here can run ships with its smoke test missing, and that is
@@ -921,6 +881,48 @@ class ReleaseCommand {
       assets: [...assets, if (formula != null) formula],
     );
     return url != null;
+  }
+
+  /// Every name this release takes for good, in one block.
+  ///
+  /// One line per registrar, each with its own notion of permanence, the
+  /// name on its own line and the consequence indented under it — a reader
+  /// who skims still sees the name, which is the thing a typo gets wrong.
+  ///
+  /// The macOS half was a separate sentence, gated on
+  /// `shipsBinaries && permanent.isNotEmpty && certificates.length == 1`.
+  /// None of those three is first-ness: `isPermanent` is `publishRegistry`
+  /// alone, so it meant "a pub.dev publish remains" — true of every release
+  /// of a pub.dev unit. It therefore announced a first signing on every
+  /// later release from a one-certificate machine, and stayed silent on a
+  /// genuine first release of a binaries-only unit, which has nothing
+  /// permanent in it at all. `publishedRequirement == null` is the fact, and
+  /// it is what `firstCertificate` carries.
+  void _sayClaims(
+    List<String> claims,
+    String? firstCertificate,
+    String? codeId,
+  ) {
+    final firstOf = <String>[
+      for (final name in claims)
+        'pub.dev          $name\n'
+            '                 permanent: a package name cannot be renamed, '
+            'reassigned,\n'
+            '                 or released back',
+      if (firstCertificate != null)
+        'macOS identity   $codeId\n'
+            '                 permanent: sealed into the designated '
+            'requirement, and into\n'
+            '                 every Keychain item this program creates. '
+            'Signed by\n'
+            '                 $firstCertificate',
+    ];
+    if (firstOf.isEmpty) return;
+    output.blank();
+    output.say('this release claims, for the first time:');
+    for (final line in firstOf) {
+      output.say(line, depth: 1);
+    }
   }
 
   /// A conventional identifier to *suggest*, never to use.

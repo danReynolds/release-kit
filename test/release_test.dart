@@ -1071,6 +1071,31 @@ void mutationCloseout() {
     expect(probePubspec, contains('keybay: 0.2.0'));
   });
 
+  test('a later publish claims nothing, and says so by saying nothing',
+      () async {
+    // The negative direction. Announcing a first-time claim for a name that
+    // is already published is the same false-consent bug the first-signing
+    // disclosure had — it told the operator an identity did not exist yet
+    // while reading it off the binary users had installed.
+    final registry = _MutableRegistry(<String>['0.1.0']);
+    final ran = await release(
+      registry: registry,
+      onRun: (key) {
+        if (key == 'dart pub publish --force') {
+          registry.goLive('0.2.0');
+          registry.archives['keybay@0.2.0'] = publishedBytes();
+        }
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    expect(
+      ran.text,
+      isNot(contains('claims, for the first time')),
+      reason: 'keybay is published; this release takes no new name',
+    );
+  });
+
   test('a first publish unattended is refused for want of a human, not a rule',
       () async {
     final ran = await release(
