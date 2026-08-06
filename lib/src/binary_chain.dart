@@ -1,22 +1,34 @@
 import 'dart:convert';
 import 'dart:io';
 
-import '../builds/capability.dart';
-import '../builds/dart_cli.dart';
-import '../destinations/github_release.dart';
-import '../destinations/homebrew.dart';
-import '../engine/checklist.dart';
-import '../engine/diagnostic.dart';
-import '../engine/output.dart';
-import '../engine/resolve.dart';
-import '../engine/tools.dart';
-import '../engine/verdict.dart';
-import '../engine/workspace.dart';
-import '../transforms/archive.dart';
-import '../transforms/digest.dart';
-import '../transforms/macos.dart';
+import 'builds/capability.dart';
+import 'builds/dart_cli.dart';
+import 'destinations/github_release.dart';
+import 'destinations/homebrew.dart';
+import 'engine/assets.dart';
+import 'engine/checklist.dart';
+import 'engine/diagnostic.dart';
+import 'output/output.dart';
+import 'engine/resolve.dart';
+import 'engine/tools.dart';
+import 'engine/verdict.dart';
+import 'engine/workspace.dart';
+import 'transforms/archive.dart';
+import 'transforms/digest.dart';
+import 'transforms/macos.dart';
 
 /// The local half of shipping binaries, one checklist step at a time.
+///
+/// It sits at the top of `lib/src` because it belongs to none of the
+/// directories below it. It is not a verb — no argument parsing, no exit
+/// codes; its API is buildStep, signStep, notarizeStep, archiveStep,
+/// checksumsStep, each called by `commands/release.dart`. And it is not an
+/// adapter by this codebase's own test, the one `destinations/git_tag.dart`
+/// states: it holds an [Output] at thirty-odd sites, where every file in
+/// `builds/`, `transforms/` and `destinations/` holds one at zero.
+///
+/// It lived in `commands/` until `ls` there said five against a README and
+/// an RFC heading that both say four verbs.
 ///
 /// This used to be one `produce()` that ran the whole chain inside the first
 /// build step and handed a `_produced` list to the steps after it — which
@@ -48,45 +60,16 @@ class BinaryChain {
   final String repositoryRoot;
   final HostCapabilities capabilities;
 
-  // ---- the naming convention, shared with the expected-asset derivation ----
+  // ---- workspace-internal names ----
+  //
+  // These two are not public asset names: they name what lives under
+  // `.rk/work/` between steps. The published grammar is ReleaseAssets.
 
   static String binaryName(String platform, String executable) =>
       '$platform/$executable';
 
   static String zipName(String platform, String executable) =>
       '$platform/$executable.zip';
-
-  static String archiveName(
-    String executable,
-    String version,
-    String platform,
-  ) =>
-      '$executable-$version-$platform.tar.gz';
-
-  /// Apple's verdict, verbatim, as a published asset — and its log, which
-  /// says what the verdict covered.
-  static String notaryResultName(
-    String executable,
-    String version,
-    String platform,
-  ) =>
-      '$executable-$version-$platform.notary-result.json';
-
-  static String notaryLogName(
-    String executable,
-    String version,
-    String platform,
-  ) =>
-      '$executable-$version-$platform.notary-log.json';
-
-  /// The formula ships with the release too, so the release is
-  /// self-describing: the tap copy is a pointer, this one is the record.
-  static String formulaName(String executable) => '$executable.rb';
-
-  String _projectDirectory(ResolvedProject project) =>
-      project.pubspec.directory == '.'
-          ? repositoryRoot
-          : '$repositoryRoot/${project.pubspec.directory}';
 
   // ---- build ----
 
@@ -159,7 +142,7 @@ class BinaryChain {
       platform: platform,
       entryPoint: 'bin/$executable.dart',
       output: workspace.pathOf(name),
-      workingDirectory: _projectDirectory(project),
+      workingDirectory: project.directoryIn(repositoryRoot),
       expectedVersion: project.version.canonical,
     );
     if (!built.ok) {
@@ -181,7 +164,6 @@ class BinaryChain {
     // nothing here could run.
     final unproven = built.unproven;
     if (unproven != null) {
-      unprovenPlatforms.add(platform);
       activity.done('built, not executed');
       output.step(
         step,
@@ -197,12 +179,6 @@ class BinaryChain {
     return true;
   }
 
-  /// Platforms whose binary was built and never run, in this process.
-  ///
-  /// Read by the authorize prompt, so the operator accepts the weaker
-  /// assurance knowingly rather than discovering it in the release notes.
-  final unprovenPlatforms = <String>{};
-
   Future<bool> _versionMatches(String name, String version) async {
     final result = await tools.run(workspace.pathOf(name), ['--version']);
     return result.ok && result.stdout.contains(version);
@@ -215,14 +191,18 @@ class BinaryChain {
   ///
   /// The requirement is derived from the release users already installed —
   /// asking the certificate about to sign what it will sign with is a
-  /// tautology. Only a first signed release, which has no published binary
-  /// to derive from, falls back to the declared `[identity]`.
+  /// tautology.
+  ///
+  /// [codeId] is resolved by the caller, before anything acts, and is
+  /// non-null by construction: it is read off the published binary, or
+  /// declared, or the release was refused (RK-SIGN-009). This step used to
+  /// resolve it itself and fall back to the package name — inventing, at the
+  /// one moment that makes the answer permanent, a value nothing had stated.
   Future<bool> signStep(
     Step step,
     ResolvedProject project, {
     required String? publishedRequirement,
-    required String? declaredTeam,
-    required String? declaredCodeId,
+    required String codeId,
   }) async {
     final platform = step.platform!;
     final name = binaryName(platform, project.executable!);
@@ -230,32 +210,19 @@ class BinaryChain {
       return _missingArtifact(step, name, 'the build step produces it');
     }
 
-    final team = publishedRequirement != null
-        ? _teamOf(publishedRequirement) ?? declaredTeam
-        : declaredTeam;
-    // The identifier is an identity fact like the team, and identity facts
-    // are derived from the release users already installed. Signing with
-    // the project name while the published binary carries a reverse-DNS
-    // identifier would produce a different designated requirement — a
-    // mismatch discovered only after signing, for a value rk could read
-    // before it.
-    final codeId = (publishedRequirement != null
-            ? _identifierOf(publishedRequirement)
-            : null) ??
-        declaredCodeId ??
-        project.name;
-    if (team == null) {
+    // Derived when a release exists to derive from; discovered otherwise.
+    // Nothing is declared: a team a user types can only ever agree with the
+    // certificate they have or contradict it.
+    final team =
+        publishedRequirement == null ? null : teamOf(publishedRequirement);
+
+    if (publishedRequirement != null && team == null) {
       output.problem(
         Diagnostic(
           code: 'RK-SIGN-001',
-          message: 'no signing identity is established for this project',
-          remedy: publishedRequirement == null
-              ? 'the first signed release states it once — add [identity] '
-                  'with apple_team and code_id to release.toml. Every '
-                  'release after it derives the identity from what is '
-                  'already published.'
-              : 'the published requirement names no team rk can read, and '
-                  'no [identity] is declared',
+          message: 'the published release names no team rk can read',
+          remedy: 'its designated requirement carries no subject.OU, so rk '
+              'cannot tell which certificate reproduces it',
         ),
         unit: step.unit,
       );
@@ -327,12 +294,17 @@ class BinaryChain {
         note: 'signed · matches the published identity',
       );
     } else {
+      // A first signed release makes an identity permanent, so it is named
+      // rather than assumed: the certificate that signed and the identifier
+      // every later release must reproduce.
       output.step(
         step,
         mark: Mark.done,
         verdict: Verdict.exact,
-        detail: 'signed · first release, baseline declared',
-        note: 'signed · first release, baseline declared',
+        detail: 'signed · first release · ${signed.certificate ?? 'unknown '
+            'certificate'} · $codeId',
+        note: 'signed · first release · ${signed.certificate ?? 'unknown '
+            'certificate'} · $codeId',
       );
     }
     return true;
@@ -348,23 +320,19 @@ class BinaryChain {
   /// signed apps and a csreq round-trip. The quoted-only version of this
   /// returned null for every letter-leading team, which misread an
   /// established identity as "no team rk can read".
-  static String? _teamOf(String requirement) =>
+  static String? teamOf(String requirement) =>
       RegExp(r'subject\.OU\]\s*=\s*"?([A-Z0-9]+)"?')
           .firstMatch(requirement)
           ?.group(1);
 
   /// The code identifier inside a designated requirement — always quoted by
   /// codesign's printer, unlike the OU.
-  static String? _identifierOf(String requirement) =>
+  ///
+  /// Public because the preflight compares it against a declared one before
+  /// anything acts; it had a one-line public forwarder around it for that,
+  /// which is a module punched through for a single caller.
+  static String? identifierOf(String requirement) =>
       RegExp(r'identifier "([^"]+)"').firstMatch(requirement)?.group(1);
-
-  /// The identity facts a published requirement carries, for the preflight
-  /// that compares them against a declared `[identity]` before anything
-  /// acts.
-  static ({String? team, String? identifier}) identityOf(
-    String requirement,
-  ) =>
-      (team: _teamOf(requirement), identifier: _identifierOf(requirement));
 
   // ---- notarize ----
 
@@ -380,12 +348,12 @@ class BinaryChain {
           'produce it');
     }
 
-    final resultName = notaryResultName(
+    final resultName = ReleaseAssets.notaryResultName(
       executable,
       project.version.canonical,
       platform,
     );
-    final logName = notaryLogName(
+    final logName = ReleaseAssets.notaryLogName(
       executable,
       project.version.canonical,
       platform,
@@ -500,7 +468,7 @@ class BinaryChain {
     ];
     // LICENSE and README travel with the binary by convention, not by
     // configuration.
-    final directory = _projectDirectory(project);
+    final directory = project.directoryIn(repositoryRoot);
     for (final extra in const ['LICENSE', 'README.md']) {
       final file = File('$directory/$extra');
       if (file.existsSync()) {
@@ -508,7 +476,7 @@ class BinaryChain {
       }
     }
 
-    final name = archiveName(
+    final name = ReleaseAssets.archiveName(
       executable,
       project.version.canonical,
       platform,
@@ -529,7 +497,7 @@ class BinaryChain {
   Future<bool> checksumsStep(Step step, ResolvedProject project) async {
     final assets = <String, List<int>>{};
     for (final platform in project.binaryPlatforms) {
-      final name = archiveName(
+      final name = ReleaseAssets.archiveName(
         project.executable!,
         project.version.canonical,
         platform,
@@ -541,7 +509,8 @@ class BinaryChain {
       assets[name] = bytes;
     }
 
-    workspace.write('SHA256SUMS', utf8.encode(Checksums.render(assets)));
+    workspace.write(
+        ReleaseAssets.checksums, utf8.encode(Checksums.render(assets)));
     output.step(
       step,
       mark: Mark.done,
@@ -588,7 +557,7 @@ class BinaryChain {
       final executable = project.executable!;
       final version = project.version.canonical;
       final archive = named(
-        archiveName(executable, version, platform),
+        ReleaseAssets.archiveName(executable, version, platform),
         'the archive steps produce it',
         platform: platform,
       );
@@ -597,8 +566,8 @@ class BinaryChain {
 
       if (platform.startsWith('macos-')) {
         for (final evidence in [
-          notaryResultName(executable, version, platform),
-          notaryLogName(executable, version, platform),
+          ReleaseAssets.notaryResultName(executable, version, platform),
+          ReleaseAssets.notaryLogName(executable, version, platform),
         ]) {
           final asset = named(evidence, 'the notarize step produces it');
           if (asset == null) return null;
@@ -607,7 +576,8 @@ class BinaryChain {
       }
     }
 
-    final sums = named('SHA256SUMS', 'the checksums step produces it');
+    final sums =
+        named(ReleaseAssets.checksums, 'the checksums step produces it');
     if (sums == null) return null;
     assets.add(sums);
     return assets;
@@ -643,7 +613,7 @@ class BinaryChain {
             ),
       },
     );
-    final name = formulaName(executable);
+    final name = ReleaseAssets.formulaName(executable);
     final bytes = utf8.encode(contents);
     workspace.write(name, bytes);
     return ReleaseAsset(
@@ -711,12 +681,13 @@ class BinaryChain {
     required ResolvedProject project,
   }) async {
     final executable = project.executable!;
-    final formula = workspace.readBytes(formulaName(executable));
+    final formula = workspace.readBytes(ReleaseAssets.formulaName(executable));
     if (formula == null) {
       output.problem(
         Diagnostic(
           code: 'RK-WORK-001',
-          message: 'the workspace has no ${formulaName(executable)}',
+          message:
+              'the workspace has no ${ReleaseAssets.formulaName(executable)}',
           remedy: 'the github-release step produces it — re-running runs it',
         ),
       );

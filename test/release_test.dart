@@ -8,7 +8,7 @@ import 'package:release_kit/src/engine/config.dart';
 import 'package:release_kit/src/engine/diagnostic.dart';
 import 'package:release_kit/src/engine/git.dart';
 import 'package:release_kit/src/engine/inspect.dart';
-import 'package:release_kit/src/engine/output.dart';
+import 'package:release_kit/src/output/output.dart';
 import 'package:release_kit/src/engine/registry.dart';
 import 'package:release_kit/src/engine/resolve.dart';
 import 'package:release_kit/src/engine/source_tree.dart';
@@ -45,15 +45,21 @@ GitState _git({
   bool pushed = true,
   List<String> tags = const [],
   bool signing = true,
+  String root = '/repo',
 }) =>
     GitState(
-      root: '/repo',
+      root: root,
       head: '9f2c1ab',
       branch: 'main',
       isClean: clean,
       uncommitted: clean ? const [] : const ['lib/x.dart'],
       headIsPushed: pushed,
       tags: tags,
+      // Stated, not omitted. These fixtures used to leave it empty and lean
+      // on `tagTarget` answering null reading as "at HEAD" — the very
+      // collapse RK-GIT-007 now refuses. A fixture that means "the tag is at
+      // HEAD" should say so.
+      tagTargets: {for (final t in tags) t: '9f2c1ab'},
       signingConfigured: signing,
       originUrl: 'danReynolds/keybay',
     );
@@ -199,9 +205,6 @@ schema = 1
 path = "packages/tool"
 publish = ["github-release"]
 binary_platforms = ["macos-arm64"]
-
-[identity]
-apple_team = "TEAM123456"
 code_id = "com.example.tool"
 ''';
 
@@ -340,14 +343,22 @@ executables:
 
   test('the baseline is read from the newest lower version, not the oldest',
       () async {
+    // A writable root: preflight writes the release body into the workspace
+    // before anything acts, so even a run that stops at authorize touches
+    // the filesystem.
+    final root = Directory.systemTemp.createTempSync('rk-baseline-');
+    addTearDown(() => root.deleteSync(recursive: true));
     final downloads = <String>[];
     final ran = await release(
       config: binaryConfig,
       source: binaryTree(),
-      state: _git(tags: ['v0.8.0', 'v0.9.0']),
+      state: _git(tags: ['v0.8.0', 'v0.9.0'], root: root.path),
       registry: FakeRegistry({}),
-      typed: '1.0.0',
-      dryRun: true, // the read happens in preflight, inside --dry-run
+      // Nobody to authorize: the baseline is resolved in preflight, so the
+      // read this test is about has already happened when the run stops.
+      // (--dry-run would run the whole local chain now, which is a
+      // different test.)
+      typed: null,
       only: 'cli',
       answers: (key) {
         if (key.contains('/releases/tags/v0.9.0')) {
@@ -385,7 +396,7 @@ executables:
       },
     );
 
-    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    expect(ran.exitCode, ExitCodes.refused, reason: 'nobody authorized it');
     expect(downloads, hasLength(1));
     expect(
       downloads.single,
@@ -401,10 +412,11 @@ void main() {
   mutationCloseout();
   signingBaselineRegressions();
 
-  test('a dry run rehearses everything read-only and starts nothing', () async {
+  test('a dry run does every local act and nothing public', () async {
     final ran = await release(dryRun: true);
-    expect(ran.exitCode, ExitCodes.ok);
-    expect(ran.text, contains('nothing was started'));
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    expect(ran.text, contains('dry run complete'));
+    expect(ran.text, contains('nothing public changed'));
     expect(
       ran.calls.where((c) => c.startsWith('git tag')),
       isEmpty,

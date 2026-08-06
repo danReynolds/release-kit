@@ -5,6 +5,7 @@ import 'package:release_kit/src/engine/config.dart';
 import 'package:release_kit/src/engine/diagnostic.dart';
 import 'package:release_kit/src/engine/git.dart';
 import 'package:release_kit/src/engine/inspect.dart';
+import 'package:release_kit/src/engine/registry.dart';
 import 'package:release_kit/src/engine/resolve.dart';
 import 'package:release_kit/src/engine/source_tree.dart';
 import 'package:release_kit/src/engine/tools.dart';
@@ -250,6 +251,166 @@ void classificationTables() {
     );
   });
 
+  group('an unread tag target is not agreement', () {
+    Future<List<Diagnostic>> guardsFor({
+      required Map<String, String> tagTargets,
+    }) async {
+      final unit = await _binaryUnit(); // 1.0.0, tag v1.0.0
+      final git = GitState(
+        root: '/repo',
+        head: 'abc123def456',
+        branch: 'main',
+        isClean: true,
+        uncommitted: const [],
+        headIsPushed: true,
+        tags: const ['v1.0.0'],
+        tagTargets: tagTargets,
+        signingConfigured: false,
+        originUrl: 'example/tool',
+      );
+      final inspector = Inspector(registry: FakeRegistry({}), git: git);
+      final checklist =
+          Checklist.derive(unit, await _binaryResolution(), Diagnostics());
+      // The version is not published yet, so the publish step is absent —
+      // which is what arms both placement guards.
+      final states = {
+        for (final s in checklist.steps) s.id: const Inspection.absent(),
+      };
+      return inspector.tagGuards(unit, checklist, states);
+    }
+
+    test('unread refuses rather than reading as "at HEAD"', () async {
+      // One unreachable tag object anywhere empties the whole map, so this
+      // is reachable without the tag rk cares about being broken. Silent,
+      // it publishes from a commit the tag does not name — and a burned
+      // pub.dev version is what re-running cannot fix.
+      final found = await guardsFor(tagTargets: const {});
+
+      expect(found.map((d) => d.code), contains('RK-GIT-007'));
+    });
+
+    test('read and elsewhere still names the commit', () async {
+      final found =
+          await guardsFor(tagTargets: const {'v1.0.0': 'fedcba987654'});
+
+      expect(found.map((d) => d.code), contains('RK-GIT-005'));
+    });
+
+    test('read and at HEAD is quiet', () async {
+      final found =
+          await guardsFor(tagTargets: const {'v1.0.0': 'abc123def456'});
+
+      expect(found, isEmpty);
+    });
+  });
+
+  group('monotonicity keeps the half it can compute offline', () {
+    Future<List<Diagnostic>> problemsFor({
+      required RegistryReader? registry,
+      required List<String> tags,
+    }) async {
+      final inspector = Inspector(
+        registry: registry,
+        git: GitState(
+          root: '/repo',
+          head: 'abc123def456',
+          branch: 'main',
+          isClean: true,
+          uncommitted: const [],
+          headIsPushed: true,
+          tags: tags,
+          signingConfigured: false,
+          originUrl: 'example/tool',
+        ),
+      );
+      final problems = Diagnostics();
+      // The unit is 1.0.0, so a v2.0.0 tag is a namespace already ahead.
+      await inspector.monotonicity(await _binaryUnit(), problems);
+      return problems.found;
+    }
+
+    test('the tag half is a local git fact, so --offline still refuses',
+        () async {
+      final found = await problemsFor(registry: null, tags: ['v2.0.0']);
+
+      expect(
+        found.map((d) => d.code),
+        contains('RK-MONO-001'),
+        reason: 'the tag loop reads git and nothing else — guarding it behind '
+            'the registry handed --json callers an empty problems array for '
+            'a repository whose tags are ahead of its manifests',
+      );
+    });
+
+    test('the registry half needs the registry, and says nothing without it',
+        () async {
+      final offline = await problemsFor(registry: null, tags: const []);
+      expect(offline, isEmpty, reason: 'nothing to be monotonic against');
+
+      final online = await problemsFor(
+        registry: FakeRegistry({
+          'example_tool': ['2.0.0'],
+        }),
+        tags: const [],
+      );
+      expect(online.map((d) => d.code), contains('RK-MONO-002'));
+    });
+  });
+
+  group('offline never reports a tag as done', () {
+    Future<Inspection> tagOffline({required List<String> tags}) async {
+      final inspector = Inspector(
+        registry: FakeRegistry({}),
+        git: GitState(
+          root: '/repo',
+          head: 'abc123def456',
+          branch: 'main',
+          isClean: true,
+          uncommitted: const [],
+          headIsPushed: true,
+          tags: tags,
+          tagTargets: {for (final t in tags) t: 'abc123def456'},
+          signingConfigured: false,
+          originUrl: 'example/tool',
+        ),
+        // No tools is what `--offline` wires: nothing to ask origin with.
+      );
+      return inspector.inspect(
+        Step(
+          id: 'cli/tag',
+          unit: 'cli',
+          kind: StepKind.tag,
+          summary: 'tag the release',
+          needs: const [],
+        ),
+        await _binaryUnit(),
+      );
+    }
+
+    test('a local-only tag is unknown, never exact', () async {
+      final state = await tagOffline(tags: ['v1.0.0']);
+
+      expect(
+        state.verdict,
+        Verdict.unknown,
+        reason: 'origin was not read, and a local tag is not a pushed tag — '
+            'exact here would make not reading the more confident answer '
+            'than reading, which online returns absent for this same world',
+      );
+      expect(state.detail, contains('--offline'));
+    });
+
+    test('no local tag is absent, because git is local and was read', () async {
+      final state = await tagOffline(tags: const []);
+
+      expect(
+        state.verdict,
+        Verdict.absent,
+        reason: 'offline says "not read" only about what it did not read',
+      );
+    });
+  });
+
   test('the formula is unknown until a tap reader exists', () async {
     final inspector = Inspector(
       registry: FakeRegistry({}),
@@ -373,9 +534,11 @@ void classificationTables() {
 
   test('the checklist summary counts the same assets the inspector expects',
       () async {
-    // The two derivations cannot share code without an import cycle, so
-    // this is the pin: a summary telling the operator "publish 4 assets"
-    // while the equality check expects 6 is the mirror drifting.
+    // Both derivations read ReleaseAssets now, so comparing them to each
+    // other would compare a thing to itself. The pin is the literal: this
+    // fixture's frozen six-name vector lives in the sibling test below, and
+    // a summary that says any other number has drifted from the grammar
+    // whatever the grammar says.
     final resolution = await _binaryResolution();
     final unit = resolution.unit('cli')!;
     final steps = Checklist.derive(unit, resolution, Diagnostics()).steps;
@@ -383,7 +546,7 @@ void classificationTables() {
         steps.firstWhere((s) => s.kind == StepKind.publishRelease).summary;
     final counted = int.parse(
         RegExp(r'publish (\d+) assets').firstMatch(summary)!.group(1)!);
-    expect(counted, Inspector.expectedAssets(unit).length);
+    expect(counted, 6);
   });
 
   test('the expected asset set is derived, and derives everything', () async {

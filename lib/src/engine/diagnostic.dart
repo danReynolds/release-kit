@@ -1,5 +1,6 @@
 /// A blocking problem, carrying a stable code so it stays greppable as its
-/// prose improves.
+/// prose improves — every one of them indexed in `doc/codes.md`, which
+/// `tool/validate.dart` keeps current.
 ///
 /// Codes are `RK-<AREA>-<NNN>`, additive, and never reused for a different
 /// meaning. The code is secondary in output: a reader wants the sentence and
@@ -83,10 +84,5 @@ class Diagnostics {
         remedy: remedy,
       ),
     );
-  }
-
-  /// Raises everything collected, or returns if nothing was found.
-  void throwIfAny() {
-    if (_found.isNotEmpty) throw RkFailure(found);
   }
 }

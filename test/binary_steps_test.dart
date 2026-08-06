@@ -2,11 +2,11 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:release_kit/src/builds/capability.dart';
-import 'package:release_kit/src/commands/binary_chain.dart';
+import 'package:release_kit/src/binary_chain.dart';
 import 'package:release_kit/src/engine/checklist.dart';
 import 'package:release_kit/src/engine/config.dart';
 import 'package:release_kit/src/engine/diagnostic.dart';
-import 'package:release_kit/src/engine/output.dart';
+import 'package:release_kit/src/output/output.dart';
 import 'package:release_kit/src/engine/resolve.dart';
 import 'package:release_kit/src/engine/source_tree.dart';
 import 'package:release_kit/src/engine/tools.dart';
@@ -153,8 +153,7 @@ executables:
         step(StepKind.sign),
         project,
         publishedRequirement: null,
-        declaredTeam: 'TEAM123456',
-        declaredCodeId: 'com.example.tool',
+        codeId: 'com.example.tool',
       ),
       isTrue,
       reason: buffer.toString(),
@@ -211,8 +210,7 @@ executables:
       project,
       publishedRequirement: 'designated => certificate '
           'leaf[subject.OU] = "TEAM123456" and leaf "OLD"',
-      declaredTeam: null,
-      declaredCodeId: 'com.example.tool',
+      codeId: 'com.example.tool',
     );
 
     expect(ok, isFalse);
@@ -243,33 +241,77 @@ executables:
       step(StepKind.sign),
       project,
       publishedRequirement:
-          'designated => certificate leaf[subject.OU] = "TEAM123456"',
-      declaredTeam: null, // nothing declared: derivation must carry it
-      declaredCodeId: 'com.example.tool',
+          'designated => certificate leaf[subject.OU] = "TEAM123456"', // nothing declared: derivation must carry it
+      codeId: 'com.example.tool',
     );
     expect(ok, isTrue, reason: buffer.toString());
   });
 
   test(
-      'no baseline and no declaration refuses with the first-release '
-      'instruction', () async {
-    await chain(scripted()).buildStep(
+      'a first release discovers the one certificate, and names the '
+      'identity it just made permanent', () async {
+    // Nothing to declare: capabilities are discovered, and a machine with
+    // one Developer ID has exactly one answer. What rk owes the operator is
+    // not a demand for configuration but a statement of what became
+    // permanent — the certificate, and the identifier every later release
+    // must reproduce.
+    final tools = scripted();
+    await chain(tools).buildStep(
       step(StepKind.build),
       project,
       publishedRequirement: null,
     );
-    final ok = await chain(scripted()).signStep(
+    final ok = await chain(tools).signStep(
       step(StepKind.sign),
       project,
       publishedRequirement: null,
-      declaredTeam: null,
-      declaredCodeId: null,
+      codeId: 'io.github.example.tool',
+    );
+    expect(ok, isTrue, reason: buffer.toString());
+    expect(buffer.toString(), contains('first release'));
+    expect(buffer.toString(), contains('Developer ID Application: Dan'));
+    // Asserted on the argv, not on the buffer. `contains('tool')` was
+    // satisfied by the build line `build tool for macos-arm64` that the
+    // step above had already written into the same buffer, so the whole
+    // assertion held with the identifier mutated to 'zz.mutation' — and this
+    // is the value that becomes the permanent designated requirement.
+    final sign = (tools as RecordingTools)
+        .calls
+        .firstWhere((c) => c.startsWith('codesign --force'));
+    expect(
+      sign,
+      contains('--identifier io.github.example.tool'),
+      reason: 'the caller resolved it and this step signs exactly that — '
+          'the step no longer has a fallback of its own to reach for',
+    );
+  });
+
+  test('several certificates and nothing published is a refusal, not a guess',
+      () async {
+    final tools = RecordingTools(
+      answers: (key) {
+        if (key.startsWith('security find-identity')) {
+          return ToolResult(
+            exitCode: 0,
+            stdout: '1) A "Developer ID Application: One (TEAM111111)"\n'
+                '2) B "Developer ID Application: Two (TEAM222222)"',
+            stderr: '',
+          );
+        }
+        return null;
+      },
+    );
+    workspace.write('macos-arm64/tool', utf8.encode('BINARY'));
+
+    final ok = await chain(tools).signStep(
+      step(StepKind.sign),
+      project,
+      publishedRequirement: null,
+      codeId: 'tool',
     );
     expect(ok, isFalse);
-    expect(
-        buffer.toString(),
-        contains('the first signed release states it '
-            'once'));
+    expect(buffer.toString(), contains('TEAM111111'));
+    expect(buffer.toString(), contains('TEAM222222'));
   });
 
   test(
@@ -323,9 +365,8 @@ executables:
       step(StepKind.sign),
       project,
       publishedRequirement: 'designated => identifier "TOOL" and certificate '
-          'leaf[subject.OU] = Q6L2SF6YDW',
-      declaredTeam: null, // derivation must carry the unquoted team
-      declaredCodeId: 'com.example.tool',
+          'leaf[subject.OU] = Q6L2SF6YDW', // derivation must carry the unquoted team
+      codeId: 'com.example.tool',
     );
     expect(ok, isTrue, reason: buffer.toString());
     expect(
@@ -455,8 +496,7 @@ executables:
       step(StepKind.sign),
       project,
       publishedRequirement: published,
-      declaredTeam: null,
-      declaredCodeId: 'com.example.tool',
+      codeId: 'com.example.tool',
     );
     expect(ok, isFalse, reason: buffer.toString());
     expect(
@@ -555,8 +595,7 @@ executables:
       step(StepKind.sign),
       project,
       publishedRequirement: published,
-      declaredTeam: null,
-      declaredCodeId: 'com.example.tool', // derivation must beat this
+      codeId: 'io.github.example.tool', // resolved by the caller from leg 1
     );
     expect(ok, isTrue, reason: buffer.toString());
     final sign = (tools as RecordingTools)

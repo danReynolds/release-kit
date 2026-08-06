@@ -33,6 +33,10 @@ Future<void> main(List<String> args) async {
     exit(2);
   }
 
+  // The codes index is a published interface no test pins, so it is checked
+  // here — outside the tally, where a documentation contract belongs.
+  if (!codesIndexIsCurrent()) exit(1);
+
   var crashed = 0;
   var looked = 0;
 
@@ -110,4 +114,54 @@ Future<Map<String, Object?>?> _run(
   } on Object {
     return null;
   }
+}
+
+/// Whether doc/codes.md still lists every code the sources declare.
+///
+/// The index is a published interface and nothing in the test tally pins
+/// it, so the check lives here: `dart run tool/validate.dart` fails when a
+/// new code is added without indexing it.
+bool codesIndexIsCurrent() {
+  final declared = <String>{};
+  for (final dir in [Directory('lib'), Directory('bin')]) {
+    for (final entry in dir.listSync(recursive: true)) {
+      if (entry is! File || !entry.path.endsWith('.dart')) continue;
+      for (final m in RegExp(r"'(RK-[A-Z]+-\d+)'")
+          .allMatches(entry.readAsStringSync())) {
+        declared.add(m.group(1)!);
+      }
+    }
+  }
+  final index = File('doc/codes.md');
+  if (!index.existsSync()) {
+    stderr.writeln('doc/codes.md is missing');
+    return false;
+  }
+  final source = index.readAsStringSync();
+  final listed = RegExp(r'`(RK-[A-Z]+-\d+)`')
+      .allMatches(source)
+      .map((m) => m.group(1)!)
+      .toSet();
+
+  final missing = declared.difference(listed).toList()..sort();
+  // Both directions. Checking only that every declared code is listed lets a
+  // row for a deleted code survive forever — and a vocabulary index whose
+  // entries may not exist is worse than none, because it is read as
+  // authoritative. The count below is a claim too, so it is checked.
+  final stale = listed.difference(declared).toList()..sort();
+  final claimed = RegExp(r'(\d+) codes across').firstMatch(source);
+
+  if (missing.isNotEmpty) {
+    stderr.writeln('doc/codes.md does not list: ${missing.join(', ')}');
+  }
+  if (stale.isNotEmpty) {
+    stderr.writeln('doc/codes.md lists codes nothing declares: '
+        '${stale.join(', ')}');
+  }
+  if (claimed != null && int.parse(claimed.group(1)!) != listed.length) {
+    stderr.writeln('doc/codes.md says ${claimed.group(1)} codes and lists '
+        '${listed.length}');
+    return false;
+  }
+  return missing.isEmpty && stale.isEmpty;
 }

@@ -110,7 +110,7 @@ package locally, end to end.
 
 Split from the destinations: this was six subsystems behind one gate, on the
 phase with the most unreviewed code. 7a is everything that happens before a
-destination is touched — and it ends with `--rehearse`: every local step and
+destination is touched — and it ends with `--dry-run`: every local step and
 every inspection, stopping before any public act. The failure rehearsal
 prevents is discovering the expired certificate or broken notarization at
 minute 40 of an announced release.
@@ -155,6 +155,219 @@ Bootstrap its packages by hand (pub.dev requires an interactive first
 publish), then rk owns every subsequent version. Exercises multi-project
 units, derived ordering, and cross-unit prerequisites — the paths keybay
 never touches.
+
+## The austerity pass on the surface
+
+Two ways to ask one question is a bug in the surface, so the flags were
+held to the same test the code is: **name the failure it prevents that
+nothing else prevents.**
+
+- `--rehearse` and `--dry-run` were two flags for one job, and the weaker
+  one duplicated a whole verb: "inspect and stop before acting" is what
+  `rk status` says. One flag survives, `--dry-run`, with the semantics
+  worth having — every local act for real, nothing public touched.
+- `-v` / `--verbose` was a second, worse rendering of the default view: it
+  carried *less* verdict information than the lanes it replaced, and the
+  diagnostic codes it used to gate now ride every problem line in every
+  mode. `--json` is the surface for everything-at-once. Cut, along with the
+  renderer behind it.
+- `--offline` survives, and the test says why: nothing else gives a
+  network-free answer. It stopped being a mode the verb branches on,
+  though — it is now wiring (a null registry and null tools, exactly like
+  an absent forge), so offline renders through the same lanes as a live
+  run and says "not read: --offline" where it did not read. The
+  offline-only renderer went with the branch, and offline gained honesty:
+  it reads git, so a missing tag reads `absent` rather than shrugging.
+
+What is left is one flag per job: `--json`, `--dry-run`, `--offline`,
+`--write`, `--at=<ref>`, `-h`.
+
+### …and on the config
+
+The same test, applied to `release.toml`, found three things:
+
+- **`tag_signer` was dead.** Accepted by the parser, stored on the config
+  object, read by nothing. A promise with no implementation is the worst
+  kind of surface. Cut.
+- **`apple_team` was drift, not design.** The RFC always specified the
+  keychain rule — one Developer ID certificate is unambiguous, several
+  fail closed with the list, none says a certificate must be installed —
+  and the implementation had grown a declaration requirement instead. rk
+  discovers it again, so the key is gone, and a first signed release now
+  *states* which certificate it made permanent rather than asking to be
+  told.
+- **`[identity]` was a modelling footgun.** It was global; a code
+  identifier is per-unit. A repository with two binary units would have
+  signed both as the same program. The table is gone: `code_id` and
+  `homebrew_tap` are unit settings now, both optional, and `code_id` is
+  consulted only for the one release that has no published binary to
+  derive it from.
+
+`release.toml` is now: `schema`, `[release.<unit>]` with
+`tag`/`path`/`publish`/`binary_platforms`/`code_id`/`homebrew_tap`, and
+`[[release.<unit>.project]]` rows for a unit with several projects.
+
+### …and on the code, by workflow
+
+Eleven agents surveyed the codebase, proposed three decompositions of
+`release.dart` independently, judged them by austerity, spec-fidelity and
+risk, and synthesised one staged plan. **The minimal-cut proposal won**,
+two judges of three ranking it first. Six stages landed, each gated at
+579 passing / 2 deliberate reds; `release.dart` went 1226 → 1200, which
+was not the point.
+
+What actually moved:
+
+- **`engine/assets.dart`** — the published asset grammar was spelled in
+  four places. That is a latent, permanently unfixable failure, not
+  untidiness: `GithubRelease.inspect` calls *any* expected-vs-published
+  difference a conflict, a published release cannot be edited, and the
+  publish step's verify leg compares only against what it just uploaded.
+  One name out of step between producer and inspector lets rk publish a
+  release and read it back, next run, as an unfixable conflict against a
+  release it made itself. The comment claiming the checklist and the
+  inspector "cannot share code (they would import each other)" was
+  written during the asset-count fix and was false — verified before
+  deletion.
+- **`GitState.uncommittedProblem()`** — RK-GIT-001 meant two `--json`
+  payloads: status pluralized and named up to eight paths, release said
+  "1 paths are uncommitted" and named none. `unpushedProblem`'s own doc,
+  one method away, already forbade exactly this.
+- **`RK-GIT-002`** — a missing origin refused through `Output.line`, which
+  writes only to the sink, so a `--json` caller got an empty `problems`
+  array. Same invisibility RK-BREW-001 was created to end.
+- **Four derivations onto the resolved model** — `binaryProject`,
+  `tapFor`, `fileAt`, `directoryIn`, replacing ten sites, two of which
+  were `firstWhere` calls throwing StateError (a crash at exit 3) for an
+  invariant RK-RES-009 already refuses.
+- **`destinations/git_tag.dart`** — the git protocol leaves the verb, with
+  a sealed three-way presence type so "unknown never collapses into
+  absent" is structural for the tag rather than a discipline each caller
+  remembers.
+
+**What was refused, and why it is worth recording.** `_release` stays one
+ordered pipeline: the proposed preflight/execute split formalises the
+CI-seam-1 violation instead of removing it.
+
+*Corrected after review.* The original entry justified this on a second
+ground — that the wires the split re-plumbs "are pinned by nothing (every
+sign step in the suite receives a null `publishedRequirement`, and `notes`
+is read by no test)". Both clauses were wrong, and wrong in the two ways
+that matter. `publishedRequirement` was simply false:
+`test/binary_steps_test.dart` passes non-null values at five call sites,
+including the gate that refuses a mismatched signature with both
+requirements as evidence. And `notes` was read by no test *because this
+same branch had deleted the test that read it* — a fact the branch
+manufactured, presented as one it found. A refusal recorded on false
+grounds is worse than an unrecorded one, because it will be trusted. The
+refusal stands on the first ground alone, which is the real one. `notes`
+has a reader again, and so does the wire that carries first-ness.
+
+`_authorize` stays welded to
+the pipeline — every disclosure is computed at the point of the decision
+it discloses, and separated, the reason a sentence is true stops being
+visible beside it. The pub.dev block stays: RFC 0002 assigns the publish
+dry-run and the consumer resolve to the **ecosystem** adapter, not the
+destination, so extracting them would put ninety lines in the module the
+spec says they do not belong to.
+
+### The code identifier: rejected alternative, and why
+
+Asked whether `code_id` should be **derived** rather than declared, on the
+austerity principle that removed `apple_team`. It should not, and the
+distinction is the whole answer: `security find-identity` *literally
+returns* the team, so deference was available and the declaration was
+drift. Nothing returns the code identifier — not the keychain, not the
+pubspec, not the forge. A rule would be rk inventing a convention and
+calling it derivation.
+
+`io.github.<owner>.<command>` was the candidate, and the evidence against
+it is specific:
+
+- It reproduces rk's own declared `io.github.danreynolds.rk` **exactly**,
+  and **misses** keybay's `io.github.danreynolds.keybay.cli` — where the
+  `.cli` suffix was chosen so one signed program in a two-unit repository
+  would not claim the bare product name. A rule that reproduces the less
+  considered choice and misses the more considered one is a suggestion.
+- It collides live: `erikas-taroza/audiotags` and `erikas-taroza/
+  simple_audio` both declare `executables: cli`, so both derive
+  `io.github.erikas-taroza.cli`. Every `sidekick_core`-generated CLI
+  hard-codes `executables: main`, so all of them derive
+  `io.github.<owner>.main`.
+- Apple's own `codesign --prefix` documentation has the *signer* supply the
+  prefix and names `com.domain.`. Apple cannot name `io.github.<owner>`,
+  because Apple does not know what a forge is.
+
+What *was* drift is the third leg: `?? project.name`. It answered "what is
+this called on pub.dev" for a question about which executable macOS is
+running — wrong on both of this fleet's repositories — and it did so at the
+one moment that makes the answer permanent. Deleted. rk refuses with
+RK-SIGN-009 and offers the convention in the remedy, as text a human reads
+and edits. Nothing becomes permanent without being typed.
+
+A useful side effect: every unknown-collapses-into-absent hole in
+`_signingBaseline` (below) stops being able to cause permanent harm. They
+used to silently sign the package name; under a derivation they would
+silently sign a derived value; now they hit RK-SIGN-009 and refuse.
+Fail-safe rather than fail-permanent.
+
+### Two claims corrected after the second review
+
+`111a2a7`'s message says its three mutations "each passed the whole suite
+before this commit". True of two. The third — `formulaName` dropped from
+`expectedFor`, so producer and inspector drift *together* — was already
+caught at the parent by two `inspect_test.dart` assertions. The design
+reason for set equality over a literal list stands; the novelty claim does
+not.
+
+`596643a`'s message says "a gate now checks that no shipped document names
+a flag `bin/rk.dart` refuses". It checks the backticked mentions in three
+documents — the ones describing rk's current surface. Widening it to every
+shipped markdown was tried and reverted: `doc/plan.md` legitimately records
+flags that were *cut*, and both RFCs quote other tools' flags. The test's
+own name is scoped correctly; the message was not.
+
+### Deferred, with the condition each waits on
+
+- **`_signingBaseline`'s four unknown-into-absent collapses** — it reads
+  local `git tag --list` rather than asking the forge, walks only the
+  single best earlier tag, hardcodes `macos-arm64` when matching the
+  published asset, and treats a changed tag pattern or renamed executable
+  as "no earlier release". Each now produces a *refusal* (RK-SIGN-009)
+  rather than a silent permanent identifier, so they are friction rather
+  than harm. Waits on: a release that actually hits one, or the CI pass —
+  the fix must fail *open* on an inconclusive forge answer (403, rate
+  limit) so a genuine first release is not blocked by GitHub having a bad
+  minute.
+- **`GitState._originSlug` hygiene** — accepts five mirror-path spellings
+  (`https://gitlab.com/github.com/acme/tool.git`), lookalike hosts
+  (`evilgithub.com`), and eats the port in `ssh://git@github.com:22/o/r`,
+  while rejecting `https://GitHub.com/...` and GitHub's own documented
+  SSH-over-443 host `ssh.github.com`. Now ordinary hygiene rather than a
+  precondition: nothing permanent depends on it, since it feeds only the
+  RK-SIGN-009 suggestion and `gh`, which fails loudly.
+
+1. **`destinations/pub_dev.dart`, partial** — `_publish`,
+   `_refuseFirstPublish`, `_confirmPublishedBytes` and the poll policy.
+   Condition: the tally may move, so RK-PUB-002/003 become directly
+   testable, which is the only thing the extraction buys.
+2. **Pins for four blind spots** — RK-HOST-001 through injected
+   capabilities; a *non-null* `publishedRequirement` at the sign step;
+   `notes` against the CHANGELOG body; RK-TAG-001 by code. Plus a
+   `git_tag_test.dart`. Condition: consent to raise the count.
+3. **`_act`'s two out-of-band parameters** — reading the baseline from the
+   workspace by name would make "no earlier signed release" and "the
+   baseline was never written" the same observation, and the second
+   silently *skips* the signing proof. Unknown collapsing into absent, at
+   the signing gate. Needs an explicit no-baseline record and pin 2 first.
+4. **`engine/forge.dart`** — three implementations of the gh-404
+   definitive-negative rule, and two divergent contents decoders, one of
+   which (`binary_chain`'s tap read-back) collapses every failure to null.
+   The honest justification is fixing that collapse, which is a behaviour
+   change no test distinguishes.
+5. **The first-publish fact, derived four ways** — already ledgered above.
+6. **`report.acted` / `report.halted` as an out-of-band return channel** —
+   `_act` returns bool, which cannot say *which* halt occurred.
 
 ## Constraints to hold throughout
 
@@ -373,7 +586,14 @@ Recorded because the reviews found them claimed-as-shipped when they are not:
   stay expanded (`Output.line` clears the transient line first, collapsing
   the detail that is the diagnosis).
 - **Phase 7b** — a multi-platform command-layer drive: done, in the 7b
-  build (three platforms, both directions).
+  build (three platforms, both directions). Deleted as collateral when
+  `--rehearse` was cut — it sat beside the flag test it shared a group
+  with, and the commit enumerated every flag it removed without ever
+  saying a DONE WHEN gate went with them. These two lines went on
+  asserting it existed. Restored, and rebuilt to assert set equality
+  against the derivation rather than a literal list. The lesson is in the
+  review record below: a stage gated on a *count* cannot tell coverage
+  that moved from coverage that was deleted.
 - **Verify, owed by the unproven-platform change** — a release whose
   Linux binaries shipped unexecuted carries that fact only in the run's
   own output. `rk verify` should say it too, per platform, so a reader
@@ -520,7 +740,7 @@ Ledgered from the reviews, deliberately not squeezed into the polish:
   byte-compare against the published archive, printing the proven commit
   instead of a placeholder — verify's machinery, pointed at the operator's
   scariest chore.
-- A one-line gloss for sign/notarize where --rehearse mentions them.
+- A one-line gloss for sign/notarize where --dry-run mentions them.
 
 Sign-offs, round 3: the first-timer — "no warning label"; the maintainer —
 "ship, and stop polishing"; the release engineer — status and verify
@@ -598,8 +818,11 @@ from the public tap byte-for-byte after pushing (RK-BREW-001/002/003). A
 three-platform drive — native macOS plus two cross-compiled linux targets
 under injected capabilities — proves the whole shape at the command layer,
 in both directions: the full release (seven assets, ordering, notes,
-read-back) and the rehearsal that runs every local step and touches
-nothing public. The DONE-WHEN live gate is deliberately red until the real
+read-back) and the dry run that runs every local step and touches nothing
+public. The published set is asserted as *set equality against
+`Inspector.expectedAssets`* rather than against a literal list, so the
+producer is pinned to the party it has to agree with rather than to a
+spelling. The DONE-WHEN live gate is deliberately red until the real
 keybay cli release is recorded as "## Phase 7b checkpoint".
 
 **Phase 7a — the independent review.** Fifteen mutations, nine survived —
@@ -644,8 +867,10 @@ codesign behaviour. Fixed in closeout:
   diagnosed win over the default. The formula path records RK-BREW-001.
 - `--dry-run --rehearse` silently ran as a dry run — both flags
   individually valid, so the pair passed the per-verb check, and the class
-  the CLI's own comment forbids recurred. It is RK-CLI-008 now: two
-  different promises, refused together.
+  the CLI's own comment forbids recurred. Refused together, as two
+  different promises — and then made unrepresentable by the austerity
+  pass, which merged `--rehearse` into `--dry-run`. The refusal and its
+  code went with the flag.
 - The two workspaces disagreed about a file a native tool wrote at
   `pathOf` before any ingest — which made the reuse branch unreachable
   under MemoryWorkspace, and was the mechanical reason every reuse
@@ -783,7 +1008,7 @@ terminal for the typed confirmation. The path to it, in order:
    gate green.
 7. Then the cli, for the phase 7b checkpoint: bump packages/keybay_cli
    (with its CHANGELOG entry — the entry becomes the release body), run
-   `rk status`, then `rk release cli --rehearse` (every local step, signing
+   `rk status`, then `rk release cli --dry-run` (every local step, signing
    and notarization included, nothing public), then `rk release cli`. No
    `[identity]` is needed: rk derives the team and the code identifier from
    the published 0.1.0 binary, and a declaration that contradicted it would
@@ -805,7 +1030,7 @@ release users already installed — `PublishedIdentity`, wired at last, with
 the team read out of the published requirement itself — and a signature that
 does not reproduce it is refused with both requirements as evidence, before
 anything public exists. `Activity` finally has its production callers: the
-build and the notarization wait. And `--rehearse` is real: every local step
-runs for real, nothing public is touched, nothing is authorized because
+build and the notarization wait. And the rehearsal was real: every local
+step ran for real, nothing public was touched, nothing is authorized because
 nothing permanent happens — proved by a gate that counts the tool calls both
 ways.

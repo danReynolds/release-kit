@@ -98,20 +98,128 @@ publish = ["pub.dev"]
     expect(config.units.single.projects.single.path, 'packages/keybay');
   });
 
-  test('identity overrides are read when present', () {
+  test('the two identity overrides live on the unit that owns them', () {
+    // Per unit, not per repository: a repository with two binary units has
+    // two program identities and possibly two taps, and the global
+    // [identity] table this replaced would have signed both as one program.
     final config = accepted('''
 schema = 1
 
-[release.core]
-publish = ["pub.dev"]
-
-[identity]
-apple_team = "5AHFA9FUZG"
+[release.cli]
+publish = ["github-release", "homebrew"]
+binary_platforms = ["macos-arm64"]
 code_id = "io.github.danreynolds.keybay.cli"
+homebrew_tap = "danReynolds/homebrew-tools"
 ''');
-    expect(config.identity!.appleTeam, '5AHFA9FUZG');
-    expect(config.identity!.codeId, 'io.github.danreynolds.keybay.cli');
-    expect(config.identity!.homebrewTap, isNull);
+    expect(config.units.single.codeId, 'io.github.danreynolds.keybay.cli');
+    expect(config.units.single.homebrewTap, 'danReynolds/homebrew-tools');
+  });
+
+  group('a setting nothing in the unit can read is refused', () {
+    // The migration hazard the move created. `[identity]` was repository
+    // global, so "which unit" had no answer to get wrong; now it does, and
+    // a two-unit repository makes it a coin flip. Silently accepting the
+    // wrong one lets the binary unit fall back to the package name as its
+    // program identity — permanently, on the first signing.
+    test('code_id on a unit that signs nothing', () {
+      expect(
+        refusedWith('schema = 1\n[release.core]\npublish = ["pub.dev"]\n'
+            'code_id = "io.github.danreynolds.keybay"\n'),
+        'RK-CONF-035',
+      );
+    });
+
+    test('code_id on a unit whose binaries are all linux', () {
+      // Narrower than "ships binaries": sign steps exist only for macos-
+      // targets, so a linux-only unit cannot read it either.
+      expect(
+        refusedWith('schema = 1\n[release.cli]\n'
+            'publish = ["github-release"]\n'
+            'binary_platforms = ["linux-x64"]\n'
+            'code_id = "io.github.danreynolds.keybay.cli"\n'),
+        'RK-CONF-035',
+      );
+    });
+
+    test('but not when a project row failed to parse — that is unknown', () {
+      // The signing project is dropped by a typo'd platform, so `signs`
+      // used to read false and accuse a correctly placed code_id. An
+      // operator following that remedy deletes a correct declaration.
+      final problems = Diagnostics();
+      ReleaseConfig.parse(
+        'schema = 1\n[release.cli]\n'
+            'publish = ["github-release"]\n'
+            'binary_platforms = ["macos-arm65"]\n'
+            'code_id = "io.github.danreynolds.keybay.cli"\n',
+        'release.toml',
+        problems,
+      );
+      final codes = problems.found.map((d) => d.code);
+      expect(codes, contains('RK-CONF-028'), reason: 'the real problem');
+      expect(
+        codes,
+        isNot(contains('RK-CONF-035')),
+        reason: 'rk could not read the project, which is not the same as '
+            'reading it and finding it signs nothing',
+      );
+    });
+
+    test('an empty value, which is not the same as an absent one', () {
+      // Verified against the real tool: `codesign -i ""` does not refuse, it
+      // silently substitutes a filename-derived default — so a blank
+      // code_id ships a permanent identifier nobody chose.
+      expect(
+        refusedWith('schema = 1\n[release.cli]\n'
+            'publish = ["github-release"]\n'
+            'binary_platforms = ["macos-arm64"]\n'
+            'code_id = "   "\n'),
+        'RK-CONF-037',
+      );
+    });
+
+    test('homebrew_tap on a unit that does not publish to homebrew', () {
+      expect(
+        refusedWith('schema = 1\n[release.cli]\n'
+            'publish = ["github-release"]\n'
+            'binary_platforms = ["macos-arm64"]\n'
+            'homebrew_tap = "danReynolds/homebrew-tools"\n'),
+        'RK-CONF-036',
+      );
+    });
+  });
+
+  test('the [identity] refusal names where its settings went', () {
+    // A breaking change whose remedy lists only what is still allowed
+    // leaves the operator holding a file with no path forward.
+    final problems = Diagnostics();
+    ReleaseConfig.parse(
+      'schema = 1\n[release.core]\npublish = ["pub.dev"]\n'
+          '[identity]\ncode_id = "io.github.danreynolds.keybay"\n',
+      'release.toml',
+      problems,
+    );
+    final remedy = problems.found.single.remedy!;
+    for (final moved in [
+      'code_id',
+      'homebrew_tap',
+      'apple_team',
+      'tag_signer'
+    ]) {
+      expect(remedy, contains(moved),
+          reason: 'all four settings must be accounted for');
+    }
+  });
+
+  test('there is no team to declare, and no identity table to declare it in',
+      () {
+    // apple_team was discoverable all along — a machine with one Developer
+    // ID certificate has nothing to say — and tag_signer was accepted,
+    // stored, and read by nothing at all.
+    expect(
+      refusedWith('schema = 1\n[release.core]\npublish = ["pub.dev"]\n'
+          '[identity]\napple_team = "5AHFA9FUZG"\n'),
+      'RK-CONF-003',
+    );
   });
 
   group('refuses', () {
@@ -248,11 +356,11 @@ code_id = "io.github.danreynolds.keybay.cli"
       );
     });
 
-    test('an unknown identity override', () {
+    test('an unknown setting on a unit', () {
       expect(
         refusedWith('schema = 1\n[release.core]\npublish = ["pub.dev"]\n'
-            '[identity]\nsigning_key = "x"'),
-        'RK-CONF-031',
+            'signing_key = "x"'),
+        'RK-CONF-008',
       );
     });
   });

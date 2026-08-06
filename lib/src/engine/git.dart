@@ -137,6 +137,29 @@ class GitState {
       .where((path) => path != '.rk/' && !path.startsWith('.rk/'))
       .toList();
 
+  /// The problem an uncommitted worktree is, with the paths named.
+  ///
+  /// Shared for the same reason [unpushedProblem] is, and because the drift
+  /// it prevents had already happened: status pluralized correctly and
+  /// named up to eight files, while release said "1 paths are uncommitted"
+  /// and named none — one diagnostic code, two --json payloads.
+  Diagnostic? uncommittedProblem() {
+    if (isClean) return null;
+    // Named, not counted: the ellipsis costs more characters than the path
+    // it hides until the list is genuinely long.
+    final paths = uncommitted.length <= 8
+        ? uncommitted.join(', ')
+        : '${uncommitted.take(8).join(', ')} '
+            '…and ${uncommitted.length - 8} more';
+    return Diagnostic(
+      code: 'RK-GIT-001',
+      message: uncommitted.length == 1
+          ? '1 path is uncommitted'
+          : '${uncommitted.length} paths are uncommitted',
+      remedy: 'a release is of a commit, and these are not in one: $paths',
+    );
+  }
+
   /// The problem an unpushed HEAD is, said with its facts: which branch,
   /// how far ahead, or that there is nowhere to push to at all. Shared by
   /// status and release so the two verbs cannot describe it differently.

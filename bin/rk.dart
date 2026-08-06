@@ -1,3 +1,17 @@
+/// rk's entry point, and its composition root.
+///
+/// Everything a run needs is built here and nowhere else: this file finds the
+/// git root, reads and parses `release.toml`, resolves it against the
+/// repository, and constructs the `Registry`, `SystemTools`, `Comparator` and
+/// `Output` the verbs are handed. It then dispatches to one of the four verbs
+/// and, on a run that failed after acting, writes the diagnosis.
+///
+/// So the answer to "where does rk read release.toml?" is `_prepare` below,
+/// not a file under `lib/`. Reading files and deciding exit codes is
+/// composition-root work; pushing it down would put `dart:io` in the layer
+/// `engine/source_tree.dart` exists to keep testable.
+library;
+
 import 'dart:io';
 
 import 'package:release_kit/src/commands/init.dart';
@@ -6,11 +20,11 @@ import 'package:release_kit/src/commands/status.dart';
 import 'package:release_kit/src/commands/verify.dart';
 import 'package:release_kit/src/engine/compare.dart';
 import 'package:release_kit/src/engine/config.dart';
-import 'package:release_kit/src/engine/diagnosis.dart';
+import 'package:release_kit/src/output/diagnosis.dart';
 import 'package:release_kit/src/engine/diagnostic.dart';
 import 'package:release_kit/src/engine/git.dart';
 import 'package:release_kit/src/engine/inspect.dart';
-import 'package:release_kit/src/engine/output.dart';
+import 'package:release_kit/src/output/output.dart';
 import 'package:release_kit/src/engine/registry.dart';
 import 'package:release_kit/src/engine/resolve.dart';
 import 'package:release_kit/src/engine/source_tree.dart';
@@ -29,12 +43,11 @@ Usage: rk [command] [unit]        a unit is one releasable package
 Bare `rk` runs status.
 
 Flags
-  -v          the per-step checklist view             --json   the machine surface
-                                                               (doc/json.md)
-  --offline   status from the manifests alone         --write  accept init's proposal
-  --dry-run   release: inspect and stop before acting
-  --rehearse  release: run every local step, touch nothing public
-  --at=<ref>  verify against a tag or commit
+  --json      the machine surface (doc/json.md)
+  --offline   status: derive the plan, read nothing
+  --dry-run   release: run every local step, touch nothing public
+  --write     init: accept the proposal without a prompt
+  --at=<ref>  verify: against a tag or commit instead of the derived one
 
 Marks: ✓ done,  · already satisfied,  ✗ blocked,  → your next move,
        unmarked pending
@@ -44,14 +57,11 @@ Exit:  0 clean or complete (status: blocked counts too), 1 refused or failed,
 
 Future<void> main(List<String> args) async {
   const known = {
-    '-v',
-    '--verbose',
     '-h',
     '--help',
     '--dry-run',
-    '--rehearse',
-    '--offline',
     '--json',
+    '--offline',
     '--write',
   };
   // `--at=<ref>` carries a value, so it is peeled before the set membership
@@ -80,17 +90,13 @@ Future<void> main(List<String> args) async {
       ? first
       : (positional.length > 1 ? positional[1] : null);
 
-  final output = Output.stdio(
-    verbose: flags.contains('-v') || flags.contains('--verbose'),
-    json: json,
-    command: command,
-  );
+  final output = Output.stdio(json: json, command: command);
   // The document says how it was asked to read, so a caller can tell
   // "checked, inconclusive" from "never looked" — an offline run's unknowns
   // are only interpretable with this beside them.
   output.report.mode.addAll({
+    'dry_run': flags.contains('--dry-run'),
     'offline': flags.contains('--offline'),
-    'verbose': flags.contains('-v') || flags.contains('--verbose'),
     if (at != null) 'at': at,
   });
 
@@ -98,18 +104,10 @@ Future<void> main(List<String> args) async {
   // way as one that does not exist: `rk release --offline` performing live
   // reads under a flag that promises none is worse than an error.
   const perVerb = {
-    'status': {'-v', '--verbose', '-h', '--help', '--json', '--offline'},
-    'verify': {'-v', '--verbose', '-h', '--help', '--json'},
-    'release': {
-      '-v',
-      '--verbose',
-      '-h',
-      '--help',
-      '--json',
-      '--dry-run',
-      '--rehearse',
-    },
-    'init': {'-v', '--verbose', '-h', '--help', '--json', '--write'},
+    'status': {'-h', '--help', '--json', '--offline'},
+    'verify': {'-h', '--help', '--json'},
+    'release': {'-h', '--help', '--json', '--dry-run'},
+    'init': {'-h', '--help', '--json', '--write'},
   };
   final inapplicable = {
     ...flags.difference(perVerb[command] ?? known),
@@ -173,24 +171,6 @@ Future<void> main(List<String> args) async {
     return;
   }
 
-  // Both flags are individually valid for release, so the pair slips past
-  // the per-verb check — and --dry-run returning first meant --rehearse was
-  // silently ignored, the exact class the comment above forbids.
-  if (flags.contains('--dry-run') && flags.contains('--rehearse')) {
-    output.problem(
-      Diagnostic(
-        code: 'RK-CLI-008',
-        message: 'rk release takes --dry-run or --rehearse, not both',
-        remedy: '--dry-run inspects and stops before any act; --rehearse '
-            'performs every local act and stops before the public ones. '
-            'They are different promises, and rk will not pick one for you.',
-      ),
-    );
-    exitCode = ExitCodes.usage;
-    if (json) stdout.write(output.report.encode(exit: ExitCodes.usage));
-    return;
-  }
-
   if (flags.contains('-h') || flags.contains('--help')) {
     // Under --json stdout carries the document and nothing else, so the usage
     // travels inside it rather than beside it.
@@ -212,7 +192,6 @@ Future<void> main(List<String> args) async {
           output,
           target,
           dryRun: flags.contains('--dry-run'),
-          rehearse: flags.contains('--rehearse'),
           interactive: !json,
         ),
       'init' => await _init(
@@ -220,11 +199,7 @@ Future<void> main(List<String> args) async {
           interactive: !json,
           write: flags.contains('--write'),
         ),
-      _ => await _status(
-          output,
-          target,
-          offline: flags.contains('--offline'),
-        ),
+      _ => await _status(output, target, offline: flags.contains('--offline')),
     };
   } on Object catch (error, stack) {
     // Its own exit class: an agent must tell "refused — remedy, then retry"
@@ -338,7 +313,6 @@ Future<int> _release(
   Output output,
   String? unit, {
   required bool dryRun,
-  required bool rehearse,
   required bool interactive,
 }) async {
   final prepared = _prepare(output);
@@ -358,7 +332,6 @@ Future<int> _release(
         git: git,
         tools: const SystemTools(),
         repository: git.originUrl,
-        tap: resolution.identity?.homebrewTap,
       ),
       comparator: Comparator(tools: const SystemTools()),
       tools: const SystemTools(),
@@ -367,13 +340,23 @@ Future<int> _release(
       // silences: asking would corrupt the document, and the consequences the
       // prompt exists to disclose would be suppressed while the question was
       // still asked. release already refuses when nobody can authorize.
-      confirm: interactive ? promptOnTerminal : null,
+      confirm: interactive ? _promptOnTerminal : null,
       dryRun: dryRun,
-      rehearse: rehearse,
     ).run(only: unit);
   } finally {
     registry.close();
   }
+}
+
+/// Asks at the terminal, or answers null when there is none.
+///
+/// Lives at the entry point rather than in a command file: reading a line
+/// from a person is this program's edge, and a verb that could reach for
+/// stdin is a verb that could ask a question no caller can answer.
+Future<String?> _promptOnTerminal(String prompt) async {
+  if (!stdin.hasTerminal) return null;
+  stdout.write(prompt);
+  return stdin.readLineSync();
 }
 
 Future<int> _verify(Output output, String? unit, {String? at}) async {
@@ -484,7 +467,7 @@ _Prepared _prepare(Output output) {
 Future<int> _status(
   Output output,
   String? unit, {
-  bool offline = false,
+  required bool offline,
 }) async {
   final prepared = _prepare(output);
   if (!prepared.isReady) return prepared.code!;
@@ -497,18 +480,17 @@ Future<int> _status(
       resolution: resolution,
       tree: tree,
       git: git,
-      registry: registry,
+      registry: offline ? null : registry,
       inspector: Inspector(
-        registry: registry,
+        registry: offline ? null : registry,
         git: git,
-        // Read-only, and only when there is a forge to ask about. Without
-        // either, the forge reports as unread rather than as empty.
+        // Offline is a wiring decision, not a mode the verb branches on:
+        // nothing to read from means every verdict says "not read", through
+        // the same paths and the same rendering as a live run.
         tools: offline ? null : const SystemTools(),
         repository: offline ? null : git.originUrl,
-        tap: resolution.identity?.homebrewTap,
       ),
       output: output,
-      offline: offline,
     ).run(only: unit);
   } finally {
     registry.close();

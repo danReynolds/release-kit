@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'checklist.dart';
-import 'diagnostic.dart';
+import '../engine/checklist.dart';
+import '../engine/diagnostic.dart';
 import 'report.dart';
-import 'verdict.dart';
+import '../engine/verdict.dart';
 
 /// How a line reads at a glance.
 ///
@@ -28,6 +28,19 @@ enum Mark {
 
   const Mark(this.glyph);
   final String glyph;
+
+  /// The mark a verdict earns.
+  ///
+  /// One definition, because two commands mapping this themselves is how
+  /// the line a person reads and the document a caller keys on end up
+  /// disagreeing about severity.
+  static Mark of(Verdict verdict) => switch (verdict) {
+        Verdict.exact => satisfied,
+        Verdict.conflict => blocked,
+        // Absent is work to do and unknown is work rk could not rule out.
+        // Neither earns a glyph; the words separate them.
+        Verdict.absent || Verdict.unknown => none,
+      };
 }
 
 /// The colour a word earns from what it says.
@@ -44,17 +57,19 @@ enum Tone {
   /// Already so; nothing to do here.
   muted,
 
-  /// Proven or live.
-  good,
-
   /// Blocked, conflicting, or failed.
   bad,
 
   /// rk could not read it, and wants eyes on that.
-  attention,
+  attention;
 
-  /// The next move.
-  next,
+  /// The tone a verdict earns, beside [Mark.of].
+  static Tone of(Verdict verdict) => switch (verdict) {
+        Verdict.exact => muted,
+        Verdict.conflict => bad,
+        Verdict.unknown => attention,
+        Verdict.absent => plain,
+      };
 }
 
 /// Everything rk prints goes through here, so terseness, collapse, and the
@@ -67,7 +82,6 @@ class Output {
   Output({
     required this.sink,
     required this.isTerminal,
-    this.verbose = false,
     this.useColor = true,
     Report? report,
     Elapsed Function()? clock,
@@ -80,16 +94,11 @@ class Output {
   /// rather than an addition to the human one, so a caller parsing stdout is
   /// never handed both. The report is still recorded, because the recording
   /// happens inside the same calls that would have printed.
-  factory Output.stdio({
-    bool verbose = false,
-    bool json = false,
-    required String command,
-  }) {
+  factory Output.stdio({bool json = false, required String command}) {
     final terminal = stdout.hasTerminal && !json;
     return Output(
       sink: json ? _discard : stdout.write,
       isTerminal: terminal,
-      verbose: verbose,
       useColor: terminal && !Platform.environment.containsKey('NO_COLOR'),
       report: Report(command),
     );
@@ -107,7 +116,6 @@ class Output {
   /// Spinners, transient lines, and cursor movement happen only here.
   final bool isTerminal;
 
-  final bool verbose;
   final bool useColor;
 
   /// What a caller is told, recorded by the same calls that print.
@@ -345,10 +353,8 @@ class Output {
       Tone.plain => null,
       Tone.header => '1', // bold
       Tone.muted => '90', // grey
-      Tone.good => '32', // green
       Tone.bad => '31', // red
       Tone.attention => '33', // yellow
-      Tone.next => '36', // cyan
     };
     return code == null ? text : '\x1b[${code}m$text\x1b[0m';
   }

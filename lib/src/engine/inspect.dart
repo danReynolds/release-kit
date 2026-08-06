@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../destinations/github_release.dart';
+import 'assets.dart';
 import 'checklist.dart';
 import 'git.dart';
 import 'registry.dart';
@@ -29,19 +30,18 @@ class Inspector {
     required this.git,
     this.tools,
     this.repository,
-    this.tap,
   });
 
-  final RegistryReader registry;
+  /// Absent means the registry was not read — `--offline`, exactly like a
+  /// null [tools] means the forge was not read. Null rather than a flag: a
+  /// verb cannot then branch on a mode, so there is one rendering of one
+  /// set of verdicts, and "not read" is a verdict like any other.
+  final RegistryReader? registry;
   final GitState git;
 
   /// Needed to read the forge. Absent means the forge cannot be read, which is
   /// `unknown` — never `absent`.
   final Tools? tools;
-
-  /// `owner/homebrew-tap`, when one is declared; the default is derived
-  /// from [repository]'s owner.
-  final String? tap;
 
   /// `owner/name`, when the repository has an origin to ask about.
   final String? repository;
@@ -87,29 +87,10 @@ class Inspector {
   ///
   /// Public and static so a test can hold the set itself to account: emptied,
   /// every release inspects exact, and nothing else notices.
-  static Set<String> expectedAssets(ResolvedUnit unit) {
-    final expected = <String>{};
-    for (final project in unit.projects) {
-      final executable = project.executable;
-      if (executable == null) continue;
-      for (final platform in project.binaryPlatforms) {
-        expected.add('$executable-${project.version}-$platform.tar.gz');
-        if (platform.startsWith('macos-')) {
-          // Apple's verdict and its log are published evidence, so they are
-          // expected — a release missing them is not what rk produces.
-          expected
-            ..add('$executable-${project.version}-$platform'
-                '.notary-result.json')
-            ..add('$executable-${project.version}-$platform.notary-log.json');
-        }
-      }
-      if (project.channels.contains('homebrew')) {
-        expected.add('$executable.rb');
-      }
-      if (project.binaryPlatforms.isNotEmpty) expected.add('SHA256SUMS');
-    }
-    return expected;
-  }
+  static Set<String> expectedAssets(ResolvedUnit unit) => {
+        for (final project in unit.projects)
+          ...ReleaseAssets.expectedFor(project),
+      };
 
   Future<Inspection> inspect(Step step, ResolvedUnit unit) async {
     switch (step.kind) {
@@ -121,7 +102,11 @@ class Inspector {
 
       case StepKind.publishRegistry:
         final project = unit.projects.firstWhere((p) => p.name == step.project);
-        return registry.inspect(project.name, project.version);
+        final reader = registry;
+        if (reader == null) {
+          return const Inspection.unknown('not read: --offline');
+        }
+        return reader.inspect(project.name, project.version);
 
       case StepKind.publishRelease:
         return _release(unit);
@@ -149,14 +134,27 @@ class Inspector {
   Future<Inspection> _tag(ResolvedUnit unit) async {
     if (!git.hasTag(unit.tag)) return const Inspection.absent();
 
+    // Three cases, not two: read-and-agrees is silent, read-and-differs says
+    // where, and unread says it is unread. Folding unread in with agreement
+    // is the same collapse `tagGuards` makes below, one surface along.
     final target = git.tagTarget(unit.tag);
-    final placement = target == null || target == git.head
+    final placement = target == git.head
         ? ''
-        : ', at ${_short(target)} — HEAD has moved on, expected';
+        : target == null
+            ? ', at a commit rk could not read'
+            : ', at ${_short(target)} — HEAD has moved on, expected';
 
     if (tools == null) {
-      // Nothing to ask the remote with: say exactly how much is known.
-      return Inspection.exact(detail: 'already tagged locally$placement');
+      // A local tag is not a pushed tag, and offline cannot tell them apart.
+      // This branch answered `exact` — the satisfied mark — which made *not
+      // reading* the more confident verdict than reading: online, the same
+      // repository answers `absent` ("exists locally, not on origin"). That
+      // is the failure in the paragraph above, arrived at from the other
+      // side. The siblings that cannot read their destination — `_release`,
+      // `_formula` — all answer `unknown` here, and so does this.
+      return Inspection.unknown(
+        'the tag exists locally; origin was not read: --offline',
+      );
     }
 
     final remote = await tools!.run(
@@ -180,6 +178,9 @@ class Inspector {
 
   /// A package another unit publishes, which must already be live.
   Future<Inspection> _prerequisite(Step step) async {
+    if (registry == null) {
+      return const Inspection.unknown('not read: --offline');
+    }
     // The coordinate is carried by the step so nothing here has to know how an
     // id is spelled: `pub.dev/<package>/<version>`.
     final parts = step.coordinate!.split('/');
@@ -191,7 +192,7 @@ class Inspector {
 
     final RegistryPackage? package;
     try {
-      package = await registry.lookup(name);
+      package = await registry!.lookup(name);
     } on RegistryUnavailable catch (error) {
       return Inspection.unknown(error.message);
     }
@@ -236,25 +237,34 @@ class Inspector {
   /// release calls it as part of validating independently rather than
   /// trusting status.
   Future<void> monotonicity(ResolvedUnit unit, Diagnostics problems) async {
-    for (final project in unit.projects) {
-      if (!project.channels.contains('pub.dev')) continue;
-      final RegistryPackage? published;
-      try {
-        published = await registry.lookup(project.name);
-      } on RegistryUnavailable {
-        continue; // the step's own inspection reports this, with a remedy
-      }
-      final latest = published?.latest;
-      if (latest == null) continue;
-      if (latest.version > project.version) {
-        problems.add(
-          'RK-MONO-002',
-          '${project.name} ${latest.version} is already published, and this '
-              'would publish ${project.version}',
-          source:
-              SourceLocation(project.pubspec.path, project.pubspec.versionLine),
-          remedy: 'a release moves forward — bump past ${latest.version}',
-        );
+    // Only the registry half needs the registry. The guard used to sit above
+    // both loops, which silently dropped RK-MONO-001 — a refusal computed
+    // entirely from local git — whenever `--offline` was passed, handing
+    // `--json` callers an empty problems array for a repository whose tags
+    // are ahead of its manifests.
+    if (registry != null) {
+      for (final project in unit.projects) {
+        if (!project.channels.contains('pub.dev')) continue;
+        final RegistryPackage? published;
+        try {
+          published = await registry!.lookup(project.name);
+        } on RegistryUnavailable {
+          continue; // the step's own inspection reports this, with a remedy
+        }
+        final latest = published?.latest;
+        if (latest == null) continue;
+        if (latest.version > project.version) {
+          problems.add(
+            'RK-MONO-002',
+            '${project.name} ${latest.version} is already published, and this '
+                'would publish ${project.version}',
+            source: SourceLocation(
+              project.pubspec.path,
+              project.pubspec.versionLine,
+            ),
+            remedy: 'a release moves forward — bump past ${latest.version}',
+          );
+        }
       }
     }
 
@@ -291,8 +301,10 @@ class Inspector {
     if (repository == null) {
       return const Inspection.unknown('no origin remote to ask');
     }
-    final tapRepo = tap ?? '${repository!.split('/').first}/homebrew-tap';
-    final project = unit.projects.firstWhere((p) => p.config.wantsBinaries);
+    // Per unit: a tap is where this unit's formula goes, and a repository
+    // with two binary units can point them at two taps.
+    final tapRepo = unit.tapFor(repository!);
+    final project = unit.binaryProject;
     final executable = project.executable!;
 
     final result = await tools!.run(
@@ -384,6 +396,36 @@ class Inspector {
     }
 
     final target = git.tagTarget(unit.tag);
+
+    // Unread is not agreement. `tagTargets`' own docstring says so — "callers
+    // treat as placement unknown, never as agreement" — and both callers
+    // broke the contract by folding null into "at HEAD, nothing to say".
+    //
+    // One unreachable tag object anywhere in the repository empties the whole
+    // map (`git show-ref --tags -d` fails whole, and the failure is
+    // swallowed), so this is reachable without any tag rk cares about being
+    // broken. The consequence is the guard below going *silent*: rk reports
+    // ready, `problems` is empty, all three clauses of the blessed CI gate
+    // rule pass, and the release pushes the tag and publishes the version —
+    // from a commit the tag does not name. A burned pub.dev version is the
+    // one outcome re-running cannot fix.
+    if (git.hasTag(unit.tag) &&
+        target == null &&
+        publishes.any((s) => s.isAbsent)) {
+      return [
+        Diagnostic(
+          code: 'RK-GIT-007',
+          message: 'the tag ${unit.tag} exists, and rk could not read which '
+              'commit it names',
+          remedy: 'rk proves the tag names the commit it is about to publish '
+              'from, and it cannot prove that here — so it will not publish. '
+              'One unreachable tag object breaks the read for every tag:\n'
+              '  git show-ref --tags -d   (must exit 0)\n'
+              '  git fsck --tags          (names what is unreachable)',
+        ),
+      ];
+    }
+
     if (git.hasTag(unit.tag) &&
         target != null &&
         target != git.head &&

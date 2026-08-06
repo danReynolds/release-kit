@@ -195,16 +195,45 @@ release matches the last one" — impossible to typo and self-maintaining:
 | Tag signer | the signature on the previous release's tag |
 | Homebrew tap | `<repository owner>/homebrew-tap`, Homebrew's convention |
 
-An optional `[identity]` block overrides any of them, and matters in two
-cases. A **deliberate migration** — a new tap or team — overrides a
-`conflict` on purpose. A **first release** has no baseline: the Apple team
+There is deliberately no `code_id` row. The tap convention is *resolved by
+`brew tap`*, so deferring to it defers to a system that enforces it, and a
+wrong tap fails loudly and is fixable. Nothing resolves
+`io.github.<owner>.<command>`; a wrong identifier is silent, permanent, and
+sealed into every Keychain ACL the program creates. rk suggests it and
+refuses to choose it.
+
+*Amended (as built):* there is no `[identity]` block. Two optional
+settings live on the unit that owns them — `code_id` and `homebrew_tap` —
+because a program identity and a tap belong to what is being shipped, and
+a repository with two binary units has two of each; a single global table
+would have signed both as one program. `apple_team` is gone entirely: the
+keychain rule below was always the specification, and requiring the
+declaration was drift. `tag_signer` is gone too — it was accepted,
+stored, and read by nothing.
+
+The remaining override matters in two cases. A **deliberate migration** —
+a new tap — overrides a `conflict` on purpose. A new *team* is not
+overridable as built: a signature that disagrees with the published
+identity is refused (RK-SIGN-003), and a `code_id` that disagrees with it
+is refused before anything acts (RK-SIGN-005). Changing the team that
+distributes a program breaks Keychain continuity for existing users, so it
+is a refusal rather than a setting. A **first release** has no baseline: the Apple team
 comes from the keychain, filtered to `Developer ID Application` identities
 (one is unambiguous; several fail closed with the list; none reports that a
 certificate must be installed), and rk does not read `.xcodeproj` files,
 which in practice belong to example apps with unrelated identities. The
-code identifier has no source, because it is a name a human chooses and
-cannot change without breaking Keychain continuity for existing users; rk
-proposes reverse-DNS and requires confirmation once. A tag signer, where
+code identifier has no source *in the system*, because it is a name a
+human chooses and cannot change without breaking Keychain continuity for
+existing users. So on a first signed release `code_id` is **required**, not
+optional: rk refuses (RK-SIGN-009) and offers `io.github.<owner>.<command>`
+in the remedy as text to read and edit. It offers rather than derives,
+because the rule reproduces rk's own declared identifier exactly and misses
+keybay's — where `.cli` was chosen so one signed program in a two-unit
+repository would not claim the bare product name — and because two real
+packages by one owner that both declare `executables: cli` collide under
+it. Every release after the first reads the identifier off the binary users
+installed. The prompt names both halves of what becomes permanent, the
+certificate and the identifier, before the version is typed. A tag signer, where
 earlier tags are unsigned or absent, is the key about to sign, confirmed
 once. Keybay needs none of this: its 0.1.0 release supplies every baseline.
 
@@ -494,7 +523,7 @@ surfaced by `status` with sizes and deleted only by a human.
 ## Credentials
 
 Two rules. **Facts** come from the manifests, published reality, or an
-explicit `[identity]` override — never from the environment. **Secrets and
+explicit override on the unit — never from the environment. **Secrets and
 sessions** resolve from the platform's native store under a conventional
 name, with no mapping file, no ambient pickup, and no interpolation; every
 resolved credential is checked against the declared facts before use, so a
@@ -730,17 +759,46 @@ unchanged and core migrates to the derived `keybay-v{version}`;
 
 ## Module layout
 
+*Amended (as built).* The block below described a tree that never existed —
+it named `ecosystems/dart/`, `builds/dart_cli/` as a directory, four
+`transforms/` modules none of which is a filename, and `pub_dev` under
+destinations while omitting `git_tag`. Documentation contradicting
+structure is the failure this section is supposed to prevent, so the rule
+is stated once and applied: **where the code is right, move the spec;
+where the spec is right, move the code.**
+
 ```text
 release-kit/
-  bin/rk.dart
-  lib/src/engine/        # toml, pubspec, checklist, verdicts, output, diagnosis
-  lib/src/ecosystems/dart/
-  lib/src/builds/dart_cli/
-  lib/src/transforms/    # macos_sign, macos_notarize, archive, checksums
-  lib/src/destinations/  # pub_dev, github_release, homebrew_tap
-  doc/rfcs/
-  test/                  # black-box fixtures: keybay-, fleury-, dune-shaped
+  bin/rk.dart            # the entry point, and the composition root
+  lib/src/
+    binary_chain.dart    # the local production chain: neither verb nor adapter
+    commands/            # the four verbs: init, status, release, verify
+    destinations/        # git_tag, github_release, homebrew — see below
+    builds/              # capability, dart_cli
+    transforms/          # archive, digest, macos
+    output/              # output, report, diagnosis — the two surfaces
+    engine/              # the model and the readers: config, resolve,
+                         # checklist, inspect, compare, registry, git,
+                         # identity, assets, and the format parsers
+  doc/rfcs/  doc/plan.md  doc/json.md
+  examples/              # five repository shapes the tests drive end to end
+  test/                  # flat, deliberately: mirroring couples test paths
+                         # to source paths and doubles every future move
+  tool/                  # validate.dart, outside the test tally
 ```
+
+Two adjudications the rule forces. **`pub.dev` is absent from
+`destinations/`** and that is honest, not an omission: its read half is
+`engine/registry.dart`, parameterised over host rather than named for one,
+and its act half is in `commands/release.dart`. `doc/plan.md` carries the
+extraction and the condition it waits on. **`ecosystems/` is removed from
+this block rather than created on disk** — a directory hosting a taxonomy
+with one member and no second member in sight is complexity naming no
+failure.
+
+`engine/` is the residue by design. It is the largest directory and the
+vaguest name, and it stays that way: a directory name that is wrong
+excludes falsely, which is worse than one that merely fails to narrow.
 
 rk has **no runtime dependencies** — `dart:*` and its own sources only,
 enforced by a test over the import graph and an empty `dependencies:`

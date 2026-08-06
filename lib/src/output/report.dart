@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-import 'diagnostic.dart';
+import '../engine/diagnostic.dart';
 
 /// The machine surface: what a run found, keyed by step id.
 ///

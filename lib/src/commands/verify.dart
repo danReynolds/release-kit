@@ -1,6 +1,6 @@
 import '../engine/compare.dart';
 import '../engine/diagnostic.dart';
-import '../engine/output.dart';
+import '../output/output.dart';
 import '../engine/pubspec.dart';
 import '../engine/registry.dart';
 import '../engine/resolve.dart';

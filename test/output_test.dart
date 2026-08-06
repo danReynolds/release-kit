@@ -1,5 +1,5 @@
 import 'package:release_kit/src/engine/diagnostic.dart';
-import 'package:release_kit/src/engine/output.dart';
+import 'package:release_kit/src/output/output.dart';
 import 'package:test/test.dart';
 
 /// Captures what rk would print, so the contract can be asserted rather than
@@ -11,12 +11,11 @@ class Captured {
       text.split('\n').where((l) => l.isNotEmpty).toList();
 }
 
-(Output, Captured) make({bool isTerminal = false, bool verbose = false}) {
+(Output, Captured) make({bool isTerminal = false}) {
   final captured = Captured();
   final output = Output(
     sink: captured.buffer.write,
     isTerminal: isTerminal,
-    verbose: verbose,
     useColor: false,
   );
   return (output, captured);
@@ -131,9 +130,8 @@ void main() {
         contains('· RK-CONF-019'),
       );
 
-      final (verbose, verboseCaptured) = make(verbose: true);
-      verbose.problem(diagnostic);
-      expect(verboseCaptured.text, contains('· RK-CONF-019'));
+      // The code rides every ✗ in every mode — an alert grepping a CI log
+      // must not depend on a verbosity flag that no longer exists.
     });
 
     test('are reported in one pass', () {

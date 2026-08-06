@@ -23,6 +23,12 @@ void main() {
   Run offline(String shape) =>
       Rk.example(scratch, shape)(['status', '--offline']);
 
+  /// The same run as a document. Derivation claims — ordering, dependency
+  /// edges, the shape of the chain — are structural, so they are asserted on
+  /// the machine surface rather than on prose that collapses for a reader.
+  Run offlineJson(String shape) =>
+      Rk.example(scratch, shape)(['status', '--offline', '--json']);
+
   group('single-package', () {
     late Run run;
     setUpAll(() => run = offline('single-package'));
@@ -55,7 +61,14 @@ void main() {
     });
 
     test('the cross-unit dependency becomes a prerequisite', () {
-      expect(run.all, contains('example_core 0.3.0 must be live on pub.dev'));
+      final steps = offlineJson('workspace-with-dependent').stepsOf('cli');
+      expect(
+        steps.map((s) => s['id']),
+        contains('cli/requires/pub.dev/example_core/0.3.0'),
+        reason: 'a dependency on another unit is a step, not a footnote',
+      );
+      expect(run.all, contains('needs'));
+      expect(run.all, contains('example_core'));
     });
 
     test('the workspace root is not mistaken for a package', () {
@@ -79,12 +92,17 @@ void main() {
     });
 
     test('publication order comes from the manifests, not the file', () {
-      final base = run.all.indexOf('publish example_base');
-      final middle = run.all.indexOf('publish example_middle');
-      final top = run.all.indexOf('publish example_top');
-      expect(base, greaterThan(-1), reason: run.all);
-      expect(base, lessThan(middle), reason: 'declaration order was reversed');
-      expect(middle, lessThan(top), reason: 'a dev dependency orders too');
+      final ids = offlineJson('multi-project-unit')
+          .stepsOf('framework')
+          .map((s) => '${s['id']}')
+          .toList();
+      int at(String package) =>
+          ids.indexWhere((id) => id.contains('/pub.dev/$package@'));
+      expect(at('example_base'), greaterThan(-1), reason: ids.join('\n'));
+      expect(at('example_base'), lessThan(at('example_middle')),
+          reason: 'declaration order was reversed');
+      expect(at('example_middle'), lessThan(at('example_top')),
+          reason: 'a dev dependency orders too');
     });
   });
 
@@ -118,27 +136,39 @@ void main() {
     test('it succeeds', () => expect(run.code, 0, reason: run.all));
 
     test('the binary chain is derived in full, in order', () {
+      final steps = offlineJson('binary-cli').stepsOf('cli');
+      final ids = steps.map((s) => '${s['id']}').toList();
       for (final expected in [
-        'build example-tool for linux-x64',
-        'build example-tool for macos-arm64',
-        'sign macos-arm64',
-        'notarize macos-arm64',
-        'archive macos-arm64',
-        'checksums for 3 archives',
+        'cli/build/linux-x64',
+        'cli/build/macos-arm64',
+        'cli/sign/macos-arm64',
+        'cli/notarize/macos-arm64',
+        'cli/archive/macos-arm64',
+        'cli/checksums/SHA256SUMS',
       ]) {
-        expect(run.all, contains(expected));
+        expect(ids, contains(expected), reason: ids.join('\n'));
       }
+      // The reader sees the same chain folded onto one row per platform.
+      expect(run.all, contains('build › sign › notarize › archive'));
     });
 
     test('only macOS is signed', () {
-      expect(run.all, isNot(contains('sign linux-x64')));
+      final ids = offlineJson('binary-cli')
+          .stepsOf('cli')
+          .map((s) => '${s['id']}')
+          .toList();
+      expect(ids, isNot(contains('cli/sign/linux-x64')));
     });
 
     test('the formula waits for the release', () {
-      final release = run.all.indexOf('assets to the');
-      final formula = run.all.indexOf('update the example-tool formula');
-      expect(release, greaterThan(-1), reason: run.all);
-      expect(release, lessThan(formula));
+      final steps = offlineJson('binary-cli').stepsOf('cli');
+      final formula = steps.firstWhere((s) => s['kind'] == 'publishFormula');
+      final release = steps.firstWhere((s) => s['kind'] == 'publishRelease');
+      expect(
+        formula['needs'],
+        contains(release['id']),
+        reason: 'a formula pointing at an unpublished release would 404',
+      );
     });
   });
 

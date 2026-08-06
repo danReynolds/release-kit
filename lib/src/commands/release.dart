@@ -6,7 +6,7 @@ import '../engine/changelog.dart';
 import '../engine/checklist.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
-import '../engine/output.dart';
+import '../output/output.dart';
 import '../engine/compare.dart';
 import '../engine/inspect.dart';
 import '../engine/registry.dart';
@@ -17,9 +17,18 @@ import '../engine/identity.dart';
 import '../engine/verdict.dart';
 import '../engine/version.dart';
 import '../engine/workspace.dart';
-import 'binary_chain.dart';
+import '../transforms/macos.dart';
+import '../destinations/git_tag.dart';
+import '../binary_chain.dart';
 
-/// Executes a release: inspect, act, verify, one step at a time.
+/// Executes a release: inspect, act, verify, one step at a time — and
+/// decides everything rk refuses.
+///
+/// The second half is easy to miss and is most of the file: the refusal
+/// ladder lives here, not in the engine. An unfinishable host, a dirty
+/// worktree, an unpushed HEAD, a back-version, a misplaced tag, a first
+/// publish, an unreadable signing baseline, a missing changelog entry, an
+/// unauthorized run — each is refused here, before anything acts.
 ///
 /// Every step is decided from its own inspection of reality, never from what a
 /// previous step left behind — which is what makes re-running the resume, and
@@ -36,7 +45,6 @@ class ReleaseCommand {
     required this.output,
     required this.confirm,
     this.dryRun = false,
-    this.rehearse = false,
     Future<void> Function(Duration)? wait,
     HostCapabilities? capabilities,
   })  : _wait = wait ?? _sleep,
@@ -82,17 +90,15 @@ class ReleaseCommand {
   HostCapabilities get capabilities =>
       _capabilities ??= HostCapabilities.detect();
 
-  /// Show what would happen and stop before the first effect.
-  final bool dryRun;
-
   /// Run every local step for real and stop before anything public.
   ///
-  /// The rehearsal exists so an expired certificate or a broken notarization
-  /// is discovered on a quiet afternoon, not at minute forty of an announced
-  /// release. Public steps — the tag, every publish — are inspected but
-  /// never acted on, and nothing is authorized because nothing permanent
-  /// happens.
-  final bool rehearse;
+  /// One flag, because there were two and the weaker one duplicated
+  /// `rk status`: inspecting and stopping before any act says what status
+  /// already says. What has no other way to be asked is "does this machine
+  /// actually work" — so a dry run compiles, signs, notarizes, archives and
+  /// checksums for real, and touches no tag, no registry, no forge, no tap.
+  /// Nothing is authorized because nothing permanent happens.
+  final bool dryRun;
 
   Future<int> run({String? only}) async {
     final units = only == null
@@ -249,18 +255,66 @@ class ReleaseCommand {
     // read, and reading it inside the sign step meant an unreadable baseline
     // surfaced after the tag was public — as a crash claiming a bug in rk.
     String? publishedRequirement;
-    if (checklist.steps
-        .any((s) => s.kind == StepKind.sign && !states[s.id]!.isExact)) {
+    String? firstCertificate;
+    String? codeId;
+    final willSign = checklist.steps
+        .any((s) => s.kind == StepKind.sign && !states[s.id]!.isExact);
+    if (willSign) {
       final baseline = await _signingBaseline(unit);
       if (!baseline.ok) return ExitCodes.refused;
       publishedRequirement = baseline.requirement;
 
-      // A declared [identity] that disagrees with the published one is
+      // A declared `code_id` that disagrees with the published one is
       // refused here, before anything acts. Left to the sign step, the
       // mismatch surfaced after the tag was public — as RK-SIGN-003, whose
       // remedy cannot help, because the declaration itself is the drift.
       if (publishedRequirement != null &&
-          !_declarationAgrees(publishedRequirement)) {
+          !_declarationAgrees(unit, publishedRequirement)) {
+        return ExitCodes.refused;
+      }
+
+      final keychain = await _signingCertificate(unit, publishedRequirement);
+      if (!keychain.ok) return ExitCodes.refused;
+      firstCertificate = keychain.firstCertificate;
+
+      // What the binary will be called, resolved once, here. It used to fall
+      // back to the package name inside the sign step — a value that is
+      // wrong on both of this fleet's repositories (`release_kit` for a
+      // command called `rk`), because it answers "what is this called on
+      // pub.dev" for a question about which executable macOS is running.
+      //
+      // rk will not choose one instead. Nothing in the system states it:
+      // not the keychain, not the pubspec, not the forge. A rule like
+      // `io.github.<owner>.<executable>` looks like derivation and is
+      // invention — it collides two real packages by one owner that both
+      // declare `executables: cli`, and every sidekick-generated CLI on
+      // `main`. And the first signature is what makes the answer permanent:
+      // macOS stores the designated requirement in the ACL of every
+      // Keychain item the program creates, so a wrong one means an auth
+      // dialog on every access, forever.
+      //
+      // So: read it off the release users installed, or be told. Never
+      // guessed.
+      codeId = publishedRequirement == null
+          ? unit.codeId
+          : BinaryChain.identifierOf(publishedRequirement) ?? unit.codeId;
+      if (codeId == null) {
+        output.problem(
+          Diagnostic(
+            code: 'RK-SIGN-009',
+            message: 'no release states what this program is called',
+            remedy: 'rk signs macOS binaries under an identifier macOS binds '
+                'Keychain items to. Nothing is published to read it from, so '
+                'rk will not choose one — the first signature makes it '
+                'permanent.\n'
+                'Add to [release.${unit.name}]: code_id = '
+                '"${_conventionalCodeId(unit)}" — a conventional choice, '
+                'io.github.<owner>.<command>. Any unique string works; it can '
+                'never change.',
+          ),
+          unit: unit.name,
+        );
+        output.halt(HaltKind.beforeActing);
         return ExitCodes.refused;
       }
     }
@@ -273,8 +327,11 @@ class ReleaseCommand {
     String? notesPath;
     if (checklist.steps.any(
         (s) => s.kind == StepKind.publishRelease && !states[s.id]!.isExact)) {
-      final notes = _releaseNotes(_binaryProject(unit));
+      final notes = _releaseNotes(unit.binaryProject);
       if (notes == null) return ExitCodes.refused;
+      // Validated always — that refusal belongs before any act — but written
+      // only when something will read it: under a dry run the release step
+      // is skipped, so the file would have no consumer.
       if (!dryRun) {
         final chain = _chain(unit);
         chain.workspace.write('release-notes.md', utf8.encode(notes));
@@ -283,7 +340,7 @@ class ReleaseCommand {
     }
 
     output.heading('${unit.name} ${unit.version} › '
-        '${_channels(unit).join(', ')}');
+        '${unit.projects.expand((p) => p.channels).toSet().join(', ')}');
     output.blank();
 
     for (final step in checklist.steps) {
@@ -298,13 +355,13 @@ class ReleaseCommand {
       );
     }
 
-    if (dryRun) {
-      output.blank();
-      output.say('nothing was started.');
-      return ExitCodes.ok;
-    }
-
-    if (!rehearse && !await _authorize(unit, remaining)) {
+    if (!dryRun &&
+        !await _authorize(
+          unit,
+          remaining,
+          firstCertificate: firstCertificate,
+          codeId: codeId,
+        )) {
       return ExitCodes.refused;
     }
 
@@ -312,19 +369,20 @@ class ReleaseCommand {
     var rehearsed = 0;
     for (final step in checklist.steps) {
       if (states[step.id]!.isExact) continue;
-      if (rehearse && step.isPublic) {
+      if (dryRun && step.isPublic) {
         rehearsed++;
         output.step(
           step,
           verdict: states[step.id]!.verdict,
-          note: 'rehearsal — not touched',
+          note: 'dry run — not touched',
         );
         continue;
       }
       // From here on the world may change, which is what makes a failure
       // worth recording evidence about. A rehearsal's local acts count too.
       output.report.acted = true;
-      final ok = await _act(step, unit, publishedRequirement, notesPath);
+      final ok =
+          await _act(step, unit, publishedRequirement, codeId, notesPath);
       // The act's answer supersedes the inspection's: without this, the
       // document of a failed run said `absent` about a tag that was already
       // public — rk acted, and the JSON said nothing had.
@@ -345,10 +403,10 @@ class ReleaseCommand {
       }
     }
 
-    if (rehearse) {
+    if (dryRun) {
       output.blank();
       output.line(
-        '${unit.name} ${unit.version} rehearsed',
+        '${unit.name} ${unit.version} dry run complete',
         mark: Mark.done,
         note: '$rehearsed public steps untouched',
       );
@@ -408,26 +466,25 @@ class ReleaseCommand {
 
     // The same capabilities the chain will build with — a second detect()
     // here let the refusal and the build disagree about what this host is.
-    final blocked = <String>[];
+    //
+    // Platforms blocked for the same reason fold onto one line: two
+    // identical sentences are one fact said twice. Grouped as they are
+    // found, because the version that encoded '$platform — $reason' into a
+    // list and parsed it back apart two lines later carried an arm for a
+    // shape its own encoder could not produce.
+    final byReason = <String, List<String>>{};
     for (final project in unit.projects) {
       for (final platform in project.binaryPlatforms) {
         final resolved = capabilities.resolve(platform);
         if (!resolved.canProduce) {
-          blocked.add('$platform — ${resolved.reason}');
+          byReason
+              .putIfAbsent(
+                  resolved.reason ?? 'it needs a different host', () => [])
+              .add(platform);
         }
       }
     }
-    if (blocked.isEmpty) return null;
-
-    // Platforms blocked for the same reason fold onto one line — two
-    // identical sentences are one fact said twice.
-    final byReason = <String, List<String>>{};
-    for (final entry in blocked) {
-      final cut = entry.indexOf(' — ');
-      final platform = cut < 0 ? entry : entry.substring(0, cut);
-      final reason = cut < 0 ? '' : entry.substring(cut + 3);
-      byReason.putIfAbsent(reason, () => []).add(platform);
-    }
+    if (byReason.isEmpty) return null;
     final folded = byReason.entries
         .map((e) => '${e.value.join(', ')} — ${e.key}')
         .toList();
@@ -461,13 +518,8 @@ class ReleaseCommand {
   }
 
   void _validate(ResolvedUnit unit, Diagnostics problems) {
-    if (!git.isClean) {
-      problems.add(
-        'RK-GIT-001',
-        '${git.uncommitted.length} paths are uncommitted',
-        remedy: 'a release is of a commit, and these are not in one',
-      );
-    }
+    final uncommitted = git.uncommittedProblem();
+    if (uncommitted != null) problems.report(uncommitted);
     final unpushed = git.unpushedProblem();
     if (unpushed != null) problems.report(unpushed);
     for (final project in unit.projects) {
@@ -481,17 +533,105 @@ class ReleaseCommand {
     }
   }
 
-  Set<String> _channels(ResolvedUnit unit) {
-    final channels = <String>{};
-    for (final project in unit.projects) {
-      channels.addAll(project.channels);
+  /// Whether this machine can sign, resolved before anything acts.
+  ///
+  /// Returns the certificate a *first* signed release will make permanent,
+  /// or null when there is a published identity to reproduce instead. The
+  /// keychain used to be read at the prompt and its answer discarded in
+  /// exactly the two cases that fail: none installed, and several with
+  /// nothing published to say which. `MacOsSigner.sign` refuses both — but
+  /// it runs after the tag is pushed and pub.dev has published, so a fact
+  /// available before the first act became a halt in the middle of one.
+  Future<({bool ok, String? firstCertificate})> _signingCertificate(
+    ResolvedUnit unit,
+    String? publishedRequirement,
+  ) async {
+    final certificates = await MacOsSigner(tools: tools).availableIdentities();
+    Diagnostic? refusal;
+
+    if (certificates == null) {
+      refusal = Diagnostic(
+        code: 'RK-SIGN-006',
+        message: 'the login keychain could not be read',
+        remedy: 'signing needs `security find-identity -v -p codesigning` to '
+            'answer. This is not the same as having no certificate, and rk '
+            'will not guess which it is.',
+      );
+    } else if (certificates.isEmpty) {
+      refusal = Diagnostic(
+        code: 'RK-SIGN-007',
+        message: 'no Developer ID Application certificate is installed',
+        remedy: 'a signed release needs one in the login keychain — it is '
+            'the only certificate that distributes outside the App Store.',
+      );
+    } else if (publishedRequirement != null &&
+        BinaryChain.teamOf(publishedRequirement) != null &&
+        certificates
+            .where((c) => c.team == BinaryChain.teamOf(publishedRequirement))
+            .isEmpty) {
+      // The likeliest signing failure of all — a machine that has a
+      // certificate, just not the one the published release names — and the
+      // last one this preflight learned to catch. `MacOsSigner.sign` refuses
+      // it, but sign runs *after* the pub.dev publish for every unit in this
+      // fleet (`publishRegistry` is emitted before `build`), so the cost of
+      // catching it late is a permanently burned version number.
+      refusal = Diagnostic(
+        code: 'RK-SIGN-010',
+        message: 'no certificate for the team the published release names',
+        remedy: 'users installed a binary signed by team '
+            '${BinaryChain.teamOf(publishedRequirement)}; this machine has '
+            '${certificates.map((c) => c.team).join(', ')}. Signing with a '
+            'different team ships what macOS treats as a new program.',
+      );
+    } else if (publishedRequirement != null &&
+        certificates
+                .where(
+                    (c) => c.team == BinaryChain.teamOf(publishedRequirement))
+                .length >
+            1) {
+      refusal = Diagnostic(
+        code: 'RK-SIGN-011',
+        message: 'several certificates for team '
+            '${BinaryChain.teamOf(publishedRequirement)}, and rk will not '
+            'guess which one distributes this',
+        remedy: 'leave one Developer ID Application certificate for that '
+            'team in the login keychain.',
+      );
+    } else if (publishedRequirement == null && certificates.length > 1) {
+      // With a published requirement the team is derived from it and the
+      // sign step picks by that, so several certificates are fine. Without
+      // one, nothing says which of them distributes this — and the first
+      // signing is what makes the answer permanent.
+      refusal = Diagnostic(
+        code: 'RK-SIGN-008',
+        message: 'this machine has ${certificates.length} Developer ID '
+            'certificates and nothing published says which distributes this',
+        remedy: 'release once from a machine with one '
+            '(${certificates.map((c) => c.team).join(', ')}), and every '
+            'release after derives it from what users installed.',
+      );
     }
-    return channels;
+
+    if (refusal != null) {
+      output.problem(refusal, unit: unit.name);
+      output.halt(HaltKind.beforeActing);
+      return (ok: false, firstCertificate: null);
+    }
+    return (
+      ok: true,
+      firstCertificate:
+          publishedRequirement == null ? certificates!.single.name : null,
+    );
   }
 
   /// The operator's presence and typed confirmation are the authorization for
   /// a local release. Where a tag already exists, its signature is.
-  Future<bool> _authorize(ResolvedUnit unit, List<Step> remaining) async {
+  Future<bool> _authorize(
+    ResolvedUnit unit,
+    List<Step> remaining, {
+    required String? firstCertificate,
+    required String? codeId,
+  }) async {
     final permanent = remaining.where((s) => s.isPermanent).toList();
 
     output.blank();
@@ -504,6 +644,26 @@ class ReleaseCommand {
           'retracted, which hides it and removes nothing.\n'
           'everything before this yes re-runs safely. after it, the first '
           'permanent step is: ${permanent.first.summary}.');
+    }
+
+    // A first signed release establishes an identity every later release
+    // must reproduce, so the operator sees which certificate is about to
+    // become permanent before consenting rather than after.
+    //
+    // Gated on the fact that decides it. This read `shipsBinaries &&
+    // permanent.isNotEmpty && certificates.length == 1`, and none of those
+    // three is first-ness: `isPermanent` is `publishRegistry` alone, so it
+    // meant "a pub.dev publish remains" — true of every release of a pub.dev
+    // unit, which is rk's own shape. It therefore announced a first signing
+    // on every later release from a one-certificate machine, and stayed
+    // silent on a genuine first release of a binaries-only unit, which has
+    // nothing permanent in it at all. `publishedRequirement == null` is the
+    // fact, and the sign step has always branched on it one layer down.
+    if (firstCertificate != null) {
+      output.blank();
+      output.say('this is a first signed release. It will sign with '
+          '$firstCertificate as $codeId, and every later release must '
+          'reproduce that identity.');
     }
 
     // Weaker assurance is accepted knowingly or not at all: a platform
@@ -553,6 +713,7 @@ class ReleaseCommand {
     Step step,
     ResolvedUnit unit,
     String? publishedRequirement,
+    String? codeId,
     String? notesPath,
   ) async {
     switch (step.kind) {
@@ -565,23 +726,22 @@ class ReleaseCommand {
       case StepKind.build:
         return _chain(unit).buildStep(
           step,
-          _binaryProject(unit),
+          unit.binaryProject,
           publishedRequirement: publishedRequirement,
         );
       case StepKind.sign:
         return _chain(unit).signStep(
           step,
-          _binaryProject(unit),
+          unit.binaryProject,
           publishedRequirement: publishedRequirement,
-          declaredTeam: resolution.identity?.appleTeam,
-          declaredCodeId: resolution.identity?.codeId,
+          codeId: codeId!,
         );
       case StepKind.notarize:
-        return _chain(unit).notarizeStep(step, _binaryProject(unit));
+        return _chain(unit).notarizeStep(step, unit.binaryProject);
       case StepKind.archive:
-        return _chain(unit).archiveStep(step, _binaryProject(unit));
+        return _chain(unit).archiveStep(step, unit.binaryProject);
       case StepKind.checksums:
-        return _chain(unit).checksumsStep(step, _binaryProject(unit));
+        return _chain(unit).checksumsStep(step, unit.binaryProject);
       case StepKind.publishRelease:
         return _publishRelease(unit, _chain(unit), notesPath);
       case StepKind.publishFormula:
@@ -602,9 +762,6 @@ class ReleaseCommand {
         capabilities: capabilities,
       );
 
-  ResolvedProject _binaryProject(ResolvedUnit unit) =>
-      unit.projects.firstWhere((p) => p.config.wantsBinaries);
-
   /// The designated requirement of the newest already-published release,
   /// which is what this release's signature must reproduce.
   ///
@@ -612,7 +769,7 @@ class ReleaseCommand {
   /// users already installed, and its binary is the only authority on what
   /// identity this program has. `none` — no earlier signed release — is a
   /// null requirement with `ok`, and the sign step falls back to the
-  /// declared `[identity]`. `unreadable` refuses the whole run — before
+  /// unit's declared `code_id`. `unreadable` refuses the whole run — before
   /// anything acts, because the version of this that resolved inside the
   /// sign step surfaced an unreadable forge as an internal error after the
   /// tag was already public. Not knowing the baseline is not permission to
@@ -642,7 +799,7 @@ class ReleaseCommand {
       workingDirectory: git.root,
     ).read(
       tag: bestTag,
-      executable: _binaryProject(unit).executable!,
+      executable: unit.binaryProject.executable!,
       into: _chain(unit).workspace.pathOf('published-identity'),
     );
     switch (reading.answer) {
@@ -672,10 +829,10 @@ class ReleaseCommand {
     BinaryChain chain,
     String? notesPath,
   ) async {
-    final repository = _repository();
+    final repository = _repository('github-release');
     if (repository == null) return false;
 
-    final project = _binaryProject(unit);
+    final project = unit.binaryProject;
     final assets = chain.gatherAssets(project, unit.name);
     if (assets == null) return false;
 
@@ -715,46 +872,49 @@ class ReleaseCommand {
     return url != null;
   }
 
-  /// Whether the declared `[identity]` agrees with the published
+  /// A conventional identifier to *suggest*, never to use.
+  ///
+  /// `io.github.<owner>.<command>` is what a human usually picks for
+  /// GitHub-hosted software with no domain, and rk offers it in RK-SIGN-009's
+  /// remedy as text to read and edit. It is deliberately not a fallback: the
+  /// rule reproduces rk's own declared identifier exactly, and misses
+  /// keybay's — where the `.cli` suffix was chosen so one signed program in a
+  /// two-unit repository would not claim the bare product name. A rule that
+  /// reproduces the less considered choice and misses the more considered one
+  /// is a suggestion, not a derivation. Two real packages by one owner that
+  /// both declare `executables: cli` collide under it outright.
+  String _conventionalCodeId(ResolvedUnit unit) {
+    final executable = unit.binaryProject.executable ?? unit.name;
+    final owner = git.originUrl?.split('/').first.toLowerCase();
+    return owner == null || owner.isEmpty
+        ? executable
+        : 'io.github.$owner.$executable';
+  }
+
+  /// Whether the unit's declared `code_id` agrees with the published
   /// requirement, recording the refusal when it does not.
   ///
   /// Derivation wins when nothing is declared; a declaration that
   /// *contradicts* what users already installed is either a typo or an
   /// identity migration, and both deserve a refusal naming the two values
   /// rather than a signature mismatch after the tag is public.
-  bool _declarationAgrees(String publishedRequirement) {
-    final declared = resolution.identity;
+  bool _declarationAgrees(ResolvedUnit unit, String publishedRequirement) {
+    final declared = unit.codeId;
     if (declared == null) return true;
-    final published = BinaryChain.identityOf(publishedRequirement);
-
-    final disagreements = <String, String>{};
-    if (declared.appleTeam != null &&
-        published.team != null &&
-        declared.appleTeam != published.team) {
-      disagreements['apple_team'] =
-          'declared ${declared.appleTeam}, published ${published.team}';
-    }
-    if (declared.codeId != null &&
-        published.identifier != null &&
-        declared.codeId != published.identifier) {
-      disagreements['code_id'] =
-          'declared ${declared.codeId}, published ${published.identifier}';
-    }
-    if (disagreements.isEmpty) return true;
+    final published = BinaryChain.identifierOf(publishedRequirement);
+    if (published == null || declared == published) return true;
 
     output.problem(
       Diagnostic(
         code: 'RK-SIGN-005',
-        message: 'the declared [identity] disagrees with the release users '
-            'already installed',
-        remedy: 'identity facts are derived from the published release; the '
-            'declaration only fills what no release states yet. Fix or '
-            'remove the declaration:\n'
-            '${disagreements.entries.map((e) => '${e.key}: ${e.value}').join('\n')}\n'
+        message: 'code_id disagrees with the release users already installed',
+        remedy: 'the identity is derived from the published binary; the '
+            'declaration only fills what no release states yet.\n'
+            'declared $declared, published $published\n'
             'A deliberate identity change is a migration rk does not '
             'automate, because it ships what macOS treats as a new program.',
       ),
-      unit: null,
+      unit: unit.name,
     );
     output.halt(HaltKind.beforeActing);
     return false;
@@ -766,8 +926,7 @@ class ReleaseCommand {
   /// that is unexpected, and saying so beats publishing with a body that
   /// silently fell back to something else.
   String? _releaseNotes(ResolvedProject project) {
-    final directory = project.pubspec.directory;
-    final path = directory == '.' ? 'CHANGELOG.md' : '$directory/CHANGELOG.md';
+    final path = project.fileAt('CHANGELOG.md');
     final source = tree.read(path);
     final entry =
         source == null ? null : Changelog.entry(source, project.version);
@@ -806,29 +965,46 @@ class ReleaseCommand {
   }
 
   Future<bool> _publishFormula(ResolvedUnit unit, BinaryChain chain) async {
-    final repository = _repository();
+    final repository = _repository('homebrew');
     if (repository == null) return false;
 
-    final identity = resolution.identity;
-    final tap =
-        identity?.homebrewTap ?? '${repository.split('/').first}/homebrew-tap';
+    final tap = unit.tapFor(repository);
 
     return chain.updateFormula(
       tap: tap,
-      project: _binaryProject(unit),
+      project: unit.binaryProject,
     );
   }
 
   /// The `owner/name` this repository pushes to.
-  String? _repository() {
+  /// The `owner/name` this repository pushes to, or null with the refusal
+  /// recorded.
+  ///
+  /// A problem, not a bare line: `Output.line` writes only to the sink, so a
+  /// run stopped here handed a --json caller an empty problems array — the
+  /// same invisibility the formula step's RK-BREW-001 was built to end.
+  /// [step] names the destination that wanted it, because the message was
+  /// hardcoded to github-release while the tap step calls this too.
+  String? _repository(String step) {
     final remote = git.originUrl;
     if (remote == null) {
-      output.line('github-release',
-          mark: Mark.blocked, note: 'this repository has no origin remote');
+      output.problem(
+        Diagnostic(
+          code: 'RK-GIT-002',
+          message: '$step needs an origin remote, and this repository has none',
+          remedy: 'rk publishes what others can fetch, and reads back what it '
+              'published. git remote add origin <url>, then git push -u '
+              'origin ${git.branch ?? 'main'}',
+        ),
+      );
+      output.halt(HaltKind.beforeActing);
       return null;
     }
     return remote;
   }
+
+  /// The tag destination, spoken to through git.
+  GitTag get _tags => GitTag(tools: tools, root: git.root);
 
   /// Creates and pushes the tag that records this release.
   ///
@@ -846,15 +1022,11 @@ class ReleaseCommand {
       return _pushTag(unit, signed: signed, preExisting: true);
     }
 
-    final args = [
-      'tag',
-      if (signed) '-s' else '-a',
+    final created = await _tags.create(
       unit.tag,
-      '-m',
-      '${unit.name} ${unit.version}',
-    ];
-
-    final created = await tools.run('git', args, workingDirectory: git.root);
+      signed: signed,
+      message: '${unit.name} ${unit.version}',
+    );
     if (!created.ok) {
       output.problem(
         Diagnostic(
@@ -868,21 +1040,13 @@ class ReleaseCommand {
       return false;
     }
 
-    final pushed = await tools.run(
-      'git',
-      ['push', 'origin', unit.tag],
-      workingDirectory: git.root,
-    );
+    final pushed = await _tags.push(unit.tag);
     if (!pushed.ok) {
       // A local tag nobody else can see is a trap, not progress: the next run
       // would report it as work remaining, but a clean refusal beats a
       // half-state. Removing what this run created restores "nothing changed"
       // honestly.
-      final removed = await tools.run(
-        'git',
-        ['tag', '-d', unit.tag],
-        workingDirectory: git.root,
-      );
+      final removed = await _tags.deleteLocal(unit.tag);
       output.problem(
         Diagnostic(
           code: 'RK-TAG-002',
@@ -906,11 +1070,7 @@ class ReleaseCommand {
     required bool signed,
     required bool preExisting,
   }) async {
-    final pushed = await tools.run(
-      'git',
-      ['push', 'origin', unit.tag],
-      workingDirectory: git.root,
-    );
+    final pushed = await _tags.push(unit.tag);
     if (!pushed.ok) {
       output.problem(
         Diagnostic(
@@ -937,21 +1097,18 @@ class ReleaseCommand {
     required bool signed,
     required bool preExisting,
   }) async {
-    final remote = await tools.run(
-      'git',
-      ['ls-remote', 'origin', 'refs/tags/${unit.tag}'],
-      workingDirectory: git.root,
-    );
-    if (!remote.ok || !remote.stdout.contains('refs/tags/${unit.tag}')) {
+    final presence = await _tags.onOrigin(unit.tag);
+    if (presence is! TagListed) {
       output.problem(
         Diagnostic(
           code: 'RK-TAG-003',
           message: 'the push reported success, and origin does not list '
               '${unit.tag}',
-          remedy: remote.ok
-              ? 're-running pushes it again; if this repeats, look at the '
-                  'remote'
-              : 'origin could not be read back: ${remote.summary}',
+          remedy: switch (presence) {
+            TagUnreadable(:final why) => 'origin could not be read back: $why',
+            _ => 're-running pushes it again; if this repeats, look at the '
+                'remote',
+          },
         ),
         unit: unit.name,
       );
@@ -1224,12 +1381,4 @@ dependency_overrides:
         return false;
     }
   }
-}
-
-/// Reads a confirmation from the terminal, or nothing when there is no
-/// terminal to read from.
-Future<String?> promptOnTerminal(String prompt) async {
-  if (!stdin.hasTerminal) return null;
-  stdout.write(prompt);
-  return stdin.readLineSync();
 }
