@@ -145,12 +145,22 @@ homebrew_tap = "danReynolds/homebrew-tools"
       // The signing project is dropped by a typo'd platform, so `signs`
       // used to read false and accuse a correctly placed code_id. An
       // operator following that remedy deletes a correct declaration.
+      // Rows, not inline: an inline single-project unit is refused at
+      // RK-CONF-011 long before `complete` is computed, so an inline fixture
+      // gives the same diagnostics with the guard present or absent — it
+      // cannot tell the fix from its absence.
       final problems = Diagnostics();
       ReleaseConfig.parse(
         'schema = 1\n[release.cli]\n'
+            'tag = "v{version}"\n'
+            'code_id = "io.github.danreynolds.keybay.cli"\n'
+            '[[release.cli.project]]\n'
+            'path = "packages/core"\n'
+            'publish = ["pub.dev"]\n'
+            '[[release.cli.project]]\n'
+            'path = "packages/tool"\n'
             'publish = ["github-release"]\n'
-            'binary_platforms = ["macos-arm65"]\n'
-            'code_id = "io.github.danreynolds.keybay.cli"\n',
+            'binary_platforms = ["macos-arm65"]\n',
         'release.toml',
         problems,
       );

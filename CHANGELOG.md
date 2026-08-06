@@ -11,5 +11,6 @@ Initial release of rk, an austere release tool for Dart repositories.
   evidence published beside the archives, and checksums.
 - `--dry-run` runs every local step for real — build, sign, notarize,
   archive — and touches nothing public.
-- `rk verify` proves a published release against its tag from any fresh
-  clone: no state, no credentials, no `.rk/`.
+- `rk verify` proves a published pub.dev release byte-identical against its
+  tag from any fresh clone: no state, no credentials, no `.rk/`. It reports
+  binary channels as not examined — verifying those is not built yet.

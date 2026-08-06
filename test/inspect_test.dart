@@ -296,6 +296,44 @@ void classificationTables() {
       expect(found.map((d) => d.code), contains('RK-GIT-005'));
     });
 
+    test('the prose says unread too, not just the refusal', () async {
+      final unit = await _binaryUnit();
+      final inspector = Inspector(
+        registry: FakeRegistry({}),
+        git: GitState(
+          root: '/repo',
+          head: 'abc123def456',
+          branch: 'main',
+          isClean: true,
+          uncommitted: const [],
+          headIsPushed: true,
+          tags: const ['v1.0.0'],
+          tagTargets: const {},
+          signingConfigured: false,
+          originUrl: 'example/tool',
+        ),
+        tools: ScriptedTools({
+          'git': ToolResult(
+            exitCode: 0,
+            stdout: 'deadbeef refs/tags/v1.0.0',
+            stderr: '',
+          ),
+        }),
+      );
+      final tag =
+          Checklist.derive(unit, await _binaryResolution(), Diagnostics())
+              .steps
+              .firstWhere((s) => s.kind == StepKind.tag);
+
+      final state = await inspector.inspect(tag, unit);
+      expect(
+        state.detail,
+        contains('could not read'),
+        reason: 'folding unread in with "at HEAD" is the same collapse the '
+            'refusal below prevents, one surface along',
+      );
+    });
+
     test('read and at HEAD is quiet', () async {
       final found =
           await guardsFor(tagTargets: const {'v1.0.0': 'abc123def456'});
