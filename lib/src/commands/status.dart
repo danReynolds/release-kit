@@ -211,22 +211,11 @@ class StatusCommand {
     if (settled) return false;
     if (problems.isEmpty && blocking.isEmpty && !repositoryBlocks) {
       // Status must never recommend the command release refuses — the
-      // phase-3 rule, and a first publish is release's own refusal
-      // (RK-REG-003): the honest next move on a never-published package is
-      // the manual publish, with rk taking over from the release after it.
-      final firstPublish = unit.projects
-          .where((p) =>
-              p.channels.contains('pub.dev') &&
-              _live[p.name] == 'not published')
-          .firstOrNull;
-      if (firstPublish != null) {
-        final directory = firstPublish.pubspec.directory;
-        output.next(directory == '.'
-            ? 'dart pub publish'
-            : 'cd $directory && dart pub publish');
-      } else {
-        output.next('rk release ${unit.name}');
-      }
+      // phase-3 rule. A never-published package used to be such a case and
+      // is not any more: release performs a first publish, disclosing the
+      // name it claims. The special case went with the refusal that
+      // justified it.
+      output.next('rk release ${unit.name}');
     } else {
       // A prerequisite that is not live points at the unit that must go
       // first, and that is the honest next command — not this one, which
@@ -376,13 +365,13 @@ class StatusCommand {
             _ => '${live ?? 'not published'} · publishing is permanent',
           },
         );
-        // Refusing to act is not refusing to instruct: rk will not perform
-        // a first publish, and now — not at the release prompt — is when
-        // knowing that is worth something.
+        // The name, not the version, is what a first publish takes for
+        // good — and now, rather than at the release prompt, is when a
+        // reader can still change it.
         if (state.isAbsent && live == 'not published' && !repositoryBlocks) {
           output.say(
-            'pub.dev requires the first publish by hand: dart pub publish, '
-            'once.\nrk owns every release after it.',
+            'never published: releasing claims the name "${project.name}" '
+            'on pub.dev,\npermanently. rk states it again before asking.',
             depth: 3,
           );
         }

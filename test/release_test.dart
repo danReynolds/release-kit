@@ -718,8 +718,14 @@ void main() {
 class _MutableRegistry extends FakeRegistry {
   _MutableRegistry(List<String> live) : super({'keybay': live});
 
-  /// What `dart pub publish` does at the registry.
-  void goLive(String version) => published['keybay']!.add(version);
+  /// The registry before the package exists at all, so `lookup` answers
+  /// null — "has never been published", and nothing else.
+  _MutableRegistry.unpublished() : super({});
+
+  /// What `dart pub publish` does at the registry. A first publish creates
+  /// the package, so the key may not be there yet.
+  void goLive(String version) =>
+      (published['keybay'] ??= <String>[]).add(version);
 }
 
 /// Regressions for the phase 3 independent reviews: every halting rule was
@@ -791,18 +797,41 @@ dependencies:
     expect(ran.problems.map((p) => p['code']), contains('RK-REL-001'));
   });
 
-  test('a first publish is the author\'s ceremony, not rk\'s', () async {
+  test('a first publish states the name it claims, then performs it', () async {
+    // rk refused this outright as RK-REG-003, saying a first publish
+    // "accepts the terms and names a publisher". pub's own publish command
+    // has no first-time branch: --force skips only the confirmation prompt,
+    // the prompt text is identical for a new name, and there is no terms
+    // acceptance in the flow. The refusal was justified by a ceremony that
+    // does not exist.
+    final registry = _MutableRegistry.unpublished();
     final ran = await release(
-      registry: FakeRegistry({}), // keybay has never been published
+      registry: registry,
+      onRun: (key) {
+        if (key == 'dart pub publish --force') {
+          registry.goLive('0.2.0');
+          registry.archives['keybay@0.2.0'] = publishedBytes();
+        }
+      },
     );
 
-    expect(ran.exitCode, ExitCodes.refused);
-    expect(ran.calls, isEmpty, reason: 'no publish was attempted');
-    expect(ran.problems.map((p) => p['code']), contains('RK-REG-003'));
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    expect(
+      ran.calls.any((c) => c == 'dart pub publish --force'),
+      isTrue,
+      reason: 'the release rk was asked for is the release it performs',
+    );
     expect(
       ran.text,
-      contains('dart pub publish'),
-      reason: 'refusing to act is not refusing to instruct',
+      contains('this release claims, for the first time:'),
+      reason: 'what a first publish really takes is the NAME, permanently — '
+          'so the operator reads it before consenting',
+    );
+    expect(
+      ran.text,
+      contains('pub.dev          keybay'),
+      reason: 'the name itself is on the line, because a typo claiming a '
+          'name nobody meant to own is the accident this guards against',
     );
   });
 
@@ -1042,7 +1071,7 @@ void mutationCloseout() {
     expect(probePubspec, contains('keybay: 0.2.0'));
   });
 
-  test('a first publish is refused with its diagnosis even unattended',
+  test('a first publish unattended is refused for want of a human, not a rule',
       () async {
     final ran = await release(
       registry: FakeRegistry({}),
@@ -1052,9 +1081,12 @@ void mutationCloseout() {
     expect(ran.exitCode, ExitCodes.refused);
     expect(
       ran.problems.map((p) => p['code']),
-      contains('RK-REG-003'),
-      reason: 'the guard runs before authorization, so a --json caller '
-          'learns the real reason, not merely "nobody authorized"',
+      contains('RK-AUTH-001'),
+      reason: 'claiming a name permanently is exactly what wants a human — '
+          'and with nobody there, that is the honest reason to refuse',
     );
+    // `--force` is the act; `--dry-run` is the validation leg, which runs
+    // before authorization by design.
+    expect(ran.calls.any((c) => c == 'dart pub publish --force'), isFalse);
   });
 }

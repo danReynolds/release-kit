@@ -184,7 +184,6 @@ class ReleaseCommand {
     // verb that does not act.
     await inspector.monotonicity(unit, problems);
     inspector.tagGuards(unit, checklist, states).forEach(problems.report);
-    await _refuseFirstPublish(unit, problems);
     if (problems.isNotEmpty) {
       output.halt(HaltKind.beforeActing);
       output.problems(problems.found);
@@ -257,6 +256,9 @@ class ReleaseCommand {
     String? publishedRequirement;
     String? firstCertificate;
     String? codeId;
+    // Read before the prompt, with the other facts consent depends on:
+    // what this release claims that cannot be given back.
+    final claims = await _firstClaims(unit);
     final willSign = checklist.steps
         .any((s) => s.kind == StepKind.sign && !states[s.id]!.isExact);
     if (willSign) {
@@ -361,6 +363,7 @@ class ReleaseCommand {
           remaining,
           firstCertificate: firstCertificate,
           codeId: codeId,
+          claims: claims,
         )) {
       return ExitCodes.refused;
     }
@@ -434,29 +437,40 @@ class ReleaseCommand {
   /// that ceremony as a side effect, or fail halfway into one. Refusing to
   /// act is not refusing to instruct: the exact command is printed, and every
   /// release after the first belongs to rk.
-  Future<void> _refuseFirstPublish(
-    ResolvedUnit unit,
-    Diagnostics problems,
-  ) async {
+  /// Package names this release claims for the first time.
+  ///
+  /// rk used to refuse a first publish outright (RK-REG-003), on the stated
+  /// grounds that it "accepts the terms and names a publisher, which is the
+  /// author's ceremony". That was not true. pub's own publish command has no
+  /// first-time branch at all: `--force` skips only the confirmation prompt,
+  /// the prompt text is identical for a new name, there is no terms
+  /// acceptance in the flow, and a verified publisher is configured on the
+  /// website afterwards or not at all. RFC 0002 never asked for the refusal
+  /// either — it arrived with the implementation, the same way `apple_team`
+  /// did, and it was refusing on a reason that does not exist.
+  ///
+  /// What IS true is narrower and worth saying out loud: a pub.dev package
+  /// name is claimed permanently. It cannot be renamed, moved to another
+  /// package, or given back. That is not a reason to refuse a release the
+  /// operator intends — it is a reason to make sure they are looking at the
+  /// name before they consent, because the accident this guards against is a
+  /// typo claiming a name nobody meant to own.
+  Future<List<String>> _firstClaims(ResolvedUnit unit) async {
+    final claims = <String>[];
     for (final project in unit.projects) {
       if (!project.channels.contains('pub.dev')) continue;
-      final RegistryPackage? package;
       try {
-        package = await registry.lookup(project.name);
+        if (await registry.lookup(project.name) == null) {
+          claims.add(project.name);
+        }
       } on RegistryUnavailable {
-        continue; // the step's own inspection already reports this
+        // Unread is not "never published" — the step's own inspection
+        // reports the unreachable registry, and an unknown here must not
+        // manufacture a claim notice for a name that may well exist.
+        continue;
       }
-      if (package != null) continue;
-      problems.add(
-        'RK-REG-003',
-        '${project.name} has never been published, and a first publish is '
-            'not rk\'s to perform',
-        remedy: 'the first release accepts the terms and names a publisher, '
-            'which is the author\'s ceremony. Run it once by hand:\n'
-            '  cd ${project.pubspec.directory} && dart pub publish\n'
-            'and every release after it belongs to rk.',
-      );
     }
+    return claims;
   }
 
   /// Refuses what this machine cannot finish, before any work rather than at
@@ -643,6 +657,7 @@ class ReleaseCommand {
     List<Step> remaining, {
     required String? firstCertificate,
     required String? codeId,
+    required List<String> claims,
   }) async {
     final permanent = remaining.where((s) => s.isPermanent).toList();
 
@@ -658,6 +673,36 @@ class ReleaseCommand {
           'permanent step is: ${permanent.first.summary}.');
     }
 
+    // Names this release takes for good, gathered into one block rather
+    // than scattered across the steps that take them. Each line is a
+    // different registrar with a different notion of permanence, so each
+    // says its own — a reader who skims still sees the name itself, which
+    // is the thing a typo gets wrong.
+    // Continuations align under the value column, so the names read down a
+    // single edge — the name is the thing a typo gets wrong, and it should
+    // not have to be hunted for.
+    final firstOf = <String>[
+      for (final name in claims)
+        'pub.dev          $name\n'
+            '                 permanent: a package name cannot be renamed, '
+            'reassigned,\n'
+            '                 or released back',
+      if (firstCertificate != null)
+        'macOS identity   $codeId\n'
+            '                 permanent: sealed into the designated '
+            'requirement, and into\n'
+            '                 every Keychain item this program creates. '
+            'Signed by\n'
+            '                 $firstCertificate',
+    ];
+    if (firstOf.isNotEmpty) {
+      output.blank();
+      output.say('this release claims, for the first time:');
+      for (final line in firstOf) {
+        output.say(line, depth: 1);
+      }
+    }
+
     // A first signed release establishes an identity every later release
     // must reproduce, so the operator sees which certificate is about to
     // become permanent before consenting rather than after.
@@ -671,12 +716,6 @@ class ReleaseCommand {
     // silent on a genuine first release of a binaries-only unit, which has
     // nothing permanent in it at all. `publishedRequirement == null` is the
     // fact, and the sign step has always branched on it one layer down.
-    if (firstCertificate != null) {
-      output.blank();
-      output.say('this is a first signed release. It will sign with '
-          '$firstCertificate as $codeId, and every later release must '
-          'reproduce that identity.');
-    }
 
     // Weaker assurance is accepted knowingly or not at all: a platform
     // nothing here can run ships with its smoke test missing, and that is

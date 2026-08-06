@@ -1684,7 +1684,7 @@ executables:
       expect(run.code, 0, reason: run.text);
       expect(
         run.text,
-        contains('this is a first signed release'),
+        contains('this release claims, for the first time:'),
         reason: 'the identity about to become permanent is disclosed at the '
             'prompt, and this unit has nothing permanent in the pub.dev '
             'sense — which is what used to silence it',
@@ -1695,8 +1695,14 @@ executables:
       // one place it is too late to matter.
       expect(
         run.text,
-        contains('Developer ID Application: D (TEAM123456) as '
-            'io.github.example.tool'),
+        contains('macOS identity   io.github.example.tool'),
+        reason: 'the identifier is what becomes permanent, and it is on its '
+            'own line so a wrong one is seen rather than hunted for',
+      );
+      expect(
+        run.text,
+        contains('Signed by\n'
+            '                     Developer ID Application: D (TEAM123456)'),
         reason: 'the identifier is half of what becomes permanent, and the '
             'RFC already claimed this sentence named it — it named only the '
             'certificate',
