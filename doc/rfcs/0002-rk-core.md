@@ -610,6 +610,18 @@ verify(public vs expected)
   that has never existed yields `first-publish`, which prints the ordered
   interactive bootstrap commands and refuses to act, because pub.dev
   accepts a first version only from an interactive publish.
+
+  *Amended (as built):* there is no such refusal. The premise above is
+  false — pub accepts a first version exactly as it accepts any other.
+  `lish.dart`'s `_confirmUpload` begins `if (force) return;`, so `--force`
+  skips one thing, the confirmation prompt; the prompt text does not vary
+  by whether the package exists; there is no terms acceptance in the flow,
+  only a link to the policy; and the command has no first-time branch at
+  all. rk performs a first publish like any other. What it adds is
+  disclosure, because the thing a first publish really takes is the *name*,
+  permanently: the consent block states each name claimed for the first
+  time — the pub.dev package and, when it applies, the macOS code
+  identifier — with its consequence, before the version is typed.
 - **`github-release`** (destination): adoption, staging, repair, flip, and
   verification as above.
 - **`homebrew-tap`** (destination): formula from a closed template plus

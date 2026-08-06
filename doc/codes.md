@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-114 codes across 25 families.
+113 codes across 25 families.
 
 
 ## RK-AUTH — Authorization
@@ -179,7 +179,6 @@ fails, and the count below is checked against the rows.
 | code | says | declared in |
 |---|---|---|
 | `RK-REG-001` | ${project.name}: ${error.message} | `lib/src/commands/verify.dart` |
-| `RK-REG-003` | ${project.name} has never been published, and a first publish is  not rk\ | `lib/src/commands/release.dart` |
 
 ## RK-REL — The release run
 

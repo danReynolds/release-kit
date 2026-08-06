@@ -4,3 +4,8 @@
 test/
 examples/
 tool/
+
+# Committed, because rk compiles its own binaries and a pinned lockfile is
+# what makes that reproducible — but not shipped, because a consumer of the
+# library resolves their own.
+pubspec.lock

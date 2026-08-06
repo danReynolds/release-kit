@@ -348,7 +348,7 @@ own name is scoped correctly; the message was not.
   RK-SIGN-009 suggestion and `gh`, which fails loudly.
 
 1. **`destinations/pub_dev.dart`, partial** — `_publish`,
-   `_refuseFirstPublish`, `_confirmPublishedBytes` and the poll policy.
+   `_firstClaims`, `_confirmPublishedBytes` and the poll policy.
    Condition: the tally may move, so RK-PUB-002/003 become directly
    testable, which is the only thing the extraction buys.
 2. **Pins for four blind spots** — RK-HOST-001 through injected
