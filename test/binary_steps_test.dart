@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:release_kit/src/builds/capability.dart';
 import 'package:release_kit/src/binary_chain.dart';
+import 'package:release_kit/src/destinations/homebrew.dart';
 import 'package:release_kit/src/engine/checklist.dart';
 import 'package:release_kit/src/engine/config.dart';
 import 'package:release_kit/src/engine/diagnostic.dart';
@@ -12,6 +13,10 @@ import 'package:release_kit/src/engine/source_tree.dart';
 import 'package:release_kit/src/engine/tools.dart';
 import 'package:release_kit/src/engine/workspace.dart';
 import 'package:test/test.dart';
+
+final _certificateSha1 = 'a' * 40;
+final _otherCertificateSha1 = 'b' * 40;
+final _certificateSha256 = 'c' * 64;
 
 /// The chain, one step at a time — each step gets a FRESH chain instance
 /// over the same workspace, which is the no-state proof: everything a later
@@ -96,7 +101,16 @@ executables:
           if (key.startsWith('security find-identity')) {
             return ToolResult(
               exitCode: 0,
-              stdout: '1) ABC "Developer ID Application: Dan (TEAM123456)"',
+              stdout: '1) $_certificateSha1 '
+                  '"Developer ID Application: Dan (TEAM123456)"',
+              stderr: '',
+            );
+          }
+          if (key.startsWith('security find-certificate')) {
+            return ToolResult(
+              exitCode: 0,
+              stdout: 'SHA-256 hash: $_certificateSha256\n'
+                  'SHA-1 hash: $_certificateSha1\n',
               stderr: '',
             );
           }
@@ -134,46 +148,86 @@ executables:
       'survives between them', () async {
     final tools = scripted();
 
-    expect(
-      await chain(tools).buildStep(
-        step(StepKind.build),
-        project,
-        publishedRequirement: null,
-      ),
-      isTrue,
+    final built = await chain(tools).buildStep(
+      step(StepKind.build),
+      project,
+      publishedRequirement: null,
     );
+    expect(built.ok, isTrue, reason: built.problem);
+    expect(
+      built.outputs.map((output) => (output.path, output.type)),
+      [('macos-arm64/tool', 'executable')],
+    );
+    expect(built.evidence['smoke'], {'status': 'passed'});
     expect(
       workspace.exists('macos-arm64/tool'),
       isTrue,
       reason: 'the build wrote the binary where the next step will look',
     );
 
-    expect(
-      await chain(tools).signStep(
-        step(StepKind.sign),
-        project,
-        publishedRequirement: null,
-        codeId: 'com.example.tool',
-      ),
-      isTrue,
-      reason: buffer.toString(),
+    final signed = await chain(tools).signStep(
+      step(StepKind.sign),
+      project,
+      publishedRequirement: null,
+      codeId: 'com.example.tool',
     );
+    expect(signed.ok, isTrue, reason: signed.problem ?? buffer.toString());
+    expect(
+      signed.outputs.map((output) => (output.path, output.type)),
+      [('macos-arm64/tool', 'executable')],
+    );
+    final signature = signed.evidence['signature']! as Map;
+    expect(signature['first_identity'], isTrue);
+    expect(signature['published_requirement'], isNull);
+    expect(signature['designated_requirement'], 'designated => leaf "A"');
+    expect(signature['code_id'], 'com.example.tool');
+    expect(
+        signature['certificate'], 'Developer ID Application: Dan (TEAM123456)');
+    expect(signature['certificate_sha256'], _certificateSha256);
+    expect(signature['unsigned_sha256'], hasLength(64));
+    expect(signature['signed_sha256'], hasLength(64));
 
+    final notarized =
+        await chain(tools).notarizeStep(step(StepKind.notarize), project);
+    expect(notarized.ok, isTrue,
+        reason: notarized.problem ?? buffer.toString());
     expect(
-      await chain(tools).notarizeStep(step(StepKind.notarize), project),
-      isTrue,
-      reason: buffer.toString(),
+      notarized.outputs.map((output) => (output.path, output.type)),
+      [
+        ('macos-arm64/tool.zip', 'notary-input'),
+        ('tool-1.0.0-macos-arm64.notary-result.json', 'notary'),
+        ('tool-1.0.0-macos-arm64.notary-log.json', 'notary'),
+      ],
     );
+    final notary = notarized.evidence['notary']! as Map;
+    expect(notary['status'], 'Accepted');
+    expect(notary['submission_id'], 'abc-123');
+    expect(notary['result_sha256'], hasLength(64));
+    expect(notary['log_sha256'], hasLength(64));
 
+    final archived =
+        await chain(tools).archiveStep(step(StepKind.archive), project);
+    expect(archived.ok, isTrue, reason: archived.problem);
     expect(
-      await chain(tools).archiveStep(step(StepKind.archive), project),
-      isTrue,
+      archived.outputs.map((output) => (output.path, output.type)),
+      [('tool-1.0.0-macos-arm64.tar.gz', 'archive')],
     );
+    final inventory = archived.evidence['inventory']! as List;
+    expect(inventory, hasLength(1));
+    expect((inventory.single as Map)['name'], 'tool');
+    expect((inventory.single as Map)['mode'], '0755');
     expect(workspace.exists('tool-1.0.0-macos-arm64.tar.gz'), isTrue);
 
+    final checksummed =
+        await chain(tools).checksumsStep(step(StepKind.checksums), project);
+    expect(checksummed.ok, isTrue, reason: checksummed.problem);
     expect(
-      await chain(tools).checksumsStep(step(StepKind.checksums), project),
-      isTrue,
+      checksummed.outputs.map((output) => (output.path, output.type)),
+      [('SHA256SUMS', 'checksums')],
+    );
+    expect(
+      (checksummed.evidence['checksums']! as Map).keys,
+      ['tool-1.0.0-macos-arm64.tar.gz'],
     );
     expect(workspace.exists('SHA256SUMS'), isTrue);
     expect(
@@ -181,7 +235,11 @@ executables:
       contains('tool-1.0.0-macos-arm64.tar.gz'),
     );
 
-    final assets = chain(tools).gatherAssets(project, 'cli');
+    final assets = chain(tools).gatherAssets(
+      project,
+      'cli',
+      includeFinal: false,
+    );
     expect(assets, isNotNull);
     expect(assets!.map((a) => a.name), contains('SHA256SUMS'));
   });
@@ -190,7 +248,7 @@ executables:
       () async {
     final ok =
         await chain(scripted()).archiveStep(step(StepKind.archive), project);
-    expect(ok, isFalse);
+    expect(ok.ok, isFalse);
     expect(buffer.toString(), contains('the workspace has no'));
     expect(buffer.toString(), contains('the build step produces it'));
   });
@@ -213,7 +271,7 @@ executables:
       codeId: 'com.example.tool',
     );
 
-    expect(ok, isFalse);
+    expect(ok.ok, isFalse);
     expect(
       buffer.toString(),
       contains('does not match the identity users already installed'),
@@ -244,7 +302,7 @@ executables:
           'designated => certificate leaf[subject.OU] = "TEAM123456"', // nothing declared: derivation must carry it
       codeId: 'com.example.tool',
     );
-    expect(ok, isTrue, reason: buffer.toString());
+    expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
   });
 
   test(
@@ -267,7 +325,7 @@ executables:
       publishedRequirement: null,
       codeId: 'io.github.example.tool',
     );
-    expect(ok, isTrue, reason: buffer.toString());
+    expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
     expect(buffer.toString(), contains('first release'));
     expect(buffer.toString(), contains('Developer ID Application: Dan'));
     // Asserted on the argv, not on the buffer. `contains('tool')` was
@@ -293,8 +351,10 @@ executables:
         if (key.startsWith('security find-identity')) {
           return ToolResult(
             exitCode: 0,
-            stdout: '1) A "Developer ID Application: One (TEAM111111)"\n'
-                '2) B "Developer ID Application: Two (TEAM222222)"',
+            stdout: '1) $_certificateSha1 '
+                '"Developer ID Application: One (TEAM111111)"\n'
+                '2) $_otherCertificateSha1 '
+                '"Developer ID Application: Two (TEAM222222)"',
             stderr: '',
           );
         }
@@ -309,7 +369,7 @@ executables:
       publishedRequirement: null,
       codeId: 'tool',
     );
-    expect(ok, isFalse);
+    expect(ok.ok, isFalse);
     expect(buffer.toString(), contains('TEAM111111'));
     expect(buffer.toString(), contains('TEAM222222'));
   });
@@ -341,7 +401,16 @@ executables:
         if (key.startsWith('security find-identity')) {
           return ToolResult(
             exitCode: 0,
-            stdout: '1) ABC "Developer ID Application: Dan (Q6L2SF6YDW)"',
+            stdout: '1) $_certificateSha1 '
+                '"Developer ID Application: Dan (Q6L2SF6YDW)"',
+            stderr: '',
+          );
+        }
+        if (key.startsWith('security find-certificate')) {
+          return ToolResult(
+            exitCode: 0,
+            stdout: 'SHA-256 hash: $_certificateSha256\n'
+                'SHA-1 hash: $_certificateSha1\n',
             stderr: '',
           );
         }
@@ -368,12 +437,16 @@ executables:
           'leaf[subject.OU] = Q6L2SF6YDW', // derivation must carry the unquoted team
       codeId: 'com.example.tool',
     );
-    expect(ok, isTrue, reason: buffer.toString());
+    expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
     expect(
       tools.calls.any(
-          (c) => c.contains('codesign --force') && c.contains('(Q6L2SF6YDW)')),
+        (c) =>
+            c.contains('codesign --force') &&
+            c.contains('--sign $_certificateSha1'),
+      ),
       isTrue,
-      reason: 'the certificate for the derived team is the one that signs',
+      reason: 'the exact certificate token for the derived team signs; its '
+          'display name is not a unique keychain selector',
     );
   });
 
@@ -432,7 +505,7 @@ executables:
         project,
         publishedRequirement: publishedRequirement,
       );
-      expect(ok, isTrue, reason: buffer.toString());
+      expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
       return (tools as RecordingTools).calls;
     }
 
@@ -498,7 +571,7 @@ executables:
       publishedRequirement: published,
       codeId: 'com.example.tool',
     );
-    expect(ok, isFalse, reason: buffer.toString());
+    expect(ok.ok, isFalse, reason: buffer.toString());
     expect(
       buffer.toString(),
       contains('does not match the identity users already installed'),
@@ -523,7 +596,7 @@ executables:
 
     final ok =
         await chain(tools).notarizeStep(step(StepKind.notarize), project);
-    expect(ok, isTrue);
+    expect(ok.ok, isTrue, reason: ok.problem);
     expect(buffer.toString(), contains('already notarized'));
     expect(
       tools.calls.where((c) => c.contains('notarytool')),
@@ -566,7 +639,7 @@ executables:
 
     final ok =
         await chain(forced).notarizeStep(step(StepKind.notarize), project);
-    expect(ok, isTrue, reason: buffer.toString());
+    expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
     expect(
       forced.calls.any((c) => c.startsWith('xcrun notarytool submit')),
       isTrue,
@@ -597,7 +670,7 @@ executables:
       publishedRequirement: published,
       codeId: 'io.github.example.tool', // resolved by the caller from leg 1
     );
-    expect(ok, isTrue, reason: buffer.toString());
+    expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
     final sign = (tools as RecordingTools)
         .calls
         .firstWhere((c) => c.startsWith('codesign --force'));
@@ -609,22 +682,22 @@ executables:
     );
   });
 
-  group('the tap read-back', () {
-    /// Tools for updateFormula: scripted git plumbing over a real checkout
-    /// dir, and a contents API answering [publishedText].
-    RecordingTools tapTools({String? publishedText, bool unreadable = false}) =>
+  group('the tap act outcome', () {
+    /// Tools for updateFormula: scripted git plumbing over a real checkout.
+    /// Public readback belongs to ReleaseCommand's shared inspector.
+    RecordingTools tapTools({
+      bool pushFails = false,
+      bool pushRejected = false,
+    }) =>
         RecordingTools(
           answers: (key) {
-            if (key.startsWith('gh api repos/owner/homebrew-tap/contents/')) {
-              if (unreadable) {
-                return ToolResult(
-                    exitCode: 1, stdout: '', stderr: 'HTTP 500 oops');
-              }
+            if (key == 'git push' && (pushFails || pushRejected)) {
               return ToolResult(
-                exitCode: 0,
-                stdout:
-                    '{"content":"${base64Encode(utf8.encode(publishedText!))}"}',
-                stderr: '',
+                exitCode: 1,
+                stdout: '',
+                stderr: pushRejected
+                    ? 'rejected (non-fast-forward)'
+                    : 'connection closed before the response',
               );
             }
             return null; // git clone/add/commit/push default ok
@@ -636,36 +709,39 @@ executables:
           },
         );
 
-    Future<bool> update(RecordingTools tools) {
+    Future<TapOutcome> update(RecordingTools tools) {
       workspace.write('tool.rb', utf8.encode('FORMULA v1\n'));
       return chain(tools).updateFormula(
         tap: 'owner/homebrew-tap',
         project: project,
+        authority: const HomebrewUpdateAuthority.absent(),
       );
     }
 
-    test('what the public tap serves is proven byte-for-byte', () async {
-      final ok = await update(tapTools(publishedText: 'FORMULA v1\n'));
-      expect(ok, isTrue, reason: buffer.toString());
-      expect(buffer.toString(), contains('read back from the public tap'));
-    });
-
-    test('a tap serving different bytes is refused, with rerun the remedy',
+    test('a successful push is returned for the shared inspector to confirm',
         () async {
-      final ok = await update(tapTools(publishedText: 'SOMETHING ELSE\n'));
-      expect(ok, isFalse);
-      expect(buffer.toString(), contains('does not hold what rk pushed'));
+      final outcome = await update(tapTools());
+      expect(outcome.ok, isTrue, reason: buffer.toString());
+      expect(outcome.changed, isTrue);
+      expect(buffer.toString(), isEmpty);
+      expect(output.report.halted, isFalse);
     });
 
-    test('a tap that cannot be read back is lostTrack, not success', () async {
-      final ok = await update(tapTools(unreadable: true));
-      expect(ok, isFalse);
-      expect(buffer.toString(), contains('could not be read back'));
-      expect(
-        buffer.toString(),
-        contains('lost sight of the result'),
-        reason: 'rk pushed; what a user now installs is unproven',
-      );
+    test('a lost push response remains ambiguous and renders nothing yet',
+        () async {
+      final outcome = await update(tapTools(pushFails: true));
+      expect(outcome.ok, isFalse);
+      expect(outcome.mayHaveActed, isTrue);
+      expect(buffer.toString(), isEmpty);
+      expect(output.report.halted, isFalse,
+          reason: 'only the shared public inspection may classify it');
+    });
+
+    test('a non-fast-forward rejection is a definite private failure',
+        () async {
+      final outcome = await update(tapTools(pushRejected: true));
+      expect(outcome.ok, isFalse);
+      expect(outcome.mayHaveActed, isFalse);
     });
   });
 
@@ -704,7 +780,7 @@ executables:
 
     final ok =
         await chain(tools).notarizeStep(step(StepKind.notarize), project);
-    expect(ok, isFalse);
+    expect(ok.ok, isFalse);
     expect(buffer.toString(), contains('the log could not be fetched'));
   });
 }

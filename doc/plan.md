@@ -1,5 +1,9 @@
 # Implementation plan
 
+> Historical build plan and evidence ledger. It preserves decisions and test
+> drives from earlier phases; it is not the current CLI contract. The active
+> three-command path is [the production-alpha plan](production-alpha-plan.md).
+
 Against RFC 0002 revision 3. Milestone 1 is a local release of keybay core
 to pub.dev; milestone 2 is the full binary chain for keybay cli.
 
@@ -164,8 +168,9 @@ nothing else prevents.**
 
 - `--rehearse` and `--dry-run` were two flags for one job, and the weaker
   one duplicated a whole verb: "inspect and stop before acting" is what
-  `rk status` says. One flag survives, `--dry-run`, with the semantics
-  worth having — every local act for real, nothing public touched.
+  `rk status` says. This historical pass retained `--dry-run`; the production
+  alpha later renamed that exact private-preparation contract to `--stage`,
+  which is the only spelling the current CLI accepts.
 - `-v` / `--verbose` was a second, worse rendering of the default view: it
   carried *less* verdict information than the lanes it replaced, and the
   diagnostic codes it used to gate now ride every problem line in every
@@ -179,8 +184,9 @@ nothing else prevents.**
   offline-only renderer went with the branch, and offline gained honesty:
   it reads git, so a missing tag reads `absent` rather than shrugging.
 
-What is left is one flag per job: `--json`, `--dry-run`, `--offline`,
-`--write`, `--at=<ref>`, `-h`.
+At this historical checkpoint the surviving flags were `--json`,
+`--dry-run`, `--offline`, `--write`, `--at=<ref>`, and `-h`. The current
+surface is defined by the production-alpha plan.
 
 ### …and on the config
 
@@ -1008,7 +1014,7 @@ terminal for the typed confirmation. The path to it, in order:
    gate green.
 7. Then the cli, for the phase 7b checkpoint: bump packages/keybay_cli
    (with its CHANGELOG entry — the entry becomes the release body), run
-   `rk status`, then `rk release cli --dry-run` (every local step, signing
+   `rk status`, then `rk release cli --stage` (every local step, signing
    and notarization included, nothing public), then `rk release cli`. No
    `[identity]` is needed: rk derives the team and the code identifier from
    the published 0.1.0 binary, and a declaration that contradicted it would

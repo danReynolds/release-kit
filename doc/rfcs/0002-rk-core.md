@@ -1,15 +1,19 @@
 # RFC 0002: rk core
 
 - Status: Approved for implementation
-- Revision: 3 (2026-07-29) — local-only scope; consolidates eight
-  adversarial reviews
+- Revision: 4 (2026-08-08) — production-alpha staging and three-verb surface
 - Supersedes: RFC 0001 as build authority; 0001 remains the threat catalog
   and assurance ladder
 - MVP scope: Dart packages and Dart CLIs, released **from the operator's
   own machine**, to pub.dev, GitHub Releases, and Homebrew
 - CI: designed for, deferred from the MVP. See "CI readiness" — its
   constraints are binding on the MVP.
-- First demo: keybay
+- First production-alpha canary: release-kit 0.0.1
+
+The staging and status amendments in this revision are the forward contract
+being implemented. [The production-alpha plan](../production-alpha-plan.md)
+tracks the sequence and acceptance evidence; historical build evidence remains
+in `doc/plan.md`.
 
 ## What rk is
 
@@ -21,7 +25,9 @@ re-running is always safe, and it refuses to guess.
 
 rk manages the release steps and defers authentication to the native tools
 that own it — `dart pub`, `codesign`, `notarytool`, `gh`, `git`. It stores
-no secrets and keeps no state.
+no secrets and keeps no authoritative release ledger. Public targets are the
+database. Private stages are disposable outside the interval in which a
+binary release is only partially public.
 
 ## Principles
 
@@ -30,8 +36,9 @@ no secrets and keeps no state.
    reality owns identity. The machine owns credentials.
 2. **Reality is the database.** Destinations are inspected, never mirrored
    into records.
-3. **Inspect, act, verify.** Every step checks reality before acting and
-   confirms it afterward. Effects are idempotent; resume is re-run.
+3. **Inspect, act, inspect again.** Every public target has one exact
+   inspection used before and after its act. Effects are idempotent; resume
+   is re-run.
 4. **Auth defers to native tools.** rk never stores, receives, or prompts
    for a secret value; it arranges context and lets the native tool work.
 5. **Identity, not acceptability.** An artifact is reusable only when an
@@ -78,14 +85,19 @@ addressed here beyond fail-closed defaults.
 - **Checklist** — the deterministic ordered set of steps rk derives. Pure
   data, identical on every machine.
 - **Step** — one checklist entry with a stable id
-  `<unit>/<adapter>/<coordinate>`. Every step implements inspect, act,
-  verify.
+  `<unit>/<adapter>/<coordinate>`. A public-target step uses the same exact
+  inspection before and after its act.
 - **Verdict** — `absent`, `exact`, `conflict`, or `unknown`.
-- **Workspace** — the per-release cache of intermediates under `.rk/work/`,
-  keyed by release and commit. Disposable; only self-authenticating
-  artifacts are reused from it.
-- **Draft** — the pre-publication GitHub release: staging area, aggregation
-  point, and the durable memory that lets a release resume.
+- **Stage** — the immutable, complete set of release inputs, artifacts, and
+  evidence under `.rk/work/stages/<stage-id>`. Its atomic receipt binds the
+  full source commit and tree, canonical plan, toolchain, artifact digests,
+  signature, and notarization evidence. It is reusable acceleration, not a
+  database of public truth. It is recovery-critical only between the first
+  and last public acts of a binary release: signing and notarization are not
+  byte-reproducible, so an interrupted release must retain those exact bytes.
+- **Draft** — the private GitHub release assembled and validated immediately
+  before it is made public. It is transactional protection for that target,
+  not cross-target storage or rk's recovery ledger.
 - **Adapter** — a closed module: ecosystem, build, transform, or
   destination.
 
@@ -237,15 +249,14 @@ certificate and the identifier, before the version is typed. A tag signer, where
 earlier tags are unsigned or absent, is the key about to sign, confirmed
 once. Keybay needs none of this: its 0.1.0 release supplies every baseline.
 
-## The four verbs
+## The three verbs
 
-`rk init` · `rk status` · `rk release` · `rk verify`. Bare `rk` runs
-`status`.
+`rk init` · `rk status` · `rk release`. Bare `rk` runs `status`.
 
-Every verb takes **one optional positional**: a unit name or a tag. Bare
-invocation works in a single-unit repository and, in a multi-unit one,
-lists the units and stops — choosing what to publish permanently is not an
-arrow key.
+`status` takes an optional unit. `release` takes one unit and optionally
+`--stage`. `init` takes no positional. Bare invocation works in a single-unit
+repository and, in a multi-unit one, lists the units and stops — choosing
+what to publish permanently is not an arrow key.
 
 - **`rk init`** — write `release.toml`. Reads the repository, shows the
   config it proposes, writes it on confirmation. No network, no settings,
@@ -255,31 +266,32 @@ arrow key.
   never infers a binary channel from an `executables:` block — declaring an
   executable means `dart pub global activate` works, not "ship a signed
   tarball." A repository with nothing releasable exits 0.
-- **`rk status`** — read-only; the only verb that changes nothing. Compares
-  local state against published reality: live version and date per
-  destination, manifest version, whether local is ahead, in-flight
-  progress, and anything blocking. Prints the next command.
-- **`rk release`** — execute. Refuses at the start anything it cannot
-  finish; re-validates independently rather than trusting `status`;
-  verifies the authorizing tag's signature where one exists; then inspects
-  before acting at every step. Halts on `conflict` or `unknown`; safe to
-  re-run at any point.
-- **`rk verify`** — proves the version each unit's manifests declare
-  against what the registry serves for it, comparing byte-for-byte with the
-  **sources at the ref** — the derived tag, or one named with `--at=<ref>`
-  for a release made under an older tag scheme. After a completed release
-  the manifest version *is* the latest published one; older releases are
-  reached by naming their tag. Configuration is read from the working tree,
-  deliberately: the version, the sources, and the comparison come from the
-  ref, while `release.toml` locates the packages — a repository's early tags
-  predate its release.toml (keybay's do), and refusing to verify them would
-  make the tool's own history unprovable. What the config supplies is
-  *where to look*, and a package that moved directories is caught by the
-  ref's own manifest being missing there (RK-VER-002). On success it prints
-  provenance — the ref proved against and when the registry received it —
-  and names what is not knowable rather than omitting it: a version with no
-  tag has no commit to bind to, and rk does not pretend otherwise. Signer
-  identity arrives with authorization (phase 5).
+- **`rk status`** — online and read-only. Resolves the intended release,
+  inspects an exact local stage when one exists, and inspects all configured
+  public targets in parallel. It reports each target's current and intended
+  version, the exact artifacts it consumes, concrete issues and fixes, and
+  whether there are no known issues or an exact stage is good to release. It
+  never builds, signs, notarizes, packages, or writes a stage.
+- **`rk release <unit> --stage`** — perform every local and package preflight
+  for real and write a complete immutable stage, but make no public mutation
+  and never run a registry login.
+- **`rk release <unit>`** — revalidate and reuse an exact stage, or create the
+  same stage internally, then authorize and publish. It inspects each target
+  before acting and with the same operation afterward. `exact` skips,
+  `absent` acts, and `conflict` or `unknown` stops. In an interactive run with
+  one or more unfinished pub.dev targets, it runs exactly one native
+  `dart pub login` before private staging. Re-running is resume.
+
+The login is a release preflight, not a target verdict or public act. Success
+proves only that Dart has a current session; it cannot prove that account is an
+uploader for every package. Only the publish attempt followed by exact public
+read-back completes a pub.dev target, and an idempotent rerun records that
+already-exact result without publishing again.
+
+There is no historical verification verb. Published truth is established by
+the exact inspection owned by each configured target and shared by `status`
+and `release`; the process that performed a publish is never accepted as its
+own proof of success.
 
 ### Authorization
 
@@ -300,20 +312,23 @@ not authorization.
 - **Interactive release.** The operator's presence and typed confirmation
   are the authorization, so rk tags on their behalf: an annotated tag at
   the released commit, named by the unit's derived pattern, signed when git
-  signing is configured and unsigned otherwise, and it says which. This is
-  an ordinary checklist step — inspect (does the tag exist, and at this
-  commit?), act (create and push), verify (confirm it on the remote) — and
-  it runs first, because a GitHub Release attaches to a tag.
+  signing is configured and unsigned otherwise, and it says which. The tag
+  binds the complete stage manifest digest as well as the source commit. It
+  is an ordinary checklist step — inspect the remote ref, create and push,
+  then inspect the remote ref again — and it runs only after the complete
+  stage has been revalidated.
 - **Non-interactive release.** An agent or CI run has no operator presence,
   so the tag *is* the authorization: it must already exist, rk verifies its
   signature against the expected signer, and rk never creates it. Creating
   it here would be minting the permission it acts on.
 
-Because every release therefore carries a tag, a published version is
-always bound to a commit, and `rk verify` can resolve configuration and
-sources at that tag rather than comparing against a working tree that may
-have moved on. No project has to remember to tag, and none has to skip the
-proof.
+Every tag binds the digest of its complete stage manifest to the source
+commit. Binary releases also publish the manifest itself with their GitHub
+assets, so their inventory remains recoverable after the local stage is
+deleted. A pub.dev-only release has no separate public artifact to name: its
+truth is recovered directly from the peeled source commit and the registry
+archive's exact contents. A signed tag authenticates its binding; an unsigned
+tag proves consistency but not signer authenticity.
 
 There is no `--yes` and no `--force`. Every classic use has a real path: a
 permanent registry conflict cannot be forced because the permanence is
@@ -327,8 +342,7 @@ expands. A level with one child collapses onto its parent; a level whose
 children agree collapses to their shared fact — three channels at one
 version are one line, not three.
 
-**Terseness.** rk does not narrate itself. Timings, check counts, and
-per-step detail belong to `-v`. A line that reads the same on every
+**Terseness.** rk does not narrate itself. A line that reads the same on every
 successful run is noise.
 
 **Attention.** The verdict leads the line, in a gutter, and the vocabulary
@@ -337,15 +351,53 @@ already satisfied, nothing to do · `✗` blocked, conflicting, or failed · `�
 your next move. A running step shows a spinner in the same column. Anything
 finer — unknown versus conflict, expected-absent versus missing — is carried
 by the words on the line, which the reader has to read anyway. Glyphs never
-appear without a word; `NO_COLOR` and non-TTY are honoured.
+appear without a word; `NO_COLOR` and non-TTY are honoured. Any concrete issue
+linked to a target makes that target's row `✗`, without rewriting the target's
+public-state verdict. Global, prerequisite, and stage issues stay in `Issues`;
+artifact production and validation problems use the artifact rows beneath the
+target that consumes them.
+
+### Status report
+
+Status is target-oriented. While independent reads run concurrently, a TTY
+shows one fixed transient `Release targets` list with a row and spinner for
+each configured target. Rows settle independently; after all reads settle,
+the entire transient region is erased and replaced once with the deterministic
+final report. A pipe or JSON caller receives no spinner or cursor movement.
+
+The final report has one section per configured target — Git tag, pub.dev,
+GitHub Release, Homebrew, or a later adapter — and shows `current -> target`,
+the public condition in words, and the exact filenames that target consumes.
+For artifacts, `✓` means the exact artifact is validated in the matching
+stage, no mark means it has not been produced and no production problem is
+known, and `✗` means rk already knows it cannot be produced or validated. The
+words `staged`, `not staged`, or the concrete problem repeat that meaning.
+
+Status has no authentication-specific green or unknown state. A supported,
+safe read-only native check may produce a concrete issue and `Fix:` linked to
+its target, which marks that row `✗`. If a native tool has no safe check,
+status says nothing about authentication; normal release preflight owns it.
+
+There is no user-facing `ready`, `partial`, or `blocked` lifecycle. An
+`Issues` section appears only when nonempty and every issue supplies one
+concrete `Fix:`. The report ends with exactly one natural conclusion:
+`Good to release`, `No known issues`, `Published everywhere configured`, or
+`N issues prevent release`.
+
+Colour carries no unique information: green is success, red a concrete or
+actionable problem (including an online target read that failed), yellow an
+unknown with no linked issue such as an offline read, cyan a next command, and
+dim text secondary. `NO_COLOR`, `TERM=dumb`, non-TTY output, and `--json`
+contain no ANSI or cursor movement.
 
 **Every halt opens with a plain sentence** answering the only two questions
-an operator has, before any verdict noun: did anything happen, and is
-re-running safe. Three cover every case — "rk stopped before acting.
-nothing changed. safe to re-run." / "rk acted, then lost sight of the
-result. an effect may exist. still safe to re-run." / "rk did not act. this
-cannot be fixed by re-running." A halt states what is **already permanent**
-before its remediation.
+an operator has, before any verdict noun: did any public target change, and is
+re-running safe. Five distinguish stopped-before-acting, safely stopped
+partway, acted-but-lost-track, unfixable without acting, and acted-with-a-bad
+read-back. Their sentences state what is **already permanent** before the
+remediation, and `doc/json.md` freezes their machine names. In particular,
+`beforeActing` means no public target changed; a native login may still have
+updated local session state.
 
 **Every conflict prints the difference**, not the fact of one: differing
 files and digests, a formula line diff, a per-object asset table. "A human
@@ -360,7 +412,7 @@ remediation. Grouping follows the configuration — unit, project, channel,
 platform — subject to collapse. `--json` is the named machine surface,
 stable, keyed on step id, surviving non-zero exit and carrying
 `safe_to_rerun`. Exit codes: `0` clean, complete, or blocked; `1` refusal;
-`2` usage.
+`2` usage; `3` rk itself crashed.
 
 ### Liveness
 
@@ -393,10 +445,11 @@ its own internals — reading files, resolving config, counting checks. It
 reports the work, while the work is the thing the user is waiting for.
 
 **Diagnosis.** Reality records what exists and nothing about why a run
-failed. On any non-clean exit rk writes a diagnosis directory inside the
-workspace with the resolved checklist, per-step verdicts and durations,
-redacted provider request metadata, and native tool stderr. rk never reads
-it back; deleting it is always safe.
+failed. When a failed run may have acted, or whenever rk itself crashes, rk
+writes a diagnosis directory inside the workspace with the report and its
+attachments. A refusal that provably acted on nothing remains entirely in its
+human or JSON report. rk never reads a diagnosis back; deleting it is always
+safe.
 
 ## Execution
 
@@ -426,22 +479,24 @@ only from exact pins misses the ordinary caret pin most packages use.
 After rk's own act on a coordinate, inspection polls to a bounded deadline
 before concluding anything — destination APIs lag their own writes.
 
-### Reuse
+### Staging and reuse
 
-Only self-authenticating artifacts are reused: a **signed** macOS binary
-(`codesign` verification plus team and designated requirement — forging one
-requires the certificate, and an older correctly signed binary fails the
-embedded version check), an artifact **staged at a destination** (identity
-is the digest the destination reports), and **notarization state**
-(confirmed with Apple). Everything else — unsigned binaries, unstaged
-archives, package archives — is rebuilt. A file on disk is not evidence of
-itself, and rk mints no signatures of its own.
+Every release completes and atomically receipts its stage before the first
+public act. The stage id binds its schema, full commit and tree identity, and
+canonical release plan, including the exact producer implementation and the
+version plus digest of the PATH-resolved compiler executable. Production
+invokes that resolved path rather than resolving `dart` a second time, without
+depending on the SDK's private on-disk layout. The receipt then binds every
+artifact by name, size, and digest together with the source snapshot, package
+preflight, toolchain, signature, and notarization evidence. An incomplete
+directory is not a stage.
 
-The workspace is keyed by release and commit, so successive runs of the
-same release share one, but a workspace is never seeded from a different
-run: a tag deleted and re-pushed at another commit would otherwise let rk
-sign and publish binaries from the wrong source while every acceptability
-check passed.
+A normal release reuses a stage only after a read-only inspector validates
+that complete receipt and all referenced bytes. An explicitly created stage
+is never silently replaced with different bytes. If no exact stage exists,
+the normal release creates the same stage internally. A file on disk is not
+evidence of itself, and no artifact is re-signed or otherwise mutated after
+the receipt that names it.
 
 ### The draft
 
@@ -451,9 +506,12 @@ otherwise leave a permanent, immutable release missing files. A draft is
 the fix — fill it privately, verify it, publish once — and that is the
 whole of its job in this revision.
 
-It is deliberately **not** memory. The workspace holds every artifact
-locally, so a draft contains nothing that cannot be rebuilt or re-uploaded,
-which reduces the rule to three cases:
+It is deliberately **not** memory. The local stage holds every artifact
+locally, so a draft contains nothing that cannot be re-uploaded from the
+retained exact stage. Before publication begins an invalid private stage may
+be rebuilt; after any public target is exact, signed or notarized bytes are
+not assumed reproducible and the recovery-critical stage must be retained.
+This reduces the draft rule to three cases:
 
 - **no draft** — create it and upload the full inventory;
 - **a draft matching this release exactly** — adopt and publish;
@@ -462,12 +520,12 @@ which reduces the rule to three cases:
 
 *Amended (7b, as built):* the middle case is folded into the third — every
 same-tag draft is deleted by id and the release recreated, because with
-the workspace holding every artifact, proving a draft exactly right costs
-more than rebuilding it. Adoption returns when CI makes the draft the only
+the stage holding every artifact, proving a draft exactly right costs
+more than recreating it. Adoption returns when CI makes the draft the only
 copy, per the paragraph below. The create is delegated to
-`gh release create`, which is itself draft-first (draft → upload → publish),
-so the safety outcome — no permanent release ever missing files — holds by
-delegation.
+the GitHub API: create a private draft, upload every staged asset, re-read its
+metadata and complete inventory, then send one `draft: false` update. Thus no
+permanent release is intentionally created with a partial asset set.
 
 Deleting is safe precisely because the draft is not the only copy. Its
 worst case is re-uploading a few files, which is cheaper than the machinery
@@ -479,17 +537,16 @@ require the exact inventory, confirm every digest, recompute the checksums
 file and formula from those digests and compare against what is staged.
 Only then publish once, and confirm the release reports immutable.
 
-*Amended (7b, as built):* the post-create confirmation compares the asset
-inventory by name; per-asset digest re-proof of a published release belongs
-to `rk verify`, which runs when the assets are public facts — ledgered in
-the plan.
+The post-create inspection downloads or hashes the public assets and compares
+their complete inventory and digests with the public release manifest. Asset
+names alone are not exactness.
 
 **After publishing, verification failure is terminal.** Immutable releases
 cannot be edited and deleting one permanently burns the tag name. rk
 retries verification to a bounded deadline, then states the only honest
 remedy: ship the next version.
 
-When CI arrives, the workspace becomes ephemeral and a half-filled draft
+When CI arrives, the local stage becomes ephemeral and a half-filled draft
 may be the only surviving copy of expensive work. Only then does the draft
 also become memory, and only then are adoption by enumeration, per-asset
 repair of an interrupted upload, and the concurrent-writer cases worth
@@ -499,26 +556,29 @@ their complexity. Deferring them costs nothing today.
 
 The Homebrew formula updates compare-and-swap: inspect (absent / exact /
 older-clean-base / conflict), apply only if the inspected blob is still
-current, re-read, then install from the public tap as a final check. "Older
-clean base" is derived from reality — the tap formula must byte-equal the
-formula asset of the release it names — so a hand-edited formula correctly
-yields `conflict`. Reads use git fetch, never a CDN path.
+current, then re-read the public tap as the post-act check. "Older clean base"
+is derived from reality — the tap formula must byte-equal the formula asset of
+the release it names — so a hand-edited formula correctly yields `conflict`.
+A clean consumer install from the public tap remains a supervised live-canary
+gate rather than part of the mutation.
 
-*Amended (7b, as built):* the inspection's exactness is the version
-pointer (absent / exact / unknown); the byte-equality that would surface
-`conflict` for a hand-edited formula needs digests of published assets and
-belongs to `rk verify` — ledgered in the plan. The swap applies against a
-fresh `--depth 1` clone (the clone is the read; a rejected push is the CAS
-failing), the act reads the pushed formula back from the public tap
-byte-for-byte, and both reads use the GitHub contents API — REST, not a
-CDN path; the API serves blob content, not cached pages.
+The inspection compares the public formula bytes, version, URLs, and hashes
+with the formula derived from the release manifest. The swap applies against
+a fresh `--depth 1` clone, first requiring its formula to match the exact base
+authorized by inspection; a rejected push then catches movement after that
+check. The authoritative pre-act and post-act public reads use the GitHub
+contents API — REST, not a CDN path; the API serves blob content, not cached
+pages.
 
 ### Cleanup
 
-Published assets are the product and are never cleaned up. The workspace is
-deleted by the run that completes its release; a failed step or non-clean
-verdict keeps it for diagnosis. Residue from an abandoned release is
-surfaced by `status` with sizes and deleted only by a human.
+Published assets are the product and are never cleaned up. Local stages are
+disposable acceleration and may be deleted after release; public truth remains
+recoverable from target inspection, using the published manifest for binary
+releases and the tagged source plus registry archive for pub.dev-only
+releases. A failed step or non-clean verdict keeps its evidence for diagnosis.
+Residue from an abandoned release is surfaced by `status` and deleted only by
+a human.
 
 ## Credentials
 
@@ -538,20 +598,23 @@ wrong credential fails as loudly as a missing one.
 | Tap update | normal git auth to the tap |
 | Tag signing | operator SSH signing key |
 
-Native login commands are named by diagnostics, run by the user, and never
-read by rk. Publishers run attached to the terminal so registry MFA prompts
-pass through.
+Native tools remain the credential owners and rk never reads their secrets.
+For a normal interactive release with unfinished pub.dev targets, rk runs one
+native `dart pub login` attached to the terminal before private staging.
+`status` and `release --stage` never run it. Failure is `RK-PUB-007` with the
+remedy to run `dart pub login` from a terminal and rerun the unit release.
+Success proves a current session, not uploader authority for any package;
+publish and exact read-back remain the final proof. Publishers also run
+attached to the terminal so native prompts can pass through.
 
 ## Adapters
 
-Every step implements inspect, act, verify; destinations share one
-interface:
+Every public target owns one exact inspection, used by status and on both
+sides of release's act:
 
 ```text
-inspect(coordinate) -> absent | exact | conflict | unknown
-stage(final asset)          # only where a staging area exists
-publish()
-verify(public vs expected)
+inspect(expected) -> absent | exact | conflict | unknown
+act(expected, stage)
 ```
 
 - **`dart`** (ecosystem): parses pubspec, workspace, lockfile, and any
@@ -586,17 +649,17 @@ verify(public vs expected)
   natively on Apple Silicon. Capabilities are discovered, never declared:
   which platforms to ship is a product decision, where a binary can be
   produced is a fact about the machine.
-- **`macos-sign`** (transform): ephemeral keychain with
-  `set-keychain-settings -lut`, `import -T /usr/bin/codesign`, and
-  `set-key-partition-list` (without which codesign hangs on a UI prompt),
-  `--keychain` passed explicitly; verifies its output against the published
-  release's designated requirement, not against its own input.
-- **`macos-notarize`** (transform): `notarytool submit --wait`; the notary
-  log ships as a release asset. Resume resubmits by default — identical
-  bytes are accepted and cost minutes. History-based adoption is legal only
-  when a per-submission log reports a digest equal to the exact bytes rk
-  holds; name and recency are not evidence. `codesign --check-notarization`
-  remains the binding verification.
+- **`macos-sign`** (transform): selects one exact Developer ID Application
+  identity from the operator's login keychain, signs by its identity token,
+  then runs `codesign --verify --strict` and compares the output requirement
+  against the published release's designated requirement, not against the
+  signer that just produced it. The certificate SHA-256 fingerprint is stage
+  evidence. Ephemeral-keychain import is deferred with remote CI.
+- **`macos-notarize`** (transform): `notarytool submit --wait`; the result and
+  log ship as release assets. A reusable stage retains and revalidates that
+  exact evidence instead of resubmitting. `codesign
+  --test-requirement=notarized -v` remains the binding check on the exact
+  signed bytes.
 - **`archive` + `checksums`** (transforms): deterministic tar.gz per
   platform — fixed entry order, zeroed mtimes, normalized modes, no gzip
   timestamp — containing the executable, LICENSE, and README, with frozen
@@ -606,7 +669,9 @@ verify(public vs expected)
 - **`pub-dev`** (destination): inspection via the pub.dev API; publish via
   `dart pub publish` against the operator's session; post-publish
   re-download and logical content compare, since pub rewraps archives —
-  name, type, mode, size, content, ignoring archive timestamps. A package
+  name, regular entry type, inventory, size, and content in both directions,
+  ignoring archive timestamps. File modes are an explicit alpha boundary
+  because `SourceTree` does not expose them. A package
   that has never existed yields `first-publish`, which prints the ordered
   interactive bootstrap commands and refuses to act, because pub.dev
   accepts a first version only from an interactive publish.
@@ -622,12 +687,20 @@ verify(public vs expected)
   permanently: the consent block states each name claimed for the first
   time — the pub.dev package and, when it applies, the macOS code
   identifier — with its consequence, before the version is typed.
-- **`github-release`** (destination): adoption, staging, repair, flip, and
-  verification as above.
+
+  A normal interactive release invokes one native `dart pub login` before
+  private staging when at least one configured pub.dev target is unfinished.
+  Stage-only runs never log in. A successful login creates no auth-specific
+  target state and proves no package-level uploader permission; the actual
+  publish and exact archive read-back decide completion, while an idempotent
+  retry reports the target already exact and performs no second publish.
+- **`github-release`** (destination): draft creation, upload, public flip, and
+  exact public asset inspection as above.
 - **`homebrew-tap`** (destination): formula from a closed template plus
   staged digests plus derived identity; compare-and-swap update; public
-  install check, run without any credential present, since a formula is
-  executable Ruby.
+  byte-for-byte read-back. A clean consumer install from the public tap,
+  without release credentials or the source checkout, is the supervised
+  Homebrew canary rather than part of the mutation.
 
 A proposed destination adapter must document verdict semantics, terminal
 act atomicity, post-crash inspectability (a platform that cannot be
@@ -669,24 +742,24 @@ What makes the CLI sufficient is already required for other reasons:
   ```
 
   `test/checklist_test.dart` holds them as frozen vectors.
-- **Read-only verbs are always safe.** `status` and `verify` change
-  nothing, so an agent may run them freely, including across a fleet by
-  invoking rk once per repository.
+- **The read-only verb is always safe.** `status` changes nothing, so an agent
+  may run it freely, including across a fleet by invoking rk once per
+  repository.
 - **Idempotence.** Re-running is the resume, so an agent that loses track
   of a run recovers by running the same command again.
 - **Next actions are data.** `status --json` names the command that would
   advance the release, so an agent can chain without inferring intent from
   formatting.
 
-**Authorization is unchanged for agents.** An agent is a non-interactive
-caller, so the confirmation rule applies as written: without a human at the
-terminal, a release proceeds only when an authorizing tag exists and its
-signature verifies. That is the same path CI will take, and it is the point
-of having a durable authorization carrier at all — the human signs, the
-machine executes. There is no agent exemption and no `--yes`: an agent
-running unattended is precisely the case that must fail closed. In
-practice the division is: the agent reports what is ready and why, the
-human authorizes by tagging, and the agent executes and verifies.
+**Unattended authorization is deferred.** An agent may run status freely and
+may prepare a private stage only through the same explicitly invoked command,
+but the built alpha refuses publication without a human at the terminal.
+Signed-tag authorization remains the intended CI path; its signer policy and
+non-interactive execution are ledgered rather than implied by the current
+implementation. There is no agent exemption, `--yes`, or guessed consent.
+The interactive `dart pub login` preflight does not change this boundary and
+is not a CI credential design; trusted publishing remains part of the deferred
+remote-CI work below.
 
 ## CI readiness
 
@@ -730,14 +803,14 @@ on the implementation:
 5. **Authorization is a signal with carriers.** The MVP implements operator
    presence and verifies a signed tag when one exists. Adding "a tag is
    required here" must be a policy check at one place, not a new code path.
-6. **Optional evidence degrades honestly.** `verify` already distinguishes
+6. **Optional evidence degrades honestly.** Target inspection distinguishes
    expected-absent from missing, so attestations attach later as one more
    evidence type rather than a new concept.
 
 **What CI must not require.** Reshaping the checklist, changing a verdict,
-altering an adapter's inspect/act/verify contract, or introducing state
-that outlives a run. If adding CI needs any of those, the MVP got a seam
-wrong and the seam is the thing to fix.
+altering an adapter's inspect/act contract, or introducing state that outlives
+a run. If adding CI needs any of those, the MVP got a seam wrong and the seam
+is the thing to fix.
 
 ## Deferred by principle 8
 
@@ -749,17 +822,25 @@ materialization, the credential mapping file, global identity with
 overrides, and cross-run workspace warming. Any returns only by naming the
 concrete failure it prevents.
 
-## Keybay demo plan
+## Production-alpha canary and compatibility drives
 
-1. **Engine + `dart` + `pub-dev`.** Release keybay core from the operator's
-   machine: `rk init`, `rk status`, `rk release core`, `rk verify`. First
-   production use of every verb, with no binaries, signing, draft, or tap.
-2. **Binary chain + `github-release` + `homebrew-tap`.** Release keybay
+1. **Self-host release-kit.** Stage and release `release_kit` 0.0.1 to pub.dev
+   and GitHub Releases from the clean release-kit checkout, including its
+   signed/notarized macOS and cross-built Linux artifacts. Prove fresh public
+   read-back, an idempotent zero-act rerun, and clean pub.dev/GitHub consumers.
+   Homebrew remains outside this canary because release-kit does not configure
+   a tap target.
+2. **Engine + `dart` + `pub-dev`.** As a later compatibility drive, stage and
+   release keybay core from the
+   operator's machine: `rk init`, `rk status`, `rk release core --stage`,
+   `rk release core`, then `rk status core`. First production use of every
+   verb in Keybay, with no binaries, signing, draft, or tap.
+3. **Binary chain + `github-release` + `homebrew-tap`.** Release keybay
    cli: three platforms — macos-arm64 native, both Linux targets
    cross-compiled and smoke-tested in containers — signed, notarized,
    archived, staged, published, formula updated, then installed and
    smoke-tested from the public tap.
-3. **Fleury**, after its five packages are bootstrapped by hand, exercising
+4. **Fleury**, after its five packages are bootstrapped by hand, exercising
    multi-project units and derived ordering.
 
 Keybay compatibility: public asset names are frozen; archives contain the
@@ -784,8 +865,8 @@ release-kit/
   bin/rk.dart            # the entry point, and the composition root
   lib/src/
     binary_chain.dart    # the local production chain: neither verb nor adapter
-    commands/            # the four verbs: init, status, release, verify
-    destinations/        # git_tag, github_release, homebrew — see below
+    commands/            # the three verbs: init, status, release
+    destinations/        # pub_dev, git_tag, github_release, homebrew
     builds/              # capability, dart_cli
     transforms/          # archive, digest, macos
     output/              # output, report, diagnosis — the two surfaces
@@ -799,14 +880,13 @@ release-kit/
   tool/                  # validate.dart, outside the test tally
 ```
 
-Two adjudications the rule forces. **`pub.dev` is absent from
-`destinations/`** and that is honest, not an omission: its read half is
-`engine/registry.dart`, parameterised over host rather than named for one,
-and its act half is in `commands/release.dart`. `doc/plan.md` carries the
-extraction and the condition it waits on. **`ecosystems/` is removed from
-this block rather than created on disk** — a directory hosting a taxonomy
-with one member and no second member in sight is complexity naming no
-failure.
+Two adjudications the rule forces. **`pub.dev` has a destination reader**:
+`destinations/pub_dev.dart` owns its exact inspection, while the generic
+HTTP client remains in `engine/registry.dart` and the act half remains in
+`commands/release.dart`. `doc/plan.md` carries the condition for extracting
+the remaining act half. **`ecosystems/` is removed from this block rather
+than created on disk** — a directory hosting a taxonomy with one member and
+no second member in sight is complexity naming no failure.
 
 `engine/` is the residue by design. It is the largest directory and the
 vaguest name, and it stays that way: a directory name that is wrong
@@ -825,13 +905,12 @@ discovery, no override of native vetoes.
 
 ## Open items
 
-1. Port `tool/compare_pub_archives.py` into the `pub-dev` adapter.
-2. Verify container smoke tests for cross-compiled Linux binaries, and that
+1. Verify container smoke tests for cross-compiled Linux binaries, and that
    cross-compiled and natively built binaries carry the same glibc floor,
    since the platform profile fixes that floor as a compatibility contract.
-3. Publish a JSON Schema for `release.toml`.
-4. `rk doctor` — fleet-consistency checker; build only when drift is real.
-5. Final name.
+2. Publish a JSON Schema for `release.toml`.
+3. `rk doctor` — fleet-consistency checker; build only when drift is real.
+4. Final name.
 
 ## Relationship to RFC 0001
 

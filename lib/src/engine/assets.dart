@@ -13,7 +13,7 @@ import 'resolve.dart';
 /// permanently unfixable failure. `GithubRelease.inspect` returns
 /// `Verdict.conflict` for *any* difference between expected and published —
 /// missing or extra — and a published release cannot be edited, so the
-/// verdict is terminal. Meanwhile the publish step's own verify leg compares
+/// verdict is terminal. Meanwhile the publish step's own read-back compares
 /// only against what it just uploaded, never against the expected set. One
 /// name out of step between producer and inspector therefore lets rk publish
 /// a release and then read it back, on the next run, as an unfixable conflict
@@ -28,6 +28,9 @@ import 'resolve.dart';
 abstract final class ReleaseAssets {
   /// The checksums file, which every binary release carries exactly one of.
   static const checksums = 'SHA256SUMS';
+
+  /// Public binding from release bytes back to their source and stage plan.
+  static const manifest = 'release-manifest.json';
 
   static String archiveName(
     String executable,
@@ -77,6 +80,7 @@ abstract final class ReleaseAssets {
       },
       if (project.channels.contains('homebrew')) formulaName(executable),
       checksums,
+      manifest,
     };
   }
 }

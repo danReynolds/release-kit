@@ -52,11 +52,39 @@ void main() {
 
       test('a name that escapes the workspace is refused everywhere', () {
         final workspace = make();
-        expect(() => workspace.pathOf('../escape'), throwsArgumentError);
-        expect(
-          () => workspace.write('a/../../escape', utf8.encode('x')),
-          throwsArgumentError,
-        );
+        for (final name in [
+          '../escape',
+          'a/../../escape',
+          '/absolute',
+          r'a\b',
+          'a//b',
+          './a',
+        ]) {
+          for (final operation in <void Function()>[
+            () => workspace.pathOf(name),
+            () => workspace.write(name, utf8.encode('x')),
+            () => workspace.readBytes(name),
+            () => workspace.exists(name),
+            () => workspace.ingest(name),
+          ]) {
+            expect(operation, throwsArgumentError, reason: name);
+          }
+        }
+      });
+
+      test('rewriting a file leaves no partial writer artifact', () {
+        final workspace = make();
+        workspace.write('a.txt', utf8.encode('first'));
+        workspace.write('a.txt', utf8.encode('second'));
+        expect(utf8.decode(workspace.readBytes('a.txt')!), 'second');
+        if (workspace case DirectoryWorkspace(:final root)) {
+          expect(
+            Directory(root)
+                .listSync(recursive: true)
+                .where((entry) => entry.path.contains('.tmp.')),
+            isEmpty,
+          );
+        }
       });
 
       test('absence is null and false, not an exception', () {

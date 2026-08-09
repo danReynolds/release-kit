@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'atomic_file.dart';
+
 /// Where a release keeps its intermediates, addressed by name.
 ///
 /// This is CI seam 3, placed where it earns its keep: the binary chain is the
@@ -10,12 +12,11 @@ import 'dart:io';
 /// Locally that is a directory; in CI it becomes the run's artifact store
 /// without the chain changing.
 ///
-/// It is a cache, not memory: keyed by release and commit (the caller builds
-/// the key), never seeded from a different run, and deleting it is always
-/// safe — everything here can be rebuilt, and the only artifacts a re-run
-/// may reuse are those an external authority can re-verify (a signed binary,
-/// a notarized zip), which is checked at inspection, not assumed from
-/// existence.
+/// It is not authority, and existence is never sufficient evidence for reuse.
+/// Trusted staged reuse is established by the content-addressed receipt in
+/// `stage_receipt.dart`. Deletion fails closed, but a binary stage must be
+/// retained while its public targets are only partially complete because its
+/// signed and notarized bytes cannot be recreated exactly.
 abstract interface class Workspace {
   /// The artifact's bytes, or null when it is not here.
   List<int>? readBytes(String name);
@@ -36,11 +37,12 @@ abstract interface class Workspace {
   String pathOf(String name);
 }
 
-/// A directory under `.rk/work/`.
+/// A directory-backed workspace.
 class DirectoryWorkspace implements Workspace {
   DirectoryWorkspace(this.root);
 
-  /// `<repo>/.rk/work/<tag>-<shortHead>`, typically.
+  /// The caller owns the directory layout. New release stages use
+  /// `<repo>/.rk/work/stages/<stage-id>`.
   final String root;
 
   @override
@@ -55,24 +57,20 @@ class DirectoryWorkspace implements Workspace {
     // an artifact — every pub.dev-only release — leaves no directory behind.
     final file = File(pathOf(name));
     file.parent.createSync(recursive: true);
-    file.writeAsBytesSync(bytes);
+    AtomicFile.write(file.path, bytes);
   }
 
   @override
   void ingest(String name) {
     // The file already lives at pathOf; nothing to move.
+    _artifactName(name);
   }
 
   @override
   bool exists(String name) => File(pathOf(name)).existsSync();
 
   @override
-  String pathOf(String name) {
-    if (name.split('/').contains('..')) {
-      throw ArgumentError('artifact names stay inside the workspace: $name');
-    }
-    return '$root/$name';
-  }
+  String pathOf(String name) => '$root/${_artifactName(name)}';
 }
 
 /// In memory, for tests — with real temp files minted only when a native
@@ -90,6 +88,7 @@ class MemoryWorkspace implements Workspace {
   Directory? _spill;
 
   File? _spilled(String name) {
+    name = _guard(name);
     final spill = _spill;
     if (spill == null) return null;
     final file = File('${spill.path}/$name');
@@ -98,20 +97,21 @@ class MemoryWorkspace implements Workspace {
 
   @override
   List<int>? readBytes(String name) =>
-      _artifacts[name] ?? _spilled(name)?.readAsBytesSync();
+      _artifacts[_guard(name)] ?? _spilled(name)?.readAsBytesSync();
 
   @override
   void write(String name, List<int> bytes) => _artifacts[_guard(name)] = bytes;
 
   @override
   void ingest(String name) {
+    name = _guard(name);
     final file = _spilled(name);
     if (file != null) _artifacts[name] = file.readAsBytesSync();
   }
 
   @override
   bool exists(String name) =>
-      _artifacts.containsKey(name) || _spilled(name) != null;
+      _artifacts.containsKey(_guard(name)) || _spilled(name) != null;
 
   @override
   String pathOf(String name) {
@@ -123,13 +123,23 @@ class MemoryWorkspace implements Workspace {
     return file.path;
   }
 
-  static String _guard(String name) {
-    if (name.split('/').contains('..')) {
-      throw ArgumentError('artifact names stay inside the workspace: $name');
-    }
-    return name;
-  }
+  static String _guard(String name) => _artifactName(name);
 
   /// What was written, by name — the assertion surface.
   Iterable<String> get names => _artifacts.keys;
+}
+
+String _artifactName(String name) {
+  final parts = name.split('/');
+  final drive = RegExp(r'^[A-Za-z]:');
+  if (name.isEmpty ||
+      name.startsWith('/') ||
+      name.startsWith('\\') ||
+      name.contains('\\') ||
+      name.contains('\u0000') ||
+      drive.hasMatch(name) ||
+      parts.any((part) => part.isEmpty || part == '.' || part == '..')) {
+    throw ArgumentError('artifact names stay inside the workspace: $name');
+  }
+  return name;
 }

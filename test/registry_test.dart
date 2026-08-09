@@ -29,15 +29,18 @@ void main() {
 
   /// Served for any path ending `.tar.gz`, so an archive URL can point here.
   List<int>? archiveBytes;
+  late List<HttpHeaders> requestHeaders;
 
   setUp(() async {
     status = 200;
     body = '{"versions": []}';
     delay = Duration.zero;
     archiveBytes = null;
+    requestHeaders = [];
 
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     server.listen((request) async {
+      requestHeaders.add(request.headers);
       if (delay > Duration.zero) await Future<void>.delayed(delay);
       request.response.statusCode = status;
       if (archiveBytes != null && request.uri.path.endsWith('.tar.gz')) {
@@ -76,6 +79,23 @@ void main() {
   });
 
   group('everything else is unknown, never absent', () {
+    test('a provider that does not answer is bounded and stays unknown',
+        () async {
+      registry.close();
+      registry = Registry(
+        host: '${server.address.host}:${server.port}',
+        secure: false,
+        responseTimeout: const Duration(milliseconds: 20),
+      );
+      delay = const Duration(seconds: 1);
+
+      final stopwatch = Stopwatch()..start();
+      final inspection = await inspect();
+
+      expect(inspection.verdict, Verdict.unknown);
+      expect(stopwatch.elapsed, lessThan(const Duration(milliseconds: 500)));
+    });
+
     test('a 500', () async {
       status = 500;
       final inspection = await inspect();
@@ -148,6 +168,19 @@ void main() {
   });
 
   group('lookup', () {
+    test('uses the supported hosted-repository v2 media type', () async {
+      await registry.lookup('keybay');
+
+      expect(
+        requestHeaders.single.value(HttpHeaders.acceptHeader),
+        'application/vnd.pub.v2+json',
+      );
+      expect(
+        requestHeaders.single.value(HttpHeaders.userAgentHeader),
+        contains('release-kit'),
+      );
+    });
+
     test('returns null only for a 404', () async {
       status = 404;
       expect(await registry.lookup('keybay'), isNull);
@@ -230,6 +263,14 @@ void main() {
           sha: Sha256.hex([1, 2, 3, 4]),
         ));
         expect(bytes, [1, 2, 3, 4]);
+        expect(
+          requestHeaders.single.value(HttpHeaders.acceptHeader),
+          'application/octet-stream',
+        );
+        expect(
+          requestHeaders.single.value(HttpHeaders.userAgentHeader),
+          contains('release-kit'),
+        );
       });
 
       test(

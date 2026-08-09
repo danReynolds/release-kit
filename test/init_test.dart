@@ -10,6 +10,8 @@ import 'package:release_kit/src/output/output.dart';
 import 'package:release_kit/src/engine/source_tree.dart';
 import 'package:test/test.dart';
 
+import 'rk_process.dart';
+
 void main() {
   dogfoodRegressions();
   closeoutRegressions();
@@ -71,6 +73,44 @@ void main() {
     ).run();
     expect(written, isEmpty);
     expect(buffer.toString(), contains('nothing was written'));
+  });
+
+  test('proposal and prompt remain readable on a narrow terminal', () async {
+    const width = 36;
+    final buffer = StringBuffer();
+    late Output output;
+    output = Output(
+      sink: buffer.write,
+      isTerminal: true,
+      useColor: true,
+      terminalWidth: width,
+    );
+    await InitCommand(
+      tree: MemorySourceTree({
+        'pubspec.yaml':
+            'name: command_line_application\nversion: 1.0.0\nexecutables:\n  app: app\n',
+      }, description: '/repo/command-line-application'),
+      output: output,
+      write: (_, __) {},
+      confirm: (prompt) async {
+        output.prompt(prompt);
+        buffer.writeln(); // the terminal echoes Enter before init continues
+        return false;
+      },
+    ).run();
+
+    final visible = buffer
+        .toString()
+        .replaceAll(RegExp('\x1b\\[[0-9;]*[A-Za-z]'), '')
+        .replaceAll('\r', '')
+        .split('\n')
+        .where((line) => line.isNotEmpty)
+        .toList();
+    expect(visible.every((line) => line.runes.length <= width), isTrue);
+    expect(visible.join('\n'), contains('write release.toml'));
+    expect(visible.join('\n'), contains('[Y/n]'));
+    expect(visible.join('\n'), contains('nothing was written'));
+    expect(buffer.toString(), isNot(contains('…')));
   });
 
   test('a repository with nothing releasable is not a failure', () async {
@@ -161,6 +201,7 @@ workspace:
         'pubspec.yaml': 'name: solo\nversion: 1.0.0\n',
       }, description: '/repo/solo'),
       output: output,
+      origin: 'example/solo',
       write: (_, __) {},
       confirm: null, // nobody at a terminal — the fleet-sweep case
     ).run();
@@ -171,6 +212,10 @@ workspace:
       reason: 'an agent reads the proposal from the document; a human writes '
           'it at a terminal',
     );
+    final document = jsonDecode(output.report.encode(exit: ExitCodes.ok))
+        as Map<String, Object?>;
+    expect((document['repository'] as Map)['remote'], 'example/solo');
+    expect(document['next'], ['rk init --write']);
   });
 }
 
@@ -457,6 +502,27 @@ void realRepositoryRegressions() {
         text,
         contains('packages/gone/pubspec.yaml is tracked but not on '
             'disk'));
+  });
+
+  test('real init JSON reports its origin and proposal next action', () {
+    write('pubspec.yaml', 'name: origin_fixture\nversion: 1.0.0\n');
+    commit();
+    Process.runSync(
+      'git',
+      [
+        'remote',
+        'add',
+        'origin',
+        'git@github.com:example/origin-fixture.git',
+      ],
+      workingDirectory: root.path,
+    );
+
+    final run = Rk(root.path)(['init', '--json']);
+    expect(run.code, ExitCodes.ok, reason: run.all);
+    expect((run.json['repository'] as Map)['remote'], 'example/origin-fixture');
+    expect(run.json['next'], ['rk init --write']);
+    expect(run.json['attachments'], contains('release.toml'));
   });
 
   test('a directory git cannot list is a named refusal, not a bug in rk',

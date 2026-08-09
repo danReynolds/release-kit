@@ -1,12 +1,19 @@
-import 'dart:convert';
+import 'dart:io';
 
+import '../destinations/homebrew.dart';
+import '../destinations/git_tag.dart';
 import '../destinations/github_release.dart';
+import '../destinations/pub_dev.dart';
 import 'assets.dart';
+import 'changelog.dart';
 import 'checklist.dart';
 import 'git.dart';
 import 'registry.dart';
 import 'diagnostic.dart';
 import 'resolve.dart';
+import 'release_stage.dart';
+import 'source_tree.dart';
+import 'targets.dart';
 import 'tools.dart';
 import 'verdict.dart';
 import 'version.dart';
@@ -28,15 +35,19 @@ class Inspector {
   Inspector({
     required this.registry,
     required this.git,
+    PubDevInspector? pubDev,
     this.tools,
     this.repository,
-  });
+    this.stageFor,
+  }) : pubDev = pubDev ??
+            (registry is PubDevInspector ? registry as PubDevInspector : null);
 
   /// Absent means the registry was not read — `--offline`, exactly like a
   /// null [tools] means the forge was not read. Null rather than a flag: a
   /// verb cannot then branch on a mode, so there is one rendering of one
   /// set of verdicts, and "not read" is a verdict like any other.
   final RegistryReader? registry;
+  final PubDevInspector? pubDev;
   final GitState git;
 
   /// Needed to read the forge. Absent means the forge cannot be read, which is
@@ -45,6 +56,10 @@ class Inspector {
 
   /// `owner/name`, when the repository has an origin to ask about.
   final String? repository;
+
+  /// Resolves the one content-addressed stage both verbs inspect. Null keeps
+  /// the engine usable in narrow destination tests that have no filesystem.
+  final ReleaseStage Function(ResolvedUnit unit)? stageFor;
 
   /// Whether this step's state lives somewhere rk can read without acting.
   ///
@@ -106,7 +121,18 @@ class Inspector {
         if (reader == null) {
           return const Inspection.unknown('not read: --offline');
         }
-        return reader.inspect(project.name, project.version);
+        final exact = pubDev;
+        if (exact == null) {
+          return const Inspection.unknown(
+            'the exact pub.dev inspector was not configured',
+          );
+        }
+        final stage = _reusableStage(unit);
+        return exact.inspectProject(
+          project,
+          expectedSource:
+              stage == null ? null : SnapshotSourceTree(stage.sourceRoot),
+        );
 
       case StepKind.publishRelease:
         return _release(unit);
@@ -114,12 +140,102 @@ class Inspector {
       case StepKind.publishFormula:
         return _formula(unit);
 
+      case StepKind.completeStage:
+        return _stageInspection(unit);
+
       case StepKind.build ||
             StepKind.sign ||
             StepKind.notarize ||
             StepKind.archive ||
             StepKind.checksums:
-        return const Inspection.unknown('local work, decided when it runs');
+        return _reusableStage(unit) == null
+            ? const Inspection.unknown('local work, decided when it runs')
+            : const Inspection.exact(detail: 'validated in the release stage');
+    }
+  }
+
+  /// The newest public version visible in one configured target lane.
+  ///
+  /// This is status metadata, not a substitute for inspecting the exact
+  /// candidate coordinate. The candidate answers whether acting is needed;
+  /// this answers the separate operator question, "what is this lane at?"
+  Future<Inspection> inspectLatestVersion(
+    TargetExpectation target,
+    ResolvedUnit unit,
+  ) async {
+    switch (target.kind) {
+      case ReleaseTargetKind.pubDev:
+        final reader = registry;
+        if (reader == null) {
+          return const Inspection.unknown('not read: --offline');
+        }
+        try {
+          final package = await reader.lookup(target.coordinate);
+          final latest = package?.latest;
+          return latest == null
+              ? const Inspection.absent(
+                  detail: 'no published package version',
+                )
+              : Inspection.exact(
+                  detail: 'latest published package is ${latest.version}',
+                  evidence: {'version': latest.version.canonical},
+                );
+        } on Object catch (error) {
+          return Inspection.unknown(
+            'the latest pub.dev version could not be read: $error',
+          );
+        }
+
+      case ReleaseTargetKind.gitTag:
+        if (tools == null) {
+          return const Inspection.unknown('origin was not read: --offline');
+        }
+        return GitTag(tools: tools!, root: git.root)
+            .inspectLatestVersion(unit.tagPattern);
+
+      case ReleaseTargetKind.githubRelease:
+        if (tools == null) {
+          return const Inspection.unknown('not read: --offline');
+        }
+        if (repository == null) {
+          return const Inspection.unknown('no origin remote to ask');
+        }
+        return GithubRelease(
+          tools: tools!,
+          repository: repository!,
+          workingDirectory: git.root,
+        ).inspectLatestVersion(unit.tagPattern);
+
+      case ReleaseTargetKind.homebrew:
+        // Formula inspection parses and authenticates the public bytes and
+        // carries their version in its own evidence. Reading the tap twice
+        // would add latency without adding a stronger fact.
+        return const Inspection.unknown(
+          'the formula inspection owns the current version',
+        );
+    }
+  }
+
+  Inspection _stageInspection(ResolvedUnit unit) {
+    final factory = stageFor;
+    if (factory == null) {
+      return const Inspection.absent(detail: 'not staged');
+    }
+    try {
+      return factory(unit).inspect().asInspection;
+    } on Object catch (error) {
+      return Inspection.unknown('the release stage could not be read: $error');
+    }
+  }
+
+  ReleaseStage? _reusableStage(ResolvedUnit unit) {
+    final factory = stageFor;
+    if (factory == null) return null;
+    try {
+      final stage = factory(unit);
+      return stage.inspect().reusable ? stage : null;
+    } on Object {
+      return null;
     }
   }
 
@@ -132,48 +248,74 @@ class Inspector {
   /// tag is work remaining (the act pushes it), and a remote rk cannot read
   /// is unknown, which blocks rather than permits.
   Future<Inspection> _tag(ResolvedUnit unit) async {
-    if (!git.hasTag(unit.tag)) return const Inspection.absent();
-
-    // Three cases, not two: read-and-agrees is silent, read-and-differs says
-    // where, and unread says it is unread. Folding unread in with agreement
-    // is the same collapse `tagGuards` makes below, one surface along.
-    final target = git.tagTarget(unit.tag);
-    final placement = target == git.head
-        ? ''
-        : target == null
-            ? ', at a commit rk could not read'
-            : ', at ${_short(target)} — HEAD has moved on, expected';
-
     if (tools == null) {
-      // A local tag is not a pushed tag, and offline cannot tell them apart.
-      // This branch answered `exact` — the satisfied mark — which made *not
-      // reading* the more confident verdict than reading: online, the same
-      // repository answers `absent` ("exists locally, not on origin"). That
-      // is the failure in the paragraph above, arrived at from the other
-      // side. The siblings that cannot read their destination — `_release`,
-      // `_formula` — all answer `unknown` here, and so does this.
       return Inspection.unknown(
-        'the tag exists locally; origin was not read: --offline',
+        git.hasTag(unit.tag)
+            ? 'the tag exists locally; origin was not read: --offline'
+            : 'origin was not read: --offline',
       );
+    }
+    final target = GitTag(tools: tools!, root: git.root);
+    final stage = _reusableStage(unit);
+    String? manifestSha256;
+    if (stage != null) {
+      try {
+        final manifest = stage.requireReceipt().artifacts.singleWhere(
+              (artifact) => artifact.path == ReleaseAssets.manifest,
+            );
+        manifestSha256 = manifest.sha256;
+      } on Object catch (error) {
+        return Inspection.unknown(
+          'the expected release tag binding could not be read: $error',
+        );
+      }
     }
 
-    final remote = await tools!.run(
-      'git',
-      ['ls-remote', 'origin', 'refs/tags/${unit.tag}'],
-      workingDirectory: git.root,
+    // The public tag must be a release record, not merely a ref at HEAD. A
+    // reusable stage supplies the exact expected manifest; without one, one
+    // structurally valid binding and the configured signature are still
+    // required. This stateless remote read remains authoritative immediately
+    // after rk creates a tag, when this Inspector's GitState snapshot cannot
+    // yet contain its local object id.
+    final remote = await target.inspectReleaseBinding(
+      tag: unit.tag,
+      expectedCommit: git.head,
+      expectedManifestSha256: manifestSha256,
+      requireSignature: git.signingConfigured,
     );
-    if (!remote.ok) {
-      return Inspection.unknown(
-        'the tag exists locally and origin could not be read: '
-        '${remote.summary}',
+    if (!remote.isAbsent || !git.hasTag(unit.tag)) return remote;
+
+    // A pre-existing local tag is the bytes `_tag` will push. Validate that
+    // input while the destination is still absent, so a malformed lightweight,
+    // wrong-manifest, or bad-signature tag is refused before authorization.
+    final commit = git.tagTarget(unit.tag);
+    if (commit == null) {
+      return const Inspection.unknown(
+        'could not read the expected local tag commit',
       );
     }
-    if (!remote.stdout.contains('refs/tags/${unit.tag}')) {
-      return Inspection.absent(
-        detail: 'exists locally, not on origin — acting pushes it',
+    final object = git.tagObject(unit.tag);
+    if (object == null) {
+      return const Inspection.unknown(
+        'could not read the expected local tag object',
       );
     }
-    return Inspection.exact(detail: 'already tagged, pushed$placement');
+    if (commit.toLowerCase() != git.head.toLowerCase()) {
+      return Inspection.conflict(
+        'the local release tag points at a different source commit',
+        evidence: {
+          'source commit': 'local $commit, expected ${git.head}',
+        },
+      );
+    }
+    final local = await target.inspectLocalReleaseBinding(
+      tag: unit.tag,
+      expectedObject: object,
+      expectedCommit: commit,
+      expectedManifestSha256: manifestSha256,
+      requireSignature: git.signingConfigured,
+    );
+    return local.isExact ? remote : local;
   }
 
   /// A package another unit publishes, which must already be live.
@@ -220,12 +362,100 @@ class Inspector {
       return const Inspection.unknown('no origin remote to ask');
     }
     final expected = expectedAssets(unit);
-
-    return GithubRelease(
+    final target = GithubRelease(
       tools: tools!,
       repository: repository!,
       workingDirectory: git.root,
-    ).inspect(unit.tag, expected);
+    );
+    final stage = _reusableStage(unit);
+    if (stage == null) {
+      final inventory = await target.inspect(unit.tag, expected);
+      if (!inventory.isExact) return inventory;
+
+      final object = git.tagObject(unit.tag);
+      final commit = git.tagTarget(unit.tag);
+      if (object == null || commit == null) {
+        return const Inspection.unknown(
+          'the release exists, but this checkout has no readable annotated '
+          'tag object to authenticate its manifest',
+        );
+      }
+      final binding =
+          await GitTag(tools: tools!, root: git.root).manifestBinding(
+        tag: unit.tag,
+        expectedObject: object,
+        expectedCommit: commit,
+      );
+      switch (binding) {
+        case TagManifestBound(:final digest):
+          final project = unit.binaryProject;
+          final source = GitCommitSourceTree(git.root, git.head);
+          final changelog = source.read(project.fileAt('CHANGELOG.md'));
+          final notes = changelog == null
+              ? null
+              : Changelog.entry(changelog, project.version);
+          if (notes == null) {
+            return const Inspection.unknown(
+              'the expected release notes could not be read from the '
+              'released commit',
+            );
+          }
+          return target.inspectManifest(GithubManifestExpectation(
+            unit: unit.name,
+            version: unit.version.canonical,
+            tag: unit.tag,
+            sourceCommit: git.head,
+            sourceTree: git.headTree,
+            title: '${project.name} ${unit.version}',
+            body: notes,
+            manifestSha256: digest,
+            publicAssets: expected,
+          ));
+        case TagManifestAbsent(:final why):
+          return Inspection.conflict(
+            'the GitHub Release exists without its release tag',
+            evidence: {'tag': why},
+          );
+        case TagManifestConflict(:final why, :final evidence):
+          return Inspection.conflict(why, evidence: evidence);
+        case TagManifestMissing(:final why) ||
+              TagManifestMalformed(:final why) ||
+              TagManifestUnbound(:final why):
+          return Inspection.conflict(
+            'the release tag does not bind its public manifest',
+            evidence: {'tag': why},
+          );
+        case TagManifestUnreadable(:final why):
+          return Inspection.unknown(why);
+      }
+    }
+
+    final receipt = stage.requireReceipt();
+    final byPath = {
+      for (final artifact in receipt.artifacts) artifact.path: artifact,
+    };
+    final missing = expected.difference(byPath.keys.toSet());
+    if (missing.isNotEmpty) {
+      return Inspection.conflict(
+        'the completed stage is missing release assets',
+        evidence: {for (final name in missing) name: 'missing from stage'},
+      );
+    }
+    final notes = File(stage.directory.resolve('release-notes.md'));
+    if (!notes.existsSync()) {
+      return const Inspection.conflict(
+        'the completed stage has no release notes',
+      );
+    }
+    final project = unit.binaryProject;
+    return target.inspectExact(GithubReleaseExpectation(
+      tag: unit.tag,
+      title: '${project.name} ${unit.version}',
+      body: notes.readAsStringSync(),
+      assetSha256: {
+        for (final name in expected) name: byPath[name]!.sha256,
+      },
+    ));
   }
 
   /// A version must exceed everything already published, and a tag must
@@ -268,6 +498,127 @@ class Inspector {
       }
     }
 
+    _localTagMonotonicity(unit, problems);
+  }
+
+  /// The release-only monotonicity gate against every configured public lane.
+  ///
+  /// Exact-coordinate inspection answers whether this version exists. It
+  /// cannot answer whether a newer version exists elsewhere in the same lane:
+  /// a shallow checkout can truthfully find `v1.0.0` absent while origin is
+  /// already at `v2.0.0`. Release calls this before private production and
+  /// again immediately before authorization.
+  ///
+  /// Homebrew is deliberately omitted. Its exact formula inspection parses
+  /// the public version and authenticates the complete formula bytes against
+  /// the manifest bound into that release's tag. It returns absent only for a
+  /// proven earlier formula and conflict for an equal or newer one. A second,
+  /// weaker version-only tap read would add latency and no permission.
+  Future<void> releaseMonotonicity(
+    ResolvedUnit unit,
+    Iterable<TargetExpectation> targets,
+    Diagnostics problems, {
+    bool refreshRegistry = false,
+  }) async {
+    final localTagProblems = Diagnostics();
+    _localTagMonotonicity(unit, localTagProblems);
+
+    final guarded = <TargetExpectation>[];
+    final seen = <String>{};
+    for (final target in targets) {
+      if (target.kind == ReleaseTargetKind.homebrew) continue;
+      final key = '${target.kind.name}\u0000${target.coordinate}';
+      if (seen.add(key)) guarded.add(target);
+    }
+
+    if (refreshRegistry) {
+      for (final target in guarded) {
+        if (target.kind == ReleaseTargetKind.pubDev) {
+          registry?.forget(target.coordinate);
+        }
+      }
+    }
+
+    // Start every independent provider read before awaiting one. A slow
+    // forge must not postpone asking origin or pub.dev.
+    final reads = [
+      for (final target in guarded)
+        () async {
+          try {
+            return await inspectLatestVersion(target, unit);
+          } on Object catch (error) {
+            return Inspection.unknown(
+              'the latest public version could not be read: $error',
+            );
+          }
+        }(),
+    ];
+    final latest = await Future.wait(reads);
+
+    var remoteTagAhead = false;
+    for (final (index, target) in guarded.indexed) {
+      final inspection = latest[index];
+      if (inspection.isAbsent) continue;
+      if (!inspection.isExact) {
+        problems.add(
+          'RK-REL-001',
+          '${target.label}: ${inspection.detail ?? 'the latest public '
+              'version could not be read'}',
+          remedy: 'restore read access to ${target.label} and re-run; rk '
+              'will not publish against an unknown public history',
+        );
+        continue;
+      }
+
+      final raw = inspection.evidence['version'];
+      final version = raw == null ? null : Version.tryParse(raw);
+      if (version == null) {
+        problems.add(
+          'RK-REL-001',
+          '${target.label}: the latest public version response carried no '
+              'semantic version',
+          remedy: 'restore a readable version listing for ${target.label} '
+              'and re-run',
+        );
+        continue;
+      }
+
+      final targetVersion = Version.tryParse(target.targetVersion)!;
+      if (version <= targetVersion) continue;
+      if (target.kind == ReleaseTargetKind.pubDev) {
+        final project = target.project!;
+        problems.add(
+          'RK-MONO-002',
+          '${project.name} $version is already published, and this would '
+              'publish ${project.version}',
+          source: SourceLocation(
+            project.pubspec.path,
+            project.pubspec.versionLine,
+          ),
+          remedy: 'a release moves forward — bump past $version',
+        );
+        continue;
+      }
+      if (target.kind == ReleaseTargetKind.gitTag) remoteTagAhead = true;
+      problems.add(
+        'RK-MONO-003',
+        '${target.label} is at $version, ahead of the '
+            '${target.targetVersion} this release would publish',
+        remedy: 'a release moves forward — bump past $version',
+      );
+    }
+
+    // The public lane is the stronger fact. Do not tell the operator twice
+    // about the same ahead tag merely because it is also present locally.
+    if (!remoteTagAhead) {
+      localTagProblems.found.forEach(problems.report);
+    }
+  }
+
+  void _localTagMonotonicity(
+    ResolvedUnit unit,
+    Diagnostics problems,
+  ) {
     for (final tag in git.tagsMatching(unit.tagPattern)) {
       final raw = GitState.versionIn(tag, unit.tagPattern);
       if (raw == null) continue;
@@ -289,11 +640,11 @@ class Inspector {
   /// The tap's formula, read from the public repository the same way a
   /// user's `brew install` reads it.
   ///
-  /// Exactness here is the version pointer, not bytes: the formula's sha256
-  /// values are digests of assets this run may not have built yet, so byte
-  /// equality is only checkable by the act (which compares before pushing)
-  /// and by `verify` after the fact. A formula naming an earlier version is
-  /// `absent` — moving it forward is exactly the work the step does.
+  /// Expected bytes come from the exact local stage while preparing a release,
+  /// or from the public release manifest after publication. A formula naming
+  /// an earlier authenticated release is `absent` — moving it forward is
+  /// exactly the work the step does. Unauthenticated or different same/newer
+  /// bytes are a conflict, never permission to overwrite blindly.
   Future<Inspection> _formula(ResolvedUnit unit) async {
     if (tools == null) {
       return const Inspection.unknown('not read: --offline');
@@ -306,45 +657,191 @@ class Inspector {
     final tapRepo = unit.tapFor(repository!);
     final project = unit.binaryProject;
     final executable = project.executable!;
-
-    final result = await tools!.run(
-      'gh',
-      ['api', 'repos/$tapRepo/contents/Formula/$executable.rb'],
-    );
-    if (!result.ok) {
-      if (result.summary.contains('(HTTP 404)')) {
-        // The same 404 discipline as the forge: GitHub answers 404 for a
-        // repository the token cannot see, so a missing formula is only
-        // concluded once the tap has answered for itself.
-        final readable = await tools!.run(
-          'gh',
-          ['repo', 'view', tapRepo, '--json', 'name'],
+    final stage = _reusableStage(unit);
+    final name = ReleaseAssets.formulaName(executable);
+    List<int>? expectedBytes;
+    if (stage != null) {
+      final expected = File(stage.directory.resolve(name));
+      if (!expected.existsSync()) {
+        return Inspection.conflict(
+          'the completed stage has no $name',
         );
-        return readable.ok
-            ? const Inspection.absent(detail: 'no formula in the tap yet')
-            : Inspection.unknown(
-                'the tap $tapRepo could not be read, so rk cannot tell '
-                'what users install',
-              );
       }
-      return Inspection.unknown('the tap could not be read: ${result.summary}');
+      expectedBytes = expected.readAsBytesSync();
+    } else if (git.hasTag(unit.tag)) {
+      final current = await _currentManifestAsset(unit, name);
+      if (current.inspection.verdict == Verdict.conflict ||
+          current.inspection.verdict == Verdict.unknown) {
+        return current.inspection;
+      }
+      expectedBytes = current.bytes;
     }
 
-    try {
-      final decoded = jsonDecode(result.stdout);
-      final content = decoded is Map ? decoded['content'] : null;
-      if (content is! String) {
-        return const Inspection.unknown(
-            'the tap answered something unreadable');
-      }
-      final text =
-          utf8.decode(base64Decode(content.replaceAll(RegExp(r'\s'), '')));
-      return text.contains('version "${unit.version}"')
-          ? Inspection.exact(detail: 'points at ${unit.version}')
-          : const Inspection.absent(detail: 'points at an earlier release');
-    } on Object {
-      return const Inspection.unknown('the tap answered something unreadable');
+    return HomebrewTarget(
+      tools: tools!,
+      tap: tapRepo,
+      workingDirectory: git.root,
+    ).inspect(
+      formulaPath: 'Formula/$executable.rb',
+      expectedBytes: expectedBytes,
+      inspectEarlierRelease: (bytes) => _inspectEarlierFormula(unit, bytes),
+    );
+  }
+
+  Future<({Inspection inspection, List<int>? bytes})> _currentManifestAsset(
+    ResolvedUnit unit,
+    String assetName,
+  ) async {
+    final object = git.tagObject(unit.tag);
+    final commit = git.tagTarget(unit.tag);
+    if (object == null || commit == null) {
+      return (
+        inspection: const Inspection.unknown(
+          'the release tag object could not be read',
+        ),
+        bytes: null,
+      );
     }
+    final binding = await GitTag(tools: tools!, root: git.root).manifestBinding(
+      tag: unit.tag,
+      expectedObject: object,
+      expectedCommit: commit,
+    );
+    if (binding case TagManifestBound(:final digest)) {
+      try {
+        final expected = _manifestExpectation(unit, digest);
+        final read = await GithubRelease(
+          tools: tools!,
+          repository: repository!,
+          workingDirectory: git.root,
+        ).readManifestBoundAsset(expected, assetName);
+        return (inspection: read.inspection, bytes: read.bytes);
+      } on Object catch (error) {
+        return (
+          inspection: Inspection.unknown(
+            'the expected release manifest could not be derived: $error',
+          ),
+          bytes: null,
+        );
+      }
+    }
+    return (inspection: _bindingInspection(binding), bytes: null);
+  }
+
+  GithubManifestExpectation _manifestExpectation(
+    ResolvedUnit unit,
+    String digest,
+  ) {
+    final project = unit.binaryProject;
+    final source = GitCommitSourceTree(git.root, git.head);
+    final changelog = source.read(project.fileAt('CHANGELOG.md'));
+    final notes =
+        changelog == null ? null : Changelog.entry(changelog, project.version);
+    if (notes == null) {
+      throw StateError('release notes are absent from the released commit');
+    }
+    return GithubManifestExpectation(
+      unit: unit.name,
+      version: unit.version.canonical,
+      tag: unit.tag,
+      sourceCommit: git.head,
+      sourceTree: git.headTree,
+      title: '${project.name} ${unit.version}',
+      body: notes,
+      manifestSha256: digest,
+      publicAssets: expectedAssets(unit),
+    );
+  }
+
+  Future<Inspection> _inspectEarlierFormula(
+    ResolvedUnit unit,
+    List<int> publicBytes,
+  ) async {
+    final version = HomebrewFormula.versionIn(publicBytes);
+    if (version == null) {
+      return const Inspection.conflict(
+        'the public formula is not generated by rk with one canonical version',
+      );
+    }
+    if (version >= unit.version) {
+      return Inspection.conflict(
+        'the public formula claims ${version.canonical}, not an earlier '
+        'release than ${unit.version}',
+      );
+    }
+    final tag = unit.tagPattern.replaceAll('{version}', version.canonical);
+    final object = git.tagObject(tag);
+    final commit = git.tagTarget(tag);
+    if (object == null || commit == null) {
+      return Inspection.unknown(
+        'the earlier release tag $tag is not available in this checkout',
+      );
+    }
+    final binding = await GitTag(tools: tools!, root: git.root).manifestBinding(
+      tag: tag,
+      expectedObject: object,
+      expectedCommit: commit,
+    );
+    if (binding case TagManifestBound(:final digest)) {
+      final project = unit.binaryProject;
+      final assetName = ReleaseAssets.formulaName(project.executable!);
+      final read = await GithubRelease(
+        tools: tools!,
+        repository: repository!,
+        workingDirectory: git.root,
+      ).readHistoricalManifestBoundAsset(
+        GithubHistoricalManifestExpectation(
+          unit: unit.name,
+          version: version.canonical,
+          tag: tag,
+          sourceCommit: commit,
+          manifestSha256: digest,
+          title: '${project.name} ${version.canonical}',
+        ),
+        assetName,
+      );
+      if (!read.inspection.isExact) return read.inspection;
+      final released = read.bytes!;
+      if (!_sameBytes(released, publicBytes)) {
+        return Inspection.conflict(
+          'the tap formula differs from the formula bound to $tag',
+        );
+      }
+      return Inspection.exact(
+        detail: 'matches the manifest-bound formula from $tag',
+        evidence: {'version': version.canonical},
+      );
+    }
+    return _bindingInspection(binding);
+  }
+
+  static Inspection _bindingInspection(TagManifestBinding binding) =>
+      switch (binding) {
+        TagManifestBound() => const Inspection.unknown(
+            'the tag manifest binding was not consumed',
+          ),
+        TagManifestAbsent(:final why) => Inspection.conflict(
+            'the release tag is absent',
+            evidence: {'tag': why},
+          ),
+        TagManifestConflict(:final why, :final evidence) =>
+          Inspection.conflict(why, evidence: evidence),
+        TagManifestMissing(:final why) ||
+        TagManifestMalformed(:final why) ||
+        TagManifestUnbound(:final why) =>
+          Inspection.conflict(
+            'the release tag does not bind its public manifest',
+            evidence: {'tag': why},
+          ),
+        TagManifestUnreadable(:final why) => Inspection.unknown(why),
+      };
+
+  static bool _sameBytes(List<int> left, List<int> right) {
+    if (left.length != right.length) return false;
+    for (var index = 0; index < left.length; index++) {
+      if (left[index] != right[index]) return false;
+    }
+    return true;
   }
 
   /// Cross-step judgments about the tag, which no single step can make.
@@ -389,8 +886,8 @@ class Inspector {
               '  git push origin ${unit.tag}\n'
               'find it: git log --oneline -S "version: ${unit.version}" '
               '-- ${unit.projects.first.pubspec.directory}/pubspec.yaml — '
-              'and prove a candidate before pushing: '
-              'rk verify ${unit.name} --at=<sha>',
+              'then check out the candidate and run rk status ${unit.name} '
+              'before pushing the tag',
         ),
       ];
     }

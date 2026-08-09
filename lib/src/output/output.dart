@@ -83,6 +83,7 @@ class Output {
     required this.sink,
     required this.isTerminal,
     this.useColor = true,
+    this.terminalWidth,
     Report? report,
     Elapsed Function()? clock,
   })  : report = report ?? Report('rk'),
@@ -95,16 +96,30 @@ class Output {
   /// never handed both. The report is still recorded, because the recording
   /// happens inside the same calls that would have printed.
   factory Output.stdio({bool json = false, required String command}) {
-    final terminal = stdout.hasTerminal && !json;
+    final attached = stdout.hasTerminal && !json;
+    final noColor = Platform.environment.containsKey('NO_COLOR');
+    final terminal = attached &&
+        !noColor &&
+        Platform.environment['TERM']?.toLowerCase() != 'dumb';
     return Output(
       sink: json ? _discard : stdout.write,
       isTerminal: terminal,
-      useColor: terminal && !Platform.environment.containsKey('NO_COLOR'),
+      useColor: terminal,
+      terminalWidth: attached ? _stdoutWidth() : null,
       report: Report(command),
     );
   }
 
   static void _discard(String _) {}
+
+  static int? _stdoutWidth() {
+    try {
+      final width = stdout.terminalColumns;
+      return width > 0 ? width : null;
+    } on Object {
+      return null;
+    }
+  }
 
   static Elapsed _wallClock() {
     final stopwatch = Stopwatch()..start();
@@ -118,17 +133,40 @@ class Output {
 
   final bool useColor;
 
+  /// Columns available on an attached terminal.
+  ///
+  /// Transient rows are shortened to stay one physical row, because cursor-up
+  /// erasure depends on that. Settled rows are instead wrapped without losing
+  /// words, with their continuation indented so narrow output remains readable.
+  /// A pipe has no width and remains byte-for-byte append-only.
+  final int? terminalWidth;
+
   /// What a caller is told, recorded by the same calls that print.
   final Report report;
 
   final Elapsed Function() _clock;
 
   var _transient = false;
+  TargetChecks? _targetChecks;
+
+  /// A fixed multi-line region for concurrent public-target reads.
+  ///
+  /// Nothing is emitted for a pipe. On a terminal the region appears only
+  /// after a short delay, so fast reads do not flicker, and [TargetChecks]
+  /// erases it completely before the deterministic report is rendered.
+  TargetChecks targetChecks(
+      {Duration delay = const Duration(milliseconds: 80)}) {
+    _clearTransient();
+    _targetChecks?.close();
+    final checks = TargetChecks._(this, delay);
+    _targetChecks = checks;
+    return checks;
+  }
 
   /// A heading. Callers space their own sections; this adds nothing.
   void heading(String text) {
     _clearTransient();
-    sink('$text\n');
+    _writeSettled(text, continuationPrefix: '  ');
   }
 
   /// The repository line, recorded in parts so a caller is not left parsing
@@ -162,14 +200,18 @@ class Output {
     required String version,
     required String tag,
     String? state,
+    String? display,
   }) {
     report.unit(name: name, version: version, tag: tag);
     blank();
     // › for becomes and for sequence, everywhere inline: the gutter's → is
     // reserved for "your next move", and three reviewers independently
     // caught it moonlighting.
-    line(name,
-        note: state == null ? '$version › $tag' : '$version › $tag · $state');
+    line(
+      name,
+      note: display ??
+          (state == null ? '$version › $tag' : '$version › $tag · $state'),
+    );
   }
 
   /// One step of a checklist, printed and recorded as one act.
@@ -191,6 +233,7 @@ class Output {
     String? detail,
     Map<String, String> evidence = const {},
     Duration? took,
+    String? action,
     int depth = 1,
     bool show = true,
   }) {
@@ -206,6 +249,7 @@ class Output {
       public: step.isPublic,
       needs: step.needs,
       took: took,
+      action: action,
     );
     if (!show) return;
     line(
@@ -220,52 +264,6 @@ class Output {
     // a bare blocked line while the JSON carried the six-asset table.
     for (final entry in evidence.entries) {
       line('${entry.key}  ${entry.value}', depth: depth + 1);
-    }
-  }
-
-  /// One verification result, printed and recorded as one act.
-  ///
-  /// [id] is the frozen step id for a subject the grammar names, so a caller
-  /// keys verifications the same way it keys steps — free prose was the phase
-  /// 3 "machine surface empty where a caller needs it" finding relocated.
-  /// [counts] is false for a scope disclosure — a subject this command names
-  /// as unexamined rather than one it judged — which reads as unknown but is
-  /// not a failed proof, because it never claimed to be one.
-  void verification(
-    String unit,
-    String subject, {
-    required Verdict verdict,
-    String? id,
-    String? detail,
-    Map<String, String> evidence = const {},
-    bool counts = true,
-  }) {
-    report.verification(
-      unit,
-      subject,
-      id: id,
-      verdict: verdict.name,
-      detail: detail,
-      evidence: evidence,
-      counts: counts,
-    );
-    line(
-      subject,
-      mark: switch (verdict) {
-        Verdict.exact => Mark.done,
-        // A proof that failed — conflicting or not provable — is ✗: the RFC
-        // gives the glyph to "blocked, conflicting, or failed", and a failed
-        // run whose line carries no mark reads as a note.
-        Verdict.conflict => Mark.blocked,
-        Verdict.unknown when counts => Mark.blocked,
-        _ => Mark.none,
-      },
-      note: detail,
-      depth: 1,
-      labelWidth: 32,
-    );
-    for (final entry in evidence.entries) {
-      line('${entry.key}  ${entry.value}', depth: 2);
     }
   }
 
@@ -325,11 +323,41 @@ class Output {
     Tone noteTone = Tone.plain,
   }) {
     _clearTransient();
-    final glyph = mark == Mark.none ? ' ' : _paint(mark);
+    final plainGlyph = mark == Mark.none ? ' ' : mark.glyph;
+    final paintedGlyph = mark == Mark.none ? ' ' : _paint(mark);
 
     // The indent is part of what is padded, so the note column stays put as
     // the tree deepens rather than drifting right with it.
     final indented = '${'  ' * depth}$label';
+    final plain = note == null
+        ? '$plainGlyph $indented'
+        : indented.length >= labelWidth
+            ? '$plainGlyph $indented $note'
+            : '$plainGlyph ${indented.padRight(labelWidth)} $note';
+    final width = terminalWidth;
+    if (width != null && plain.runes.length > width) {
+      final firstPrefix = '$plainGlyph ${'  ' * depth}';
+      final paintedFirstPrefix = '$paintedGlyph ${'  ' * depth}';
+      final continuationPrefix = '${' ' * firstPrefix.runes.length}  ';
+      _writeSettled(
+        label,
+        firstPrefix: firstPrefix,
+        paintedFirstPrefix: paintedFirstPrefix,
+        continuationPrefix: continuationPrefix,
+        tone: tone,
+      );
+      if (note != null) {
+        _writeSettled(
+          note,
+          firstPrefix: continuationPrefix,
+          continuationPrefix: continuationPrefix,
+          tone: noteTone,
+        );
+      }
+      return;
+    }
+
+    final glyph = paintedGlyph;
     if (note == null) {
       sink('$glyph ${_tint(indented, tone)}\n');
       return;
@@ -362,10 +390,107 @@ class Output {
   /// Free-form prose, wrapped in the same indentation as the tree.
   void say(String text, {int depth = 0}) {
     _clearTransient();
-    final indent = '  ' * depth;
+    final prefix = '  ${'  ' * depth}';
     for (final part in text.split('\n')) {
-      sink('  $indent$part\n');
+      final repeatsComment = part.startsWith('# ');
+      _writeSettled(
+        part,
+        firstPrefix: prefix,
+        continuationPrefix: '$prefix  ${repeatsComment ? '# ' : ''}',
+      );
     }
+  }
+
+  /// A terminal prompt, using the same width policy as settled prose while
+  /// leaving the cursor after the final space for the answer.
+  void prompt(String text) {
+    _clearTransient();
+    final body = text.trimRight();
+    _writeSettled(
+      body,
+      continuationPrefix: '  ',
+      endWithNewline: false,
+    );
+    if (text.length != body.length) sink(' ');
+  }
+
+  void _writeSettled(
+    String text, {
+    String firstPrefix = '',
+    String? paintedFirstPrefix,
+    required String continuationPrefix,
+    Tone tone = Tone.plain,
+    bool endWithNewline = true,
+  }) {
+    final width = terminalWidth;
+    if (width == null ||
+        firstPrefix.runes.length + text.runes.length <= width) {
+      sink('${paintedFirstPrefix ?? firstPrefix}${_tint(text, tone)}'
+          '${endWithNewline ? '\n' : ''}');
+      return;
+    }
+
+    final fragments = _wrapSettled(
+      text,
+      firstWidth: width - firstPrefix.runes.length,
+      continuationWidth: width - continuationPrefix.runes.length,
+    );
+    for (final (index, fragment) in fragments.indexed) {
+      final first = index == 0;
+      final prefix =
+          first ? paintedFirstPrefix ?? firstPrefix : continuationPrefix;
+      final newline = index < fragments.length - 1 || endWithNewline;
+      sink('$prefix${_tint(fragment, tone)}${newline ? '\n' : ''}');
+    }
+  }
+
+  static List<String> _wrapSettled(
+    String text, {
+    required int firstWidth,
+    required int continuationWidth,
+  }) {
+    final words = text.trim().split(RegExp(r'\s+'));
+    if (words.length == 1 && words.single.isEmpty) return const [''];
+
+    final lines = <String>[];
+    var width = firstWidth < 1 ? 1 : firstWidth;
+    var current = '';
+
+    void flush() {
+      if (current.isEmpty) return;
+      lines.add(current);
+      current = '';
+      width = continuationWidth < 1 ? 1 : continuationWidth;
+    }
+
+    for (final word in words) {
+      final runes = word.runes.toList();
+      var offset = 0;
+      while (offset < runes.length) {
+        final separator = current.isEmpty ? 0 : 1;
+        final available = width - current.runes.length - separator;
+        if (available <= 0) {
+          flush();
+          continue;
+        }
+        final remaining = runes.length - offset;
+        if (remaining <= available) {
+          current = '$current${separator == 0 ? '' : ' '}'
+              '${String.fromCharCodes(runes.skip(offset))}';
+          offset = runes.length;
+          continue;
+        }
+        if (current.isNotEmpty) {
+          flush();
+          continue;
+        }
+        current = String.fromCharCodes(runes.skip(offset).take(available));
+        offset += available;
+        flush();
+      }
+    }
+    flush();
+    return lines.isEmpty ? const [''] : lines;
   }
 
   /// A line that will be replaced by its own completion, so the terminal shows
@@ -381,6 +506,7 @@ class Output {
   }
 
   void _clearTransient() {
+    _targetChecks?.close();
     if (!_transient) return;
     // Return to the start of the line and clear it.
     sink('\r\x1b[2K');
@@ -391,7 +517,7 @@ class Output {
   void halt(HaltKind kind) {
     final sentence = switch (kind) {
       HaltKind.beforeActing =>
-        'rk stopped before acting. nothing changed. safe to re-run.',
+        'rk stopped. no public target changed. safe to re-run.',
       HaltKind.stoppedPartway => 'rk stopped partway. everything already '
           'done is real and stays done; re-running resumes after it.',
       HaltKind.lostTrack => 'rk acted, then lost sight of the result. '
@@ -462,9 +588,129 @@ class Output {
   }
 }
 
+/// The transient fixed-height list used while status reads targets in
+/// parallel.
+class TargetChecks {
+  TargetChecks._(this._output, Duration delay) {
+    if (!_output.isTerminal) return;
+    _delay = Timer(delay, () {
+      if (_closed || _rows.isEmpty) return;
+      _draw();
+      _ticker = Timer.periodic(
+        const Duration(milliseconds: 120),
+        (_) => _draw(),
+      );
+    });
+  }
+
+  final Output _output;
+  final List<_TargetCheckRow> _rows = [];
+  Timer? _delay;
+  Timer? _ticker;
+  var _drawnLines = 0;
+  var _spin = 0;
+  var _closed = false;
+
+  static const _frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+  void add(String id, String label) {
+    if (_closed || !_output.isTerminal) return;
+    if (_rows.any((row) => row.id == id)) return;
+    _rows.add(_TargetCheckRow(id, label));
+    if (_drawnLines > 0) _draw();
+  }
+
+  void finish(String id, Verdict verdict) {
+    if (_closed || !_output.isTerminal) return;
+    for (final row in _rows) {
+      if (row.id == id) {
+        row.verdict = verdict;
+        break;
+      }
+    }
+    if (_drawnLines > 0) _draw();
+  }
+
+  void _draw() {
+    if (_closed || _rows.isEmpty) return;
+    _erase();
+    final widestLabel = _rows.fold<int>(
+        0, (width, row) => row.label.length > width ? row.label.length : width);
+    const widestStatus = 8; // checking
+    const rowOverhead = 6; // two spaces, mark, space, and two-column gap
+    final available = _output.terminalWidth;
+    final labelWidth = available == null
+        ? widestLabel
+        : _lesser(
+            widestLabel, _atLeastZero(available - rowOverhead - widestStatus));
+    final statusWidth = available == null
+        ? widestStatus
+        : _lesser(widestStatus, _atLeastZero(available - 4));
+    final lines = <String>[
+      _fit('Release targets', available),
+    ];
+    for (final row in _rows) {
+      final verdict = row.verdict;
+      final (mark, word, tone) = switch (verdict) {
+        null => (_frames[_spin % _frames.length], 'checking', Tone.attention),
+        Verdict.exact => (Mark.done.glyph, 'checked', Tone.muted),
+        Verdict.absent => (Mark.none.glyph, 'checked', Tone.plain),
+        Verdict.conflict => (Mark.blocked.glyph, 'differs', Tone.bad),
+        Verdict.unknown => (Mark.none.glyph, 'unread', Tone.attention),
+      };
+      final label = _fit(row.label, labelWidth).padRight(labelWidth);
+      final status = _fit(word, statusWidth);
+      final gap = labelWidth > 0 && status.isNotEmpty ? '  ' : '';
+      lines.add(
+        '  $mark $label$gap${_output._tint(status, tone)}',
+      );
+    }
+    _output.sink('${lines.join('\n')}\n');
+    _drawnLines = lines.length;
+    _spin++;
+  }
+
+  static int _atLeastZero(int value) => value < 0 ? 0 : value;
+
+  static int _lesser(int left, int right) => left < right ? left : right;
+
+  static String _fit(String text, int? width) {
+    if (width == null || text.length <= width) return text;
+    if (width <= 0) return '';
+    if (width == 1) return '…';
+    return '${text.substring(0, width - 1)}…';
+  }
+
+  void _erase() {
+    for (var i = 0; i < _drawnLines; i++) {
+      _output.sink('\x1b[1A\r\x1b[2K');
+    }
+    _drawnLines = 0;
+  }
+
+  void close() {
+    if (_closed) return;
+    _closed = true;
+    _delay?.cancel();
+    _ticker?.cancel();
+    _erase();
+    if (identical(_output._targetChecks, this)) {
+      _output._targetChecks = null;
+    }
+  }
+}
+
+class _TargetCheckRow {
+  _TargetCheckRow(this.id, this.label);
+
+  final String id;
+  final String label;
+  Verdict? verdict;
+}
+
 /// Which of the two questions an operator has a halt is answering.
 enum HaltKind {
-  /// Nothing happened; the world is unchanged.
+  /// No public target changed. Private preparation or native login may have.
   beforeActing,
 
   /// The run stopped between acts; what completed stays done, nothing was

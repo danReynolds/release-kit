@@ -11,10 +11,12 @@ class DartCliBuilder {
   DartCliBuilder({
     required this.tools,
     required this.capabilities,
+    this.compilerExecutable = 'dart',
   });
 
   final Tools tools;
   final HostCapabilities capabilities;
+  final String compilerExecutable;
 
   /// Compiles [entryPoint] for [platform], writing to [output].
   Future<BuildOutcome> build({
@@ -30,7 +32,7 @@ class DartCliBuilder {
 
     final target = _target(platform);
     final compiled = await tools.run(
-      'dart',
+      compilerExecutable,
       [
         'compile',
         'exe',

@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 /// Runs the native tools rk defers to.
@@ -41,12 +43,24 @@ class ToolResult {
   String get summary {
     final text = stderr.trim().isEmpty ? stdout.trim() : stderr.trim();
     final lines = text.split('\n').where((l) => l.trim().isNotEmpty).toList();
-    return lines.isEmpty ? 'exit $exitCode' : lines.last.trim();
+    if (lines.isEmpty) return 'exit $exitCode';
+    final failure = RegExp(
+      r'\b(error|fatal|failed|could not|denied|not found|timed out|exception)\b',
+      caseSensitive: false,
+    );
+    return lines
+        .map((line) => line.trim())
+        .firstWhere((line) => failure.hasMatch(line), orElse: () => lines.last);
   }
 }
 
 class SystemTools implements Tools {
-  const SystemTools();
+  const SystemTools({this.timeout});
+
+  /// A bound for non-interactive subprocesses, used by public-target readers.
+  /// Release acts deliberately use an unbounded instance: signing and
+  /// notarization have their own progress and completion contracts.
+  final Duration? timeout;
 
   @override
   Future<ToolResult> run(
@@ -55,16 +69,54 @@ class SystemTools implements Tools {
     String? workingDirectory,
     Map<String, String>? environment,
   }) async {
-    final result = await Process.run(
+    final bound = timeout;
+    if (bound == null) {
+      final result = await Process.run(
+        executable,
+        arguments,
+        workingDirectory: workingDirectory,
+        environment: environment,
+      );
+      return ToolResult(
+        exitCode: result.exitCode,
+        stdout: result.stdout as String,
+        stderr: result.stderr as String,
+      );
+    }
+
+    final process = await Process.start(
       executable,
       arguments,
       workingDirectory: workingDirectory,
       environment: environment,
     );
+    final stdout = process.stdout.transform(utf8.decoder).join();
+    final stderr = process.stderr.transform(utf8.decoder).join();
+    var timedOut = false;
+    var exitCode = 124;
+    try {
+      exitCode = await process.exitCode.timeout(bound);
+    } on TimeoutException {
+      timedOut = true;
+      process.kill(ProcessSignal.sigterm);
+      try {
+        await process.exitCode.timeout(const Duration(seconds: 2));
+      } on TimeoutException {
+        process.kill(ProcessSignal.sigkill);
+        await process.exitCode;
+      }
+    }
+    final capturedOut = await stdout;
+    final capturedErr = await stderr;
     return ToolResult(
-      exitCode: result.exitCode,
-      stdout: result.stdout as String,
-      stderr: result.stderr as String,
+      exitCode: exitCode,
+      stdout: capturedOut,
+      stderr: timedOut
+          ? [
+              capturedErr.trimRight(),
+              'timed out after ${bound.inSeconds} seconds',
+            ].where((line) => line.isNotEmpty).join('\n')
+          : capturedErr,
     );
   }
 

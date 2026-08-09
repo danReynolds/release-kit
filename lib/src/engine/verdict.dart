@@ -22,17 +22,39 @@ class Inspection {
     this.verdict, {
     this.detail,
     this.evidence = const {},
+    this.authority,
   });
 
-  const Inspection.absent({String? detail})
-      : this(Verdict.absent, detail: detail);
+  const Inspection.absent({
+    String? detail,
+    Map<String, String> evidence = const {},
+    Object? authority,
+  }) : this(
+          Verdict.absent,
+          detail: detail,
+          evidence: evidence,
+          authority: authority,
+        );
 
-  const Inspection.exact({String? detail})
-      : this(Verdict.exact, detail: detail);
+  const Inspection.exact({
+    String? detail,
+    Map<String, String> evidence = const {},
+    Object? authority,
+  }) : this(
+          Verdict.exact,
+          detail: detail,
+          evidence: evidence,
+          authority: authority,
+        );
 
   const Inspection.conflict(String detail,
-      {Map<String, String> evidence = const {}})
-      : this(Verdict.conflict, detail: detail, evidence: evidence);
+      {Map<String, String> evidence = const {}, Object? authority})
+      : this(
+          Verdict.conflict,
+          detail: detail,
+          evidence: evidence,
+          authority: authority,
+        );
 
   /// rk could not determine the state.
   const Inspection.unknown(String detail)
@@ -43,9 +65,16 @@ class Inspection {
   /// One line saying what rk saw.
   final String? detail;
 
-  /// What a conflict differs on, so a human is given the evidence rather than
-  /// the fact of a difference.
+  /// Provider evidence supporting an exact answer, or the fields a conflict
+  /// differs on, so callers receive the proof rather than only the verdict.
   final Map<String, String> evidence;
+
+  /// Provider-owned authority for an act based on this exact observation.
+  ///
+  /// This is deliberately process-local rather than report data. An adapter
+  /// may use it to prove that the public base it is about to mutate is still
+  /// the one this inspection authorized.
+  final Object? authority;
 
   bool get isAbsent => verdict == Verdict.absent;
   bool get isExact => verdict == Verdict.exact;

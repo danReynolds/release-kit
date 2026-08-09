@@ -10,6 +10,7 @@ import 'engine/checklist.dart';
 import 'engine/diagnostic.dart';
 import 'output/output.dart';
 import 'engine/resolve.dart';
+import 'engine/stage_archive.dart';
 import 'engine/tools.dart';
 import 'engine/verdict.dart';
 import 'engine/workspace.dart';
@@ -27,8 +28,8 @@ import 'transforms/macos.dart';
 /// states: it holds an [Output] at thirty-odd sites, where every file in
 /// `builds/`, `transforms/` and `destinations/` holds one at zero.
 ///
-/// It lived in `commands/` until `ls` there said five against a README and
-/// an RFC heading that both say four verbs.
+/// It lived in `commands/` until `ls` there exposed a non-command alongside
+/// the three verbs promised by the README and RFC.
 ///
 /// This used to be one `produce()` that ran the whole chain inside the first
 /// build step and handed a `_produced` list to the steps after it — which
@@ -52,6 +53,7 @@ class BinaryChain {
     required this.workspace,
     required this.repositoryRoot,
     required this.capabilities,
+    this.compilerExecutable = 'dart',
   });
 
   final Tools tools;
@@ -59,6 +61,7 @@ class BinaryChain {
   final Workspace workspace;
   final String repositoryRoot;
   final HostCapabilities capabilities;
+  final String compilerExecutable;
 
   // ---- workspace-internal names ----
   //
@@ -73,7 +76,7 @@ class BinaryChain {
 
   // ---- build ----
 
-  Future<bool> buildStep(
+  Future<LocalProducerOutcome> buildStep(
     Step step,
     ResolvedProject project, {
     required String? publishedRequirement,
@@ -90,7 +93,9 @@ class BinaryChain {
         ),
         unit: step.unit,
       );
-      return false;
+      return LocalProducerOutcome.failed(
+        capability.reason ?? 'this host cannot produce $platform',
+      );
     }
 
     final name = binaryName(platform, executable);
@@ -129,7 +134,12 @@ class BinaryChain {
           note: 'signed binary in the workspace — signature verified, '
               'identity matches the published release',
         );
-        return true;
+        return LocalProducerOutcome.succeeded(
+          outputs: [LocalProducerOutput(name, 'executable')],
+          evidence: const {
+            'smoke': {'status': 'passed'},
+          },
+        );
       }
     }
 
@@ -138,6 +148,7 @@ class BinaryChain {
     final built = await DartCliBuilder(
       tools: tools,
       capabilities: capabilities,
+      compilerExecutable: compilerExecutable,
     ).build(
       platform: platform,
       entryPoint: 'bin/$executable.dart',
@@ -155,7 +166,9 @@ class BinaryChain {
         ),
         unit: step.unit,
       );
-      return false;
+      return LocalProducerOutcome.failed(
+        built.problem ?? 'the build failed',
+      );
     }
     workspace.ingest(name);
 
@@ -173,10 +186,23 @@ class BinaryChain {
         note: 'built, not executed — $unproven',
         show: false,
       );
-      return true;
+      return LocalProducerOutcome.succeeded(
+        outputs: [LocalProducerOutput(name, 'executable')],
+        evidence: {
+          'smoke': {
+            'status': 'not-executed',
+            'reason': unproven,
+          },
+        },
+      );
     }
     activity.done('built');
-    return true;
+    return LocalProducerOutcome.succeeded(
+      outputs: [LocalProducerOutput(name, 'executable')],
+      evidence: const {
+        'smoke': {'status': 'passed'},
+      },
+    );
   }
 
   Future<bool> _versionMatches(String name, String version) async {
@@ -198,17 +224,20 @@ class BinaryChain {
   /// declared, or the release was refused (RK-SIGN-009). This step used to
   /// resolve it itself and fall back to the package name — inventing, at the
   /// one moment that makes the answer permanent, a value nothing had stated.
-  Future<bool> signStep(
+  Future<LocalProducerOutcome> signStep(
     Step step,
     ResolvedProject project, {
     required String? publishedRequirement,
     required String codeId,
+    SigningIdentity? signingIdentity,
+    String? certificateSha256,
   }) async {
     final platform = step.platform!;
     final name = binaryName(platform, project.executable!);
     if (!workspace.exists(name)) {
       return _missingArtifact(step, name, 'the build step produces it');
     }
+    final unsignedSha256 = Sha256.hex(workspace.readBytes(name)!);
 
     // Derived when a release exists to derive from; discovered otherwise.
     // Nothing is declared: a team a user types can only ever agree with the
@@ -226,7 +255,9 @@ class BinaryChain {
         ),
         unit: step.unit,
       );
-      return false;
+      return const LocalProducerOutcome.failed(
+        'the published requirement has no readable team',
+      );
     }
 
     final signer = MacOsSigner(tools: tools);
@@ -234,6 +265,8 @@ class BinaryChain {
       binary: workspace.pathOf(name),
       team: team,
       codeId: codeId,
+      selectedIdentity: signingIdentity,
+      expectedCertificateSha256: certificateSha256,
     );
     if (!signed.ok) {
       output.problem(
@@ -244,7 +277,9 @@ class BinaryChain {
         ),
         unit: step.unit,
       );
-      return false;
+      return LocalProducerOutcome.failed(
+        signed.problem ?? 'signing failed',
+      );
     }
     workspace.ingest(name);
 
@@ -279,12 +314,15 @@ class BinaryChain {
           },
           show: true,
         );
-        // Acted-aware: by the time signing runs, the tag act has usually
-        // already pushed — "rk did not act" would be false there.
+        // The signing attempt changed private staged bytes, so the halt must
+        // not claim that rk did nothing. Public release acts still have not
+        // begun: staging is mandatory before the tag or any destination act.
         output.halt(output.report.acted
             ? HaltKind.actedAndUnfixable
             : HaltKind.unfixableByRerun);
-        return false;
+        return const LocalProducerOutcome.failed(
+          'the produced signature differs from the published identity',
+        );
       }
       output.step(
         step,
@@ -307,7 +345,23 @@ class BinaryChain {
             'certificate'} · $codeId',
       );
     }
-    return true;
+    final signedSha256 = Sha256.hex(workspace.readBytes(name)!);
+    return LocalProducerOutcome.succeeded(
+      outputs: [LocalProducerOutput(name, 'executable')],
+      evidence: {
+        'signature': {
+          'first_identity': publishedRequirement == null,
+          'published_requirement': publishedRequirement,
+          'designated_requirement': signed.requirement,
+          'code_id': codeId,
+          if (signed.certificate != null) 'certificate': signed.certificate,
+          if (signed.certificateSha256 != null)
+            'certificate_sha256': signed.certificateSha256,
+          'unsigned_sha256': unsignedSha256,
+          'signed_sha256': signedSha256,
+        },
+      },
+    );
   }
 
   /// The team id inside a designated requirement, which is the one fact
@@ -336,7 +390,10 @@ class BinaryChain {
 
   // ---- notarize ----
 
-  Future<bool> notarizeStep(Step step, ResolvedProject project) async {
+  Future<LocalProducerOutcome> notarizeStep(
+    Step step,
+    ResolvedProject project,
+  ) async {
     final platform = step.platform!;
     final executable = project.executable!;
     final binary = binaryName(platform, executable);
@@ -373,7 +430,13 @@ class BinaryChain {
         detail: 'Apple already notarized these exact bytes',
         note: 'Apple already notarized these exact bytes',
       );
-      return true;
+      return _notaryOutcome(
+        resultName: resultName,
+        logName: logName,
+        zipName: workspace.exists(zipName(platform, executable))
+            ? zipName(platform, executable)
+            : null,
+      );
     }
 
     final zip = zipName(platform, executable);
@@ -396,7 +459,7 @@ class BinaryChain {
         ),
         unit: step.unit,
       );
-      return false;
+      return LocalProducerOutcome.failed(zipped.summary);
     }
     workspace.ingest(zip);
 
@@ -419,7 +482,9 @@ class BinaryChain {
         ),
         unit: step.unit,
       );
-      return false;
+      return LocalProducerOutcome.failed(
+        notarized.problem ?? 'Apple rejected the submission',
+      );
     }
 
     // The verdict and its log become published assets, so a user who
@@ -442,16 +507,25 @@ class BinaryChain {
         ),
         unit: step.unit,
       );
-      return false;
+      return const LocalProducerOutcome.failed(
+        'the notarization log could not be fetched',
+      );
     }
     workspace.write(logName, utf8.encode(log.stdout));
     activity.done('notarized');
-    return true;
+    return _notaryOutcome(
+      resultName: resultName,
+      logName: logName,
+      zipName: zip,
+    );
   }
 
   // ---- archive ----
 
-  Future<bool> archiveStep(Step step, ResolvedProject project) async {
+  Future<LocalProducerOutcome> archiveStep(
+    Step step,
+    ResolvedProject project,
+  ) async {
     final platform = step.platform!;
     final executable = project.executable!;
     final binary = workspace.readBytes(binaryName(platform, executable));
@@ -481,7 +555,8 @@ class BinaryChain {
       project.version.canonical,
       platform,
     );
-    workspace.write(name, ArchiveBuilder.gzip(ArchiveBuilder.tar(entries)));
+    final bytes = ArchiveBuilder.gzip(ArchiveBuilder.tar(entries));
+    workspace.write(name, bytes);
     output.step(
       step,
       mark: Mark.done,
@@ -489,12 +564,22 @@ class BinaryChain {
       detail: name,
       note: name,
     );
-    return true;
+    return LocalProducerOutcome.succeeded(
+      outputs: [LocalProducerOutput(name, 'archive')],
+      evidence: {
+        'inventory': StageArchiveInventory.evidence(
+          StageArchiveInventory.parse(bytes),
+        ),
+      },
+    );
   }
 
   // ---- checksums ----
 
-  Future<bool> checksumsStep(Step step, ResolvedProject project) async {
+  Future<LocalProducerOutcome> checksumsStep(
+    Step step,
+    ResolvedProject project,
+  ) async {
     final assets = <String, List<int>>{};
     for (final platform in project.binaryPlatforms) {
       final name = ReleaseAssets.archiveName(
@@ -518,7 +603,17 @@ class BinaryChain {
       detail: '${assets.length} archives',
       note: '${assets.length} archives',
     );
-    return true;
+    return LocalProducerOutcome.succeeded(
+      outputs: const [
+        LocalProducerOutput(ReleaseAssets.checksums, 'checksums'),
+      ],
+      evidence: {
+        'checksums': {
+          for (final entry in assets.entries)
+            entry.key: Sha256.hex(entry.value),
+        },
+      },
+    );
   }
 
   // ---- the public acts, gathering from the workspace by name ----
@@ -530,7 +625,11 @@ class BinaryChain {
   /// gathers is what a later inspection expects, and the real keybay 0.1.0
   /// release is the reference shape — archives, notary evidence per macOS
   /// platform, the formula, the checksums.
-  List<ReleaseAsset>? gatherAssets(ResolvedProject project, String unit) {
+  List<ReleaseAsset>? gatherAssets(
+    ResolvedProject project,
+    String unit, {
+    bool includeFinal = true,
+  }) {
     final assets = <ReleaseAsset>[];
     ReleaseAsset? named(String name, String producer, {String? platform}) {
       final bytes = workspace.readBytes(name);
@@ -580,6 +679,23 @@ class BinaryChain {
         named(ReleaseAssets.checksums, 'the checksums step produces it');
     if (sums == null) return null;
     assets.add(sums);
+
+    if (includeFinal) {
+      if (project.channels.contains('homebrew')) {
+        final formula = named(
+          ReleaseAssets.formulaName(project.executable!),
+          'the staging phase renders it',
+        );
+        if (formula == null) return null;
+        assets.add(formula);
+      }
+      final manifest = named(
+        ReleaseAssets.manifest,
+        'the complete-stage step produces it',
+      );
+      if (manifest == null) return null;
+      assets.add(manifest);
+    }
     return assets;
   }
 
@@ -625,7 +741,7 @@ class BinaryChain {
   }
 
   /// Publishes the gathered assets as one immutable release.
-  Future<String?> publishRelease({
+  Future<PublishOutcome> publishRelease({
     required String repository,
     required String tag,
     required String title,
@@ -644,143 +760,110 @@ class BinaryChain {
       title: title,
       notesPath: notesPath,
       assetPaths: assets.map((a) => a.path).toList(),
+      assetSha256: {
+        for (final asset in assets) asset.name: Sha256.hex(asset.bytes),
+      },
+      assetSizes: {
+        for (final asset in assets) asset.name: asset.bytes.length,
+      },
     );
-    if (!published.ok) {
-      output.line('github-release',
-          mark: Mark.blocked, note: published.problem);
-      // Three different things, and an operator acts differently on each: rk
-      // never wrote; rk wrote and could not read it back, so re-running
-      // classifies it; or rk read it back and it is permanently wrong, which
-      // re-running cannot touch.
-      output.halt(
-        published.isTerminal
-            ? HaltKind.actedAndUnfixable
-            : published.mayHaveActed
-                ? HaltKind.lostTrack
-                : HaltKind.beforeActing,
-      );
-      if (published.permanent != null) {
-        output.say(published.permanent!);
-        output.say('the only way forward is the next version.');
-      }
-      return null;
-    }
-    output.line(
-      'github-release',
-      mark: Mark.done,
-      note: '${assets.length} assets, immutable',
-    );
-    return published.url;
+    // Do not classify or render an ambiguous response here. ReleaseCommand
+    // immediately performs the shared exact destination inspection, which is
+    // the only read allowed to decide whether a public effect exists.
+    return published;
   }
 
   /// Moves the tap formula to this release — the same bytes the release
   /// itself shipped, read from the workspace rather than re-rendered, so
   /// the two copies cannot drift.
-  Future<bool> updateFormula({
+  Future<TapOutcome> updateFormula({
     required String tap,
     required ResolvedProject project,
+    required HomebrewUpdateAuthority authority,
   }) async {
     final executable = project.executable!;
     final formula = workspace.readBytes(ReleaseAssets.formulaName(executable));
     if (formula == null) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-WORK-001',
-          message:
-              'the workspace has no ${ReleaseAssets.formulaName(executable)}',
-          remedy: 'the github-release step produces it — re-running runs it',
-        ),
+      return TapOutcome.failed(
+        'the workspace has no ${ReleaseAssets.formulaName(executable)}; '
+        'the github-release step produces it — re-running runs it',
       );
-      return false;
     }
 
     final formulaPath = 'Formula/$executable.rb';
+    final Directory scratch;
+    try {
+      scratch = Directory.systemTemp.createTempSync('rk-tap-');
+    } on FileSystemException catch (error) {
+      return TapOutcome.failed(
+        'a temporary checkout could not be created: $error',
+      );
+    }
+    final checkout = '${scratch.path}/tap';
     final result = await HomebrewTap(
       tools: tools,
       tap: tap,
-      checkout: workspace.pathOf('tap'),
+      checkout: checkout,
     ).update(
       formulaPath: formulaPath,
       contents: utf8.decode(formula),
       message: '$executable ${project.version}',
+      authority: authority,
     );
-
-    if (!result.ok) {
-      // A problem, not a bare line: a formula failure that never reached
-      // `problems` was invisible to every --json caller.
-      output.problem(
-        Diagnostic(
-          code: 'RK-BREW-001',
-          message: 'the tap formula was not updated',
-          remedy: result.problem ?? 'see the tap output',
-        ),
-      );
-      return false;
+    try {
+      scratch.deleteSync(recursive: true);
+    } on FileSystemException {
+      // Public truth, not scratch cleanup, decides the step.
     }
 
-    // The verify leg: read the formula back from the public tap and prove
-    // it byte-for-byte. This is what a user's `brew install` will fetch —
-    // the push succeeding is rk's word, this is the tap's.
-    final readBack = await tools.run(
-      'gh',
-      ['api', 'repos/$tap/contents/$formulaPath'],
-    );
-    List<int>? published;
-    if (readBack.ok) {
-      try {
-        final decoded = jsonDecode(readBack.stdout);
-        final content = decoded is Map ? decoded['content'] : null;
-        published = content is String
-            ? base64Decode(content.replaceAll(RegExp(r'\s'), ''))
-            : null;
-      } on Object {
-        published = null;
+    // The shared Homebrew inspector performs the one authoritative readback.
+    // Returning the command outcome keeps a lost push response distinct from
+    // a private clone/write failure without pre-empting that public truth.
+    return result;
+  }
+
+  LocalProducerOutcome _notaryOutcome({
+    required String resultName,
+    required String logName,
+    required String? zipName,
+  }) {
+    final resultBytes = workspace.readBytes(resultName)!;
+    final logBytes = workspace.readBytes(logName)!;
+    Object? status;
+    Object? submissionId;
+    try {
+      final decoded = jsonDecode(utf8.decode(resultBytes));
+      if (decoded is Map) {
+        status = decoded['status'];
+        submissionId = decoded['id'];
       }
+    } on Object {
+      // The stage inspector owns the strict semantic decision. Carry the
+      // evidence exactly as observed so it can refuse without this producer
+      // inventing a successful status or submission id.
     }
-    if (published == null) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-BREW-002',
-          message: 'the tap was updated and could not be read back',
-          remedy: 'what a user installs is unproven until the tap answers — '
-              're-running reads it again: ${readBack.summary}',
-        ),
-      );
-      output.halt(HaltKind.lostTrack);
-      return false;
-    }
-    if (!_sameBytes(published, formula)) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-BREW-003',
-          message: 'the public tap does not hold what rk pushed',
-          remedy: 'something moved the formula between the push and the '
-              'read-back. The tap is mutable, so re-running pushes again on '
-              'top of what is there now.',
-        ),
-      );
-      return false;
-    }
-
-    output.line(
-      'homebrew',
-      mark: Mark.done,
-      note: result.changed
-          ? 'formula updated · read back from the public tap'
-          : 'formula already current · read back from the public tap',
+    return LocalProducerOutcome.succeeded(
+      outputs: [
+        if (zipName != null) LocalProducerOutput(zipName, 'notary-input'),
+        LocalProducerOutput(resultName, 'notary'),
+        LocalProducerOutput(logName, 'notary'),
+      ],
+      evidence: {
+        'notary': {
+          'status': status,
+          'submission_id': submissionId,
+          'result_sha256': Sha256.hex(resultBytes),
+          'log_sha256': Sha256.hex(logBytes),
+        },
+      },
     );
-    return true;
   }
 
-  static bool _sameBytes(List<int> a, List<int> b) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i] != b[i]) return false;
-    }
-    return true;
-  }
-
-  bool _missingArtifact(Step step, String name, String producedBy) {
+  LocalProducerOutcome _missingArtifact(
+    Step step,
+    String name,
+    String producedBy,
+  ) {
     output.problem(
       Diagnostic(
         code: 'RK-WORK-001',
@@ -789,8 +872,44 @@ class BinaryChain {
       ),
       unit: step.unit,
     );
-    return false;
+    return LocalProducerOutcome.failed('the workspace has no $name');
   }
+}
+
+/// One stage-relative file a local producer created or authoritatively reused.
+class LocalProducerOutput {
+  const LocalProducerOutput(this.path, this.type);
+
+  /// A workspace-relative path, never a host filesystem path.
+  final String path;
+  final String type;
+}
+
+/// The complete handoff from one local operation to the stage receipt writer.
+///
+/// Producers still render their established diagnostics. This value carries
+/// only the machine facts the receipt needs: whether the operation completed,
+/// which stage-relative outputs it owns, and the evidence learned while doing
+/// the work. The receipt writer therefore does not have to rediscover semantic
+/// facts from mutable workspace files after the operation returns.
+class LocalProducerOutcome {
+  LocalProducerOutcome.succeeded({
+    required Iterable<LocalProducerOutput> outputs,
+    Map<String, Object?> evidence = const {},
+  })  : ok = true,
+        problem = null,
+        outputs = List<LocalProducerOutput>.unmodifiable(outputs),
+        evidence = Map<String, Object?>.unmodifiable(evidence);
+
+  const LocalProducerOutcome.failed([this.problem])
+      : ok = false,
+        outputs = const [],
+        evidence = const {};
+
+  final bool ok;
+  final String? problem;
+  final List<LocalProducerOutput> outputs;
+  final Map<String, Object?> evidence;
 }
 
 class ReleaseAsset {

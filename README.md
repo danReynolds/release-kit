@@ -7,11 +7,20 @@ validating everything before acting, inspecting reality before every step so
 re-running is always safe, and refusing to guess.
 
 rk manages the release steps and defers authentication to the native tools
-that own it (`dart pub`, `codesign`, `notarytool`, `gh`, `git`). It stores no
-secrets and keeps no state.
+that own it (`dart pub`, `codesign`, `notarytool`, `gh`, `git`). A normal
+interactive release with unfinished pub.dev targets runs one native
+`dart pub login` before private staging; `status` and `release --stage` never
+log in. Login proves only that a current session exists, not that it may upload
+every package. The attempted publish and exact public read-back remain the
+authority, and a retry records an already-exact target without publishing it
+again. rk stores no secrets and keeps no authoritative release ledger: public
+targets are truth.
+A private stage is disposable before publication begins and after every target
+is exact; during a partial binary release, retain it so the remaining targets
+receive the exact signed and notarized bytes already bound by the public ones.
 
-Four verbs: `rk init`, `rk status`, `rk release`, `rk verify`. No hooks, no
-templates, no `--force`.
+Three verbs: `rk init`, `rk status`, `rk release`. No hooks, no templates,
+no `--force`.
 
 ## Using it
 
@@ -19,10 +28,32 @@ templates, no `--force`.
 dart pub global activate release_kit    # the command is rk
 rk status                              # where things stand. Read-only.
 rk init                                # propose a release.toml
-rk release <unit> --dry-run            # every local step, nothing public
+rk release <unit> --stage              # exact reusable stage, nothing public
 rk release <unit>                      # plan, confirm, act
-rk verify                              # prove a published release against its tag
 ```
+
+For release-kit's own first release, invoke the clean checkout explicitly
+instead of an older globally installed `rk`:
+
+```
+dart run bin/rk.dart --version
+dart run bin/rk.dart status rk
+dart run bin/rk.dart release rk --stage
+dart run bin/rk.dart release rk
+```
+
+Every published binary supports `rk --version`; staging uses that output to
+prove it built the intended version before the artifact can be released.
+
+`status` has no separate authentication state. A concrete issue that belongs
+to a target marks that target `✗` and appears once under `Issues`; when a native
+tool offers no safe read-only authentication check, status stays silent and
+the normal release preflight owns the check.
+
+The two production-alpha receipts are intentionally outside the default local
+suite. Run them explicitly with
+`dart test test/live_release_checkpoints.dart` when performing the supervised
+releases.
 
 `rk -h` lists every flag, the four marks, and the exit codes.
 [doc/json.md](doc/json.md) is the `--json` contract: the schema, the frozen
@@ -32,7 +63,7 @@ verdict enum, and the blessed CI gate rule.
 
 `bin/rk.dart` is the composition root — it parses flags, reads and resolves
 `release.toml`, builds the collaborators, and dispatches to a verb.
-`lib/src/commands/` holds the four verbs; `lib/src/destinations/` the places
+`lib/src/commands/` holds the three verbs; `lib/src/destinations/` the places
 a release is published to; `lib/src/builds/` and `lib/src/transforms/` the
 adapters that produce artifacts; `lib/src/output/` the two surfaces (prose
 and the `--json` document, written by the same calls so they cannot drift);
@@ -43,10 +74,12 @@ and `lib/src/engine/` the model and the readers everything else is built on.
 
 Dart packages and Dart CLIs released from the operator's own machine to
 pub.dev, GitHub Releases, and Homebrew. CI is designed-for and deferred.
-First demo: keybay.
+The production-alpha canary is release-kit itself; the older keybay work is
+preserved as historical design evidence in `doc/plan.md`.
 
-The design is [RFC 0002](doc/rfcs/0002-rk-core.md); the threat catalog and
-assurance ladder it prices against is
-[RFC 0001](doc/rfcs/0001-rk-secure-release-compiler.md).
-[doc/plan.md](doc/plan.md) carries the build plan, the review records, and
-the ledger of what is deliberately deferred.
+The current path to a supervised local release is the
+[production-alpha plan](doc/production-alpha-plan.md). The design is
+[RFC 0002](doc/rfcs/0002-rk-core.md); the threat catalog and assurance ladder
+it prices against is [RFC 0001](doc/rfcs/0001-rk-secure-release-compiler.md).
+[doc/plan.md](doc/plan.md) preserves the original build plan, review records,
+and evidence ledger.

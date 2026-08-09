@@ -9,28 +9,43 @@ class GitState {
   GitState({
     required this.root,
     required this.head,
+    String? headTree,
     required this.branch,
     required this.isClean,
     required this.uncommitted,
+    this.worktreeStatusError,
     required this.headIsPushed,
     this.hasRemote = true,
     this.aheadOfUpstream,
     required this.tags,
+    this.tagObjects = const {},
     this.tagTargets = const {},
     required this.signingConfigured,
     required this.originUrl,
-  });
+  }) : headTree = headTree ?? head;
 
   final String root;
 
   /// The commit a release would be built from.
   final String head;
 
+  /// The full Git tree object for [head]. It is a separate stage coordinate:
+  /// a commit identifies history and metadata, while the tree identifies the
+  /// exact tracked bytes a stage materializes.
+  final String headTree;
+
   final String? branch;
   final bool isClean;
 
   /// Paths with uncommitted changes, for naming them rather than counting.
   final List<String> uncommitted;
+
+  /// Why Git could not say whether the worktree is clean.
+  ///
+  /// Null means `git status --porcelain` answered. A non-null value is never
+  /// folded into an empty change list: not knowing whether release inputs are
+  /// dirty is the opposite of proving that they are clean.
+  final String? worktreeStatusError;
 
   /// Whether [head] exists on the remote. A tag on a commit nobody can fetch
   /// points at nothing for everyone else.
@@ -45,6 +60,14 @@ class GitState {
   final int? aheadOfUpstream;
 
   final List<String> tags;
+
+  /// Tag name to the object its ref names directly.
+  ///
+  /// For a lightweight tag this is the commit. For an annotated tag this is
+  /// the tag object, whose bytes (including its signature, when present) are
+  /// part of the release identity. [tagTargets] separately carries the peeled
+  /// commit.
+  final Map<String, String> tagObjects;
 
   /// Tag name to the commit it points at, peeled for annotated tags.
   ///
@@ -63,6 +86,9 @@ class GitState {
   String get shortHead => head.length > 7 ? head.substring(0, 7) : head;
 
   bool hasTag(String tag) => tags.contains(tag);
+
+  /// The object stored directly in `refs/tags/[tag]`.
+  String? tagObject(String tag) => tagObjects[tag];
 
   /// The commit [tag] points at, or null when rk has not read it.
   String? tagTarget(String tag) => tagTargets[tag];
@@ -113,6 +139,19 @@ class GitState {
     return targets;
   }
 
+  /// `show-ref --tags -d` lines into tag -> direct object.
+  static Map<String, String> _tagObjects(String showRef) {
+    final objects = <String, String>{};
+    for (final line in showRef.split('\n')) {
+      final parts = line.trim().split(' ');
+      if (parts.length != 2) continue;
+      final ref = parts[1];
+      if (!ref.startsWith('refs/tags/') || ref.endsWith('^{}')) continue;
+      objects[ref.substring('refs/tags/'.length)] = parts[0];
+    }
+    return objects;
+  }
+
   static String _run(String root, List<String> args) {
     final result = Process.runSync('git', args, workingDirectory: root);
     if (result.exitCode != 0) return '';
@@ -144,6 +183,15 @@ class GitState {
   /// named up to eight files, while release said "1 paths are uncommitted"
   /// and named none — one diagnostic code, two --json payloads.
   Diagnostic? uncommittedProblem() {
+    if (worktreeStatusError != null) {
+      return Diagnostic(
+        code: 'RK-GIT-008',
+        message: 'the worktree state could not be read',
+        remedy: '$worktreeStatusError\n'
+            '`git status --porcelain` must succeed before rk can prove the '
+            'release is of the committed source.',
+      );
+    }
     if (isClean) return null;
     // Named, not counted: the ellipsis costs more characters than the path
     // it hides until the list is genuinely long.
@@ -195,11 +243,16 @@ class GitState {
   static GitState read(String root) {
     final result = Process.runSync('git', const ['status', '--porcelain'],
         workingDirectory: root);
+    final statusError = result.exitCode == 0
+        ? null
+        : _processFailure(result,
+            fallback: 'git status exited ${result.exitCode}');
     final uncommitted = result.exitCode == 0
         ? _uncommittedIn(result.stdout as String)
         : const <String>[];
 
     final head = _run(root, const ['rev-parse', 'HEAD']);
+    final headTree = _run(root, const ['rev-parse', 'HEAD^{tree}']);
 
     // A commit is fetchable when some remote branch contains it.
     final contains = _run(root, ['branch', '-r', '--contains', head]);
@@ -208,12 +261,16 @@ class GitState {
 
     final signingKey = _run(root, const ['config', '--get', 'user.signingkey']);
 
+    final showRef = _run(root, const ['show-ref', '--tags', '-d']);
+
     return GitState(
       root: root,
       head: head,
+      headTree: headTree,
       branch: branch.isEmpty || branch == 'HEAD' ? null : branch,
-      isClean: uncommitted.isEmpty,
+      isClean: statusError == null && uncommitted.isEmpty,
       uncommitted: uncommitted,
+      worktreeStatusError: statusError,
       headIsPushed: contains.trim().isNotEmpty,
       hasRemote: _run(root, const ['remote']).trim().isNotEmpty,
       aheadOfUpstream: int.tryParse(
@@ -222,7 +279,8 @@ class GitState {
           .split('\n')
           .where((t) => t.trim().isNotEmpty)
           .toList(),
-      tagTargets: _tagTargets(_run(root, const ['show-ref', '--tags', '-d'])),
+      tagObjects: _tagObjects(showRef),
+      tagTargets: _tagTargets(showRef),
       // A configured signing key, whether SSH or GPG. Inferring one from a
       // commit-signing *preference* would answer a different question, and
       // still would not prove a key exists — so rk claims only what git
@@ -239,5 +297,16 @@ class GitState {
         .firstMatch(url.trim());
     if (match == null) return null;
     return '${match.group(1)}/${match.group(2)}';
+  }
+
+  static String _processFailure(
+    ProcessResult result, {
+    required String fallback,
+  }) {
+    final stderr = '${result.stderr}'.trim();
+    if (stderr.isNotEmpty) return stderr.split('\n').last.trim();
+    final stdout = '${result.stdout}'.trim();
+    if (stdout.isNotEmpty) return stdout.split('\n').last.trim();
+    return fallback;
   }
 }
