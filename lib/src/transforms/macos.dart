@@ -33,14 +33,56 @@ class MacOsSigner {
     final identities = <SigningIdentity>[];
     for (final line in result.stdout.split('\n')) {
       if (!line.contains('Developer ID Application')) continue;
-      final name = RegExp(r'"([^"]+)"').firstMatch(line)?.group(1);
+      final parsed = RegExp(
+        r'^\s*\d+\)\s+([0-9A-Fa-f]{40})\s+"([^"]+)"',
+      ).firstMatch(line);
+      if (parsed == null) return null;
+      final sha1 = parsed.group(1)!.toLowerCase();
+      final name = parsed.group(2);
       final team =
           RegExp(r'\(([A-Z0-9]{10})\)$').firstMatch(name ?? '')?.group(1);
       if (name != null && team != null) {
-        identities.add(SigningIdentity(name: name, team: team));
+        identities.add(SigningIdentity(
+          name: name,
+          team: team,
+          sha1: sha1,
+        ));
       }
     }
     return identities;
+  }
+
+  /// The SHA-256 fingerprint of the exact certificate identity selected by
+  /// `find-identity`.
+  ///
+  /// `find-certificate -Z` emits both SHA-256 and SHA-1. Names alone are not
+  /// unique, so the SHA-1 identity token correlates the selected signing
+  /// identity to the right certificate block; the stronger SHA-256 value is
+  /// what the stage records.
+  Future<String?> certificateSha256(SigningIdentity identity) async {
+    final result = await tools.run('security', [
+      'find-certificate',
+      '-a',
+      '-c',
+      identity.name,
+      '-Z',
+    ]);
+    if (!result.ok) return null;
+    final starts = RegExp(
+      r'SHA-256 hash:\s*([0-9A-Fa-f]{64})',
+    ).allMatches(result.stdout).toList();
+    for (var index = 0; index < starts.length; index++) {
+      final match = starts[index];
+      final end = index + 1 < starts.length
+          ? starts[index + 1].start
+          : result.stdout.length;
+      final block = result.stdout.substring(match.start, end);
+      final sha1 = RegExp(
+        r'SHA-1 hash:\s*([0-9A-Fa-f]{40})',
+      ).firstMatch(block)?.group(1)?.toLowerCase();
+      if (sha1 == identity.sha1) return match.group(1)!.toLowerCase();
+    }
+    return null;
   }
 
   /// Signs [binary]. [team] selects the certificate when the published
@@ -51,6 +93,8 @@ class MacOsSigner {
     required String binary,
     required String? team,
     required String codeId,
+    SigningIdentity? selectedIdentity,
+    String? expectedCertificateSha256,
   }) async {
     final identities = await availableIdentities();
     if (identities == null) {
@@ -62,9 +106,13 @@ class MacOsSigner {
       );
     }
 
-    final matching = team == null
-        ? identities
-        : identities.where((i) => i.team == team).toList();
+    final matching = selectedIdentity == null
+        ? (team == null
+            ? identities
+            : identities.where((i) => i.team == team).toList())
+        : identities
+            .where((identity) => identity.sha1 == selectedIdentity.sha1)
+            .toList();
 
     if (matching.isEmpty) {
       return SignOutcome.failed(
@@ -84,6 +132,27 @@ class MacOsSigner {
       );
     }
 
+    final selected = matching.single;
+    if (selectedIdentity != null &&
+        (selected.name != selectedIdentity.name ||
+            selected.team != selectedIdentity.team)) {
+      return SignOutcome.failed(
+        'the selected signing certificate changed after preflight',
+      );
+    }
+    final certificateSha256 = await this.certificateSha256(selected);
+    if (certificateSha256 == null) {
+      return SignOutcome.failed(
+        'the selected certificate SHA-256 fingerprint could not be read',
+      );
+    }
+    if (expectedCertificateSha256 != null &&
+        certificateSha256 != expectedCertificateSha256) {
+      return SignOutcome.failed(
+        'the selected certificate fingerprint changed after preflight',
+      );
+    }
+
     final signed = await tools.run('codesign', [
       '--force',
       '--timestamp',
@@ -91,7 +160,10 @@ class MacOsSigner {
       '--identifier',
       codeId,
       '--sign',
-      matching.single.name,
+      // Names are display labels and need not be unique. The SHA-1 identity
+      // token is the exact keychain selector emitted by find-identity; the
+      // stage records the correlated SHA-256 certificate fingerprint.
+      selected.sha1,
       binary,
     ]);
     if (!signed.ok) return SignOutcome.failed(signed.summary);
@@ -100,7 +172,14 @@ class MacOsSigner {
     if (requirement == null) {
       return SignOutcome.failed('the signature could not be read back');
     }
-    return SignOutcome.signed(requirement, certificate: matching.single.name);
+    if (!await verifies(binary)) {
+      return SignOutcome.failed('the signature did not verify after signing');
+    }
+    return SignOutcome.signed(
+      requirement,
+      certificate: selected.name,
+      certificateSha256: certificateSha256,
+    );
   }
 
   /// The designated requirement of an already-signed binary.
@@ -141,17 +220,39 @@ class MacOsSigner {
 }
 
 class SigningIdentity {
-  const SigningIdentity({required this.name, required this.team});
+  const SigningIdentity({
+    required this.name,
+    required this.team,
+    required this.sha1,
+  });
 
   /// The full certificate common name, which codesign selects by.
   final String name;
   final String team;
+
+  /// The SHA-1 token `security find-identity` uses to name the exact
+  /// keychain identity. It is correlation only; stage evidence records the
+  /// SHA-256 certificate fingerprint read through that token.
+  final String sha1;
 }
 
 class SignOutcome {
-  const SignOutcome._(this.requirement, this.problem, {this.certificate});
-  const SignOutcome.signed(String requirement, {String? certificate})
-      : this._(requirement, null, certificate: certificate);
+  const SignOutcome._(
+    this.requirement,
+    this.problem, {
+    this.certificate,
+    this.certificateSha256,
+  });
+  const SignOutcome.signed(
+    String requirement, {
+    String? certificate,
+    String? certificateSha256,
+  }) : this._(
+          requirement,
+          null,
+          certificate: certificate,
+          certificateSha256: certificateSha256,
+        );
   const SignOutcome.failed(String problem) : this._(null, problem);
 
   /// The designated requirement the signature produced.
@@ -161,6 +262,9 @@ class SignOutcome {
   /// The certificate that signed, named so a first release can show which
   /// identity it just made permanent.
   final String? certificate;
+
+  /// The SHA-256 fingerprint of [certificate].
+  final String? certificateSha256;
 
   bool get ok => requirement != null;
 }

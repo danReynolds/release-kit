@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-113 codes across 25 families.
+119 codes across 24 families.
 
 
 ## RK-AUTH — Authorization
@@ -26,9 +26,9 @@ fails, and the count below is checked against the rows.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-BREW-001` | the tap formula was not updated | `lib/src/binary_chain.dart` |
-| `RK-BREW-002` | the tap was updated and could not be read back | `lib/src/binary_chain.dart` |
-| `RK-BREW-003` | the public tap does not hold what rk pushed | `lib/src/binary_chain.dart` |
+| `RK-BREW-001` | the tap formula was not updated | `lib/src/commands/release.dart` |
+| `RK-BREW-002` | the tap was updated and could not be read back | `lib/src/commands/release.dart` |
+| `RK-BREW-003` | the public tap does not hold what rk pushed | `lib/src/commands/release.dart` |
 
 ## RK-BUILD — The build
 
@@ -54,8 +54,8 @@ fails, and the count below is checked against the rows.
 | `RK-CLI-003` | no unit named "$only" | `lib/src/commands/release.dart` |
 | `RK-CLI-004` | name the unit to release | `lib/src/commands/release.dart` |
 | `RK-CLI-005` | rk $command does not have ${inapplicable.join( | `bin/rk.dart` |
-| `RK-CLI-006` | --at names one release, and this repository has  ${units.length} units | `lib/src/commands/verify.dart` |
 | `RK-CLI-007` | — | `bin/rk.dart` |
+| `RK-CLI-008` | rk has no command named "$command" | `bin/rk.dart` |
 
 ## RK-CONF — release.toml, structurally
 
@@ -121,6 +121,7 @@ fails, and the count below is checked against the rows.
 | `RK-GIT-004` | ${unit.version} is already published, and the tag  ${unit.tag} does not exist | `lib/src/engine/inspect.dart` |
 | `RK-GIT-005` | the tag ${unit.tag} points at ${_short(target)}, and this  release would publish from ${… | `lib/src/engine/inspect.dart` |
 | `RK-GIT-007` | the tag exists, and rk could not read which commit it names | `lib/src/engine/inspect.dart` |
+| `RK-GIT-008` | the worktree state could not be read | `lib/src/engine/git.dart` |
 | `RK-GIT-006` | the repository could not be listed | `lib/src/commands/init.dart` |
 
 ## RK-HOST — What this machine can produce
@@ -149,6 +150,7 @@ fails, and the count below is checked against the rows.
 |---|---|---|
 | `RK-MONO-001` | the tag $tag is ahead of ${unit.version}, which this release  would publish | `lib/src/engine/inspect.dart` |
 | `RK-MONO-002` | ${project.name} ${latest.version} is already published, and this  would publish ${projec… | `lib/src/engine/inspect.dart` |
+| `RK-MONO-003` | a public target is ahead of the version this release would publish | `lib/src/engine/inspect.dart`, `lib/src/commands/status.dart` |
 
 ## RK-NOTARY — Notarization
 
@@ -172,19 +174,18 @@ fails, and the count below is checked against the rows.
 | `RK-PUB-001` | pub refuses to publish ${project.name} | `lib/src/commands/release.dart` |
 | `RK-PUB-002` | ${project.name}: consumers could not resolve this | `lib/src/commands/release.dart` |
 | `RK-PUB-003` | ${project.name}: dart pub publish did not complete | `lib/src/commands/release.dart` |
-| `RK-PUB-004` | ${project.name} ${project.version}: published, and the  archive could not be read back | `lib/src/commands/release.dart` |
+| `RK-PUB-005` | the published version's exact public archive could not be confirmed | `lib/src/commands/release.dart` |
+| `RK-PUB-006` | the immutable public archive differs from the release source | `lib/src/commands/release.dart` |
+| `RK-PUB-007` | dart pub login did not complete | `lib/src/commands/release.dart` |
 
-## RK-REG — The registry
-
-| code | says | declared in |
-|---|---|---|
-| `RK-REG-001` | ${project.name}: ${error.message} | `lib/src/commands/verify.dart` |
+RK-PUB-004 is a retired historical meaning and is not reused.
 
 ## RK-REL — The release run
 
 | code | says | declared in |
 |---|---|---|
 | `RK-REL-001` | ${first.summary}:  ${state.detail ?? state.verdict.name} | `lib/src/commands/release.dart` |
+| `RK-REL-003` | a public target could not be proven after rk acted | `lib/src/commands/release.dart` |
 
 ## RK-RES — The config resolved against the repository
 
@@ -216,6 +217,18 @@ fails, and the count below is checked against the rows.
 | `RK-SIGN-009` | no release states what this program is called | `lib/src/commands/release.dart` |
 | `RK-SIGN-010` | no certificate for the team the published release names | `lib/src/commands/release.dart` |
 | `RK-SIGN-011` | several certificates for the published team | `lib/src/commands/release.dart` |
+| `RK-SIGN-012` | the selected signing certificate fingerprint could not be read | `lib/src/commands/release.dart` |
+| `RK-SIGN-013` | the published signing identity changed after staging | `lib/src/commands/release.dart` |
+
+## RK-STAGE — The private release stage
+
+| code | says | declared in |
+|---|---|---|
+| `RK-STAGE-001` | the release stage could not be located or replaced safely | `lib/src/commands/release.dart` |
+| `RK-STAGE-002` | the reviewed release stage no longer validates | `lib/src/commands/release.dart`, `lib/src/commands/status.dart` |
+| `RK-STAGE-003` | committed release bytes could not be staged or did not remain valid | `lib/src/commands/release.dart` |
+| `RK-STAGE-004` | the repository or canonical release plan changed after staging | `lib/src/commands/release.dart` |
+| `RK-STAGE-005` | a partial binary release lost the exact stage it still needs | `lib/src/commands/release.dart`, `lib/src/commands/status.dart` |
 
 ## RK-TAG — The tag
 
@@ -224,23 +237,13 @@ fails, and the count below is checked against the rows.
 | `RK-TAG-001` | the tag ${unit.tag} could not be created | `lib/src/commands/release.dart` |
 | `RK-TAG-002` | the tag ${unit.tag} could not be pushed | `lib/src/commands/release.dart` |
 | `RK-TAG-003` | the push reported success, and origin does not list  ${unit.tag} | `lib/src/commands/release.dart` |
+| `RK-TAG-004` | origin did not confirm the release binding on ${act.coordinate ?? target.coordinate} | `lib/src/commands/release.dart` |
 
 ## RK-TOML — The TOML subset
 
 | code | says | declared in |
 |---|---|---|
 | `RK-TOML-001` | — | `lib/src/engine/toml.dart` |
-
-## RK-VER — Verification
-
-| code | says | declared in |
-|---|---|---|
-| `RK-VER-001` | the ref $ref does not exist, so there is no source to  prove the published version again… | `lib/src/commands/verify.dart` |
-| `RK-VER-002` | ${project.name} has no readable version at $ref | `lib/src/commands/verify.dart` |
-| `RK-VER-003` | ${project.name} $atRef is not on pub.dev, so there is  nothing to verify | `lib/src/commands/verify.dart` |
-| `RK-VER-004` | ${project.name} ${project.version}: $tampered | `lib/src/commands/release.dart` |
-| `RK-VER-005` | ${project.name} $atRef could not be fully proved | `lib/src/commands/verify.dart` |
-| `RK-VER-006` | ${project.name} ${project.version}:  ${comparison.detail ?? | `lib/src/commands/release.dart` |
 
 ## RK-WORK — The workspace
 

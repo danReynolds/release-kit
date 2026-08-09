@@ -100,6 +100,7 @@ void main() {
       final outcome = await DartCliBuilder(
         tools: tools,
         capabilities: capabilities,
+        compilerExecutable: '/sdk/bin/dart',
       ).build(
         platform: 'macos-arm64',
         entryPoint: 'bin/keybay.dart',
@@ -109,6 +110,7 @@ void main() {
       );
 
       expect(outcome.ok, isTrue, reason: outcome.problem);
+      expect(tools.calls.first, startsWith('/sdk/bin/dart compile exe'));
       expect(tools.calls.first, isNot(contains('--target-os')));
     });
 

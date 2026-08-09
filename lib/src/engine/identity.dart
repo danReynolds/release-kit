@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import '../transforms/macos.dart';
 import 'tools.dart';
+import 'version.dart';
 
 /// What the signing identity of a release must match, read from the release
 /// that is already public.
@@ -30,6 +31,80 @@ class PublishedIdentity {
 
   final String workingDirectory;
 
+  /// Every older public release that could carry the signing baseline, newest
+  /// first.
+  ///
+  /// Local tags are deliberately not an input. A shallow checkout can omit
+  /// the exact release users installed; GitHub's complete, paginated public
+  /// release inventory is the authority for whether this is really a first
+  /// signed release.
+  Future<PublishedReleaseTags> priorReleaseTags({
+    required String tagPattern,
+    required Version before,
+  }) async {
+    final parts = tagPattern.split('{version}');
+    if (parts.length != 2) {
+      return const PublishedReleaseTags.unreadable(
+        'the release tag pattern has no single {version} coordinate',
+      );
+    }
+    final listed = await tools.run(
+      'gh',
+      ['api', '--paginate', '--slurp', 'repos/$repository/releases'],
+      workingDirectory: workingDirectory,
+    );
+    if (!listed.ok) {
+      return PublishedReleaseTags.unreadable(
+        'the published release history could not be read: ${listed.summary}',
+      );
+    }
+
+    try {
+      final decoded = jsonDecode(listed.stdout);
+      if (decoded is! List) {
+        throw const FormatException('the paginated answer is not an array');
+      }
+      final candidates = <({String tag, Version version})>[];
+      final seen = <String>{};
+      for (final page in decoded) {
+        if (page is! List) {
+          throw const FormatException('a release page is not an array');
+        }
+        for (final entry in page) {
+          if (entry is! Map ||
+              entry['tag_name'] is! String ||
+              entry['draft'] is! bool) {
+            throw const FormatException('a release entry is malformed');
+          }
+          if (entry['draft'] as bool) continue;
+          final tag = entry['tag_name'] as String;
+          final raw = _versionIn(tag, parts);
+          if (raw == null) continue;
+          final version = Version.tryParse(raw);
+          if (version == null) {
+            throw FormatException(
+              'the published tag $tag matches the release pattern but is '
+              'not a semantic version',
+            );
+          }
+          if (version >= before || !seen.add(tag)) continue;
+          candidates.add((tag: tag, version: version));
+        }
+      }
+      candidates.sort((left, right) {
+        final precedence = right.version.compareTo(left.version);
+        return precedence != 0 ? precedence : right.tag.compareTo(left.tag);
+      });
+      return PublishedReleaseTags.readable([
+        for (final candidate in candidates) candidate.tag,
+      ]);
+    } on Object catch (error) {
+      return PublishedReleaseTags.unreadable(
+        'the published release history was malformed: $error',
+      );
+    }
+  }
+
   /// Reads the designated requirement of the macOS binary published at [tag].
   ///
   /// [into] is a directory this may fill with a downloaded archive and its
@@ -39,6 +114,7 @@ class PublishedIdentity {
     required String executable,
     required String into,
     String platform = 'macos-arm64',
+    bool expectedPublished = false,
   }) async {
     // No asset is a fact; a failure to ask is not. They are kept apart
     // because the first means "there is no published identity yet" — the
@@ -55,6 +131,12 @@ class PublishedIdentity {
     );
     if (!viewed.ok) {
       if (viewed.summary.contains('(HTTP 404)')) {
+        if (expectedPublished) {
+          return IdentityReading.unreadable(
+            'the public release at $tag disappeared while its signing '
+            'identity was being read',
+          );
+        }
         // GitHub answers 404 for a repository the token cannot see, so a
         // 404 becomes "nothing is published" only once the repository has
         // answered for itself.
@@ -124,18 +206,10 @@ class PublishedIdentity {
       );
     }
 
-    final listed = await tools.run(
-      'sh',
-      ['-c', 'ls $into/*.tar.gz | head -1'],
-      workingDirectory: workingDirectory,
-    );
-    final archive = listed.stdout.trim();
-    if (!listed.ok || archive.isEmpty) {
-      return const IdentityReading.unreadable(
-        'the downloaded archive could not be found',
-      );
-    }
-
+    // The release response already named the one asset we downloaded. Using
+    // that exact path avoids a shell/glob over a repository-derived directory
+    // and cannot accidentally select a stale second archive.
+    final archive = '$into/$assetName';
     final extracted = await tools.run(
       'tar',
       ['-xzf', archive, '-C', into],
@@ -147,8 +221,13 @@ class PublishedIdentity {
       );
     }
 
-    final requirement = await MacOsSigner(tools: tools)
-        .designatedRequirement('$into/$executable');
+    final signer = MacOsSigner(tools: tools);
+    if (!await signer.verifies('$into/$executable')) {
+      return const IdentityReading.unreadable(
+        'the published binary signature is not valid for its bytes',
+      );
+    }
+    final requirement = await signer.designatedRequirement('$into/$executable');
     if (requirement == null) {
       return const IdentityReading.unreadable(
         'the published binary carries no signature rk could read',
@@ -156,6 +235,28 @@ class PublishedIdentity {
     }
     return IdentityReading.found(requirement);
   }
+}
+
+String? _versionIn(String tag, List<String> parts) {
+  final prefix = parts[0];
+  final suffix = parts[1];
+  if (!tag.startsWith(prefix) || !tag.endsWith(suffix)) return null;
+  final end = tag.length - suffix.length;
+  if (end <= prefix.length) return null;
+  return tag.substring(prefix.length, end);
+}
+
+/// A fail-closed read of the public release tags relevant to signing.
+class PublishedReleaseTags {
+  const PublishedReleaseTags.readable(List<String> this.tags) : why = null;
+
+  const PublishedReleaseTags.unreadable(String this.why) : tags = null;
+
+  /// Newest-to-oldest public tags, or null when public history was unreadable.
+  final List<String>? tags;
+  final String? why;
+
+  bool get readable => tags != null;
 }
 
 /// What reading the published identity produced.

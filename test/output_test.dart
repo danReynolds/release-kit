@@ -1,4 +1,5 @@
 import 'package:release_kit/src/engine/diagnostic.dart';
+import 'package:release_kit/src/engine/verdict.dart';
 import 'package:release_kit/src/output/output.dart';
 import 'package:test/test.dart';
 
@@ -11,15 +12,22 @@ class Captured {
       text.split('\n').where((l) => l.isNotEmpty).toList();
 }
 
-(Output, Captured) make({bool isTerminal = false}) {
+(Output, Captured) make({
+  bool isTerminal = false,
+  int? terminalWidth,
+}) {
   final captured = Captured();
   final output = Output(
     sink: captured.buffer.write,
     isTerminal: isTerminal,
     useColor: false,
+    terminalWidth: terminalWidth,
   );
   return (output, captured);
 }
+
+String withoutControls(String text) =>
+    text.replaceAll(RegExp('\x1b\\[[0-9;]*[A-Za-z]'), '').replaceAll('\r', '');
 
 void main() {
   test('a plain line carries no glyph', () {
@@ -59,6 +67,13 @@ void main() {
       expect(captured.text, isNot(contains('\r')));
       expect(captured.text, isNot(contains('\x1b')));
     });
+
+    test('and settled rows are not reformatted to an invented width', () {
+      final (out, captured) = make(isTerminal: false);
+      const row = 'a deliberately long machine-readable line stays one line';
+      out.say(row);
+      expect(captured.lines, ['  $row']);
+    });
   });
 
   group('terminal output is transient', () {
@@ -73,6 +88,62 @@ void main() {
         reason: 'the transient line is erased rather than left behind',
       );
     });
+
+    test('a concurrent target list is fixed, updated, then erased', () async {
+      final (out, captured) = make(isTerminal: true);
+      final checks = out.targetChecks(delay: Duration.zero);
+      checks
+        ..add('tag', 'Git tag')
+        ..add('pub', 'pub.dev');
+      await Future<void>.delayed(const Duration(milliseconds: 1));
+
+      expect(captured.text, contains('Release targets'));
+      expect(captured.text, contains('Git tag'));
+      expect(captured.text, contains('pub.dev'));
+      checks.finish('pub', Verdict.exact);
+      checks.close();
+
+      expect(captured.text, contains('checked'));
+      expect(captured.text, contains('\x1b[1A'));
+    });
+
+    for (final width in [52, 36]) {
+      test('target rows fit and erase exactly at $width columns', () async {
+        final (out, captured) = make(
+          isTerminal: true,
+          terminalWidth: width,
+        );
+        final checks = out.targetChecks(delay: Duration.zero);
+        checks
+          ..add('tag', 'Git tag')
+          ..add('pub', 'pub.dev · release_kit')
+          ..add(
+            'github',
+            'GitHub Release · danReynolds/release-kit',
+          );
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+
+        checks.finish('github', Verdict.exact);
+        checks.close();
+
+        final visibleLines = withoutControls(captured.text)
+            .split('\n')
+            .where((line) => line.isNotEmpty);
+        expect(
+          visibleLines.every((line) => line.runes.length <= width),
+          isTrue,
+          reason: 'a transient logical row must not wrap into two physical '
+              'rows or cursor-up will leave a stale fragment',
+        );
+        expect(withoutControls(captured.text), contains('…'));
+        final erase = '\x1b[1A\r\x1b[2K';
+        expect(
+          captured.text,
+          endsWith(List.filled(4, erase).join()),
+          reason: 'the four fixed physical rows are completely erased',
+        );
+      });
+    }
   });
 
   test('colour is off when asked, and never the only signal', () {
@@ -82,11 +153,65 @@ void main() {
     expect(captured.text, contains('✗'));
   });
 
+  test('settled rows use readable hanging indentation on a narrow terminal',
+      () {
+    final captured = Captured();
+    final out = Output(
+      sink: captured.buffer.write,
+      isTerminal: true,
+      useColor: true,
+      terminalWidth: 36,
+    );
+
+    out.line(
+      'GitHub Release',
+      mark: Mark.blocked,
+      note: '0.1.0 › 0.2.0 · public history could not be read',
+      depth: 2,
+      tone: Tone.bad,
+      noteTone: Tone.attention,
+    );
+
+    final visible = withoutControls(captured.text)
+        .split('\n')
+        .where((line) => line.isNotEmpty)
+        .toList();
+    expect(visible.every((line) => line.runes.length <= 36), isTrue);
+    expect(visible.first, startsWith('✗     GitHub Release'));
+    expect(
+        visible.skip(1).every((line) => line.startsWith('        ')), isTrue);
+    expect(
+      visible.join(' ').replaceAll('✗', '').split(RegExp(r'\s+')).where(
+            (word) => word.isNotEmpty,
+          ),
+      [
+        'GitHub',
+        'Release',
+        '0.1.0',
+        '›',
+        '0.2.0',
+        '·',
+        'public',
+        'history',
+        'could',
+        'not',
+        'be',
+        'read',
+      ],
+      reason: 'wrapping may move words, never omit or reorder them',
+    );
+    for (final line
+        in captured.text.split('\n').where((line) => line.isNotEmpty)) {
+      expect(line, endsWith('\x1b[0m'),
+          reason: 'each painted physical row closes its ANSI span');
+    }
+  });
+
   group('halts open with the sentence, not the noun', () {
-    test('nothing happened', () {
+    test('no public target changed', () {
       final (out, captured) = make();
       out.halt(HaltKind.beforeActing);
-      expect(captured.text, contains('nothing changed'));
+      expect(captured.text, contains('no public target changed'));
       expect(captured.text, contains('safe to re-run'));
     });
 

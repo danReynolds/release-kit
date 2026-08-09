@@ -1,20 +1,32 @@
 import 'dart:convert';
+import 'dart:async';
+import 'dart:io';
 
+import 'package:release_kit/src/builds/capability.dart';
 import 'package:release_kit/src/commands/status.dart';
+import 'package:release_kit/src/destinations/pub_dev.dart';
+import 'package:release_kit/src/engine/assets.dart';
+import 'package:release_kit/src/engine/checklist.dart';
 import 'package:release_kit/src/engine/config.dart';
 import 'package:release_kit/src/engine/diagnostic.dart';
 import 'package:release_kit/src/engine/git.dart';
 import 'package:release_kit/src/engine/inspect.dart';
-import 'package:release_kit/src/output/output.dart';
 import 'package:release_kit/src/engine/registry.dart';
+import 'package:release_kit/src/engine/release_stage.dart';
 import 'package:release_kit/src/engine/resolve.dart';
 import 'package:release_kit/src/engine/source_tree.dart';
+import 'package:release_kit/src/engine/stage.dart';
+import 'package:release_kit/src/engine/stage_archive.dart';
+import 'package:release_kit/src/engine/stage_plan.dart';
+import 'package:release_kit/src/engine/stage_receipt.dart';
+import 'package:release_kit/src/engine/targets.dart';
 import 'package:release_kit/src/engine/tools.dart';
 import 'package:release_kit/src/engine/verdict.dart';
 import 'package:release_kit/src/engine/version.dart';
+import 'package:release_kit/src/output/output.dart';
+import 'package:release_kit/src/transforms/archive.dart';
+import 'package:release_kit/src/transforms/digest.dart';
 import 'package:test/test.dart';
-
-import 'scripted_tools.dart';
 
 /// An origin that lists exactly the tags git holds locally.
 ///
@@ -25,9 +37,10 @@ import 'scripted_tools.dart';
 /// toolless inspector was asserting that an unread origin counts as read.
 /// Tests that want a divergent world pass their own tools.
 class OriginAgreeing implements Tools {
-  OriginAgreeing(this.tags);
+  OriginAgreeing(this.tags, this.head);
 
   final List<String> tags;
+  final String head;
 
   @override
   Future<ToolResult> run(
@@ -37,12 +50,47 @@ class OriginAgreeing implements Tools {
     Map<String, String>? environment,
   }) async {
     if (executable == 'git' && arguments.first == 'ls-remote') {
-      final ref = arguments.last;
+      if (arguments.length == 3 && arguments[1] == '--tags') {
+        return ToolResult(
+          exitCode: 0,
+          stdout: [
+            for (final tag in tags) ...[
+              '$testTagObject\trefs/tags/$tag',
+              '$head\trefs/tags/$tag^{}',
+            ],
+          ].join('\n'),
+          stderr: '',
+        );
+      }
+      final tag = tags
+          .where(
+            (tag) => arguments.contains('refs/tags/$tag'),
+          )
+          .firstOrNull;
+      final ref = tag == null ? null : 'refs/tags/$tag';
       return ToolResult(
         exitCode: 0,
-        stdout: tags.any((t) => ref == 'refs/tags/$t') ? 'deadbeef $ref' : '',
+        stdout: ref == null ? '' : '$testTagObject $ref\n$head $ref^{}',
         stderr: '',
       );
+    }
+    if (executable == 'git' &&
+        arguments.length == 3 &&
+        arguments[0] == 'cat-file' &&
+        arguments[1] == 'tag' &&
+        arguments[2] == testTagObject) {
+      return ToolResult(
+        exitCode: 0,
+        stdout: 'object $head\n'
+            'type commit\n'
+            'tag v-test\n'
+            '\n'
+            'release-manifest-sha256: $testManifestDigest\n',
+        stderr: '',
+      );
+    }
+    if (executable == 'git' && arguments.first == 'verify-tag') {
+      return ToolResult(exitCode: 0, stdout: '', stderr: '');
     }
     return ToolResult(exitCode: 127, stdout: '', stderr: 'not scripted');
   }
@@ -56,9 +104,15 @@ class OriginAgreeing implements Tools {
       0;
 }
 
+const testHead = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const testTree = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+const testTagObject = 'cccccccccccccccccccccccccccccccccccccccc';
+const testManifestDigest =
+    '0000000000000000000000000000000000000000000000000000000000000000';
+
 /// A registry with a fixed idea of what is published, so status can be
 /// exercised without a network.
-class FakeRegistry implements RegistryReader {
+class FakeRegistry implements RegistryReader, PubDevInspector {
   FakeRegistry(
     this.published, {
     this.unreachable = false,
@@ -166,6 +220,138 @@ class FakeRegistry implements RegistryReader {
         ? const Inspection.absent()
         : const Inspection.exact(detail: 'published 6 months ago');
   }
+
+  @override
+  Future<Inspection> inspectProject(
+    ResolvedProject project, {
+    SourceTree? expectedSource,
+  }) =>
+      inspect(project.name, project.version);
+}
+
+/// A destination-only inspector for status layout tests. It keeps provider
+/// mechanics out of tests whose subject is the report contract.
+class FixedInspector extends Inspector {
+  FixedInspector({
+    required super.registry,
+    required super.git,
+    required this.answer,
+    this.latest,
+    this.answers = const {},
+  });
+
+  final Inspection answer;
+  final Inspection? latest;
+  final Map<StepKind, Inspection> answers;
+
+  @override
+  Future<Inspection> inspect(Step step, ResolvedUnit unit) async =>
+      answers[step.kind] ?? answer;
+
+  @override
+  Future<Inspection> inspectLatestVersion(
+    TargetExpectation target,
+    ResolvedUnit unit,
+  ) async {
+    final configured = latest;
+    if (configured != null) return configured;
+    final targetAnswer = answers[target.step.kind] ?? answer;
+    if (targetAnswer.isExact) {
+      return Inspection.exact(
+        detail: targetAnswer.detail,
+        evidence: {
+          ...targetAnswer.evidence,
+          'version': target.targetVersion,
+        },
+      );
+    }
+    if (targetAnswer.isAbsent && target.kind == ReleaseTargetKind.pubDev) {
+      return super.inspectLatestVersion(target, unit);
+    }
+    return targetAnswer;
+  }
+
+  @override
+  Future<void> monotonicity(
+    ResolvedUnit unit,
+    Diagnostics problems,
+  ) async {}
+
+  @override
+  List<Diagnostic> tagGuards(
+    ResolvedUnit unit,
+    Checklist checklist,
+    Map<String, Inspection> states,
+  ) =>
+      const [];
+}
+
+class GuardInspector extends FixedInspector {
+  GuardInspector({
+    required super.registry,
+    required super.git,
+    required this.code,
+  }) : super(answer: const Inspection.absent());
+
+  final String code;
+
+  @override
+  List<Diagnostic> tagGuards(
+    ResolvedUnit unit,
+    Checklist checklist,
+    Map<String, Inspection> states,
+  ) =>
+      [
+        Diagnostic(
+          code: code,
+          message: 'the Git tag lane is blocked',
+          remedy: 'repair the tag, then run status again',
+        ),
+      ];
+}
+
+/// Holds every target read until the test releases it independently.
+class CoordinatedInspector extends Inspector {
+  CoordinatedInspector({
+    required super.registry,
+    required super.git,
+    required this.expected,
+  });
+
+  final int expected;
+  final allStarted = Completer<void>();
+  final Map<StepKind, Completer<void>> _gates = {};
+  var active = 0;
+  var maximumActive = 0;
+  var started = 0;
+
+  @override
+  Future<Inspection> inspect(Step step, ResolvedUnit unit) async {
+    final gate = _gates.putIfAbsent(step.kind, Completer<void>.new);
+    started++;
+    active++;
+    if (active > maximumActive) maximumActive = active;
+    if (started == expected && !allStarted.isCompleted) allStarted.complete();
+    await gate.future;
+    active--;
+    return const Inspection.absent();
+  }
+
+  void finish(StepKind kind) => _gates[kind]!.complete();
+
+  @override
+  Future<void> monotonicity(
+    ResolvedUnit unit,
+    Diagnostics problems,
+  ) async {}
+
+  @override
+  List<Diagnostic> tagGuards(
+    ResolvedUnit unit,
+    Checklist checklist,
+    Map<String, Inspection> states,
+  ) =>
+      const [];
 }
 
 GitState git({
@@ -175,7 +361,8 @@ GitState git({
 }) =>
     GitState(
       root: '/repo',
-      head: '9f2c1abcdef',
+      head: testHead,
+      headTree: testTree,
       branch: 'main',
       isClean: clean,
       uncommitted: clean ? const [] : const ['lib/src/args.dart'],
@@ -183,7 +370,8 @@ GitState git({
       tags: tags,
       // Stated rather than omitted, for the reason RK-GIT-007 exists: an
       // unread target is not "at HEAD".
-      tagTargets: {for (final t in tags) t: '9f2c1abcdef'},
+      tagObjects: {for (final t in tags) t: testTagObject},
+      tagTargets: {for (final t in tags) t: testHead},
       signingConfigured: true,
       originUrl: 'danReynolds/keybay',
     );
@@ -219,8 +407,16 @@ Future<({String text, Map<String, Object?> report})> statusRun({
   String withConfig = config,
   Tools? tools,
   String? repository,
+  Inspector Function(GitState git, Resolution resolution)? inspectorBuilder,
+  ReleaseStage Function(ResolvedUnit unit)? stageFor,
+  HostCapabilities? capabilities,
+  bool isTerminal = false,
+  bool useColor = false,
+  int? terminalWidth,
+  void Function(StringBuffer buffer)? onOutputReady,
 }) async {
   final buffer = StringBuffer();
+  onOutputReady?.call(buffer);
   final diagnostics = Diagnostics();
   final parsed = ReleaseConfig.parse(withConfig, 'release.toml', diagnostics)!;
   final resolution = Resolution.resolve(parsed, source, diagnostics);
@@ -228,9 +424,18 @@ Future<({String text, Map<String, Object?> report})> statusRun({
 
   final output = Output(
     sink: buffer.write,
-    isTerminal: false,
-    useColor: false,
+    isTerminal: isTerminal,
+    useColor: useColor,
+    terminalWidth: terminalWidth,
   );
+  final selectedInspector = inspectorBuilder?.call(state, resolution!) ??
+      Inspector(
+        registry: registry,
+        git: state,
+        tools: tools ?? OriginAgreeing(state.tags, state.head),
+        repository: repository,
+        stageFor: stageFor,
+      );
   final code = await StatusCommand(
     resolution: resolution!,
     tree: source,
@@ -239,13 +444,15 @@ Future<({String text, Map<String, Object?> report})> statusRun({
     // Origin agrees with local unless a test says otherwise; without a
     // repository the forge still reports as unread, which is what rk says
     // when it has not been given a way to look.
-    inspector: Inspector(
-      registry: registry,
-      git: state,
-      tools: tools ?? OriginAgreeing(state.tags),
-      repository: repository,
-    ),
+    inspector: selectedInspector,
+    stageFor: stageFor,
     output: output,
+    capabilities: capabilities ??
+        HostCapabilities(
+          hostPlatform: 'macos-arm64',
+          containerRuntime: null,
+          hasNativeAssets: false,
+        ),
   ).run();
   return (
     text: buffer.toString(),
@@ -254,10 +461,32 @@ Future<({String text, Map<String, Object?> report})> statusRun({
   );
 }
 
+Future<void> _waitForStatusText(
+  StringBuffer buffer,
+  bool Function(String text) matches,
+) async {
+  for (var attempt = 0; attempt < 100; attempt++) {
+    if (matches(buffer.toString())) return;
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
+  fail('status output did not reach the expected transient state:\n$buffer');
+}
+
+String _afterLastTransientErase(String text) {
+  const erase = '\x1b[2K';
+  final last = text.lastIndexOf(erase);
+  return last < 0 ? text : text.substring(last + erase.length);
+}
+
+String _targetLine(String text, String label) => text.split('\n').firstWhere(
+      (line) => line.contains(label) && line.contains(' › '),
+    );
+
 void main() {
+  statusTargetContract();
   statusReviewRegressions();
 
-  test('says nothing to release when local matches live', () async {
+  test('always shows targets when local matches live', () async {
     final text = await statusOf(
       source: tree(),
       state: git(tags: ['v0.2.0']),
@@ -265,11 +494,26 @@ void main() {
         'keybay': ['0.1.0', '0.2.0']
       }),
     );
-    expect(text, contains('nothing to release'));
+    expect(text, contains('Targets'));
+    expect(text, contains('Published everywhere configured'));
     expect(text, isNot(contains('rk release')));
   });
 
-  test('says ready, and names the next command, when local is ahead', () async {
+  test('a pub-only tag does not invent a public manifest file', () async {
+    final run = await statusRun(
+      source: tree(),
+      state: git(),
+      registry: FakeRegistry(const {}),
+    );
+    final unit = (run.report['units'] as List).single as Map;
+    final targets = (unit['targets'] as List).cast<Map>();
+    final tag = targets.singleWhere((target) => target['kind'] == 'gitTag');
+
+    expect(tag['artifacts'], isEmpty);
+    expect(run.text, isNot(contains(ReleaseAssets.manifest)));
+  });
+
+  test('names staging as the next command when local is ahead', () async {
     final text = await statusOf(
       source: tree(),
       state: git(tags: ['v0.2.0']),
@@ -277,8 +521,26 @@ void main() {
         'keybay': ['0.1.0']
       }),
     );
-    expect(text, contains('ready'));
-    expect(text, contains('rk release core'));
+    expect(text, contains('No known issues'));
+    expect(text, contains('0.1.0 › 0.2.0'));
+    expect(text, contains('rk release core --stage'));
+    expect(text, isNot(contains('ready')));
+  });
+
+  test('the Git lane reports the latest older tag, not an invented absence',
+      () async {
+    final text = await statusOf(
+      source: tree(),
+      state: git(tags: const ['v0.1.0']),
+      registry: FakeRegistry({
+        'keybay': ['0.1.0']
+      }),
+    );
+    expect(text, contains('0.1.0 › 0.2.0 · v0.2.0'));
+    expect(
+      text,
+      matches(RegExp(r'Git tag\s+0\.1\.0 › 0\.2\.0')),
+    );
   });
 
   test('blocks on a missing changelog entry, naming the heading to add',
@@ -385,29 +647,1047 @@ void main() {
   _reviewFixes();
   _phase23Fixes();
 
-  test('a package that has never been published reads as ready', () async {
+  test('a package that has never been published is safe to stage', () async {
     final text = await statusOf(
       source: tree(),
       state: git(),
       registry: FakeRegistry(const {}),
     );
     expect(text, contains('not published'));
-    expect(text, contains('ready'));
+    expect(text, contains('No known issues'));
+    expect(text, contains('rk release core --stage'));
   });
+}
+
+void statusTargetContract() {
+  const binaryConfig = '''
+schema = 1
+
+[release.cli]
+path = "packages/keybay"
+publish = ["pub.dev", "github-release"]
+binary_platforms = ["macos-arm64"]
+''';
+  final binaryTree = MemorySourceTree({
+    'packages/keybay/pubspec.yaml': '''
+name: keybay
+version: 0.2.0
+executables:
+  keybay: keybay
+''',
+    'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
+  }, description: '/repo/keybay');
+
+  test('all target completion orders render in configured order', () async {
+    const tag = StepKind.tag;
+    const pub = StepKind.publishRegistry;
+    const github = StepKind.publishRelease;
+    const completionOrders = <List<StepKind>>[
+      [tag, pub, github],
+      [tag, github, pub],
+      [pub, tag, github],
+      [pub, github, tag],
+      [github, tag, pub],
+      [github, pub, tag],
+    ];
+
+    for (final completionOrder in completionOrders) {
+      late CoordinatedInspector controlled;
+      final running = statusRun(
+        withConfig: binaryConfig,
+        source: binaryTree,
+        state: git(),
+        registry: FakeRegistry(const {}),
+        inspectorBuilder: (git, _) => controlled = CoordinatedInspector(
+          registry: FakeRegistry(const {}),
+          git: git,
+          expected: 3,
+        ),
+      );
+
+      await controlled.allStarted.future.timeout(const Duration(seconds: 1));
+      expect(controlled.maximumActive, 3, reason: '$completionOrder');
+      for (final target in completionOrder) {
+        controlled.finish(target);
+      }
+      final run = await running;
+
+      final tagRow = run.text.indexOf('Git tag');
+      final pubRow = run.text.indexOf('pub.dev · keybay');
+      final githubRow = run.text.indexOf('GitHub Release ·');
+      expect(tagRow, greaterThanOrEqualTo(0), reason: '$completionOrder');
+      expect(pubRow, greaterThan(tagRow), reason: '$completionOrder');
+      expect(githubRow, greaterThan(pubRow), reason: '$completionOrder');
+    }
+  });
+
+  test(
+      'delayed parallel reads show every target, then settle to the pipe '
+      'report', () async {
+    late CoordinatedInspector terminalInspector;
+    late StringBuffer terminalBuffer;
+    final terminalFuture = statusRun(
+      withConfig: binaryConfig,
+      source: binaryTree,
+      state: git(),
+      registry: FakeRegistry(const {}),
+      isTerminal: true,
+      onOutputReady: (buffer) => terminalBuffer = buffer,
+      inspectorBuilder: (git, _) => terminalInspector = CoordinatedInspector(
+        registry: FakeRegistry(const {}),
+        git: git,
+        expected: 3,
+      ),
+    );
+
+    await terminalInspector.allStarted.future
+        .timeout(const Duration(seconds: 1));
+    await _waitForStatusText(
+      terminalBuffer,
+      (text) => text.contains('Release targets'),
+    );
+    final checking = _afterLastTransientErase(terminalBuffer.toString());
+    expect(
+      checking.split('\n').where((line) => line.isNotEmpty),
+      [
+        'Release targets',
+        matches(RegExp(r'^  . Git tag\s+checking$')),
+        matches(RegExp(r'^  . pub\.dev · keybay\s+checking$')),
+        matches(RegExp(
+          r'^  . GitHub Release · danReynolds/keybay\s+checking$',
+        )),
+      ],
+      reason: 'one fixed list makes the parallel reads visible together',
+    );
+
+    terminalInspector.finish(StepKind.tag);
+    await _waitForStatusText(
+      terminalBuffer,
+      (text) =>
+          RegExp(r'Git tag\s+checked').hasMatch(_afterLastTransientErase(text)),
+    );
+    final partlyChecked = _afterLastTransientErase(terminalBuffer.toString());
+    expect(partlyChecked, matches(RegExp(r'Git tag\s+checked')));
+    expect('checking'.allMatches(partlyChecked), hasLength(2));
+
+    terminalInspector
+      ..finish(StepKind.publishRegistry)
+      ..finish(StepKind.publishRelease);
+    final terminal = await terminalFuture;
+    expect(terminal.text, contains('\x1b[1A\r\x1b[2K'));
+
+    late CoordinatedInspector pipeInspector;
+    late StringBuffer pipeBuffer;
+    final pipeFuture = statusRun(
+      withConfig: binaryConfig,
+      source: binaryTree,
+      state: git(),
+      registry: FakeRegistry(const {}),
+      onOutputReady: (buffer) => pipeBuffer = buffer,
+      inspectorBuilder: (git, _) => pipeInspector = CoordinatedInspector(
+        registry: FakeRegistry(const {}),
+        git: git,
+        expected: 3,
+      ),
+    );
+
+    await pipeInspector.allStarted.future.timeout(const Duration(seconds: 1));
+    expect(
+      pipeBuffer.toString(),
+      isEmpty,
+      reason: 'a pipe waits silently rather than receiving transient output',
+    );
+    pipeInspector
+      ..finish(StepKind.tag)
+      ..finish(StepKind.publishRegistry)
+      ..finish(StepKind.publishRelease);
+    final pipe = await pipeFuture;
+
+    expect(pipe.text, isNot(contains('\x1b')));
+    expect(pipe.text, isNot(contains('\r')));
+    expect(
+      _afterLastTransientErase(terminal.text),
+      pipe.text,
+      reason: 'the transient list is erased before the same deterministic '
+          'target report a pipe receives',
+    );
+  });
+
+  test('unstaged status uses the austere target vocabulary', () async {
+    final text = await statusOf(
+      source: tree(),
+      state: git(),
+      registry: FakeRegistry({
+        'keybay': ['0.1.0']
+      }),
+    );
+
+    expect(text, contains('Targets'));
+    expect(text, contains('Git tag'));
+    expect(text, contains('pub.dev · keybay'));
+    expect(text, contains('0.1.0 › 0.2.0'));
+    expect(text, contains('No known issues'));
+    expect(text, contains('→ rk release core --stage'));
+    expect(
+      _targetLine(text, 'pub.dev · keybay').trimLeft(),
+      startsWith('pub.dev · keybay'),
+      reason: 'ordinary absent work has no problem mark',
+    );
+    for (final discarded in [
+      'ready',
+      'partial',
+      'blocked',
+      'nothing to release',
+      'build ›',
+    ]) {
+      expect(text, isNot(contains(discarded)));
+    }
+  });
+
+  test('the settled target report fits a narrow terminal without truncation',
+      () async {
+    const width = 36;
+    final run = await statusRun(
+      withConfig: binaryConfig,
+      source: binaryTree,
+      state: git(),
+      registry: FakeRegistry(const {}),
+      isTerminal: true,
+      useColor: true,
+      terminalWidth: width,
+      inspectorBuilder: (git, _) => FixedInspector(
+        registry: FakeRegistry(const {}),
+        git: git,
+        answer: const Inspection.absent(),
+      ),
+    );
+
+    final visible = run.text
+        .replaceAll(RegExp('\x1b\\[[0-9;]*[A-Za-z]'), '')
+        .replaceAll('\r', '')
+        .split('\n')
+        .where((line) => line.isNotEmpty)
+        .toList();
+    expect(visible.every((line) => line.runes.length <= width), isTrue);
+    expect(visible.join('\n'), contains('GitHub Release'));
+    expect(visible.join('\n'), contains('keybay-0.2.0-macos-arm64'));
+    expect(run.text, isNot(contains('…')),
+        reason: 'settled facts wrap; only transient progress may truncate');
+  });
+
+  test('Homebrew refers to its GitHub-owned formula without duplicating it',
+      () async {
+    final run = await statusRun(
+      withConfig: binaryConfig.replaceFirst(
+        'publish = ["pub.dev", "github-release"]',
+        'publish = ["pub.dev", "github-release", "homebrew"]',
+      ),
+      source: binaryTree,
+      state: git(),
+      registry: FakeRegistry(const {}),
+      inspectorBuilder: (git, _) => FixedInspector(
+        registry: FakeRegistry(const {}),
+        git: git,
+        answer: const Inspection.absent(),
+      ),
+    );
+
+    expect(
+      run.text,
+      contains('uses release-manifest.json from GitHub Release'),
+    );
+    expect(run.text, contains('uses keybay.rb from GitHub Release'));
+    final targets =
+        ((run.report['units'] as List).single as Map)['targets'] as List;
+    final github = targets.singleWhere(
+      (target) => (target as Map)['kind'] == 'githubRelease',
+    ) as Map;
+    final homebrew = targets.singleWhere(
+      (target) => (target as Map)['kind'] == 'homebrew',
+    ) as Map;
+    final tag = targets.singleWhere(
+      (target) => (target as Map)['kind'] == 'gitTag',
+    ) as Map;
+    expect(
+      (github['artifacts'] as List)
+          .map((artifact) => (artifact as Map)['name']),
+      contains('keybay.rb'),
+    );
+    expect(homebrew['artifacts'], isEmpty);
+    expect(homebrew['uses'], 'keybay.rb from GitHub Release');
+    expect(tag['artifacts'], isEmpty);
+    expect(
+      tag['uses'],
+      'release-manifest.json from GitHub Release',
+    );
+  });
+
+  test('an aggregate current version is shown only when every target agrees',
+      () async {
+    final agreed = await statusRun(
+      withConfig: binaryConfig,
+      source: binaryTree,
+      state: git(tags: const ['v0.2.0']),
+      registry: FakeRegistry({
+        'keybay': ['0.2.0']
+      }),
+      inspectorBuilder: (git, _) => FixedInspector(
+        registry: FakeRegistry({
+          'keybay': ['0.2.0']
+        }),
+        git: git,
+        answer: const Inspection.exact(detail: 'published exactly'),
+      ),
+    );
+    expect(agreed.text, contains('0.2.0 › 0.2.0 · v0.2.0'));
+
+    final split = await statusRun(
+      withConfig: binaryConfig,
+      source: binaryTree,
+      state: git(),
+      registry: FakeRegistry({
+        'keybay': ['0.1.0']
+      }),
+      inspectorBuilder: (git, _) => FixedInspector(
+        registry: FakeRegistry({
+          'keybay': ['0.1.0']
+        }),
+        git: git,
+        answer: const Inspection.absent(),
+      ),
+    );
+    expect(split.text, contains('target 0.2.0 · v0.2.0'));
+    expect(split.text, contains('0.1.0 › 0.2.0'));
+    expect(split.text, isNot(contains('0.1.0 › 0.2.0 · v0.2.0')));
+  });
+
+  test('cheap host facts mark artifacts that cannot be produced here',
+      () async {
+    final run = await statusRun(
+      withConfig: binaryConfig,
+      source: binaryTree,
+      state: git(),
+      registry: FakeRegistry(const {}),
+      capabilities: HostCapabilities(
+        hostPlatform: 'linux-x64',
+        containerRuntime: null,
+        hasNativeAssets: false,
+      ),
+      inspectorBuilder: (git, _) => FixedInspector(
+        registry: FakeRegistry(const {}),
+        git: git,
+        answer: const Inspection.absent(),
+      ),
+    );
+
+    expect(run.text, contains('this machine cannot produce every platform'));
+    expect(run.text, contains('Fix: stage this unit on a host'));
+    expect(
+      run.text,
+      matches(RegExp(
+        r'✗\s+keybay-0\.2\.0-macos-arm64\.tar\.gz\s+macos-arm64 '
+        r'cannot be produced here',
+      )),
+    );
+    final targets =
+        ((run.report['units'] as List).single as Map)['targets'] as List;
+    final github = targets.singleWhere(
+      (target) => (target as Map)['kind'] == 'githubRelease',
+    ) as Map;
+    final archive = (github['artifacts'] as List).singleWhere(
+      (artifact) =>
+          (artifact as Map)['name'] == 'keybay-0.2.0-macos-arm64.tar.gz',
+    ) as Map;
+    expect(archive['status'], 'invalid');
+    expect(archive['problem'], contains('cannot be produced here'));
+  });
+
+  test('an unread public history is an issue even when the candidate is absent',
+      () async {
+    final run = await statusRun(
+      withConfig: binaryConfig,
+      source: binaryTree,
+      state: git(),
+      registry: FakeRegistry(const {}),
+      inspectorBuilder: (git, _) => FixedInspector(
+        registry: FakeRegistry(const {}),
+        git: git,
+        answer: const Inspection.absent(),
+        latest: const Inspection.unknown('provider history was unreadable'),
+      ),
+    );
+
+    expect(run.text, contains('? › 0.2.0'));
+    expect(
+        run.text, contains('current public version could not be established'));
+    expect(run.text, contains('provider history was unreadable'));
+    expect(run.text, isNot(contains('No known issues')));
+
+    final targets =
+        ((run.report['units'] as List).single as Map)['targets'] as List;
+    final github = targets.singleWhere(
+      (target) => (target as Map)['kind'] == 'githubRelease',
+    ) as Map;
+    expect(
+      _targetLine(run.text, 'GitHub Release · danReynolds/keybay').trimLeft(),
+      startsWith('✗'),
+      reason: 'the target-linked issue, not the absent verdict, marks the row',
+    );
+    expect(github['verdict'], 'absent');
+    expect(
+      (run.report['problems'] as List).cast<Map>().any(
+            (problem) => problem['target'] == github['id'],
+          ),
+      isTrue,
+      reason: 'JSON keeps the public verdict and links the separate problem',
+    );
+
+    final archiveName = 'keybay-0.2.0-macos-arm64.tar.gz';
+    final archive = (github['artifacts'] as List).singleWhere(
+      (artifact) => (artifact as Map)['name'] == archiveName,
+    ) as Map;
+    expect(archive['status'], 'notStaged');
+    expect(
+      run.text
+          .split('\n')
+          .firstWhere((line) => line.contains(archiveName))
+          .trimLeft(),
+      startsWith(archiveName),
+      reason: 'a target problem does not turn an unstaged artifact into one',
+    );
+  });
+
+  test('a public lane ahead of the target is a monotonicity issue', () async {
+    final run = await statusRun(
+      source: tree(),
+      state: git(),
+      registry: FakeRegistry(const {}),
+      inspectorBuilder: (git, _) => FixedInspector(
+        registry: FakeRegistry(const {}),
+        git: git,
+        answer: const Inspection.absent(),
+        latest: const Inspection.exact(
+          detail: 'latest is 0.3.0',
+          evidence: {'version': '0.3.0'},
+        ),
+      ),
+    );
+
+    expect(run.text, contains('0.3.0 › 0.2.0'));
+    expect(run.text, contains('ahead of the target 0.2.0'));
+    expect(run.text, contains('RK-MONO-003'));
+    expect(
+        run.text, contains('Fix: a release moves forward — bump past 0.3.0'));
+    expect(run.text, isNot(contains('rk release core --stage')));
+
+    final targets =
+        ((run.report['units'] as List).single as Map)['targets'] as List;
+    final pub = targets.singleWhere(
+      (target) => (target as Map)['kind'] == 'pubDev',
+    ) as Map;
+    expect(
+        _targetLine(run.text, 'pub.dev · keybay').trimLeft(), startsWith('✗'));
+    expect(pub['verdict'], 'absent');
+    expect(
+      (run.report['problems'] as List).cast<Map>().any(
+            (problem) => problem['target'] == pub['id'],
+          ),
+      isTrue,
+    );
+  });
+
+  for (final code in const ['RK-GIT-004', 'RK-GIT-005', 'RK-GIT-007']) {
+    test('$code links to and marks the Git tag lane', () async {
+      final registry = FakeRegistry(const {});
+      final run = await statusRun(
+        source: tree(),
+        state: git(),
+        registry: registry,
+        inspectorBuilder: (git, _) => GuardInspector(
+          registry: registry,
+          git: git,
+          code: code,
+        ),
+      );
+
+      final targets =
+          ((run.report['units'] as List).single as Map)['targets'] as List;
+      final tag = targets.singleWhere(
+        (target) => (target as Map)['kind'] == 'gitTag',
+      ) as Map;
+      final problem = (run.report['problems'] as List)
+          .cast<Map>()
+          .singleWhere((problem) => problem['code'] == code);
+
+      expect(tag['verdict'], 'absent');
+      expect(problem['target'], tag['id']);
+      expect(_targetLine(run.text, 'Git tag').trimLeft(), startsWith('✗'));
+    });
+  }
+
+  test('an exact stage lists exact filenames and is good to release', () async {
+    final root = Directory.systemTemp.createTempSync('rk-status-stage-');
+    addTearDown(() => root.deleteSync(recursive: true));
+    ReleaseStage? made;
+    ReleaseStage stageFor(ResolvedUnit unit) => made ??= _completedStage(
+          root: root,
+          unit: unit,
+          source: binaryTree,
+        );
+
+    final run = await statusRun(
+      withConfig: binaryConfig,
+      source: binaryTree,
+      state: git(),
+      registry: FakeRegistry(const {}),
+      stageFor: stageFor,
+      inspectorBuilder: (git, _) => FixedInspector(
+        registry: FakeRegistry(const {}),
+        git: git,
+        answer: const Inspection.absent(),
+      ),
+    );
+
+    expect(run.text, contains('Good to release'));
+    expect(run.text, contains('rk release cli'));
+    expect(run.text, isNot(contains('rk release cli --stage')));
+    for (final name in ReleaseAssets.expectedFor(made!.unit.binaryProject)) {
+      expect(run.text, contains(name));
+    }
+    expect(
+      run.text,
+      matches(RegExp(
+        r'✓\s+keybay-0\.2\.0-macos-arm64\.tar\.gz\s+staged',
+      )),
+    );
+    final units = run.report['units'] as List;
+    final targets = (units.single as Map)['targets'] as List;
+    final github = targets.singleWhere(
+      (target) => (target as Map)['kind'] == 'githubRelease',
+    ) as Map;
+    expect(github['current_known'], isTrue);
+    expect(github['target_version'], '0.2.0');
+    expect(github['verdict'], 'absent');
+    expect(
+      (github['artifacts'] as List)
+          .map((artifact) => (artifact as Map)['name']),
+      contains('keybay-0.2.0-macos-arm64.tar.gz'),
+    );
+    expect(
+      (github['artifacts'] as List)
+          .map((artifact) => (artifact as Map)['status'])
+          .toSet(),
+      {'staged'},
+    );
+  });
+
+  test('an exact stage makes a partial public release safely resumable',
+      () async {
+    final root = Directory.systemTemp.createTempSync('rk-status-resume-');
+    addTearDown(() => root.deleteSync(recursive: true));
+    ReleaseStage? made;
+    ReleaseStage stageFor(ResolvedUnit unit) => made ??= _completedStage(
+          root: root,
+          unit: unit,
+          source: binaryTree,
+        );
+    final registry = FakeRegistry({
+      'keybay': ['0.2.0']
+    });
+
+    final run = await statusRun(
+      withConfig: binaryConfig,
+      source: binaryTree,
+      state: git(tags: const ['v0.2.0']),
+      registry: registry,
+      stageFor: stageFor,
+      inspectorBuilder: (git, _) => FixedInspector(
+        registry: registry,
+        git: git,
+        answer: const Inspection.absent(),
+        answers: const {
+          StepKind.tag: Inspection.exact(
+            detail: 'the release tag is already public',
+          ),
+          StepKind.publishRegistry: Inspection.exact(
+            detail: 'published exactly',
+          ),
+        },
+      ),
+    );
+
+    expect(run.text, contains('Targets'));
+    expect(
+      run.text,
+      matches(RegExp(r'✓\s+Git tag\s+0\.2\.0 › 0\.2\.0')),
+    );
+    expect(
+      run.text,
+      matches(RegExp(r'✓\s+pub\.dev · keybay\s+0\.2\.0 › 0\.2\.0')),
+    );
+    expect(
+      run.text,
+      matches(RegExp(
+        r'GitHub Release · danReynolds/keybay\s+'
+        r'— › 0\.2\.0 · not published',
+      )),
+    );
+    expect(run.text, contains('Good to release'));
+    expect(run.text, contains('→ rk release cli'));
+    expect(run.text, isNot(contains('rk release cli --stage')));
+    expect(run.text, isNot(contains('Issues')));
+    expect(run.text, isNot(contains('issue prevents release')));
+
+    expect(run.report['safe_to_rerun'], isTrue);
+    expect(run.report['problems'], isEmpty);
+    expect(run.report['next'], ['rk release cli']);
+    final targets =
+        ((run.report['units'] as List).single as Map)['targets'] as List;
+    expect(
+      [
+        for (final target in targets)
+          (
+            (target as Map)['kind'],
+            target['verdict'],
+          ),
+      ],
+      [
+        ('gitTag', 'exact'),
+        ('pubDev', 'exact'),
+        ('githubRelease', 'absent'),
+      ],
+    );
+    final github = targets.singleWhere(
+      (target) => (target as Map)['kind'] == 'githubRelease',
+    ) as Map;
+    expect(
+      (github['artifacts'] as List)
+          .map((artifact) => (artifact as Map)['status'])
+          .toSet(),
+      {'staged'},
+    );
+  });
+
+  test('a reusable stage does not require the publishing host to reproduce it',
+      () async {
+    final root = Directory.systemTemp.createTempSync('rk-status-stage-host-');
+    addTearDown(() => root.deleteSync(recursive: true));
+    ReleaseStage? made;
+    ReleaseStage stageFor(ResolvedUnit unit) => made ??= _completedStage(
+          root: root,
+          unit: unit,
+          source: binaryTree,
+        );
+
+    final run = await statusRun(
+      withConfig: binaryConfig,
+      source: binaryTree,
+      state: git(),
+      registry: FakeRegistry(const {}),
+      stageFor: stageFor,
+      capabilities: HostCapabilities(
+        hostPlatform: 'linux-x64',
+        containerRuntime: null,
+        hasNativeAssets: false,
+      ),
+      inspectorBuilder: (git, _) => FixedInspector(
+        registry: FakeRegistry(const {}),
+        git: git,
+        answer: const Inspection.absent(),
+      ),
+    );
+
+    expect(run.text, contains('Good to release'));
+    expect(run.text, isNot(contains('RK-HOST-001')));
+    expect(run.text, isNot(contains('cannot produce every platform')));
+  });
+
+  test('a changed staged artifact is marked and explained once', () async {
+    final root = Directory.systemTemp.createTempSync('rk-status-tamper-');
+    addTearDown(() => root.deleteSync(recursive: true));
+    ReleaseStage? made;
+    ReleaseStage stageFor(ResolvedUnit unit) => made ??= _completedStage(
+          root: root,
+          unit: unit,
+          source: binaryTree,
+        );
+    // Resolve and create the stage before status inspects it.
+    final diagnostics = Diagnostics();
+    final parsed = ReleaseConfig.parse(
+      binaryConfig,
+      'release.toml',
+      diagnostics,
+    )!;
+    final resolution = Resolution.resolve(parsed, binaryTree, diagnostics)!;
+    final stage = stageFor(resolution.units.single);
+    final archive = ReleaseAssets.archiveName(
+      'keybay',
+      '0.2.0',
+      'macos-arm64',
+    );
+    File(stage.directory.resolve(archive)).writeAsStringSync('changed');
+
+    final run = await statusRun(
+      withConfig: binaryConfig,
+      source: binaryTree,
+      state: git(),
+      registry: FakeRegistry(const {}),
+      stageFor: stageFor,
+      inspectorBuilder: (git, _) => FixedInspector(
+        registry: FakeRegistry(const {}),
+        git: git,
+        answer: const Inspection.absent(),
+      ),
+    );
+
+    expect(
+      run.text,
+      matches(RegExp('$archive\\s+artifact .* differs from the receipt')),
+    );
+    expect(run.text, contains('Issues'));
+    expect(run.text, contains('Fix:'));
+    expect(run.text, contains('1 issue prevents release'));
+    expect('RK-STAGE-002'.allMatches(run.text), hasLength(1));
+  });
+
+  test('a global completed-stage problem invalidates every artifact row',
+      () async {
+    final root = Directory.systemTemp.createTempSync('rk-status-stage-global-');
+    addTearDown(() => root.deleteSync(recursive: true));
+    ReleaseStage? made;
+    ReleaseStage stageFor(ResolvedUnit unit) => made ??= (() {
+          final complete = _completedStage(
+            root: root,
+            unit: unit,
+            source: binaryTree,
+          );
+          return ReleaseStage(
+            unit: unit,
+            source: binaryTree,
+            directory: complete.directory,
+            compiler: DartCompilerIdentity.recorded(
+              executable: '/status-test/dart',
+              version: 'Dart SDK version: status test compiler',
+              sha256: 'c' * 64,
+            ),
+          );
+        })();
+
+    final run = await statusRun(
+      withConfig: binaryConfig,
+      source: binaryTree,
+      state: git(),
+      registry: FakeRegistry(const {}),
+      stageFor: stageFor,
+      inspectorBuilder: (git, _) => FixedInspector(
+        registry: FakeRegistry(const {}),
+        git: git,
+        answer: const Inspection.absent(),
+      ),
+    );
+
+    final targets =
+        ((run.report['units'] as List).single as Map)['targets'] as List;
+    final artifacts = [
+      for (final target in targets)
+        ...((target as Map)['artifacts'] as List).cast<Map>(),
+    ];
+    expect(artifacts, isNotEmpty);
+    expect(artifacts.map((artifact) => artifact['status']).toSet(), {
+      'invalid',
+    });
+    expect(
+      artifacts.map((artifact) => artifact['problem']),
+      everyElement(
+        allOf(contains('stage does not validate'), contains('stage.json')),
+      ),
+    );
+    expect(run.text, isNot(contains(' staged')));
+    expect(run.text, contains('does not record its Dart compiler'));
+    expect(run.text, contains('RK-STAGE-002'));
+  });
+
+  test('a partial binary release without its exact stage is an issue',
+      () async {
+    final run = await statusRun(
+      withConfig: binaryConfig,
+      source: binaryTree,
+      state: git(),
+      registry: FakeRegistry({
+        'keybay': ['0.1.0']
+      }),
+      inspectorBuilder: (git, _) => FixedInspector(
+        registry: FakeRegistry({
+          'keybay': ['0.1.0']
+        }),
+        git: git,
+        answer: const Inspection.absent(),
+        answers: const {
+          StepKind.tag: Inspection.exact(
+            detail: 'the release tag is already public',
+          ),
+        },
+      ),
+    );
+
+    expect(
+      run.text,
+      contains('the partial binary release needs its exact stage'),
+    );
+    expect(run.text, contains('RK-STAGE-005'));
+    expect(
+      run.text,
+      contains('Signed or notarized bytes cannot be recreated'),
+    );
+    expect(run.text, isNot(contains('No known issues')));
+    expect(run.text, isNot(contains('rk release cli --stage')));
+    expect(
+      (run.report['problems'] as List)
+          .map((problem) => (problem as Map)['code']),
+      ['RK-STAGE-005'],
+    );
+    final targets =
+        ((run.report['units'] as List).single as Map)['targets'] as List;
+    final artifacts = [
+      for (final target in targets)
+        ...((target as Map)['artifacts'] as List).cast<Map>(),
+    ];
+    expect(artifacts, isNotEmpty);
+    expect(
+      artifacts.map((artifact) => artifact['status']).toSet(),
+      {'invalid'},
+    );
+    expect(
+      artifacts.map((artifact) => artifact['problem']),
+      everyElement(contains('exact stage')),
+    );
+    for (final artifact in artifacts) {
+      expect(
+        run.text
+            .split('\n')
+            .firstWhere(
+              (line) =>
+                  line.contains(artifact['name'] as String) &&
+                  line.contains('exact stage'),
+            )
+            .trimLeft(),
+        startsWith('✗'),
+      );
+    }
+  });
+}
+
+ReleaseStage _completedStage({
+  required Directory root,
+  required ResolvedUnit unit,
+  required SourceTree source,
+}) {
+  final identity = StageIdentity.forPlan(
+    headCommit: testHead,
+    headTree: testTree,
+    resolvedPlan: {'unit': unit.name, 'test': 'status'},
+  );
+  final stage = ReleaseStage(
+    unit: unit,
+    source: source,
+    directory: StageDirectory(
+      repositoryRoot: root.path,
+      identity: identity,
+    ),
+  );
+  final public = ReleaseAssets.expectedFor(unit.binaryProject).toSet()
+    ..remove(ReleaseAssets.manifest);
+  final sourceArtifacts = stage.materializeSource();
+  final sourceStep = StageStep(
+    name: 'source-snapshot',
+    inputs: [
+      StageInput.commit(identity),
+      StageInput.tree(identity),
+      StageInput.plan(identity),
+    ],
+    outputs: sourceArtifacts,
+    evidence: {'commit': identity.headCommit, 'tree': identity.headTree},
+  );
+  final steps = <StageStep>[sourceStep];
+  final project = unit.binaryProject;
+  final executable = project.executable!;
+  final archives = <StageArtifact>[];
+  for (final platform in project.binaryPlatforms) {
+    final binaryName = '$platform/$executable';
+    stage.directory.writeBytesAtomically(
+      binaryName,
+      utf8.encode('binary:$platform'),
+    );
+    final binary = StageArtifact.capture(
+      stage: stage.directory,
+      path: binaryName,
+      type: 'executable',
+    );
+    steps.add(StageStep(
+      name: '${platform.startsWith('macos-') ? 'sign' : 'build'}:$platform',
+      inputs: [StageInput.step(sourceStep)],
+      outputs: [binary],
+      evidence: {
+        'smoke': {'status': 'passed'},
+        if (platform.startsWith('macos-'))
+          'signature': {
+            'certificate': 'Developer ID Application: Test (TEAM123456)',
+            'certificate_sha256': 'c' * 64,
+            'first_identity': false,
+            'published_requirement': 'designated => identifier '
+                '"io.example.$executable" and certificate '
+                'leaf[subject.OU] = "TEAM123456"',
+            'code_id': 'io.example.$executable',
+            'unsigned_sha256': 'd' * 64,
+            'signed_sha256': binary.sha256,
+          },
+      },
+    ));
+    if (platform.startsWith('macos-')) {
+      final zip = '$platform/$executable.zip';
+      final result = ReleaseAssets.notaryResultName(
+        executable,
+        project.version.canonical,
+        platform,
+      );
+      final log = ReleaseAssets.notaryLogName(
+        executable,
+        project.version.canonical,
+        platform,
+      );
+      stage.directory.writeBytesAtomically(zip, utf8.encode('zip:$platform'));
+      stage.directory.writeBytesAtomically(
+        result,
+        utf8.encode('{"id":"status-test","status":"Accepted"}'),
+      );
+      stage.directory.writeBytesAtomically(log, utf8.encode('{"issues":[]}'));
+      final resultArtifact = StageArtifact.capture(
+        stage: stage.directory,
+        path: result,
+        type: 'notary',
+      );
+      final logArtifact = StageArtifact.capture(
+        stage: stage.directory,
+        path: log,
+        type: 'notary',
+      );
+      steps.add(StageStep(
+        name: 'notarize:$platform',
+        inputs: [StageInput.artifact(binary)],
+        outputs: [
+          StageArtifact.capture(
+            stage: stage.directory,
+            path: zip,
+            type: 'notary-input',
+          ),
+          resultArtifact,
+          logArtifact,
+        ],
+        evidence: {
+          'notary': {
+            'status': 'Accepted',
+            'submission_id': 'status-test',
+            'result_sha256': resultArtifact.sha256,
+            'log_sha256': logArtifact.sha256,
+          },
+        },
+      ));
+    }
+    final archiveName = ReleaseAssets.archiveName(
+      executable,
+      project.version.canonical,
+      platform,
+    );
+    final bytes = ArchiveBuilder.gzip(ArchiveBuilder.tar([
+      ArchiveEntry(
+        name: executable,
+        bytes: utf8.encode('binary:$platform'),
+        executable: true,
+      ),
+    ]));
+    stage.directory.writeBytesAtomically(archiveName, bytes);
+    final archive = StageArtifact.capture(
+      stage: stage.directory,
+      path: archiveName,
+      type: 'archive',
+    );
+    archives.add(archive);
+    steps.add(StageStep(
+      name: 'archive:$platform',
+      inputs: [StageInput.artifact(binary)],
+      outputs: [archive],
+      evidence: {
+        'inventory': StageArchiveInventory.evidence(
+          StageArchiveInventory.parse(bytes),
+        ),
+      },
+    ));
+  }
+  stage.directory.writeBytesAtomically(
+    ReleaseAssets.checksums,
+    utf8.encode(Checksums.render({
+      for (final archive in archives)
+        archive.path:
+            File(stage.directory.resolve(archive.path)).readAsBytesSync(),
+    })),
+  );
+  steps.add(StageStep(
+    name: 'checksums',
+    inputs: [for (final archive in archives) StageInput.artifact(archive)],
+    outputs: [
+      StageArtifact.capture(
+        stage: stage.directory,
+        path: ReleaseAssets.checksums,
+        type: 'checksums',
+      ),
+    ],
+  ));
+  final formula = ReleaseAssets.formulaName(executable);
+  if (public.contains(formula)) {
+    stage.directory.writeBytesAtomically(formula, utf8.encode('formula'));
+    steps.add(StageStep(
+      name: 'homebrew-formula',
+      inputs: [for (final archive in archives) StageInput.artifact(archive)],
+      outputs: [
+        StageArtifact.capture(
+          stage: stage.directory,
+          path: formula,
+          type: 'formula',
+        ),
+      ],
+    ));
+  }
+  stage.writeProgress(steps);
+  stage.finalize(publicArtifacts: public);
+  return stage;
 }
 
 // Regressions from the phase 2-3 review.
 void _reviewFixes() {
   test('publishing behind what is live is refused', () async {
-    final text = await statusOf(
+    final run = await statusRun(
       source: tree(coreVersion: '0.2.0'),
       state: git(tags: ['v0.2.0']),
       registry: FakeRegistry({
         'keybay': ['0.1.0', '0.5.0']
       }),
     );
-    expect(text, contains('0.5.0 is already published'));
-    expect(text, isNot(contains('rk release')));
+    expect(run.text, contains('0.5.0 is already published'));
+    expect(run.text, isNot(contains('rk release')));
+
+    final targets =
+        ((run.report['units'] as List).single as Map)['targets'] as List;
+    final pub = targets.singleWhere(
+      (target) => (target as Map)['kind'] == 'pubDev',
+    ) as Map;
+    final monotonicity = (run.report['problems'] as List)
+        .cast<Map>()
+        .singleWhere((problem) => problem['code'] == 'RK-MONO-002');
+    expect(monotonicity['target'], pub['id']);
+    expect(
+      _targetLine(run.text, 'pub.dev · keybay').trimLeft(),
+      startsWith('✗'),
+    );
   });
 }
 
@@ -427,7 +1707,7 @@ void _phase23Fixes() {
     expect(text, isNot(contains('ready')));
   });
 
-  test('the live line names the published version, not the local one',
+  test('the target row names the published version, not the local one',
       () async {
     final text = await statusOf(
       source: tree(),
@@ -436,12 +1716,12 @@ void _phase23Fixes() {
         'keybay': ['0.1.0']
       }),
     );
-    expect(text, contains('0.1.0 published'),
+    expect(text, contains('0.1.0 › 0.2.0'),
         reason: 'local is 0.2.0; live is 0.1.0');
-    expect(text, contains('ready'));
+    expect(text, contains('No known issues'));
   });
 
-  test('a clean unit with nothing to release ignores worktree state', () async {
+  test('a fully published unit ignores worktree state', () async {
     final text = await statusOf(
       source: tree(),
       state: git(clean: false, tags: ['v0.2.0']),
@@ -449,7 +1729,7 @@ void _phase23Fixes() {
         'keybay': ['0.2.0']
       }),
     );
-    expect(text, contains('nothing to release'));
+    expect(text, contains('Published everywhere configured'));
     expect(
       text,
       isNot(contains('files are uncommitted')),
@@ -475,6 +1755,8 @@ void statusReviewRegressions() {
     );
     expect(text, isNot(contains('ready')));
     expect(text, isNot(contains('rk release')));
+    expect(text, contains('pub.dev versions are immutable'));
+    expect(text, contains('Bump the version and changelog'));
   });
 
   test('a dirty tree suppresses the next command', () async {
@@ -500,12 +1782,8 @@ void statusReviewRegressions() {
       state: git(),
       registry: FakeRegistry({}, unreachable: true),
     );
-    expect(
-      run.text,
-      isNot(contains('not published')),
-      reason: 'the step lines were honest all along; this line was '
-          'concluding a definitive negative from a socket error',
-    );
+    expect(run.text, contains('pub.dev · keybay'));
+    expect(run.text, contains('? › 0.2.0 · could not be read'));
     expect(
       run.text,
       contains('could not be reached'),
@@ -555,7 +1833,8 @@ dependencies:
     );
   });
 
-  test('moot steps leave the terminal but never the document', () async {
+  test('a published binary target stays visible and keeps all JSON steps',
+      () async {
     final run = await statusRun(
       withConfig: '''
 schema = 1
@@ -578,21 +1857,18 @@ executables:
       registry: FakeRegistry({
         'keybay': ['0.2.0']
       }),
-      tools: ScriptedTools({
-        // The REST shape, carrying the full expected set — archive, notary
-        // evidence, checksums — so the release reads exact, not conflicted.
-        'gh': ok('{"tag_name":"v0.2.0","draft":false,"id":1,'
-            '"assets":[{"name":"keybay-0.2.0-macos-arm64.tar.gz"},'
-            '{"name":"keybay-0.2.0-macos-arm64.notary-result.json"},'
-            '{"name":"keybay-0.2.0-macos-arm64.notary-log.json"},'
-            '{"name":"SHA256SUMS"}]}'),
-        // The tag's remote half reads origin through the same tools.
-        'git': ok('deadbeef refs/tags/v0.2.0'),
-      }),
-      repository: 'example/keybay',
+      inspectorBuilder: (git, _) => FixedInspector(
+        registry: FakeRegistry({
+          'keybay': ['0.2.0']
+        }),
+        git: git,
+        answer: const Inspection.exact(detail: 'published exactly'),
+      ),
     );
 
-    expect(run.text, contains('nothing to release'));
+    expect(run.text, contains('Targets'));
+    expect(run.text, contains('GitHub Release'));
+    expect(run.text, contains('Published everywhere configured'));
     expect(
       run.text,
       isNot(contains('build keybay')),

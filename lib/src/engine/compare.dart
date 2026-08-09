@@ -13,10 +13,9 @@ import 'verdict.dart';
 
 /// Compares a published package archive against the source it claims to be.
 ///
-/// This is the tool's core primitive, not a helper of the `verify` command:
-/// phase 5's post-publish check and phase 7's post-flip check are the same
-/// comparison against a different [SourceTree]. One engine, several wearers —
-/// the lesson of the two inspectors, applied before it is re-learned.
+/// This is the pub.dev target's core primitive. Pre-act status and release,
+/// post-publish confirmation, and retries all use it through the same target
+/// reader rather than maintaining a second historical-verification path.
 ///
 /// The comparison is per-file byte equality, in both directions:
 ///
@@ -31,10 +30,9 @@ import 'verdict.dart';
 /// not reinterpreted here, so when one is present the missing-from-archive
 /// direction is reported as not fully checkable rather than guessed at.
 ///
-/// Acknowledged partial: file *modes* are not compared — `SourceTree` does
-/// not expose them. Type is (a non-regular entry is a conflict), and mode
-/// verification is recorded for phase 7a, where rk builds the archives whose
-/// modes it controls and the executable bit is load-bearing.
+/// Acknowledged alpha boundary: file *modes* are not compared because
+/// `SourceTree` does not expose them. Entry type is checked, and regular-file
+/// inventory and bytes are compared in both directions.
 class Comparator {
   Comparator({required this.tools});
 

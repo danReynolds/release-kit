@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:release_kit/src/engine/checklist.dart';
@@ -8,6 +9,7 @@ import 'package:release_kit/src/engine/inspect.dart';
 import 'package:release_kit/src/engine/registry.dart';
 import 'package:release_kit/src/engine/resolve.dart';
 import 'package:release_kit/src/engine/source_tree.dart';
+import 'package:release_kit/src/engine/targets.dart';
 import 'package:release_kit/src/engine/tools.dart';
 import 'package:release_kit/src/engine/verdict.dart';
 import 'package:test/test.dart';
@@ -200,6 +202,7 @@ void classificationTables() {
         StepKind.notarize: false,
         StepKind.archive: false,
         StepKind.checksums: false,
+        StepKind.completeStage: false,
       },
       reason: 'a prerequisite dropped from this set stops blocking a release '
           'whose dependency rk could not read',
@@ -395,6 +398,118 @@ void classificationTables() {
     });
   });
 
+  group('release monotonicity reads complete public histories', () {
+    Future<({ResolvedUnit unit, List<TargetExpectation> targets})>
+        releaseTargets() async {
+      final resolution = await _binaryResolution();
+      final unit = resolution.unit('cli')!;
+      final checklist = Checklist.derive(unit, resolution, Diagnostics());
+      return (
+        unit: unit,
+        targets: TargetExpectation.derive(
+          unit,
+          checklist,
+          repository: 'example/tool',
+        ),
+      );
+    }
+
+    test('starts independent lane reads together and omits Homebrew', () async {
+      final fixture = await releaseTargets();
+      final inspector = _LatestInspector(expectedConcurrent: 3);
+      final problems = Diagnostics();
+
+      final checking = inspector.releaseMonotonicity(
+        fixture.unit,
+        fixture.targets,
+        problems,
+      );
+      await inspector.allStarted.future;
+
+      expect(inspector.maximumActive, 3);
+      expect(
+        inspector.started,
+        {
+          ReleaseTargetKind.gitTag,
+          ReleaseTargetKind.pubDev,
+          ReleaseTargetKind.githubRelease,
+        },
+        reason: 'the authenticated formula inspection already owns the '
+            'Homebrew forward-only decision',
+      );
+      inspector.finish();
+      await checking;
+      expect(problems, isEmpty);
+    });
+
+    test('an unreadable lane is a refusal and newer remote lanes are named',
+        () async {
+      final fixture = await releaseTargets();
+      final inspector = _LatestInspector(answers: {
+        ReleaseTargetKind.gitTag: const Inspection.exact(
+          evidence: {'version': '2.0.0'},
+        ),
+        ReleaseTargetKind.pubDev: const Inspection.exact(
+          evidence: {'version': '1.1.0'},
+        ),
+        ReleaseTargetKind.githubRelease:
+            const Inspection.unknown('GitHub timed out'),
+      });
+      final problems = Diagnostics();
+
+      await inspector.releaseMonotonicity(
+        fixture.unit,
+        fixture.targets,
+        problems,
+      );
+
+      expect(
+        problems.found.map((problem) => problem.code),
+        containsAll(['RK-MONO-002', 'RK-MONO-003', 'RK-REL-001']),
+      );
+      expect(
+        problems.found
+            .singleWhere((problem) => problem.code == 'RK-MONO-003')
+            .message,
+        allOf(contains('Git tag'), contains('2.0.0'), contains('1.0.0')),
+      );
+      expect(
+        problems.found
+            .singleWhere((problem) => problem.code == 'RK-REL-001')
+            .message,
+        allOf(contains('GitHub Release'), contains('timed out')),
+      );
+    });
+
+    test('one remote ahead tag is not repeated as a local-tag problem',
+        () async {
+      final fixture = await releaseTargets();
+      final inspector = _LatestInspector(
+        tags: const ['v2.0.0'],
+        answers: {
+          ReleaseTargetKind.gitTag: const Inspection.exact(
+            evidence: {'version': '2.0.0'},
+          ),
+        },
+      );
+      final problems = Diagnostics();
+
+      await inspector.releaseMonotonicity(
+        fixture.unit,
+        fixture.targets,
+        problems,
+      );
+
+      expect(
+        problems.found
+            .where((problem) =>
+                problem.code == 'RK-MONO-001' || problem.code == 'RK-MONO-003')
+            .map((problem) => problem.code),
+        ['RK-MONO-003'],
+      );
+    });
+  });
+
   group('offline never reports a tag as done', () {
     Future<Inspection> tagOffline({required List<String> tags}) async {
       final inspector = Inspector(
@@ -438,13 +553,14 @@ void classificationTables() {
       expect(state.detail, contains('--offline'));
     });
 
-    test('no local tag is absent, because git is local and was read', () async {
+    test('no local tag is unknown because origin was not read', () async {
       final state = await tagOffline(tags: const []);
 
       expect(
         state.verdict,
-        Verdict.absent,
-        reason: 'offline says "not read" only about what it did not read',
+        Verdict.unknown,
+        reason: 'a fresh clone can lack a tag that origin already has; local '
+            'absence is not public absence',
       );
     });
   });
@@ -515,15 +631,16 @@ void classificationTables() {
     String contentsOf(String text) =>
         '{"content":"${base64Encode(utf8.encode(text))}"}';
 
-    test('a formula naming this version is exact', () async {
+    test('a hand-written formula is a conflict without a manifest proof',
+        () async {
       final state = await formula((key) => key.contains('/contents/')
           ? ok(contentsOf('class T < Formula\n  version "1.0.0"\nend\n'))
           : null);
-      expect(state.verdict, Verdict.exact);
-      expect(state.detail, contains('1.0.0'));
+      expect(state.verdict, Verdict.conflict);
+      expect(state.detail, contains('not an exact release formula'));
     });
 
-    test('a formula naming an earlier version is absent — the work remains',
+    test('an older-looking formula is not trusted without exact bytes',
         () async {
       // Exactness is the version pointer: weakened to "any readable
       // formula", a tap stuck on the previous release would read satisfied
@@ -531,8 +648,7 @@ void classificationTables() {
       final state = await formula((key) => key.contains('/contents/')
           ? ok(contentsOf('class T < Formula\n  version "0.9.0"\nend\n'))
           : null);
-      expect(state.verdict, Verdict.absent);
-      expect(state.detail, contains('earlier release'));
+      expect(state.verdict, Verdict.conflict);
     });
 
     test('404 with a readable tap is absent; with an unreadable tap, unknown',
@@ -584,7 +700,7 @@ void classificationTables() {
         steps.firstWhere((s) => s.kind == StepKind.publishRelease).summary;
     final counted = int.parse(
         RegExp(r'publish (\d+) assets').firstMatch(summary)!.group(1)!);
-    expect(counted, 6);
+    expect(counted, 7);
   });
 
   test('the expected asset set is derived, and derives everything', () async {
@@ -598,6 +714,7 @@ void classificationTables() {
         'example-tool-1.0.0-macos-arm64.notary-log.json',
         'example-tool.rb',
         'SHA256SUMS',
+        'release-manifest.json',
       },
       reason: 'emptied, every release inspects exact and nothing notices — '
           'and the reference shape is the real keybay 0.1.0 release: '
@@ -609,6 +726,57 @@ void classificationTables() {
 
 Future<ResolvedUnit> _binaryUnit() async =>
     (await _binaryResolution()).unit('cli')!;
+
+class _LatestInspector extends Inspector {
+  _LatestInspector({
+    this.answers = const {},
+    this.expectedConcurrent = 0,
+    List<String> tags = const [],
+  }) : super(
+          registry: FakeRegistry({}),
+          git: GitState(
+            root: '/repo',
+            head: '1111111111111111111111111111111111111111',
+            branch: 'main',
+            isClean: true,
+            uncommitted: const [],
+            headIsPushed: true,
+            tags: tags,
+            signingConfigured: true,
+            originUrl: 'example/tool',
+          ),
+        );
+
+  final Map<ReleaseTargetKind, Inspection> answers;
+  final int expectedConcurrent;
+  final Completer<void> allStarted = Completer<void>();
+  final Completer<void> _finish = Completer<void>();
+  final Set<ReleaseTargetKind> started = {};
+  var active = 0;
+  var maximumActive = 0;
+
+  @override
+  Future<Inspection> inspectLatestVersion(
+    TargetExpectation target,
+    ResolvedUnit unit,
+  ) async {
+    started.add(target.kind);
+    if (expectedConcurrent > 0) {
+      active++;
+      if (active > maximumActive) maximumActive = active;
+      if (started.length == expectedConcurrent && !allStarted.isCompleted) {
+        allStarted.complete();
+      }
+      await _finish.future;
+      active--;
+    }
+    return answers[target.kind] ?? const Inspection.absent();
+  }
+
+  void finish() {
+    if (!_finish.isCompleted) _finish.complete();
+  }
+}
 
 Future<Resolution> _binaryResolution() async {
   final diagnostics = Diagnostics();
@@ -636,21 +804,49 @@ executables:
 /// The tag's remote half — the leg whose absence let a killed push produce a
 /// release whose authorizing tag existed only on one machine.
 void tagRemoteLeg() {
-  GitState gitWith({List<String> tags = const []}) => GitState(
+  const head = '1111111111111111111111111111111111111111';
+  const object = '2222222222222222222222222222222222222222';
+  const digest =
+      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
+  ToolResult annotatedTagObject() => ToolResult(
+        exitCode: 0,
+        stdout: 'object $head\n'
+            'type commit\n'
+            'tag v0.2.0\n'
+            'tagger Test <test@example.com> 0 +0000\n\n'
+            'core 0.2.0\n\n'
+            'release-manifest-sha256: $digest\n',
+        stderr: '',
+      );
+
+  GitState gitWith({
+    List<String> tags = const [],
+    Map<String, String> tagObjects = const {},
+    bool signing = false,
+  }) =>
+      GitState(
         root: '/repo',
-        head: 'abc123def456',
+        head: head,
         branch: 'main',
         isClean: true,
         uncommitted: const [],
         headIsPushed: true,
         tags: tags,
-        signingConfigured: false,
+        tagTargets: {
+          for (final tag in tags) tag: head,
+        },
+        tagObjects: tagObjects,
+        signingConfigured: signing,
         originUrl: 'example/keybay',
       );
 
   Future<Inspection> inspectTag({
     required List<String> localTags,
     required ToolResult remote,
+    Map<String, String> tagObjects = const {},
+    bool signing = false,
+    Map<String, ToolResult> additionalResults = const {},
   }) async {
     final diagnostics = Diagnostics();
     final config = ReleaseConfig.parse('''
@@ -674,28 +870,93 @@ publish = ["pub.dev"]
 
     return Inspector(
       registry: FakeRegistry({}),
-      git: gitWith(tags: localTags),
+      git: gitWith(
+        tags: localTags,
+        tagObjects: tagObjects,
+        signing: signing,
+      ),
       tools: RecordingTools(
-        results: {'git ls-remote origin refs/tags/v0.2.0': remote},
+        results: {
+          'git ls-remote origin refs/tags/v0.2.0 '
+              'refs/tags/v0.2.0^{}': remote,
+          ...additionalResults,
+        },
       ),
       repository: 'example/keybay',
     ).inspect(step, unit);
   }
 
-  test('local and on origin is done', () async {
+  test('an annotated origin tag with a readable release binding is done',
+      () async {
     final state = await inspectTag(
-      localTags: ['v0.2.0'],
-      remote:
-          ToolResult(exitCode: 0, stdout: 'dead refs/tags/v0.2.0', stderr: ''),
+      localTags: const [],
+      remote: ToolResult(
+        exitCode: 0,
+        stdout: '$object refs/tags/v0.2.0\n'
+            '$head refs/tags/v0.2.0^{}',
+        stderr: '',
+      ),
+      additionalResults: {'git cat-file tag $object': annotatedTagObject()},
     );
     expect(state.verdict, Verdict.exact);
-    expect(state.detail, contains('pushed'));
+    expect(state.detail, contains('release manifest'));
+  });
+
+  test('a fresh checkout never calls a matching lightweight ref exact',
+      () async {
+    final state = await inspectTag(
+      localTags: const [],
+      remote: ToolResult(
+        exitCode: 0,
+        stdout: '$head refs/tags/v0.2.0',
+        stderr: '',
+      ),
+    );
+
+    expect(state.verdict, Verdict.conflict);
+    expect(state.detail, contains('lightweight release tag'));
+  });
+
+  test('a fresh checkout does not call a peeled commit exact by itself',
+      () async {
+    final state = await inspectTag(
+      localTags: const [],
+      remote: ToolResult(
+        exitCode: 0,
+        stdout: '$object refs/tags/v0.2.0\n'
+            '$head refs/tags/v0.2.0^{}',
+        stderr: '',
+      ),
+      additionalResults: {
+        'git cat-file tag $object': ToolResult(
+          exitCode: 128,
+          stdout: '',
+          stderr: 'fatal: Not a valid object name',
+        ),
+      },
+    );
+
+    expect(state.verdict, Verdict.unknown);
+    expect(state.detail, contains('tag object could not be read'));
+  });
+
+  test('a definitively absent remote tag stays absent in a fresh checkout',
+      () async {
+    final state = await inspectTag(
+      localTags: const [],
+      remote: ToolResult(exitCode: 0, stdout: '', stderr: ''),
+    );
+
+    expect(state.verdict, Verdict.absent);
+    expect(state.detail, contains('not on origin'));
   });
 
   test('local but not on origin is work remaining, not done', () async {
     final state = await inspectTag(
-      localTags: ['v0.2.0'],
+      localTags: const ['v0.2.0'],
+      tagObjects: const {'v0.2.0': object},
       remote: ToolResult(exitCode: 0, stdout: '', stderr: ''),
+      additionalResults: {'git cat-file tag $object': annotatedTagObject()},
     );
     expect(
       state.verdict,
@@ -713,5 +974,58 @@ publish = ["pub.dev"]
           exitCode: 128, stdout: '', stderr: 'could not resolve host'),
     );
     expect(state.verdict, Verdict.unknown);
+  });
+
+  test(
+      'a configured tag remains non-exact when its signature fails without '
+      'a stage', () async {
+    final state = await inspectTag(
+      localTags: const ['v0.2.0'],
+      tagObjects: const {'v0.2.0': object},
+      signing: true,
+      remote: ToolResult(
+        exitCode: 0,
+        stdout: '$object refs/tags/v0.2.0\n'
+            '$head refs/tags/v0.2.0^{}',
+        stderr: '',
+      ),
+      additionalResults: {
+        'git cat-file tag $object': ToolResult(
+          exitCode: 0,
+          stdout: 'object $head\n'
+              'type commit\n'
+              'tag v0.2.0\n'
+              'tagger Test <test@example.com> 0 +0000\n\n'
+              'core 0.2.0\n\n'
+              'release-manifest-sha256: $digest\n',
+          stderr: '',
+        ),
+        'git verify-tag $object': ToolResult(
+          exitCode: 1,
+          stdout: '',
+          stderr: 'BAD signature',
+        ),
+      },
+    );
+
+    expect(state.verdict, Verdict.conflict);
+    expect(state.detail, contains('signature could not be verified'));
+  });
+
+  test(
+      'a known unsigned lightweight tag is not an exact release record '
+      'without a stage', () async {
+    final state = await inspectTag(
+      localTags: const ['v0.2.0'],
+      tagObjects: const {'v0.2.0': head},
+      remote: ToolResult(
+        exitCode: 0,
+        stdout: '$head refs/tags/v0.2.0',
+        stderr: '',
+      ),
+    );
+
+    expect(state.verdict, Verdict.conflict);
+    expect(state.detail, contains('lightweight release tag'));
   });
 }

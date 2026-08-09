@@ -19,7 +19,7 @@ class Report {
   final String command;
 
   /// Wire format version, bumped only when a key changes meaning.
-  static const schema = 1;
+  static const schema = 2;
 
   /// Units by name, in the order they were first mentioned.
   ///
@@ -37,8 +37,9 @@ class Report {
   ///
   /// Two questions, kept apart because conflating them made the flagship field
   /// wrong on the commonest halt: *is re-running safe* and *will re-running
-  /// help* are different. rk's execution model — inspect, act, verify, with
-  /// reality as the database — makes re-running safe in every case it has,
+  /// help* are different. rk's execution model — the same inspection before
+  /// and after an act, with reality as the database — makes re-running safe in
+  /// every case it has,
   /// including after a conflict, where a second run inspects and refuses
   /// again. What a conflict changes is that re-running will not fix it.
   var safeToRerun = true;
@@ -102,32 +103,6 @@ class Report {
         () => {'name': name, 'steps': <Map<String, Object?>>[]},
       );
 
-  /// Records what `verify` proved (or could not) about one published subject
-  /// of [unit] — a package at a version, later an asset.
-  void verification(
-    String unit,
-    String subject, {
-    required String verdict,
-    String? id,
-    String? detail,
-    Map<String, String> evidence = const {},
-    bool counts = true,
-  }) {
-    ((_entry(unit)['verifications'] ??= <Map<String, Object?>>[])
-            as List<Map<String, Object?>>)
-        .add({
-      if (id != null) 'id': id,
-      'subject': subject,
-      'verdict': verdict,
-      // False marks a disclosure: the subject was named as unexamined, not
-      // judged. A caller folding verifications into pass/fail skips these —
-      // they never claimed to be proofs.
-      'counts': counts,
-      if (detail != null) 'detail': detail,
-      if (evidence.isNotEmpty) 'evidence': evidence,
-    });
-  }
-
   /// Records a step under its own unit, keyed by [id].
   /// [verdict] is always written, and defaults to `unknown` rather than to
   /// nothing. An omitted key invites a caller to read "no verdict" as "nothing
@@ -146,6 +121,7 @@ class Report {
     String? detail,
     Map<String, String> evidence = const {},
     Duration? took,
+    String? action,
   }) {
     // Replace by id rather than append: a step is one fact, and recording it
     // twice — once at inspection, once after the act — gave a caller two
@@ -164,19 +140,53 @@ class Report {
       if (detail != null) 'detail': detail,
       if (evidence.isNotEmpty) 'evidence': evidence,
       if (took != null) 'took_ms': took.inMilliseconds,
+      if (action != null) 'action': action,
     });
   }
 
-  /// Every verification recorded, across units — the tally's source, so a
-  /// summary line cannot disagree with the rows it summarises.
-  List<Map<String, Object?>> get verifications => [
-        for (final unit in _units.values)
-          ...?(unit['verifications'] as List<Map<String, Object?>>?),
-      ];
+  /// Records one target-oriented status observation without introducing a
+  /// second readiness state machine. The target carries the same four-way
+  /// verdict as its checklist step; artifact status describes only the local
+  /// stage evidence for each filename.
+  void target({
+    required String unit,
+    required String id,
+    required String kind,
+    required String label,
+    required String coordinate,
+    required String targetVersion,
+    required String verdict,
+    required bool currentKnown,
+    String? currentVersion,
+    String? detail,
+    String? uses,
+    required List<Map<String, Object?>> artifacts,
+  }) {
+    final entry = _entry(unit);
+    final targets = entry.putIfAbsent(
+      'targets',
+      () => <Map<String, Object?>>[],
+    ) as List<Map<String, Object?>>;
+    targets.removeWhere((target) => target['id'] == id);
+    targets.add({
+      'id': id,
+      'kind': kind,
+      'label': label,
+      'coordinate': coordinate,
+      'current_known': currentKnown,
+      'current_version': currentVersion,
+      'target_version': targetVersion,
+      'verdict': verdict,
+      if (detail != null) 'detail': detail,
+      if (uses != null) 'uses': uses,
+      'artifacts': artifacts,
+    });
+  }
 
-  void problem(Diagnostic diagnostic, {String? unit}) {
+  void problem(Diagnostic diagnostic, {String? unit, String? target}) {
     _problems.add({
       if (unit != null) 'unit': unit,
+      if (target != null) 'target': target,
       'code': diagnostic.code,
       'message': diagnostic.message,
       if (diagnostic.source != null) 'source': diagnostic.source.toString(),

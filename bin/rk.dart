@@ -2,8 +2,8 @@
 ///
 /// Everything a run needs is built here and nowhere else: this file finds the
 /// git root, reads and parses `release.toml`, resolves it against the
-/// repository, and constructs the `Registry`, `SystemTools`, `Comparator` and
-/// `Output` the verbs are handed. It then dispatches to one of the four verbs
+/// repository, and constructs the `Registry`, `SystemTools`, and `Output` the
+/// verbs are handed. It then dispatches to one of the three verbs
 /// and, on a run that failed after acting, writes the diagnosis.
 ///
 /// So the answer to "where does rk read release.toml?" is `_prepare` below,
@@ -17,7 +17,7 @@ import 'dart:io';
 import 'package:release_kit/src/commands/init.dart';
 import 'package:release_kit/src/commands/release.dart';
 import 'package:release_kit/src/commands/status.dart';
-import 'package:release_kit/src/commands/verify.dart';
+import 'package:release_kit/src/destinations/pub_dev.dart';
 import 'package:release_kit/src/engine/compare.dart';
 import 'package:release_kit/src/engine/config.dart';
 import 'package:release_kit/src/output/diagnosis.dart';
@@ -27,92 +27,92 @@ import 'package:release_kit/src/engine/inspect.dart';
 import 'package:release_kit/src/output/output.dart';
 import 'package:release_kit/src/engine/registry.dart';
 import 'package:release_kit/src/engine/resolve.dart';
+import 'package:release_kit/src/engine/release_stage.dart';
 import 'package:release_kit/src/engine/source_tree.dart';
 import 'package:release_kit/src/engine/tools.dart';
+import 'package:release_kit/src/version.dart';
 
 const _usage = '''
 rk — an austere release tool
 
-Usage: rk [command] [unit]        a unit is one releasable package
-
-  status    Where things stand: what is live, ready, or blocking. Read-only.
-  init      Propose release.toml for this repository; writes only on a yes.
-  release   Plan, confirm, then act — asks before anything permanent.
-  verify    Prove a published release against its tag. Read-only.
-
-Bare `rk` runs status.
+Usage
+  rk                              status all units
+  rk --version                    print this binary's version
+  rk status [unit]                status all units or one
+  rk init                         propose release.toml; write only on a yes
+  rk release <unit>               stage, confirm, then publish one unit
+  rk release <unit> --stage       prepare its exact stage; publish nothing
 
 Flags
+  --version   print this binary's version and exit
   --json      the machine surface (doc/json.md)
   --offline   status: derive the plan, read nothing
-  --dry-run   release: run every local step, touch nothing public
+  --stage     release: build, sign, and notarize exact artifacts; publish nothing
   --write     init: accept the proposal without a prompt
-  --at=<ref>  verify: against a tag or commit instead of the derived one
 
-Marks: ✓ done,  · already satisfied,  ✗ blocked,  → your next move,
+Marks: ✓ done,  · already satisfied,  ✗ problem or conflict,  → your next move,
        unmarked pending
-Exit:  0 clean or complete (status: blocked counts too), 1 refused or failed,
+Exit:  0 successful report or completed command, 1 refused or failed,
        2 usage, 3 rk itself crashed — --json mirrors it in "exit"
 ''';
 
 Future<void> main(List<String> args) async {
+  // This is deliberately self-contained: smoke tests, Homebrew, and a user
+  // holding only the compiled artifact must be able to identify its bytes
+  // without a repository, release.toml, network, or credential access.
+  if (args.length == 1 && args.single == '--version') {
+    stdout.writeln('rk $rkVersion');
+    return;
+  }
+
   const known = {
     '-h',
     '--help',
-    '--dry-run',
+    '--stage',
     '--json',
     '--offline',
     '--write',
   };
-  // `--at=<ref>` carries a value, so it is peeled before the set membership
-  // checks that every other flag goes through.
-  String? at;
-  var atEmpty = false;
-  final flags = <String>{};
-  for (final arg in args.where((a) => a.startsWith('-'))) {
-    if (arg.startsWith('--at=')) {
-      at = arg.substring('--at='.length);
-      if (at.isEmpty) atEmpty = true;
-      continue;
-    }
-    flags.add(arg);
-  }
+  final flags = args.where((a) => a.startsWith('-')).toSet();
   final positional = args.where((a) => !a.startsWith('-')).toList();
   final json = flags.contains('--json');
 
-  // A bare unit name is the common slip, so an unrecognised verb is tried as
-  // one — but the verb is decided here, once, so that every path below agrees
-  // on what ran and no flag is quietly dropped by a fallthrough.
-  const verbs = {'status', 'verify', 'release', 'init'};
+  const verbs = {'status', 'release', 'init'};
   final first = positional.isEmpty ? null : positional.first;
-  final command = first == null || !verbs.contains(first) ? 'status' : first;
-  final target = first != null && !verbs.contains(first)
-      ? first
-      : (positional.length > 1 ? positional[1] : null);
+  final command = first ?? 'status';
+  final target = positional.length > 1 ? positional[1] : null;
 
   final output = Output.stdio(json: json, command: command);
   // The document says how it was asked to read, so a caller can tell
   // "checked, inconclusive" from "never looked" — an offline run's unknowns
   // are only interpretable with this beside them.
   output.report.mode.addAll({
-    'dry_run': flags.contains('--dry-run'),
+    'stage': flags.contains('--stage'),
     'offline': flags.contains('--offline'),
-    if (at != null) 'at': at,
   });
+
+  if (!verbs.contains(command)) {
+    output.problem(
+      Diagnostic(
+        code: 'RK-CLI-008',
+        message: 'rk has no command named "$command"',
+        remedy: _usage.trim(),
+      ),
+    );
+    exitCode = ExitCodes.usage;
+    if (json) stdout.write(output.report.encode(exit: ExitCodes.usage));
+    return;
+  }
 
   // A flag that exists but does not apply to this verb is refused the same
   // way as one that does not exist: `rk release --offline` performing live
   // reads under a flag that promises none is worse than an error.
   const perVerb = {
     'status': {'-h', '--help', '--json', '--offline'},
-    'verify': {'-h', '--help', '--json'},
-    'release': {'-h', '--help', '--json', '--dry-run'},
+    'release': {'-h', '--help', '--json', '--stage'},
     'init': {'-h', '--help', '--json', '--write'},
   };
-  final inapplicable = {
-    ...flags.difference(perVerb[command] ?? known),
-    if (at != null && command != 'verify') '--at=<ref>',
-  };
+  final inapplicable = flags.difference(perVerb[command] ?? known);
   final unknown = flags.difference(known);
   if (unknown.isNotEmpty) {
     // Silently ignoring a flag is worse than refusing it: a caller asking for
@@ -146,23 +146,18 @@ Future<void> main(List<String> args) async {
     return;
   }
 
-  // Misuse is refused, not repaired: an empty ref would be resolved as
-  // something, a third word would be dropped as if it had not been said, and
-  // `rk init somepkg` would configure the whole repository while reading as
-  // if it had scoped itself to one unit.
-  if (atEmpty ||
-      positional.length > 2 ||
-      (command == 'init' && target != null)) {
+  // Misuse is refused, not repaired: a third word would be dropped as if it
+  // had not been said, and `rk init somepkg` would configure the whole
+  // repository while reading as if it had scoped itself to one unit.
+  if (positional.length > 2 || (command == 'init' && target != null)) {
     output.problem(
       Diagnostic(
         code: 'RK-CLI-007',
-        message: atEmpty
-            ? '--at= names no ref'
-            : command == 'init' && positional.length <= 2
-                ? 'rk init takes no unit — it proposes for the whole '
-                    'repository, and got "$target"'
-                : 'rk takes a verb and a unit, and got '
-                    '"${positional.join(' ')}"',
+        message: command == 'init' && positional.length <= 2
+            ? 'rk init takes no unit — it proposes for the whole '
+                'repository, and got "$target"'
+            : 'rk takes a verb and a unit, and got '
+                '"${positional.join(' ')}"',
         remedy: _usage.trim(),
       ),
     );
@@ -183,15 +178,33 @@ Future<void> main(List<String> args) async {
     return;
   }
 
+  // Release is deliberately never inferred. Even a repository with one unit
+  // must name it: a bare `rk release` would otherwise begin real producer
+  // work — including signing or notarization — when the operator has not said
+  // which release they intend. Refuse here, before reading release.toml or
+  // inspecting the repository, and enforce the same invariant again in the
+  // command for callers that do not enter through this parser.
+  if (command == 'release' && target == null) {
+    output.problem(
+      Diagnostic(
+        code: 'RK-CLI-004',
+        message: 'name the unit to release',
+        remedy: _usage.trim(),
+      ),
+    );
+    exitCode = ExitCodes.usage;
+    if (json) stdout.write(output.report.encode(exit: ExitCodes.usage));
+    return;
+  }
+
   int code;
   String? crash;
   try {
     code = switch (command) {
-      'verify' => await _verify(output, target, at: at),
       'release' => await _release(
           output,
           target,
-          dryRun: flags.contains('--dry-run'),
+          stageOnly: flags.contains('--stage'),
           interactive: !json,
         ),
       'init' => await _init(
@@ -285,10 +298,12 @@ Future<int> _init(
     return ExitCodes.usage;
   }
   final tree = GitSourceTree(root);
+  final git = GitState.read(root);
 
   return InitCommand(
     tree: tree,
     output: output,
+    origin: git.originUrl,
     write: (path, contents) => File('$root/$path').writeAsStringSync(contents),
     // A prompt would be written straight to stdout, past the sink that --json
     // silences, so asking is not an option when a caller is parsing the
@@ -302,7 +317,7 @@ Future<int> _init(
         ? (_) async => true
         : interactive && stdin.hasTerminal
             ? (prompt) async {
-                stdout.write(prompt);
+                output.prompt(prompt);
                 return InitCommand.consented(stdin.readLineSync());
               }
             : null,
@@ -312,7 +327,7 @@ Future<int> _init(
 Future<int> _release(
   Output output,
   String? unit, {
-  required bool dryRun,
+  required bool stageOnly,
   required bool interactive,
 }) async {
   final prepared = _prepare(output);
@@ -321,6 +336,8 @@ Future<int> _release(
   final tree = prepared.tree!;
   final registry = prepared.registry!;
   final git = GitState.read(tree.root);
+  final stages = ReleaseStages(source: tree, git: git);
+  const targetTools = SystemTools(timeout: Duration(minutes: 2));
   try {
     return await ReleaseCommand(
       resolution: resolution,
@@ -329,19 +346,27 @@ Future<int> _release(
       registry: registry,
       inspector: Inspector(
         registry: registry,
+        pubDev: PubDevTarget(
+          registry: registry,
+          comparator: Comparator(tools: targetTools),
+          source: GitCommitSourceTree(tree.root, git.head),
+        ),
         git: git,
-        tools: const SystemTools(),
+        tools: targetTools,
         repository: git.originUrl,
+        stageFor: stages.call,
       ),
-      comparator: Comparator(tools: const SystemTools()),
       tools: const SystemTools(),
       output: output,
       // The prompt is written straight to stdout, past the sink --json
       // silences: asking would corrupt the document, and the consequences the
       // prompt exists to disclose would be suppressed while the question was
       // still asked. release already refuses when nobody can authorize.
-      confirm: interactive ? _promptOnTerminal : null,
-      dryRun: dryRun,
+      confirm: interactive && stdin.hasTerminal ? _promptOnTerminal : null,
+      stageOnly: stageOnly,
+      stageFor: stages.call,
+      refreshStage: stages.refresh,
+      refreshGit: () => GitState.read(tree.root),
     ).run(only: unit);
   } finally {
     registry.close();
@@ -357,37 +382,6 @@ Future<String?> _promptOnTerminal(String prompt) async {
   if (!stdin.hasTerminal) return null;
   stdout.write(prompt);
   return stdin.readLineSync();
-}
-
-Future<int> _verify(Output output, String? unit, {String? at}) async {
-  final prepared = _prepare(output);
-  if (!prepared.isReady) return prepared.code!;
-  final resolution = prepared.resolution!;
-  final tree = prepared.tree!;
-  final registry = prepared.registry!;
-  // The same header every verb stamps: in a CI log these outputs get
-  // separated from their invocations, and a headerless transcript answers
-  // for no repository in particular.
-  final git = GitState.read(tree.root);
-  output.repository(
-    name: tree.root.split('/').last,
-    branch: git.branch,
-    uncommitted: git.uncommitted.length,
-    head: git.head,
-    remote: git.originUrl,
-  );
-  try {
-    return await VerifyCommand(
-      resolution: resolution,
-      registry: registry,
-      comparator: Comparator(tools: const SystemTools()),
-      treeAt: (ref) => GitTreeAtRef.at(tree.root, ref),
-      output: output,
-      at: at,
-    ).run(only: unit);
-  } finally {
-    registry.close();
-  }
 }
 
 /// What reading the repository produced: either everything a command needs,
@@ -476,6 +470,8 @@ Future<int> _status(
   final registry = prepared.registry!;
   try {
     final git = GitState.read(tree.root);
+    final stages = ReleaseStages(source: tree, git: git);
+    const targetTools = SystemTools(timeout: Duration(minutes: 2));
     return await StatusCommand(
       resolution: resolution,
       tree: tree,
@@ -483,12 +479,20 @@ Future<int> _status(
       registry: offline ? null : registry,
       inspector: Inspector(
         registry: offline ? null : registry,
+        pubDev: offline
+            ? null
+            : PubDevTarget(
+                registry: registry,
+                comparator: Comparator(tools: targetTools),
+                source: GitCommitSourceTree(tree.root, git.head),
+              ),
         git: git,
         // Offline is a wiring decision, not a mode the verb branches on:
         // nothing to read from means every verdict says "not read", through
         // the same paths and the same rendering as a live run.
-        tools: offline ? null : const SystemTools(),
+        tools: offline ? null : targetTools,
         repository: offline ? null : git.originUrl,
+        stageFor: stages.call,
       ),
       output: output,
     ).run(only: unit);

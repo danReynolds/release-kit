@@ -28,21 +28,10 @@ class Checklist {
   ) {
     final steps = <Step>[];
 
-    // A tag names the release. It is created for an interactive release and
-    // merely verified for a non-interactive one, but either way it precedes
-    // everything, because a forge release attaches to it.
-    steps.add(
-      Step(
-        id: '${unit.name}/tag/${unit.tag}',
-        kind: StepKind.tag,
-        unit: unit.name,
-        summary: 'tag ${unit.tag}',
-        needs: const [],
-      ),
-    );
-
     // A dependency released by another unit must already be public, so it is
-    // an inspect-only step rather than something this release performs.
+    // an inspect-only step rather than something this release performs. Keep
+    // these reads first: they can refuse an impossible release before local
+    // producers spend time or credentials.
     // One step per distinct coordinate — two dependents on the same package
     // are one fact about the world, not two — and every dependent waits on
     // each of its own, not merely the last one seen.
@@ -70,6 +59,37 @@ class Checklist {
 
     final publicationOrder = _publicationOrder(unit, diagnostics);
 
+    // Every local producer runs before a public identity exists. Their output
+    // is not permission to publish until the complete-stage barrier has
+    // finalized and validated the package, notes and manifest preflight too.
+    final localProducers = <Step>[];
+    for (final project in publicationOrder) {
+      if (!project.config.wantsBinaries) continue;
+      localProducers.addAll(_localBinarySteps(unit, project));
+    }
+    steps.addAll(localProducers);
+
+    final completeStage = Step(
+      id: '${unit.name}/stage/complete',
+      kind: StepKind.completeStage,
+      unit: unit.name,
+      summary: 'complete the local stage',
+      needs: [for (final producer in localProducers) producer.id],
+    );
+    steps.add(completeStage);
+
+    // The tag is the first public act. Even a unit without binary producers
+    // gets a stage barrier: registry package, notes and manifest preparation
+    // are finalized when the command executes that barrier.
+    final tag = Step(
+      id: '${unit.name}/tag/${unit.tag}',
+      kind: StepKind.tag,
+      unit: unit.name,
+      summary: 'tag ${unit.tag}',
+      needs: [completeStage.id],
+    );
+    steps.add(tag);
+
     // Publish steps are emitted first so a sibling's prerequisite can be a
     // lookup rather than a second place that reconstructs an id format.
     final published = <String, Step>{};
@@ -89,7 +109,7 @@ class Checklist {
     for (final project in publicationOrder) {
       final step = published[project.name];
       if (step == null) continue;
-      final needs = <String>[steps.first.id];
+      final needs = <String>[tag.id];
 
       for (final name in project.pubspec.dependencies.keys) {
         final sibling = published[name];
@@ -103,7 +123,14 @@ class Checklist {
     // Binary channels belong to the single project that requested them.
     for (final project in publicationOrder) {
       if (!project.config.wantsBinaries) continue;
-      steps.addAll(_binarySteps(unit, project, steps.first.id));
+      steps.addAll(
+        _binaryPublicationSteps(
+          unit,
+          project,
+          tag.id,
+          completeStage.id,
+        ),
+      );
     }
 
     // A refused input — a dependency circle, say — legitimately has no order,
@@ -120,8 +147,14 @@ class Checklist {
   /// than diagnose.
   static void _checkGraph(List<Step> steps) {
     final seen = <String>{};
+    var phase = StepPhase.inspect;
     for (var i = 0; i < steps.length; i++) {
       final step = steps[i];
+      if (step.phase.index < phase.index) {
+        throw StateError('"${step.id}" moves from the ${phase.name} phase '
+            'back to ${step.phase.name}');
+      }
+      phase = step.phase;
       if (!seen.add(step.id)) {
         throw StateError('two steps share the id "${step.id}"');
       }
@@ -181,10 +214,9 @@ class Checklist {
     return ordered;
   }
 
-  static List<Step> _binarySteps(
+  static List<Step> _localBinarySteps(
     ResolvedUnit unit,
     ResolvedProject project,
-    String tagStepId,
   ) {
     final steps = <Step>[];
     final built = <String>[];
@@ -197,7 +229,7 @@ class Checklist {
         project: project.name,
         platform: platform,
         summary: 'build ${project.executable} for $platform',
-        needs: [tagStepId],
+        needs: const [],
       );
       steps.add(build);
 
@@ -251,6 +283,17 @@ class Checklist {
     );
     steps.add(checksums);
 
+    return steps;
+  }
+
+  static List<Step> _binaryPublicationSteps(
+    ResolvedUnit unit,
+    ResolvedProject project,
+    String tagStepId,
+    String completeStageStepId,
+  ) {
+    final steps = <Step>[];
+
     final publish = Step(
       id: '${unit.name}/github-release/${unit.tag}',
       kind: StepKind.publishRelease,
@@ -258,7 +301,7 @@ class Checklist {
       project: project.name,
       summary: 'publish ${ReleaseAssets.expectedFor(project).length} assets '
           'to the ${unit.tag} release',
-      needs: [...built, checksums.id],
+      needs: [tagStepId, completeStageStepId],
     );
     steps.add(publish);
 
@@ -291,10 +334,20 @@ enum StepKind {
   notarize,
   archive,
   checksums,
+
+  /// The locally validated release receipt exists and is complete.
+  completeStage,
   publishRegistry,
   publishRelease,
   publishFormula,
 }
+
+/// The three safety phases a checklist may cross, in order.
+///
+/// This is deliberately derived from [StepKind]: there is one source of
+/// truth, while callers can enforce the stage-before-public boundary without
+/// depending on where a step happened to be appended to a list.
+enum StepPhase { inspect, stage, publish }
 
 /// One entry in a checklist, executable in isolation from its id, the
 /// workspace, and destination reality — never from state a previous step left
@@ -343,13 +396,22 @@ class Step {
   final List<String> needs;
 
   /// Whether this step changes something outside the workspace.
-  bool get isPublic => switch (kind) {
+  bool get isPublic => phase == StepPhase.publish;
+
+  StepPhase get phase => switch (kind) {
+        StepKind.prerequisite => StepPhase.inspect,
+        StepKind.build ||
+        StepKind.sign ||
+        StepKind.notarize ||
+        StepKind.archive ||
+        StepKind.checksums ||
+        StepKind.completeStage =>
+          StepPhase.stage,
         StepKind.tag ||
         StepKind.publishRegistry ||
         StepKind.publishRelease ||
         StepKind.publishFormula =>
-          true,
-        _ => false,
+          StepPhase.publish,
       };
 
   /// Whether this step's effect can never be taken back.

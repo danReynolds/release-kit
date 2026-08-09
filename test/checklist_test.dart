@@ -41,15 +41,25 @@ binary_platforms = ["linux-x64", "linux-arm64", "macos-arm64"]
 void main() {
   frozenIdVectors();
 
-  test('a registry-only unit is a tag and a publish', () {
+  test('a registry-only unit stages before its tag and publish', () {
     final resolution = resolve(keybayConfig, keybayTree);
     final checklist =
         Checklist.derive(resolution.unit('core')!, resolution, Diagnostics());
 
     expect(checklist.steps.map((s) => s.id), [
+      'core/stage/complete',
       'core/tag/keybay-v0.2.0',
       'core/pub.dev/keybay@0.2.0',
     ]);
+    expect(checklist['core/stage/complete']!.needs, isEmpty);
+    expect(
+      checklist['core/tag/keybay-v0.2.0']!.needs,
+      ['core/stage/complete'],
+    );
+    expect(
+      checklist['core/pub.dev/keybay@0.2.0']!.needs,
+      ['core/tag/keybay-v0.2.0'],
+    );
   });
 
   test('the binary chain covers every declared platform', () {
@@ -69,6 +79,7 @@ void main() {
     expect(ids, contains('cli/notarize/macos-arm64'));
     expect(ids, contains('cli/archive/linux-x64'));
     expect(ids, contains('cli/checksums/SHA256SUMS'));
+    expect(ids, contains('cli/stage/complete'));
     expect(ids, contains('cli/github-release/keybay_cli-v0.2.0'));
     expect(ids, contains('cli/homebrew/keybay'));
   });
@@ -97,14 +108,62 @@ void main() {
     );
   });
 
-  test('the release waits for every archive and the checksums', () {
+  test('the complete-stage barrier waits for every local producer', () {
     final resolution = resolve(keybayConfig, keybayTree);
     final checklist =
         Checklist.derive(resolution.unit('cli')!, resolution, Diagnostics());
-    final needs = checklist['cli/github-release/keybay_cli-v0.2.0']!.needs;
+    final producers = checklist.steps
+        .where((step) => const {
+              StepKind.build,
+              StepKind.sign,
+              StepKind.notarize,
+              StepKind.archive,
+              StepKind.checksums,
+            }.contains(step.kind))
+        .map((step) => step.id)
+        .toList();
 
-    expect(needs, hasLength(4), reason: '3 archives and SHA256SUMS');
-    expect(needs, contains('cli/checksums/SHA256SUMS'));
+    expect(checklist['cli/stage/complete']!.needs, producers);
+    expect(
+      checklist['cli/github-release/keybay_cli-v0.2.0']!.needs,
+      [
+        'cli/tag/keybay_cli-v0.2.0',
+        'cli/stage/complete',
+      ],
+    );
+  });
+
+  test('every public act transitively depends on the complete stage', () {
+    final resolution = resolve(keybayConfig, keybayTree);
+    final checklist =
+        Checklist.derive(resolution.unit('cli')!, resolution, Diagnostics());
+    const barrier = 'cli/stage/complete';
+
+    for (final step in checklist.steps.where((step) => step.isPublic)) {
+      expect(
+        _transitivelyNeeds(checklist, step, barrier),
+        isTrue,
+        reason: '${step.id} can act publicly without $barrier',
+      );
+    }
+  });
+
+  test('the explicit safety phases never move backwards', () {
+    final resolution = resolve(keybayConfig, keybayTree);
+    final checklist =
+        Checklist.derive(resolution.unit('cli')!, resolution, Diagnostics());
+    var phase = StepPhase.inspect;
+    for (final step in checklist.steps) {
+      expect(
+        step.phase.index,
+        greaterThanOrEqualTo(phase.index),
+        reason: '${step.id} moved from ${phase.name} back to '
+            '${step.phase.name}',
+      );
+      phase = step.phase;
+    }
+    expect(checklist['cli/stage/complete']!.phase, StepPhase.stage);
+    expect(checklist['cli/tag/keybay_cli-v0.2.0']!.phase, StepPhase.publish);
   });
 
   test('the formula waits for the release to be public', () {
@@ -193,7 +252,10 @@ publish = ["pub.dev"]
           resolution.unit('framework')!, resolution, Diagnostics());
       expect(
         checklist['framework/pub.dev/fleury_test@0.1.0']!.needs,
-        contains('framework/pub.dev/fleury@0.1.0'),
+        [
+          'framework/tag/fleury-v0.1.0',
+          'framework/pub.dev/fleury@0.1.0',
+        ],
       );
     });
   });
@@ -250,6 +312,19 @@ publish = ["pub.dev"]
         diagnostics,
       );
       expect(prerequisites.single.coordinate, 'pub.dev/keybay/0.2.0');
+
+      final checklist = Checklist.derive(
+        resolution.unit('cli')!,
+        resolution,
+        Diagnostics(),
+      );
+      expect(
+        checklist['cli/pub.dev/keybay_cli@0.2.0']!.needs,
+        [
+          'cli/tag/keybay_cli-v0.2.0',
+          'cli/requires/pub.dev/keybay/0.2.0',
+        ],
+      );
     });
 
     test('a third-party dependency is not a prerequisite', () {
@@ -332,9 +407,7 @@ executables:
         Checklist.derive(resolution.unit('cli')!, resolution, Diagnostics());
 
     expect(checklist.steps.map((s) => s.id).toList(), [
-      'cli/tag/keybay_cli-v0.2.0',
       'cli/requires/pub.dev/keybay/0.2.0',
-      'cli/pub.dev/keybay_cli@0.2.0',
       'cli/build/linux-x64',
       'cli/archive/linux-x64',
       'cli/build/linux-arm64',
@@ -344,8 +417,24 @@ executables:
       'cli/notarize/macos-arm64',
       'cli/archive/macos-arm64',
       'cli/checksums/SHA256SUMS',
+      'cli/stage/complete',
+      'cli/tag/keybay_cli-v0.2.0',
+      'cli/pub.dev/keybay_cli@0.2.0',
       'cli/github-release/keybay_cli-v0.2.0',
       'cli/homebrew/keybay',
     ]);
   });
+}
+
+bool _transitivelyNeeds(Checklist checklist, Step step, String requiredId) {
+  final pending = [...step.needs];
+  final seen = <String>{};
+  while (pending.isNotEmpty) {
+    final id = pending.removeLast();
+    if (id == requiredId) return true;
+    if (!seen.add(id)) continue;
+    final dependency = checklist[id];
+    if (dependency != null) pending.addAll(dependency.needs);
+  }
+  return false;
 }

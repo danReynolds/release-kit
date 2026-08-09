@@ -18,10 +18,12 @@ class InitCommand {
     required this.output,
     required this.write,
     required this.confirm,
+    this.origin,
   });
 
   final SourceTree tree;
   final Output output;
+  final String? origin;
 
   /// Writes the file, so the command is testable without a filesystem.
   final void Function(String path, String contents) write;
@@ -47,7 +49,7 @@ class InitCommand {
     // proposal-awaiting-a-human — used to produce byte-identical empty
     // documents under --json. Each is data now: a state is a problem entry
     // with exit 0, the same shape status uses for blocked-but-not-failed.
-    output.repository(name: _name());
+    output.repository(name: _name(), remote: origin);
 
     // The same reading rules as every other verb: unreadable is not absent,
     // and neither is a repository that cannot be listed. Before this, both
@@ -168,11 +170,12 @@ class InitCommand {
 
     if (confirm == null) {
       output.blank();
-      // A refusal names its door, and this one has two.
-      output.say('nothing was written — there is no terminal to confirm in.\n'
-          'to accept: rk init --write — writes the above and adds .rk/ '
-          '(rk\'s local\nwork files, never a source of truth) to .gitignore '
-          '— or run rk init at a terminal.');
+      output.say('nothing was written — there is no terminal to confirm in.');
+      output.next('rk init --write');
+      output.say(
+          'writes the proposal and adds .rk/ to .gitignore; or run '
+          'rk init at a terminal.',
+          depth: 1);
       return ExitCodes.ok;
     }
 
@@ -185,8 +188,8 @@ class InitCommand {
 
     output.blank();
     if (needsIgnore) {
-      output.say('.rk/ holds rk\'s local work files — never a source of '
-          'truth, always safe to delete.');
+      output.say('.rk/ holds rk\'s private work files — never public truth. '
+          'Keep it while a binary release is partial.');
     }
     final prompt = needsIgnore
         ? 'write release.toml and add .rk/ to .gitignore? [Y/n] '
@@ -194,8 +197,8 @@ class InitCommand {
     if (!await confirm!(prompt)) {
       // A decline and an EOF land here alike, and both deserve the doors:
       // the answer may have been "not like this", not "never".
-      output.say('nothing was written. To accept exactly the proposal '
-          'above: rk init --write');
+      output.say('nothing was written.');
+      output.next('rk init --write');
       return ExitCodes.ok;
     }
 

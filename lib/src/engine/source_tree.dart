@@ -30,6 +30,36 @@ abstract class SourceTree {
   String get description;
 }
 
+/// One entry in an immutable Git tree, including the metadata that makes the
+/// entry more than its blob bytes.
+///
+/// Release staging accepts only ordinary blobs. Keeping the mode and object
+/// type here prevents an executable, symlink, or gitlink from being silently
+/// materialized as a default-mode regular file while the receipt still claims
+/// to represent the original Git tree.
+class GitTreeEntry {
+  const GitTreeEntry({
+    required this.path,
+    required this.mode,
+    required this.type,
+  });
+
+  final String path;
+  final String mode;
+  final String type;
+
+  bool get isRegularFile =>
+      type == 'blob' && (mode == '100644' || mode == '100755');
+
+  bool get executable => mode == '100755';
+
+  String get unsupportedKind => switch ((mode, type)) {
+        ('120000', 'blob') => 'symbolic link',
+        ('160000', 'commit') => 'gitlink/submodule',
+        _ => '$type with mode $mode',
+      };
+}
+
 /// A repository on disk, listing files through git so untracked material is
 /// invisible.
 class GitSourceTree implements SourceTree {
@@ -104,6 +134,69 @@ class GitSourceTree implements SourceTree {
     return _tracked = out.split('\u0000').where((p) => p.isNotEmpty).toList();
   }
 
+  /// Files and bytes from one immutable commit, bypassing the worktree and
+  /// index. Release staging uses these after it captures HEAD and its tree so
+  /// a concurrent edit cannot be trusted under the old tree identity.
+  List<GitTreeEntry> trackedEntriesAt(String commit) {
+    final result = Process.runSync(
+      'git',
+      ['ls-tree', '-r', '-z', commit],
+      workingDirectory: root,
+    );
+    if (result.exitCode != 0) {
+      throw SourceUnreadable(
+        'the source tree at $commit',
+        (result.stderr as String).trim(),
+      );
+    }
+    final entries = <GitTreeEntry>[];
+    for (final record in (result.stdout as String)
+        .split('\u0000')
+        .where((r) => r.isNotEmpty)) {
+      final separator = record.indexOf('\t');
+      if (separator <= 0 || separator == record.length - 1) {
+        throw SourceUnreadable(
+          'the source tree at $commit',
+          'git returned a malformed tree entry',
+        );
+      }
+      final metadata = record.substring(0, separator).split(' ');
+      final path = record.substring(separator + 1);
+      if (metadata.length != 3 ||
+          !RegExp(r'^[0-7]{6}$').hasMatch(metadata[0]) ||
+          !RegExp(r'^(?:[0-9a-f]{40}|[0-9a-f]{64})$').hasMatch(metadata[2])) {
+        throw SourceUnreadable(
+          'the source tree at $commit',
+          'git returned malformed mode, type, or object metadata for $path',
+        );
+      }
+      _resolve(path);
+      entries.add(GitTreeEntry(
+        path: path,
+        mode: metadata[0],
+        type: metadata[1],
+      ));
+    }
+    return entries;
+  }
+
+  List<String> trackedFilesAt(String commit) =>
+      trackedEntriesAt(commit).map((entry) => entry.path).toList();
+
+  List<int> readBytesAt(String commit, String path) {
+    _resolve(path); // validates that [path] cannot escape the repository.
+    final result = Process.runSync(
+      'git',
+      ['show', '$commit:$path'],
+      workingDirectory: root,
+      stdoutEncoding: null,
+    );
+    if (result.exitCode != 0) {
+      throw SourceUnreadable(path, '${result.stderr}'.trim());
+    }
+    return List<int>.from(result.stdout as List<int>);
+  }
+
   /// The repository root containing [start], or null when there is none.
   static String? findRoot(String start) {
     final result = Process.runSync(
@@ -113,6 +206,126 @@ class GitSourceTree implements SourceTree {
     );
     if (result.exitCode != 0) return null;
     return (result.stdout as String).trim();
+  }
+}
+
+/// One immutable Git commit exposed through the synchronous [SourceTree]
+/// contract.
+///
+/// Status uses this when no local release stage exists. A dirty worktree is a
+/// problem to report, but it must not make an exact published package look
+/// different from the committed source the target version names.
+class GitCommitSourceTree implements SourceTree {
+  GitCommitSourceTree(String root, this.commit)
+      : _repository = GitSourceTree(root);
+
+  final GitSourceTree _repository;
+  final String commit;
+  List<String>? _tracked;
+
+  @override
+  String get description => '${_repository.root}@$commit';
+
+  String _path(String path) {
+    final parts =
+        path.split('/').where((part) => part.isNotEmpty && part != '.');
+    if (parts.contains('..')) {
+      throw ArgumentError('path escapes the committed source: $path');
+    }
+    return parts.join('/');
+  }
+
+  @override
+  List<String> trackedFiles() =>
+      _tracked ??= _repository.trackedFilesAt(commit);
+
+  @override
+  bool exists(String path) {
+    final target = _path(path);
+    if (target.isEmpty) return true;
+    if (trackedFiles().contains(target)) return true;
+    final prefix = '$target/';
+    return trackedFiles().any((candidate) => candidate.startsWith(prefix));
+  }
+
+  @override
+  List<int>? readBytes(String path) {
+    final target = _path(path);
+    if (!trackedFiles().contains(target)) return null;
+    return _repository.readBytesAt(commit, target);
+  }
+
+  @override
+  String? read(String path) {
+    final bytes = readBytes(path);
+    return bytes == null ? null : utf8.decode(bytes);
+  }
+}
+
+/// A read-only source snapshot materialized beneath a release stage.
+///
+/// Unlike [GitSourceTree], this directory deliberately has no `.git`
+/// metadata. Its inventory is the regular-file tree copied from Git before
+/// producers ran, so pub.dev comparison and changelog extraction can keep
+/// using the [SourceTree] contract without falling back to the mutable
+/// worktree.
+class SnapshotSourceTree implements SourceTree {
+  SnapshotSourceTree(this.root);
+
+  final String root;
+
+  @override
+  String get description => root;
+
+  String _resolve(String path) {
+    final parts =
+        path.split('/').where((part) => part.isNotEmpty && part != '.');
+    if (parts.contains('..')) {
+      throw ArgumentError('path escapes the source snapshot: $path');
+    }
+    return [root, ...parts].join('/');
+  }
+
+  @override
+  String? read(String path) {
+    final bytes = readBytes(path);
+    return bytes == null ? null : utf8.decode(bytes);
+  }
+
+  @override
+  List<int>? readBytes(String path) {
+    final file = File(_resolve(path));
+    if (!file.existsSync()) return null;
+    try {
+      return file.readAsBytesSync();
+    } on FileSystemException catch (error) {
+      throw SourceUnreadable(path, error.osError?.message ?? '$error');
+    }
+  }
+
+  @override
+  bool exists(String path) {
+    final full = _resolve(path);
+    return File(full).existsSync() || Directory(full).existsSync();
+  }
+
+  @override
+  List<String> trackedFiles() {
+    final directory = Directory(root);
+    if (!directory.existsSync()) return const [];
+    final files = <String>[];
+    for (final entity
+        in directory.listSync(recursive: true, followLinks: false)) {
+      if (entity is! File) continue;
+      files.add(
+        entity.path
+            .substring(directory.path.length + 1)
+            .split(Platform.pathSeparator)
+            .join('/'),
+      );
+    }
+    files.sort();
+    return files;
   }
 }
 
@@ -148,104 +361,6 @@ class MemorySourceTree implements SourceTree {
 
   static String _normalize(String path) =>
       path.split('/').where((p) => p.isNotEmpty && p != '.').join('/');
-}
-
-/// The repository as it stood at a ref — a tag, a commit — read from git's
-/// object store rather than the working copy.
-///
-/// This is what lets `rk verify` answer for a release made months ago from a
-/// worktree that has long since moved on: the comparison runs against what
-/// the tag names, not whatever is on disk today. Reads are `git show` and
-/// `git ls-tree`, so nothing here can see uncommitted state, and nothing
-/// needs the working copy to be clean.
-class GitTreeAtRef implements SourceTree {
-  GitTreeAtRef._(this.root, this.ref, this.commit);
-
-  /// The tree at [ref], or null when the ref does not resolve to a commit.
-  ///
-  /// Resolved up front so a typo in a tag name is one clear refusal rather
-  /// than a cascade of per-file "not found"s reading as an empty release.
-  static GitTreeAtRef? at(String root, String ref) {
-    final resolved = Process.runSync(
-      'git',
-      ['rev-parse', '--verify', '--quiet', '$ref^{commit}'],
-      workingDirectory: root,
-    );
-    if (resolved.exitCode != 0) return null;
-    return GitTreeAtRef._(root, ref, (resolved.stdout as String).trim());
-  }
-
-  final String root;
-  final String ref;
-
-  /// The commit [ref] peels to — the provenance a verification binds to.
-  final String commit;
-
-  @override
-  String get description => '$root@$ref';
-
-  String _inside(String path) {
-    final parts =
-        path.split('/').where((p) => p.isNotEmpty && p != '.').toList();
-    if (parts.contains('..')) {
-      throw ArgumentError('path escapes the repository: $path');
-    }
-    return parts.join('/');
-  }
-
-  @override
-  String? read(String path) {
-    final bytes = readBytes(path);
-    return bytes == null ? null : utf8.decode(bytes, allowMalformed: true);
-  }
-
-  @override
-  List<int>? readBytes(String path) {
-    final result = Process.runSync(
-      'git',
-      ['show', '$commit:${_inside(path)}'],
-      workingDirectory: root,
-      stdoutEncoding: null,
-    );
-    if (result.exitCode != 0) return null;
-    return result.stdout as List<int>;
-  }
-
-  @override
-  bool exists(String path) => readBytes(path) != null || _isDirectory(path);
-
-  bool _isDirectory(String path) {
-    final result = Process.runSync(
-      'git',
-      ['ls-tree', '-d', '--name-only', commit, _inside(path)],
-      workingDirectory: root,
-    );
-    return result.exitCode == 0 && (result.stdout as String).trim().isNotEmpty;
-  }
-
-  List<String>? _tracked;
-
-  @override
-  List<String> trackedFiles() {
-    if (_tracked != null) return _tracked!;
-    final result = Process.runSync(
-      'git',
-      ['ls-tree', '-r', '--name-only', '-z', commit],
-      workingDirectory: root,
-    );
-    if (result.exitCode != 0) {
-      // The commit was verified at construction, so a listing that fails now
-      // is the object store misbehaving — an answer verify must not read as
-      // "this release contained no files".
-      throw SourceUnreadable(
-        'the file list at $ref',
-        (result.stderr as String).trim(),
-      );
-    }
-    final out = result.stdout as String;
-    return _tracked =
-        out.split(String.fromCharCode(0)).where((p) => p.isNotEmpty).toList();
-  }
 }
 
 /// A file that is there and that rk could not read.

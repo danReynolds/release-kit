@@ -120,6 +120,27 @@ class HostCapabilities {
 
   /// Reads the host, and whether a container runtime is answering.
   static HostCapabilities detect({bool hasNativeAssets = false}) {
+    return HostCapabilities(
+      hostPlatform: _hostPlatform(),
+      containerRuntime: _containerRuntimeRunning(),
+      hasNativeAssets: hasNativeAssets,
+    );
+  }
+
+  /// The cheap, read-only capability view used by status.
+  ///
+  /// It deliberately does not wake Docker, read a keychain, compile, sign, or
+  /// contact Apple. Linux cross-targets remain producible-but-unproven without
+  /// a runtime, while targets the SDK cannot produce from this OS are known
+  /// blockers and can be reported before `rk release --stage` is attempted.
+  static HostCapabilities inspect({bool hasNativeAssets = false}) =>
+      HostCapabilities(
+        hostPlatform: _hostPlatform(),
+        containerRuntime: null,
+        hasNativeAssets: hasNativeAssets,
+      );
+
+  static String _hostPlatform() {
     final os = Platform.isMacOS
         ? 'macos'
         : Platform.isLinux
@@ -129,12 +150,7 @@ class HostCapabilities {
     // Dart reports the architecture through its own version banner, which is
     // the only place it is exposed without a package.
     final arch = Platform.version.contains('arm64') ? 'arm64' : 'x64';
-
-    return HostCapabilities(
-      hostPlatform: '$os-$arch',
-      containerRuntime: _containerRuntimeRunning(),
-      hasNativeAssets: hasNativeAssets,
-    );
+    return '$os-$arch';
   }
 
   /// The first runtime that answers, by name — docker first because it is

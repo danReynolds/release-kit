@@ -1,6 +1,6 @@
 /// The subset of gitignore syntax rk understands, for reading `.pubignore`.
 ///
-/// Why this exists: verify's second direction asks whether every file in the
+/// Why this exists: pub.dev exactness asks whether every file in the
 /// source made it into the published archive, and a `.pubignore` legitimately
 /// keeps files out. Without reading it, rk could only answer "some tracked
 /// files are absent and I cannot say why" — an honest partial, and a useless

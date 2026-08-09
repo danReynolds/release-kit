@@ -67,8 +67,6 @@ void main() {
         contains('cli/requires/pub.dev/example_core/0.3.0'),
         reason: 'a dependency on another unit is a step, not a footnote',
       );
-      expect(run.all, contains('needs'));
-      expect(run.all, contains('example_core'));
     });
 
     test('the workspace root is not mistaken for a package', () {
@@ -76,8 +74,26 @@ void main() {
     });
 
     test('it says what it did not read, so nothing reads as done', () {
-      expect(run.all, contains('derived from the manifests alone'));
-      expect(run.all, contains('says what is already done'));
+      expect(run.all, contains('public targets were not read'));
+      expect(run.all, contains('Unknown is not treated as unpublished'));
+    });
+
+    test('chosen offline mode is one issue per unit, not one per target', () {
+      final document = offlineJson('workspace-with-dependent');
+      final offlineProblems = document.problems.where(
+        (problem) => problem['message'].toString().contains(
+              'public targets were not read',
+            ),
+      );
+      expect(offlineProblems, hasLength(2));
+      expect(
+        document.problems.where(
+          (problem) => problem['message'].toString().contains(
+                'could not be read: not read: --offline',
+              ),
+        ),
+        isEmpty,
+      );
     });
   });
 
@@ -148,8 +164,14 @@ void main() {
       ]) {
         expect(ids, contains(expected), reason: ids.join('\n'));
       }
-      // The reader sees the same chain folded onto one row per platform.
-      expect(run.all, contains('build › sign › notarize › archive'));
+      // The reader sees the concrete outputs the target needs, while the
+      // machine surface preserves the complete ordered production chain.
+      expect(run.all, contains('example-tool-2.1.0-macos-arm64.tar.gz'));
+      expect(
+        run.all,
+        contains('example-tool-2.1.0-macos-arm64.notary-result.json'),
+      );
+      expect(run.all, contains('SHA256SUMS'));
     });
 
     test('only macOS is signed', () {
@@ -176,23 +198,71 @@ void main() {
     late Rk repo;
     setUpAll(() => repo = Rk.example(scratch, 'single-package', as: 'flags'));
 
-    test('--at on a verb that is not verify', () {
+    test('--at is not a supported flag', () {
       final run = repo(['status', '--at=v1.0.0', '--json']);
       expect(run.code, 2, reason: run.all);
-      expect(run.problems.map((p) => p['code']), contains('RK-CLI-005'));
+      expect(run.problems.map((p) => p['code']), contains('RK-CLI-001'));
+      expect(run.all, contains('rk does not have --at=v1.0.0'));
     });
 
-    test('an empty --at names no ref', () {
-      final run = repo(['verify', '--at=', '--json']);
+    test('verify is not a command', () {
+      final run = repo(['verify', '--json']);
       expect(run.code, 2);
-      expect(run.problems.map((p) => p['code']), contains('RK-CLI-007'));
+      expect(run.problems.map((p) => p['code']), contains('RK-CLI-008'));
+      expect(
+          run.problems.single['message'], 'rk has no command named "verify"');
+    });
+
+    test('a unit name is scoped through status, not inferred as a command', () {
+      final run = repo(['lib', '--json']);
+      expect(run.code, 2);
+      expect(run.problems.map((p) => p['code']), contains('RK-CLI-008'));
+      expect(run.all, contains('rk status [unit]'));
     });
 
     test('a third word is refused, not silently dropped', () {
-      final run = repo(['verify', 'lib', 'bogus', '--json']);
+      final run = repo(['status', 'lib', 'bogus', '--json']);
       expect(run.code, 2);
       expect(run.problems.map((p) => p['code']), contains('RK-CLI-007'));
     });
+
+    test('release help names its required unit without requiring one', () {
+      final run = repo(['release', '--help']);
+      expect(run.code, 0, reason: run.all);
+      expect(run.all, contains('rk release <unit>'));
+      expect(run.all, contains('rk release <unit> --stage'));
+    });
+  });
+
+  test('--version identifies the binary without repository preparation', () {
+    final loose = Directory('${scratch.path}/version-only')..createSync();
+    final run = Rk(loose.path)(['--version']);
+    final manifestVersion = RegExp(
+      r'^version: *([^ ]+) *$',
+      multiLine: true,
+    ).firstMatch(File('pubspec.yaml').readAsStringSync())!.group(1);
+
+    expect(run.code, 0, reason: run.all);
+    expect(run.stdout, 'rk $manifestVersion\n');
+    expect(run.stderr, isEmpty);
+    expect(Directory('${loose.path}/.rk').existsSync(), isFalse);
+  });
+
+  test('release without a unit is refused before repository preparation', () {
+    final broken = Rk.repository(scratch, 'missing-release-unit', {
+      'release.toml': 'this is deliberately not release config\n',
+    });
+
+    final run = broken(['release', '--json']);
+
+    expect(run.code, 2, reason: run.all);
+    expect(run.problems.map((problem) => problem['code']), ['RK-CLI-004']);
+    expect(run.problems.single['message'], 'name the unit to release');
+    expect(
+      run.all,
+      isNot(contains('release.toml:')),
+      reason: 'the parser must refuse before it reads repository state',
+    );
   });
 
   group('a repository rk has nothing to say about', () {

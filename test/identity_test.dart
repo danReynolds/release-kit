@@ -1,5 +1,6 @@
 import 'package:release_kit/src/engine/identity.dart';
 import 'package:release_kit/src/engine/tools.dart';
+import 'package:release_kit/src/engine/version.dart';
 import 'package:test/test.dart';
 
 import 'scripted_tools.dart';
@@ -12,10 +13,67 @@ void main() {
         workingDirectory: '/repo',
       );
 
+  group('public signing history', () {
+    test('is complete, public-only, and newest first in a shallow checkout',
+        () async {
+      final history = await identity({
+        'gh': ok('''[[
+          {"tag_name":"v0.7.0","draft":false},
+          {"tag_name":"v0.9.0","draft":false},
+          {"tag_name":"v0.8.0","draft":true},
+          {"tag_name":"notes","draft":false}
+        ],[
+          {"tag_name":"v1.0.0","draft":false}
+        ]]'''),
+      }).priorReleaseTags(
+        tagPattern: 'v{version}',
+        before: Version.tryParse('1.0.0')!,
+      );
+
+      expect(history.readable, isTrue, reason: history.why);
+      expect(history.tags, ['v0.9.0', 'v0.7.0']);
+    });
+
+    test('an unreadable or malformed public history never means first release',
+        () async {
+      final unreachable = await identity({
+        'gh': failed('could not resolve host'),
+      }).priorReleaseTags(
+        tagPattern: 'v{version}',
+        before: Version.tryParse('1.0.0')!,
+      );
+      final malformed = await identity({
+        'gh': ok('[[{"tag_name":"v0.9.0"}]]'),
+      }).priorReleaseTags(
+        tagPattern: 'v{version}',
+        before: Version.tryParse('1.0.0')!,
+      );
+
+      expect(unreachable.readable, isFalse);
+      expect(malformed.readable, isFalse);
+    });
+
+    test('a listed release disappearing during identity read is unreadable',
+        () async {
+      final reading = await PublishedIdentity(
+        tools: SequencedTools([failed('gh: Not Found (HTTP 404)')]),
+        repository: 'example/tool',
+        workingDirectory: '/repo',
+      ).read(
+        tag: 'v0.9.0',
+        executable: 'example',
+        into: '/tmp/w',
+        expectedPublished: true,
+      );
+
+      expect(reading.answer, IdentityAnswer.unreadable);
+      expect(reading.why, contains('disappeared'));
+    });
+  });
+
   test('reads the requirement from the published binary', () async {
     final reading = await identity({
       'gh': ok('{"assets":[{"name":"example-2.1.0-macos-arm64.tar.gz"}]}'),
-      'sh': ok('/tmp/w/example-2.1.0-macos-arm64.tar.gz\n'),
       'tar': ok(),
       'codesign': ok('designated => identifier "com.example.tool" and '
           'certificate leaf[subject.OU] = "ABCDE12345"'),
@@ -28,7 +86,6 @@ void main() {
   test('runs the steps in the order that makes them meaningful', () async {
     final tools = ScriptedTools({
       'gh': ok('{"assets":[{"name":"example-2.1.0-macos-arm64.tar.gz"}]}'),
-      'sh': ok('/tmp/w/example-2.1.0-macos-arm64.tar.gz\n'),
       'tar': ok(),
       'codesign': ok('designated => identifier "x"'),
     });
@@ -40,9 +97,9 @@ void main() {
 
     expect(
       tools.calls.map((c) => c.first).toList(),
-      ['gh', 'gh', 'sh', 'tar', 'codesign'],
-      reason: 'ask the release, download, locate, open, then read the '
-          'signature',
+      ['gh', 'gh', 'tar', 'codesign', 'codesign'],
+      reason: 'ask the release, download, open the named asset, then read the '
+          'verified signature',
     );
     expect(
       tools.calls.first.join(' '),
@@ -128,7 +185,6 @@ void main() {
     test('an archive that will not open is not an absence', () async {
       final reading = await identity({
         'gh': ok('{"assets":[{"name":"example-2.1.0-macos-arm64.tar.gz"}]}'),
-        'sh': ok('/tmp/w/example-2.1.0-macos-arm64.tar.gz\n'),
         'tar': failed('unexpected end of file'),
       }).read(tag: 'v2.1.0', executable: 'example', into: '/tmp/w');
 
@@ -139,13 +195,47 @@ void main() {
     test('an unsigned published binary is not an absence either', () async {
       final reading = await identity({
         'gh': ok('{"assets":[{"name":"example-2.1.0-macos-arm64.tar.gz"}]}'),
-        'sh': ok('/tmp/w/example-2.1.0-macos-arm64.tar.gz\n'),
         'tar': ok(),
         'codesign': failed('code object is not signed at all'),
       }).read(tag: 'v2.1.0', executable: 'example', into: '/tmp/w');
 
       expect(reading.isKnown, isFalse);
-      expect(reading.why, contains('no signature rk could read'));
+      expect(reading.why, contains('signature is not valid'));
+    });
+
+    test('a displayed requirement from invalid bytes is not a baseline',
+        () async {
+      final tools = RecordingTools(
+        answers: (key) {
+          if (key.startsWith('gh api ')) {
+            return ok(
+              '{"assets":[{'
+              '"name":"example-2.1.0-macos-arm64.tar.gz"}]}',
+            );
+          }
+          if (key.startsWith('gh release download')) return ok();
+          if (key.startsWith('tar -xzf')) return ok();
+          if (key.startsWith('codesign --verify')) {
+            return failed('code object is not signed at all');
+          }
+          if (key.startsWith('codesign -d -r-')) {
+            return ok('designated => identifier "forged"');
+          }
+          return null;
+        },
+      );
+      final reading = await PublishedIdentity(
+        tools: tools,
+        repository: 'example/tool',
+        workingDirectory: '/repo',
+      ).read(tag: 'v2.1.0', executable: 'example', into: '/tmp/w');
+
+      expect(reading.answer, IdentityAnswer.unreadable);
+      expect(reading.why, contains('not valid for its bytes'));
+      expect(
+        tools.calls.where((call) => call.startsWith('codesign -d -r-')),
+        isEmpty,
+      );
     });
   });
 
@@ -153,7 +243,6 @@ void main() {
       () async {
     final tools = ScriptedTools({
       'gh': ok('{"assets":[{"name":"example-2.1.0-macos-arm64.tar.gz"}]}'),
-      'sh': ok('/tmp/w/example-2.1.0-macos-arm64.tar.gz\n'),
       'tar': ok(),
       'codesign': ok('designated => identifier "x"'),
     });
