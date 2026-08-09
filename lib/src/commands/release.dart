@@ -968,8 +968,12 @@ class ReleaseCommand {
 
     String? cleanup;
     var localCleanupFailed = false;
-    if (tag && state.isAbsent && act.removeLocalTagIfAbsent != null) {
-      final removed = await _tags.deleteLocal(act.removeLocalTagIfAbsent!);
+    final localTag = act.removeLocalTagIfAbsent;
+    if (tag && state.isAbsent && localTag != null) {
+      final removed = await _tags.deleteLocalIfExact(
+        localTag.tag,
+        localTag.object,
+      );
       localCleanupFailed = !removed.ok;
       cleanup = removed.ok
           ? 'the local tag was removed, so re-running starts clean'
@@ -2300,13 +2304,19 @@ class ReleaseCommand {
     // act then pushes what exists rather than failing to re-create it.
     if (git.hasTag(unit.tag)) {
       output.say('the tag exists locally; pushing it', depth: 1);
-      return _pushTag(unit, signed: signed, preExisting: true);
+      return _pushTag(
+        unit,
+        object: git.tagObject(unit.tag),
+        signed: signed,
+        preExisting: true,
+      );
     }
 
+    final manifestSha256 = _manifestDigest(unit);
     final created = await _tags.create(
       unit.tag,
       signed: signed,
-      message: _tagMessage(unit),
+      message: _tagMessage(unit, manifestSha256),
     );
     if (!created.ok) {
       return _ActOutcome._(
@@ -2322,7 +2332,44 @@ class ReleaseCommand {
       );
     }
 
-    final pushed = await _tags.push(unit.tag);
+    final resolved = await _tags.localObject(unit.tag);
+    final object = resolved.object;
+    if (object == null) {
+      return _ActOutcome._(
+        ok: false,
+        coordinate: unit.tag,
+        diagnostic: Diagnostic(
+          code: 'RK-TAG-001',
+          message: 'the new tag ${unit.tag} could not be identified',
+          remedy: resolved.problem ?? 'the annotated tag object was unreadable',
+        ),
+      );
+    }
+    final local = await _tags.inspectLocalReleaseBinding(
+      tag: unit.tag,
+      expectedObject: object,
+      expectedCommit: git.head,
+      expectedManifestSha256: manifestSha256,
+      requireSignature: signed,
+    );
+    if (!local.isExact) {
+      return _ActOutcome._(
+        ok: false,
+        coordinate: unit.tag,
+        removeLocalTagIfAbsent: (tag: unit.tag, object: object),
+        diagnostic: Diagnostic(
+          code: 'RK-TAG-001',
+          message: 'the new tag ${unit.tag} did not validate',
+          remedy: [
+            if (local.detail != null) local.detail!,
+            ...local.evidence.entries
+                .map((entry) => '${entry.key}: ${entry.value}'),
+          ].join('\n'),
+        ),
+      );
+    }
+
+    final pushed = await _tags.pushExact(unit.tag, object);
     if (!pushed.ok) {
       // The shared destination read decides whether this ambiguous response
       // landed. If it proves absence, the reporting layer removes only the
@@ -2331,7 +2378,7 @@ class ReleaseCommand {
         ok: false,
         coordinate: unit.tag,
         mayHaveActed: true,
-        removeLocalTagIfAbsent: unit.tag,
+        removeLocalTagIfAbsent: (tag: unit.tag, object: object),
         diagnostic: Diagnostic(
           code: 'RK-TAG-002',
           message: 'the tag ${unit.tag} could not be pushed',
@@ -2349,8 +2396,7 @@ class ReleaseCommand {
     );
   }
 
-  String _tagMessage(ResolvedUnit unit) {
-    final digest = _manifestDigest(unit);
+  String _tagMessage(ResolvedUnit unit, String digest) {
     return '${unit.name} ${unit.version}\n\n'
         'release-manifest-sha256: $digest';
   }
@@ -2367,10 +2413,23 @@ class ReleaseCommand {
 
   Future<_ActOutcome> _pushTag(
     ResolvedUnit unit, {
+    required String? object,
     required bool signed,
     required bool preExisting,
   }) async {
-    final pushed = await _tags.push(unit.tag);
+    if (object == null) {
+      return _ActOutcome._(
+        ok: false,
+        coordinate: unit.tag,
+        diagnostic: Diagnostic(
+          code: 'RK-TAG-002',
+          message: 'the tag ${unit.tag} could not be pushed',
+          remedy: 'the validated local tag object id is unavailable; '
+              're-run so rk can inspect it again',
+        ),
+      );
+    }
+    final pushed = await _tags.pushExact(unit.tag, object);
     if (!pushed.ok) {
       return _ActOutcome._(
         ok: false,
@@ -2656,7 +2715,7 @@ class _ActOutcome {
   final bool failureAlreadyReported;
   final Diagnostic? diagnostic;
   final String? coordinate;
-  final String? removeLocalTagIfAbsent;
+  final ({String tag, String object})? removeLocalTagIfAbsent;
   final String? successNote;
   final bool includeInspectionDetail;
   final String? reconciledNote;

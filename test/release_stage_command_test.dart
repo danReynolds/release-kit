@@ -305,7 +305,7 @@ void main() {
       confirm: (_) async => fail('stage mode must not authorize'),
     );
     expect(staged.code, ExitCodes.ok, reason: staged.text);
-    harness.tools.wrongTagBinding = true;
+    harness.tools.wrongTagBindingAfterPush = true;
 
     final released = await harness.run(
       stageOnly: false,
@@ -1668,6 +1668,7 @@ class _WorldTools implements Tools {
   bool loseTagPushResponse = false;
   bool unreadTagAfterPush = false;
   bool wrongTagBinding = false;
+  bool wrongTagBindingAfterPush = false;
   bool loseHomebrewPushResponse = false;
   bool rejectHomebrewPush = false;
   bool unreadHomebrewAfterPush = false;
@@ -1760,10 +1761,18 @@ class _WorldTools implements Tools {
     }
     if (executable == 'git' &&
         arguments.length == 3 &&
+        arguments[0] == 'rev-parse' &&
+        arguments[1] == '--verify' &&
+        arguments[2].endsWith('^{tag}')) {
+      return _ok(stdout: '$_tagObject\n');
+    }
+    if (executable == 'git' &&
+        arguments.length == 3 &&
         arguments[0] == 'cat-file' &&
         arguments[1] == 'tag' &&
         arguments[2] == _tagObject) {
-      final digest = wrongTagBinding
+      final digest = wrongTagBinding ||
+              (wrongTagBindingAfterPush && remoteTags.contains('v1.2.3'))
           ? '0' * 64
           : tagManifestSha256 ??
               stageFor()
@@ -1788,7 +1797,11 @@ class _WorldTools implements Tools {
         arguments.length >= 3 &&
         arguments[0] == 'push' &&
         arguments[1] == 'origin') {
-      remoteTags.add(arguments[2]);
+      const marker = ':refs/tags/';
+      final refspec = arguments[2];
+      if (refspec.contains(marker)) {
+        remoteTags.add(refspec.split(marker).last);
+      }
       if (unreadTagAfterPush) _tagPublicUnreadable = true;
       if (loseTagPushResponse) {
         return ToolResult(

@@ -713,6 +713,7 @@ void main() {
     final tagObject = local.tagObject(tag)!;
     expect(tagObject, isNot(sourceCommit));
     expect(local.tagTarget(tag), sourceCommit);
+    expect((await destination.localObject(tag)).object, tagObject);
 
     final localProof = await destination.inspectLocalReleaseBinding(
       tag: tag,
@@ -723,7 +724,25 @@ void main() {
     );
     expect(localProof.verdict, Verdict.exact);
 
-    expectOk(await destination.push(tag), 'release tag push');
+    // Move the mutable local ref after validation. The push must still send
+    // the exact object that was proved above, never whatever the name happens
+    // to resolve to at push time.
+    expectOk(
+      await tools.run(
+        'git',
+        ['tag', '-fa', tag, '-m', 'replacement tag object'],
+        workingDirectory: root.path,
+      ),
+      'local tag replacement',
+    );
+    final replacementObject = GitState.read(root.path).tagObject(tag)!;
+    expect(replacementObject, isNot(tagObject));
+
+    final staleCleanup = await destination.deleteLocalIfExact(tag, tagObject);
+    expect(staleCleanup.ok, isFalse);
+    expect(GitState.read(root.path).tagObject(tag), replacementObject);
+
+    expectOk(await destination.pushExact(tag, tagObject), 'release tag push');
     final firstReadback = await destination.inspectReleaseBinding(
       tag: tag,
       expectedCommit: sourceCommit,
@@ -738,7 +757,10 @@ void main() {
       'signature': 'not required',
     });
 
-    expectOk(await destination.push(tag), 'idempotent release tag re-push');
+    expectOk(
+      await destination.pushExact(tag, tagObject),
+      'idempotent release tag re-push',
+    );
     expect(await destination.onOrigin(tag), isA<TagListed>());
     final secondReadback = await destination.inspectReleaseBinding(
       tag: tag,

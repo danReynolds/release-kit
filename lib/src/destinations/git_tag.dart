@@ -482,19 +482,64 @@ class GitTag {
         workingDirectory: root,
       );
 
-  Future<ToolResult> push(String tag) => tools.run(
+  /// Resolves the immutable annotated-tag object currently named by [tag].
+  ///
+  /// The caller validates that object and then passes its OID to [pushExact].
+  /// Keeping the mutable ref name out of the push closes the interval in which
+  /// another local process could replace the tag after validation.
+  Future<({String? object, String? problem})> localObject(String tag) async {
+    final ToolResult result;
+    try {
+      result = await tools.run(
         'git',
-        ['push', 'origin', tag],
+        ['rev-parse', '--verify', 'refs/tags/$tag^{tag}'],
         workingDirectory: root,
       );
+    } on Object catch (error) {
+      return (object: null, problem: '$error');
+    }
+    if (!result.ok) return (object: null, problem: result.summary);
+    final lines = result.stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .toList();
+    if (lines.length != 1 || !_isObjectId(lines.single)) {
+      return (
+        object: null,
+        problem: 'git returned an invalid annotated-tag object id',
+      );
+    }
+    return (object: lines.single.toLowerCase(), problem: null);
+  }
 
-  /// Removes a local tag this run created but could not push, so a refusal
-  /// leaves "nothing changed" true rather than a trap for the next run.
-  Future<ToolResult> deleteLocal(String tag) => tools.run(
-        'git',
-        ['tag', '-d', tag],
-        workingDirectory: root,
-      );
+  /// Pushes the exact validated tag object to the public tag ref.
+  Future<ToolResult> pushExact(String tag, String object) {
+    if (!_isObjectId(object)) {
+      throw ArgumentError.value(object, 'object', 'invalid Git object id');
+    }
+    return tools.run(
+      'git',
+      ['push', 'origin', '${object.toLowerCase()}:refs/tags/$tag'],
+      workingDirectory: root,
+    );
+  }
+
+  /// Removes a local tag only while it still names the object rk created.
+  ///
+  /// Supplying the expected old OID makes the ref update atomic: if another
+  /// process replaced the tag after validation, Git refuses instead of
+  /// deleting that process's tag.
+  Future<ToolResult> deleteLocalIfExact(String tag, String object) {
+    if (!_isObjectId(object)) {
+      throw ArgumentError.value(object, 'object', 'invalid Git object id');
+    }
+    return tools.run(
+      'git',
+      ['update-ref', '-d', 'refs/tags/$tag', object.toLowerCase()],
+      workingDirectory: root,
+    );
+  }
 }
 
 String? _versionIn(String tag, List<String> pattern) {

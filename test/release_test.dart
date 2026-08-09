@@ -30,6 +30,9 @@ path = "packages/keybay"
 publish = ["pub.dev"]
 ''';
 
+const _tagObject = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const _tagPush = 'git push origin $_tagObject:refs/tags/v0.2.0';
+
 MemorySourceTree _tree({String changelog = '## 0.2.0\n'}) => MemorySourceTree({
       'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
       'packages/keybay/CHANGELOG.md': changelog,
@@ -162,8 +165,7 @@ Future<Ran> release({
   final localTags = <String>{...effectiveGit.tags};
   final tagObjects = <String, String>{
     for (final tag in effectiveGit.tags)
-      tag: effectiveGit.tagObject(tag) ??
-          'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      tag: effectiveGit.tagObject(tag) ?? _tagObject,
   };
   final recorder = RecordingTools(
     results: results,
@@ -177,21 +179,45 @@ Future<Ran> release({
           tagObjects[tag] = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
         }
       }
-      if (key.startsWith('git tag -d ')) {
-        final tag = key.substring('git tag -d '.length);
-        localTags.remove(tag);
-        tagObjects.remove(tag);
+      if (key.startsWith('git update-ref -d refs/tags/')) {
+        final parts = key.split(' ');
+        final tag = parts[3].substring('refs/tags/'.length);
+        final object = parts[4];
+        final scripted = results[key];
+        if ((scripted == null || scripted.exitCode == 0) &&
+            tagObjects[tag] == object) {
+          localTags.remove(tag);
+          tagObjects.remove(tag);
+        }
       }
       const push = 'git push origin ';
       if (key.startsWith(push)) {
         final scripted = results[key];
         if (scripted == null || scripted.exitCode == 0) {
-          remoteTags.add(key.substring(push.length));
+          final refspec = key.substring(push.length);
+          const marker = ':refs/tags/';
+          if (refspec.contains(marker)) {
+            remoteTags.add(refspec.split(marker).last);
+          }
         }
       }
       onRun?.call(key);
     },
     answers: (key) {
+      const objectPrefix = 'git rev-parse --verify refs/tags/';
+      if (key.startsWith(objectPrefix) && key.endsWith('^{tag}')) {
+        final tag =
+            key.substring(objectPrefix.length, key.length - '^{tag}'.length);
+        final object = tagObjects[tag];
+        if (localTags.contains(tag) && object != null) {
+          return ToolResult(exitCode: 0, stdout: '$object\n', stderr: '');
+        }
+        return ToolResult(
+          exitCode: 1,
+          stdout: '',
+          stderr: 'unknown tag',
+        );
+      }
       const prefix = 'git ls-remote origin refs/tags/';
       if (key.startsWith(prefix)) {
         final tag = key.substring(prefix.length).split(' ').first;
@@ -712,7 +738,7 @@ void main() {
     final tag = ran.calls.indexWhere(
       (call) => call.startsWith('git tag -s v0.2.0 -m core 0.2.0'),
     );
-    final push = ran.calls.indexOf('git push origin v0.2.0');
+    final push = ran.calls.indexOf(_tagPush);
     final publish = ran.calls.indexOf('dart pub publish --force');
     final orderedCalls = [
       pubLogin,
@@ -820,7 +846,7 @@ void main() {
     final ran = await release(
       registry: _MutableRegistry(<String>['0.1.0']),
       results: {
-        'git push origin v0.2.0': ToolResult(
+        _tagPush: ToolResult(
           exitCode: 1,
           stdout: '',
           stderr: 'fatal: unable to access origin',
@@ -831,7 +857,7 @@ void main() {
     expect(ran.exitCode, ExitCodes.refused);
     expect(
       ran.calls,
-      contains('git tag -d v0.2.0'),
+      contains('git update-ref -d refs/tags/v0.2.0 $_tagObject'),
       reason: 'a local tag nobody else can see is a trap: the next run '
           'would inspect it as done and publish a version bound to a commit '
           'only this machine knows about',
@@ -849,12 +875,12 @@ void main() {
     final ran = await release(
       registry: _MutableRegistry(<String>['0.1.0']),
       results: {
-        'git push origin v0.2.0': ToolResult(
+        _tagPush: ToolResult(
           exitCode: 1,
           stdout: '',
           stderr: 'fatal: unable to access origin',
         ),
-        'git tag -d v0.2.0': ToolResult(
+        'git update-ref -d refs/tags/v0.2.0 $_tagObject': ToolResult(
           exitCode: 1,
           stdout: '',
           stderr: 'could not update refs',
@@ -1404,7 +1430,7 @@ void mutationCloseout() {
     );
     expect(
       ran.calls,
-      contains('git push origin v0.2.0'),
+      contains(_tagPush),
       reason: 'the half-done step is finished, not skipped',
     );
     expect(ran.text, contains('pre-existing local tag'));

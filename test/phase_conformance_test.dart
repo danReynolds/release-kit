@@ -612,7 +612,7 @@ publish = ["pub.dev"]
           // A successful push is what puts a tag on origin — the same set
           // feeds the next run's local tags and the remote's answer, which
           // is exactly the world after a push: everyone can see it.
-          if (key == 'git push origin v0.2.0' &&
+          if (key == 'git push origin $tagObject:refs/tags/v0.2.0' &&
               (results[key]?.exitCode ?? 0) == 0) {
             tags.add('v0.2.0');
           }
@@ -622,6 +622,13 @@ publish = ["pub.dev"]
         // one it does not is not — the remote leg reads reality, and this is
         // the reality the drive maintains.
         answers: (key) {
+          if (key == 'git rev-parse --verify refs/tags/v0.2.0^{tag}') {
+            return ToolResult(
+              exitCode: 0,
+              stdout: '$tagObject\n',
+              stderr: '',
+            );
+          }
           if (key == 'git ls-remote --tags origin') {
             return ToolResult(
               exitCode: 0,
@@ -1212,7 +1219,11 @@ executables:
       },
       onRun: (key) {
         if (key.startsWith('git push origin ')) {
-          pushed.add(key.substring('git push origin '.length));
+          final refspec = key.substring('git push origin '.length);
+          const marker = ':refs/tags/';
+          if (refspec.contains(marker)) {
+            pushed.add(refspec.split(marker).last);
+          }
         }
         if (key.contains(' -X POST repos/example/tool/releases --input ')) {
           final input = key.split(' --input ').last;
@@ -1254,6 +1265,13 @@ executables:
         }
       },
       answers: (key) {
+        if (key == 'git rev-parse --verify refs/tags/v1.0.0^{tag}') {
+          return ToolResult(
+            exitCode: 0,
+            stdout: '$releaseTagObject\n',
+            stderr: '',
+          );
+        }
         if (key == 'git ls-remote --tags origin') {
           return ToolResult(
             exitCode: 0,
