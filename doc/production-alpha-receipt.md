@@ -19,7 +19,9 @@ after a separately configured clean-consumer canary exercises it.
 
 Replace every angle-bracketed instruction below with exact evidence. Keep
 `Status: not run` until every field and transcript is complete; only then set
-it to `Status: completed` and run the live checkpoint test.
+it to `Status: completed` and run the live checkpoint test. In every fenced
+transcript, normalize each command line as `$ <exact command>` and preserve its
+output unchanged until the next `$ ` command line.
 
 ## Release and provider receipt
 
@@ -28,6 +30,7 @@ Unit: <unit name>
 Version: <semantic version>
 Stage identity: <64-character lowercase SHA-256>
 Manifest SHA-256: <64-character lowercase SHA-256>
+Notary submission ID: <UUID shown by both macOS notary JSON files>
 
 Configured adapters: <exact adapter names>
 Target URLs: <exact Git tag, pub.dev version, and GitHub Release URLs>
@@ -38,14 +41,19 @@ Target URLs: <exact Git tag, pub.dev version, and GitHub Release URLs>
 <complete `dart run bin/rk.dart release rk --stage` command and output, showing
 no `dart pub login` invocation>
 <the exact stage path printed by rk>
-<`shasum -a 256` output for release-manifest.json>
+<`shasum -a 256 release-manifest.json` and its output>
 <`shasum -a 256 -c SHA256SUMS` output, run from the stage directory>
-<`tar -tzf` inventory for each of the three release archives>
-<the extracted macOS `rk --version` output>
-<`codesign --verify --strict --verbose=2` output for that binary>
-<`codesign -d -r- --verbose=4` output for that binary>
-<`codesign --test-requirement=notarized -v` output for that exact binary>
-<the Accepted status and matching submission id from both macOS notary JSONs>
+<`$ tar -tzf <archive>` and the exact `rk`, `LICENSE`, `README.md` inventory,
+repeated for each of the three release archives>
+<a fresh `alpha_macos_dir`, extraction of the macOS archive into it, and
+`$ "$alpha_macos_dir/rk" --version` output>
+<`$ codesign --verify --strict --verbose=2 "$alpha_macos_dir/rk" && echo
+"signature valid"` and its output>
+<`$ codesign -d -r- --verbose=4 "$alpha_macos_dir/rk"` and its output>
+<`$ codesign --test-requirement=notarized -v "$alpha_macos_dir/rk" && echo
+"notarization valid"` and its output>
+<`$ cat rk-<version>-macos-arm64.notary-result.json` and the complete JSON>
+<`$ cat rk-<version>-macos-arm64.notary-log.json` and the complete JSON>
 ```
 
 ### Release transcript
@@ -74,9 +82,10 @@ Asset SHA-256: <64-character lowercase SHA-256>
 ### Repeated release transcript
 
 ```text
-<complete repeated `dart run bin/rk.dart release rk` command and output,
-showing the pub.dev target already exact, no second login or publish, and zero
-public acts; login is not itself a public act or proof of uploader authority>
+<complete `dart run bin/rk.dart release rk --json` command and output, showing
+every configured public step with `verdict: exact` and `action: already_exact`,
+and no second login or public act; login is not itself a public act or proof of
+uploader authority>
 ```
 
 ### pub.dev consumer

@@ -471,6 +471,17 @@ void main() {
     expect(rerun.code, ExitCodes.ok, reason: rerun.text);
     expect(rerun.publicMutations, isEmpty);
     expect(rerun.text, contains('already released'));
+    final unit = (rerun.report['units'] as List).single as Map;
+    final actions = {
+      for (final step in (unit['steps'] as List).cast<Map>())
+        if (step['public'] == true) step['kind']: step['action'],
+    };
+    expect(actions, {
+      'tag': 'already_exact',
+      'publishRegistry': 'already_exact',
+      'publishRelease': 'already_exact',
+      'publishFormula': 'already_exact',
+    });
   });
 
   test('a partial binary release refuses to rebuild a lost exact stage',
