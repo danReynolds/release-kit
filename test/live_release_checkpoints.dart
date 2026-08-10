@@ -156,7 +156,7 @@ void main() {
       'Git tag',
       'pub.dev',
       'GitHub Release',
-      'Published everywhere configured',
+      '$version · published',
     });
   });
 
@@ -209,7 +209,7 @@ void main() {
       // installed binary is invoked with — the shape that derives its own
       // identity from argv[0]. --version and --help inspect no stage.
       'PATH="\$alpha_pub_cache/bin:\$PATH" rk status rk',
-      'Published everywhere configured',
+      '$version · published',
     });
     _expectNextLine(
       pubConsumer,
@@ -234,7 +234,7 @@ void main() {
       './rk --help',
       'rk $version',
       'rk status rk',
-      'Published everywhere configured',
+      '$version · published',
     });
     expect(
       githubConsumer,

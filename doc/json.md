@@ -35,7 +35,7 @@ must say what it says yes to.
 | `repository` | `{name, branch?, head?, remote, uncommitted?}`. `head` is the full 40-char SHA. `remote` is always present and null when no origin exists — a forge slug (`owner/name`), not a URL |
 | `units[]` | per-unit: `{name, version, tag, steps[], targets[]?}` |
 | `problems[]` | `{code, message, remedy?, source?, unit?, target?}` — every refusal and blockage, with its `RK-*` code. `target`, when present, is the affected target id and makes that target's human row `✗` |
-| `next[]` | the commands that would advance things, as data |
+| `next[]` | the commands that would advance things, as data. The human report does not print them; this is where they live |
 | `halt` | `{kind, sentence}` when the run halted |
 | `attachments` | documents that travel with the run (a proposed release.toml, pub's validation text) |
 | `diagnosis` | where evidence was written, on failed runs that acted |
@@ -78,8 +78,8 @@ read-back; an idempotent retry records `already_exact`.
 
 ## Status targets
 
-Each `units[].targets[]` entry is the settled observation used to print the
-human `Targets` section: `id`, `kind`, `label`, `coordinate`, `current_known`,
+Each `units[].targets[]` entry is the settled observation the human report
+renders as one target row: `id`, `kind`, `label`, `coordinate`, `current_known`,
 `current_version`, `target_version`, `verdict`, optional `detail`, optional
 `uses`, and `artifacts[]`. `uses` refers to an artifact inventoried under
 another target without duplicating it. An artifact is
