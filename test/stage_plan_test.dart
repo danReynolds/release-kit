@@ -20,6 +20,62 @@ const _head = '1111111111111111111111111111111111111111';
 const _tree = '2222222222222222222222222222222222222222';
 
 void main() {
+  group('the rk implementation identity, when its sources are not on disk', () {
+    late Directory scratch;
+    late File executable;
+
+    setUp(() {
+      scratch = Directory.systemTemp.createTempSync('rk-program-');
+      executable = File('${scratch.path}/rk')
+        ..writeAsBytesSync(utf8.encode('COMPILED RK'));
+    });
+    tearDown(() => scratch.deleteSync(recursive: true));
+
+    test('a script path that is not there identifies nothing, and is skipped',
+        () {
+      // Invoked by bare name, Dart resolves Platform.script against the
+      // current directory: for a compiled binary that is a file which does
+      // not exist. Reading it made an installed rk unusable — every stage
+      // inspection answered RK-STAGE-002 — so `rk status` failed in every
+      // repository but the one that happened to hold a file named rk.
+      final phantom = File('${scratch.path}/somewhere-else/rk');
+      expect(phantom.existsSync(), isFalse, reason: 'precondition');
+
+      expect(
+        rkProgramDigest(phantom, executable),
+        rkProgramDigest(null, executable),
+        reason: 'the executable beside it is the whole identity',
+      );
+    });
+
+    test('the digest does not depend on how rk was invoked', () {
+      expect(
+        rkProgramDigest(executable, executable),
+        rkProgramDigest(File('${scratch.path}/nope/rk'), executable),
+        reason: 'by full path or by bare name, it is the same program',
+      );
+    });
+
+    test('a different program is a different identity', () {
+      final other = File('${scratch.path}/other')
+        ..writeAsBytesSync(utf8.encode('A DIFFERENT RK'));
+      expect(
+        rkProgramDigest(null, executable),
+        isNot(rkProgramDigest(null, other)),
+      );
+    });
+
+    test('nothing readable is refused rather than guessed', () {
+      expect(
+        () => rkProgramDigest(
+          File('${scratch.path}/nope/rk'),
+          File('${scratch.path}/also-nope/rk'),
+        ),
+        throwsStateError,
+      );
+    });
+  });
+
   late Directory repository;
   late MemorySourceTree source;
   late Resolution resolution;
