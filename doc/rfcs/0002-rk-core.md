@@ -317,10 +317,14 @@ not authorization.
   is an ordinary checklist step — inspect the remote ref, create and push,
   then inspect the remote ref again — and it runs only after the complete
   stage has been revalidated.
-- **Non-interactive release.** An agent or CI run has no operator presence,
-  so the tag *is* the authorization: it must already exist, rk verifies its
-  signature against the expected signer, and rk never creates it. Creating
-  it here would be minting the permission it acts on.
+- **Non-interactive release.** Consent must still be explicit and exact:
+  `--confirm=<version>` carries the operator's typed yes as a flag, authorizes
+  only the version it names, and skips no inspection — the same door
+  `init --write` opens. For consentless CI with no operator anywhere in the
+  loop, the tag *is* the intended authorization: it must already exist, rk
+  verifies its signature against the expected signer, and rk never creates
+  it — creating it there would be minting the permission it acts on. That
+  signed-tag path remains ledgered, not built.
 
 Every tag binds the digest of its complete stage manifest to the source
 commit. Binary releases also publish the manifest itself with their GitHub
@@ -656,11 +660,12 @@ act(expected, stage)
   against the published release's designated requirement, not against the
   signer that just produced it. The certificate SHA-256 fingerprint is stage
   evidence. Ephemeral-keychain import is deferred with remote CI.
-- **`macos-notarize`** (transform): `notarytool submit --wait`; the result and
-  log ship as release assets. A reusable stage retains and revalidates that
-  exact evidence instead of resubmitting. `codesign
-  --test-requirement=notarized -v` remains the binding check on the exact
-  signed bytes.
+- **`macos-notarize`** (transform): `notarytool submit --wait`; the result
+  and log are receipt-bound stage evidence — a consumer verifies the binary
+  with Apple directly, so they are not release assets. A reusable stage
+  retains and revalidates that exact evidence instead of resubmitting.
+  `codesign --test-requirement=notarized -v` remains the binding check on
+  the exact signed bytes.
 - **`archive` + `checksums`** (transforms): deterministic tar.gz per
   platform — fixed entry order, zeroed mtimes, normalized modes, no gzip
   timestamp — containing the executable, LICENSE, and README, with frozen
@@ -751,12 +756,14 @@ What makes the CLI sufficient is already required for other reasons:
   advance the release, so an agent can chain without inferring intent from
   formatting.
 
-**Unattended authorization is deferred.** An agent may run status freely and
-may prepare a private stage only through the same explicitly invoked command,
-but the built alpha refuses publication without a human at the terminal.
-Signed-tag authorization remains the intended CI path; its signer policy and
-non-interactive execution are ledgered rather than implied by the current
-implementation. There is no agent exemption, `--yes`, or guessed consent.
+**Consent is explicit, or the release refuses.** An agent may run status
+freely and prepare a private stage through the same explicitly invoked
+command. Publication requires the exact version as consent: typed at a
+terminal, or carried as `--confirm=<version>` — a per-run, version-pinned
+yes, not a standing `--force`, and never guessed. Consentless publication
+(no operator anywhere in the loop) stays refused; signed-tag authorization
+remains the intended CI path, its signer policy and non-interactive
+execution ledgered rather than implied by the current implementation.
 The interactive `dart pub login` preflight does not change this boundary and
 is not a CI credential design; trusted publishing remains part of the deferred
 remote-CI work below.

@@ -527,18 +527,6 @@ class StatusCommand {
           project.version.canonical,
           platform,
         )] = '$platform cannot be produced here: $reason';
-        if (platform.startsWith('macos-')) {
-          problems[ReleaseAssets.notaryResultName(
-            executable,
-            project.version.canonical,
-            platform,
-          )] = '$platform cannot be produced here: $reason';
-          problems[ReleaseAssets.notaryLogName(
-            executable,
-            project.version.canonical,
-            platform,
-          )] = '$platform cannot be produced here: $reason';
-        }
       }
       final summary = blocked.entries
           .map((entry) => '${entry.key}: ${entry.value}')

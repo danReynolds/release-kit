@@ -560,8 +560,8 @@ class GithubRelease {
       final names = expectedDigests.keys.toList()..sort();
       final verifiedBytes = <String, List<int>>{};
       // Assets are independent immutable coordinates. Reading them serially
-      // multiplied the per-command timeout by the inventory size (seven alpha
-      // assets could mean fourteen minutes). Start every missing download
+      // multiplied the per-command timeout by the inventory size (five alpha
+      // assets could mean ten minutes). Start every missing download
       // together, then classify in sorted name order so output and conflict
       // precedence remain deterministic.
       final reads = <String, Future<({List<int>? bytes, String? problem})>>{
@@ -1359,8 +1359,8 @@ class GithubManifestExpectation {
 /// [sourceCommit] is the peeled commit proven by the authenticated Git tag;
 /// [manifestSha256] is the digest bound into that tag. Together they prevent a
 /// valid-looking manifest from redefining either the release source or its
-/// artifacts. The manifest supplies the old stage plan identity and inventory,
-/// which are intentionally not reconstructed from today's configuration.
+/// artifacts. The manifest supplies the old release's inventory, which is
+/// intentionally not reconstructed from today's configuration.
 class GithubHistoricalManifestExpectation {
   const GithubHistoricalManifestExpectation({
     required this.unit,
@@ -1376,8 +1376,6 @@ class GithubHistoricalManifestExpectation {
   final String tag;
   final String sourceCommit;
   final String manifestSha256;
-
-  /// Optional independently known tree for the peeled source commit.
 
   /// Optional stable title. Historical changelog bodies are not required.
   final String? title;

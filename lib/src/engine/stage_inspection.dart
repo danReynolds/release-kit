@@ -351,20 +351,15 @@ class StageInspector {
     }
 
     if (!receipt.complete) {
+      // Completion is derived from the terminal step, and step names are
+      // unique by construction, so the one damaged shape left to name is a
+      // finalizing step that is no longer terminal.
       if (completeIndexes.isNotEmpty) {
         _structure(
           issues,
-          'an incomplete receipt cannot contain complete-stage',
+          'complete-stage must be the terminal step',
         );
       }
-      return;
-    }
-    if (completeIndexes.length != 1 ||
-        completeIndexes.singleOrNull != receipt.steps.length - 1) {
-      _structure(
-        issues,
-        'a complete receipt must end with exactly one complete-stage',
-      );
       return;
     }
 

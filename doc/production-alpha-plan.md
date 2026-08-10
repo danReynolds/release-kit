@@ -81,7 +81,7 @@ worktree. The local acceptance evidence is:
   reach a public act and that only an exact validated prefix resumes;
 - automated status cases cover the final-state matrix, parallel completion
   orders, pipe, JSON, `NO_COLOR`, and `TERM=dumb`; actual CLI review covers an
-  ordinary online/unreachable report and a narrow offline report; and
+  ordinary online/unreachable report; and
 - the partial-binary/missing-stage recovery case fails closed as
   `RK-STAGE-005` before rebuilding, authorization, or another public act.
 
@@ -496,7 +496,7 @@ final ordering is deterministic; normalized settled TTY output equals piped
 output; colour and marks are redundant with words; `NO_COLOR`, `TERM=dumb`,
 non-TTY, and JSON contain no transient control sequences; and snapshots cover
 clean, first release, unstaged, fully staged, safely resumable, conflicting,
-unreachable, offline, and fully published cases.
+unreachable, and fully published cases.
 
 ### Phase 7 — Exercise every distinct failure and resume boundary
 

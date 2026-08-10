@@ -206,14 +206,16 @@ class StageReceipt {
 
   factory StageReceipt.parse(String document) {
     final decoded = CanonicalJson.decodeDocument(document);
+    // Version before shape: an older receipt differs in both, and the
+    // schema message is the one a reader can act on.
+    if (decoded is Map && decoded['schema'] != stageSchemaVersion) {
+      throw FormatException('unsupported stage schema: ${decoded['schema']}');
+    }
     final map = _strictMap(
       decoded,
       const {'schema', 'stage', 'steps'},
       'stage receipt',
     );
-    if (map['schema'] != stageSchemaVersion) {
-      throw FormatException('unsupported stage schema: ${map['schema']}');
-    }
     return StageReceipt(
       identity: StageIdentity.fromJson(map['stage']),
       steps: _list(map, 'steps').map(StageStep.fromJson),

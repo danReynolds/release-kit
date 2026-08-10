@@ -456,6 +456,9 @@ class ReleaseStage {
   /// receipt to complete. Outputs must already have been captured explicitly;
   /// an inventory scan never adopts an unrelated file.
   void writeProgress(Iterable<StageStep> steps) {
+    if (steps.any((step) => step.name == 'complete-stage')) {
+      throw StateError('only finalize may complete a stage');
+    }
     StageReceiptStore(directory).write(StageReceipt(
       identity: directory.identity,
       steps: steps,

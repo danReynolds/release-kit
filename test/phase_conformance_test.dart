@@ -566,6 +566,7 @@ void main() {
       required Set<String> tags,
       Map<String, ToolResult> results = const {},
       Map<String, String> sourceFiles = const {},
+      String? config,
       void Function(String key)? onRun,
     }) async {
       // A fresh registry per drive is a fresh process: the world — what is
@@ -575,13 +576,17 @@ void main() {
       final registry = FakeRegistry(published, archives: archives);
       final buffer = StringBuffer();
       final diagnostics = Diagnostics();
-      final parsed = ReleaseConfig.parse('''
+      final parsed = ReleaseConfig.parse(
+          config ??
+              '''
 schema = 1
 
 [release.core]
 path = "packages/keybay"
 publish = ["pub.dev"]
-''', 'release.toml', diagnostics)!;
+''',
+          'release.toml',
+          diagnostics)!;
       final tree = MemorySourceTree({
         'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
         'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
@@ -761,7 +766,7 @@ publish = ["pub.dev"]
       );
 
       expect(run.code, ExitCodes.refused);
-      expect(run.text, contains('masks consumer resolution'));
+      expect(run.text, contains('mask consumer resolution'));
       expect(
         run.calls,
         isNot(contains('dart pub publish --dry-run')),
@@ -774,6 +779,72 @@ publish = ["pub.dev"]
         run.calls.where((c) => c.contains('publish --force')),
         isEmpty,
       );
+    });
+
+    test('a dependency_overrides section masks the same way, and refuses',
+        () async {
+      // The section form: tracked by necessity (it lives in the manifest),
+      // honoured by the dry run's resolution, stripped from the archive.
+      // Pub exits 0 with only a hint, so only rk can refuse it.
+      final run = await drive(
+        published: {
+          'keybay': ['0.1.0']
+        },
+        archives: {},
+        tags: {},
+        sourceFiles: {
+          'packages/keybay/pubspec.yaml': 'name: keybay\n'
+              'version: 0.2.0\n'
+              'dependency_overrides:\n'
+              '  transitive:\n'
+              '    path: ../other\n',
+        },
+      );
+
+      expect(run.code, ExitCodes.refused);
+      expect(run.text, contains('mask consumer resolution'));
+      expect(run.text, contains('dependency_overrides section'));
+      expect(run.calls, isNot(contains('dart pub publish --dry-run')));
+    });
+
+    test('a workspace member is masked from its nested workspace root',
+        () async {
+      // Pub resolves a `resolution: workspace` member at the nearest
+      // ancestor declaring `workspace:` — which need not be the repository
+      // root. Overrides tracked there mask every member.
+      final run = await drive(
+        published: {
+          'keybay': ['0.1.0']
+        },
+        archives: {},
+        tags: {},
+        config: '''
+schema = 1
+
+[release.core]
+path = "dart/packages/keybay"
+publish = ["pub.dev"]
+''',
+        sourceFiles: {
+          'dart/pubspec.yaml': 'name: dart_workspace\n'
+              'publish_to: none\n'
+              'environment:\n'
+              "  sdk: ^3.6.0\n"
+              'workspace:\n'
+              '  - packages/keybay\n',
+          'dart/pubspec_overrides.yaml':
+              'dependency_overrides:\n  transitive:\n    path: ../other\n',
+          'dart/packages/keybay/pubspec.yaml': 'name: keybay\n'
+              'version: 0.2.0\n'
+              'resolution: workspace\n',
+          'dart/packages/keybay/CHANGELOG.md': '## 0.2.0\n',
+        },
+      );
+
+      expect(run.code, ExitCodes.refused);
+      expect(run.text, contains('mask consumer resolution'));
+      expect(run.text, contains('dart/pubspec_overrides.yaml'));
+      expect(run.calls, isNot(contains('dart pub publish --dry-run')));
     });
 
     test('post-publish re-download and compare, and a mismatch is terminal',

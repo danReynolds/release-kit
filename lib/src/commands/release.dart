@@ -44,6 +44,7 @@ class ReleaseCommand {
     required this.tools,
     required this.output,
     required this.confirm,
+    this.preauthorized,
     this.stageOnly = false,
     ReleaseStage Function(ResolvedUnit unit)? stageFor,
     ReleaseStage Function(ResolvedUnit unit, GitState git)? refreshStage,
@@ -111,6 +112,13 @@ class ReleaseCommand {
   final GitState Function() _refreshGit;
   final Map<String, BinaryChain> _chains = {};
 
+  /// The exact version a noninteractive caller pre-authorized
+  /// (`--confirm=<version>`), or null when authorization happens at the
+  /// prompt. Checked before any native session or producer runs: a value
+  /// that cannot authorize this release must not spend credentials or
+  /// contact Apple on the way to refusing.
+  final String? preauthorized;
+
   Future<int> run({String? only}) async {
     if (only == null) {
       output.problem(
@@ -142,6 +150,37 @@ class ReleaseCommand {
   }
 
   Future<int> _release(ResolvedUnit unit) async {
+    // The machine surface carries the same identity facts on every verb:
+    // doc/json.md promises repository and the unit's version and tag, and
+    // the production-alpha retry checkpoint reads both from this document.
+    output.report.repository(
+      name: tree.description.split('/').last,
+      branch: git.branch,
+      uncommitted: git.uncommitted.length,
+      head: git.head,
+      remote: git.originUrl,
+    );
+    output.report.unit(
+      name: unit.name,
+      version: unit.version.canonical,
+      tag: unit.tag,
+    );
+
+    if (preauthorized != null && preauthorized != unit.version.canonical) {
+      output.problem(
+        Diagnostic(
+          code: 'RK-AUTH-002',
+          message: 'the authorization does not name this release',
+          remedy: '--confirm=$preauthorized cannot authorize '
+              '${unit.version}. Authorize exactly this release: '
+              '--confirm=${unit.version}',
+        ),
+        unit: unit.name,
+      );
+      output.halt(HaltKind.beforeActing);
+      return ExitCodes.refused;
+    }
+
     final problems = Diagnostics();
     _validate(unit, problems);
     if (problems.isNotEmpty) {
@@ -1208,9 +1247,15 @@ class ReleaseCommand {
       );
     }
 
-    final completedOrCorrupt = inspected.receipt?.complete == true ||
-        inspected.issues
-            .any((issue) => issue.kind == StageIssueKind.invalidReceipt);
+    // "Ever finalized" rather than "complete": a damaged receipt whose
+    // complete-stage step is no longer terminal derives incomplete, and
+    // silently rebuilding those reviewed bytes is exactly what this
+    // refusal exists to prevent.
+    final completedOrCorrupt =
+        inspected.receipt?.steps.any((step) => step.name == 'complete-stage') ==
+                true ||
+            inspected.issues
+                .any((issue) => issue.kind == StageIssueKind.invalidReceipt);
     if (completedOrCorrupt && !mayReplaceReviewed) {
       return Diagnostic(
         code: 'RK-STAGE-002',
@@ -1572,6 +1617,7 @@ class ReleaseCommand {
       return target.step.isPermanent;
     }).toList();
 
+    final disclosed = <String>[];
     output.blank();
     if (permanent.isEmpty) {
       output.say('nothing here is permanent.');
@@ -1584,12 +1630,14 @@ class ReleaseCommand {
               case final notice?)
             notice,
       };
-      output.say('${notices.join('\n')}\n'
+      final ground = '${notices.join('\n')}\n'
           'everything before this yes re-runs safely. after it, the first '
-          'permanent step is: ${permanent.first.step.summary}.');
+          'permanent step is: ${permanent.first.step.summary}.';
+      output.say(ground);
+      disclosed.add(ground);
     }
 
-    _sayClaims(claims, firstCertificate, codeId);
+    disclosed.addAll(_sayClaims(claims, firstCertificate, codeId));
 
     // Weaker assurance is accepted knowingly or not at all: a platform
     // nothing here can run ships with its smoke test missing, and that is
@@ -1597,11 +1645,19 @@ class ReleaseCommand {
     final unprovable = _unprovable(unit);
     if (unprovable.isNotEmpty) {
       output.blank();
-      output.say('these ship built but never executed — rk cannot prove '
-          'they run or report ${unit.version}:');
+      final warning = 'these ship built but never executed — rk cannot '
+          'prove they run or report ${unit.version}:';
+      output.say(warning);
       for (final platform in unprovable) {
         output.say(platform, depth: 1);
       }
+      disclosed.add('$warning\n${unprovable.join('\n')}');
+    }
+
+    // What the prompt disclosed travels with the yes: a --json --confirm
+    // caller never sees the prose sink, so the document carries it.
+    if (disclosed.isNotEmpty) {
+      output.report.attach('authorization-disclosures', disclosed.join('\n\n'));
     }
 
     if (!_requireAuthorizer(unit)) return false;
@@ -1612,9 +1668,18 @@ class ReleaseCommand {
     if (typed?.trim() != unit.version.canonical) {
       output.blank();
       output.say(typed == null
-          ? 'no terminal to answer on — stopped; nothing was published. '
-              'A release is authorized at a terminal.'
+          ? 'no terminal to answer on — stopped; nothing was published.'
           : 'stopped. nothing was published.');
+      output.problem(
+        Diagnostic(
+          code: 'RK-AUTH-002',
+          message: 'the authorization does not name this release',
+          remedy: 'authorize exactly ${unit.version}: type it at the '
+              'prompt, or pass --confirm=${unit.version}',
+        ),
+        unit: unit.name,
+      );
+      output.halt(HaltKind.beforeActing);
       return false;
     }
     return true;
@@ -1626,10 +1691,9 @@ class ReleaseCommand {
       Diagnostic(
         code: 'RK-AUTH-001',
         message: 'nobody is here to authorize this release',
-        remedy: 'a release from a terminal is authorized by the operator '
-            'confirming it. Unattended, rk needs a signed tag instead — '
-            'and verifying one is on the ledger, so today unattended '
-            'means refused.',
+        remedy: 'a release is authorized by the operator: type the version '
+            'at a terminal, or pass --confirm=<version> as the explicit '
+            'noninteractive yes. Without either, rk refuses.',
       ),
       unit: unit.name,
     );
@@ -1778,7 +1842,9 @@ class ReleaseCommand {
   /// genuine first release of a binaries-only unit, which has nothing
   /// permanent in it at all. `publishedRequirement == null` is the fact, and
   /// it is what `firstCertificate` carries.
-  void _sayClaims(
+  /// Says the first-claim disclosures and returns them, so the caller can
+  /// carry them onto the machine surface beside the yes they gate.
+  List<String> _sayClaims(
     List<TargetClaim> claims,
     String? firstCertificate,
     String? codeId,
@@ -1795,12 +1861,13 @@ class ReleaseCommand {
             'Signed by\n'
             '                 $firstCertificate',
     ];
-    if (firstOf.isEmpty) return;
+    if (firstOf.isEmpty) return const [];
     output.blank();
     output.say('this release claims, for the first time:');
     for (final line in firstOf) {
       output.say(line, depth: 1);
     }
+    return ['this release claims, for the first time:', ...firstOf];
   }
 
   /// A conventional identifier to *suggest*, never to use.

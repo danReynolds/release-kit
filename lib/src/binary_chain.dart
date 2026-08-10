@@ -265,13 +265,16 @@ class BinaryChain {
           'the produced signature differs from the published identity',
         );
       }
-      activity.done('built · signed · matches the published identity');
+      activity.done(smoke['status'] == 'passed'
+          ? 'built · signed · matches the published identity'
+          : 'built, not executed · signed · matches the published identity');
     } else {
       // A first signed release makes an identity permanent, so it is named
       // rather than assumed: the certificate that signed and the identifier
       // every later release must reproduce.
       activity.done(
-        'built · signed · first release · ${signed.certificate ?? 'unknown '
+        '${smoke['status'] == 'passed' ? 'built' : 'built, not executed'} · '
+        'signed · first release · ${signed.certificate ?? 'unknown '
             'certificate'} · ${signing.codeId}',
       );
     }
@@ -329,11 +332,7 @@ class BinaryChain {
     final executable = project.executable!;
     final binary = binaryName(platform, executable);
     if (!workspace.exists(binary)) {
-      return _missingArtifact(
-          step,
-          binary,
-          'the build and sign steps '
-          'produce it');
+      return _missingArtifact(step, binary, 'the build step produces it');
     }
 
     final resultName = ReleaseAssets.notaryResultName(
@@ -394,8 +393,8 @@ class BinaryChain {
       );
     }
 
-    // The verdict and its log become published assets, so a user who
-    // trusts neither can ask Apple with the submission id inside them.
+    // The verdict and its log are stage evidence, receipt-bound for
+    // diagnosis; a consumer verifies the binary with Apple directly.
     workspace.write(resultName, utf8.encode(notarized.raw ?? '{}'));
     final submission = notarized.submissionId;
     final log = submission == null

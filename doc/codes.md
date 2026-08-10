@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-120 codes across 24 families.
+121 codes across 24 families.
 
 
 ## RK-AUTH — Authorization
@@ -21,6 +21,7 @@ fails, and the count below is checked against the rows.
 | code | says | declared in |
 |---|---|---|
 | `RK-AUTH-001` | nobody is here to authorize this release | `lib/src/commands/release.dart` |
+| `RK-AUTH-002` | the authorization does not name this release | `lib/src/commands/release.dart` |
 
 ## RK-BREW — The Homebrew tap
 
@@ -177,7 +178,7 @@ fails, and the count below is checked against the rows.
 | `RK-PUB-005` | the published version's exact public archive could not be confirmed | `lib/src/targets/pub_dev_target.dart` |
 | `RK-PUB-006` | the immutable public archive differs from the release source | `lib/src/targets/pub_dev_target.dart` |
 | `RK-PUB-007` | dart pub login did not complete | `lib/src/targets/pub_dev_target.dart` |
-| `RK-PUB-008` | ${project.name}: a tracked pubspec_overrides.yaml masks consumer resolution | `lib/src/targets/pub_dev_target.dart` |
+| `RK-PUB-008` | ${project.name}: tracked dependency overrides mask consumer resolution | `lib/src/targets/pub_dev_target.dart` |
 
 RK-PUB-002 (the consumer-resolve probe) and RK-PUB-004 are retired historical
 meanings and are not reused.

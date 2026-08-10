@@ -96,6 +96,21 @@ void main() {
       expect(run.problems.map((p) => p['code']), contains('RK-CLI-009'));
     });
 
+    test('two contradictory --confirm values refuse, not last-wins', () {
+      final run = repo(
+          ['release', 'lib', '--confirm=1.0.0', '--confirm=2.0.0', '--json']);
+      expect(run.code, 2, reason: run.all);
+      expect(run.problems.map((p) => p['code']), contains('RK-CLI-009'));
+    });
+
+    test('--stage does not take an authorization', () {
+      final run =
+          repo(['release', 'lib', '--stage', '--confirm=1.4.0', '--json']);
+      expect(run.code, 2, reason: run.all);
+      expect(run.problems.map((p) => p['code']), contains('RK-CLI-005'));
+      expect(run.all, contains('staging publishes nothing'));
+    });
+
     test('--confirm carries its version through the parser', () {
       // --help short-circuits before the verb runs, so this proves only the
       // surface: the flag parses, applies to release, and is refused
