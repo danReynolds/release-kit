@@ -575,18 +575,23 @@ a session, not package uploader permission.
    contain no `dart pub login` invocation.
 5. Copy the exact `.rk/work/stages/<stage-id>` path printed by rk into an
    external transcript. From that directory, independently:
-   - hash `release-manifest.json` with `shasum -a 256`;
+   - hash `release-manifest.json` with the exact command
+     `shasum -a 256 release-manifest.json`;
    - run `shasum -a 256 -c SHA256SUMS`;
-   - list every archive with `tar -tzf` and confirm its exact expected
-     inventory: the executable plus `LICENSE` and `README.md` when those files
-     are present in the staged project source, and nothing else;
+   - list each archive with the exact command `tar -tzf <archive>` and confirm
+     its inventory is exactly `rk`, `LICENSE`, and `README.md`;
    - extract each runnable archive into a fresh temporary directory and require
      its `--version` output to equal `0.0.1`;
-   - on the macOS binary, run `codesign --verify --strict --verbose=2` and
-     `codesign -d -r- --verbose=4`, then require exact-byte notarization with
-     `codesign --test-requirement=notarized -v`; and
-   - inspect both notary JSON files and require the same submission id and an
-     `Accepted` result.
+   - extract the macOS archive into a fresh `alpha_macos_dir`, run its exact
+     `rk --version`, and bind every native check to
+     `"$alpha_macos_dir/rk"`: run
+     `codesign --verify --strict --verbose=2 ... && echo "signature valid"`,
+     `codesign -d -r- --verbose=4 ...`, and
+     `codesign --test-requirement=notarized -v ... && echo "notarization
+     valid"`; and
+   - print both notary JSON files with `cat` and require the result file's
+     `id` and the log file's `jobId` to be the same submission with an
+     `Accepted` status in each.
    Preserve command output, not a prose assertion that these checks passed.
 6. Run status again. It must show the exact stage and `Good to release`.
 7. Run `dart run bin/rk.dart release rk`. Require exactly one attached native
@@ -600,8 +605,10 @@ a session, not package uploader permission.
 9. Run `dart run bin/rk.dart status rk` from a fresh process. It must report
    the published versions and public target contents correctly without relying
    on process memory.
-10. Run `dart run bin/rk.dart release rk` again. With every pub.dev target now
-    exact, it must run no second login and perform no public act.
+10. Run `dart run bin/rk.dart release rk --json` again. With every target now
+    exact, it must run no second login and perform no public act. Preserve the
+    report proving every configured public step is `exact` with action
+    `already_exact`.
 11. Consume each configured public destination without using the checkout or
     the stale global installation:
     - Set `alpha_pub_cache` to a fresh temporary directory. Activate with
@@ -616,9 +623,12 @@ a session, not package uploader permission.
     For Homebrew, use a machine or environment that has not seen the repository
     checkout.
 12. Until the idempotent rerun is complete, preserve every command transcript,
-   stage identity, public manifest digest, target URL, and any divergence in a
-   file outside the tracked checkout. Editing the receipt earlier would dirty
-   the release tree and invalidate the retry exercise.
+   stage identity, public manifest digest, notary submission id, target URL,
+   and any divergence in a file outside the tracked checkout. Editing the
+   receipt earlier would dirty the release tree and invalidate the retry
+   exercise. When transferring evidence into the receipt, normalize command
+   lines as `$ <exact command>` so each command's unchanged output has an
+   unambiguous boundary.
 13. Fill `doc/production-alpha-receipt.md` from that evidence, set its status
    to exactly `completed`, run
    `dart test test/live_release_checkpoints.dart`, then commit and push the
