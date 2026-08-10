@@ -479,9 +479,13 @@ String _afterLastTransientErase(String text) {
   return last < 0 ? text : text.substring(last + erase.length);
 }
 
-String _targetLine(String text, String label) => text.split('\n').firstWhere(
-      (line) => line.contains(label) && line.contains(' › '),
-    );
+/// The target's own row, which is above `Issues` — where the same label
+/// appears again inside a remedy.
+String _targetLine(String text, String label) {
+  final issues = text.indexOf('\nIssues');
+  final body = issues < 0 ? text : text.substring(0, issues);
+  return body.split('\n').firstWhere((line) => line.contains(label));
+}
 
 void main() {
   statusTargetContract();
@@ -495,8 +499,9 @@ void main() {
         'keybay': ['0.1.0', '0.2.0']
       }),
     );
-    expect(text, contains('Targets'));
-    expect(text, contains('Published everywhere configured'));
+    expect(text, contains('pub.dev · keybay'));
+    expect(text, contains('0.2.0 · published'));
+    expect(text, isNot(contains('prevent')));
     expect(text, isNot(contains('rk release')));
   });
 
@@ -522,9 +527,8 @@ void main() {
         'keybay': ['0.1.0']
       }),
     );
-    expect(text, contains('No known issues'));
+    expect(text, isNot(contains('prevent')));
     expect(text, contains('0.1.0 › 0.2.0'));
-    expect(text, contains('rk release core --stage'));
     expect(text, isNot(contains('ready')));
   });
 
@@ -537,10 +541,22 @@ void main() {
         'keybay': ['0.1.0']
       }),
     );
-    expect(text, contains('0.1.0 › 0.2.0 · v0.2.0'));
+    expect(text, contains('0.1.0 › 0.2.0'));
     expect(
       text,
-      matches(RegExp(r'Git tag\s+0\.1\.0 › 0\.2\.0')),
+      isNot(contains('v0.2.0')),
+      reason: 'the tag repeats the version under the default pattern',
+    );
+    expect(
+      text,
+      matches(RegExp(r'core 0\.1\.0 › 0\.2\.0')),
+      reason: 'every lane agrees the current release is 0.1.0, so the '
+          'movement is stated once, above them',
+    );
+    expect(
+      text,
+      isNot(contains('not published: origin has no matching release tag')),
+      reason: 'how rk established absence is diagnosis, not the report',
     );
   });
 
@@ -655,8 +671,7 @@ void main() {
       registry: FakeRegistry(const {}),
     );
     expect(text, contains('not published'));
-    expect(text, contains('No known issues'));
-    expect(text, contains('rk release core --stage'));
+    expect(text, isNot(contains('prevent')));
   });
 }
 
@@ -823,12 +838,11 @@ executables:
       }),
     );
 
-    expect(text, contains('Targets'));
     expect(text, contains('Git tag'));
     expect(text, contains('pub.dev · keybay'));
     expect(text, contains('0.1.0 › 0.2.0'));
-    expect(text, contains('No known issues'));
-    expect(text, contains('→ rk release core --stage'));
+    expect(text, isNot(contains('prevent')));
+    expect(text, isNot(contains('→')));
     expect(
       _targetLine(text, 'pub.dev · keybay').trimLeft(),
       startsWith('pub.dev · keybay'),
@@ -871,7 +885,7 @@ executables:
         .toList();
     expect(visible.every((line) => line.runes.length <= width), isTrue);
     expect(visible.join('\n'), contains('GitHub Release'));
-    expect(visible.join('\n'), contains('keybay-0.2.0-macos-arm64'));
+    expect(visible.join('\n'), contains('artifacts'));
     expect(run.text, isNot(contains('…')),
         reason: 'settled facts wrap; only transient progress may truncate');
   });
@@ -895,9 +909,10 @@ executables:
 
     expect(
       run.text,
-      contains('uses release-manifest.json from GitHub Release'),
+      isNot(contains('uses release-manifest.json')),
+      reason: 'which target owns a shared artifact explains a conflict; it '
+          'is not news on the happy path',
     );
-    expect(run.text, contains('uses keybay.rb from GitHub Release'));
     final targets =
         ((run.report['units'] as List).single as Map)['targets'] as List;
     final github = targets.singleWhere(
@@ -940,7 +955,11 @@ executables:
         answer: const Inspection.exact(detail: 'published exactly'),
       ),
     );
-    expect(agreed.text, contains('0.2.0 › 0.2.0 · v0.2.0'));
+    expect(
+      agreed.text,
+      contains('0.2.0 · published'),
+      reason: 'an arrow to where it already is describes no movement',
+    );
 
     final split = await statusRun(
       withConfig: binaryConfig,
@@ -957,9 +976,12 @@ executables:
         answer: const Inspection.absent(),
       ),
     );
-    expect(split.text, contains('target 0.2.0 · v0.2.0'));
     expect(split.text, contains('0.1.0 › 0.2.0'));
-    expect(split.text, isNot(contains('0.1.0 › 0.2.0 · v0.2.0')));
+    expect(
+      split.text,
+      isNot(contains('0.2.0 · published')),
+      reason: 'targets disagree, so the header invents no single answer',
+    );
   });
 
   test('cheap host facts mark artifacts that cannot be produced here',
@@ -1022,7 +1044,7 @@ executables:
     expect(
         run.text, contains('current public version could not be established'));
     expect(run.text, contains('provider history was unreadable'));
-    expect(run.text, isNot(contains('No known issues')));
+    expect(run.text, contains('prevent'));
 
     final targets =
         ((run.report['units'] as List).single as Map)['targets'] as List;
@@ -1051,9 +1073,9 @@ executables:
     expect(
       run.text
           .split('\n')
-          .firstWhere((line) => line.contains(archiveName))
+          .firstWhere((line) => line.contains('artifacts'))
           .trimLeft(),
-      startsWith(archiveName),
+      startsWith('3 artifacts'),
       reason: 'a target problem does not turn an unstaged artifact into one',
     );
   });
@@ -1149,17 +1171,28 @@ executables:
       ),
     );
 
-    expect(run.text, contains('Good to release'));
-    expect(run.text, contains('rk release cli'));
-    expect(run.text, isNot(contains('rk release cli --stage')));
-    for (final name in ReleaseAssets.expectedFor(made!.unit.binaryProject)) {
-      expect(run.text, contains(name));
-    }
+    expect(run.text, isNot(contains('prevent')));
+    expect(run.report['next'], ['rk release cli']);
+    // The report collapses a set that agrees; the document keeps every
+    // name, which is where a caller reading filenames should be reading
+    // them anyway.
+    final expected = ReleaseAssets.expectedFor(made!.unit.binaryProject);
     expect(
       run.text,
-      matches(RegExp(
-        r'✓\s+keybay-0\.2\.0-macos-arm64\.tar\.gz\s+staged',
-      )),
+      matches(RegExp('✓\\s+${expected.length} artifacts\\s+staged')),
+    );
+    final staged = (((run.report['units'] as List).single as Map)['targets']
+            as List)
+        .cast<Map>()
+        .singleWhere(
+            (target) => target['kind'] == 'githubRelease')['artifacts'] as List;
+    expect(
+      staged.cast<Map>().map((artifact) => artifact['name']).toSet(),
+      expected,
+    );
+    expect(
+      staged.cast<Map>().map((artifact) => artifact['status']).toSet(),
+      {'staged'},
     );
     final units = run.report['units'] as List;
     final targets = (units.single as Map)['targets'] as List;
@@ -1217,25 +1250,27 @@ executables:
       ),
     );
 
-    expect(run.text, contains('Targets'));
     expect(
       run.text,
-      matches(RegExp(r'✓\s+Git tag\s+0\.2\.0 › 0\.2\.0')),
+      matches(RegExp(r'✓\s+Git tag\s+published')),
     );
     expect(
       run.text,
-      matches(RegExp(r'✓\s+pub\.dev · keybay\s+0\.2\.0 › 0\.2\.0')),
+      matches(RegExp(r'✓\s+pub\.dev · keybay\s+published')),
     );
     expect(
       run.text,
       matches(RegExp(
-        r'GitHub Release · danReynolds/keybay\s+'
-        r'— › 0\.2\.0 · not published',
+        r'GitHub Release · danReynolds/keybay\s+not published',
       )),
     );
-    expect(run.text, contains('Good to release'));
-    expect(run.text, contains('→ rk release cli'));
-    expect(run.text, isNot(contains('rk release cli --stage')));
+    expect(run.report['next'], ['rk release cli']);
+    expect(
+      run.text,
+      isNot(contains('→')),
+      reason: 'the next command is data for an agent, not a prompt for the '
+          'operator who just chose it',
+    );
     expect(run.text, isNot(contains('Issues')));
     expect(run.text, isNot(contains('issue prevents release')));
 
@@ -1297,7 +1332,7 @@ executables:
       ),
     );
 
-    expect(run.text, contains('Good to release'));
+    expect(run.text, isNot(contains('prevent')));
     expect(run.text, isNot(contains('RK-HOST-001')));
     expect(run.text, isNot(contains('cannot produce every platform')));
   });
@@ -1439,8 +1474,8 @@ executables:
       run.text,
       contains('Signed or notarized bytes cannot be recreated'),
     );
-    expect(run.text, isNot(contains('No known issues')));
-    expect(run.text, isNot(contains('rk release cli --stage')));
+    expect(run.text, contains('prevent'));
+    expect(run.report['next'], isEmpty);
     expect(
       (run.report['problems'] as List)
           .map((problem) => (problem as Map)['code']),
@@ -1718,7 +1753,7 @@ void _phase23Fixes() {
     );
     expect(text, contains('0.1.0 › 0.2.0'),
         reason: 'local is 0.2.0; live is 0.1.0');
-    expect(text, contains('No known issues'));
+    expect(text, isNot(contains('prevent')));
   });
 
   test('a fully published unit ignores worktree state', () async {
@@ -1729,7 +1764,7 @@ void _phase23Fixes() {
         'keybay': ['0.2.0']
       }),
     );
-    expect(text, contains('Published everywhere configured'));
+    expect(text, contains('0.2.0 · published'));
     expect(
       text,
       isNot(contains('files are uncommitted')),
@@ -1866,9 +1901,9 @@ executables:
       ),
     );
 
-    expect(run.text, contains('Targets'));
+    expect(run.text, contains('Git tag'));
     expect(run.text, contains('GitHub Release'));
-    expect(run.text, contains('Published everywhere configured'));
+    expect(run.text, contains('0.2.0 · published'));
     expect(
       run.text,
       isNot(contains('build keybay')),

@@ -138,9 +138,9 @@ parallel, then render one report. It may perform cheap read-only prerequisite
 checks only where the native tool provides a safe one, but never builds, signs,
 notarizes, packages, logs in, or writes a stage. Unsupported safe
 authentication checks stay silent; there is no authentication-specific green
-or unknown state, and normal release preflight owns the check. `No known
-issues` therefore means no currently observable blocker; only an exact stage
-earns `Good to release`.
+or unknown state, and normal release preflight owns the check. A report with
+no `Issues` section therefore means no currently observable blocker; whether
+the artifacts are staged is read off their own rows.
 
 While target reads run concurrently, a TTY shows a fixed transient list:
 
@@ -169,23 +169,37 @@ Artifact marks have one meaning:
 - `✗`: rk already knows the artifact cannot be produced or validated.
 
 The text also says `staged`, `not staged`, or the problem, so marks and colour
-are never the only signal. Shared artifacts are listed once under the target
-that owns them; another target may refer to that target without duplicating
-the inventory.
+are never the only signal.
+
+One fact appears once. A set of artifacts that agrees collapses to
+`N artifacts` with its shared state; they are named individually the moment
+they disagree, and an invalid one is never collapsed, because which and why
+are the only questions it raises. Artifacts are not listed at all under a
+target that is already public: those files are out there, and their local
+staging has stopped being something anyone can act on. The unit's own line
+carries `current › target` only when every target agrees there is movement —
+otherwise each row carries its own, and none is invented — and it states
+`unpublished` or `published` where an arrow would say nothing, because a bare
+version cannot distinguish the two. It carries the tag only when the tag is
+not the plain `v{version}` convention. Which target owns a shared artifact is
+part of explaining a conflict, not part of the steady-state report.
 
 There is no user-facing `ready`, `partial`, or `blocked` vocabulary. `Issues`
-appears only when nonempty, every issue has one concrete `Fix:`, and the report
-ends with one of these natural conclusions:
+appears only when nonempty and every issue has one concrete `Fix:`. Only a
+refusal concludes:
 
-- `✓ Good to release` when an exact stage exists and no issue remains;
-- `✓ No known issues` when release can prepare the unstaged artifacts first;
-- `✓ Published everywhere configured` when no work remains;
-- `✗ N issues prevent release` when intervention is required.
+- `✗ N issues prevent release` when intervention is required;
+- nothing at all otherwise. rk does not congratulate itself: success is the
+  absence of a refusal, the rows already say what is published and what is
+  staged, and exit 0 says it to anything parsing. The command that would
+  advance the work stays in the document as `next[]`, where an agent reads
+  it, and off the report, where it told an operator what they had just
+  decided to do.
 
 Colour is restrained: green for success, red for a concrete or actionable
 problem (including an online target read that failed), yellow for an unknown
-with no linked issue such as an unreachable read, cyan for the next command, dim
-text for secondary facts, and bold section headings. `NO_COLOR`, `TERM=dumb`,
+with no linked issue such as an unreachable read, dim text for secondary
+facts, and bold section headings. `NO_COLOR`, `TERM=dumb`,
 non-TTY output, and `--json` contain no ANSI or cursor movement. The final
 non-TTY report has the same words and ordering as the settled TTY report.
 
@@ -599,7 +613,7 @@ a session, not package uploader permission.
      `id` and the log file's `jobId` to be the same submission with an
      `Accepted` status in each.
    Preserve command output, not a prose assertion that these checks passed.
-6. Run status again. It must show the exact stage and `Good to release`.
+6. Run status again. It must show every artifact staged and raise no issue.
 7. Run `dart run bin/rk.dart release rk`. Require exactly one attached native
    `dart pub login` before the private-stage boundary, review the final
    consequences, and type the version. If login fails, preserve `RK-PUB-007`,
@@ -635,7 +649,7 @@ a session, not package uploader permission.
       directory first on `PATH`, run `rk status rk` **by bare name** —
       `cd "$alpha_consumer_repo" && PATH="$alpha_pub_cache/bin:$PATH" rk status rk`,
       and the same with the extracted archive's directory. Require exit 0 and
-      `Published everywhere configured`. A bare name is not a nicety: an
+      every target `published`. A bare name is not a nicety: an
       installed binary derives its own identity from `argv[0]`, and rk once
       shipped a build that answered `RK-STAGE-002` for every repository whose
       directory did not happen to contain a file named `rk`. `--version` and

@@ -97,44 +97,34 @@ class StatusCommand {
     final uniqueIssues = _deduplicate(issues);
     if (uniqueIssues.isNotEmpty) _renderIssues(uniqueIssues);
 
-    output.blank();
+    // Only a refusal concludes. rk does not congratulate itself: success is
+    // the absence of an issue, the rows already say what is published and
+    // what is staged, and exit 0 says it to anything parsing. The next
+    // command stays in the document (`next[]`), where an agent reads it,
+    // and off the report, where it was telling an operator what they had
+    // just decided to do.
     if (uniqueIssues.isNotEmpty) {
       final count = uniqueIssues.length;
+      output.blank();
       output.line(
         '$count ${count == 1 ? 'issue prevents' : 'issues prevent'} release',
         mark: Mark.blocked,
         tone: Tone.bad,
       );
-    } else if (!workRemains) {
-      output.line(
-        'Published everywhere configured',
-        mark: Mark.done,
-        tone: Tone.muted,
-      );
-    } else if (snapshots
+    }
+
+    final unfinished = snapshots
         .where((snapshot) => snapshot.targets.any(
               (target) => !target.inspection.isExact,
             ))
-        .every((snapshot) => snapshot.stage?.reusable == true)) {
-      output.line('Good to release', mark: Mark.done);
-    } else {
-      output.line('No known issues', mark: Mark.done);
-    }
-
-    if (uniqueIssues.isEmpty) {
-      final unfinished = snapshots
-          .where((snapshot) => snapshot.targets.any(
-                (target) => !target.inspection.isExact,
-              ))
-          .toList();
-      if (unfinished.length == 1) {
-        final snapshot = unfinished.single;
-        output.next(
-          snapshot.stage?.reusable == true
-              ? 'rk release ${snapshot.unit.name}'
-              : 'rk release ${snapshot.unit.name} --stage',
-        );
-      }
+        .toList();
+    if (uniqueIssues.isEmpty && unfinished.length == 1) {
+      final snapshot = unfinished.single;
+      output.report.next(
+        snapshot.stage?.reusable == true
+            ? 'rk release ${snapshot.unit.name}'
+            : 'rk release ${snapshot.unit.name} --stage',
+      );
     }
 
     // A status issue is a state to resolve, not a command crash.
@@ -694,17 +684,28 @@ class StatusCommand {
       for (final target in snapshot.targets) target.currentVersion,
     };
     final hasAgreedCurrent = allCurrentsKnown && currentVersions.length == 1;
-    final currentVersion =
-        hasAgreedCurrent ? currentVersions.single ?? '—' : null;
+    final agreedCurrent = hasAgreedCurrent ? currentVersions.single : null;
+    final target = snapshot.unit.version.canonical;
+
+    // One fact, once. The header carries movement only when every target
+    // agrees there is movement; otherwise the rows carry it, because there
+    // is no honest single answer to invent. Collapsing `— › 0.0.1` to
+    // `0.0.1` would make "nothing published" and "already published"
+    // read identically, so the state that survives the collapse is a word.
+    final movement = hasAgreedCurrent && agreedCurrent != null
+        ? agreedCurrent == target
+            ? '$target · published'
+            : '$agreedCurrent › $target'
+        : hasAgreedCurrent
+            ? '$target · unpublished'
+            : target;
+    // The tag is news only when it is not the plain convention.
+    final tag = snapshot.unit.tag == 'v$target' ? null : snapshot.unit.tag;
     output.unit(
       snapshot.unit.name,
-      version: snapshot.unit.version.canonical,
+      version: target,
       tag: snapshot.unit.tag,
-      display: hasAgreedCurrent
-          ? '$currentVersion › ${snapshot.unit.version.canonical} · '
-              '${snapshot.unit.tag}'
-          : 'target ${snapshot.unit.version.canonical} · '
-              '${snapshot.unit.tag}',
+      display: tag == null ? movement : '$movement · $tag',
     );
     for (final step in snapshot.checklist.steps) {
       // Public targets are recorded once, in targets[], where the settled
@@ -715,7 +716,6 @@ class StatusCommand {
       _record(step, snapshot.states[step.id]!);
     }
 
-    output.line('Targets', depth: 1, tone: Tone.header);
     for (final target in snapshot.targets) {
       final state = target.inspection;
       final hasLinkedIssue = snapshot.issues.any(
@@ -743,7 +743,23 @@ class StatusCommand {
             },
         ],
       );
-      final current = target.currentKnown ? target.currentVersion ?? '—' : '?';
+      // The row repeats the header's movement only when the header could
+      // not state it — and says the condition in words only when those
+      // words are not the verdict again. An absent target's "how rk knows"
+      // is diagnosis; a conflict or an unread target is nothing but.
+      // Movement, when this row has to carry it, needs somewhere to have
+      // moved from. A target with nothing published has no such place, and
+      // "not published" already says so — the placeholder the header stopped
+      // printing does not belong here either.
+      final current = target.currentKnown ? target.currentVersion : '?';
+      final movementHere = hasAgreedCurrent ||
+              current == null ||
+              current == target.expectation.targetVersion
+          ? null
+          : '$current › ${target.expectation.targetVersion}';
+      final condition = _condition(state);
+      final speaks =
+          state.verdict == Verdict.conflict || state.verdict == Verdict.unknown;
       output.line(
         target.expectation.label,
         mark: hasLinkedIssue
@@ -753,46 +769,82 @@ class StatusCommand {
                 Verdict.conflict => Mark.blocked,
                 Verdict.absent || Verdict.unknown => Mark.none,
               },
-        note: '$current › ${target.expectation.targetVersion} · '
-            '${_condition(state)}',
-        depth: 2,
-        labelWidth: 30,
+        note: [
+          if (movementHere != null) movementHere,
+          speaks ? condition : _plainVerdict(state.verdict),
+        ].join(' · '),
+        depth: 1,
+        labelWidth: 44,
         tone: targetTone,
         noteTone: targetTone,
       );
-      for (final artifact in target.artifacts) {
-        output.line(
-          artifact.name,
-          mark: switch (artifact.status) {
-            ArtifactStatus.notStaged => Mark.none,
-            ArtifactStatus.staged => Mark.done,
-            ArtifactStatus.invalid => Mark.blocked,
-          },
-          note: switch (artifact.status) {
-            ArtifactStatus.notStaged => 'not staged',
-            ArtifactStatus.staged => 'staged',
-            ArtifactStatus.invalid => artifact.problem,
-          },
-          depth: 3,
-          labelWidth: 54,
-          tone: artifact.status == ArtifactStatus.invalid
-              ? Tone.bad
-              : artifact.status == ArtifactStatus.staged
-                  ? Tone.muted
-                  : Tone.plain,
-          noteTone:
-              artifact.status == ArtifactStatus.invalid ? Tone.bad : Tone.muted,
-        );
-      }
-      if (target.expectation.uses case final uses?) {
-        output.line(
-          'uses $uses',
-          depth: 3,
-          tone: Tone.muted,
-        );
-      }
+      _renderArtifacts(target);
     }
   }
+
+  /// What this target will publish, and whether it is ready.
+  ///
+  /// Nothing once the target is public: those files are out there, and
+  /// their local staging stopped being a fact anyone can act on. One line
+  /// while they all share a state, because ten lines saying `not staged`
+  /// answer the same question once. Each on its own line the moment they
+  /// disagree, which is exactly when which-one matters.
+  void _renderArtifacts(TargetObservation target) {
+    final artifacts = target.artifacts;
+    if (artifacts.isEmpty || target.inspection.isExact) return;
+
+    // An invalid artifact is never collapsed, even when every one of them
+    // is invalid for the same reason: "3 artifacts · invalid" answers none
+    // of which, or why, and those are the only questions a broken artifact
+    // raises.
+    final statuses = artifacts.map((artifact) => artifact.status).toSet();
+    if (statuses.length == 1 &&
+        artifacts.length > 1 &&
+        statuses.single != ArtifactStatus.invalid) {
+      final status = statuses.single;
+      output.line(
+        '${artifacts.length} artifacts',
+        mark: _artifactMark(status),
+        note: _artifactNote(status),
+        depth: 2,
+        labelWidth: 44,
+        tone: status == ArtifactStatus.staged ? Tone.muted : Tone.plain,
+        noteTone: Tone.muted,
+      );
+      return;
+    }
+
+    for (final artifact in artifacts) {
+      output.line(
+        artifact.name,
+        mark: _artifactMark(artifact.status),
+        note: artifact.status == ArtifactStatus.invalid
+            ? artifact.problem
+            : _artifactNote(artifact.status),
+        depth: 2,
+        labelWidth: 44,
+        tone: artifact.status == ArtifactStatus.invalid
+            ? Tone.bad
+            : artifact.status == ArtifactStatus.staged
+                ? Tone.muted
+                : Tone.plain,
+        noteTone:
+            artifact.status == ArtifactStatus.invalid ? Tone.bad : Tone.muted,
+      );
+    }
+  }
+
+  static Mark _artifactMark(ArtifactStatus status) => switch (status) {
+        ArtifactStatus.notStaged => Mark.none,
+        ArtifactStatus.staged => Mark.done,
+        ArtifactStatus.invalid => Mark.blocked,
+      };
+
+  static String _artifactNote(ArtifactStatus status) => switch (status) {
+        ArtifactStatus.notStaged => 'not staged',
+        ArtifactStatus.staged => 'staged',
+        ArtifactStatus.invalid => 'invalid',
+      };
 
   void _renderIssues(List<StatusIssue> issues) {
     output.blank();
@@ -832,6 +884,14 @@ class StatusCommand {
         Verdict.absent => 'not published${_detailSuffix(state.detail)}',
         Verdict.conflict => 'does not match${_detailSuffix(state.detail)}',
         Verdict.unknown => 'could not be read${_detailSuffix(state.detail)}',
+      };
+
+  /// The verdict alone, for the states whose detail only restates it.
+  static String _plainVerdict(Verdict verdict) => switch (verdict) {
+        Verdict.exact => 'published',
+        Verdict.absent => 'not published',
+        Verdict.conflict => 'does not match',
+        Verdict.unknown => 'could not be read',
       };
 
   static String _detailSuffix(String? detail) =>

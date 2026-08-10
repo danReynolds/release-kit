@@ -384,9 +384,9 @@ status says nothing about authentication; normal release preflight owns it.
 
 There is no user-facing `ready`, `partial`, or `blocked` lifecycle. An
 `Issues` section appears only when nonempty and every issue supplies one
-concrete `Fix:`. The report ends with exactly one natural conclusion:
-`Good to release`, `No known issues`, `Published everywhere configured`, or
-`N issues prevent release`.
+concrete `Fix:`. Only a refusal concludes the report — `N issues prevent
+release` — because success is the absence of one, and the rows above already
+say what is published and what is staged.
 
 Colour carries no unique information: green is success, red a concrete or
 actionable problem (including an online target read that failed), yellow an

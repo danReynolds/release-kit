@@ -209,6 +209,10 @@ class Output {
       name,
       note: display ??
           (state == null ? '$version › $tag' : '$version › $tag · $state'),
+      // The unit's own line is a sentence, not a column: what follows the
+      // name belongs beside it, not at the note column the rows below
+      // share.
+      labelWidth: 0,
     );
   }
 
