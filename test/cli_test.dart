@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:test/test.dart';
@@ -124,6 +125,43 @@ void main() {
       expect(elsewhere.problems.map((p) => p['code']), contains('RK-CLI-005'));
     });
   });
+
+  test('the shipped form — a compiled binary, invoked by bare name — works',
+      () {
+    // Every other test drives `dart run bin/rk.dart`, which is not what a
+    // user installs. A compiled binary resolves Platform.script from
+    // argv[0]: passed a bare name, Dart resolves it against the current
+    // directory and names a file that is not there. rk read it anyway, so
+    // every stage inspection under an installed rk answered RK-STAGE-002 —
+    // and the alpha gate's consume step only runs --version and --help,
+    // which never inspect a stage, so nothing here would have caught it.
+    final compiled = '${scratch.path}/rk-compiled';
+    final built = Process.runSync(
+      Platform.resolvedExecutable,
+      ['compile', 'exe', 'bin/rk.dart', '-o', compiled],
+    );
+    expect(built.exitCode, 0, reason: '${built.stdout}${built.stderr}');
+
+    final repo = Rk.example(scratch, 'binary-cli', as: 'shipped')..commit();
+    // Committed: without a HEAD there is no stage to inspect, so the
+    // program identity is never computed and this proves nothing.
+    // `exec -a` is how a shell that passes a bare argv[0] invokes it.
+    final run = Process.runSync(
+      '/bin/sh',
+      ['-c', 'exec -a rk "$compiled" status --json'],
+      workingDirectory: repo.root,
+    );
+    final report = jsonDecode(run.stdout as String) as Map<String, Object?>;
+    final problems = ((report['problems'] as List?) ?? const [])
+        .cast<Map<String, Object?>>();
+
+    expect(
+      problems.map((problem) => problem['code']),
+      isNot(contains('RK-STAGE-002')),
+      reason: 'the running program must be able to identify itself: '
+          '${run.stdout}${run.stderr}',
+    );
+  }, timeout: const Timeout(Duration(minutes: 3)));
 
   test('--version identifies the binary without repository preparation', () {
     final loose = Directory('${scratch.path}/version-only')..createSync();

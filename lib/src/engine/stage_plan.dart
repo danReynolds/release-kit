@@ -340,18 +340,34 @@ String _rkImplementationSha256() {
     return Sha256.hex(utf8.encode(CanonicalJson.encode(inventory)));
   }
 
-  final candidates = <File>[
-    if (script != null) script,
-    File(Platform.resolvedExecutable).absolute,
-  ];
+  return rkProgramDigest(script, File(Platform.resolvedExecutable).absolute);
+}
+
+/// What identifies this rk when its Dart sources are not on disk to read —
+/// an installed binary, or a snapshot run by the Dart VM.
+///
+/// Only files that are actually there are read. [Platform.script] cannot be
+/// trusted for a compiled executable: invoked by bare name, as a shell that
+/// passes a bare `argv[0]` does, Dart resolves it against the *current
+/// directory*, so it names a file that does not exist — `rk status` in any
+/// other repository named a phantom `<cwd>/rk`. Reading it unconditionally
+/// made every stage inspection fail with RK-STAGE-002, which is to say it
+/// made an installed rk unusable, while [Platform.resolvedExecutable] — the
+/// path that is always real — sat beside it in the same list. Skipping the
+/// phantom also makes the digest identical however rk was invoked.
+///
+/// Public so a test can hold this to account without a compiled binary and
+/// a shell that lies about argv[0].
+String rkProgramDigest(File? script, File executable) {
   final seen = <String>{};
   final inventory = <String, String>{};
-  for (final file in candidates) {
+  for (final file in [if (script != null) script, executable]) {
+    if (!file.existsSync()) continue;
     String path;
     try {
       path = file.resolveSymbolicLinksSync();
     } on Object {
-      path = file.path;
+      path = file.absolute.path;
     }
     if (!seen.add(path)) continue;
     inventory['program-${inventory.length + 1}'] =
