@@ -19,14 +19,12 @@ final class StageStepContract {
     this.name, {
     this.inputs = const {},
     this.outputs = const {},
-    this.optionalOutputs = const {},
     this.validate,
   });
 
   final String name;
   final Set<String> inputs;
   final Map<String, String> outputs;
-  final Map<String, String> optionalOutputs;
   final StageStepContractValidator? validate;
 }
 
@@ -55,11 +53,7 @@ List<T> orderStageContributions<T>(
     if (!names.add(name)) {
       throw StateError('two stage contracts claim the producer "$name"');
     }
-    final claimed = {
-      ...contract.step.outputs.keys,
-      ...contract.step.optionalOutputs.keys,
-    };
-    for (final output in claimed) {
+    for (final output in contract.step.outputs.keys) {
       final previous = outputs[output];
       if (previous != null) {
         throw StateError(
@@ -171,10 +165,7 @@ class StageReceiptContract {
     }
     final outputOwners = <String, String>{};
     for (final step in steps) {
-      for (final output in {
-        ...step.outputs.keys,
-        ...step.optionalOutputs.keys,
-      }) {
+      for (final output in step.outputs.keys) {
         final previous = outputOwners[output];
         if (previous != null) {
           throw StateError(
@@ -252,8 +243,8 @@ class StageReceiptContract {
     )) {
       return false;
     }
-    final allowed = {...contract.outputs, ...contract.optionalOutputs};
-    return actual.entries.every((entry) => allowed[entry.key] == entry.value);
+    return actual.entries
+        .every((entry) => contract.outputs[entry.key] == entry.value);
   }
 
   static void _issue(List<StageIssue> issues, String message) {

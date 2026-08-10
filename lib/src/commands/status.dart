@@ -555,10 +555,7 @@ class StatusCommand {
       if (blockedInputs.isEmpty) continue;
       final reason =
           blockedInputs.map((input) => '$input: ${problems[input]}').join('; ');
-      for (final output in {
-        ...stage.contract.step.outputs.keys,
-        ...stage.contract.step.optionalOutputs.keys,
-      }) {
+      for (final output in stage.contract.step.outputs.keys) {
         problems[output] = 'cannot be produced until $reason';
       }
     }
