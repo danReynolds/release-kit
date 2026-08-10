@@ -120,7 +120,6 @@ Future<Ran> release({
   bool dryRun = false,
   Map<String, ToolResult> results = const {},
   void Function(String key)? onRun,
-  void Function(String key, String? workingDirectory)? probe,
   ToolResult? Function(String key)? answers,
   Iterable<String> onRemote = const [],
   String config = _config,
@@ -169,7 +168,6 @@ Future<Ran> release({
   };
   final recorder = RecordingTools(
     results: results,
-    probe: probe,
     onRun: (key) {
       if (key.startsWith('git tag -s ') || key.startsWith('git tag -a ')) {
         final scripted = results[key];
@@ -629,7 +627,6 @@ void main() {
       reason: 'the rehearsal rehearses: the first real run once discovered '
           'a validation refusal only after the signed tag was public',
     );
-    expect(ran.calls, contains('dart pub get --no-precompile'));
   });
 
   test('a missing pub session refuses before staging or any public act',
@@ -654,7 +651,6 @@ void main() {
     expect(ran.text, contains('no public target changed'));
     expect(ran.calls, contains('dart pub login'));
     expect(ran.calls, isNot(contains('dart pub publish --dry-run')));
-    expect(ran.calls, isNot(contains('dart pub get --no-precompile')));
     expect(ran.calls.where((call) => call.startsWith('git tag ')), isEmpty);
     expect(ran.calls, isNot(contains('dart pub publish --force')));
     expect('not attempted'.allMatches(ran.text), hasLength(2));
@@ -733,7 +729,6 @@ void main() {
     );
     final pubLogin = ran.calls.indexOf('dart pub login');
     final pubValidation = ran.calls.indexOf('dart pub publish --dry-run');
-    final dependencyProbe = ran.calls.indexOf('dart pub get --no-precompile');
     final tag = ran.calls.indexWhere(
       (call) => call.startsWith('git tag -s v0.2.0 -m core 0.2.0'),
     );
@@ -742,7 +737,6 @@ void main() {
     final orderedCalls = [
       pubLogin,
       pubValidation,
-      dependencyProbe,
       tag,
       push,
       publish,
@@ -1525,51 +1519,6 @@ void mutationCloseout() {
           'path rk has',
     );
     expect(ran.report['rerun_helps'], false);
-  });
-
-  test('the consumer probe is written where and how the check demands',
-      () async {
-    // Three mutations survived because nothing could see the probe: written
-    // without the override, pointed at the wrong path, or run in the package
-    // directory — where pub honours pubspec_overrides.yaml, the exact
-    // failure the check exists for.
-    String? probeCwd;
-    String? probePubspec;
-    final registry = _MutableRegistry(<String>['0.1.0']);
-    final ran = await release(
-      registry: registry,
-      probe: (key, cwd) {
-        if (key == 'dart pub get --no-precompile') {
-          probeCwd = cwd;
-          probePubspec = File('$cwd/pubspec.yaml').readAsStringSync();
-        }
-      },
-      onRun: (key) {
-        if (key == 'dart pub publish --force') {
-          registry.goLive('0.2.0');
-          registry.archives['keybay@0.2.0'] = publishedBytes();
-        }
-      },
-    );
-
-    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
-    expect(probeCwd, isNotNull);
-    expect(
-      probeCwd,
-      isNot(contains('/repo')),
-      reason: 'run in the package directory, pub honours '
-          'pubspec_overrides.yaml — the exact failure the check exists for',
-    );
-    expect(probePubspec, contains('dependency_overrides'));
-    expect(
-      probePubspec,
-      allOf(
-        contains('/.rk/work/stages/'),
-        contains('/source/packages/keybay'),
-      ),
-      reason: 'the override supplies the immutable staged package by path',
-    );
-    expect(probePubspec, contains('keybay: 0.2.0'));
   });
 
   test('a later publish claims nothing, and says so by saying nothing',

@@ -64,7 +64,7 @@ final class HomebrewTargetModule extends TargetModule {
   ) async {
     final tools = context.tools;
     if (tools == null) {
-      return const Inspection.unknown('not read: --offline');
+      return const Inspection.unknown('no tools to read the tap with');
     }
     final repository = context.repository;
     if (repository == null) {

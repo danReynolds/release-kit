@@ -5,7 +5,6 @@ import '../engine/assets.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
 import '../engine/inspect.dart';
-import '../engine/registry.dart';
 import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
 import '../engine/source_tree.dart';
@@ -25,7 +24,6 @@ class StatusCommand {
     required this.resolution,
     required this.tree,
     required this.git,
-    required this.registry,
     required this.inspector,
     required this.output,
     this.stageFor,
@@ -35,7 +33,6 @@ class StatusCommand {
   final Resolution resolution;
   final SourceTree tree;
   final GitState git;
-  final RegistryReader? registry;
   final Inspector inspector;
   final Output output;
   final HostCapabilities capabilities;
@@ -81,14 +78,7 @@ class StatusCommand {
       uncommitted: git.uncommitted.length,
       head: git.head,
       remote: git.originUrl,
-      mode: registry == null ? 'offline' : null,
     );
-
-    if (registry == null) {
-      output.say(
-        'public targets were not read. Unknown is not treated as unpublished.',
-      );
-    }
 
     for (final snapshot in snapshots) {
       _renderUnit(snapshot);
@@ -275,11 +265,10 @@ class StatusCommand {
         ),
       for (final target in targets)
         if (target.inspection.verdict == Verdict.conflict ||
-            (registry != null && target.inspection.verdict == Verdict.unknown))
+            target.inspection.verdict == Verdict.unknown)
           _targetIssue(unit, target),
       for (final target in targets)
-        if (registry != null &&
-            !target.currentKnown &&
+        if (!target.currentKnown &&
             target.inspection.verdict != Verdict.unknown &&
             target.inspection.verdict != Verdict.conflict)
           _currentVersionIssue(unit, target),
@@ -287,17 +276,8 @@ class StatusCommand {
         if (_isAhead(target) && !_aheadAlreadyReported(target, diagnostics))
           _aheadIssue(unit, target),
       for (final step in prerequisiteSteps)
-        if (registry != null && Inspector.blocks(step, states[step.id]!))
+        if (Inspector.blocks(step, states[step.id]!))
           _prerequisiteIssue(unit, step, states[step.id]!),
-      if (registry == null && targets.isNotEmpty)
-        StatusIssue(
-          unit: unit.name,
-          diagnostic: Diagnostic(
-            code: 'RK-REL-001',
-            message: '${unit.name}: public targets were not read',
-            remedy: 'read them before release: rk status ${unit.name}',
-          ),
-        ),
       if (stageResult.issue != null &&
           !partialBinaryWithoutStage &&
           targets.any((target) => !target.inspection.isExact))
@@ -626,10 +606,8 @@ class StatusCommand {
         code: 'RK-REL-001',
         message: '$label: ${_condition(state)}',
         remedy: state.verdict == Verdict.unknown
-            ? registry == null
-                ? 'read the public targets: rk status ${unit.name}'
-                : 'restore read access to $label, then run '
-                    'rk status ${unit.name} again'
+            ? 'restore read access to $label, then run '
+                'rk status ${unit.name} again'
             : _targetConflictRemedy(unit, target),
       ),
       evidence: state.evidence,
@@ -717,10 +695,8 @@ class StatusCommand {
         remedy: declaring != null && state.isAbsent
             ? 'publish the prerequisite first: '
                 'rk release ${declaring.unitName}'
-            : registry == null
-                ? 'read the public prerequisite: rk status ${unit.name}'
-                : 'restore read access to the prerequisite, then run '
-                    'rk status ${unit.name} again',
+            : 'restore read access to the prerequisite, then run '
+                'rk status ${unit.name} again',
       ),
       evidence: state.evidence,
     );

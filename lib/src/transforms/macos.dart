@@ -210,13 +210,6 @@ class MacOsSigner {
         await tools.run('codesign', ['--verify', '--strict', binary]);
     return result.ok;
   }
-
-  /// Whether Apple has notarized these exact bytes.
-  Future<bool> isNotarized(String binary) async {
-    final result = await tools
-        .run('codesign', ['--test-requirement=notarized', '-v', binary]);
-    return result.ok;
-  }
 }
 
 class SigningIdentity {

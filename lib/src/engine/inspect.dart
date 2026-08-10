@@ -29,21 +29,15 @@ class Inspector {
   Inspector({
     required this.registry,
     required this.git,
-    PublicationInspector? pubDev,
+    this.pubDev,
     this.tools,
     this.repository,
     this.stageFor,
     TargetCatalog? targets,
-  })  : pubDev = pubDev ??
-            (registry is PublicationInspector
-                ? registry as PublicationInspector
-                : null),
-        targets = targets ?? TargetCatalog.builtIn();
+  }) : targets = targets ?? TargetCatalog.builtIn();
 
-  /// Absent means the registry was not read — `--offline`, exactly like a
-  /// null [tools] means the forge was not read. Null rather than a flag: a
-  /// verb cannot then branch on a mode, so there is one rendering of one
-  /// set of verdicts, and "not read" is a verdict like any other.
+  /// Null means no reader was configured — narrow destination tests — and
+  /// answers `unknown`, never `absent`: not looking is not a negative.
   final RegistryReader? registry;
   final PublicationInspector? pubDev;
   final GitState git;
@@ -164,7 +158,7 @@ class Inspector {
   /// A package another unit publishes, which must already be live.
   Future<Inspection> _prerequisite(Step step) async {
     if (registry == null) {
-      return const Inspection.unknown('not read: --offline');
+      return const Inspection.unknown('the registry reader is not configured');
     }
     // The coordinate is carried by the step so nothing here has to know how an
     // id is spelled: `pub.dev/<package>/<version>`.

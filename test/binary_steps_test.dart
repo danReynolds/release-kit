@@ -23,13 +23,13 @@ final _certificateSha256 = 'c' * 64;
 /// it in memory is gone.
 void main() {
   late Directory scratch;
-  late DirectoryWorkspace workspace;
+  late Workspace workspace;
   late StringBuffer buffer;
   late Output output;
 
   setUp(() {
     scratch = Directory.systemTemp.createTempSync('rk-steps-');
-    workspace = DirectoryWorkspace('${scratch.path}/work');
+    workspace = Workspace('${scratch.path}/work');
     buffer = StringBuffer();
     output = Output(sink: buffer.write, isTerminal: false, useColor: false);
   });
@@ -86,9 +86,6 @@ executables:
         answers: (key) {
           if (key.startsWith('dart compile exe')) {
             return ToolResult(exitCode: 0, stdout: '', stderr: '');
-          }
-          if (key.startsWith('codesign --test-requirement')) {
-            return ToolResult(exitCode: 1, stdout: '', stderr: 'not notarized');
           }
           if (key.startsWith('codesign -d -r-')) {
             return ToolResult(
@@ -150,7 +147,6 @@ executables:
     final built = await chain(tools).buildStep(
       step(StepKind.build),
       project,
-      publishedRequirement: null,
     );
     expect(built.ok, isTrue, reason: built.problem);
     expect(
@@ -251,7 +247,6 @@ executables:
     await chain(tools).buildStep(
       step(StepKind.build),
       project,
-      publishedRequirement: null,
     );
 
     final ok = await chain(tools).signStep(
@@ -283,7 +278,6 @@ executables:
     await chain(tools).buildStep(
       step(StepKind.build),
       project,
-      publishedRequirement: null,
     );
 
     final ok = await chain(tools).signStep(
@@ -308,7 +302,6 @@ executables:
     await chain(tools).buildStep(
       step(StepKind.build),
       project,
-      publishedRequirement: null,
     );
     final ok = await chain(tools).signStep(
       step(StepKind.sign),
@@ -418,7 +411,6 @@ executables:
     await chain(tools).buildStep(
       step(StepKind.build),
       project,
-      publishedRequirement: null,
     );
 
     final ok = await chain(tools).signStep(
@@ -441,104 +433,6 @@ executables:
     );
   });
 
-  group('build reuse is by identity, not acceptability', () {
-    /// A workspace seeded with a binary that claims the right version —
-    /// the foreign-artifact case. `.rk/` is invisible to git status, so
-    /// nothing upstream of this gate would ever notice it.
-    void seed() =>
-        workspace.write('macos-arm64/tool', utf8.encode('FOREIGN BYTES 1.0.0'));
-
-    const published =
-        'designated => certificate leaf[subject.OU] = "TEAM123456"';
-
-    /// Tools where every reuse leg answers as scripted, and any compile is
-    /// recorded so the tests can assert rebuild-vs-reuse.
-    Tools legs({
-      required bool verifyPasses,
-      String? requirement = published,
-    }) =>
-        RecordingTools(
-          answers: (key) {
-            if (key.startsWith('codesign --verify --strict')) {
-              return ToolResult(
-                exitCode: verifyPasses ? 0 : 1,
-                stdout: '',
-                stderr: verifyPasses ? '' : 'invalid signature',
-              );
-            }
-            if (key.startsWith('codesign -d -r-')) {
-              return requirement == null
-                  ? ToolResult(exitCode: 1, stdout: '', stderr: 'not signed')
-                  : ToolResult(exitCode: 0, stdout: requirement, stderr: '');
-            }
-            if (key.startsWith('dart compile exe')) {
-              return ToolResult(exitCode: 0, stdout: '', stderr: '');
-            }
-            if (key.contains('--version')) {
-              return ToolResult(exitCode: 0, stdout: '1.0.0', stderr: '');
-            }
-            return null;
-          },
-          onRun: (key) {
-            if (key.startsWith('dart compile exe')) {
-              File(workspace
-                  .pathOf(BinaryChain.binaryName('macos-arm64', 'tool')))
-                ..parent.createSync(recursive: true)
-                ..writeAsBytesSync(utf8.encode('BINARY 1.0.0'));
-            }
-          },
-        );
-
-    Future<List<String>> build(Tools tools,
-        {String? publishedRequirement = published}) async {
-      final ok = await chain(tools).buildStep(
-        step(StepKind.build),
-        project,
-        publishedRequirement: publishedRequirement,
-      );
-      expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
-      return (tools as RecordingTools).calls;
-    }
-
-    test('a binary codesign cannot verify is rebuilt', () async {
-      // codesign -d -r- prints the requirement, exit 0, for a binary
-      // modified after signing — the display command must not be the gate.
-      seed();
-      final calls = await build(legs(verifyPasses: false));
-      expect(calls.any((c) => c.startsWith('dart compile exe')), isTrue,
-          reason: 'an unverifiable signature is not an identity');
-    });
-
-    test('a verified signature from the wrong identity is rebuilt', () async {
-      seed();
-      final calls = await build(legs(
-        verifyPasses: true,
-        requirement: 'designated => certificate leaf[subject.OU] = "OTHER"',
-      ));
-      expect(calls.any((c) => c.startsWith('dart compile exe')), isTrue,
-          reason: 'valid bytes signed by someone else are someone else\'s');
-    });
-
-    test('with no published baseline nothing vouches, so it rebuilds',
-        () async {
-      seed();
-      final calls =
-          await build(legs(verifyPasses: true), publishedRequirement: null);
-      expect(calls.any((c) => c.startsWith('dart compile exe')), isTrue,
-          reason: 'reuse exists to stay continuous with a published '
-              'identity; a first release has none');
-    });
-
-    test(
-        'verified bytes, matching identity, right version — the one case '
-        'that reuses', () async {
-      seed();
-      final calls = await build(legs(verifyPasses: true));
-      expect(calls.any((c) => c.startsWith('dart compile exe')), isFalse);
-      expect(buffer.toString(), contains('signature verified'));
-    });
-  });
-
   test(
       'a produced requirement that merely extends the published one is '
       'still a mismatch', () async {
@@ -553,7 +447,6 @@ executables:
     await chain(tools).buildStep(
       step(StepKind.build),
       project,
-      publishedRequirement: null,
     );
 
     final ok = await chain(tools).signStep(
@@ -569,79 +462,6 @@ executables:
     );
   });
 
-  test('a notarized binary with its evidence in hand is not resubmitted',
-      () async {
-    final RecordingTools tools = RecordingTools(
-      answers: (key) {
-        if (key.startsWith('codesign --test-requirement')) {
-          return ToolResult(exitCode: 0, stdout: '', stderr: '');
-        }
-        return null;
-      },
-    );
-    workspace.write('macos-arm64/tool', utf8.encode('BINARY'));
-    workspace.write('tool-1.0.0-macos-arm64.notary-result.json',
-        utf8.encode('{"status": "Accepted"}'));
-    workspace.write('tool-1.0.0-macos-arm64.notary-log.json',
-        utf8.encode('{"issues": []}'));
-
-    final ok =
-        await chain(tools).notarizeStep(step(StepKind.notarize), project);
-    expect(ok.ok, isTrue, reason: ok.problem);
-    expect(buffer.toString(), contains('already notarized'));
-    expect(
-      tools.calls.where((c) => c.contains('notarytool')),
-      isEmpty,
-      reason: 'Apple already vouched for these exact bytes',
-    );
-  });
-
-  test('notarized bytes without their evidence files resubmit', () async {
-    // The result and log are published assets; skipping on Apple's word
-    // alone would ship a release missing two of its expected assets.
-    final tools = scripted();
-    // Force the notarized answer while the evidence is absent.
-    final forced = RecordingTools(
-      answers: (key) {
-        if (key.startsWith('codesign --test-requirement')) {
-          return ToolResult(exitCode: 0, stdout: '', stderr: '');
-        }
-        if (key.startsWith('xcrun notarytool submit')) {
-          return ToolResult(
-            exitCode: 0,
-            stdout: '{"id": "abc-1", "status": "Accepted"}',
-            stderr: '',
-          );
-        }
-        if (key.startsWith('xcrun notarytool log')) {
-          return ToolResult(exitCode: 0, stdout: '{"issues": []}', stderr: '');
-        }
-        return (tools as RecordingTools).answers!(key);
-      },
-      onRun: (key) {
-        if (key.startsWith('ditto')) {
-          File(workspace.pathOf(BinaryChain.zipName('macos-arm64', 'tool')))
-            ..parent.createSync(recursive: true)
-            ..writeAsBytesSync(utf8.encode('ZIP'));
-        }
-      },
-    );
-    workspace.write('macos-arm64/tool', utf8.encode('BINARY'));
-
-    final ok =
-        await chain(forced).notarizeStep(step(StepKind.notarize), project);
-    expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
-    expect(
-      forced.calls.any((c) => c.startsWith('xcrun notarytool submit')),
-      isTrue,
-    );
-    expect(
-      workspace.exists('tool-1.0.0-macos-arm64.notary-result.json'),
-      isTrue,
-    );
-    expect(workspace.exists('tool-1.0.0-macos-arm64.notary-log.json'), isTrue);
-  });
-
   test('the derived identifier signs, not the project name', () async {
     // The published 0.1.0 binary carries a reverse-DNS identifier; signing
     // with the project-name default would produce a different designated
@@ -652,7 +472,6 @@ executables:
     await chain(tools).buildStep(
       step(StepKind.build),
       project,
-      publishedRequirement: null,
     );
 
     final ok = await chain(tools).signStep(
@@ -680,9 +499,6 @@ executables:
     // alternative would publish evidence nobody issued.
     final tools = RecordingTools(
       answers: (key) {
-        if (key.startsWith('codesign --test-requirement')) {
-          return ToolResult(exitCode: 1, stdout: '', stderr: 'no');
-        }
         if (key.startsWith('xcrun notarytool submit')) {
           return ToolResult(
             exitCode: 0,

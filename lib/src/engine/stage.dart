@@ -106,7 +106,7 @@ class StageDirectory {
         ['.rk', 'work', 'stages', identity.id],
       );
 
-  DirectoryWorkspace get workspace => DirectoryWorkspace(path);
+  Workspace get workspace => Workspace(path);
 
   String resolve(String relativePath) =>
       _join(path, StagePath.segments(relativePath));

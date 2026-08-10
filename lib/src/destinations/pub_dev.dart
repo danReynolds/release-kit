@@ -4,9 +4,6 @@ import '../engine/resolve.dart';
 import '../engine/source_tree.dart';
 import '../engine/verdict.dart';
 
-/// Compatibility name for the exact package-publication read contract.
-typedef PubDevInspector = PublicationInspector;
-
 class PubDevTarget implements PublicationInspector {
   PubDevTarget({
     required this.registry,

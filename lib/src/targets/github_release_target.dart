@@ -66,7 +66,7 @@ final class GithubReleaseTargetModule extends TargetModule {
   ) async {
     final tools = context.tools;
     if (tools == null) {
-      return const Inspection.unknown('not read: --offline');
+      return const Inspection.unknown('no tools to read the forge with');
     }
     final repository = context.repository;
     if (repository == null) {
@@ -171,7 +171,9 @@ final class GithubReleaseTargetModule extends TargetModule {
   ) {
     final tools = context.tools;
     if (tools == null) {
-      return Future.value(const Inspection.unknown('not read: --offline'));
+      return Future.value(
+        const Inspection.unknown('no tools to read the forge with'),
+      );
     }
     final repository = context.repository;
     if (repository == null) {

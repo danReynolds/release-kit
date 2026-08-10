@@ -177,7 +177,6 @@ class Output {
     int? uncommitted,
     String? head,
     String? remote,
-    String? mode,
   }) {
     report.repository(
       name: name,
@@ -190,7 +189,6 @@ class Output {
       name,
       if (branch != null) branch,
       if (uncommitted != null && uncommitted > 0) '$uncommitted uncommitted',
-      if (mode != null) mode,
     ].join(' · '));
   }
 
