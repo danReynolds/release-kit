@@ -62,11 +62,7 @@ class Checklist {
     // Every local producer runs before a public identity exists. Their output
     // is not permission to publish until the complete-stage barrier has
     // finalized and validated the package, notes and manifest preflight too.
-    final localProducers = <Step>[];
-    for (final project in publicationOrder) {
-      if (!project.config.wantsBinaries) continue;
-      localProducers.addAll(_localBinarySteps(unit, project));
-    }
+    final localProducers = localProducerSteps(unit);
     steps.addAll(localProducers);
 
     final completeStage = Step(
@@ -214,6 +210,18 @@ class Checklist {
     return ordered;
   }
 
+  /// The ordered local producer steps for [unit] — the one derivation of
+  /// the pipeline's names, order, and dependency edges. The receipt contract
+  /// and the coordinator both consume this list; nothing else respells it.
+  static List<Step> localProducerSteps(ResolvedUnit unit) {
+    final steps = <Step>[];
+    for (final project in unit.projects) {
+      if (!project.config.wantsBinaries) continue;
+      steps.addAll(_localBinarySteps(unit, project));
+    }
+    return steps;
+  }
+
   static List<Step> _localBinarySteps(
     ResolvedUnit unit,
     ResolvedProject project,
@@ -221,32 +229,28 @@ class Checklist {
     final steps = <Step>[];
     final built = <String>[];
 
-    for (final platform in project.binaryPlatforms) {
+    // Sorted, so the checklist and the receipt agree on one sequence
+    // without a second ordering rule anywhere.
+    for (final platform in [...project.binaryPlatforms]..sort()) {
+      final macos = platform.startsWith('macos-');
+      // Compiling and signing are one step: a signature is not resumable
+      // work worth its own receipt, and one step means the checklist, the
+      // receipt, and the validators all speak the same producer names.
       final build = Step(
         id: '${unit.name}/build/$platform',
         kind: StepKind.build,
         unit: unit.name,
         project: project.name,
         platform: platform,
-        summary: 'build ${project.executable} for $platform',
+        summary: macos
+            ? 'build and sign ${project.executable} for $platform'
+            : 'build ${project.executable} for $platform',
         needs: const [],
       );
       steps.add(build);
 
       var last = build.id;
-      if (platform.startsWith('macos-')) {
-        final sign = Step(
-          id: '${unit.name}/sign/$platform',
-          kind: StepKind.sign,
-          unit: unit.name,
-          project: project.name,
-          platform: platform,
-          summary: 'sign $platform',
-          needs: [last],
-        );
-        steps.add(sign);
-        last = sign.id;
-
+      if (macos) {
         final notarize = Step(
           id: '${unit.name}/notarize/$platform',
           kind: StepKind.notarize,
@@ -329,8 +333,9 @@ enum StepKind {
 
   /// Something another unit released, which must already be public.
   prerequisite,
+
+  /// Compile the platform binary — and on macOS, sign it, as one step.
   build,
-  sign,
   notarize,
   archive,
   checksums,
@@ -353,7 +358,6 @@ extension StepKindFacts on StepKind {
   StepPhase get phase => switch (this) {
         StepKind.prerequisite => StepPhase.inspect,
         StepKind.build ||
-        StepKind.sign ||
         StepKind.notarize ||
         StepKind.archive ||
         StepKind.checksums ||
@@ -379,7 +383,6 @@ extension StepKindFacts on StepKind {
         StepKind.publishFormula => 'homebrew',
         StepKind.prerequisite ||
         StepKind.build ||
-        StepKind.sign ||
         StepKind.notarize ||
         StepKind.archive ||
         StepKind.checksums ||

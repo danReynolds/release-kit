@@ -338,7 +338,7 @@ class StageInspector {
     // otherwise a crash after a bad archive was receipted would turn that
     // false claim into a trusted input on the next run.
     for (final step in receipt.steps) {
-      if (step.name.startsWith('sign:')) {
+      if (step.name.startsWith('build:macos-')) {
         _inspectSignature(step, issues);
       }
       if (step.name.startsWith('archive:')) {
@@ -507,12 +507,12 @@ class StageInspector {
         : null;
     String? problem;
     if (binary == null) {
-      problem = 'sign step does not produce exactly one executable';
+      problem = 'signed build does not produce exactly one executable';
     } else if (producer.inputs.length != 1 ||
         producer.inputs.single.name != 'step:source-snapshot') {
-      problem = 'sign step is not bound to the staged source snapshot';
+      problem = 'signed build is not bound to the staged source snapshot';
     } else if (signature is! Map) {
-      problem = 'sign step has no signature evidence';
+      problem = 'signed build has no signature evidence';
     } else {
       final certificate = signature['certificate'];
       final fingerprint = signature['certificate_sha256'];

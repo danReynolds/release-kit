@@ -121,7 +121,6 @@ class Inspector {
     }
     if (step.kind
         case StepKind.build ||
-            StepKind.sign ||
             StepKind.notarize ||
             StepKind.archive ||
             StepKind.checksums) {

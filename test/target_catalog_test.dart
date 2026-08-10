@@ -6,6 +6,7 @@ import 'package:release_kit/src/engine/diagnostic.dart';
 import 'package:release_kit/src/engine/resolve.dart';
 import 'package:release_kit/src/engine/source_tree.dart';
 import 'package:release_kit/src/targets/catalog.dart';
+import 'package:release_kit/src/engine/producers.dart';
 import 'package:release_kit/src/engine/stage_contract.dart';
 import 'package:test/test.dart';
 
@@ -194,6 +195,7 @@ executables:
             ),
           ),
         ],
+        localProducers: localProducerContracts(unit),
       ),
       throwsStateError,
       reason: 'a target cannot claim a core stage artifact',

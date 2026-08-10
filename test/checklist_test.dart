@@ -71,11 +71,14 @@ void main() {
     expect(ids, contains('cli/build/linux-x64'));
     expect(ids, contains('cli/build/macos-arm64'));
     expect(
-      ids,
-      isNot(contains('cli/sign/linux-x64')),
-      reason: 'only macOS binaries are signed',
+      checklist['cli/build/macos-arm64']!.summary,
+      contains('build and sign'),
+      reason: 'only macOS binaries are signed, inside their build step',
     );
-    expect(ids, contains('cli/sign/macos-arm64'));
+    expect(
+      checklist['cli/build/linux-x64']!.summary,
+      isNot(contains('sign')),
+    );
     expect(ids, contains('cli/notarize/macos-arm64'));
     expect(ids, contains('cli/archive/linux-x64'));
     expect(ids, contains('cli/checksums/SHA256SUMS'));
@@ -84,18 +87,24 @@ void main() {
     expect(ids, contains('cli/homebrew/keybay'));
   });
 
-  test('signing and notarization sit between build and archive', () {
+  test('notarization sits between the signed build and its archive', () {
     final resolution = resolve(keybayConfig, keybayTree);
     final checklist =
         Checklist.derive(resolution.unit('cli')!, resolution, Diagnostics());
 
     expect(
-      checklist['cli/sign/macos-arm64']!.needs,
-      ['cli/build/macos-arm64'],
+      checklist['cli/sign/macos-arm64'],
+      isNull,
+      reason: 'compiling and signing are one build step, so the checklist, '
+          'the receipt, and the validators speak the same producer names',
+    );
+    expect(
+      checklist['cli/build/macos-arm64']!.summary,
+      contains('build and sign'),
     );
     expect(
       checklist['cli/notarize/macos-arm64']!.needs,
-      ['cli/sign/macos-arm64'],
+      ['cli/build/macos-arm64'],
     );
     expect(
       checklist['cli/archive/macos-arm64']!.needs,
@@ -115,7 +124,6 @@ void main() {
     final producers = checklist.steps
         .where((step) => const {
               StepKind.build,
-              StepKind.sign,
               StepKind.notarize,
               StepKind.archive,
               StepKind.checksums,
@@ -408,12 +416,11 @@ executables:
 
     expect(checklist.steps.map((s) => s.id).toList(), [
       'cli/requires/pub.dev/keybay/0.2.0',
-      'cli/build/linux-x64',
-      'cli/archive/linux-x64',
       'cli/build/linux-arm64',
       'cli/archive/linux-arm64',
+      'cli/build/linux-x64',
+      'cli/archive/linux-x64',
       'cli/build/macos-arm64',
-      'cli/sign/macos-arm64',
       'cli/notarize/macos-arm64',
       'cli/archive/macos-arm64',
       'cli/checksums/SHA256SUMS',

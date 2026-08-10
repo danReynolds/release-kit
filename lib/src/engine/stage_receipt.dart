@@ -198,7 +198,6 @@ class StageStep {
 class StageReceipt {
   StageReceipt({
     required this.identity,
-    required this.complete,
     Iterable<StageStep> steps = const [],
   }) : steps = List<StageStep>.unmodifiable(steps) {
     _requireUnique(this.steps.map((step) => step.name), 'step name');
@@ -209,29 +208,26 @@ class StageReceipt {
     final decoded = CanonicalJson.decodeDocument(document);
     final map = _strictMap(
       decoded,
-      const {'complete', 'schema', 'stage', 'steps'},
+      const {'schema', 'stage', 'steps'},
       'stage receipt',
     );
     if (map['schema'] != stageSchemaVersion) {
       throw FormatException('unsupported stage schema: ${map['schema']}');
     }
-    final complete = map['complete'];
-    if (complete is! bool) {
-      throw const FormatException('receipt complete is not a boolean');
-    }
     return StageReceipt(
       identity: StageIdentity.fromJson(map['stage']),
-      complete: complete,
       steps: _list(map, 'steps').map(StageStep.fromJson),
     );
   }
 
   final StageIdentity identity;
-
-  /// Incomplete receipts can preserve diagnostic progress but are never
-  /// reusable. A normal staged release ends with this true.
-  final bool complete;
   final List<StageStep> steps;
+
+  /// Whether the terminal barrier ran: completion is the recorded fact of
+  /// the `complete-stage` step, not a second flag that could disagree with
+  /// it. Incomplete receipts preserve diagnostic progress but are never
+  /// reusable.
+  bool get complete => steps.isNotEmpty && steps.last.name == 'complete-stage';
 
   Iterable<StageArtifact> get artifacts sync* {
     for (final step in steps) {
@@ -240,7 +236,6 @@ class StageReceipt {
   }
 
   Map<String, Object?> toJson() => {
-        'complete': complete,
         'schema': stageSchemaVersion,
         'stage': identity.toJson(),
         'steps': steps.map((step) => step.toJson()).toList(),

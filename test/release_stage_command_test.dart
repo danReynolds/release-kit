@@ -1076,7 +1076,6 @@ void main() {
     final receipt = harness.stage.requireReceipt();
     StageReceiptStore(harness.stage.directory).write(StageReceipt(
       identity: receipt.identity,
-      complete: true,
       steps: receipt.steps.where((step) => step.name != 'pub-preflight:tool'),
     ));
 
@@ -1107,7 +1106,6 @@ void main() {
     );
     StageReceiptStore(harness.stage.directory).write(StageReceipt(
       identity: receipt.identity,
-      complete: true,
       steps: [
         for (final step in receipt.steps)
           if (step.name == build.name) renamed else step,
@@ -1139,7 +1137,6 @@ void main() {
     );
     StageReceiptStore(harness.stage.directory).write(StageReceipt(
       identity: receipt.identity,
-      complete: true,
       steps: [
         for (final step in receipt.steps)
           if (step.name == build.name) noSmoke else step,
@@ -1407,7 +1404,6 @@ void _interruptAfter(ReleaseStage stage, String stepName) {
   }
   StageReceiptStore(stage.directory).write(StageReceipt(
     identity: complete.identity,
-    complete: false,
     steps: kept,
   ));
 }
