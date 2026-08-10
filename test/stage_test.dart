@@ -209,7 +209,6 @@ void main() {
       File(stage.resolve('rk')).writeAsStringSync('changed');
       final receipt = StageReceipt(
         identity: stage.identity,
-        complete: true,
         steps: [
           StageStep(name: 'build', outputs: [artifact])
         ],
@@ -236,7 +235,6 @@ void main() {
       expect(
         () => StageReceiptStore(stage).write(StageReceipt(
           identity: previous.identity,
-          complete: true,
           steps: [
             ...previous.steps,
             StageStep(name: 'candidate', outputs: [candidate]),
@@ -350,7 +348,6 @@ void main() {
       );
       StageReceiptStore(stage).write(StageReceipt(
         identity: stage.identity,
-        complete: false,
         steps: [
           StageStep(name: 'build', outputs: [artifact])
         ],
@@ -380,7 +377,6 @@ void main() {
       );
       StageReceiptStore(stage).write(StageReceipt(
         identity: receipt.identity,
-        complete: true,
         steps: [receipt.steps.first, sign, receipt.steps.last],
       ));
 
@@ -418,7 +414,6 @@ void main() {
       );
       StageReceiptStore(stage).write(StageReceipt(
         identity: receipt.identity,
-        complete: true,
         steps: [receipt.steps.first, sign, receipt.steps.last],
       ));
 
@@ -569,7 +564,6 @@ StageReceipt _writeCompleteStage(StageDirectory stage) {
   );
   final receipt = StageReceipt(
     identity: stage.identity,
-    complete: true,
     steps: [
       sourceStep,
       build,

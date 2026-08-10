@@ -362,7 +362,6 @@ void main() {
       }
       StageReceiptStore(release.directory).write(StageReceipt(
         identity: complete.identity,
-        complete: false,
         steps: prefix,
       ));
       final prefixReceipt =
@@ -376,7 +375,6 @@ void main() {
       }
       final candidate = StageReceipt(
         identity: complete.identity,
-        complete: nextName == 'complete-stage',
         steps: [...prefix, next],
       );
 
@@ -583,7 +581,6 @@ void main() {
     );
     StageReceiptStore(release.directory).write(StageReceipt(
       identity: identity,
-      complete: false,
       steps: [
         for (final step in receipt.steps)
           if (step.name == archive.name) detached else step,
@@ -616,7 +613,6 @@ void main() {
     );
     StageReceiptStore(release.directory).write(StageReceipt(
       identity: identity,
-      complete: false,
       steps: [
         for (final step in receipt.steps)
           if (step.name == archive.name) falseClaim else step,
@@ -656,7 +652,6 @@ void main() {
     );
     StageReceiptStore(release.directory).write(StageReceipt(
       identity: identity,
-      complete: true,
       steps: [
         ...progress.steps,
         StageStep(
@@ -714,7 +709,6 @@ void main() {
     );
     StageReceiptStore(release.directory).write(StageReceipt(
       identity: identity,
-      complete: true,
       steps: [
         ...progress.steps,
         checksumStep,

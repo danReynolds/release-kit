@@ -415,7 +415,6 @@ class ReleaseStage {
     final public = publicArtifacts.toList()..sort();
     final receipt = StageReceipt(
       identity: directory.identity,
-      complete: true,
       steps: [
         ...progress.steps,
         StageStep(
@@ -457,7 +456,6 @@ class ReleaseStage {
   void writeProgress(Iterable<StageStep> steps) {
     StageReceiptStore(directory).write(StageReceipt(
       identity: directory.identity,
-      complete: false,
       steps: steps,
     ));
   }

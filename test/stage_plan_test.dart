@@ -126,7 +126,6 @@ executables:
     final complete = receipt.steps.last;
     StageReceiptStore(first.directory).write(StageReceipt(
       identity: receipt.identity,
-      complete: true,
       steps: [
         ...receipt.steps.take(receipt.steps.length - 1),
         StageStep(
