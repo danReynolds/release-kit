@@ -21,6 +21,7 @@ import 'package:release_kit/src/engine/tools.dart';
 import 'package:release_kit/src/engine/verdict.dart';
 import 'package:release_kit/src/engine/version.dart';
 import 'package:release_kit/src/output/output.dart';
+import 'package:release_kit/src/targets/catalog.dart';
 import 'package:release_kit/src/transforms/archive.dart';
 import 'package:release_kit/src/transforms/digest.dart';
 import 'package:test/test.dart';
@@ -144,6 +145,33 @@ void main() {
     expect(
       released.publicMutations.map((call) => call.publicKind),
       containsAllInOrder(['tag', 'pub.dev', 'github-release', 'homebrew']),
+    );
+  });
+
+  test('public acts never borrow the bounded target-read tools', () async {
+    final staged = await harness.run(
+      stageOnly: true,
+      confirm: (_) async => fail('stage mode must not authorize'),
+    );
+    expect(staged.code, ExitCodes.ok, reason: staged.text);
+
+    final reads = _ForwardingReadTools(harness.tools);
+    final released = await harness.run(
+      stageOnly: false,
+      confirm: (_) async => '1.2.3',
+      readTools: reads,
+    );
+
+    expect(released.code, ExitCodes.ok, reason: released.text);
+    expect(
+      reads.invocations.where((call) => call.publicKind != null),
+      isEmpty,
+      reason: 'read tools may reconcile public truth but cannot mutate it',
+    );
+    expect(
+      reads.invocations.where((call) => call.interactive),
+      isEmpty,
+      reason: 'login and publish use the operator-facing release tools',
     );
   });
 
@@ -1278,6 +1306,8 @@ void main() {
       refreshStage: (unit, currentGit) => ReleaseStages(
         source: harness.source,
         git: currentGit,
+        stageContracts:
+            TargetCatalog.builtIn().stageContractResolver(harness.resolution),
         repositoryRoot: harness.root.path,
         compilerIdentity: () => DartCompilerIdentity.recorded(
           executable: '/different/dart',
@@ -1304,6 +1334,8 @@ void main() {
       refreshStage: (unit, currentGit) => ReleaseStages(
         source: harness.source,
         git: currentGit,
+        stageContracts:
+            TargetCatalog.builtIn().stageContractResolver(harness.resolution),
         repositoryRoot: harness.root.path,
         compilerIdentity: () => DartCompilerIdentity.recorded(
           executable: '/different/dart',
@@ -1400,6 +1432,7 @@ class _Harness {
     stages = ReleaseStages(
       source: source,
       git: git,
+      stageContracts: TargetCatalog.builtIn().stageContractResolver(resolution),
       repositoryRoot: root.path,
     );
     registry = _ReleaseRegistry({
@@ -1456,6 +1489,7 @@ class _Harness {
     HostCapabilities? capabilities,
     void Function(_Invocation call)? onInvocation,
     void Function()? onRegistryRead,
+    Tools? readTools,
   }) async {
     final start = tools.invocations.length;
     final buffer = StringBuffer();
@@ -1475,7 +1509,7 @@ class _Harness {
         source: source,
       ),
       git: git,
-      tools: tools,
+      tools: readTools ?? tools,
       repository: 'example/tool',
       stageFor: stages.call,
     );
@@ -1484,7 +1518,6 @@ class _Harness {
       resolution: resolution,
       tree: source,
       git: git,
-      registry: runRegistry,
       inspector: inspector,
       tools: tools,
       output: output,
@@ -1615,6 +1648,53 @@ class _Invocation {
       return 'homebrew';
     }
     return null;
+  }
+}
+
+class _ForwardingReadTools implements Tools {
+  _ForwardingReadTools(this.delegate);
+
+  final Tools delegate;
+  final List<_Invocation> invocations = [];
+
+  @override
+  Future<ToolResult> run(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+    Map<String, String>? environment,
+  }) {
+    invocations.add(_Invocation(
+      executable: executable,
+      arguments: List.unmodifiable(arguments),
+      workingDirectory: workingDirectory,
+      interactive: false,
+    ));
+    return delegate.run(
+      executable,
+      arguments,
+      workingDirectory: workingDirectory,
+      environment: environment,
+    );
+  }
+
+  @override
+  Future<int> runInteractive(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+  }) {
+    invocations.add(_Invocation(
+      executable: executable,
+      arguments: List.unmodifiable(arguments),
+      workingDirectory: workingDirectory,
+      interactive: true,
+    ));
+    return delegate.runInteractive(
+      executable,
+      arguments,
+      workingDirectory: workingDirectory,
+    );
   }
 }
 

@@ -1586,9 +1586,6 @@ class PublishOutcome {
 
   /// A public release may exist that rk could not verify.
   bool get mayHaveActed => !confirmed && url != null;
-
-  /// Re-running cannot resolve this.
-  bool get isTerminal => permanent != null;
 }
 
 /// The private half of GitHub's draft-first release transaction.

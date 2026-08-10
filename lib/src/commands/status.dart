@@ -170,12 +170,12 @@ class StatusCommand {
     }
 
     final stageResult = _inspectStage(unit);
-    final artifactProblems = _artifactProductionProblems(unit);
-    final expectations = TargetExpectation.derive(
+    final expectations = inspector.targets.derive(
       unit,
       checklist,
       repository: git.originUrl,
     );
+    final artifactProblems = _artifactProductionProblems(unit, expectations);
     for (final expectation in expectations) {
       checking.add(
         expectation.step.id,
@@ -219,28 +219,18 @@ class StatusCommand {
 
     for (final step in checklist.steps) {
       if (states.containsKey(step.id)) continue;
-      states[step.id] = switch (step.kind) {
-        StepKind.completeStage => stageResult.state,
-        StepKind.build ||
-        StepKind.sign ||
-        StepKind.notarize ||
-        StepKind.archive ||
-        StepKind.checksums =>
-          stageResult.inspection?.reusable == true
-              ? const Inspection.exact(
-                  detail: 'validated in the release stage',
-                )
-              : const Inspection.unknown(
-                  'local work, decided when it runs',
-                ),
-        // Public and prerequisite states were populated above.
-        StepKind.tag ||
-        StepKind.prerequisite ||
-        StepKind.publishRegistry ||
-        StepKind.publishRelease ||
-        StepKind.publishFormula =>
-          const Inspection.unknown('the target was not inspected'),
-      };
+      states[step.id] = step.kind == StepKind.completeStage
+          ? stageResult.state
+          : step.phase == StepPhase.stage
+              ? stageResult.inspection?.reusable == true
+                  ? const Inspection.exact(
+                      detail: 'validated in the release stage',
+                    )
+                  : const Inspection.unknown(
+                      'local work, decided when it runs',
+                    )
+              // Public targets and prerequisites were populated above.
+              : const Inspection.unknown('the target was not inspected');
     }
 
     for (final diagnostic in inspector.tagGuards(unit, checklist, states)) {
@@ -432,8 +422,7 @@ class StatusCommand {
     // tag, and forge lanes, only the provider's history/listing can answer the
     // separate "what version is this lane at?" question. Homebrew's exact
     // formula read already carries the authenticated current version.
-    final currentInspection =
-        expectation.kind == ReleaseTargetKind.homebrew ? inspection : latest;
+    final currentInspection = latest ?? inspection;
     final reportedVersion = currentInspection.evidence['version'];
     final parsedVersion =
         reportedVersion == null ? null : Version.tryParse(reportedVersion);
@@ -468,7 +457,7 @@ class StatusCommand {
     }
   }
 
-  Future<Inspection> _inspectLatestSafely(
+  Future<Inspection?> _inspectLatestSafely(
     TargetExpectation target,
     ResolvedUnit unit,
   ) async {
@@ -530,7 +519,10 @@ class StatusCommand {
     return ArtifactObservation(name: name, status: ArtifactStatus.staged);
   }
 
-  Map<String, String> _artifactProductionProblems(ResolvedUnit unit) {
+  Map<String, String> _artifactProductionProblems(
+    ResolvedUnit unit,
+    List<TargetExpectation> targets,
+  ) {
     final blocked = <String, String>{};
     for (final project in unit.projects) {
       for (final platform in project.binaryPlatforms) {
@@ -575,9 +567,19 @@ class StatusCommand {
           'cannot be finalized until every archive exists: $summary';
       problems[ReleaseAssets.manifest] =
           'cannot be finalized until every release artifact exists: $summary';
-      if (project.channels.contains('homebrew')) {
-        problems[ReleaseAssets.formulaName(executable)] =
-            'cannot be rendered until every archive exists: $summary';
+    }
+    for (final stage
+        in inspector.targets.stages(unit: unit, targets: targets)) {
+      final blockedInputs =
+          stage.contract.step.inputs.where(problems.containsKey).toList();
+      if (blockedInputs.isEmpty) continue;
+      final reason =
+          blockedInputs.map((input) => '$input: ${problems[input]}').join('; ');
+      for (final output in {
+        ...stage.contract.step.outputs.keys,
+        ...stage.contract.step.optionalOutputs.keys,
+      }) {
+        problems[output] = 'cannot be produced until $reason';
       }
     }
     return Map.unmodifiable(problems);
@@ -638,22 +640,9 @@ class StatusCommand {
     ResolvedUnit unit,
     TargetObservation target,
   ) =>
-      switch (target.expectation.kind) {
-        ReleaseTargetKind.gitTag =>
-          'do not move the public tag. If it is not the intended release, '
-              'bump the version and changelog, then stage the new release',
-        ReleaseTargetKind.pubDev =>
-          'pub.dev versions are immutable. Bump the version and changelog, '
-              'then stage the new release',
-        ReleaseTargetKind.githubRelease =>
-          'compare the published release with the source named by its tag. '
-              'If they are not the intended release, bump the version and '
-              'changelog; rk will not replace conflicting public bytes',
-        ReleaseTargetKind.homebrew =>
-          'restore the formula to the exact release bytes it is meant to '
-              'reference, or advance the source version intentionally; then '
-              'run rk status ${unit.name} again',
-      };
+      inspector.targets
+          .moduleForTarget(target.expectation)
+          .conflictRemedy(unit, target.expectation);
 
   StatusIssue _currentVersionIssue(
     ResolvedUnit unit,
@@ -687,31 +676,26 @@ class StatusCommand {
     TargetObservation target,
     Diagnostics diagnostics,
   ) {
-    final existingCode = switch (target.expectation.kind) {
-      ReleaseTargetKind.pubDev => 'RK-MONO-002',
-      ReleaseTargetKind.gitTag => 'RK-MONO-001',
-      ReleaseTargetKind.githubRelease || ReleaseTargetKind.homebrew => null,
-    };
-    return existingCode != null &&
-        diagnostics.found.any((problem) => problem.code == existingCode);
+    final module = inspector.targets.moduleForTarget(target.expectation);
+    return diagnostics.found.any(
+      (problem) => module.ownsDiagnostic(problem, target.expectation),
+    );
   }
 
   StatusIssue _aheadIssue(
     ResolvedUnit unit,
     TargetObservation target,
-  ) =>
-      StatusIssue(
-        unit: unit.name,
-        target: target.expectation.step.id,
-        diagnostic: Diagnostic(
-          code: 'RK-MONO-003',
-          message: '${target.expectation.label} is already at '
-              '${target.currentVersion}, ahead of the target '
-              '${target.expectation.targetVersion}',
-          remedy: 'a release moves forward — bump past '
-              '${target.currentVersion}',
-        ),
-      );
+  ) {
+    final current = Version.tryParse(target.currentVersion!)!;
+    final diagnostic = inspector.targets
+        .moduleForTarget(target.expectation)
+        .aheadDiagnostic(unit, target.expectation, current)!;
+    return StatusIssue(
+      unit: unit.name,
+      target: target.expectation.step.id,
+      diagnostic: diagnostic,
+    );
+  }
 
   StatusIssue _prerequisiteIssue(
     ResolvedUnit unit,
@@ -775,7 +759,7 @@ class StatusCommand {
       output.report.target(
         unit: snapshot.unit.name,
         id: target.expectation.step.id,
-        kind: target.expectation.kind.name,
+        kind: target.expectation.kind,
         label: target.expectation.label,
         coordinate: target.expectation.coordinate,
         targetVersion: target.expectation.targetVersion,
@@ -898,38 +882,17 @@ class StatusCommand {
     ];
   }
 
-  static String? _diagnosticTarget(
+  String? _diagnosticTarget(
     Diagnostic diagnostic,
     List<TargetObservation> targets,
   ) {
-    const gitTargetCodes = {
-      'RK-MONO-001',
-      'RK-GIT-004',
-      'RK-GIT-005',
-      'RK-GIT-007',
-    };
-    if (gitTargetCodes.contains(diagnostic.code)) {
-      return targets
-          .where(
-            (target) => target.expectation.kind == ReleaseTargetKind.gitTag,
-          )
-          .firstOrNull
-          ?.expectation
-          .step
-          .id;
-    }
-    if (diagnostic.code == 'RK-MONO-002') {
-      final source = diagnostic.source?.path;
-      return targets
-          .where(
-            (target) =>
-                target.expectation.kind == ReleaseTargetKind.pubDev &&
-                target.expectation.project?.pubspec.path == source,
-          )
-          .firstOrNull
-          ?.expectation
-          .step
-          .id;
+    for (final target in targets) {
+      final expectation = target.expectation;
+      if (inspector.targets
+          .moduleForTarget(expectation)
+          .ownsDiagnostic(diagnostic, expectation)) {
+        return expectation.step.id;
+      }
     }
     return null;
   }

@@ -249,7 +249,7 @@ class FixedInspector extends Inspector {
       answers[step.kind] ?? answer;
 
   @override
-  Future<Inspection> inspectLatestVersion(
+  Future<Inspection?> inspectLatestVersion(
     TargetExpectation target,
     ResolvedUnit unit,
   ) async {
@@ -265,7 +265,7 @@ class FixedInspector extends Inspector {
         },
       );
     }
-    if (targetAnswer.isAbsent && target.kind == ReleaseTargetKind.pubDev) {
+    if (targetAnswer.isAbsent && target.kind == 'pubDev') {
       return super.inspectLatestVersion(target, unit);
     }
     return targetAnswer;

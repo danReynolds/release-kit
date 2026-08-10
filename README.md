@@ -63,11 +63,16 @@ verdict enum, and the blessed CI gate rule.
 
 `bin/rk.dart` is the composition root — it parses flags, reads and resolves
 `release.toml`, builds the collaborators, and dispatches to a verb.
-`lib/src/commands/` holds the three verbs; `lib/src/destinations/` the places
-a release is published to; `lib/src/builds/` and `lib/src/transforms/` the
-adapters that produce artifacts; `lib/src/output/` the two surfaces (prose
-and the `--json` document, written by the same calls so they cannot drift);
-and `lib/src/engine/` the model and the readers everything else is built on.
+`lib/src/commands/` holds the three coordinators. `lib/src/targets/` is the
+closed catalog of Git tag, pub.dev, GitHub Release, and Homebrew lanes; each
+module owns that target's expectation, reads, status policy, private stage
+contribution, public act, read-back settling, and retry/failure semantics.
+The contribution's in-memory contract drives both production and validation
+of the reusable stage, so provider receipt rules are declared once.
+`lib/src/destinations/` holds the lower-level provider protocols those modules
+use. `lib/src/builds/` and `lib/src/transforms/` produce artifacts;
+`lib/src/output/` owns the prose and `--json` surfaces; and `lib/src/engine/`
+holds the shared model and readers.
 `examples/` holds five repository shapes the tests drive end to end.
 
 ## Scope

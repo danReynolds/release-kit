@@ -18,6 +18,7 @@ import 'package:release_kit/src/engine/stage.dart';
 import 'package:release_kit/src/engine/tools.dart';
 import 'package:release_kit/src/transforms/archive.dart';
 import 'package:release_kit/src/transforms/digest.dart';
+import 'package:release_kit/src/targets/catalog.dart';
 import 'package:test/test.dart';
 
 import 'rk_process.dart';
@@ -685,13 +686,14 @@ publish = ["pub.dev"]
         stages = ReleaseStages(
           source: tree,
           git: git,
+          stageContracts:
+              TargetCatalog.builtIn().stageContractResolver(resolution),
           repositoryRoot: stageRoot.path,
         );
         code = await ReleaseCommand(
           resolution: resolution,
           tree: tree,
           git: git,
-          registry: registry,
           // The same tools the command gets, which is what `bin/rk.dart`
           // does — release never builds a toolless inspector. Without them
           // the tag step could not reach the `answers:` leg above, so the
@@ -1541,7 +1543,6 @@ executables:
         resolution: resolution,
         tree: tree,
         git: git,
-        registry: registry,
         inspector: Inspector(
           registry: registry,
           pubDev: PubDevTarget(

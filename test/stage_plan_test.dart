@@ -13,6 +13,7 @@ import 'package:release_kit/src/engine/stage_archive.dart';
 import 'package:release_kit/src/engine/stage_plan.dart';
 import 'package:release_kit/src/engine/stage_receipt.dart';
 import 'package:release_kit/src/transforms/archive.dart';
+import 'package:release_kit/src/targets/catalog.dart';
 import 'package:test/test.dart';
 
 const _head = '1111111111111111111111111111111111111111';
@@ -21,6 +22,7 @@ const _tree = '2222222222222222222222222222222222222222';
 void main() {
   late Directory repository;
   late MemorySourceTree source;
+  late Resolution resolution;
   late ResolvedUnit unit;
   late GitState git;
 
@@ -50,7 +52,7 @@ executables:
       'release.toml',
       diagnostics,
     )!;
-    final resolution = Resolution.resolve(config, source, diagnostics)!;
+    resolution = Resolution.resolve(config, source, diagnostics)!;
     unit = resolution.units.single;
     git = GitState(
       root: repository.path,
@@ -79,6 +81,7 @@ executables:
     final firstResolver = ReleaseStages(
       source: source,
       git: git,
+      stageContracts: TargetCatalog.builtIn().stageContractResolver(resolution),
       repositoryRoot: repository.path,
       compilerIdentity: () => compilerA,
     );
@@ -94,6 +97,7 @@ executables:
     final sameCompiler = ReleaseStages(
       source: source,
       git: git,
+      stageContracts: TargetCatalog.builtIn().stageContractResolver(resolution),
       repositoryRoot: repository.path,
       compilerIdentity: () => DartCompilerIdentity.recorded(
         executable: '/moved/toolchains/a/dart',
@@ -107,6 +111,7 @@ executables:
     final changedCompiler = ReleaseStages(
       source: source,
       git: git,
+      stageContracts: TargetCatalog.builtIn().stageContractResolver(resolution),
       repositoryRoot: repository.path,
       compilerIdentity: () => DartCompilerIdentity.recorded(
         executable: '/toolchains/b/dart',
@@ -150,6 +155,7 @@ executables:
     final stages = ReleaseStages(
       source: source,
       git: git,
+      stageContracts: TargetCatalog.builtIn().stageContractResolver(resolution),
       repositoryRoot: repository.path,
       compilerIdentity: () => throw const DartCompilerUnavailable(
         'dart is not on PATH',
@@ -193,6 +199,8 @@ executables:
     ReleaseStage withRk(String digest) => ReleaseStages(
           source: source,
           git: git,
+          stageContracts:
+              TargetCatalog.builtIn().stageContractResolver(resolution),
           repositoryRoot: repository.path,
           compilerIdentity: () => compiler,
           rkIdentity: () => RkImplementationIdentity.recorded(

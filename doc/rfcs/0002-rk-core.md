@@ -866,7 +866,8 @@ release-kit/
   lib/src/
     binary_chain.dart    # the local production chain: neither verb nor adapter
     commands/            # the three verbs: init, status, release
-    destinations/        # pub_dev, git_tag, github_release, homebrew
+    targets/             # the closed target catalog and lifecycle modules
+    destinations/        # lower-level provider protocol clients
     builds/              # capability, dart_cli
     transforms/          # archive, digest, macos
     output/              # output, report, diagnosis — the two surfaces
@@ -880,13 +881,19 @@ release-kit/
   tool/                  # validate.dart, outside the test tally
 ```
 
-Two adjudications the rule forces. **`pub.dev` has a destination reader**:
-`destinations/pub_dev.dart` owns its exact inspection, while the generic
-HTTP client remains in `engine/registry.dart` and the act half remains in
-`commands/release.dart`. `doc/plan.md` carries the condition for extracting
-the remaining act half. **`ecosystems/` is removed from this block rather
-than created on disk** — a directory hosting a taxonomy with one member and
-no second member in sight is complexity naming no failure.
+Two adjudications the rule forces. **A target is a complete lifecycle, while a
+destination is a protocol client.** `targets/pub_dev_target.dart` owns the
+pub.dev expectation, exact/latest reads, stage preflight, session preflight,
+publish, settling, and failure semantics; `destinations/pub_dev.dart` and
+`engine/registry.dart` supply the lower-level read protocol. The other three
+built-ins follow the same boundary. Each stage-producing target also supplies
+one in-memory contribution contract; the coordinator executes it and the stage
+inspector validates the same descriptor, rather than maintaining a second
+provider grammar in `engine/stage_contract.dart`. `binary_chain.dart` therefore
+contains only local build, sign, notarize, archive, and checksum operations.
+**`ecosystems/` is removed from this block
+rather than created on disk** — a directory hosting a taxonomy with one member
+and no second member in sight is complexity naming no failure.
 
 `engine/` is the residue by design. It is the largest directory and the
 vaguest name, and it stays that way: a directory name that is wrong

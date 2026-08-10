@@ -277,7 +277,6 @@ Future<Ran> release({
     resolution: resolution,
     tree: tree,
     git: effectiveGit,
-    registry: effectiveRegistry,
     // The same reader the command gets, or the inspection would consult a
     // different reality than the act — and the same tools, so the tag
     // step's remote half reads the harness's remote.

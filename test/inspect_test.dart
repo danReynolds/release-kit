@@ -6,12 +6,12 @@ import 'package:release_kit/src/engine/config.dart';
 import 'package:release_kit/src/engine/diagnostic.dart';
 import 'package:release_kit/src/engine/git.dart';
 import 'package:release_kit/src/engine/inspect.dart';
-import 'package:release_kit/src/engine/registry.dart';
 import 'package:release_kit/src/engine/resolve.dart';
 import 'package:release_kit/src/engine/source_tree.dart';
 import 'package:release_kit/src/engine/targets.dart';
 import 'package:release_kit/src/engine/tools.dart';
 import 'package:release_kit/src/engine/verdict.dart';
+import 'package:release_kit/src/targets/catalog.dart';
 import 'package:test/test.dart';
 
 import 'scripted_tools.dart';
@@ -345,13 +345,10 @@ void classificationTables() {
     });
   });
 
-  group('monotonicity keeps the half it can compute offline', () {
-    Future<List<Diagnostic>> problemsFor({
-      required RegistryReader? registry,
-      required List<String> tags,
-    }) async {
+  group('local monotonicity is an offline git fact', () {
+    Future<List<Diagnostic>> problemsFor(List<String> tags) async {
       final inspector = Inspector(
-        registry: registry,
+        registry: null,
         git: GitState(
           root: '/repo',
           head: 'abc123def456',
@@ -372,7 +369,7 @@ void classificationTables() {
 
     test('the tag half is a local git fact, so --offline still refuses',
         () async {
-      final found = await problemsFor(registry: null, tags: ['v2.0.0']);
+      final found = await problemsFor(['v2.0.0']);
 
       expect(
         found.map((d) => d.code),
@@ -381,20 +378,6 @@ void classificationTables() {
             'the registry handed --json callers an empty problems array for '
             'a repository whose tags are ahead of its manifests',
       );
-    });
-
-    test('the registry half needs the registry, and says nothing without it',
-        () async {
-      final offline = await problemsFor(registry: null, tags: const []);
-      expect(offline, isEmpty, reason: 'nothing to be monotonic against');
-
-      final online = await problemsFor(
-        registry: FakeRegistry({
-          'example_tool': ['2.0.0'],
-        }),
-        tags: const [],
-      );
-      expect(online.map((d) => d.code), contains('RK-MONO-002'));
     });
   });
 
@@ -406,7 +389,7 @@ void classificationTables() {
       final checklist = Checklist.derive(unit, resolution, Diagnostics());
       return (
         unit: unit,
-        targets: TargetExpectation.derive(
+        targets: TargetCatalog.builtIn().derive(
           unit,
           checklist,
           repository: 'example/tool',
@@ -429,11 +412,7 @@ void classificationTables() {
       expect(inspector.maximumActive, 3);
       expect(
         inspector.started,
-        {
-          ReleaseTargetKind.gitTag,
-          ReleaseTargetKind.pubDev,
-          ReleaseTargetKind.githubRelease,
-        },
+        {'gitTag', 'pubDev', 'githubRelease'},
         reason: 'the authenticated formula inspection already owns the '
             'Homebrew forward-only decision',
       );
@@ -446,14 +425,13 @@ void classificationTables() {
         () async {
       final fixture = await releaseTargets();
       final inspector = _LatestInspector(answers: {
-        ReleaseTargetKind.gitTag: const Inspection.exact(
+        'gitTag': const Inspection.exact(
           evidence: {'version': '2.0.0'},
         ),
-        ReleaseTargetKind.pubDev: const Inspection.exact(
+        'pubDev': const Inspection.exact(
           evidence: {'version': '1.1.0'},
         ),
-        ReleaseTargetKind.githubRelease:
-            const Inspection.unknown('GitHub timed out'),
+        'githubRelease': const Inspection.unknown('GitHub timed out'),
       });
       final problems = Diagnostics();
 
@@ -487,7 +465,7 @@ void classificationTables() {
       final inspector = _LatestInspector(
         tags: const ['v2.0.0'],
         answers: {
-          ReleaseTargetKind.gitTag: const Inspection.exact(
+          'gitTag': const Inspection.exact(
             evidence: {'version': '2.0.0'},
           ),
         },
@@ -747,19 +725,20 @@ class _LatestInspector extends Inspector {
           ),
         );
 
-  final Map<ReleaseTargetKind, Inspection> answers;
+  final Map<String, Inspection> answers;
   final int expectedConcurrent;
   final Completer<void> allStarted = Completer<void>();
   final Completer<void> _finish = Completer<void>();
-  final Set<ReleaseTargetKind> started = {};
+  final Set<String> started = {};
   var active = 0;
   var maximumActive = 0;
 
   @override
-  Future<Inspection> inspectLatestVersion(
+  Future<Inspection?> inspectLatestVersion(
     TargetExpectation target,
     ResolvedUnit unit,
   ) async {
+    if (target.kind == 'homebrew') return null;
     started.add(target.kind);
     if (expectedConcurrent > 0) {
       active++;

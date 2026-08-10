@@ -4,19 +4,10 @@ import '../engine/resolve.dart';
 import '../engine/source_tree.dart';
 import '../engine/verdict.dart';
 
-/// The pub.dev destination as one read-only, exact inspection.
-///
-/// A listed version is presence, not exactness. Exact means pub.dev's stated
-/// archive digest validates and the archive's files byte-match the source rk
-/// intends to publish. Status and both sides of a release use this same read.
-abstract interface class PubDevInspector {
-  Future<Inspection> inspectProject(
-    ResolvedProject project, {
-    SourceTree? expectedSource,
-  });
-}
+/// Compatibility name for the exact package-publication read contract.
+typedef PubDevInspector = PublicationInspector;
 
-class PubDevTarget implements PubDevInspector {
+class PubDevTarget implements PublicationInspector {
   PubDevTarget({
     required this.registry,
     required this.comparator,

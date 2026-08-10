@@ -30,6 +30,7 @@ import 'package:release_kit/src/engine/resolve.dart';
 import 'package:release_kit/src/engine/release_stage.dart';
 import 'package:release_kit/src/engine/source_tree.dart';
 import 'package:release_kit/src/engine/tools.dart';
+import 'package:release_kit/src/targets/catalog.dart';
 import 'package:release_kit/src/version.dart';
 
 const _usage = '''
@@ -336,14 +337,18 @@ Future<int> _release(
   final tree = prepared.tree!;
   final registry = prepared.registry!;
   final git = GitState.read(tree.root);
-  final stages = ReleaseStages(source: tree, git: git);
+  final targets = TargetCatalog.builtIn();
+  final stages = ReleaseStages(
+    source: tree,
+    git: git,
+    stageContracts: targets.stageContractResolver(resolution),
+  );
   const targetTools = SystemTools(timeout: Duration(minutes: 2));
   try {
     return await ReleaseCommand(
       resolution: resolution,
       tree: tree,
       git: git,
-      registry: registry,
       inspector: Inspector(
         registry: registry,
         pubDev: PubDevTarget(
@@ -355,6 +360,7 @@ Future<int> _release(
         tools: targetTools,
         repository: git.originUrl,
         stageFor: stages.call,
+        targets: targets,
       ),
       tools: const SystemTools(),
       output: output,
@@ -470,7 +476,12 @@ Future<int> _status(
   final registry = prepared.registry!;
   try {
     final git = GitState.read(tree.root);
-    final stages = ReleaseStages(source: tree, git: git);
+    final targets = TargetCatalog.builtIn();
+    final stages = ReleaseStages(
+      source: tree,
+      git: git,
+      stageContracts: targets.stageContractResolver(resolution),
+    );
     const targetTools = SystemTools(timeout: Duration(minutes: 2));
     return await StatusCommand(
       resolution: resolution,
@@ -493,6 +504,7 @@ Future<int> _status(
         tools: offline ? null : targetTools,
         repository: offline ? null : git.originUrl,
         stageFor: stages.call,
+        targets: targets,
       ),
       output: output,
     ).run(only: unit);
