@@ -5,20 +5,36 @@ non-zero exit, is never truncated, and is written by the same calls that
 print the human output, so the two surfaces cannot drift. Schema version
 rides in `"rk"` and is bumped only when a key changes meaning.
 
+This is the surface an agent drives a release through. The loop it
+supports, end to end:
+
+```
+rk status <unit> --json                 where things stand; read-only
+rk release <unit> --stage --json        produce and validate the exact stage
+rk status <unit> --json                 confirm: staged, good to release
+rk release <unit> --confirm=<v> --json  authorize exactly v, publish, read back
+rk release <unit> --confirm=<v> --json  idempotent: already-exact, no second act
+```
+
+`--confirm=<version>` is the typed yes carried as a flag — the same door
+`init --write` opens. It supplies exactly what an operator would type at
+the prompt, authorizes only the version it names, and skips no inspection
+on the way there. A bare `--confirm` is refused (RK-CLI-009): the flag
+must say what it says yes to.
+
 ## Top level
 
 | key | meaning |
 |---|---|
-| `rk` | schema version (currently `2`) |
+| `rk` | schema version (currently `3`) |
 | `command` | the verb that ran |
-| `mode` | how the run was asked to operate: `{stage}` |
+| `mode` | present only where the run has one: `{stage}` on `release` |
 | `observed_at` | UTC ISO 8601 — when rk read the world |
 | `exit` | mirrors the process exit code |
-| `safe_to_rerun` | whether running the same command again can do harm (rk's model makes this true in every case it has) |
-| `rerun_helps` | whether re-running would move things forward — false on conflicts, where a human has to decide |
+| `rerun_helps` | whether re-running would move things forward — false on conflicts, where a human has to decide. Re-running is always *safe*: the same inspection precedes every act |
 | `repository` | `{name, branch?, head?, remote, uncommitted?}`. `head` is the full 40-char SHA. `remote` is always present and null when no origin exists — a forge slug (`owner/name`), not a URL |
-| `units[]` | per-unit: `{name, version, tag, steps[], targets[]?}`. `targets` is present on status and carries the ordered target observations below |
-| `problems[]` | `{code, message, remedy?, source?, unit?, target?}` — every refusal and blockage, with its `RK-*` code. `target`, when present, is the affected step id and makes that target's human row `✗` |
+| `units[]` | per-unit: `{name, version, tag, steps[], targets[]?}` |
+| `problems[]` | `{code, message, remedy?, source?, unit?, target?}` — every refusal and blockage, with its `RK-*` code. `target`, when present, is the affected target id and makes that target's human row `✗` |
 | `next[]` | the commands that would advance things, as data |
 | `halt` | `{kind, sentence}` when the run halted |
 | `attachments` | documents that travel with the run (a proposed release.toml, pub's validation text) |
@@ -29,6 +45,14 @@ rides in `"rk"` and is bumped only when a key changes meaning.
 target changed; a native preflight such as `dart pub login` may still have
 refreshed local session state. The accompanying sentence states what changed
 and whether re-running can advance the work.
+
+## One fact, one place
+
+`targets[]` is the canonical record of public-target state on `status`;
+`steps[]` carries the local pipeline, prerequisites, and — during
+`release` — what this invocation did with each step. status no longer
+repeats the four public targets under `steps[]`: an agent that wants a
+target's verdict reads it where the settled observation lives.
 
 ## Steps
 
@@ -50,21 +74,7 @@ read-back; an idempotent retry records `already_exact`.
 - `exact` — there, and it is what this configuration produces.
 - `conflict` — there, and it differs. Re-running will not fix it.
 - `unknown` — rk could not tell. **Never** collapsed into `absent`; read
-  `mode` and the step's `detail` for why.
-
-## The gate rule
-
-For CI gating on `rk status --json`, the blessed rule is all three of:
-
-1. `problems` is empty. Public conflicts and unread targets are recorded here
-   as actionable diagnostics as well as on their target observations, so this
-   catches the human report's `Issues` section without parsing prose. Any
-   concrete problem carrying `target` also makes that target's human row `✗`.
-2. No step has `verdict == "conflict"` — belt to problems' braces.
-3. `unknown` never auto-proceeds: a destination rk could not read answers
-   `unknown`, never `absent`. A tag git does not hold is `absent`, which is
-   work remaining, not work done — so an unreadable world blocks a gate
-   rather than passing it.
+  the entry's `detail` for why.
 
 ## Status targets
 
@@ -80,6 +90,22 @@ Authentication does not add a fifth verdict or another green/unknown field.
 Supported safe read-only checks may contribute a concrete target-linked
 problem. When no safe check exists, status emits no authentication fact and
 normal release preflight owns the check.
+
+## The gate rule
+
+For CI or agent gating on `rk status --json`, the blessed rule is all three
+of:
+
+1. `problems` is empty. Public conflicts and unread targets are recorded
+   here as actionable diagnostics as well as on their target observations,
+   so this catches the human report's `Issues` section without parsing
+   prose.
+2. No `targets[]` entry has `verdict == "conflict"` — belt to problems'
+   braces.
+3. `unknown` never auto-proceeds: a destination rk could not read answers
+   `unknown`, never `absent`. A tag git does not hold is `absent`, which is
+   work remaining, not work done — so an unreadable world blocks a gate
+   rather than passing it.
 
 Exit codes (also in `-h`): `0` a successful report or completed command;
 `1` refused or failed; `2` usage; `3` rk itself crashed. A requested JSON run

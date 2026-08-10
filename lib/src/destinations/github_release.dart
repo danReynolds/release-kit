@@ -359,8 +359,7 @@ class GithubRelease {
       differences['manifest tag'] = 'published ${manifest.tag}, expected $tag';
     }
     if (manifest.commit.toLowerCase() != sourceCommit.toLowerCase()) {
-      differences['source commit'] =
-          'published ${manifest.commit}, expected '
+      differences['source commit'] = 'published ${manifest.commit}, expected '
           '${sourceCommit.toLowerCase()}';
     }
 

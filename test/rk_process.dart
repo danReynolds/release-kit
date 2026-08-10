@@ -130,6 +130,12 @@ class Run {
       .expand((u) => (u['steps'] as List).cast<Map<String, Object?>>())
       .toList();
 
+  List<Map<String, Object?>> targetsOf(String unit) => units
+      .where((u) => u['name'] == unit)
+      .expand(
+          (u) => ((u['targets'] as List?) ?? []).cast<Map<String, Object?>>())
+      .toList();
+
   List<Map<String, Object?>> get problems =>
       ((json['problems'] as List?) ?? const []).cast<Map<String, Object?>>();
 }

@@ -65,35 +65,31 @@ void main() {
     });
   });
 
-  group('safe and helps are different questions', () {
-    test('both true by default, because re-running is the resume', () {
+  group('rerun_helps is the one rerun question', () {
+    test('true by default, because re-running is the resume', () {
       final json = decode(Report('release'));
-      expect(json['safe_to_rerun'], isTrue);
       expect(json['rerun_helps'], isTrue);
+      expect(
+        json.containsKey('safe_to_rerun'),
+        isFalse,
+        reason: 're-running is safe by construction — the same inspection '
+            'precedes every act — so a field for it could only ever say so',
+      );
     });
 
-    test('a conflict is still safe to re-run — it just will not help', () {
+    test('a conflict does not help, and the halt says why', () {
       final report = Report('release')
         ..halt('unfixableByRerun', 'cannot be fixed', helps: false);
-      expect(
-        decode(report)['safe_to_rerun'],
-        isTrue,
-        reason: 'a second run inspects and refuses again; nothing is harmed. '
-            'Reporting it unsafe tells an agent re-running may do damage.',
-      );
       expect(decode(report)['rerun_helps'], isFalse);
       expect((decode(report)['halt'] as Map)['kind'], 'unfixableByRerun');
     });
 
-    test('neither can be talked back up', () {
+    test('helps cannot be talked back up', () {
       final report = Report('release')
-        ..halt('x', 'bad', helps: false, safe: false)
+        ..halt('x', 'bad', helps: false)
         ..halt('beforeActing', 'nothing changed', helps: true);
-      final json = decode(report);
-      expect(json['safe_to_rerun'], isFalse);
-      expect(json['rerun_helps'], isFalse);
       expect(
-        json['safe_to_rerun'],
+        decode(report)['rerun_helps'],
         isFalse,
         reason: 'the worst answer of the run is the answer for the run',
       );

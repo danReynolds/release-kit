@@ -411,7 +411,8 @@ All problems are reported in one pass, each naming its source location and
 remediation. Grouping follows the configuration — unit, project, channel,
 platform — subject to collapse. `--json` is the named machine surface,
 stable, keyed on step id, surviving non-zero exit and carrying
-`safe_to_rerun`. Exit codes: `0` clean, complete, or blocked; `1` refusal;
+`rerun_helps` — re-running is safe by construction, so no field says so.
+Exit codes: `0` clean, complete, or blocked; `1` refusal;
 `2` usage; `3` rk itself crashed.
 
 ### Liveness
@@ -720,7 +721,7 @@ the CLI, never in rk core.
 What makes the CLI sufficient is already required for other reasons:
 
 - **`--json` on every command**, stable, keyed on step id, surviving a
-  non-zero exit and carrying `safe_to_rerun`. An agent decides whether to
+  non-zero exit and carrying `rerun_helps`. An agent decides whether to
   retry from data rather than by parsing prose.
 
   Step ids are a frozen wire format, like the version grammar: an agent
@@ -732,8 +733,7 @@ What makes the CLI sufficient is already required for other reasons:
   <unit>/tag/<tag>
   <unit>/requires/pub.dev/<package>/<version>
   <unit>/pub.dev/<package>@<version>
-  <unit>/build/<platform>
-  <unit>/sign/<platform>
+  <unit>/build/<platform>       (on macOS the build signs too)
   <unit>/notarize/<platform>
   <unit>/archive/<platform>
   <unit>/checksums/SHA256SUMS

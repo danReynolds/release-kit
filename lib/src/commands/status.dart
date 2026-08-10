@@ -719,6 +719,11 @@ class StatusCommand {
               '${snapshot.unit.tag}',
     );
     for (final step in snapshot.checklist.steps) {
+      // Public targets are recorded once, in targets[], where the settled
+      // observation lives; recording them under steps[] too made two
+      // spellings of the same fact and left a caller guessing which one is
+      // canonical.
+      if (step.kind.targetName != null) continue;
       _record(step, snapshot.states[step.id]!);
     }
 
