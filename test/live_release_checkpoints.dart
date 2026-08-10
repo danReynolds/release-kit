@@ -205,6 +205,11 @@ void main() {
       '"\$alpha_pub_cache/bin/rk" --version',
       '"\$alpha_pub_cache/bin/rk" --help',
       'rk $version',
+      // The consumed binary must do rk's actual work, by the bare name an
+      // installed binary is invoked with — the shape that derives its own
+      // identity from argv[0]. --version and --help inspect no stage.
+      'PATH="\$alpha_pub_cache/bin:\$PATH" rk status rk',
+      'Published everywhere configured',
     });
     _expectNextLine(
       pubConsumer,
@@ -228,6 +233,8 @@ void main() {
       './rk --version',
       './rk --help',
       'rk $version',
+      'rk status rk',
+      'Published everywhere configured',
     });
     expect(
       githubConsumer,
@@ -245,6 +252,21 @@ void main() {
       reason: 'the downloaded GitHub binary must report the released version',
     );
     _expectLockedHelp(_commandOutput(githubConsumer, './rk --help'));
+
+    for (final consumer in [pubConsumer, githubConsumer]) {
+      expect(
+        consumer,
+        isNot(contains('RK-STAGE-002')),
+        reason: 'a consumed binary that cannot identify itself cannot '
+            'inspect a stage, which is most of what rk does',
+      );
+      expect(
+        consumer,
+        isNot(contains('RK-INT-001')),
+        reason: 'the shipped artifact must not crash on the work it exists '
+            'to perform',
+      );
+    }
   });
 }
 
