@@ -616,7 +616,11 @@ a session, not package uploader permission.
     report proving every configured public step is `exact` with action
     `already_exact`.
 11. Consume each configured public destination without using the checkout or
-    the stale global installation:
+    the stale global installation. First clone what was published into
+    `alpha_consumer_repo`, a fresh directory outside the release checkout:
+    `git clone --depth 1 --branch v0.0.1
+    https://github.com/danReynolds/release-kit.git "$alpha_consumer_repo"`.
+    Each consumed binary is then exercised against it.
     - Set `alpha_pub_cache` to a fresh temporary directory. Activate with
       `PUB_CACHE="$alpha_pub_cache" dart pub global activate release_kit 0.0.1`,
       then run `"$alpha_pub_cache/bin/rk" --version` and
@@ -626,6 +630,16 @@ a session, not package uploader permission.
       `shasum -a 256 -c` against it, extract the archive, and run the extracted
       `./rk --version` and `./rk --help`. The checksum source URL and archive
       URL must both be the public `v0.0.1` GitHub Release.
+    - Then make each consumed binary do rk's actual work, which `--version`
+      and `--help` do not: from `alpha_consumer_repo`, with that binary's
+      directory first on `PATH`, run `rk status rk` **by bare name** —
+      `cd "$alpha_consumer_repo" && PATH="$alpha_pub_cache/bin:$PATH" rk status rk`,
+      and the same with the extracted archive's directory. Require exit 0 and
+      `Published everywhere configured`. A bare name is not a nicety: an
+      installed binary derives its own identity from `argv[0]`, and rk once
+      shipped a build that answered `RK-STAGE-002` for every repository whose
+      directory did not happen to contain a file named `rk`. `--version` and
+      `--help` inspect no stage and would have reported that build healthy.
     For Homebrew, use a machine or environment that has not seen the repository
     checkout.
 12. Until the idempotent rerun is complete, preserve every command transcript,
