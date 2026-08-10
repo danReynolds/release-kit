@@ -367,7 +367,7 @@ void main() {
           unit: unit,
           version: version,
           tag: tag,
-          identity: stage ?? identity,
+          commit: (stage ?? identity).headCommit,
           artifacts: artifacts ??
               [
                 ReleaseManifestArtifact(
@@ -394,7 +394,7 @@ void main() {
           unit: unit,
           version: version,
           tag: tag,
-          identity: stage ?? identity,
+          sourceCommit: (stage ?? identity).headCommit,
           title: title,
           body: body,
           manifestSha256: manifestSha256 ?? Sha256.hex(bytes),
@@ -407,7 +407,6 @@ void main() {
       String version = '1.0.0',
       String tag = 'v1.0.0',
       String? sourceCommit,
-      String? sourceTree,
       String? title,
       String? manifestSha256,
     }) =>
@@ -416,7 +415,6 @@ void main() {
           version: version,
           tag: tag,
           sourceCommit: sourceCommit ?? identity.headCommit,
-          sourceTree: sourceTree,
           title: title,
           manifestSha256: manifestSha256 ?? Sha256.hex(bytes),
         );
@@ -655,7 +653,7 @@ void main() {
       expect(state.detail, contains('manifest is invalid'));
     });
 
-    test('unit, version, tag, and stage identity must all match', () async {
+    test('unit, version, tag, and source commit must all match', () async {
       final manifest = manifestBytes(
         unit: 'other',
         version: '9.0.0',
@@ -669,7 +667,7 @@ void main() {
       expect(state.verdict, Verdict.conflict);
       expect(
         state.evidence.keys,
-        containsAll(['unit', 'version', 'manifest tag', 'stage identity']),
+        containsAll(['unit', 'version', 'manifest tag', 'source commit']),
       );
     });
 
@@ -693,7 +691,6 @@ void main() {
           version: '1.0.0',
           tag: 'v1.0.0',
           sourceCommit: identity.headCommit,
-          sourceTree: identity.headTree,
           title: 'tool 1.0.0',
           body: 'release notes\n',
           manifestSha256: Sha256.hex(manifest),
@@ -828,7 +825,6 @@ void main() {
           tools,
           historicalExpectation(
             manifest,
-            sourceTree: identity.headTree,
             title: 'tool 1.0.0',
           ),
           formula,
@@ -843,8 +839,7 @@ void main() {
         expect(() => read.bytes![0] = 0, throwsUnsupportedError);
       });
 
-      test('the manifest source must equal the peeled tag commit and tree',
-          () async {
+      test('the manifest source must equal the peeled tag commit', () async {
         final manifest = historicalManifest();
         final read = await readHistoricalManifestAsset(
           downloadable(
@@ -859,7 +854,6 @@ void main() {
           historicalExpectation(
             manifest,
             sourceCommit: otherIdentity.headCommit,
-            sourceTree: otherIdentity.headTree,
           ),
           formula,
         );
@@ -867,7 +861,7 @@ void main() {
         expect(read.inspection.verdict, Verdict.conflict);
         expect(
           read.inspection.evidence.keys,
-          containsAll(['source commit', 'source tree']),
+          containsAll(['source commit']),
         );
         expect(read.bytes, isNull);
       });
@@ -942,12 +936,11 @@ void main() {
         );
       });
 
-      test('a self-inconsistent stage identity is rejected by manifest parse',
-          () async {
+      test('an unsupported manifest schema is rejected by parse', () async {
         final valid = utf8.decode(historicalManifest());
         final manifest = utf8.encode(valid.replaceFirst(
-          identity.id,
-          List.filled(64, 'f').join(),
+          '"schema":$releaseManifestSchemaVersion',
+          '"schema":99',
         ));
         final read = await readHistoricalManifestAsset(
           downloadable(

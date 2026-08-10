@@ -388,7 +388,7 @@ class ReleaseStage {
       unit: unit.name,
       version: unit.version.canonical,
       tag: unit.tag,
-      identity: directory.identity,
+      commit: directory.identity.headCommit,
       artifacts: [
         for (final name in publicArtifacts)
           ReleaseManifestArtifact.fromStage(

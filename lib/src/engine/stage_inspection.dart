@@ -420,7 +420,7 @@ class StageInspector {
       ));
       return;
     }
-    if (manifest.identity.id != receipt.identity.id) {
+    if (manifest.commit != receipt.identity.headCommit) {
       issues.add(const StageIssue(
         StageIssueKind.invalidManifest,
         'release manifest belongs to another stage',

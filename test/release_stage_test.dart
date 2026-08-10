@@ -241,7 +241,7 @@ void main() {
         'release-manifest.json',
       ]),
     );
-    expect(manifest.identity.id, identity.id);
+    expect(manifest.commit, identity.headCommit);
     expect(manifest.artifacts.map((artifact) => artifact.name), [_asset]);
     expect(manifest.encode(), isNot(contains(repository.path)));
     expect(resumed.inspect().reusable, isTrue);
@@ -635,7 +635,7 @@ void main() {
       unit: unit.name,
       version: unit.version.canonical,
       tag: unit.tag,
-      identity: identity,
+      commit: identity.headCommit,
       artifacts: [
         ReleaseManifestArtifact(
           name: _asset,
@@ -690,7 +690,7 @@ void main() {
       unit: unit.name,
       version: unit.version.canonical,
       tag: unit.tag,
-      identity: identity,
+      commit: identity.headCommit,
       artifacts: [
         ReleaseManifestArtifact.fromStage(
           publicName: _asset,
