@@ -4,6 +4,7 @@ import 'release_manifest.dart';
 import 'resolve.dart';
 import 'source_tree.dart';
 import 'stage.dart';
+import 'producers.dart';
 import 'stage_contract.dart';
 import 'stage_inspection.dart';
 import 'stage_plan.dart';
@@ -153,6 +154,7 @@ class ReleaseStage {
         repository: repository,
         sourceRoot: sourceRoot,
         targetContributions: targetContributions,
+        localProducers: localProducerContracts(unit),
       ).validate(directory, receipt));
     }
     final expectedCompiler = compiler;

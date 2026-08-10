@@ -1,6 +1,3 @@
-import 'dart:convert';
-import 'dart:io';
-
 import 'assets.dart';
 import 'resolve.dart';
 import 'stage.dart';
@@ -142,6 +139,7 @@ class StageReceiptContract {
     required String? repository,
     required String sourceRoot,
     required Iterable<StageContributionContract> targetContributions,
+    required Iterable<StageStepContract> localProducers,
   }) {
     final contributions = orderStageContributions(
       targetContributions,
@@ -154,63 +152,10 @@ class StageReceiptContract {
         .where((item) => item.phase == StageContributionPhase.beforeArtifacts)
         .map((item) => item.step));
 
-    if (unit.shipsBinaries) {
-      final project = unit.binaryProject;
-      final executable = project.executable!;
-      final platforms = [...project.binaryPlatforms]..sort();
-      for (final platform in platforms) {
-        final binary = '$platform/$executable';
-        steps.add(StageStepContract(
-          'build:$platform',
-          inputs: const {'step:source-snapshot'},
-          outputs: {binary: 'executable'},
-        ));
-        if (platform.startsWith('macos-')) {
-          steps.add(StageStepContract(
-            'notarize:$platform',
-            inputs: {binary},
-            outputs: {
-              ReleaseAssets.notaryResultName(
-                executable,
-                project.version.canonical,
-                platform,
-              ): 'notary',
-              ReleaseAssets.notaryLogName(
-                executable,
-                project.version.canonical,
-                platform,
-              ): 'notary',
-              '$platform/$executable.zip': 'notary-input',
-            },
-          ));
-        }
-        steps.add(StageStepContract(
-          'archive:$platform',
-          inputs: {binary},
-          outputs: {
-            ReleaseAssets.archiveName(
-              executable,
-              project.version.canonical,
-              platform,
-            ): 'archive',
-          },
-        ));
-      }
-
-      final archives = {
-        for (final platform in platforms)
-          ReleaseAssets.archiveName(
-            executable,
-            project.version.canonical,
-            platform,
-          ),
-      };
-      steps.add(StageStepContract(
-        'checksums',
-        inputs: archives,
-        outputs: const {ReleaseAssets.checksums: 'checksums'},
-      ));
-    }
+    // The producer pipeline is declared once, beside the checklist that
+    // derives it — the caller passes it here the same way targets pass
+    // their contributions.
+    steps.addAll(localProducers);
 
     steps.addAll(contributions
         .where((item) => item.phase == StageContributionPhase.afterArtifacts)
@@ -290,7 +235,6 @@ class StageReceiptContract {
       if (!_outputsMatch(step, contract)) {
         _issue(issues, '${step.name} has the wrong output inventory');
       }
-      _validateEvidence(stage, step, issues);
       if (contract.validate case final validate?) {
         issues.addAll(validate(context, step));
       }
@@ -312,107 +256,6 @@ class StageReceiptContract {
     return actual.entries.every((entry) => allowed[entry.key] == entry.value);
   }
 
-  static void _validateEvidence(
-    StageDirectory stage,
-    StageStep step,
-    List<StageIssue> issues,
-  ) {
-    if (step.name.startsWith('build:')) {
-      final smoke = step.evidence['smoke'];
-      final status = smoke is Map ? smoke['status'] : null;
-      final reason = smoke is Map ? smoke['reason'] : null;
-      if (status != 'passed' &&
-          !(status == 'not-executed' &&
-              reason is String &&
-              reason.isNotEmpty)) {
-        _issue(issues, '${step.name} has invalid smoke-test evidence');
-      }
-      if (step.name.startsWith('build:macos-') &&
-          step.evidence['signature'] == null) {
-        _issue(issues, '${step.name} has no signature evidence');
-      }
-    }
-
-    if (step.name.startsWith('notarize:')) {
-      final notary = step.evidence['notary'];
-      final result = step.outputs
-          .where((output) => output.path.endsWith('.notary-result.json'))
-          .firstOrNull;
-      final log = step.outputs
-          .where((output) => output.path.endsWith('.notary-log.json'))
-          .firstOrNull;
-      final submission = notary is Map ? notary['submission_id'] : null;
-      if (notary is! Map ||
-          notary['status'] != 'Accepted' ||
-          submission is! String ||
-          submission.isEmpty ||
-          result == null ||
-          log == null ||
-          notary['result_sha256'] != result.sha256 ||
-          notary['log_sha256'] != log.sha256 ||
-          !_acceptedNotaryFile(stage, result.path, submission)) {
-        issues.add(StageIssue(
-          StageIssueKind.invalidNotary,
-          '${step.name} has invalid Accepted-submission evidence',
-          path: 'stage.json',
-        ));
-      }
-    }
-
-    if (step.name == 'checksums') {
-      final checksums = step.evidence['checksums'];
-      final expected = {
-        for (final input in step.inputs) input.name: input.sha256
-      };
-      final output = step.outputs.firstOrNull;
-      if (checksums is! Map ||
-          !_sameMap(checksums, expected) ||
-          output == null ||
-          !_checksumFileMatches(stage, output.path, expected)) {
-        issues.add(const StageIssue(
-          StageIssueKind.invalidChecksums,
-          'checksums evidence does not exactly bind every archive input',
-          path: 'SHA256SUMS',
-        ));
-      }
-    }
-  }
-
-  static bool _acceptedNotaryFile(
-    StageDirectory stage,
-    String path,
-    String submission,
-  ) {
-    try {
-      final decoded = jsonDecode(File(stage.resolve(path)).readAsStringSync());
-      return decoded is Map &&
-          decoded['status'] == 'Accepted' &&
-          decoded['id'] == submission;
-    } on Object {
-      return false;
-    }
-  }
-
-  static bool _checksumFileMatches(
-    StageDirectory stage,
-    String path,
-    Map<String, String> expected,
-  ) {
-    try {
-      final found = <String, String>{};
-      for (final line in File(stage.resolve(path)).readAsLinesSync()) {
-        if (line.isEmpty) continue;
-        final match =
-            RegExp(r'^([0-9a-f]{64})  ([^/\\\u0000]+)$').firstMatch(line);
-        if (match == null || found.containsKey(match.group(2))) return false;
-        found[match.group(2)!] = match.group(1)!;
-      }
-      return _sameMap(found, expected);
-    } on Object {
-      return false;
-    }
-  }
-
   static void _issue(List<StageIssue> issues, String message) {
     issues.add(StageIssue(
       StageIssueKind.invalidStructure,
@@ -432,7 +275,3 @@ bool _sameList(List<String> left, List<String> right) =>
 
 bool _sameSet(Set<String> left, Set<String> right) =>
     left.length == right.length && left.containsAll(right);
-
-bool _sameMap(Map left, Map right) =>
-    left.length == right.length &&
-    left.entries.every((entry) => right[entry.key] == entry.value);

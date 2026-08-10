@@ -8,6 +8,7 @@ import '../engine/diagnostic.dart';
 import '../engine/git.dart';
 import '../output/output.dart';
 import '../engine/inspect.dart';
+import '../engine/producers.dart';
 import '../engine/resolve.dart';
 import '../engine/release_stage.dart';
 import '../engine/source_tree.dart';
@@ -1105,8 +1106,7 @@ class ReleaseCommand {
       return !step.isPublic &&
           step.kind != StepKind.prerequisite &&
           step.kind != StepKind.completeStage;
-    }).toList()
-      ..sort(_compareProducerSteps);
+    }).toList();
     for (final step in producerSteps) {
       if (_producerRecorded(progress, step)) {
         output.step(
@@ -1137,8 +1137,8 @@ class ReleaseCommand {
         return null;
       }
       try {
-        progress
-            .add(_captureProducerStep(stage, step, sourceStep, progress, act));
+        progress.add(
+            _captureProducerStep(stage, unit, step, sourceStep, progress, act));
         _persistStageProgress(stage, sourceArtifacts, progress);
       } on Object catch (error) {
         return _stageProgressFailed(error);
@@ -1271,106 +1271,42 @@ class ReleaseCommand {
     return null;
   }
 
-  bool _producerRecorded(List<StageStep> progress, Step step) {
-    final names = progress.map((record) => record.name).toSet();
-    final platform = step.platform;
-    return switch (step.kind) {
-      StepKind.build => names.contains('build:$platform'),
-      StepKind.notarize => names.contains('notarize:$platform'),
-      StepKind.archive => names.contains('archive:$platform'),
-      StepKind.checksums => names.contains('checksums'),
-      _ => false,
-    };
-  }
-
-  static int _compareProducerSteps(Step left, Step right) {
-    if (left.kind == StepKind.checksums) return 1;
-    if (right.kind == StepKind.checksums) return -1;
-    final byPlatform = left.platform!.compareTo(right.platform!);
-    if (byPlatform != 0) return byPlatform;
-    const rank = {
-      StepKind.build: 0,
-      StepKind.notarize: 1,
-      StepKind.archive: 2,
-    };
-    return rank[left.kind]!.compareTo(rank[right.kind]!);
-  }
+  bool _producerRecorded(List<StageStep> progress, Step step) =>
+      progress.any((record) => record.name == receiptNameFor(step));
 
   StageStep _captureProducerStep(
     ReleaseStage stage,
+    ResolvedUnit unit,
     Step step,
     StageStep sourceStep,
     List<StageStep> progress,
     LocalProducerOutcome outcome,
   ) {
-    final outputs = [
-      for (final output in outcome.outputs)
-        StageArtifact.capture(
-          stage: stage.directory,
-          path: output.path,
-          type: output.type,
-        ),
-    ];
-    final evidence = outcome.evidence;
-    final platform = step.platform;
-    switch (step.kind) {
-      case StepKind.build:
-        return StageStep(
-          name: 'build:$platform',
-          inputs: [StageInput.step(sourceStep)],
-          outputs: outputs,
-          evidence: evidence,
-        );
-
-      case StepKind.notarize:
-        final binary = progress
-            .expand((record) => record.outputs)
-            .where((artifact) =>
-                artifact.type == 'executable' &&
-                artifact.path.startsWith('$platform/'))
-            .single;
-        return StageStep(
-          name: 'notarize:$platform',
-          inputs: [StageInput.artifact(binary)],
-          outputs: outputs,
-          evidence: evidence,
-        );
-
-      case StepKind.archive:
-        final binary = progress
-            .expand((record) => record.outputs)
-            .where((artifact) =>
-                artifact.type == 'executable' &&
-                artifact.path.startsWith('$platform/'))
-            .single;
-        return StageStep(
-          name: 'archive:$platform',
-          inputs: [StageInput.artifact(binary)],
-          outputs: outputs,
-          evidence: evidence,
-        );
-
-      case StepKind.checksums:
-        final archives = progress
-            .where((record) => record.name.startsWith('archive:'))
-            .expand((record) => record.outputs)
-            .where((artifact) => artifact.type == 'archive')
-            .toList();
-        if (archives.isEmpty) {
-          throw StateError('checksums have no recorded archive inputs');
-        }
-        return StageStep(
-          name: 'checksums',
-          inputs: [
-            for (final archive in archives) StageInput.artifact(archive),
-          ],
-          outputs: outputs,
-          evidence: evidence,
-        );
-
-      default:
-        throw StateError('step ${step.kind.name} is not a local producer');
-    }
+    final contract = contractFor(unit, step);
+    final recorded = {
+      for (final record in progress)
+        for (final artifact in record.outputs) artifact.path: artifact,
+    };
+    return StageStep(
+      name: contract.name,
+      inputs: [
+        for (final input in contract.inputs)
+          input == 'step:source-snapshot'
+              ? StageInput.step(sourceStep)
+              : StageInput.artifact(recorded[input] ??
+                  (throw StateError(
+                      '${contract.name} input $input is not recorded'))),
+      ],
+      outputs: [
+        for (final output in outcome.outputs)
+          StageArtifact.capture(
+            stage: stage.directory,
+            path: output.path,
+            type: output.type,
+          ),
+      ],
+      evidence: outcome.evidence,
+    );
   }
 
   /// Package names this release claims for the first time.

@@ -416,10 +416,10 @@ executables:
 
     expect(checklist.steps.map((s) => s.id).toList(), [
       'cli/requires/pub.dev/keybay/0.2.0',
-      'cli/build/linux-x64',
-      'cli/archive/linux-x64',
       'cli/build/linux-arm64',
       'cli/archive/linux-arm64',
+      'cli/build/linux-x64',
+      'cli/archive/linux-x64',
       'cli/build/macos-arm64',
       'cli/notarize/macos-arm64',
       'cli/archive/macos-arm64',

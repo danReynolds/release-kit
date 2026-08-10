@@ -227,8 +227,7 @@ class StageReceipt {
   /// the `complete-stage` step, not a second flag that could disagree with
   /// it. Incomplete receipts preserve diagnostic progress but are never
   /// reusable.
-  bool get complete =>
-      steps.isNotEmpty && steps.last.name == 'complete-stage';
+  bool get complete => steps.isNotEmpty && steps.last.name == 'complete-stage';
 
   Iterable<StageArtifact> get artifacts sync* {
     for (final step in steps) {
