@@ -23,8 +23,6 @@ final class StageStepContract {
     this.inputs = const {},
     this.outputs = const {},
     this.optionalOutputs = const {},
-    this.outputPrefix,
-    this.outputType,
     this.validate,
   });
 
@@ -32,8 +30,6 @@ final class StageStepContract {
   final Set<String> inputs;
   final Map<String, String> outputs;
   final Map<String, String> optionalOutputs;
-  final String? outputPrefix;
-  final String? outputType;
   final StageStepContractValidator? validate;
 }
 
@@ -164,12 +160,12 @@ class StageReceiptContract {
       final platforms = [...project.binaryPlatforms]..sort();
       for (final platform in platforms) {
         final binary = '$platform/$executable';
+        steps.add(StageStepContract(
+          'build:$platform',
+          inputs: const {'step:source-snapshot'},
+          outputs: {binary: 'executable'},
+        ));
         if (platform.startsWith('macos-')) {
-          steps.add(StageStepContract(
-            'sign:$platform',
-            inputs: const {'step:source-snapshot'},
-            outputs: {binary: 'executable'},
-          ));
           steps.add(StageStepContract(
             'notarize:$platform',
             inputs: {binary},
@@ -184,14 +180,8 @@ class StageReceiptContract {
                 project.version.canonical,
                 platform,
               ): 'notary',
+              '$platform/$executable.zip': 'notary-input',
             },
-            optionalOutputs: {'$platform/$executable.zip': 'notary-input'},
-          ));
-        } else {
-          steps.add(StageStepContract(
-            'build:$platform',
-            inputs: const {'step:source-snapshot'},
-            outputs: {binary: 'executable'},
           ));
         }
         steps.add(StageStepContract(
@@ -269,7 +259,7 @@ class StageReceiptContract {
     final expected = _steps.map((step) => step.name).toList();
     final sequenceOk = receipt.complete
         ? _sameList(names, expected)
-        : _validProgress(names, expected.take(expected.length - 1).toList());
+        : _isPrefix(names, expected.take(expected.length - 1).toList());
     if (!sequenceOk) {
       _issue(
         issues,
@@ -287,7 +277,7 @@ class StageReceiptContract {
       receipt: receipt,
     );
     for (final step in receipt.steps) {
-      final contract = contracts[step.name] ?? _macBuildContract(step.name);
+      final contract = contracts[step.name];
       if (contract == null) continue;
       if (step.name != 'source-snapshot' &&
           step.name != 'complete-stage' &&
@@ -308,36 +298,8 @@ class StageReceiptContract {
     return issues;
   }
 
-  static bool _validProgress(List<String> actual, List<String> finalNames) {
-    if (_isPrefix(actual, finalNames)) return true;
-    if (actual.isEmpty || !actual.last.startsWith('build:macos-')) return false;
-    final platform = actual.last.substring('build:'.length);
-    final index = actual.length - 1;
-    return index < finalNames.length &&
-        finalNames[index] == 'sign:$platform' &&
-        _isPrefix(actual.take(index).toList(), finalNames);
-  }
-
-  static StageStepContract? _macBuildContract(String name) {
-    if (!name.startsWith('build:macos-')) return null;
-    final platform = name.substring('build:'.length);
-    return StageStepContract(
-      name,
-      inputs: const {'step:source-snapshot'},
-      // The exact executable name is checked by the corresponding sign
-      // contract once the transient unsigned build is replaced.
-      outputPrefix: '$platform/',
-      outputType: 'executable',
-    );
-  }
-
   static bool _outputsMatch(StageStep step, StageStepContract contract) {
     if (step.name == 'source-snapshot') return true;
-    if (contract.outputPrefix != null) {
-      return step.outputs.length == 1 &&
-          step.outputs.single.path.startsWith(contract.outputPrefix!) &&
-          step.outputs.single.type == contract.outputType;
-    }
     final actual = {
       for (final output in step.outputs) output.path: output.type
     };
@@ -355,7 +317,7 @@ class StageReceiptContract {
     StageStep step,
     List<StageIssue> issues,
   ) {
-    if (step.name.startsWith('build:') || step.name.startsWith('sign:')) {
+    if (step.name.startsWith('build:')) {
       final smoke = step.evidence['smoke'];
       final status = smoke is Map ? smoke['status'] : null;
       final reason = smoke is Map ? smoke['reason'] : null;
@@ -364,6 +326,10 @@ class StageReceiptContract {
               reason is String &&
               reason.isNotEmpty)) {
         _issue(issues, '${step.name} has invalid smoke-test evidence');
+      }
+      if (step.name.startsWith('build:macos-') &&
+          step.evidence['signature'] == null) {
+        _issue(issues, '${step.name} has no signature evidence');
       }
     }
 

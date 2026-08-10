@@ -20,7 +20,7 @@ import 'transforms/macos.dart';
 ///
 /// It sits at the top of `lib/src` because it belongs to none of the
 /// directories below it. It is not a verb — no argument parsing, no exit
-/// codes; its API is buildStep, signStep, notarizeStep, archiveStep,
+/// codes; its API is buildStep, notarizeStep, archiveStep, and
 /// checksumsStep, each called by `commands/release.dart`. And it is not an
 /// adapter by this codebase's own test, the one `destinations/git_tag.dart`
 /// states: it holds an [Output] at thirty-odd sites, where every file in
@@ -73,10 +73,17 @@ class BinaryChain {
 
   // ---- build ----
 
+  /// Compiles — and on macOS signs — the platform binary, as one step.
+  ///
+  /// Signing is not resumable work worth its own receipt: a compile costs
+  /// seconds, so a signing failure rebuilds rather than maintaining a
+  /// transient unsigned intermediate every validator would have to know
+  /// about. [signing] is present exactly when [step] is a macOS platform.
   Future<LocalProducerOutcome> buildStep(
     Step step,
-    ResolvedProject project,
-  ) async {
+    ResolvedProject project, {
+    MacSigning? signing,
+  }) async {
     final platform = step.platform!;
     final executable = project.executable!;
     final capability = capabilities.resolve(platform);
@@ -127,63 +134,48 @@ class BinaryChain {
     // The proof's absence travels with the artifact. `built` alone would
     // read as "checked", which is the claim rk must not make for a binary
     // nothing here could run.
-    final unproven = built.unproven;
-    if (unproven != null) {
-      activity.done('built, not executed');
-      output.step(
-        step,
-        mark: Mark.done,
-        verdict: Verdict.exact,
-        detail: 'built, not executed — $unproven',
-        note: 'built, not executed — $unproven',
-        show: false,
-      );
+    final smoke = built.unproven == null
+        ? const {'status': 'passed'}
+        : {'status': 'not-executed', 'reason': built.unproven};
+
+    if (signing == null) {
+      if (built.unproven case final unproven?) {
+        activity.done('built, not executed');
+        output.step(
+          step,
+          mark: Mark.done,
+          verdict: Verdict.exact,
+          detail: 'built, not executed — $unproven',
+          note: 'built, not executed — $unproven',
+          show: false,
+        );
+      } else {
+        activity.done('built');
+      }
       return LocalProducerOutcome.succeeded(
         outputs: [LocalProducerOutput(name, 'executable')],
-        evidence: {
-          'smoke': {
-            'status': 'not-executed',
-            'reason': unproven,
-          },
-        },
+        evidence: {'smoke': smoke},
       );
     }
-    activity.done('built');
-    return LocalProducerOutcome.succeeded(
-      outputs: [LocalProducerOutput(name, 'executable')],
-      evidence: const {
-        'smoke': {'status': 'passed'},
-      },
-    );
+
+    return _sign(step, activity, name, smoke, signing);
   }
 
-  // ---- sign ----
-
-  /// Signs, then proves the produced identity against [publishedRequirement]
-  /// when one exists.
+  /// The signing half of a macOS build, continuing [buildStep]'s activity.
   ///
   /// The requirement is derived from the release users already installed —
   /// asking the certificate about to sign what it will sign with is a
-  /// tautology.
-  ///
-  /// [codeId] is resolved by the caller, before anything acts, and is
-  /// non-null by construction: it is read off the published binary, or
-  /// declared, or the release was refused (RK-SIGN-009). This step used to
-  /// resolve it itself and fall back to the package name — inventing, at the
-  /// one moment that makes the answer permanent, a value nothing had stated.
-  Future<LocalProducerOutcome> signStep(
+  /// tautology. [MacSigning.codeId] is resolved by the caller, before
+  /// anything acts: it is read off the published binary, or declared, or the
+  /// release was refused (RK-SIGN-009).
+  Future<LocalProducerOutcome> _sign(
     Step step,
-    ResolvedProject project, {
-    required String? publishedRequirement,
-    required String codeId,
-    SigningIdentity? signingIdentity,
-    String? certificateSha256,
-  }) async {
-    final platform = step.platform!;
-    final name = binaryName(platform, project.executable!);
-    if (!workspace.exists(name)) {
-      return _missingArtifact(step, name, 'the build step produces it');
-    }
+    Activity activity,
+    String name,
+    Map<String, Object?> smoke,
+    MacSigning signing,
+  ) async {
+    final publishedRequirement = signing.publishedRequirement;
     final unsignedSha256 = Sha256.hex(workspace.readBytes(name)!);
 
     // Derived when a release exists to derive from; discovered otherwise.
@@ -193,6 +185,7 @@ class BinaryChain {
         publishedRequirement == null ? null : teamOf(publishedRequirement);
 
     if (publishedRequirement != null && team == null) {
+      activity.failed('the published release names no team rk can read');
       output.problem(
         Diagnostic(
           code: 'RK-SIGN-001',
@@ -211,15 +204,16 @@ class BinaryChain {
     final signed = await signer.sign(
       binary: workspace.pathOf(name),
       team: team,
-      codeId: codeId,
-      selectedIdentity: signingIdentity,
-      expectedCertificateSha256: certificateSha256,
+      codeId: signing.codeId,
+      selectedIdentity: signing.identity,
+      expectedCertificateSha256: signing.certificateSha256,
     );
     if (!signed.ok) {
+      activity.failed(signed.problem ?? 'signing failed');
       output.problem(
         Diagnostic(
           code: 'RK-SIGN-002',
-          message: '$platform: signing failed',
+          message: '${step.platform}: signing failed',
           remedy: signed.problem ?? 'see codesign\'s output',
         ),
         unit: step.unit,
@@ -236,6 +230,7 @@ class BinaryChain {
     if (publishedRequirement != null) {
       final produced = signed.requirement ?? '(unreadable)';
       if (produced != publishedRequirement) {
+        activity.abandon();
         output.problem(
           Diagnostic(
             code: 'RK-SIGN-003',
@@ -270,36 +265,26 @@ class BinaryChain {
           'the produced signature differs from the published identity',
         );
       }
-      output.step(
-        step,
-        mark: Mark.done,
-        verdict: Verdict.exact,
-        detail: 'signed · matches the published identity',
-        note: 'signed · matches the published identity',
-      );
+      activity.done('built · signed · matches the published identity');
     } else {
       // A first signed release makes an identity permanent, so it is named
       // rather than assumed: the certificate that signed and the identifier
       // every later release must reproduce.
-      output.step(
-        step,
-        mark: Mark.done,
-        verdict: Verdict.exact,
-        detail: 'signed · first release · ${signed.certificate ?? 'unknown '
-            'certificate'} · $codeId',
-        note: 'signed · first release · ${signed.certificate ?? 'unknown '
-            'certificate'} · $codeId',
+      activity.done(
+        'built · signed · first release · ${signed.certificate ?? 'unknown '
+            'certificate'} · ${signing.codeId}',
       );
     }
     final signedSha256 = Sha256.hex(workspace.readBytes(name)!);
     return LocalProducerOutcome.succeeded(
       outputs: [LocalProducerOutput(name, 'executable')],
       evidence: {
+        'smoke': smoke,
         'signature': {
           'first_identity': publishedRequirement == null,
           'published_requirement': publishedRequirement,
           'designated_requirement': signed.requirement,
-          'code_id': codeId,
+          'code_id': signing.codeId,
           if (signed.certificate != null) 'certificate': signed.certificate,
           if (signed.certificateSha256 != null)
             'certificate_sha256': signed.certificateSha256,
@@ -590,6 +575,27 @@ class BinaryChain {
     );
     return LocalProducerOutcome.failed('the workspace has no $name');
   }
+}
+
+/// What a macOS build needs to sign what it compiled.
+///
+/// Resolved by the coordinator before anything acts, so the one step that
+/// makes an identity permanent never invents a value nothing stated.
+final class MacSigning {
+  const MacSigning({
+    required this.publishedRequirement,
+    required this.codeId,
+    this.identity,
+    this.certificateSha256,
+  });
+
+  /// The designated requirement of the release users already installed, or
+  /// null on a first signed release.
+  final String? publishedRequirement;
+
+  final String codeId;
+  final SigningIdentity? identity;
+  final String? certificateSha256;
 }
 
 /// One stage-relative file a local producer created or authoritatively reused.

@@ -330,7 +330,7 @@ void main() {
       'each producer output stays untrusted until the receipt replacement '
       'names its exact bytes', () {
     for (final nextName in [
-      'sign:macos-arm64',
+      'build:macos-arm64',
       'notarize:macos-arm64',
       'archive:$_asset',
       'checksums',
@@ -790,7 +790,7 @@ StageReceipt _completeEveryArtifactType(ReleaseStage release) {
     type: 'executable',
   );
   final sign = StageStep(
-    name: 'sign:macos-arm64',
+    name: 'build:macos-arm64',
     inputs: [StageInput.step(source)],
     outputs: [binary],
     evidence: {
@@ -965,8 +965,17 @@ void _recordArchives(ReleaseStage release, Map<String, String> archives) {
     name: 'build:macos-arm64',
     inputs: [StageInput.step(source)],
     outputs: [binary],
-    evidence: const {
-      'smoke': {'status': 'passed'},
+    evidence: {
+      'smoke': const {'status': 'passed'},
+      'signature': {
+        'certificate': 'Developer ID Application: Test (TEAM123456)',
+        'certificate_sha256': 'a' * 64,
+        'first_identity': true,
+        'published_requirement': null,
+        'code_id': 'io.example.tool',
+        'unsigned_sha256': 'b' * 64,
+        'signed_sha256': binary.sha256,
+      },
     },
   );
   final steps = <StageStep>[source, build];

@@ -429,7 +429,8 @@ class ReleaseCommand {
       return ExitCodes.ok;
     }
 
-    if (checklist.steps.any((step) => step.kind == StepKind.sign)) {
+    if (checklist.steps.any((step) =>
+        step.kind == StepKind.build && step.platform!.startsWith('macos-'))) {
       final refreshedBaseline = await _signingBaseline(unit);
       if (!refreshedBaseline.ok) {
         _showReleaseActions(targets, publicActions);
@@ -952,7 +953,7 @@ class ReleaseCommand {
     final claims = await _firstClaims(unit, targets);
     if (inspected.reusable) {
       final signing = inspected.receipt!.steps
-          .where((step) => step.name.startsWith('sign:'))
+          .where((step) => step.name.startsWith('build:macos-'))
           .firstOrNull
           ?.evidence;
       final signature = signing?['signature'];
@@ -1070,7 +1071,8 @@ class ReleaseCommand {
     SigningIdentity? signingIdentity;
     String? certificateSha256;
     String? codeId;
-    if (checklist.steps.any((step) => step.kind == StepKind.sign)) {
+    if (checklist.steps.any((step) =>
+        step.kind == StepKind.build && step.platform!.startsWith('macos-'))) {
       final baseline = await _signingBaseline(unit);
       if (!baseline.ok) return null;
       publishedRequirement = baseline.requirement;
@@ -1116,13 +1118,6 @@ class ReleaseCommand {
         );
         continue;
       }
-      final replacedBuild = step.kind == StepKind.sign
-          ? progress
-              .where(
-                (record) => record.name == 'build:${step.platform}',
-              )
-              .firstOrNull
-          : null;
       output.report.acted = true;
       final LocalProducerOutcome act;
       try {
@@ -1142,15 +1137,8 @@ class ReleaseCommand {
         return null;
       }
       try {
-        if (replacedBuild != null) progress.remove(replacedBuild);
-        progress.add(_captureProducerStep(
-          stage,
-          step,
-          sourceStep,
-          progress,
-          act,
-          smokeEvidence: replacedBuild?.evidence['smoke'],
-        ));
+        progress
+            .add(_captureProducerStep(stage, step, sourceStep, progress, act));
         _persistStageProgress(stage, sourceArtifacts, progress);
       } on Object catch (error) {
         return _stageProgressFailed(error);
@@ -1287,10 +1275,7 @@ class ReleaseCommand {
     final names = progress.map((record) => record.name).toSet();
     final platform = step.platform;
     return switch (step.kind) {
-      StepKind.build => names.contains('build:$platform') ||
-          (platform?.startsWith('macos-') == true &&
-              names.contains('sign:$platform')),
-      StepKind.sign => names.contains('sign:$platform'),
+      StepKind.build => names.contains('build:$platform'),
       StepKind.notarize => names.contains('notarize:$platform'),
       StepKind.archive => names.contains('archive:$platform'),
       StepKind.checksums => names.contains('checksums'),
@@ -1305,9 +1290,8 @@ class ReleaseCommand {
     if (byPlatform != 0) return byPlatform;
     const rank = {
       StepKind.build: 0,
-      StepKind.sign: 1,
-      StepKind.notarize: 2,
-      StepKind.archive: 3,
+      StepKind.notarize: 1,
+      StepKind.archive: 2,
     };
     return rank[left.kind]!.compareTo(rank[right.kind]!);
   }
@@ -1317,9 +1301,8 @@ class ReleaseCommand {
     Step step,
     StageStep sourceStep,
     List<StageStep> progress,
-    LocalProducerOutcome outcome, {
-    required Object? smokeEvidence,
-  }) {
+    LocalProducerOutcome outcome,
+  ) {
     final outputs = [
       for (final output in outcome.outputs)
         StageArtifact.capture(
@@ -1328,17 +1311,12 @@ class ReleaseCommand {
           type: output.type,
         ),
     ];
-    final evidence = <String, Object?>{
-      ...outcome.evidence,
-      if (step.kind == StepKind.sign && smokeEvidence != null)
-        'smoke': smokeEvidence,
-    };
+    final evidence = outcome.evidence;
     final platform = step.platform;
     switch (step.kind) {
       case StepKind.build:
-      case StepKind.sign:
         return StageStep(
-          name: '${step.kind == StepKind.sign ? 'sign' : 'build'}:$platform',
+          name: 'build:$platform',
           inputs: [StageInput.step(sourceStep)],
           outputs: outputs,
           evidence: evidence,
@@ -1733,15 +1711,17 @@ class ReleaseCommand {
   }) async {
     switch (step.kind) {
       case StepKind.build:
-        return _chain(unit).buildStep(step, unit.binaryProject);
-      case StepKind.sign:
-        return _chain(unit).signStep(
+        return _chain(unit).buildStep(
           step,
           unit.binaryProject,
-          publishedRequirement: publishedRequirement,
-          codeId: codeId!,
-          signingIdentity: signingIdentity,
-          certificateSha256: certificateSha256,
+          signing: step.platform!.startsWith('macos-')
+              ? MacSigning(
+                  publishedRequirement: publishedRequirement,
+                  codeId: codeId!,
+                  identity: signingIdentity,
+                  certificateSha256: certificateSha256,
+                )
+              : null,
         );
       case StepKind.notarize:
         return _chain(unit).notarizeStep(step, unit.binaryProject);

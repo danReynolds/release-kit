@@ -165,8 +165,8 @@ void main() {
       );
       expect(build.inputs.single.name, 'step:source-snapshot');
       expect(
-        build.evidence['signature'],
-        {'certificate_sha256': 'a' * 64, 'identity': 'Developer ID'},
+        (build.evidence['signature']! as Map)['certificate_sha256'],
+        'a' * 64,
       );
       expect(
         build.evidence['notary'],
@@ -359,14 +359,14 @@ void main() {
       _expectIssue(stage, StageIssueKind.incompleteReceipt);
     });
 
-    test('a macOS sign receipt requires a certificate SHA-256 binding', () {
+    test('a signed macOS build requires a certificate SHA-256 binding', () {
       final receipt = _writeCompleteStage(stage);
       final build = receipt.steps.singleWhere(
         (step) => step.name == 'build:macos-arm64',
       );
       final binary = build.outputs.single;
       final sign = StageStep(
-        name: 'sign:macos-arm64',
+        name: 'build:macos-arm64',
         inputs: build.inputs,
         outputs: build.outputs,
         evidence: {
@@ -396,14 +396,14 @@ void main() {
       );
     });
 
-    test('a macOS sign receipt states whether the identity is first', () {
+    test('a signed macOS build states whether the identity is first', () {
       final receipt = _writeCompleteStage(stage);
       final build = receipt.steps.singleWhere(
         (step) => step.name == 'build:macos-arm64',
       );
       final binary = build.outputs.single;
       final sign = StageStep(
-        name: 'sign:macos-arm64',
+        name: 'build:macos-arm64',
         inputs: build.inputs,
         outputs: build.outputs,
         evidence: {
@@ -539,8 +539,13 @@ StageReceipt _writeCompleteStage(StageDirectory stage) {
     outputs: [artifact],
     evidence: {
       'signature': {
-        'identity': 'Developer ID',
+        'certificate': 'Developer ID Application: Test (TEAM123456)',
         'certificate_sha256': 'a' * 64,
+        'first_identity': true,
+        'published_requirement': null,
+        'code_id': 'io.example.rk',
+        'unsigned_sha256': 'c' * 64,
+        'signed_sha256': artifact.sha256,
       },
       'notary': {'status': 'accepted', 'log_sha256': 'b' * 64},
     },

@@ -199,7 +199,6 @@ void classificationTables() {
         StepKind.publishRelease: true,
         StepKind.publishFormula: true,
         StepKind.build: false,
-        StepKind.sign: false,
         StepKind.notarize: false,
         StepKind.archive: false,
         StepKind.checksums: false,

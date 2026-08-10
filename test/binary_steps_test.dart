@@ -147,8 +147,12 @@ executables:
     final built = await chain(tools).buildStep(
       step(StepKind.build),
       project,
+      signing: const MacSigning(
+        publishedRequirement: null,
+        codeId: 'com.example.tool',
+      ),
     );
-    expect(built.ok, isTrue, reason: built.problem);
+    expect(built.ok, isTrue, reason: built.problem ?? buffer.toString());
     expect(
       built.outputs.map((output) => (output.path, output.type)),
       [('macos-arm64/tool', 'executable')],
@@ -159,19 +163,7 @@ executables:
       isTrue,
       reason: 'the build wrote the binary where the next step will look',
     );
-
-    final signed = await chain(tools).signStep(
-      step(StepKind.sign),
-      project,
-      publishedRequirement: null,
-      codeId: 'com.example.tool',
-    );
-    expect(signed.ok, isTrue, reason: signed.problem ?? buffer.toString());
-    expect(
-      signed.outputs.map((output) => (output.path, output.type)),
-      [('macos-arm64/tool', 'executable')],
-    );
-    final signature = signed.evidence['signature']! as Map;
+    final signature = built.evidence['signature']! as Map;
     expect(signature['first_identity'], isTrue);
     expect(signature['published_requirement'], isNull);
     expect(signature['designated_requirement'], 'designated => leaf "A"');
@@ -244,17 +236,14 @@ executables:
       'a signature that does not match the published identity is refused '
       'with both requirements as evidence', () async {
     final tools = scripted(designatedRequirement: 'designated => leaf "NEW"');
-    await chain(tools).buildStep(
+    final ok = await chain(tools).buildStep(
       step(StepKind.build),
       project,
-    );
-
-    final ok = await chain(tools).signStep(
-      step(StepKind.sign),
-      project,
-      publishedRequirement: 'designated => certificate '
-          'leaf[subject.OU] = "TEAM123456" and leaf "OLD"',
-      codeId: 'com.example.tool',
+      signing: const MacSigning(
+        publishedRequirement: 'designated => certificate '
+            'leaf[subject.OU] = "TEAM123456" and leaf "OLD"',
+        codeId: 'com.example.tool',
+      ),
     );
 
     expect(ok.ok, isFalse);
@@ -275,17 +264,15 @@ executables:
       designatedRequirement:
           'designated => certificate leaf[subject.OU] = "TEAM123456"',
     );
-    await chain(tools).buildStep(
+    final ok = await chain(tools).buildStep(
       step(StepKind.build),
       project,
-    );
-
-    final ok = await chain(tools).signStep(
-      step(StepKind.sign),
-      project,
-      publishedRequirement:
-          'designated => certificate leaf[subject.OU] = "TEAM123456"', // nothing declared: derivation must carry it
-      codeId: 'com.example.tool',
+      signing: const MacSigning(
+        // Nothing declared: derivation must carry the team.
+        publishedRequirement:
+            'designated => certificate leaf[subject.OU] = "TEAM123456"',
+        codeId: 'com.example.tool',
+      ),
     );
     expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
   });
@@ -299,15 +286,13 @@ executables:
     // permanent — the certificate, and the identifier every later release
     // must reproduce.
     final tools = scripted();
-    await chain(tools).buildStep(
+    final ok = await chain(tools).buildStep(
       step(StepKind.build),
       project,
-    );
-    final ok = await chain(tools).signStep(
-      step(StepKind.sign),
-      project,
-      publishedRequirement: null,
-      codeId: 'io.github.example.tool',
+      signing: const MacSigning(
+        publishedRequirement: null,
+        codeId: 'io.github.example.tool',
+      ),
     );
     expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
     expect(buffer.toString(), contains('first release'));
@@ -332,6 +317,12 @@ executables:
       () async {
     final tools = RecordingTools(
       answers: (key) {
+        if (key.startsWith('dart compile exe')) {
+          return ToolResult(exitCode: 0, stdout: '', stderr: '');
+        }
+        if (key.contains('--version')) {
+          return ToolResult(exitCode: 0, stdout: '1.0.0', stderr: '');
+        }
         if (key.startsWith('security find-identity')) {
           return ToolResult(
             exitCode: 0,
@@ -344,14 +335,22 @@ executables:
         }
         return null;
       },
+      onRun: (key) {
+        if (key.startsWith('dart compile exe')) {
+          File(workspace.pathOf(BinaryChain.binaryName('macos-arm64', 'tool')))
+            ..parent.createSync(recursive: true)
+            ..writeAsBytesSync(utf8.encode('BINARY 1.0.0'));
+        }
+      },
     );
-    workspace.write('macos-arm64/tool', utf8.encode('BINARY'));
 
-    final ok = await chain(tools).signStep(
-      step(StepKind.sign),
+    final ok = await chain(tools).buildStep(
+      step(StepKind.build),
       project,
-      publishedRequirement: null,
-      codeId: 'tool',
+      signing: const MacSigning(
+        publishedRequirement: null,
+        codeId: 'tool',
+      ),
     );
     expect(ok.ok, isFalse);
     expect(buffer.toString(), contains('TEAM111111'));
@@ -370,6 +369,9 @@ executables:
       answers: (key) {
         if (key.startsWith('dart compile exe')) {
           return ToolResult(exitCode: 0, stdout: '', stderr: '');
+        }
+        if (key.contains('--version')) {
+          return ToolResult(exitCode: 0, stdout: '1.0.0', stderr: '');
         }
         if (key.startsWith('codesign -d -r-')) {
           // The leading quoted identifier is a decoy: a parser matching any
@@ -408,17 +410,15 @@ executables:
         }
       },
     );
-    await chain(tools).buildStep(
+    final ok = await chain(tools).buildStep(
       step(StepKind.build),
       project,
-    );
-
-    final ok = await chain(tools).signStep(
-      step(StepKind.sign),
-      project,
-      publishedRequirement: 'designated => identifier "TOOL" and certificate '
-          'leaf[subject.OU] = Q6L2SF6YDW', // derivation must carry the unquoted team
-      codeId: 'com.example.tool',
+      // Derivation must carry the unquoted team.
+      signing: const MacSigning(
+        publishedRequirement: 'designated => identifier "TOOL" and '
+            'certificate leaf[subject.OU] = Q6L2SF6YDW',
+        codeId: 'com.example.tool',
+      ),
     );
     expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
     expect(
@@ -444,16 +444,13 @@ executables:
     final tools = scripted(
       designatedRequirement: '$published and cdhash H"ABC"',
     );
-    await chain(tools).buildStep(
+    final ok = await chain(tools).buildStep(
       step(StepKind.build),
       project,
-    );
-
-    final ok = await chain(tools).signStep(
-      step(StepKind.sign),
-      project,
-      publishedRequirement: published,
-      codeId: 'com.example.tool',
+      signing: const MacSigning(
+        publishedRequirement: published,
+        codeId: 'com.example.tool',
+      ),
     );
     expect(ok.ok, isFalse, reason: buffer.toString());
     expect(
@@ -469,16 +466,14 @@ executables:
     const published = 'designated => identifier "io.github.example.tool" '
         'and certificate leaf[subject.OU] = "TEAM123456"';
     final tools = scripted(designatedRequirement: published);
-    await chain(tools).buildStep(
+    final ok = await chain(tools).buildStep(
       step(StepKind.build),
       project,
-    );
-
-    final ok = await chain(tools).signStep(
-      step(StepKind.sign),
-      project,
-      publishedRequirement: published,
-      codeId: 'io.github.example.tool', // resolved by the caller from leg 1
+      signing: const MacSigning(
+        publishedRequirement: published,
+        // Resolved by the caller before anything acts.
+        codeId: 'io.github.example.tool',
+      ),
     );
     expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
     final sign = (tools as RecordingTools)
