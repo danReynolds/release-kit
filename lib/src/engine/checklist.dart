@@ -349,6 +349,31 @@ enum StepKind {
 /// depending on where a step happened to be appended to a list.
 enum StepPhase { inspect, stage, publish }
 
+extension StepKindFacts on StepKind {
+  StepPhase get phase => switch (this) {
+        StepKind.prerequisite => StepPhase.inspect,
+        StepKind.build ||
+        StepKind.sign ||
+        StepKind.notarize ||
+        StepKind.archive ||
+        StepKind.checksums ||
+        StepKind.completeStage =>
+          StepPhase.stage,
+        StepKind.tag ||
+        StepKind.publishRegistry ||
+        StepKind.publishRelease ||
+        StepKind.publishFormula =>
+          StepPhase.publish,
+      };
+
+  bool get isPublic => phase == StepPhase.publish;
+
+  bool get isPermanent => switch (this) {
+        StepKind.publishRegistry => true,
+        _ => false,
+      };
+}
+
 /// One entry in a checklist, executable in isolation from its id, the
 /// workspace, and destination reality — never from state a previous step left
 /// in memory.
@@ -396,23 +421,9 @@ class Step {
   final List<String> needs;
 
   /// Whether this step changes something outside the workspace.
-  bool get isPublic => phase == StepPhase.publish;
+  bool get isPublic => kind.isPublic;
 
-  StepPhase get phase => switch (kind) {
-        StepKind.prerequisite => StepPhase.inspect,
-        StepKind.build ||
-        StepKind.sign ||
-        StepKind.notarize ||
-        StepKind.archive ||
-        StepKind.checksums ||
-        StepKind.completeStage =>
-          StepPhase.stage,
-        StepKind.tag ||
-        StepKind.publishRegistry ||
-        StepKind.publishRelease ||
-        StepKind.publishFormula =>
-          StepPhase.publish,
-      };
+  StepPhase get phase => kind.phase;
 
   /// Whether this step's effect can never be taken back.
   ///
@@ -421,10 +432,7 @@ class Step {
   /// a formula and even a tag can all be removed — rk deletes and recreates a
   /// wrong draft as a matter of course — and marking those permanent too would
   /// spend the operator's attention on the steps that do not need it.
-  bool get isPermanent => switch (kind) {
-        StepKind.publishRegistry => true,
-        _ => false,
-      };
+  bool get isPermanent => kind.isPermanent;
 
   @override
   String toString() => id;

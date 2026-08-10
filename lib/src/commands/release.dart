@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import '../builds/capability.dart';
@@ -9,21 +8,18 @@ import '../engine/diagnostic.dart';
 import '../engine/git.dart';
 import '../output/output.dart';
 import '../engine/inspect.dart';
-import '../engine/registry.dart';
 import '../engine/resolve.dart';
 import '../engine/release_stage.dart';
 import '../engine/source_tree.dart';
 import '../engine/stage_inspection.dart';
+import '../engine/stage_contract.dart';
 import '../engine/stage_receipt.dart';
 import '../engine/targets.dart';
 import '../engine/tools.dart';
 import '../engine/identity.dart';
 import '../engine/verdict.dart';
+import '../targets/target_release.dart';
 import '../transforms/macos.dart';
-import '../transforms/digest.dart';
-import '../destinations/git_tag.dart';
-import '../destinations/github_release.dart';
-import '../destinations/homebrew.dart';
 import '../binary_chain.dart';
 
 /// Executes a release: inspect, act, inspect again, one step at a time — and
@@ -43,7 +39,6 @@ class ReleaseCommand {
     required this.resolution,
     required this.tree,
     required this.git,
-    required this.registry,
     required this.inspector,
     required this.tools,
     required this.output,
@@ -55,10 +50,20 @@ class ReleaseCommand {
     Future<void> Function(Duration)? wait,
     HostCapabilities? capabilities,
   })  : _wait = wait ?? _sleep,
-        _stageFor = stageFor ?? ReleaseStages(source: tree, git: git).call,
+        _stageFor = stageFor ??
+            ReleaseStages(
+              source: tree,
+              git: git,
+              stageContracts:
+                  inspector.targets.stageContractResolver(resolution),
+            ).call,
         _refreshStage = refreshStage ??
-            ((unit, currentGit) =>
-                ReleaseStages(source: tree, git: currentGit).call(unit)),
+            ((unit, currentGit) => ReleaseStages(
+                  source: tree,
+                  git: currentGit,
+                  stageContracts:
+                      inspector.targets.stageContractResolver(resolution),
+                ).call(unit)),
         _refreshGit = refreshGit ?? (() => git),
         _capabilities = capabilities;
 
@@ -68,7 +73,6 @@ class ReleaseCommand {
   final Resolution resolution;
   final SourceTree tree;
   final GitState git;
-  final RegistryReader registry;
 
   /// Reads reality for a step. The same one `status` uses, so the two verbs
   /// cannot answer the same question differently — release grew its own copy
@@ -151,11 +155,14 @@ class ReleaseCommand {
       output.problems(problems.found);
       return ExitCodes.refused;
     }
-    final targets = TargetExpectation.derive(
+    final targets = inspector.targets.derive(
       unit,
       checklist,
       repository: inspector.repository,
     );
+    final targetByStep = {
+      for (final target in targets) target.step.id: target,
+    };
 
     final ReleaseStage stage;
     try {
@@ -208,10 +215,11 @@ class ReleaseCommand {
       if (step.kind == StepKind.completeStage) return false;
       final state = states[step.id]!;
       if (!Inspector.blocks(step, state)) return false;
+      final target = targetByStep[step.id];
       return !(stageInspection.reusable == false &&
           state.verdict == Verdict.unknown &&
-          (step.kind == StepKind.publishRelease ||
-              step.kind == StepKind.publishFormula));
+          target != null &&
+          inspector.targets.moduleForTarget(target).unknownMayWaitForStage);
     }).firstOrNull;
     if (initialBlock != null) {
       _haltForState(initialBlock, states[initialBlock.id]!);
@@ -287,11 +295,20 @@ class ReleaseCommand {
         _showReleaseActions(targets, publicActions);
         return ExitCodes.refused;
       }
-      final remaining =
-          publicSteps.where((step) => states[step.id]!.isAbsent).toList();
-      if (!await _preflightPubSession(unit, remaining)) {
-        _showReleaseActions(targets, publicActions);
-        return ExitCodes.refused;
+      final preflight = TargetPreflightContext(
+        tools: tools,
+        output: output,
+        git: git,
+      );
+      final preflighted = <ReleaseTargetKind>{};
+      for (final target in targets) {
+        if (!states[target.step.id]!.isAbsent) continue;
+        final module = inspector.targets.moduleForTarget(target);
+        if (!preflighted.add(target.kind)) continue;
+        if (!await module.preflight(preflight, unit)) {
+          _showReleaseActions(targets, publicActions);
+          return ExitCodes.refused;
+        }
       }
     }
 
@@ -315,6 +332,7 @@ class ReleaseCommand {
     final prepared = await _prepareStage(
       unit,
       checklist,
+      targets,
       stage,
       stageInspection,
     );
@@ -502,7 +520,7 @@ class ReleaseCommand {
 
     if (!await _authorize(
       unit,
-      remaining,
+      [for (final step in remaining) targetByStep[step.id]!],
       firstCertificate: prepared.firstCertificate,
       codeId: prepared.codeId,
       claims: prepared.claims,
@@ -553,7 +571,8 @@ class ReleaseCommand {
       final target = targets.singleWhere(
         (target) => target.step.id == step.id,
       );
-      if (target.kind != ReleaseTargetKind.homebrew) {
+      final module = inspector.targets.moduleForTarget(target);
+      if (module.latestVersionGuardsRelease) {
         final currentVersion = Diagnostics();
         await inspector.releaseMonotonicity(
           unit,
@@ -664,20 +683,24 @@ class ReleaseCommand {
         action: publicActions[step.id]!.wire,
         show: false,
       );
-      final act = await _act(
-        step,
-        unit,
-        prepared.publishedRequirement,
-        prepared.codeId,
-        prepared.notesPath,
-        inspectedTarget: state,
+      final releaseContext = TargetReleaseContext(
+        reads: inspector.targetReads,
+        tools: tools,
+        git: git,
+        repository: git.originUrl,
+        output: output,
+        stage: stage,
+        wait: _wait,
+        confirmDeadline: confirmDeadline,
+        confirmInterval: confirmInterval,
       );
+      final act = await module.act(releaseContext, unit, target, state);
       // An act's process result is not public truth. A registry can accept an
       // upload before the client loses its response; Git can finish a push
       // before the connection drops; GitHub can apply the final draft PATCH
       // before `gh` exits non-zero. Always run the same destination inspection
       // status uses before deciding what the command result means.
-      state = await _observeAfterAct(step, unit, target);
+      state = await module.settleAfterAct(releaseContext, unit, target);
       publicActions[step.id] =
           state.isExact ? _ReleaseAction.completed : _ReleaseAction.failed;
       output.step(
@@ -703,13 +726,15 @@ class ReleaseCommand {
           continue;
         }
         if (!act.failureAlreadyReported) {
-          await _reportDestinationFailure(
-            step,
+          final failure = await module.classifyFailure(
+            releaseContext,
+            unit,
             target,
             state,
             act,
             actedBefore: actedBefore,
           );
+          _reportTargetFailure(step, failure);
         } else if (!output.report.halted) {
           output.halt(
             actedBefore ? HaltKind.stoppedPartway : HaltKind.beforeActing,
@@ -719,20 +744,15 @@ class ReleaseCommand {
         return ExitCodes.refused;
       }
       if (!state.isExact) {
-        if (target.kind == ReleaseTargetKind.homebrew ||
-            target.kind == ReleaseTargetKind.gitTag ||
-            target.kind == ReleaseTargetKind.pubDev) {
-          await _reportDestinationFailure(
-            step,
-            target,
-            state,
-            act,
-            actedBefore: actedBefore,
-          );
-          _showReleaseActions(targets, publicActions);
-          return ExitCodes.refused;
-        }
-        _haltForState(step, state, afterAct: true);
+        final failure = await module.classifyFailure(
+          releaseContext,
+          unit,
+          target,
+          state,
+          act,
+          actedBefore: actedBefore,
+        );
+        _reportTargetFailure(step, failure);
         _showReleaseActions(targets, publicActions);
         return ExitCodes.refused;
       }
@@ -754,12 +774,11 @@ class ReleaseCommand {
 
     output.blank();
     output.line('${unit.name} ${unit.version} released', mark: Mark.done);
-    for (final project in unit.projects) {
-      if (!project.channels.contains('pub.dev')) continue;
-      output.say(
-          'pub.dev/packages/${project.name}/versions/'
-          '${project.version}',
-          depth: 1);
+    for (final target in targets) {
+      final module = inspector.targets.moduleForTarget(target);
+      for (final line in module.completionLines(unit, target)) {
+        output.say(line, depth: 1);
+      }
     }
     return ExitCodes.ok;
   }
@@ -782,39 +801,11 @@ class ReleaseCommand {
     return inspector.inspect(step, unit);
   }
 
-  /// The authoritative post-action read.
-  ///
-  /// pub.dev can accept immutable bytes before its version index exposes
-  /// them. Polling belongs here, where every observation is the same exact
-  /// archive comparison status uses, rather than inside the publisher where
-  /// an early absence could emit a halt that a later exact read cannot undo.
-  Future<Inspection> _observeAfterAct(
-    Step step,
-    ResolvedUnit unit,
-    TargetExpectation target,
-  ) async {
-    if (target.kind != ReleaseTargetKind.pubDev) {
-      return inspector.inspect(step, unit);
-    }
-
-    final project = unit.projects.firstWhere((p) => p.name == step.project);
-    var waited = Duration.zero;
-    while (true) {
-      registry.forget(project.name);
-      final state = await inspector.inspect(step, unit);
-      if (!state.isAbsent || waited >= confirmDeadline) {
-        if (state.isAbsent && waited >= confirmDeadline) {
-          return Inspection.absent(
-            detail: 'pub.dev does not report it after ${waited.inSeconds}s: '
-                '${project.name} ${project.version}',
-            evidence: state.evidence,
-          );
-        }
-        return state;
-      }
-      await _wait(confirmInterval);
-      waited += confirmInterval;
-    }
+  void _reportTargetFailure(Step step, TargetFailure failure) {
+    output.problem(failure.diagnostic, unit: step.unit);
+    if (failure.nextCommand case final next?) output.next(next);
+    output.halt(failure.halt);
+    if (!failure.rerunHelps) output.report.rerunHelps = false;
   }
 
   void _haltForState(Step step, Inspection state, {bool afterAct = false}) {
@@ -955,138 +946,15 @@ class ReleaseCommand {
     return false;
   }
 
-  Future<void> _reportDestinationFailure(
-    Step step,
-    TargetExpectation target,
-    Inspection state,
-    _ActOutcome act, {
-    required bool actedBefore,
-  }) async {
-    final homebrew = target.kind == ReleaseTargetKind.homebrew;
-    final tag = target.kind == ReleaseTargetKind.gitTag;
-    final pub = target.kind == ReleaseTargetKind.pubDev;
-
-    String? cleanup;
-    var localCleanupFailed = false;
-    final localTag = act.removeLocalTagIfAbsent;
-    if (tag && state.isAbsent && localTag != null) {
-      final removed = await _tags.deleteLocalIfExact(
-        localTag.tag,
-        localTag.object,
-      );
-      localCleanupFailed = !removed.ok;
-      cleanup = removed.ok
-          ? 'the local tag was removed, so re-running starts clean'
-          : 'the local tag could not be removed and was left in place; '
-              're-running inspects and pushes it safely';
-    }
-
-    late final String code;
-    late final String message;
-    if (homebrew) {
-      code = switch (state.verdict) {
-        Verdict.unknown => 'RK-BREW-002',
-        Verdict.conflict => 'RK-BREW-003',
-        Verdict.absent || Verdict.exact => 'RK-BREW-001',
-      };
-      message = switch (state.verdict) {
-        Verdict.unknown => 'the tap was updated and could not be read back',
-        Verdict.conflict => 'the public tap does not hold what rk pushed',
-        Verdict.absent || Verdict.exact => 'the tap formula was not updated',
-      };
-    } else if (pub) {
-      if (state.verdict == Verdict.conflict) {
-        code = 'RK-PUB-006';
-        message = '${act.coordinate ?? step.project}: '
-            '${state.detail ?? 'the public archive differs'}';
-      } else {
-        code = act.diagnostic?.code ?? 'RK-PUB-005';
-        message = act.diagnostic?.message ??
-            '${act.coordinate ?? step.project}: the exact public archive '
-                'could not be confirmed';
-      }
-    } else if (tag) {
-      if (state.verdict == Verdict.conflict) {
-        code = 'RK-TAG-004';
-        message = 'origin did not confirm the release binding on '
-            '${act.coordinate ?? target.coordinate}';
-      } else {
-        code = act.diagnostic?.code ?? 'RK-TAG-003';
-        message = act.diagnostic?.message ??
-            'the push reported success, and origin did not confirm the exact '
-                'tag ${act.coordinate ?? target.coordinate}';
-      }
-    } else {
-      code = 'RK-REL-003';
-      message = '${step.summary}: '
-          '${act.problem ?? state.detail ?? 'the public result could not be confirmed'}';
-    }
-
-    final details = <String>[
-      if (act.diagnostic?.remedy != null) act.diagnostic!.remedy!,
-      if (act.problem != null) act.problem!,
-      if (act.draftEffect == DraftEffect.changed)
-        'GitHub private draft state changed; this step did not publish a '
-            'GitHub Release.',
-      if (act.draftEffect == DraftEffect.uncertain)
-        'GitHub private draft state may have changed; no GitHub Release was '
-            'confirmed public.',
-      if (state.detail != null) state.detail!,
-      ...state.evidence.entries.map((entry) => '${entry.key}: ${entry.value}'),
-      if (act.permanent != null) act.permanent!,
-      if (cleanup != null) cleanup,
-    ];
-    output.problem(
-      Diagnostic(
-        code: code,
-        message: message,
-        remedy: details.isEmpty
-            ? 're-run; the shared destination inspection will classify the '
-                'public target before any retry'
-            : details.join('\n'),
-      ),
-      unit: step.unit,
-    );
-
-    if (pub && code == 'RK-PUB-005') {
-      output.next('rk status ${step.unit}');
-    }
-
-    final immutableConflict = state.verdict == Verdict.conflict &&
-        (target.kind == ReleaseTargetKind.githubRelease || pub || tag);
-    final repairableFormulaConflict =
-        homebrew && state.verdict == Verdict.conflict;
-    final tagPushProvedAbsent = tag && !act.ok && state.isAbsent;
-    final kind = act.terminal || immutableConflict
-        ? HaltKind.actedAndUnfixable
-        : repairableFormulaConflict || localCleanupFailed
-            ? HaltKind.stoppedPartway
-            : tagPushProvedAbsent
-                ? (actedBefore
-                    ? HaltKind.stoppedPartway
-                    : HaltKind.beforeActing)
-                : act.mayHaveActed ||
-                        act.draftEffect == DraftEffect.uncertain ||
-                        state.verdict == Verdict.unknown
-                    ? HaltKind.lostTrack
-                    : act.draftEffect == DraftEffect.changed || actedBefore
-                        ? HaltKind.stoppedPartway
-                        : HaltKind.beforeActing;
-    output.halt(kind);
-    if (kind == HaltKind.actedAndUnfixable) {
-      output.report.rerunHelps = false;
-    }
-  }
-
   Future<_PreparedStage?> _prepareStage(
     ResolvedUnit unit,
     Checklist checklist,
+    List<TargetExpectation> targets,
     ReleaseStage stage,
     StageInspection inspected,
   ) async {
-    final claims = await _firstClaims(unit);
+    final claims = await _firstClaims(unit, targets);
     if (inspected.reusable) {
-      final notes = File(stage.directory.resolve('release-notes.md'));
       final signing = inspected.receipt!.steps
           .where((step) => step.name.startsWith('sign:'))
           .firstOrNull
@@ -1096,7 +964,6 @@ class ReleaseCommand {
       final firstIdentity = signatureMap['first_identity'] == true;
       return _PreparedStage(
         claims: claims,
-        notesPath: notes.existsSync() ? notes.path : null,
         publishedRequirement: signatureMap['published_requirement'] as String?,
         firstCertificate:
             firstIdentity ? signatureMap['certificate'] as String? : null,
@@ -1158,36 +1025,54 @@ class ReleaseCommand {
         return null;
       }
     }
-    final stagedSource = SnapshotSourceTree(stage.sourceRoot);
+    final stageBindings = inspector.targets.stageBindings(
+      unit: unit,
+      targets: targets,
+      repository: git.originUrl,
+      sourceRoot: stage.sourceRoot,
+    );
+    Future<bool> prepareTargets(StageContributionPhase phase) async {
+      for (final binding in stageBindings.where(
+        (item) => item.contract.phase == phase,
+      )) {
+        final module = binding.module;
+        final target = binding.target;
+        final TargetStageResult result;
+        try {
+          result = await module.prepareStage(
+            TargetStageContext(
+              contract: binding.contract,
+              reads: inspector.targetReads,
+              tools: tools,
+              git: git,
+              repository: git.originUrl,
+              output: output,
+              stage: stage,
+              sourceStep: sourceStep,
+              progress: progress,
+            ),
+            unit,
+            target,
+          );
+        } on Object catch (error) {
+          _stageOperationFailed('${target.label} stage preparation', error);
+          return false;
+        }
+        if (!result.ok) return false;
+        if (result.steps.isEmpty) continue;
+        progress.addAll(result.steps);
+        try {
+          _persistStageProgress(stage, sourceArtifacts, progress);
+        } on Object catch (error) {
+          _stageProgressFailed(error);
+          return false;
+        }
+      }
+      return true;
+    }
 
-    final pubProjects = unit.projects
-        .where((project) => project.channels.contains('pub.dev'))
-        .toList()
-      ..sort((left, right) => left.name.compareTo(right.name));
-    for (final project in pubProjects) {
-      final receiptName = 'pub-preflight:${project.name}';
-      if (progress.any((record) => record.name == receiptName)) continue;
-      try {
-        if (!await _publishPreflight(project, stage.sourceRoot)) return null;
-      } on Object catch (error) {
-        return _stageOperationFailed(
-          'the package preflight for ${project.name}',
-          error,
-        );
-      }
-      progress.add(StageStep(
-        name: receiptName,
-        inputs: [StageInput.step(sourceStep)],
-        evidence: const {
-          'publish_dry_run': 'passed',
-          'consumer_resolve': 'passed',
-        },
-      ));
-      try {
-        _persistStageProgress(stage, sourceArtifacts, progress);
-      } on Object catch (error) {
-        return _stageProgressFailed(error);
-      }
+    if (!await prepareTargets(StageContributionPhase.sourcePreflight)) {
+      return null;
     }
 
     String? publishedRequirement;
@@ -1224,31 +1109,8 @@ class ReleaseCommand {
       }
     }
 
-    String? notesPath;
-    if (checklist.steps.any((step) => step.kind == StepKind.publishRelease)) {
-      if (!progress.any((record) => record.name == 'release-notes')) {
-        final notes = _releaseNotes(unit.binaryProject, source: stagedSource);
-        if (notes == null) return null;
-        try {
-          output.report.acted = true;
-          _chain(unit).workspace.write('release-notes.md', utf8.encode(notes));
-          progress.add(StageStep(
-            name: 'release-notes',
-            inputs: [StageInput.step(sourceStep)],
-            outputs: [
-              StageArtifact.capture(
-                stage: stage.directory,
-                path: 'release-notes.md',
-                type: 'notes',
-              ),
-            ],
-          ));
-          _persistStageProgress(stage, sourceArtifacts, progress);
-        } on Object catch (error) {
-          return _stageOperationFailed('release-note production', error);
-        }
-      }
-      notesPath = _chain(unit).workspace.pathOf('release-notes.md');
+    if (!await prepareTargets(StageContributionPhase.beforeProducers)) {
+      return null;
     }
 
     final producerSteps = checklist.steps.where((step) {
@@ -1276,14 +1138,13 @@ class ReleaseCommand {
               .firstOrNull
           : null;
       output.report.acted = true;
-      final _ActOutcome act;
+      final LocalProducerOutcome act;
       try {
-        act = await _act(
+        act = await _actProducer(
           step,
           unit,
           publishedRequirement,
           codeId,
-          notesPath,
           signingIdentity: signingIdentity,
           certificateSha256: certificateSha256,
         );
@@ -1301,7 +1162,7 @@ class ReleaseCommand {
           step,
           sourceStep,
           progress,
-          act.producer!,
+          act,
           smokeEvidence: replacedBuild?.evidence['smoke'],
         ));
         _persistStageProgress(stage, sourceArtifacts, progress);
@@ -1310,56 +1171,16 @@ class ReleaseCommand {
       }
     }
 
-    if (unit.shipsBinaries &&
-        unit.binaryProject.channels.contains('homebrew')) {
-      final repository = _repository('homebrew');
-      if (repository == null) return null;
-      try {
-        final core = _chain(unit).gatherAssets(
-          unit.binaryProject,
-          unit.name,
-          includeFinal: false,
-        );
-        if (core == null) return null;
-        if (!progress.any((record) => record.name == 'homebrew-formula')) {
-          output.report.acted = true;
-          _chain(unit).renderFormula(
-            project: unit.binaryProject,
-            repository: repository,
-            tag: unit.tag,
-            assets: core,
-          );
-          final archives = progress
-              .where((record) => record.name.startsWith('archive:'))
-              .expand((record) => record.outputs)
-              .where((artifact) => artifact.type == 'archive')
-              .toList();
-          progress.add(StageStep(
-            name: 'homebrew-formula',
-            inputs: [
-              for (final archive in archives) StageInput.artifact(archive),
-            ],
-            outputs: [
-              StageArtifact.capture(
-                stage: stage.directory,
-                path: ReleaseAssets.formulaName(
-                  unit.binaryProject.executable!,
-                ),
-                type: 'formula',
-              ),
-            ],
-          ));
-          _persistStageProgress(stage, sourceArtifacts, progress);
-        }
-      } on Object catch (error) {
-        return _stageOperationFailed('Homebrew formula production', error);
-      }
+    if (!await prepareTargets(StageContributionPhase.afterProducers)) {
+      return null;
     }
 
     try {
-      final publicArtifacts = unit.shipsBinaries
-          ? (Inspector.expectedAssets(unit)..remove(ReleaseAssets.manifest))
-          : <String>{};
+      final publicArtifacts = {
+        for (final target in targets)
+          for (final artifact in target.artifacts)
+            if (artifact != ReleaseAssets.manifest) artifact,
+      };
       stage.finalize(
         publicArtifacts: publicArtifacts,
         evidence: {
@@ -1392,7 +1213,6 @@ class ReleaseCommand {
       publishedRequirement: publishedRequirement,
       firstCertificate: firstCertificate,
       codeId: codeId,
-      notesPath: notesPath,
     );
   }
 
@@ -1609,22 +1429,17 @@ class ReleaseCommand {
   /// operator intends — it is a reason to make sure they are looking at the
   /// name before they consent, because the accident this guards against is a
   /// typo claiming a name nobody meant to own.
-  Future<List<String>> _firstClaims(ResolvedUnit unit) async {
-    final claims = <String>[];
-    for (final project in unit.projects) {
-      if (!project.channels.contains('pub.dev')) continue;
-      try {
-        if (await registry.lookup(project.name) == null) {
-          claims.add(project.name);
-        }
-      } on RegistryUnavailable {
-        // Unread is not "never published" — the step's own inspection
-        // reports the unreachable registry, and an unknown here must not
-        // manufacture a claim notice for a name that may well exist.
-        continue;
-      }
-    }
-    return claims;
+  Future<List<TargetClaim>> _firstClaims(
+    ResolvedUnit unit,
+    List<TargetExpectation> targets,
+  ) async {
+    final reads = [
+      for (final target in targets)
+        inspector.targets
+            .moduleForTarget(target)
+            .firstClaims(inspector.targetReads, unit, target),
+    ];
+    return [for (final found in await Future.wait(reads)) ...found];
   }
 
   /// Refuses what this machine cannot finish, before any work rather than at
@@ -1848,12 +1663,14 @@ class ReleaseCommand {
   /// a local release. Where a tag already exists, its signature is.
   Future<bool> _authorize(
     ResolvedUnit unit,
-    List<Step> remaining, {
+    List<TargetExpectation> remaining, {
     required String? firstCertificate,
     required String? codeId,
-    required List<String> claims,
+    required List<TargetClaim> claims,
   }) async {
-    final permanent = remaining.where((s) => s.isPermanent).toList();
+    final permanent = remaining.where((target) {
+      return inspector.targets.moduleForTarget(target).isPermanent;
+    }).toList();
 
     output.blank();
     if (permanent.isEmpty) {
@@ -1861,10 +1678,15 @@ class ReleaseCommand {
     } else {
       // The ground, marked where it matters: everything before the yes is
       // resumable; the first permanent step after it is not.
-      output.say('pub.dev never deletes a version. a version can be '
-          'retracted, which hides it and removes nothing.\n'
+      final notices = {
+        for (final target in permanent)
+          if (inspector.targets.moduleForTarget(target).permanenceNotice(target)
+              case final notice?)
+            notice,
+      };
+      output.say('${notices.join('\n')}\n'
           'everything before this yes re-runs safely. after it, the first '
-          'permanent step is: ${permanent.first.summary}.');
+          'permanent step is: ${permanent.first.step.summary}.');
     }
 
     _sayClaims(claims, firstCertificate, codeId);
@@ -1915,67 +1737,45 @@ class ReleaseCommand {
     return false;
   }
 
-  Future<_ActOutcome> _act(
+  Future<LocalProducerOutcome> _actProducer(
     Step step,
     ResolvedUnit unit,
     String? publishedRequirement,
-    String? codeId,
-    String? notesPath, {
+    String? codeId, {
     SigningIdentity? signingIdentity,
     String? certificateSha256,
-    Inspection? inspectedTarget,
   }) async {
     switch (step.kind) {
-      case StepKind.tag:
-        return _tag(unit);
-      case StepKind.publishRegistry:
-        return _publish(step, unit);
-      case StepKind.prerequisite:
-        return const _ActOutcome.succeeded(); // inspected, never performed
       case StepKind.build:
-        return _ActOutcome.producer(
-          await _chain(unit).buildStep(
-            step,
-            unit.binaryProject,
-            publishedRequirement: publishedRequirement,
-          ),
+        return _chain(unit).buildStep(
+          step,
+          unit.binaryProject,
+          publishedRequirement: publishedRequirement,
         );
       case StepKind.sign:
-        return _ActOutcome.producer(
-          await _chain(unit).signStep(
-            step,
-            unit.binaryProject,
-            publishedRequirement: publishedRequirement,
-            codeId: codeId!,
-            signingIdentity: signingIdentity,
-            certificateSha256: certificateSha256,
-          ),
+        return _chain(unit).signStep(
+          step,
+          unit.binaryProject,
+          publishedRequirement: publishedRequirement,
+          codeId: codeId!,
+          signingIdentity: signingIdentity,
+          certificateSha256: certificateSha256,
         );
       case StepKind.notarize:
-        return _ActOutcome.producer(
-          await _chain(unit).notarizeStep(step, unit.binaryProject),
-        );
+        return _chain(unit).notarizeStep(step, unit.binaryProject);
       case StepKind.archive:
-        return _ActOutcome.producer(
-          await _chain(unit).archiveStep(step, unit.binaryProject),
-        );
+        return _chain(unit).archiveStep(step, unit.binaryProject);
       case StepKind.checksums:
-        return _ActOutcome.producer(
-          await _chain(unit).checksumsStep(step, unit.binaryProject),
+        return _chain(unit).checksumsStep(step, unit.binaryProject);
+      case StepKind.tag ||
+            StepKind.prerequisite ||
+            StepKind.completeStage ||
+            StepKind.publishRegistry ||
+            StepKind.publishRelease ||
+            StepKind.publishFormula:
+        throw StateError(
+          'step ${step.kind.name} is not a local stage producer',
         );
-      case StepKind.completeStage:
-        return const _ActOutcome.succeeded();
-      case StepKind.publishRelease:
-        return _publishRelease(unit, _chain(unit), notesPath);
-      case StepKind.publishFormula:
-        final authority = inspectedTarget?.authority;
-        if (authority is! HomebrewUpdateAuthority) {
-          return _ActOutcome.homebrew(TapOutcome.failed(
-            'the formula update has no exact public base; re-run so rk can '
-            'inspect the tap before updating it',
-          ));
-        }
-        return _publishFormula(unit, _chain(unit), authority);
     }
   }
 
@@ -2070,42 +1870,6 @@ class ReleaseCommand {
     return (ok: true, requirement: null); // first signed release
   }
 
-  Future<_ActOutcome> _publishRelease(
-    ResolvedUnit unit,
-    BinaryChain chain,
-    String? notesPath,
-  ) async {
-    final repository = _repository('github-release');
-    if (repository == null) return const _ActOutcome.reportedFailure();
-
-    final project = unit.binaryProject;
-    final assets = chain.gatherAssets(project, unit.name);
-    if (assets == null) return const _ActOutcome.reportedFailure();
-
-    // The body was read and written in preflight — the last refusable
-    // input, resolved before the first act.
-    if (notesPath == null) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-CHG-003',
-          message: 'the release body was not prepared',
-          remedy: 'this is a bug in rk: the preflight prepares it whenever '
-              'a github-release step remains',
-        ),
-      );
-      return const _ActOutcome.reportedFailure();
-    }
-
-    final outcome = await chain.publishRelease(
-      repository: repository,
-      tag: unit.tag,
-      title: '${project.name} ${unit.version}',
-      notesPath: notesPath,
-      assets: assets,
-    );
-    return _ActOutcome.github(outcome);
-  }
-
   /// Every name this release takes for good, in one block.
   ///
   /// One line per registrar, each with its own notion of permanence, the
@@ -2122,16 +1886,14 @@ class ReleaseCommand {
   /// permanent in it at all. `publishedRequirement == null` is the fact, and
   /// it is what `firstCertificate` carries.
   void _sayClaims(
-    List<String> claims,
+    List<TargetClaim> claims,
     String? firstCertificate,
     String? codeId,
   ) {
     final firstOf = <String>[
-      for (final name in claims)
-        'pub.dev          $name\n'
-            '                 permanent: a package name cannot be renamed, '
-            'reassigned,\n'
-            '                 or released back',
+      for (final claim in claims)
+        '${claim.registrar.padRight(17)}${claim.name}\n'
+            '                 ${claim.consequence}',
       if (firstCertificate != null)
         'macOS identity   $codeId\n'
             '                 permanent: sealed into the designated '
@@ -2195,457 +1957,6 @@ class ReleaseCommand {
     output.halt(HaltKind.beforeActing);
     return false;
   }
-
-  /// The changelog entry for this version, or null with a recorded problem.
-  ///
-  /// Validation already proved the heading exists; extraction failing after
-  /// that is unexpected, and saying so beats publishing with a body that
-  /// silently fell back to something else.
-  String? _releaseNotes(
-    ResolvedProject project, {
-    SourceTree? source,
-  }) {
-    final path = project.fileAt('CHANGELOG.md');
-    final contents = (source ?? tree).read(path);
-    final entry =
-        contents == null ? null : Changelog.entry(contents, project.version);
-    if (entry != null && entry.isEmpty) {
-      // The heading exists — validation passed — and there is nothing under
-      // it. For the verb whose release body *is* this entry, publishing an
-      // empty one silently would be prose nobody wrote shipping as if
-      // someone had.
-      output.problem(
-        Diagnostic(
-          code: 'RK-CHG-004',
-          message: 'the changelog entry for ${project.version} is empty',
-          source: SourceLocation(path, 1),
-          remedy: 'the release body is this entry — write what changed '
-              'under the ${project.version} heading',
-        ),
-      );
-      output.halt(HaltKind.beforeActing);
-      return null;
-    }
-    if (entry == null) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-CHG-003',
-          message: 'the changelog entry for ${project.version} could not be '
-              'extracted',
-          source: SourceLocation(path, 1),
-          remedy: 'validation saw a heading for it; the file changed since, '
-              'or this is a bug in rk',
-        ),
-      );
-      output.halt(HaltKind.beforeActing);
-      return null;
-    }
-    return entry;
-  }
-
-  Future<_ActOutcome> _publishFormula(
-    ResolvedUnit unit,
-    BinaryChain chain,
-    HomebrewUpdateAuthority authority,
-  ) async {
-    final repository = _repository('homebrew');
-    if (repository == null) return const _ActOutcome.reportedFailure();
-
-    final tap = unit.tapFor(repository);
-
-    final outcome = await chain.updateFormula(
-      tap: tap,
-      project: unit.binaryProject,
-      authority: authority,
-    );
-    return _ActOutcome.homebrew(outcome);
-  }
-
-  /// The `owner/name` this repository pushes to.
-  /// The `owner/name` this repository pushes to, or null with the refusal
-  /// recorded.
-  ///
-  /// A problem, not a bare line: `Output.line` writes only to the sink, so a
-  /// run stopped here handed a --json caller an empty problems array — the
-  /// same invisibility the formula step's RK-BREW-001 was built to end.
-  /// [step] names the destination that wanted it, because the message was
-  /// hardcoded to github-release while the tap step calls this too.
-  String? _repository(String step) {
-    final remote = git.originUrl;
-    if (remote == null) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-GIT-002',
-          message: '$step needs an origin remote, and this repository has none',
-          remedy: 'rk publishes what others can fetch, and reads back what it '
-              'published. git remote add origin <url>, then git push -u '
-              'origin ${git.branch ?? 'main'}',
-        ),
-      );
-      output.halt(HaltKind.beforeActing);
-      return null;
-    }
-    return remote;
-  }
-
-  /// The tag destination, spoken to through git.
-  GitTag get _tags => GitTag(tools: tools, root: git.root);
-
-  /// Creates and pushes the tag that records this release.
-  ///
-  /// A record written after the operator authorized, not the authorization
-  /// itself — which is why rk may write it here and never may where a tag is
-  /// what authorizes.
-  Future<_ActOutcome> _tag(ResolvedUnit unit) async {
-    final signed = git.signingConfigured;
-
-    // The step can be half-done: a push that died leaves a local tag, which
-    // the inspection now reports as absent-with-work ("not on origin"). The
-    // act then pushes what exists rather than failing to re-create it.
-    if (git.hasTag(unit.tag)) {
-      output.say('the tag exists locally; pushing it', depth: 1);
-      return _pushTag(
-        unit,
-        object: git.tagObject(unit.tag),
-        signed: signed,
-        preExisting: true,
-      );
-    }
-
-    final manifestSha256 = _manifestDigest(unit);
-    final created = await _tags.create(
-      unit.tag,
-      signed: signed,
-      message: _tagMessage(unit, manifestSha256),
-    );
-    if (!created.ok) {
-      return _ActOutcome._(
-        ok: false,
-        coordinate: unit.tag,
-        diagnostic: Diagnostic(
-          code: 'RK-TAG-001',
-          message: 'the tag ${unit.tag} could not be created',
-          remedy: created.summary,
-        ),
-        reconciledNote: 'tag creation response was lost · origin confirmed '
-            'the exact release tag',
-      );
-    }
-
-    final resolved = await _tags.localObject(unit.tag);
-    final object = resolved.object;
-    if (object == null) {
-      return _ActOutcome._(
-        ok: false,
-        coordinate: unit.tag,
-        diagnostic: Diagnostic(
-          code: 'RK-TAG-001',
-          message: 'the new tag ${unit.tag} could not be identified',
-          remedy: resolved.problem ?? 'the annotated tag object was unreadable',
-        ),
-      );
-    }
-    final local = await _tags.inspectLocalReleaseBinding(
-      tag: unit.tag,
-      expectedObject: object,
-      expectedCommit: git.head,
-      expectedManifestSha256: manifestSha256,
-      requireSignature: signed,
-    );
-    if (!local.isExact) {
-      return _ActOutcome._(
-        ok: false,
-        coordinate: unit.tag,
-        removeLocalTagIfAbsent: (tag: unit.tag, object: object),
-        diagnostic: Diagnostic(
-          code: 'RK-TAG-001',
-          message: 'the new tag ${unit.tag} did not validate',
-          remedy: [
-            if (local.detail != null) local.detail!,
-            ...local.evidence.entries
-                .map((entry) => '${entry.key}: ${entry.value}'),
-          ].join('\n'),
-        ),
-      );
-    }
-
-    final pushed = await _tags.pushExact(unit.tag, object);
-    if (!pushed.ok) {
-      // The shared destination read decides whether this ambiguous response
-      // landed. If it proves absence, the reporting layer removes only the
-      // local tag this run created; unknown preserves it for a safe re-run.
-      return _ActOutcome._(
-        ok: false,
-        coordinate: unit.tag,
-        mayHaveActed: true,
-        removeLocalTagIfAbsent: (tag: unit.tag, object: object),
-        diagnostic: Diagnostic(
-          code: 'RK-TAG-002',
-          message: 'the tag ${unit.tag} could not be pushed',
-          remedy: '${pushed.summary}\norigin will be read before this result '
-              'is classified; a re-run inspects before pushing again',
-        ),
-        reconciledNote: 'push response was lost · origin confirmed exact',
-      );
-    }
-    return _ActOutcome._(
-      ok: true,
-      coordinate: unit.tag,
-      mayHaveActed: true,
-      successNote: [if (signed) 'signed' else 'unsigned', 'pushed'].join(', '),
-    );
-  }
-
-  String _tagMessage(ResolvedUnit unit, String digest) {
-    return '${unit.name} ${unit.version}\n\n'
-        'release-manifest-sha256: $digest';
-  }
-
-  String _manifestDigest(ResolvedUnit unit) {
-    final manifest = File(
-      _stageFor(unit).directory.resolve(ReleaseAssets.manifest),
-    );
-    if (!manifest.existsSync()) {
-      throw StateError('the completed stage has no release manifest');
-    }
-    return Sha256.hex(manifest.readAsBytesSync());
-  }
-
-  Future<_ActOutcome> _pushTag(
-    ResolvedUnit unit, {
-    required String? object,
-    required bool signed,
-    required bool preExisting,
-  }) async {
-    if (object == null) {
-      return _ActOutcome._(
-        ok: false,
-        coordinate: unit.tag,
-        diagnostic: Diagnostic(
-          code: 'RK-TAG-002',
-          message: 'the tag ${unit.tag} could not be pushed',
-          remedy: 'the validated local tag object id is unavailable; '
-              're-run so rk can inspect it again',
-        ),
-      );
-    }
-    final pushed = await _tags.pushExact(unit.tag, object);
-    if (!pushed.ok) {
-      return _ActOutcome._(
-        ok: false,
-        coordinate: unit.tag,
-        mayHaveActed: true,
-        diagnostic: Diagnostic(
-          code: 'RK-TAG-002',
-          message: 'the tag ${unit.tag} could not be pushed',
-          remedy: '${pushed.summary}\nthe tag pre-existed this run, so it '
-              'was left in place — re-running pushes it again',
-        ),
-        reconciledNote: 'push response was lost · origin confirmed exact',
-      );
-    }
-    return _ActOutcome._(
-      ok: true,
-      coordinate: unit.tag,
-      mayHaveActed: true,
-      successNote: [
-        if (signed) 'signed' else 'unsigned',
-        'pushed',
-        if (preExisting) 'pre-existing local tag',
-      ].join(', '),
-    );
-  }
-
-  Future<_ActOutcome> _publish(Step step, ResolvedUnit unit) async {
-    final project = unit.projects.firstWhere((p) => p.name == step.project);
-    final sourceRoot = _stageFor(unit).sourceRoot;
-    final directory = project.pubspec.directory == '.'
-        ? sourceRoot
-        : '$sourceRoot/${project.pubspec.directory}';
-
-    // Validation and the consumer resolve already ran, pre-act, in the
-    // preflight — a refusal there costs nothing public.
-    final code = await tools.runInteractive(
-      'dart',
-      const ['pub', 'publish', '--force'],
-      workingDirectory: directory,
-    );
-    if (code != 0) {
-      // A non-zero client exit is ambiguous. Do not inspect or halt here: the
-      // release loop owns the one exact public read that can reconcile an
-      // accepted upload whose MFA/network response was lost.
-      registry.forget(project.name);
-      return _ActOutcome._(
-        ok: false,
-        coordinate: '${project.name} ${project.version}',
-        mayHaveActed: true,
-        diagnostic: Diagnostic(
-          code: 'RK-PUB-003',
-          message: '${project.name}: dart pub publish did not complete',
-          remedy: 'fix what dart pub reported and re-run. The login preflight '
-              'confirms a current session, not uploader permission for this '
-              'package; if the upload may have landed, re-running inspects '
-              'public truth before acting',
-        ),
-        reconciledNote:
-            'publish response was lost · public archive confirmed exact',
-      );
-    }
-
-    // The release loop now owns the bounded exact-read polling. Invalidate the
-    // provider cache before handing it that outcome; the publisher has made
-    // everything this process knew about the coordinate stale.
-    registry.forget(project.name);
-    return _ActOutcome._(
-      ok: true,
-      coordinate: '${project.name} ${project.version}',
-      mayHaveActed: true,
-      successNote: 'published',
-      includeInspectionDetail: true,
-    );
-  }
-
-  /// Establishes the native pub.dev session before private production begins.
-  ///
-  /// This is intentionally neither a checklist step nor stage evidence. A
-  /// session is ambient and expiring, and a successful login says nothing
-  /// about whether this account may publish a particular package. The real
-  /// publish and its exact read-back remain authoritative.
-  Future<bool> _preflightPubSession(
-    ResolvedUnit unit,
-    Iterable<Step> remaining,
-  ) async {
-    if (!remaining.any((step) => step.kind == StepKind.publishRegistry)) {
-      return true;
-    }
-
-    int code;
-    try {
-      code = await tools.runInteractive(
-        'dart',
-        const ['pub', 'login'],
-        workingDirectory: git.root,
-      );
-    } on ProcessException {
-      code = -1;
-    }
-    if (code == 0) return true;
-
-    output.problem(
-      Diagnostic(
-        code: 'RK-PUB-007',
-        message: 'dart pub login did not complete',
-        remedy: 'Run dart pub login from a terminal, then re-run rk release '
-            '${unit.name}. A successful login confirms a current session, '
-            'not permission to publish every package.',
-      ),
-      unit: unit.name,
-    );
-    output.halt(HaltKind.beforeActing);
-    return false;
-  }
-
-  /// pub's validation and the consumer resolve, both read-only.
-  ///
-  /// The gate matches what the act will do. `dart pub publish --dry-run`
-  /// exits non-zero for warnings and for errors alike, while `--force` — the
-  /// actual act — publishes past warnings and refuses errors. Gating on the
-  /// exit code alone made rk stricter than the registry it publishes to:
-  /// keybay's deliberate, test-enforced exact pins are "warnings", pub.dev
-  /// accepted them at 0.1.0, and rk would have refused the release — after
-  /// pushing the tag. Warnings are printed, so the operator confirms the
-  /// permanent act having seen them; errors block; a summary rk cannot
-  /// classify blocks, because fail-closed is for the unrecognised.
-  Future<bool> _publishPreflight(
-    ResolvedProject project,
-    String sourceRoot,
-  ) async {
-    final directory = project.pubspec.directory == '.'
-        ? sourceRoot
-        : '$sourceRoot/${project.pubspec.directory}';
-
-    final dry = await tools.run(
-      'dart',
-      const ['pub', 'publish', '--dry-run'],
-      workingDirectory: directory,
-    );
-    final validation = '${dry.stdout}\n${dry.stderr}'.trim();
-    output.report.attach('pub-dry-run-${project.name}.txt', validation);
-
-    if (!dry.ok) {
-      final summary = RegExp(r'Package has[^\n]*')
-          .allMatches(validation)
-          .map((m) => m.group(0)!)
-          .lastOrNull;
-      final warningsOnly = summary != null &&
-          !summary.toLowerCase().contains('error') &&
-          summary.toLowerCase().contains('warning');
-      if (!warningsOnly) {
-        output.problem(
-          Diagnostic(
-            code: 'RK-PUB-001',
-            message: 'pub refuses to publish ${project.name}',
-            remedy: validation.isEmpty ? dry.summary : validation,
-          ),
-          unit: project.unitName,
-        );
-        output.halt(HaltKind.beforeActing);
-        return false;
-      }
-      // The same warnings pub's interactive publish would have shown, shown —
-      // the operator confirms the permanent act having seen them.
-      output.say('pub warns, and --force will publish past these:', depth: 1);
-      for (final line in validation.split('\n')) {
-        if (line.trimLeft().startsWith('*')) output.say(line.trim(), depth: 2);
-      }
-    }
-
-    return _consumerResolve(project, directory);
-  }
-
-  /// Resolution as every consumer will see it. False halts the step.
-  Future<bool> _consumerResolve(
-    ResolvedProject project,
-    String directory,
-  ) async {
-    final probe = Directory.systemTemp.createTempSync('rk-consumer-');
-    try {
-      File('${probe.path}/pubspec.yaml').writeAsStringSync('''
-name: rk_consumer_probe
-publish_to: none
-environment:
-  sdk: '>=3.0.0 <4.0.0'
-dependencies:
-  ${project.name}: ${project.version}
-dependency_overrides:
-  ${project.name}:
-    path: ${directory.replaceAll('\\', '/')}
-''');
-      final resolved = await tools.run(
-        'dart',
-        const ['pub', 'get', '--no-precompile'],
-        workingDirectory: probe.path,
-      );
-      if (!resolved.ok) {
-        output.problem(
-          Diagnostic(
-            code: 'RK-PUB-002',
-            message: '${project.name}: consumers could not resolve this',
-            remedy: '${resolved.summary}\n'
-                'the probe resolves as a Dart consumer on this SDK; a '
-                'package needing Flutter or a newer SDK than the probe '
-                'models is a limit rk has not lifted yet — see the ledger',
-          ),
-          unit: project.unitName,
-        );
-        output.halt(HaltKind.beforeActing);
-        return false;
-      }
-      return true;
-    } finally {
-      probe.deleteSync(recursive: true);
-    }
-  }
 }
 
 enum _ReleaseAction {
@@ -2661,79 +1972,16 @@ enum _ReleaseAction {
   final String human;
 }
 
-class _ActOutcome {
-  const _ActOutcome._({
-    required this.ok,
-    this.problem,
-    this.mayHaveActed = false,
-    this.draftEffect = DraftEffect.none,
-    this.terminal = false,
-    this.permanent,
-    this.failureAlreadyReported = false,
-    this.diagnostic,
-    this.coordinate,
-    this.removeLocalTagIfAbsent,
-    this.successNote,
-    this.includeInspectionDetail = false,
-    this.reconciledNote,
-    this.producer,
-  });
-
-  const _ActOutcome.succeeded() : this._(ok: true);
-
-  const _ActOutcome.reportedFailure()
-      : this._(ok: false, failureAlreadyReported: true);
-
-  factory _ActOutcome.producer(LocalProducerOutcome outcome) => _ActOutcome._(
-        ok: outcome.ok,
-        problem: outcome.problem,
-        failureAlreadyReported: !outcome.ok,
-        producer: outcome,
-      );
-
-  factory _ActOutcome.github(PublishOutcome outcome) => _ActOutcome._(
-        ok: outcome.ok,
-        problem: outcome.problem,
-        mayHaveActed: outcome.mayHaveActed,
-        draftEffect: outcome.draftEffect,
-        terminal: outcome.isTerminal,
-        permanent: outcome.permanent,
-      );
-
-  factory _ActOutcome.homebrew(TapOutcome outcome) => _ActOutcome._(
-        ok: outcome.ok,
-        problem: outcome.problem,
-        mayHaveActed: outcome.mayHaveActed,
-      );
-
-  final bool ok;
-  final String? problem;
-  final bool mayHaveActed;
-  final DraftEffect draftEffect;
-  final bool terminal;
-  final String? permanent;
-  final bool failureAlreadyReported;
-  final Diagnostic? diagnostic;
-  final String? coordinate;
-  final ({String tag, String object})? removeLocalTagIfAbsent;
-  final String? successNote;
-  final bool includeInspectionDetail;
-  final String? reconciledNote;
-  final LocalProducerOutcome? producer;
-}
-
 class _PreparedStage {
   const _PreparedStage({
     required this.claims,
     this.publishedRequirement,
     this.firstCertificate,
     this.codeId,
-    this.notesPath,
   });
 
-  final List<String> claims;
+  final List<TargetClaim> claims;
   final String? publishedRequirement;
   final String? firstCertificate;
   final String? codeId;
-  final String? notesPath;
 }

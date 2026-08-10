@@ -15,6 +15,7 @@ class ReleaseStages {
   ReleaseStages({
     required this.source,
     required this.git,
+    required this.stageContracts,
     String? repositoryRoot,
     DartCompilerIdentity Function()? compilerIdentity,
     RkImplementationIdentity Function()? rkIdentity,
@@ -26,6 +27,7 @@ class ReleaseStages {
   final SourceTree source;
   final GitState git;
   final String repositoryRoot;
+  final StageContractResolver stageContracts;
   final DartCompilerIdentity Function() _compilerIdentity;
   final RkImplementationIdentity Function() _rkIdentity;
   final Map<String, ReleaseStage> _stages = {};
@@ -70,15 +72,21 @@ class ReleaseStages {
         rk: rk,
       ),
     );
+    final directory = StageDirectory(
+      repositoryRoot: repositoryRoot,
+      identity: identity,
+    );
     return ReleaseStage(
       unit: unit,
       source: source,
       compiler: compiler,
       repository: currentGit.originUrl,
       enforceUnitContract: true,
-      directory: StageDirectory(
-        repositoryRoot: repositoryRoot,
-        identity: identity,
+      directory: directory,
+      targetContributions: stageContracts(
+        unit: unit,
+        repository: currentGit.originUrl,
+        sourceRoot: directory.resolve('source'),
       ),
     );
   }
@@ -116,13 +124,16 @@ class ReleaseStage {
     this.compiler,
     this.repository,
     this.enforceUnitContract = false,
-  });
+    Iterable<StageContributionContract> targetContributions = const [],
+  }) : targetContributions =
+            List<StageContributionContract>.unmodifiable(targetContributions);
 
   final ResolvedUnit unit;
   final SourceTree source;
   final StageDirectory directory;
   final DartCompilerIdentity? compiler;
   final String? repository;
+  final List<StageContributionContract> targetContributions;
 
   /// Direct construction is used by low-level receipt/atomicity tests whose
   /// deliberately partial producer graphs are not a release plan. Every
@@ -141,6 +152,7 @@ class ReleaseStage {
         unit: unit,
         repository: repository,
         sourceRoot: sourceRoot,
+        targetContributions: targetContributions,
       ).validate(directory, receipt));
     }
     final expectedCompiler = compiler;

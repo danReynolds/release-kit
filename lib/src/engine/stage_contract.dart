@@ -1,13 +1,160 @@
 import 'dart:convert';
 import 'dart:io';
 
-import '../destinations/homebrew.dart';
 import 'assets.dart';
-import 'changelog.dart';
 import 'resolve.dart';
 import 'stage.dart';
 import 'stage_inspection.dart';
 import 'stage_receipt.dart';
+
+enum StageContributionPhase {
+  sourcePreflight,
+  beforeProducers,
+  afterProducers,
+}
+
+typedef StageStepContractValidator = Iterable<StageIssue> Function(
+  StageContractContext context,
+  StageStep step,
+);
+
+final class StageStepContract {
+  const StageStepContract(
+    this.name, {
+    this.inputs = const {},
+    this.outputs = const {},
+    this.optionalOutputs = const {},
+    this.outputPrefix,
+    this.outputType,
+    this.validate,
+  });
+
+  final String name;
+  final Set<String> inputs;
+  final Map<String, String> outputs;
+  final Map<String, String> optionalOutputs;
+  final String? outputPrefix;
+  final String? outputType;
+  final StageStepContractValidator? validate;
+}
+
+final class StageContributionContract {
+  const StageContributionContract({required this.phase, required this.step});
+
+  final StageContributionPhase phase;
+  final StageStepContract step;
+}
+
+/// Orders target-owned stage work by phase, declared inputs, then stable name.
+///
+/// An input names either a producer (`step:<name>`) or an artifact. When a
+/// target contribution produces that artifact, the consumer runs after it.
+/// Inputs supplied by the source snapshot or the shared binary producers are
+/// intentionally external to this target-only graph.
+List<T> orderStageContributions<T>(
+  Iterable<T> values,
+  StageContributionContract Function(T value) contractOf,
+) {
+  final entries = List<T>.of(values);
+  final byName = <String, T>{};
+  for (final entry in entries) {
+    final name = contractOf(entry).step.name;
+    if (byName.containsKey(name)) {
+      throw StateError('two stage contracts claim the producer "$name"');
+    }
+    byName[name] = entry;
+  }
+
+  final outputOwners = <String, String>{};
+  for (final entry in entries) {
+    final contract = contractOf(entry);
+    final outputs = {
+      ...contract.step.outputs.keys,
+      ...contract.step.optionalOutputs.keys,
+    };
+    for (final output in outputs) {
+      final previous = outputOwners[output];
+      if (previous != null && previous != contract.step.name) {
+        throw StateError(
+          'stage artifact "$output" is produced by both "$previous" and '
+          '"${contract.step.name}"',
+        );
+      }
+      outputOwners[output] = contract.step.name;
+    }
+  }
+
+  final dependencies = <String, Set<String>>{};
+  for (final entry in entries) {
+    final contract = contractOf(entry);
+    final required = <String>{};
+    for (final input in contract.step.inputs) {
+      final producer = input.startsWith('step:')
+          ? input.substring('step:'.length)
+          : outputOwners[input];
+      if (producer == null) continue;
+      final producerEntry = byName[producer];
+      if (producerEntry == null) continue;
+      final producerContract = contractOf(producerEntry);
+      if (producerContract.phase.index > contract.phase.index) {
+        throw StateError(
+          'stage producer "${contract.step.name}" depends on later '
+          'producer "$producer"',
+        );
+      }
+      required.add(producer);
+    }
+    dependencies[contract.step.name] = required;
+  }
+
+  final ordered = <T>[];
+  final completed = <String>{};
+  for (final phase in StageContributionPhase.values) {
+    final remaining =
+        entries.where((entry) => contractOf(entry).phase == phase).toList();
+    while (remaining.isNotEmpty) {
+      final ready = remaining
+          .where((entry) => dependencies[contractOf(entry).step.name]!
+              .every(completed.contains))
+          .toList()
+        ..sort((left, right) =>
+            contractOf(left).step.name.compareTo(contractOf(right).step.name));
+      if (ready.isEmpty) {
+        throw StateError(
+          'stage contribution dependency cycle among '
+          '${remaining.map((entry) => contractOf(entry).step.name).join(', ')}',
+        );
+      }
+      final next = ready.first;
+      remaining.remove(next);
+      ordered.add(next);
+      completed.add(contractOf(next).step.name);
+    }
+  }
+  return List<T>.unmodifiable(ordered);
+}
+
+final class StageContractContext {
+  const StageContractContext({
+    required this.unit,
+    required this.repository,
+    required this.sourceRoot,
+    required this.stage,
+    required this.receipt,
+  });
+
+  final ResolvedUnit unit;
+  final String? repository;
+  final String sourceRoot;
+  final StageDirectory stage;
+  final StageReceipt receipt;
+}
+
+typedef StageContractResolver = List<StageContributionContract> Function({
+  required ResolvedUnit unit,
+  required String? repository,
+  required String sourceRoot,
+});
 
 /// The exact receipt shape one resolved unit is allowed to trust.
 ///
@@ -21,50 +168,42 @@ class StageReceiptContract {
     required this.unit,
     required this.repository,
     required this.sourceRoot,
-    required List<_ContractStep> steps,
-  }) : _steps = List<_ContractStep>.unmodifiable(steps);
+    required List<StageStepContract> steps,
+  }) : _steps = List<StageStepContract>.unmodifiable(steps);
 
   factory StageReceiptContract.forUnit({
     required ResolvedUnit unit,
     required String? repository,
     required String sourceRoot,
+    required Iterable<StageContributionContract> targetContributions,
   }) {
-    final steps = <_ContractStep>[
-      const _ContractStep('source-snapshot'),
+    final contributions = orderStageContributions(
+      targetContributions,
+      (contract) => contract,
+    );
+    final steps = <StageStepContract>[
+      const StageStepContract('source-snapshot'),
     ];
-
-    final packages = unit.projects
-        .where((project) => project.channels.contains('pub.dev'))
-        .toList()
-      ..sort((left, right) => left.name.compareTo(right.name));
-    for (final project in packages) {
-      steps.add(_ContractStep(
-        'pub-preflight:${project.name}',
-        inputs: const {'step:source-snapshot'},
-      ));
-    }
+    steps.addAll(contributions
+        .where((item) => item.phase == StageContributionPhase.sourcePreflight)
+        .map((item) => item.step));
+    steps.addAll(contributions
+        .where((item) => item.phase == StageContributionPhase.beforeProducers)
+        .map((item) => item.step));
 
     if (unit.shipsBinaries) {
       final project = unit.binaryProject;
       final executable = project.executable!;
-      if (project.channels.contains('github-release')) {
-        steps.add(const _ContractStep(
-          'release-notes',
-          inputs: {'step:source-snapshot'},
-          outputs: {'release-notes.md': 'notes'},
-        ));
-      }
-
       final platforms = [...project.binaryPlatforms]..sort();
       for (final platform in platforms) {
         final binary = '$platform/$executable';
         if (platform.startsWith('macos-')) {
-          steps.add(_ContractStep(
+          steps.add(StageStepContract(
             'sign:$platform',
             inputs: const {'step:source-snapshot'},
             outputs: {binary: 'executable'},
           ));
-          steps.add(_ContractStep(
+          steps.add(StageStepContract(
             'notarize:$platform',
             inputs: {binary},
             outputs: {
@@ -82,13 +221,13 @@ class StageReceiptContract {
             optionalOutputs: {'$platform/$executable.zip': 'notary-input'},
           ));
         } else {
-          steps.add(_ContractStep(
+          steps.add(StageStepContract(
             'build:$platform',
             inputs: const {'step:source-snapshot'},
             outputs: {binary: 'executable'},
           ));
         }
-        steps.add(_ContractStep(
+        steps.add(StageStepContract(
           'archive:$platform',
           inputs: {binary},
           outputs: {
@@ -109,26 +248,25 @@ class StageReceiptContract {
             platform,
           ),
       };
-      steps.add(_ContractStep(
+      steps.add(StageStepContract(
         'checksums',
         inputs: archives,
         outputs: const {ReleaseAssets.checksums: 'checksums'},
       ));
-      if (project.channels.contains('homebrew')) {
-        steps.add(_ContractStep(
-          'homebrew-formula',
-          inputs: archives,
-          outputs: {
-            ReleaseAssets.formulaName(executable): 'formula',
-          },
-        ));
-      }
     }
 
-    steps.add(const _ContractStep(
+    steps.addAll(contributions
+        .where((item) => item.phase == StageContributionPhase.afterProducers)
+        .map((item) => item.step));
+
+    steps.add(const StageStepContract(
       'complete-stage',
       outputs: {ReleaseAssets.manifest: 'manifest'},
     ));
+    final names = steps.map((step) => step.name).toList();
+    if (names.toSet().length != names.length) {
+      throw StateError('two stage contracts claim the same producer name');
+    }
     return StageReceiptContract._(
       unit: unit,
       repository: repository,
@@ -140,7 +278,7 @@ class StageReceiptContract {
   final ResolvedUnit unit;
   final String? repository;
   final String sourceRoot;
-  final List<_ContractStep> _steps;
+  final List<StageStepContract> _steps;
 
   List<StageIssue> validate(StageDirectory stage, StageReceipt receipt) {
     final issues = <StageIssue>[];
@@ -158,6 +296,13 @@ class StageReceiptContract {
     }
 
     final contracts = {for (final step in _steps) step.name: step};
+    final context = StageContractContext(
+      unit: unit,
+      repository: repository,
+      sourceRoot: sourceRoot,
+      stage: stage,
+      receipt: receipt,
+    );
     for (final step in receipt.steps) {
       final contract = contracts[step.name] ?? _macBuildContract(step.name);
       if (contract == null) continue;
@@ -173,10 +318,10 @@ class StageReceiptContract {
         _issue(issues, '${step.name} has the wrong output inventory');
       }
       _validateEvidence(stage, step, issues);
+      if (contract.validate case final validate?) {
+        issues.addAll(validate(context, step));
+      }
     }
-
-    _validateNotes(stage, receipt, issues);
-    _validateFormula(stage, receipt, issues);
     return issues;
   }
 
@@ -190,10 +335,10 @@ class StageReceiptContract {
         _isPrefix(actual.take(index).toList(), finalNames);
   }
 
-  static _ContractStep? _macBuildContract(String name) {
+  static StageStepContract? _macBuildContract(String name) {
     if (!name.startsWith('build:macos-')) return null;
     final platform = name.substring('build:'.length);
-    return _ContractStep(
+    return StageStepContract(
       name,
       inputs: const {'step:source-snapshot'},
       // The exact executable name is checked by the corresponding sign
@@ -203,7 +348,7 @@ class StageReceiptContract {
     );
   }
 
-  static bool _outputsMatch(StageStep step, _ContractStep contract) {
+  static bool _outputsMatch(StageStep step, StageStepContract contract) {
     if (step.name == 'source-snapshot') return true;
     if (contract.outputPrefix != null) {
       return step.outputs.length == 1 &&
@@ -227,19 +372,6 @@ class StageReceiptContract {
     StageStep step,
     List<StageIssue> issues,
   ) {
-    if (step.name.startsWith('pub-preflight:')) {
-      if (!_sameMap(
-        step.evidence,
-        const {
-          'publish_dry_run': 'passed',
-          'consumer_resolve': 'passed',
-        },
-      )) {
-        _issue(issues, '${step.name} does not prove both package preflights');
-      }
-      return;
-    }
-
     if (step.name.startsWith('build:') || step.name.startsWith('sign:')) {
       final smoke = step.evidence['smoke'];
       final status = smoke is Map ? smoke['status'] : null;
@@ -297,69 +429,6 @@ class StageReceiptContract {
     }
   }
 
-  void _validateNotes(
-    StageDirectory stage,
-    StageReceipt receipt,
-    List<StageIssue> issues,
-  ) {
-    final step =
-        receipt.steps.where((item) => item.name == 'release-notes').firstOrNull;
-    if (step == null) return;
-    final project = unit.binaryProject;
-    final changelog = File('$sourceRoot/${project.fileAt('CHANGELOG.md')}');
-    final expected = changelog.existsSync()
-        ? Changelog.entry(changelog.readAsStringSync(), project.version)
-        : null;
-    final actual = File(stage.resolve('release-notes.md'));
-    if (expected == null ||
-        !actual.existsSync() ||
-        actual.readAsStringSync() != expected) {
-      _issue(issues, 'release-notes does not match the staged changelog entry');
-    }
-  }
-
-  void _validateFormula(
-    StageDirectory stage,
-    StageReceipt receipt,
-    List<StageIssue> issues,
-  ) {
-    final formulaStep = receipt.steps
-        .where((item) => item.name == 'homebrew-formula')
-        .firstOrNull;
-    if (formulaStep == null) return;
-    final repository = this.repository;
-    if (repository == null) {
-      _issue(issues, 'homebrew-formula has no repository identity');
-      return;
-    }
-    final project = unit.binaryProject;
-    final archives = {
-      for (final step in receipt.steps.where(
-        (item) => item.name.startsWith('archive:'),
-      ))
-        step.name.substring('archive:'.length): PlatformAsset(
-          name: step.outputs.single.path,
-          sha256: step.outputs.single.sha256,
-        ),
-    };
-    final expected = HomebrewFormula.render(
-      className: HomebrewFormula.classNameFor(project.executable!),
-      description: 'Released by rk',
-      homepage: 'https://github.com/$repository',
-      version: project.version.canonical,
-      repository: repository,
-      tag: unit.tag,
-      executable: project.executable!,
-      assets: archives,
-    );
-    final actual = File(
-      stage.resolve(ReleaseAssets.formulaName(project.executable!)),
-    );
-    if (!actual.existsSync() || actual.readAsStringSync() != expected) {
-      _issue(issues, 'homebrew-formula does not match the staged archives');
-    }
-  }
-
   static bool _acceptedNotaryFile(
     StageDirectory stage,
     String path,
@@ -402,24 +471,6 @@ class StageReceiptContract {
       path: 'stage.json',
     ));
   }
-}
-
-class _ContractStep {
-  const _ContractStep(
-    this.name, {
-    this.inputs = const {},
-    this.outputs = const {},
-    this.optionalOutputs = const {},
-    this.outputPrefix,
-    this.outputType,
-  });
-
-  final String name;
-  final Set<String> inputs;
-  final Map<String, String> outputs;
-  final Map<String, String> optionalOutputs;
-  final String? outputPrefix;
-  final String? outputType;
 }
 
 bool _isPrefix(List<String> prefix, List<String> whole) =>

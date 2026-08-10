@@ -1,4 +1,3 @@
-import 'assets.dart';
 import 'checklist.dart';
 import 'diagnostic.dart';
 import 'resolve.dart';
@@ -39,102 +38,6 @@ class TargetExpectation {
 
   /// A concise reference to an artifact inventoried by another target.
   final String? uses;
-
-  static List<TargetExpectation> derive(
-    ResolvedUnit unit,
-    Checklist checklist, {
-    String? repository,
-  }) {
-    final targets = <TargetExpectation>[];
-    for (final step in checklist.steps) {
-      switch (step.kind) {
-        case StepKind.tag:
-          targets.add(TargetExpectation(
-            kind: ReleaseTargetKind.gitTag,
-            label: 'Git tag',
-            coordinate: unit.tag,
-            targetVersion: unit.version.canonical,
-            step: step,
-            // The tag binds the manifest digest in its annotation; it does
-            // not host a file named release-manifest.json. Binary releases
-            // publish that file on GitHub. A pub-only release is recovered
-            // directly from its peeled source commit plus pub.dev's archive,
-            // so inventing a downloadable tag artifact here would lie.
-            artifacts: const [],
-            uses: unit.shipsBinaries
-                ? '${ReleaseAssets.manifest} from GitHub Release'
-                : null,
-          ));
-
-        case StepKind.publishRegistry:
-          final project = unit.projects.firstWhere(
-            (project) => project.name == step.project,
-          );
-          targets.add(TargetExpectation(
-            kind: ReleaseTargetKind.pubDev,
-            label: 'pub.dev · ${project.name}',
-            coordinate: project.name,
-            targetVersion: project.version.canonical,
-            step: step,
-            project: project,
-            // pub publishes the staged source directory. There is no honest
-            // public archive filename to invent for this row.
-            artifacts: const [],
-          ));
-
-        case StepKind.publishRelease:
-          final project = unit.projects.firstWhere(
-            (project) => project.name == step.project,
-          );
-          final artifacts = ReleaseAssets.expectedFor(project).toList()..sort();
-          targets.add(TargetExpectation(
-            kind: ReleaseTargetKind.githubRelease,
-            label: repository == null
-                ? 'GitHub Release'
-                : 'GitHub Release · $repository',
-            coordinate: repository == null
-                ? unit.tag
-                : '$repository/releases/tag/${unit.tag}',
-            targetVersion: unit.version.canonical,
-            step: step,
-            project: project,
-            artifacts: artifacts,
-          ));
-
-        case StepKind.publishFormula:
-          final project = unit.projects.firstWhere(
-            (project) => project.name == step.project,
-          );
-          final tap =
-              repository == null ? unit.homebrewTap : unit.tapFor(repository);
-          targets.add(TargetExpectation(
-            kind: ReleaseTargetKind.homebrew,
-            label: tap == null ? 'Homebrew' : 'Homebrew · $tap',
-            coordinate: tap == null
-                ? 'Formula/${project.executable}.rb'
-                : '$tap/Formula/${project.executable}.rb',
-            targetVersion: project.version.canonical,
-            step: step,
-            project: project,
-            // The formula is a GitHub Release artifact too. Its bytes are
-            // listed once under the target that owns the artifact inventory.
-            artifacts: const [],
-            uses: '${ReleaseAssets.formulaName(project.executable!)} from '
-                'GitHub Release',
-          ));
-
-        case StepKind.prerequisite ||
-              StepKind.build ||
-              StepKind.sign ||
-              StepKind.notarize ||
-              StepKind.archive ||
-              StepKind.checksums ||
-              StepKind.completeStage:
-          break;
-      }
-    }
-    return List<TargetExpectation>.unmodifiable(targets);
-  }
 }
 
 enum ArtifactStatus {

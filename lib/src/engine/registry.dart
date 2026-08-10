@@ -4,8 +4,21 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../transforms/digest.dart';
+import 'resolve.dart';
+import 'source_tree.dart';
 import 'verdict.dart';
 import 'version.dart';
+
+/// Exact source-level inspection for a package publication target.
+///
+/// The provider adapter implements this; the release engine depends only on
+/// the question it needs answered.
+abstract interface class PublicationInspector {
+  Future<Inspection> inspectProject(
+    ResolvedProject project, {
+    SourceTree? expectedSource,
+  });
+}
 
 /// What pub.dev says about a package.
 class RegistryPackage {
@@ -46,8 +59,8 @@ class PublishedVersion {
   final String? archiveSha256;
 }
 
-/// Reads a package registry. Read-only: nothing here publishes. The act is
-/// `_publish` in `commands/release.dart`, gated by `_publishPreflight`.
+/// Reads a package registry. Read-only: nothing here publishes. The target
+/// module owns the matching preflight, act, and read-back policy.
 ///
 /// An interface so a command can be exercised without a network, and so a
 /// second registry — npm, RubyGems — attaches later without touching the
@@ -78,8 +91,8 @@ abstract class RegistryReader {
   Future<List<int>> archive(PublishedVersion version);
 }
 
-/// Reads pub.dev. Read-only: nothing here publishes. The act is `_publish`
-/// in `commands/release.dart`, gated by `_publishPreflight`.
+/// Reads pub.dev. Read-only: nothing here publishes. The pub.dev target module
+/// owns the matching preflight, act, and read-back policy.
 ///
 /// Every failure is reported as [Verdict.unknown] rather than absence — a
 /// timeout is not evidence that a version does not exist.

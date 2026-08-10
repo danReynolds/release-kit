@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:release_kit/src/builds/capability.dart';
 import 'package:release_kit/src/binary_chain.dart';
-import 'package:release_kit/src/destinations/homebrew.dart';
 import 'package:release_kit/src/engine/checklist.dart';
 import 'package:release_kit/src/engine/config.dart';
 import 'package:release_kit/src/engine/diagnostic.dart';
@@ -12,6 +11,7 @@ import 'package:release_kit/src/engine/resolve.dart';
 import 'package:release_kit/src/engine/source_tree.dart';
 import 'package:release_kit/src/engine/tools.dart';
 import 'package:release_kit/src/engine/workspace.dart';
+import 'package:release_kit/src/targets/staged_release_assets.dart';
 import 'package:test/test.dart';
 
 final _certificateSha1 = 'a' * 40;
@@ -235,7 +235,10 @@ executables:
       contains('tool-1.0.0-macos-arm64.tar.gz'),
     );
 
-    final assets = chain(tools).gatherAssets(
+    final assets = StagedReleaseAssets(
+      workspace: workspace,
+      output: output,
+    ).gather(
       project,
       'cli',
       includeFinal: false,
@@ -680,69 +683,6 @@ executables:
       reason: 'identity facts are derived from the release users already '
           'installed; the declaration only fills what no release states',
     );
-  });
-
-  group('the tap act outcome', () {
-    /// Tools for updateFormula: scripted git plumbing over a real checkout.
-    /// Public readback belongs to ReleaseCommand's shared inspector.
-    RecordingTools tapTools({
-      bool pushFails = false,
-      bool pushRejected = false,
-    }) =>
-        RecordingTools(
-          answers: (key) {
-            if (key == 'git push' && (pushFails || pushRejected)) {
-              return ToolResult(
-                exitCode: 1,
-                stdout: '',
-                stderr: pushRejected
-                    ? 'rejected (non-fast-forward)'
-                    : 'connection closed before the response',
-              );
-            }
-            return null; // git clone/add/commit/push default ok
-          },
-          onRun: (key) {
-            if (key.startsWith('git clone')) {
-              Directory(key.split(' ').last).createSync(recursive: true);
-            }
-          },
-        );
-
-    Future<TapOutcome> update(RecordingTools tools) {
-      workspace.write('tool.rb', utf8.encode('FORMULA v1\n'));
-      return chain(tools).updateFormula(
-        tap: 'owner/homebrew-tap',
-        project: project,
-        authority: const HomebrewUpdateAuthority.absent(),
-      );
-    }
-
-    test('a successful push is returned for the shared inspector to confirm',
-        () async {
-      final outcome = await update(tapTools());
-      expect(outcome.ok, isTrue, reason: buffer.toString());
-      expect(outcome.changed, isTrue);
-      expect(buffer.toString(), isEmpty);
-      expect(output.report.halted, isFalse);
-    });
-
-    test('a lost push response remains ambiguous and renders nothing yet',
-        () async {
-      final outcome = await update(tapTools(pushFails: true));
-      expect(outcome.ok, isFalse);
-      expect(outcome.mayHaveActed, isTrue);
-      expect(buffer.toString(), isEmpty);
-      expect(output.report.halted, isFalse,
-          reason: 'only the shared public inspection may classify it');
-    });
-
-    test('a non-fast-forward rejection is a definite private failure',
-        () async {
-      final outcome = await update(tapTools(pushRejected: true));
-      expect(outcome.ok, isFalse);
-      expect(outcome.mayHaveActed, isFalse);
-    });
   });
 
   test('an accepted submission whose log cannot be fetched fails the step',
