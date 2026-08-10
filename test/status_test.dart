@@ -4,7 +4,6 @@ import 'dart:io';
 
 import 'package:release_kit/src/builds/capability.dart';
 import 'package:release_kit/src/commands/status.dart';
-import 'package:release_kit/src/destinations/pub_dev.dart';
 import 'package:release_kit/src/engine/assets.dart';
 import 'package:release_kit/src/engine/checklist.dart';
 import 'package:release_kit/src/engine/config.dart';
@@ -112,7 +111,7 @@ const testManifestDigest =
 
 /// A registry with a fixed idea of what is published, so status can be
 /// exercised without a network.
-class FakeRegistry implements RegistryReader, PubDevInspector {
+class FakeRegistry implements RegistryReader, PublicationInspector {
   FakeRegistry(
     this.published, {
     this.unreachable = false,
@@ -431,6 +430,9 @@ Future<({String text, Map<String, Object?> report})> statusRun({
   final selectedInspector = inspectorBuilder?.call(state, resolution!) ??
       Inspector(
         registry: registry,
+        // The fake serves both read contracts; production wires PubDevTarget
+        // here explicitly.
+        pubDev: registry as PublicationInspector,
         git: state,
         tools: tools ?? OriginAgreeing(state.tags, state.head),
         repository: repository,
@@ -440,7 +442,6 @@ Future<({String text, Map<String, Object?> report})> statusRun({
     resolution: resolution!,
     tree: source,
     git: state,
-    registry: registry,
     // Origin agrees with local unless a test says otherwise; without a
     // repository the forge still reports as unread, which is what rk says
     // when it has not been given a way to look.

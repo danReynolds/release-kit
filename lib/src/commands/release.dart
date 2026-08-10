@@ -1733,11 +1733,7 @@ class ReleaseCommand {
   }) async {
     switch (step.kind) {
       case StepKind.build:
-        return _chain(unit).buildStep(
-          step,
-          unit.binaryProject,
-          publishedRequirement: publishedRequirement,
-        );
+        return _chain(unit).buildStep(step, unit.binaryProject);
       case StepKind.sign:
         return _chain(unit).signStep(
           step,

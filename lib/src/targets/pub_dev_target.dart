@@ -49,7 +49,9 @@ final class PubDevTargetModule extends TargetModule {
   ) {
     final reader = context.registry;
     if (reader == null) {
-      return Future.value(const Inspection.unknown('not read: --offline'));
+      return Future.value(
+        const Inspection.unknown('the registry reader is not configured'),
+      );
     }
     final exact = context.pubDev;
     if (exact == null) {
@@ -75,7 +77,7 @@ final class PubDevTargetModule extends TargetModule {
   ) async {
     final reader = context.registry;
     if (reader == null) {
-      return const Inspection.unknown('not read: --offline');
+      return const Inspection.unknown('the registry reader is not configured');
     }
     try {
       final package = await reader.lookup(target.coordinate);
@@ -299,10 +301,7 @@ final class PubDevTargetModule extends TargetModule {
         'pub-preflight:${target.project!.name}',
         inputs: const {'step:source-snapshot'},
         validate: (_, step) {
-          const expected = {
-            'publish_dry_run': 'passed',
-            'consumer_resolve': 'passed',
-          };
+          const expected = {'publish_dry_run': 'passed'};
           final evidence = step.evidence;
           final exact = evidence.length == expected.length &&
               expected.entries.every(
@@ -313,7 +312,7 @@ final class PubDevTargetModule extends TargetModule {
               : [
                   StageIssue(
                     StageIssueKind.invalidStructure,
-                    '${step.name} does not prove both package preflights',
+                    '${step.name} does not prove the publish dry run',
                     path: 'stage.json',
                   ),
                 ];
@@ -338,10 +337,7 @@ final class PubDevTargetModule extends TargetModule {
     return StageStep(
       name: receiptName,
       inputs: [StageInput.step(context.sourceStep)],
-      evidence: const {
-        'publish_dry_run': 'passed',
-        'consumer_resolve': 'passed',
-      },
+      evidence: const {'publish_dry_run': 'passed'},
     );
   }
 
@@ -353,6 +349,29 @@ final class PubDevTargetModule extends TargetModule {
     final directory = project.pubspec.directory == '.'
         ? sourceRoot
         : '$sourceRoot/${project.pubspec.directory}';
+
+    // pub honours pubspec_overrides.yaml during the dry run's resolution but
+    // excludes it from the published archive, so a tracked overrides file
+    // makes every local validation pass against a dependency graph consumers
+    // never get. Refusing is the honest check; simulating a consumer was not.
+    for (final root in {sourceRoot, directory}) {
+      if (File('$root/pubspec_overrides.yaml').existsSync()) {
+        context.output.problem(
+          Diagnostic(
+            code: 'RK-PUB-008',
+            message: '${project.name}: a tracked pubspec_overrides.yaml '
+                'masks consumer resolution',
+            remedy: 'pub honours it locally and strips it from the archive, '
+                'so validation here would not see what consumers see. '
+                'Untrack it (git rm --cached) and re-stage.',
+          ),
+          unit: project.unitName,
+        );
+        context.output.halt(HaltKind.beforeActing);
+        return false;
+      }
+    }
+
     final dry = await context.tools.run(
       'dart',
       const ['pub', 'publish', '--dry-run'],
@@ -395,51 +414,7 @@ final class PubDevTargetModule extends TargetModule {
       }
     }
 
-    return _consumerResolve(context, project, directory);
-  }
-
-  Future<bool> _consumerResolve(
-    TargetStageContext context,
-    ResolvedProject project,
-    String directory,
-  ) async {
-    final probe = Directory.systemTemp.createTempSync('rk-consumer-');
-    try {
-      File('${probe.path}/pubspec.yaml').writeAsStringSync('''
-name: rk_consumer_probe
-publish_to: none
-environment:
-  sdk: '>=3.0.0 <4.0.0'
-dependencies:
-  ${project.name}: ${project.version}
-dependency_overrides:
-  ${project.name}:
-    path: ${directory.replaceAll('\\', '/')}
-''');
-      final resolved = await context.tools.run(
-        'dart',
-        const ['pub', 'get', '--no-precompile'],
-        workingDirectory: probe.path,
-      );
-      if (!resolved.ok) {
-        context.output.problem(
-          Diagnostic(
-            code: 'RK-PUB-002',
-            message: '${project.name}: consumers could not resolve this',
-            remedy: '${resolved.summary}\n'
-                'the probe resolves as a Dart consumer on this SDK; a '
-                'package needing Flutter or a newer SDK than the probe '
-                'models is a limit rk has not lifted yet — see the ledger',
-          ),
-          unit: project.unitName,
-        );
-        context.output.halt(HaltKind.beforeActing);
-        return false;
-      }
-      return true;
-    } finally {
-      probe.deleteSync(recursive: true);
-    }
+    return true;
   }
 
   @override

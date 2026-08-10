@@ -11,7 +11,7 @@ rides in `"rk"` and is bumped only when a key changes meaning.
 |---|---|
 | `rk` | schema version (currently `2`) |
 | `command` | the verb that ran |
-| `mode` | how the run was asked to operate: `{stage, offline}`. An offline document's `unknown` verdicts are only interpretable with this beside them |
+| `mode` | how the run was asked to operate: `{stage}` |
 | `observed_at` | UTC ISO 8601 — when rk read the world |
 | `exit` | mirrors the process exit code |
 | `safe_to_rerun` | whether running the same command again can do harm (rk's model makes this true in every case it has) |
@@ -61,12 +61,10 @@ For CI gating on `rk status --json`, the blessed rule is all three of:
    catches the human report's `Issues` section without parsing prose. Any
    concrete problem carrying `target` also makes that target's human row `✗`.
 2. No step has `verdict == "conflict"` — belt to problems' braces.
-3. `unknown` never auto-proceeds. Under `mode.offline` no destination is
-   ever `exact`: every one rk did not read answers `unknown`, and the
-   local half of the tag — created but not known to be pushed — answers
-   `unknown` too. A tag git does not hold is `absent`, which is work
-   remaining, not work done. So an offline document gates nothing: every
-   registry step is unknown, and unknown blocks.
+3. `unknown` never auto-proceeds: a destination rk could not read answers
+   `unknown`, never `absent`. A tag git does not hold is `absent`, which is
+   work remaining, not work done — so an unreadable world blocks a gate
+   rather than passing it.
 
 ## Status targets
 

@@ -69,6 +69,7 @@ dependencies:
 
   Inspector inspector(FakeRegistry registry) => Inspector(
         registry: registry,
+        pubDev: registry,
         git: GitState(
           root: '/repo',
           head: 'abc123def456',
@@ -345,7 +346,7 @@ void classificationTables() {
     });
   });
 
-  group('local monotonicity is an offline git fact', () {
+  group('local monotonicity is a git fact, read without a registry', () {
     Future<List<Diagnostic>> problemsFor(List<String> tags) async {
       final inspector = Inspector(
         registry: null,
@@ -367,16 +368,16 @@ void classificationTables() {
       return problems.found;
     }
 
-    test('the tag half is a local git fact, so --offline still refuses',
+    test('the tag half is a local git fact, refused without any read',
         () async {
       final found = await problemsFor(['v2.0.0']);
 
       expect(
         found.map((d) => d.code),
         contains('RK-MONO-001'),
-        reason: 'the tag loop reads git and nothing else — guarding it behind '
-            'the registry handed --json callers an empty problems array for '
-            'a repository whose tags are ahead of its manifests',
+        reason: 'the tag loop reads git and nothing else — guarding it '
+            'behind the registry handed --json callers an empty problems '
+            'array for a repository whose tags are ahead of its manifests',
       );
     });
   });
@@ -488,8 +489,8 @@ void classificationTables() {
     });
   });
 
-  group('offline never reports a tag as done', () {
-    Future<Inspection> tagOffline({required List<String> tags}) async {
+  group('an unread origin never reports a tag as done', () {
+    Future<Inspection> tagUnread({required List<String> tags}) async {
       final inspector = Inspector(
         registry: FakeRegistry({}),
         git: GitState(
@@ -504,7 +505,6 @@ void classificationTables() {
           signingConfigured: false,
           originUrl: 'example/tool',
         ),
-        // No tools is what `--offline` wires: nothing to ask origin with.
       );
       return inspector.inspect(
         Step(
@@ -519,7 +519,7 @@ void classificationTables() {
     }
 
     test('a local-only tag is unknown, never exact', () async {
-      final state = await tagOffline(tags: ['v1.0.0']);
+      final state = await tagUnread(tags: ['v1.0.0']);
 
       expect(
         state.verdict,
@@ -528,11 +528,11 @@ void classificationTables() {
             'exact here would make not reading the more confident answer '
             'than reading, which online returns absent for this same world',
       );
-      expect(state.detail, contains('--offline'));
+      expect(state.detail, contains('no tools to read origin with'));
     });
 
     test('no local tag is unknown because origin was not read', () async {
-      final state = await tagOffline(tags: const []);
+      final state = await tagUnread(tags: const []);
 
       expect(
         state.verdict,

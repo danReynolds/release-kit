@@ -49,7 +49,6 @@ Future<void> main(List<String> args) async {
     stdout.writeln('═ $path');
 
     for (final invocation in [
-      ['status', '--offline'],
       ['status'],
     ]) {
       final run = await _run(rk, path, [...invocation, '--json']);

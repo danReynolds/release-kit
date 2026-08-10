@@ -118,13 +118,15 @@ void main() {
       );
     });
 
-    test(
-        'DONE WHEN: the derived checklist is printed offline, for every '
-        'repository shape', () {
+    test('DONE WHEN: the checklist is derived for every repository shape', () {
       // Executed. The version this replaced asserted that a file under test/
       // contained particular strings — the same anti-pattern the phase 2
       // review found, one level along: rename a test and the phase fails,
       // delete the feature and it passes.
+      //
+      // Derivation is a local fact, so only derivation is asserted: the
+      // world's answers (and therefore the exit code) belong to whatever
+      // network this machine has.
       final scratch = Directory.systemTemp.createTempSync('rk-phase1-');
       addTearDown(() => scratch.deleteSync(recursive: true));
 
@@ -134,23 +136,19 @@ void main() {
         'multi-project-unit',
         'binary-cli',
       ]) {
-        final run = Rk.example(scratch, shape)(['status', '--offline']);
-        expect(run.code, 0, reason: '$shape: ${run.all}');
-        expect(
-          run.all,
-          contains('public targets were not read'),
-          reason: '$shape must say what it did not read',
-        );
-        expect(
-          run.all,
-          contains('Unknown is not treated as unpublished'),
-          reason: '$shape must not turn an offline unknown into an absence',
-        );
+        final run = Rk.example(scratch, shape)(['status', '--json']);
+        expect(run.units, isNotEmpty, reason: '$shape: ${run.all}');
+        for (final unit in run.units) {
+          expect(
+            (unit as Map)['steps'],
+            isNotEmpty,
+            reason: '$shape must derive a checklist for every unit',
+          );
+        }
       }
 
       // The shape that must be refused rather than released.
-      final refused =
-          Rk.example(scratch, 'escapes-repository')(['status', '--offline']);
+      final refused = Rk.example(scratch, 'escapes-repository')(['status']);
       expect(refused.code, 1, reason: refused.all);
       expect(refused.all, contains('does not contain'));
     });
@@ -173,8 +171,7 @@ void main() {
     tearDownAll(() => scratch.deleteSync(recursive: true));
 
     test('the four-glyph gutter, and colour is never the only signal', () {
-      final run = repo(['status', '--offline']);
-      expect(run.code, 0, reason: run.all);
+      final run = repo(['status']);
       expect(
         run.all,
         isNot(contains('\x1b')),
@@ -183,13 +180,13 @@ void main() {
     });
 
     test('non-TTY output is append-only: no cursor movement, ever', () {
-      final run = repo(['status', '--offline']);
+      final run = repo(['status']);
       expect(run.all, isNot(contains('\r')));
       expect(run.all, isNot(contains('\x1b[')));
     });
 
     test('--json carries the checklist, keyed by step id', () {
-      final run = repo(['status', '--offline', '--json']);
+      final run = repo(['status', '--json']);
       final steps = run.stepsOf('cli');
       expect(steps, isNotEmpty, reason: 'an empty checklist is not a surface');
       expect(
@@ -203,21 +200,10 @@ void main() {
           reason: 'an omitted verdict reads as "nothing is there"',
         );
       }
-      // Offline reads what is local — git says the tag does not exist — and
-      // says "not read" only about what it did not read. The version of this
-      // that expected `unknown` everywhere was asserting a renderer that
-      // inspected nothing at all.
-      final registryStep =
-          steps.firstWhere((s) => s['kind'] == 'publishRegistry');
-      expect(registryStep['verdict'], 'unknown', reason: 'pub.dev unread');
-      expect(registryStep['detail'], contains('--offline'));
-      final tagStep = steps.firstWhere((s) => s['kind'] == 'tag');
-      expect(tagStep['verdict'], 'unknown',
-          reason: 'offline mode cannot establish remote tag truth');
     });
 
     test('--json is only JSON', () {
-      final run = repo(['status', '--offline', '--json']);
+      final run = repo(['status', '--json']);
       expect(run.stdout.trimLeft(), startsWith('{'));
       expect(run.stdout, isNot(contains('derived from the manifests alone')));
       expect(run.json['safe_to_rerun'], isTrue);
@@ -290,14 +276,14 @@ void main() {
       });
     });
 
-    test('a clean run writes no diagnosis', () {
+    test('a run that only read writes no diagnosis', () {
       final clean =
           Rk.example(scratch, 'workspace-with-dependent', as: 'clean');
-      expect(clean(['status', '--offline']).code, 0);
+      clean(['status']);
       expect(
         clean.diagnoses(),
         isEmpty,
-        reason: 'a directory that fills up on success is a directory nobody '
+        reason: 'a directory that fills up on reads is a directory nobody '
             'reads on failure',
       );
     });
@@ -310,10 +296,13 @@ void main() {
     });
 
     test(
-        'DONE WHEN: the checklist renders identically to a terminal and a '
+        'DONE WHEN: the report renders identically to a terminal and a '
         'pipe', () {
       // A pty, so this is the real comparison rather than a replay of it.
-      final piped = repo(['status', '--offline']).stdout;
+      // A bare repository answers deterministically without reading any
+      // target, so the comparison is byte-stable on any machine.
+      final bare = Rk.repository(scratch, 'pty', {'README.md': 'nothing\n'});
+      final piped = bare(['status']).stdout;
       final pty = Process.runSync(
         'script',
         [
@@ -323,9 +312,8 @@ void main() {
           'run',
           File('bin/rk.dart').absolute.path,
           'status',
-          '--offline',
         ],
-        workingDirectory: repo.root,
+        workingDirectory: bare.root,
         environment: {'NO_COLOR': '1'},
       );
 
@@ -368,9 +356,8 @@ void main() {
           'run',
           File('bin/rk.dart').absolute.path,
           'status',
-          '--offline',
         ],
-        workingDirectory: repo.root,
+        workingDirectory: bare.root,
         environment: {'TERM': 'dumb'},
       );
       final dumb = dumbPty.stdout as String;
@@ -569,6 +556,7 @@ void main() {
       required Map<String, List<int>> archives,
       required Set<String> tags,
       Map<String, ToolResult> results = const {},
+      Map<String, String> sourceFiles = const {},
       void Function(String key)? onRun,
     }) async {
       // A fresh registry per drive is a fresh process: the world — what is
@@ -588,6 +576,7 @@ publish = ["pub.dev"]
       final tree = MemorySourceTree({
         'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
         'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
+        ...sourceFiles,
       }, description: '/repo/keybay');
       final resolution = Resolution.resolve(parsed, tree, diagnostics)!;
       const tagObject = '3333333333333333333333333333333333333333';
@@ -748,7 +737,7 @@ publish = ["pub.dev"]
       expect(sourceContains('StepKind.tag'), isTrue);
     });
 
-    test('consumer resolve runs before the permanent act, and blocks it',
+    test('a tracked pubspec_overrides.yaml refuses before the permanent act',
         () async {
       final run = await drive(
         published: {
@@ -756,24 +745,25 @@ publish = ["pub.dev"]
         },
         archives: {},
         tags: {},
-        results: {
-          'dart pub get --no-precompile': ToolResult(
-            exitCode: 1,
-            stdout: '',
-            stderr: 'version solving failed',
-          ),
+        sourceFiles: {
+          'packages/keybay/pubspec_overrides.yaml':
+              'dependency_overrides:\n  transitive:\n    path: ../other\n',
         },
       );
 
       expect(run.code, ExitCodes.refused);
-      expect(run.text, contains('consumers could not resolve this'));
+      expect(run.text, contains('masks consumer resolution'));
+      expect(
+        run.calls,
+        isNot(contains('dart pub publish --dry-run')),
+        reason: 'pub excludes pubspec_overrides.yaml from the archive but '
+            'honours it locally — a dry run against an overridden graph '
+            'validates a package consumers never get, so the refusal '
+            'precedes it',
+      );
       expect(
         run.calls.where((c) => c.contains('publish --force')),
         isEmpty,
-        reason: 'pub excludes pubspec_overrides.yaml from the archive but '
-            'honours it locally — a dry run can pass while the published '
-            'package is unresolvable for everyone else, so the resolve '
-            'gates the act',
       );
     });
 
@@ -1072,12 +1062,17 @@ publish = ["pub.dev"]
       );
 
       File('${repo.root}/release.toml').writeAsStringSync(config!);
-      final status = repo(['status', '--offline', '--json']);
-      expect(status.code, 0, reason: status.all);
+      final status = repo(['status', '--json']);
       expect(
         status.units,
         hasLength(3),
-        reason: 'what init proposed, status releases',
+        reason: 'what init proposed, status derives and releases',
+      );
+      expect(
+        status.problems.map((problem) => problem['code']),
+        isNot(anyElement(startsWith('RK-CONF'))),
+        reason: 'a written config rk refuses would be rk debugging its own '
+            'output',
       );
     });
   });

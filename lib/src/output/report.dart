@@ -51,17 +51,16 @@ class Report {
   /// decide" without reading the sentence.
   var rerunHelps = true;
 
-  /// How the run was asked to read — so a caller can tell "checked, and
-  /// could not conclude" from "never looked". An offline document full of
-  /// unknown verdicts is only interpretable with this beside it.
+  /// How the run was asked to operate — today only whether release was
+  /// asked to stop at the private stage.
   final Map<String, Object> mode = {};
 
   /// Whether this run began changing things.
   ///
   /// The signal for whether a failure is worth recording evidence about. It is
-  /// set by the act phase rather than inferred from whether a step was printed:
-  /// inferring it meant no planned failure ever wrote a diagnosis, because the
-  /// only path that printed steps was the offline one, which always succeeds.
+  /// set by the act phase rather than inferred from whether a step was
+  /// printed: inferring it meant no planned failure ever wrote a diagnosis,
+  /// because a read-only path that printed steps always succeeded.
   var acted = false;
 
   /// [uncommitted] is null when the run stopped before reading git, which is

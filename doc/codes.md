@@ -172,13 +172,14 @@ fails, and the count below is checked against the rows.
 | code | says | declared in |
 |---|---|---|
 | `RK-PUB-001` | pub refuses to publish ${project.name} | `lib/src/targets/pub_dev_target.dart` |
-| `RK-PUB-002` | ${project.name}: consumers could not resolve this | `lib/src/targets/pub_dev_target.dart` |
 | `RK-PUB-003` | ${project.name}: dart pub publish did not complete | `lib/src/targets/pub_dev_target.dart` |
 | `RK-PUB-005` | the published version's exact public archive could not be confirmed | `lib/src/targets/pub_dev_target.dart` |
 | `RK-PUB-006` | the immutable public archive differs from the release source | `lib/src/targets/pub_dev_target.dart` |
 | `RK-PUB-007` | dart pub login did not complete | `lib/src/targets/pub_dev_target.dart` |
+| `RK-PUB-008` | ${project.name}: a tracked pubspec_overrides.yaml masks consumer resolution | `lib/src/targets/pub_dev_target.dart` |
 
-RK-PUB-004 is a retired historical meaning and is not reused.
+RK-PUB-002 (the consumer-resolve probe) and RK-PUB-004 are retired historical
+meanings and are not reused.
 
 ## RK-REL — The release run
 

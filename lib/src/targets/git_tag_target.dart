@@ -57,8 +57,8 @@ final class GitTagTargetModule extends TargetModule {
     if (tools == null) {
       return Inspection.unknown(
         context.git.hasTag(unit.tag)
-            ? 'the tag exists locally; origin was not read: --offline'
-            : 'origin was not read: --offline',
+            ? 'the tag exists locally; no tools to read origin with'
+            : 'no tools to read origin with',
       );
     }
     final destination = GitTag(tools: tools, root: context.git.root);
@@ -124,7 +124,7 @@ final class GitTagTargetModule extends TargetModule {
     final tools = context.tools;
     if (tools == null) {
       return Future.value(
-        const Inspection.unknown('origin was not read: --offline'),
+        const Inspection.unknown('no tools to read origin with'),
       );
     }
     return GitTag(tools: tools, root: context.git.root)

@@ -39,11 +39,10 @@ import 'transforms/macos.dart';
 /// in memory (CI readiness, seam 1); the workspace is the interface
 /// (seam 3).
 ///
-/// Reuse follows the RFC's identity rule, not existence: a file on disk is
-/// not evidence of itself. The only artifacts a re-run may reuse are those
-/// an external authority re-verifies now — a signed binary codesign accepts
-/// at the right version, a zip Apple already notarized. Everything else is
-/// rebuilt.
+/// Reuse is the coordinator's job, not this class's: a producer runs only
+/// when the stage receipt lacks its step, and a validated receipt is the one
+/// authority for skipping work. Every method here therefore does its work
+/// unconditionally — a file on disk is not evidence of itself.
 class BinaryChain {
   BinaryChain({
     required this.tools,
@@ -76,9 +75,8 @@ class BinaryChain {
 
   Future<LocalProducerOutcome> buildStep(
     Step step,
-    ResolvedProject project, {
-    required String? publishedRequirement,
-  }) async {
+    ResolvedProject project,
+  ) async {
     final platform = step.platform!;
     final executable = project.executable!;
     final capability = capabilities.resolve(platform);
@@ -97,49 +95,6 @@ class BinaryChain {
     }
 
     final name = binaryName(platform, executable);
-
-    // Reuse is by identity, not acceptability, and every leg is an external
-    // authority answering *now*:
-    //
-    //   1. `codesign --verify --strict` — the bytes match the signature. The
-    //      display commands are not this check: `-d -r-` prints the
-    //      requirement, exit 0, for a binary modified after signing.
-    //   2. The designated requirement equals the one users already
-    //      installed. A Developer ID requirement carries no content hash, so
-    //      equality proves who signed; leg 1 proves these bytes are theirs.
-    //   3. The binary reports this release's version.
-    //
-    // No published baseline means no authority to be continuous with, so a
-    // first release always rebuilds — a compile costs seconds, and the
-    // artifact reuse exists for is the one Apple takes minutes to re-vouch,
-    // which stays gated by its own step. What this refuses: a foreign
-    // binary seeded into `.rk/work/` — invisible to git status, since
-    // `.rk/` is ignored — walking out signed and published.
-    if (platform.startsWith('macos-') &&
-        publishedRequirement != null &&
-        workspace.exists(name)) {
-      final signer = MacOsSigner(tools: tools);
-      final path = workspace.pathOf(name);
-      if (await signer.verifies(path) &&
-          await signer.designatedRequirement(path) == publishedRequirement &&
-          await _versionMatches(name, project.version.canonical)) {
-        output.step(
-          step,
-          mark: Mark.satisfied,
-          verdict: Verdict.exact,
-          detail: 'signed binary in the workspace — signature verified, '
-              'identity matches the published release',
-          note: 'signed binary in the workspace — signature verified, '
-              'identity matches the published release',
-        );
-        return LocalProducerOutcome.succeeded(
-          outputs: [LocalProducerOutput(name, 'executable')],
-          evidence: const {
-            'smoke': {'status': 'passed'},
-          },
-        );
-      }
-    }
 
     final activity = output.begin(step);
     File(workspace.pathOf(name)).parent.createSync(recursive: true);
@@ -168,7 +123,6 @@ class BinaryChain {
         built.problem ?? 'the build failed',
       );
     }
-    workspace.ingest(name);
 
     // The proof's absence travels with the artifact. `built` alone would
     // read as "checked", which is the claim rk must not make for a binary
@@ -201,11 +155,6 @@ class BinaryChain {
         'smoke': {'status': 'passed'},
       },
     );
-  }
-
-  Future<bool> _versionMatches(String name, String version) async {
-    final result = await tools.run(workspace.pathOf(name), ['--version']);
-    return result.ok && result.stdout.contains(version);
   }
 
   // ---- sign ----
@@ -279,7 +228,6 @@ class BinaryChain {
         signed.problem ?? 'signing failed',
       );
     }
-    workspace.ingest(name);
 
     // The proof: what was just signed must be the same program identity users
     // already installed. A new certificate, team, or rebuilt identity passes
@@ -414,29 +362,6 @@ class BinaryChain {
       platform,
     );
 
-    final signer = MacOsSigner(tools: tools);
-    if (await signer.isNotarized(workspace.pathOf(binary)) &&
-        workspace.exists(resultName) &&
-        workspace.exists(logName)) {
-      // Apple vouches for the bytes; the evidence files vouch for the
-      // release. Both or neither: notarized bytes without the result and
-      // log would publish a release missing two of its expected assets.
-      output.step(
-        step,
-        mark: Mark.satisfied,
-        verdict: Verdict.exact,
-        detail: 'Apple already notarized these exact bytes',
-        note: 'Apple already notarized these exact bytes',
-      );
-      return _notaryOutcome(
-        resultName: resultName,
-        logName: logName,
-        zipName: workspace.exists(zipName(platform, executable))
-            ? zipName(platform, executable)
-            : null,
-      );
-    }
-
     final zip = zipName(platform, executable);
     final zipped = await tools.run(
       'ditto',
@@ -459,7 +384,6 @@ class BinaryChain {
       );
       return LocalProducerOutcome.failed(zipped.summary);
     }
-    workspace.ingest(zip);
 
     // The wait is Apple's, and silence during it reads as a hang — this is
     // the step Activity exists for.

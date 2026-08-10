@@ -89,7 +89,6 @@ void main() {
       contains('pub-preflight:tool'),
     );
     expect(run.keys, contains('dart pub publish --dry-run'));
-    expect(run.keys, contains('dart pub get --no-precompile'));
     expect(run.keys, isNot(contains('dart pub login')));
     expect(authorizationPrompts, 0);
     expect(
@@ -126,7 +125,6 @@ void main() {
       reason: 'the completed stage already proves the binary producer',
     );
     expect(released.keys, isNot(contains('dart pub publish --dry-run')));
-    expect(released.keys, isNot(contains('dart pub get --no-precompile')));
 
     final publish = released.invocations.singleWhere(
       (call) => call.key == 'dart pub publish --force',
@@ -194,7 +192,6 @@ void main() {
     expect((refused.report['halt'] as Map?)?['kind'], 'beforeActing');
     expect(refused.keys, contains('dart pub login'));
     expect(refused.keys, isNot(contains('dart pub publish --dry-run')));
-    expect(refused.keys, isNot(contains('dart pub get --no-precompile')));
     expect(
       refused.keys.where((key) => key.startsWith('dart compile exe')),
       isEmpty,
@@ -230,7 +227,6 @@ void main() {
       isEmpty,
     );
     expect(second.keys, isNot(contains('dart pub publish --dry-run')));
-    expect(second.keys, isNot(contains('dart pub get --no-precompile')));
     expect(
       File(harness.stage.directory.resolve('stage.json')).readAsBytesSync(),
       receipt,
@@ -1024,7 +1020,6 @@ void main() {
       expect(resumed.code, ExitCodes.ok, reason: resumed.text);
       if (boundary.preflightDone) {
         expect(resumed.keys, isNot(contains('dart pub publish --dry-run')));
-        expect(resumed.keys, isNot(contains('dart pub get --no-precompile')));
       }
       if (boundary.buildDone) {
         expect(

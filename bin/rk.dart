@@ -47,7 +47,6 @@ Usage
 Flags
   --version   print this binary's version and exit
   --json      the machine surface (doc/json.md)
-  --offline   status: derive the plan, read nothing
   --stage     release: build, sign, and notarize exact artifacts; publish nothing
   --write     init: accept the proposal without a prompt
 
@@ -71,7 +70,6 @@ Future<void> main(List<String> args) async {
     '--help',
     '--stage',
     '--json',
-    '--offline',
     '--write',
   };
   final flags = args.where((a) => a.startsWith('-')).toSet();
@@ -84,12 +82,9 @@ Future<void> main(List<String> args) async {
   final target = positional.length > 1 ? positional[1] : null;
 
   final output = Output.stdio(json: json, command: command);
-  // The document says how it was asked to read, so a caller can tell
-  // "checked, inconclusive" from "never looked" — an offline run's unknowns
-  // are only interpretable with this beside them.
+  // The document says how it was asked to operate.
   output.report.mode.addAll({
     'stage': flags.contains('--stage'),
-    'offline': flags.contains('--offline'),
   });
 
   if (!verbs.contains(command)) {
@@ -106,10 +101,10 @@ Future<void> main(List<String> args) async {
   }
 
   // A flag that exists but does not apply to this verb is refused the same
-  // way as one that does not exist: `rk release --offline` performing live
-  // reads under a flag that promises none is worse than an error.
+  // way as one that does not exist: `rk status --stage` staging under a verb
+  // that promises to be read-only is worse than an error.
   const perVerb = {
-    'status': {'-h', '--help', '--json', '--offline'},
+    'status': {'-h', '--help', '--json'},
     'release': {'-h', '--help', '--json', '--stage'},
     'init': {'-h', '--help', '--json', '--write'},
   };
@@ -213,7 +208,7 @@ Future<void> main(List<String> args) async {
           interactive: !json,
           write: flags.contains('--write'),
         ),
-      _ => await _status(output, target, offline: flags.contains('--offline')),
+      _ => await _status(output, target),
     };
   } on Object catch (error, stack) {
     // Its own exit class: an agent must tell "refused — remedy, then retry"
@@ -466,9 +461,8 @@ _Prepared _prepare(Output output) {
 
 Future<int> _status(
   Output output,
-  String? unit, {
-  required bool offline,
-}) async {
+  String? unit,
+) async {
   final prepared = _prepare(output);
   if (!prepared.isReady) return prepared.code!;
   final resolution = prepared.resolution!;
@@ -487,22 +481,16 @@ Future<int> _status(
       resolution: resolution,
       tree: tree,
       git: git,
-      registry: offline ? null : registry,
       inspector: Inspector(
-        registry: offline ? null : registry,
-        pubDev: offline
-            ? null
-            : PubDevTarget(
-                registry: registry,
-                comparator: Comparator(tools: targetTools),
-                source: GitCommitSourceTree(tree.root, git.head),
-              ),
+        registry: registry,
+        pubDev: PubDevTarget(
+          registry: registry,
+          comparator: Comparator(tools: targetTools),
+          source: GitCommitSourceTree(tree.root, git.head),
+        ),
         git: git,
-        // Offline is a wiring decision, not a mode the verb branches on:
-        // nothing to read from means every verdict says "not read", through
-        // the same paths and the same rendering as a live run.
-        tools: offline ? null : targetTools,
-        repository: offline ? null : git.originUrl,
+        tools: targetTools,
+        repository: git.originUrl,
         stageFor: stages.call,
         targets: targets,
       ),
