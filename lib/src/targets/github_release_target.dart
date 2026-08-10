@@ -222,7 +222,7 @@ final class GithubReleaseTargetModule extends TargetModule {
     final assets = _StagedReleaseAssets(
       workspace: context.workspace,
       output: context.output,
-    ).gather(project, unit.name);
+    ).gather(target, unit.name);
     if (assets == null) return const TargetActOutcome.reportedFailure();
     final notesPath = context.workspace.pathOf('release-notes.md');
     if (!File(notesPath).existsSync()) {
@@ -419,79 +419,43 @@ final class _StagedReleaseAssets {
   final Workspace workspace;
   final Output output;
 
+  /// The exact inventory is the expectation's, so the act can never upload
+  /// a set the inspection would not expect back.
   List<_StagedReleaseAsset>? gather(
-    ResolvedProject project,
+    TargetExpectation target,
     String unit,
   ) {
     final assets = <_StagedReleaseAsset>[];
-
-    _StagedReleaseAsset? read(
-      String name,
-      String producer,
-    ) {
+    for (final name in target.artifacts) {
       final bytes = workspace.readBytes(name);
       if (bytes == null) {
         output.problem(
           Diagnostic(
             code: 'RK-WORK-001',
             message: 'the workspace has no $name',
-            remedy: '$producer — re-running runs it',
+            remedy: '${_producerOf(name)} — re-running runs it',
           ),
           unit: unit,
         );
         return null;
       }
-      return _StagedReleaseAsset(
+      assets.add(_StagedReleaseAsset(
         name: name,
         path: workspace.pathOf(name),
         bytes: bytes,
-      );
+      ));
     }
-
-    for (final platform in project.binaryPlatforms) {
-      final executable = project.executable!;
-      final version = project.version.canonical;
-      final archive = read(
-        ReleaseAssets.archiveName(executable, version, platform),
-        'the archive steps produce it',
-      );
-      if (archive == null) return null;
-      assets.add(archive);
-
-      if (platform.startsWith('macos-')) {
-        for (final evidence in [
-          ReleaseAssets.notaryResultName(executable, version, platform),
-          ReleaseAssets.notaryLogName(executable, version, platform),
-        ]) {
-          final asset = read(evidence, 'the notarize step produces it');
-          if (asset == null) return null;
-          assets.add(asset);
-        }
-      }
-    }
-
-    final sums = read(
-      ReleaseAssets.checksums,
-      'the checksums step produces it',
-    );
-    if (sums == null) return null;
-    assets.add(sums);
-
-    if (project.channels.contains('homebrew')) {
-      final formula = read(
-        ReleaseAssets.formulaName(project.executable!),
-        'the Homebrew target renders it',
-      );
-      if (formula == null) return null;
-      assets.add(formula);
-    }
-    final manifest = read(
-      ReleaseAssets.manifest,
-      'the complete-stage step produces it',
-    );
-    if (manifest == null) return null;
-    assets.add(manifest);
     return assets;
+  }
+
+  static String _producerOf(String name) {
+    if (name == ReleaseAssets.checksums)
+      return 'the checksums step produces it';
+    if (name == ReleaseAssets.manifest) {
+      return 'the complete-stage step produces it';
+    }
+    if (name.endsWith('.rb')) return 'the Homebrew target renders it';
+    return 'the archive steps produce it';
   }
 }
 

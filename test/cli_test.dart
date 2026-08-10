@@ -89,6 +89,25 @@ void main() {
       expect(run.all, contains('rk release <unit>'));
       expect(run.all, contains('rk release <unit> --stage'));
     });
+
+    test('a bare --confirm authorizes nothing and is refused', () {
+      final run = repo(['release', 'lib', '--confirm', '--json']);
+      expect(run.code, 2, reason: run.all);
+      expect(run.problems.map((p) => p['code']), contains('RK-CLI-009'));
+    });
+
+    test('--confirm carries its version through the parser', () {
+      // --help short-circuits before the verb runs, so this proves only the
+      // surface: the flag parses, applies to release, and is refused
+      // elsewhere. Its authorization semantics are the typed-version path,
+      // proved in release_test.
+      final accepted = repo(['release', '--confirm=1.4.0', '--help']);
+      expect(accepted.code, 0, reason: accepted.all);
+
+      final elsewhere = repo(['status', '--confirm=1.4.0', '--json']);
+      expect(elsewhere.code, 2, reason: elsewhere.all);
+      expect(elsewhere.problems.map((p) => p['code']), contains('RK-CLI-005'));
+    });
   });
 
   test('--version identifies the binary without repository preparation', () {

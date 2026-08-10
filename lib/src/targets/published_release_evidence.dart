@@ -79,7 +79,6 @@ final class PublishedReleaseEvidence {
       version: unit.version.canonical,
       tag: unit.tag,
       sourceCommit: context.git.head,
-      sourceTree: context.git.headTree,
       title: '${project.name} ${unit.version}',
       body: notes,
       manifestSha256: digest,

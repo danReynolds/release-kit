@@ -19,7 +19,7 @@ class Report {
   final String command;
 
   /// Wire format version, bumped only when a key changes meaning.
-  static const schema = 2;
+  static const schema = 3;
 
   /// Units by name, in the order they were first mentioned.
   ///
@@ -32,17 +32,6 @@ class Report {
   final List<String> _next = [];
   Map<String, Object?>? _repository;
   Map<String, Object?>? _halt;
-
-  /// Whether running the same command again can do harm.
-  ///
-  /// Two questions, kept apart because conflating them made the flagship field
-  /// wrong on the commonest halt: *is re-running safe* and *will re-running
-  /// help* are different. rk's execution model — the same inspection before
-  /// and after an act, with reality as the database — makes re-running safe in
-  /// every case it has,
-  /// including after a conflict, where a second run inspects and refuses
-  /// again. What a conflict changes is that re-running will not fix it.
-  var safeToRerun = true;
 
   /// Whether re-running would move the release forward.
   ///
@@ -213,17 +202,17 @@ class Report {
   /// yield to a specific one already diagnosed.
   bool get halted => _halt != null;
 
-  /// Records a halt. [helps] and [safe] only ever narrow: the worst answer of
-  /// a run is the answer for the run.
+  /// Records a halt. [helps] only ever narrows: the worst answer of a run
+  /// is the answer for the run. Re-running is safe by construction — the
+  /// same inspection precedes every act — so the document does not carry a
+  /// field that could only ever say so.
   void halt(
     String kind,
     String sentence, {
     required bool helps,
-    bool safe = true,
   }) {
     _halt = {'kind': kind, 'sentence': sentence};
     if (!helps) rerunHelps = false;
-    if (!safe) safeToRerun = false;
   }
 
   /// The document, with [exit] folded in so a caller that captured only stdout
@@ -235,7 +224,6 @@ class Report {
             if (mode.isNotEmpty) 'mode': mode,
             'observed_at': DateTime.now().toUtc().toIso8601String(),
             'exit': exit,
-            'safe_to_rerun': safeToRerun,
             'rerun_helps': rerunHelps,
             if (_repository != null) 'repository': _repository,
             'units': _units.values.toList(),

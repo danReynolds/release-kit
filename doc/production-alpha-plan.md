@@ -1,7 +1,13 @@
 # Production alpha readiness plan
 
 Status: local implementation complete; supervised live gate pending,
-2026-08-08. This is the current forward plan.
+2026-08-08. Pre-alpha simplification landed 2026-08-10: the consumer
+probe, `--offline`, and the transient unsigned build are gone; macOS
+build and signing are one producer; the pipeline is declared once; the
+manifest carries only externally checkable facts; notary evidence is
+stage-local; and `--json` is the agent contract at schema 3 with
+`release --confirm=<version>` as the noninteractive typed yes. This is
+the current forward plan.
 `doc/plan.md` remains the historical phase plan, review record, and evidence
 ledger. Where its forward-looking design differs from this document, this
 document is the decision to implement and RFC 0002 must be reconciled before
@@ -65,7 +71,7 @@ worktree. The local acceptance evidence is:
 - `dart analyze` reports no issues;
 - the default test lane passes with no deliberate red tests, while the two
   production receipts remain isolated in `test/live_release_checkpoints.dart`;
-- `dart run tool/validate.dart` exercises online and offline status against
+- `dart run tool/validate.dart` exercises status against
   secret_store, Fleury, and release-kit with zero crashes;
 - help exposes only `init`, `status`, and `release`, with `release --stage` and
   no `verify`, `--at`, or release-level `--dry-run` surface;
@@ -178,7 +184,7 @@ ends with one of these natural conclusions:
 
 Colour is restrained: green for success, red for a concrete or actionable
 problem (including an online target read that failed), yellow for an unknown
-with no linked issue such as an offline read, cyan for the next command, dim
+with no linked issue such as an unreachable read, cyan for the next command, dim
 text for secondary facts, and bold section headings. `NO_COLOR`, `TERM=dumb`,
 non-TTY output, and `--json` contain no ANSI or cursor movement. The final
 non-TTY report has the same words and ordering as the settled TTY report.
@@ -199,8 +205,8 @@ rk release rk
 ```
 
 `--stage` performs every local and package preflight for real: source
-snapshot, package dry-run and consumer resolve, build, smoke test where
-possible, signing, notarization, archive, checksums, release notes, release
+snapshot, package dry-run, build and sign as one step, smoke test where
+possible, notarization, archive, checksums, release notes, release
 manifest, and formula rendering. It may read public targets, use signing and
 notary credentials, and contact Apple. It must not create or push a tag,
 publish a registry package, create a GitHub Release, push a tap, or run
@@ -414,7 +420,7 @@ stage that was reviewed is never replaced implicitly.
   inspect and preflight
     -> [normal interactive release with unfinished pub.dev: dart pub login]
     -> source snapshot
-    -> package/build/sign/notarize/archive/checksum/notes/formula
+    -> package/build+sign/notarize/archive/checksum/notes/formula
     -> complete stage
     -> tag
     -> dependency-ordered registry packages

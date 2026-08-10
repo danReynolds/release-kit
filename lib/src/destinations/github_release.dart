@@ -3,7 +3,6 @@ import 'dart:io';
 
 import '../engine/assets.dart';
 import '../engine/release_manifest.dart';
-import '../engine/stage.dart';
 import '../engine/tools.dart';
 import '../engine/verdict.dart';
 import '../engine/version.dart';
@@ -225,7 +224,6 @@ class GithubRelease {
       tag: expected.tag,
       manifestSha256: expected.manifestSha256,
       sourceCommit: expected.sourceCommit,
-      sourceTree: expected.sourceTree,
       title: expected.title,
     );
     if (!observation.inspection.isExact) {
@@ -252,9 +250,7 @@ class GithubRelease {
         version: expected.version,
         tag: expected.tag,
         manifestSha256: expected.manifestSha256,
-        identity: expected.identity,
         sourceCommit: expected.sourceCommit,
-        sourceTree: expected.sourceTree,
         title: expected.title,
         body: expected.body,
         publicAssets: expected.publicAssets,
@@ -265,9 +261,7 @@ class GithubRelease {
     required String version,
     required String tag,
     required String manifestSha256,
-    StageIdentity? identity,
-    String? sourceCommit,
-    String? sourceTree,
+    required String sourceCommit,
     String? title,
     String? body,
     Set<String>? publicAssets,
@@ -279,27 +273,10 @@ class GithubRelease {
         ),
       );
     }
-    if (identity == null && sourceCommit == null) {
-      return const _ManifestObservation.failed(
-        Inspection.unknown(
-          'the release manifest has no independently trusted source anchor',
-        ),
-      );
-    }
-    if (sourceCommit != null && !_isObjectId(sourceCommit)) {
+    if (!_isObjectId(sourceCommit)) {
       return const _ManifestObservation.failed(
         Inspection.unknown(
           'the tag-bound source commit is not a full Git object ID',
-        ),
-      );
-    }
-    if (sourceTree != null &&
-        (!_isObjectId(sourceTree) ||
-            sourceTree.length != sourceCommit?.length)) {
-      return const _ManifestObservation.failed(
-        Inspection.unknown(
-          'the expected source tree is not the same full Git object format as '
-          'the source commit',
         ),
       );
     }
@@ -381,22 +358,9 @@ class GithubRelease {
     if (manifest.tag != tag) {
       differences['manifest tag'] = 'published ${manifest.tag}, expected $tag';
     }
-    if (identity != null && manifest.identity.id != identity.id) {
-      differences['stage identity'] =
-          'published ${manifest.identity.id}, expected ${identity.id}';
-    }
-    if (sourceCommit != null &&
-        manifest.identity.headCommit.toLowerCase() !=
-            sourceCommit.toLowerCase()) {
-      differences['source commit'] =
-          'published ${manifest.identity.headCommit}, expected '
+    if (manifest.commit.toLowerCase() != sourceCommit.toLowerCase()) {
+      differences['source commit'] = 'published ${manifest.commit}, expected '
           '${sourceCommit.toLowerCase()}';
-    }
-    if (sourceTree != null &&
-        manifest.identity.headTree.toLowerCase() != sourceTree.toLowerCase()) {
-      differences['source tree'] =
-          'published ${manifest.identity.headTree}, expected '
-          '${sourceTree.toLowerCase()}';
     }
 
     final manifestArtifacts = manifest.artifacts.map((a) => a.name).toSet();
@@ -1365,9 +1329,7 @@ class GithubManifestExpectation {
     required this.unit,
     required this.version,
     required this.tag,
-    this.identity,
-    this.sourceCommit,
-    this.sourceTree,
+    required this.sourceCommit,
     required this.title,
     required this.body,
     required this.manifestSha256,
@@ -1378,17 +1340,10 @@ class GithubManifestExpectation {
   final String version;
   final String tag;
 
-  /// Exact local stage identity when the completed stage still exists.
-  ///
-  /// This is intentionally optional for stateless verification: host and
-  /// toolchain fields are build inputs, not stable public facts. A later host
-  /// verifies a tag-bound release against [sourceCommit]/[sourceTree] instead.
-  final StageIdentity? identity;
-
-  /// Independently authenticated source anchors, normally the remote tag's
-  /// peeled commit and that commit's tree. Required when [identity] is absent.
-  final String? sourceCommit;
-  final String? sourceTree;
+  /// The independently authenticated source anchor: the remote tag's peeled
+  /// commit. The manifest carries the same fact, and a commit already binds
+  /// its tree, so one anchor is the whole comparison.
+  final String sourceCommit;
   final String title;
   final String body;
 
@@ -1413,7 +1368,6 @@ class GithubHistoricalManifestExpectation {
     required this.tag,
     required this.sourceCommit,
     required this.manifestSha256,
-    this.sourceTree,
     this.title,
   });
 
@@ -1424,7 +1378,6 @@ class GithubHistoricalManifestExpectation {
   final String manifestSha256;
 
   /// Optional independently known tree for the peeled source commit.
-  final String? sourceTree;
 
   /// Optional stable title. Historical changelog bodies are not required.
   final String? title;

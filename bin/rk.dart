@@ -48,6 +48,8 @@ Flags
   --version   print this binary's version and exit
   --json      the machine surface (doc/json.md)
   --stage     release: build, sign, and notarize exact artifacts; publish nothing
+  --confirm=<version>
+              release: authorize exactly this version without a prompt
   --write     init: accept the proposal without a prompt
 
 Marks: ✓ done,  · already satisfied,  ✗ problem or conflict,  → your next move,
@@ -70,9 +72,22 @@ Future<void> main(List<String> args) async {
     '--help',
     '--stage',
     '--json',
+    '--confirm',
     '--write',
   };
-  final flags = args.where((a) => a.startsWith('-')).toSet();
+  // --confirm carries the exact version as its value: the typed yes for
+  // scripts and agents, the same door init opens with --write. A bare
+  // --confirm authorizes nothing and is refused below.
+  String? confirmVersion;
+  final flags = <String>{};
+  for (final flag in args.where((a) => a.startsWith('-'))) {
+    if (flag.startsWith('--confirm=')) {
+      confirmVersion = flag.substring('--confirm='.length);
+      flags.add('--confirm');
+    } else {
+      flags.add(flag);
+    }
+  }
   final positional = args.where((a) => !a.startsWith('-')).toList();
   final json = flags.contains('--json');
 
@@ -82,10 +97,11 @@ Future<void> main(List<String> args) async {
   final target = positional.length > 1 ? positional[1] : null;
 
   final output = Output.stdio(json: json, command: command);
-  // The document says how it was asked to operate.
-  output.report.mode.addAll({
-    'stage': flags.contains('--stage'),
-  });
+  // The document says how it was asked to operate — only where the answer
+  // varies. status and init have no modes, so their documents carry none.
+  if (command == 'release') {
+    output.report.mode.addAll({'stage': flags.contains('--stage')});
+  }
 
   if (!verbs.contains(command)) {
     output.problem(
@@ -105,7 +121,7 @@ Future<void> main(List<String> args) async {
   // that promises to be read-only is worse than an error.
   const perVerb = {
     'status': {'-h', '--help', '--json'},
-    'release': {'-h', '--help', '--json', '--stage'},
+    'release': {'-h', '--help', '--json', '--stage', '--confirm'},
     'init': {'-h', '--help', '--json', '--write'},
   };
   final inapplicable = flags.difference(perVerb[command] ?? known);
@@ -135,6 +151,23 @@ Future<void> main(List<String> args) async {
         code: 'RK-CLI-005',
         message: 'rk $command does not have ${inapplicable.join(', ')}',
         remedy: _usage.trim(),
+      ),
+    );
+    exitCode = ExitCodes.usage;
+    if (json) stdout.write(output.report.encode(exit: ExitCodes.usage));
+    return;
+  }
+
+  if (flags.contains('--confirm') &&
+      (confirmVersion == null || confirmVersion.isEmpty) &&
+      !flags.contains('-h') &&
+      !flags.contains('--help')) {
+    output.problem(
+      Diagnostic(
+        code: 'RK-CLI-009',
+        message: '--confirm names the exact version it authorizes',
+        remedy: 'rk release <unit> --confirm=<version> — the flag is the '
+            'typed yes, so it must say what it says yes to',
       ),
     );
     exitCode = ExitCodes.usage;
@@ -202,6 +235,7 @@ Future<void> main(List<String> args) async {
           target,
           stageOnly: flags.contains('--stage'),
           interactive: !json,
+          confirmVersion: confirmVersion,
         ),
       'init' => await _init(
           output,
@@ -325,6 +359,7 @@ Future<int> _release(
   String? unit, {
   required bool stageOnly,
   required bool interactive,
+  String? confirmVersion,
 }) async {
   final prepared = _prepare(output);
   if (!prepared.isReady) return prepared.code!;
@@ -363,7 +398,14 @@ Future<int> _release(
       // silences: asking would corrupt the document, and the consequences the
       // prompt exists to disclose would be suppressed while the question was
       // still asked. release already refuses when nobody can authorize.
-      confirm: interactive && stdin.hasTerminal ? _promptOnTerminal : null,
+      // --confirm is the typed yes carried as a flag: it supplies exactly
+      // what the operator would type, authorizes only the version it names,
+      // and skips no inspection on the way there.
+      confirm: confirmVersion != null
+          ? (_) async => confirmVersion
+          : interactive && stdin.hasTerminal
+              ? _promptOnTerminal
+              : null,
       stageOnly: stageOnly,
       stageFor: stages.call,
       refreshStage: stages.refresh,

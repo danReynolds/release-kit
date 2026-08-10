@@ -159,7 +159,7 @@ void main() {
     // real repository, because the version of this group that matched strings
     // inside test/ passed every one of five mutations that completely unwired
     // the phase: --json printing nothing, pipes getting cursor escapes, the
-    // diagnosis never being written, and safe_to_rerun never being set.
+    // diagnosis never being written, and rerun_helps never being set.
     late Directory scratch;
     late Rk repo;
 
@@ -191,7 +191,7 @@ void main() {
       expect(steps, isNotEmpty, reason: 'an empty checklist is not a surface');
       expect(
         steps.map((s) => s['id']),
-        contains('cli/pub.dev/example_cli@0.3.0'),
+        contains('cli/stage/complete'),
       );
       for (final step in steps) {
         expect(
@@ -200,13 +200,22 @@ void main() {
           reason: 'an omitted verdict reads as "nothing is there"',
         );
       }
+      // Public targets appear once, in targets[] — the canonical
+      // observation an agent keys on. steps[] no longer repeats them.
+      expect(
+        steps.map((s) => s['id']),
+        isNot(contains('cli/pub.dev/example_cli@0.3.0')),
+      );
+      expect(
+        run.targetsOf('cli').map((t) => t['id']),
+        contains('cli/pub.dev/example_cli@0.3.0'),
+      );
     });
 
     test('--json is only JSON', () {
       final run = repo(['status', '--json']);
       expect(run.stdout.trimLeft(), startsWith('{'));
       expect(run.stdout, isNot(contains('derived from the manifests alone')));
-      expect(run.json['safe_to_rerun'], isTrue);
       expect(run.json['rerun_helps'], isTrue);
     });
 
@@ -462,11 +471,11 @@ void main() {
 
       final run = repo(['status', '--json']);
       final release = run
-          .stepsOf('cli')
+          .targetsOf('cli')
           .where((s) => (s['id'] as String).contains('github-release'))
           .toList();
 
-      expect(release, hasLength(1), reason: 'the forge step must be inspected');
+      expect(release, hasLength(1), reason: 'the forge must be inspected');
       expect(
         release.single['verdict'],
         isNot('absent'),
@@ -1643,7 +1652,7 @@ executables:
       }
       expect(
         run.text,
-        contains('publish 5 assets to the v1.0.0 release'),
+        contains('publish 3 assets to the v1.0.0 release'),
       );
       expect(run.text, contains('released'));
     });
@@ -1874,7 +1883,7 @@ executables:
       expect(run.expected, contains('tool.rb'));
       expect(
         run.text,
-        contains('publish 8 assets to the v1.0.0 release'),
+        contains('publish 6 assets to the v1.0.0 release'),
         reason: run.text,
       );
 

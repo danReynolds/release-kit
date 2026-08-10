@@ -1239,7 +1239,6 @@ executables:
     expect(run.text, isNot(contains('Issues')));
     expect(run.text, isNot(contains('issue prevents release')));
 
-    expect(run.report['safe_to_rerun'], isTrue);
     expect(run.report['problems'], isEmpty);
     expect(run.report['next'], ['rk release cli']);
     final targets =

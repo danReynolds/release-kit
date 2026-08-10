@@ -4,7 +4,7 @@ import 'canonical_json.dart';
 import 'stage.dart';
 import 'stage_receipt.dart';
 
-const releaseManifestSchemaVersion = 1;
+const releaseManifestSchemaVersion = 2;
 
 /// One public file, deliberately stripped of its local stage path and all
 /// producer evidence.
@@ -87,7 +87,7 @@ class ReleaseManifest {
     required this.unit,
     required this.version,
     required this.tag,
-    required this.identity,
+    required this.commit,
     required Iterable<ReleaseManifestArtifact> artifacts,
   }) : artifacts = List<ReleaseManifestArtifact>.unmodifiable(
           artifacts.toList()
@@ -96,6 +96,9 @@ class ReleaseManifest {
     _requirePublicText('unit', unit);
     _requirePublicText('version', version);
     _requirePublicText('tag', tag);
+    if (!RegExp(r'^[0-9a-f]{40}$').hasMatch(commit)) {
+      throw ArgumentError('source commit must be a full lowercase SHA');
+    }
     final names = <String>{};
     for (final artifact in this.artifacts) {
       if (!names.add(artifact.name)) {
@@ -108,15 +111,7 @@ class ReleaseManifest {
     final decoded = CanonicalJson.decodeDocument(document);
     final map = _strictMap(
       decoded,
-      const {
-        'artifacts',
-        'schema',
-        'source',
-        'stage_id',
-        'tag',
-        'unit',
-        'version'
-      },
+      const {'artifacts', 'schema', 'source', 'tag', 'unit', 'version'},
       'release manifest',
     );
     if (map['schema'] != releaseManifestSchemaVersion) {
@@ -125,18 +120,9 @@ class ReleaseManifest {
     }
     final source = _strictMap(
       map['source'],
-      const {'commit', 'plan_sha256', 'tree'},
+      const {'commit'},
       'release source',
     );
-    final identity = StageIdentity.fromDigests(
-      headCommit: _string(source, 'commit'),
-      headTree: _string(source, 'tree'),
-      planSha256: _string(source, 'plan_sha256'),
-    );
-    if (_string(map, 'stage_id') != identity.id) {
-      throw const FormatException(
-          'manifest stage ID does not match its source');
-    }
     final artifacts = map['artifacts'];
     if (artifacts is! List) {
       throw const FormatException('manifest artifacts is not an array');
@@ -145,7 +131,7 @@ class ReleaseManifest {
       unit: _string(map, 'unit'),
       version: _string(map, 'version'),
       tag: _string(map, 'tag'),
-      identity: identity,
+      commit: _string(source, 'commit'),
       artifacts: artifacts.map(ReleaseManifestArtifact.fromJson),
     );
   }
@@ -153,18 +139,19 @@ class ReleaseManifest {
   final String unit;
   final String version;
   final String tag;
-  final StageIdentity identity;
+
+  /// The released source, as one externally checkable anchor: the commit the
+  /// tag peels to. A commit already binds its tree, and the stage plan is
+  /// local evidence an external reader could never verify — so neither
+  /// travels here.
+  final String commit;
+
   final List<ReleaseManifestArtifact> artifacts;
 
   Map<String, Object?> toJson() => {
         'artifacts': artifacts.map((artifact) => artifact.toJson()).toList(),
         'schema': releaseManifestSchemaVersion,
-        'source': {
-          'commit': identity.headCommit,
-          'plan_sha256': identity.planSha256,
-          'tree': identity.headTree,
-        },
-        'stage_id': identity.id,
+        'source': {'commit': commit},
         'tag': tag,
         'unit': unit,
         'version': version,
@@ -175,7 +162,7 @@ class ReleaseManifest {
   /// Places the public document atomically. The caller then captures it as a
   /// `manifest` output in the local receipt like any other staged artifact.
   void writeTo(StageDirectory stage, {String path = 'release-manifest.json'}) {
-    if (stage.identity.id != identity.id) {
+    if (stage.identity.headCommit != commit) {
       throw StateError('release manifest belongs to a different stage');
     }
     stage.writeBytesAtomically(path, utf8.encode(encode()));

@@ -454,7 +454,7 @@ void main() {
         unit: 'rk',
         version: '1.2.3',
         tag: 'v1.2.3',
-        identity: stage.identity,
+        commit: stage.identity.headCommit,
         artifacts: [
           ReleaseManifestArtifact.fromStage(
             publicName: 'rk-1.2.3-macos-arm64.tar.gz',
@@ -467,10 +467,14 @@ void main() {
           File(stage.resolve('release-manifest.json')).readAsStringSync();
       final parsed = ReleaseManifest.parse(document);
 
-      expect(parsed.identity.id, stage.identity.id);
+      expect(parsed.commit, stage.identity.headCommit);
       expect(parsed.artifacts.single.sha256, archive.sha256);
       expect(document, contains(_commit));
-      expect(document, contains(stage.identity.planSha256));
+      expect(
+        document,
+        isNot(contains(stage.identity.planSha256)),
+        reason: 'the plan is local evidence no external reader can verify',
+      );
       expect(document, isNot(contains(repository.path)));
       expect(document, isNot(contains('Developer ID')));
       expect(document, isNot(contains('notary')));
@@ -549,7 +553,7 @@ StageReceipt _writeCompleteStage(StageDirectory stage) {
     unit: 'rk',
     version: '1.0.0',
     tag: 'v1.0.0',
-    identity: stage.identity,
+    commit: stage.identity.headCommit,
     artifacts: [
       ReleaseManifestArtifact.fromStage(
         publicName: 'rk',

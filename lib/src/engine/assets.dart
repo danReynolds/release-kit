@@ -40,8 +40,10 @@ abstract final class ReleaseAssets {
       '$executable-$version-$platform.tar.gz';
 
   /// Apple's verdict, verbatim — and its log, which says what the verdict
-  /// covered. Published so a user who trusts neither can ask Apple with the
-  /// submission id inside them.
+  /// covered. Stage evidence, not published assets: a consumer verifies the
+  /// binary itself (`codesign --test-requirement=notarized` asks Apple about
+  /// the exact bytes), which no JSON beside it can strengthen. The receipt
+  /// records both files for diagnosis.
   static String notaryResultName(
     String executable,
     String version,
@@ -70,14 +72,8 @@ abstract final class ReleaseAssets {
     final version = project.version.canonical;
 
     return {
-      for (final platform in project.binaryPlatforms) ...{
+      for (final platform in project.binaryPlatforms)
         archiveName(executable, version, platform),
-        // Apple only vouches for macOS, so only macOS carries its evidence.
-        if (platform.startsWith('macos-')) ...{
-          notaryResultName(executable, version, platform),
-          notaryLogName(executable, version, platform),
-        },
-      },
       if (project.channels.contains('homebrew')) formulaName(executable),
       checksums,
       manifest,
