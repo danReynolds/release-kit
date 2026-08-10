@@ -219,28 +219,18 @@ class StatusCommand {
 
     for (final step in checklist.steps) {
       if (states.containsKey(step.id)) continue;
-      states[step.id] = switch (step.kind) {
-        StepKind.completeStage => stageResult.state,
-        StepKind.build ||
-        StepKind.sign ||
-        StepKind.notarize ||
-        StepKind.archive ||
-        StepKind.checksums =>
-          stageResult.inspection?.reusable == true
-              ? const Inspection.exact(
-                  detail: 'validated in the release stage',
-                )
-              : const Inspection.unknown(
-                  'local work, decided when it runs',
-                ),
-        // Public and prerequisite states were populated above.
-        StepKind.tag ||
-        StepKind.prerequisite ||
-        StepKind.publishRegistry ||
-        StepKind.publishRelease ||
-        StepKind.publishFormula =>
-          const Inspection.unknown('the target was not inspected'),
-      };
+      states[step.id] = step.kind == StepKind.completeStage
+          ? stageResult.state
+          : step.phase == StepPhase.stage
+              ? stageResult.inspection?.reusable == true
+                  ? const Inspection.exact(
+                      detail: 'validated in the release stage',
+                    )
+                  : const Inspection.unknown(
+                      'local work, decided when it runs',
+                    )
+              // Public targets and prerequisites were populated above.
+              : const Inspection.unknown('the target was not inspected');
     }
 
     for (final diagnostic in inspector.tagGuards(unit, checklist, states)) {
@@ -432,11 +422,7 @@ class StatusCommand {
     // tag, and forge lanes, only the provider's history/listing can answer the
     // separate "what version is this lane at?" question. Homebrew's exact
     // formula read already carries the authenticated current version.
-    final module = inspector.targets.moduleForTarget(expectation);
-    final currentInspection = module.currentVersionInspection(
-      exact: inspection,
-      latest: latest,
-    );
+    final currentInspection = latest ?? inspection;
     final reportedVersion = currentInspection.evidence['version'];
     final parsedVersion =
         reportedVersion == null ? null : Version.tryParse(reportedVersion);
@@ -471,7 +457,7 @@ class StatusCommand {
     }
   }
 
-  Future<Inspection> _inspectLatestSafely(
+  Future<Inspection?> _inspectLatestSafely(
     TargetExpectation target,
     ResolvedUnit unit,
   ) async {
@@ -581,13 +567,19 @@ class StatusCommand {
           'cannot be finalized until every archive exists: $summary';
       problems[ReleaseAssets.manifest] =
           'cannot be finalized until every release artifact exists: $summary';
-      for (final target in targets) {
-        if (target.project != project) continue;
-        problems.addAll(
-          inspector.targets
-              .moduleForTarget(target)
-              .artifactsBlockedByIncompleteArchives(unit, target, summary),
-        );
+    }
+    for (final stage
+        in inspector.targets.stages(unit: unit, targets: targets)) {
+      final blockedInputs =
+          stage.contract.step.inputs.where(problems.containsKey).toList();
+      if (blockedInputs.isEmpty) continue;
+      final reason =
+          blockedInputs.map((input) => '$input: ${problems[input]}').join('; ');
+      for (final output in {
+        ...stage.contract.step.outputs.keys,
+        ...stage.contract.step.optionalOutputs.keys,
+      }) {
+        problems[output] = 'cannot be produced until $reason';
       }
     }
     return Map.unmodifiable(problems);
@@ -767,7 +759,7 @@ class StatusCommand {
       output.report.target(
         unit: snapshot.unit.name,
         id: target.expectation.step.id,
-        kind: target.expectation.kind.name,
+        kind: target.expectation.kind,
         label: target.expectation.label,
         coordinate: target.expectation.coordinate,
         targetVersion: target.expectation.targetVersion,

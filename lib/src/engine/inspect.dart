@@ -143,7 +143,7 @@ class Inspector {
   /// This is status metadata, not a substitute for inspecting the exact
   /// candidate coordinate. The candidate answers whether acting is needed;
   /// this answers the separate operator question, "what is this lane at?"
-  Future<Inspection> inspectLatestVersion(
+  Future<Inspection?> inspectLatestVersion(
     TargetExpectation target,
     ResolvedUnit unit,
   ) =>
@@ -221,7 +221,7 @@ class Inspector {
   /// Targets decide whether their latest-version read is a meaningful guard.
   /// Homebrew, for example, authenticates its public formula bytes during its
   /// exact inspection and therefore declines a second, weaker version read.
-  Future<void> releaseMonotonicity(
+  Future<bool> releaseMonotonicity(
     ResolvedUnit unit,
     Iterable<TargetExpectation> targets,
     Diagnostics problems, {
@@ -234,17 +234,15 @@ class Inspector {
           .forEach(localTagProblems.report);
     }
 
-    final guarded = <TargetExpectation>[];
+    final candidates = <TargetExpectation>[];
     final seen = <String>{};
     for (final target in targets) {
-      final module = this.targets.moduleForTarget(target);
-      if (!module.latestVersionGuardsRelease) continue;
-      final key = '${target.kind.name}\u0000${target.coordinate}';
-      if (seen.add(key)) guarded.add(target);
+      final key = '${target.kind}\u0000${target.coordinate}';
+      if (seen.add(key)) candidates.add(target);
     }
 
     if (refreshRegistry) {
-      for (final target in guarded) {
+      for (final target in candidates) {
         this.targets.moduleForTarget(target).invalidate(targetReads, target);
       }
     }
@@ -252,7 +250,7 @@ class Inspector {
     // Start every independent provider read before awaiting one. A slow
     // forge must not postpone asking origin or pub.dev.
     final reads = [
-      for (final target in guarded)
+      for (final target in candidates)
         () async {
           try {
             return await inspectLatestVersion(target, unit);
@@ -266,8 +264,11 @@ class Inspector {
     final latest = await Future.wait(reads);
 
     var remoteTagAhead = false;
-    for (final (index, target) in guarded.indexed) {
+    var readIndependentHistory = false;
+    for (final (index, target) in candidates.indexed) {
       final inspection = latest[index];
+      if (inspection == null) continue;
+      readIndependentHistory = true;
       if (inspection.isAbsent) continue;
       if (!inspection.isExact) {
         problems.add(
@@ -306,6 +307,7 @@ class Inspector {
     if (!remoteTagAhead) {
       localTagProblems.found.forEach(problems.report);
     }
+    return readIndependentHistory;
   }
 
   /// Cross-step judgments about the tag, which no single step can make.
@@ -326,7 +328,7 @@ class Inspector {
     if (!checklist.steps.any((s) => s.kind == StepKind.tag)) return const [];
 
     final publishes = checklist.steps
-        .where((step) => targets.moduleForStep(step)?.isPermanent == true)
+        .where((step) => step.isPermanent)
         .map((s) => states[s.id])
         .whereType<Inspection>()
         .toList();

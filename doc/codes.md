@@ -249,7 +249,7 @@ RK-PUB-004 is a retired historical meaning and is not reused.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-WORK-001` | the staged workspace has no $name | `lib/src/targets/staged_release_assets.dart` |
+| `RK-WORK-001` | the staged workspace has no required target artifact | `lib/src/targets/github_release_target.dart`, `lib/src/targets/homebrew_target.dart` |
 
 ## RK-YAML — The YAML subset
 

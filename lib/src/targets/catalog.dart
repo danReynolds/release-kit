@@ -7,68 +7,54 @@ import 'git_tag_target.dart';
 import 'github_release_target.dart';
 import 'homebrew_target.dart';
 import 'pub_dev_target.dart';
-import 'target_release.dart';
+import 'target_module.dart';
 
-/// The complete, compile-time catalog of public targets rk understands.
+/// The fixed, compile-time catalog of public targets rk understands.
 ///
-/// Construction is fail-fast: adding a public step or target kind without one
-/// module cannot silently produce a checklist that nobody inspects or acts on.
+/// This is deliberately not a plugin registry. Adding a target is a source
+/// change, and the coverage check makes a new public checklist step fail fast
+/// until exactly one built-in module owns it.
 final class TargetCatalog {
-  TargetCatalog(Iterable<TargetReleaseModule> modules)
-      : modules = List<TargetReleaseModule>.unmodifiable(modules) {
-    final byStep = <StepKind, TargetReleaseModule>{};
-    final byKind = <ReleaseTargetKind, TargetReleaseModule>{};
-    for (final module in this.modules) {
-      if (byStep.containsKey(module.stepKind)) {
-        throw ArgumentError(
-            'two target modules handle ${module.stepKind.name}');
+  TargetCatalog._()
+      : modules = const [
+          GitTagTargetModule(),
+          PubDevTargetModule(),
+          GithubReleaseTargetModule(),
+          HomebrewTargetModule(),
+        ] {
+    final byStep = <StepKind, TargetModule>{};
+    for (final module in modules) {
+      if (byStep[module.stepKind] != null) {
+        throw StateError('two target modules handle ${module.stepKind.name}');
       }
-      if (byKind.containsKey(module.kind)) {
-        throw ArgumentError('two target modules handle ${module.kind.name}');
+      if (!module.stepKind.isPublic) {
+        throw StateError('${module.stepKind.name} is not a public step');
       }
       byStep[module.stepKind] = module;
-      byKind[module.kind] = module;
     }
-    final missingSteps = targetStepKinds.difference(byStep.keys.toSet());
-    final extraSteps = byStep.keys.toSet().difference(targetStepKinds);
-    final missingKinds = ReleaseTargetKind.values.toSet().difference(
-          byKind.keys.toSet(),
-        );
-    if (missingSteps.isNotEmpty ||
-        extraSteps.isNotEmpty ||
-        missingKinds.isNotEmpty) {
-      throw ArgumentError([
-        if (missingSteps.isNotEmpty)
-          'missing target steps: ${missingSteps.map((kind) => kind.name).join(', ')}',
-        if (extraSteps.isNotEmpty)
-          'non-target steps registered: ${extraSteps.map((kind) => kind.name).join(', ')}',
-        if (missingKinds.isNotEmpty)
-          'missing target kinds: ${missingKinds.map((kind) => kind.name).join(', ')}',
-      ].join('; '));
+    final missing = targetStepKinds.difference(byStep.keys.toSet());
+    if (missing.isNotEmpty) {
+      throw StateError(
+        'missing target modules: ${missing.map((kind) => kind.name).join(', ')}',
+      );
     }
     _byStep = Map.unmodifiable(byStep);
-    _byKind = Map.unmodifiable(byKind);
   }
 
-  factory TargetCatalog.builtIn() => TargetCatalog(const [
-        GitTagTargetModule(),
-        PubDevTargetModule(),
-        GithubReleaseTargetModule(),
-        HomebrewTargetModule(),
-      ]);
+  factory TargetCatalog.builtIn() => _builtIn;
 
+  static final TargetCatalog _builtIn = TargetCatalog._();
   static final targetStepKinds = Set<StepKind>.unmodifiable(
     StepKind.values.where((kind) => kind.isPublic),
   );
 
-  final List<TargetReleaseModule> modules;
-  late final Map<StepKind, TargetReleaseModule> _byStep;
-  late final Map<ReleaseTargetKind, TargetReleaseModule> _byKind;
+  final List<TargetModule> modules;
+  late final Map<StepKind, TargetModule> _byStep;
 
-  TargetReleaseModule? moduleForStep(Step step) => _byStep[step.kind];
+  TargetModule? moduleForStep(Step step) => _byStep[step.kind];
 
-  TargetReleaseModule moduleForTarget(TargetExpectation target) =>
-      _byKind[target.kind]!;
+  TargetModule moduleForTarget(TargetExpectation target) =>
+      _byStep[target.step.kind]!;
 
   List<TargetExpectation> derive(
     ResolvedUnit unit,
@@ -90,17 +76,10 @@ final class TargetCatalog {
         step: step,
         repository: repository,
       );
-      if (target.kind != module.kind ||
-          target.step.id != step.id ||
-          target.step.kind != module.stepKind) {
+      if (target.step.id != step.id || target.step.kind != module.stepKind) {
         throw StateError('${module.runtimeType} derived the wrong target');
       }
-      if (module.isPermanent != step.isPermanent) {
-        throw StateError(
-          '${module.runtimeType} permanence disagrees with ${step.kind.name}',
-        );
-      }
-      if (module.isPermanent != (module.permanenceNotice(target) != null)) {
+      if (step.isPermanent != (module.permanenceNotice(target) != null)) {
         throw StateError(
           '${module.runtimeType} must explain every permanent target',
         );
@@ -110,32 +89,17 @@ final class TargetCatalog {
     return List<TargetExpectation>.unmodifiable(targets);
   }
 
-  List<TargetStageBinding> stageBindings({
+  List<TargetStage> stages({
     required ResolvedUnit unit,
     required Iterable<TargetExpectation> targets,
-    required String? repository,
-    required String sourceRoot,
   }) {
-    final bindings = <TargetStageBinding>[];
+    final stages = <TargetStage>[];
     for (final target in targets) {
       final module = moduleForTarget(target);
-      final contract = module.stageContract(
-        unit: unit,
-        target: target,
-        repository: repository,
-        sourceRoot: sourceRoot,
-      );
-      if (contract == null) continue;
-      bindings.add(TargetStageBinding(
-        module: module,
-        target: target,
-        contract: contract,
-      ));
+      final stage = module.stage(unit: unit, target: target);
+      if (stage != null) stages.add(stage);
     }
-    return orderStageContributions(
-      bindings,
-      (binding) => binding.contract,
-    );
+    return orderStageContributions(stages, (stage) => stage.contract);
   }
 
   StageContractResolver stageContractResolver(Resolution resolution) => ({
@@ -151,19 +115,10 @@ final class TargetCatalog {
             '${diagnostics.found.map((item) => item.message).join('; ')}',
           );
         }
-        final targets = derive(
-          unit,
-          checklist,
-          repository: repository,
-        );
+        final targets = derive(unit, checklist, repository: repository);
         return List<StageContributionContract>.unmodifiable([
-          for (final binding in stageBindings(
-            unit: unit,
-            targets: targets,
-            repository: repository,
-            sourceRoot: sourceRoot,
-          ))
-            binding.contract,
+          for (final stage in stages(unit: unit, targets: targets))
+            stage.contract,
         ]);
       };
 }

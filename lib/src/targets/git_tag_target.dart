@@ -12,19 +12,12 @@ import '../engine/version.dart';
 import '../output/output.dart';
 import '../transforms/digest.dart';
 import 'target_module.dart';
-import 'target_release.dart';
 
-final class GitTagTargetModule extends TargetReleaseModule {
+final class GitTagTargetModule extends TargetModule {
   const GitTagTargetModule();
 
   @override
-  ReleaseTargetKind get kind => ReleaseTargetKind.gitTag;
-
-  @override
   StepKind get stepKind => StepKind.tag;
-
-  @override
-  bool get isPermanent => false;
 
   @override
   Future<bool> preflight(
@@ -40,7 +33,6 @@ final class GitTagTargetModule extends TargetReleaseModule {
     String? repository,
   }) =>
       TargetExpectation(
-        kind: kind,
         label: 'Git tag',
         coordinate: unit.tag,
         targetVersion: unit.version.canonical,
@@ -242,7 +234,8 @@ final class GitTagTargetModule extends TargetReleaseModule {
         ),
       );
     }
-    final cleanup = _DeleteLocalTag(destination, unit.tag, object);
+    Future<TargetCleanupResult> cleanup() =>
+        _deleteLocalTag(destination, unit.tag, object);
     final local = await destination.inspectLocalReleaseBinding(
       tag: unit.tag,
       expectedObject: object,
@@ -359,7 +352,7 @@ final class GitTagTargetModule extends TargetReleaseModule {
     var cleanupFailed = false;
     final recovery = act.cleanupIfAbsent;
     if (state.isAbsent && recovery != null) {
-      final result = await recovery.run();
+      final result = await recovery();
       cleanupFailed = !result.ok;
       cleanup = result.detail;
     }
@@ -403,27 +396,21 @@ final class GitTagTargetModule extends TargetReleaseModule {
             : details.join('\n'),
       ),
       halt: halt,
-      rerunHelps: halt != HaltKind.actedAndUnfixable,
     );
   }
 }
 
-final class _DeleteLocalTag implements TargetCleanup {
-  const _DeleteLocalTag(this.destination, this.tag, this.object);
-
-  final GitTag destination;
-  final String tag;
-  final String object;
-
-  @override
-  Future<TargetCleanupResult> run() async {
-    final removed = await destination.deleteLocalIfExact(tag, object);
-    return TargetCleanupResult(
-      ok: removed.ok,
-      detail: removed.ok
-          ? 'the local tag was removed, so re-running starts clean'
-          : 'the local tag could not be removed and was left in place; '
-              're-running inspects and pushes it safely',
-    );
-  }
+Future<TargetCleanupResult> _deleteLocalTag(
+  GitTag destination,
+  String tag,
+  String object,
+) async {
+  final removed = await destination.deleteLocalIfExact(tag, object);
+  return TargetCleanupResult(
+    ok: removed.ok,
+    detail: removed.ok
+        ? 'the local tag was removed, so re-running starts clean'
+        : 'the local tag could not be removed and was left in place; '
+            're-running inspects and pushes it safely',
+  );
 }

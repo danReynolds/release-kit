@@ -368,6 +368,25 @@ extension StepKindFacts on StepKind {
 
   bool get isPublic => phase == StepPhase.publish;
 
+  /// Stable report identity for a built-in public target.
+  ///
+  /// The checklist kind is the target identity. Keeping the wire spelling
+  /// here avoids a parallel enum that can drift from the release graph.
+  String? get targetName => switch (this) {
+        StepKind.tag => 'gitTag',
+        StepKind.publishRegistry => 'pubDev',
+        StepKind.publishRelease => 'githubRelease',
+        StepKind.publishFormula => 'homebrew',
+        StepKind.prerequisite ||
+        StepKind.build ||
+        StepKind.sign ||
+        StepKind.notarize ||
+        StepKind.archive ||
+        StepKind.checksums ||
+        StepKind.completeStage =>
+          null,
+      };
+
   bool get isPermanent => switch (this) {
         StepKind.publishRegistry => true,
         _ => false,

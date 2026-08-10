@@ -13,19 +13,12 @@ import '../engine/verdict.dart';
 import '../engine/version.dart';
 import '../output/output.dart';
 import 'target_module.dart';
-import 'target_release.dart';
 
-final class PubDevTargetModule extends TargetReleaseModule {
+final class PubDevTargetModule extends TargetModule {
   const PubDevTargetModule();
 
   @override
-  ReleaseTargetKind get kind => ReleaseTargetKind.pubDev;
-
-  @override
   StepKind get stepKind => StepKind.publishRegistry;
-
-  @override
-  bool get isPermanent => true;
 
   @override
   TargetExpectation expectation({
@@ -37,7 +30,6 @@ final class PubDevTargetModule extends TargetReleaseModule {
       (project) => project.name == step.project,
     );
     return TargetExpectation(
-      kind: kind,
       label: 'pub.dev · ${project.name}',
       coordinate: project.name,
       targetVersion: project.version.canonical,
@@ -282,7 +274,6 @@ final class PubDevTargetModule extends TargetReleaseModule {
             : details.join('\n'),
       ),
       halt: halt,
-      rerunHelps: halt != HaltKind.actedAndUnfixable,
       nextCommand: code == 'RK-PUB-005' ? 'rk status ${unit.name}' : null,
     );
   }
@@ -298,65 +289,59 @@ final class PubDevTargetModule extends TargetReleaseModule {
       ];
 
   @override
-  StageContributionContract stageContract({
+  TargetStage stage({
     required ResolvedUnit unit,
     required TargetExpectation target,
-    required String? repository,
-    required String sourceRoot,
-  }) =>
-      StageContributionContract(
-        phase: StageContributionPhase.sourcePreflight,
-        step: StageStepContract(
-          'pub-preflight:${target.project!.name}',
-          inputs: const {'step:source-snapshot'},
-          validate: (_, step) {
-            const expected = {
-              'publish_dry_run': 'passed',
-              'consumer_resolve': 'passed',
-            };
-            final evidence = step.evidence;
-            final exact = evidence.length == expected.length &&
-                expected.entries.every(
-                  (entry) => evidence[entry.key] == entry.value,
-                );
-            return exact
-                ? const []
-                : [
-                    StageIssue(
-                      StageIssueKind.invalidStructure,
-                      '${step.name} does not prove both package preflights',
-                      path: 'stage.json',
-                    ),
-                  ];
-          },
-        ),
-      );
-
-  @override
-  Future<TargetStageResult> prepareStage(
-    TargetStageContext context,
-    ResolvedUnit unit,
-    TargetExpectation target,
-  ) async {
-    final project = target.project!;
-    final receiptName = context.contract.step.name;
-    if (context.progress.any((record) => record.name == receiptName)) {
-      return TargetStageResult.succeeded();
-    }
-    if (!await _publishPreflight(context, project)) {
-      return const TargetStageResult.failed();
-    }
-    return TargetStageResult.succeeded(
-      steps: [
-        StageStep(
-          name: receiptName,
-          inputs: [StageInput.step(context.sourceStep)],
-          evidence: const {
+  }) {
+    final contract = StageContributionContract(
+      phase: StageContributionPhase.beforeArtifacts,
+      step: StageStepContract(
+        'pub-preflight:${target.project!.name}',
+        inputs: const {'step:source-snapshot'},
+        validate: (_, step) {
+          const expected = {
             'publish_dry_run': 'passed',
             'consumer_resolve': 'passed',
-          },
-        ),
-      ],
+          };
+          final evidence = step.evidence;
+          final exact = evidence.length == expected.length &&
+              expected.entries.every(
+                (entry) => evidence[entry.key] == entry.value,
+              );
+          return exact
+              ? const []
+              : [
+                  StageIssue(
+                    StageIssueKind.invalidStructure,
+                    '${step.name} does not prove both package preflights',
+                    path: 'stage.json',
+                  ),
+                ];
+        },
+      ),
+    );
+    return TargetStage(
+      target: target,
+      contract: contract,
+      prepare: (context) => _prepareStage(context, target.project!),
+    );
+  }
+
+  Future<StageStep?> _prepareStage(
+    TargetStageContext context,
+    ResolvedProject project,
+  ) async {
+    final receiptName = context.contract.step.name;
+    if (!await _publishPreflight(context, project)) {
+      return null;
+    }
+    return StageStep(
+      name: receiptName,
+      inputs: [StageInput.step(context.sourceStep)],
+      evidence: const {
+        'publish_dry_run': 'passed',
+        'consumer_resolve': 'passed',
+      },
     );
   }
 

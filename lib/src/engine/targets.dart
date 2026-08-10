@@ -3,14 +3,6 @@ import 'diagnostic.dart';
 import 'resolve.dart';
 import 'verdict.dart';
 
-/// A configured public place a release is expected to reach.
-enum ReleaseTargetKind {
-  gitTag,
-  pubDev,
-  githubRelease,
-  homebrew,
-}
-
 /// The immutable, manifest-derived identity of one public target.
 ///
 /// Status and release already share [Step] as their execution contract. This
@@ -18,7 +10,6 @@ enum ReleaseTargetKind {
 /// from a step id or its human prose.
 class TargetExpectation {
   TargetExpectation({
-    required this.kind,
     required this.label,
     required this.coordinate,
     required this.targetVersion,
@@ -26,9 +17,11 @@ class TargetExpectation {
     required Iterable<String> artifacts,
     this.project,
     this.uses,
+    this.exactComparisonNeedsStage = false,
   }) : artifacts = List<String>.unmodifiable(artifacts);
 
-  final ReleaseTargetKind kind;
+  /// Stable report spelling derived from the canonical checklist kind.
+  String get kind => step.kind.targetName!;
   final String label;
   final String coordinate;
   final String targetVersion;
@@ -38,6 +31,9 @@ class TargetExpectation {
 
   /// A concise reference to an artifact inventoried by another target.
   final String? uses;
+
+  /// Whether exact public bytes need a staged local counterpart.
+  final bool exactComparisonNeedsStage;
 }
 
 enum ArtifactStatus {

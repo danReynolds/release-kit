@@ -11,7 +11,6 @@ import 'package:release_kit/src/engine/resolve.dart';
 import 'package:release_kit/src/engine/source_tree.dart';
 import 'package:release_kit/src/engine/tools.dart';
 import 'package:release_kit/src/engine/workspace.dart';
-import 'package:release_kit/src/targets/staged_release_assets.dart';
 import 'package:test/test.dart';
 
 final _certificateSha1 = 'a' * 40;
@@ -234,17 +233,6 @@ executables:
       utf8.decode(workspace.readBytes('SHA256SUMS')!),
       contains('tool-1.0.0-macos-arm64.tar.gz'),
     );
-
-    final assets = StagedReleaseAssets(
-      workspace: workspace,
-      output: output,
-    ).gather(
-      project,
-      'cli',
-      includeFinal: false,
-    );
-    expect(assets, isNotNull);
-    expect(assets!.map((a) => a.name), contains('SHA256SUMS'));
   });
 
   test('a later step with an empty workspace refuses, naming the producer',

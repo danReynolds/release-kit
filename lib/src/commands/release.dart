@@ -18,7 +18,7 @@ import '../engine/targets.dart';
 import '../engine/tools.dart';
 import '../engine/identity.dart';
 import '../engine/verdict.dart';
-import '../targets/target_release.dart';
+import '../targets/target_module.dart';
 import '../transforms/macos.dart';
 import '../binary_chain.dart';
 
@@ -219,7 +219,7 @@ class ReleaseCommand {
       return !(stageInspection.reusable == false &&
           state.verdict == Verdict.unknown &&
           target != null &&
-          inspector.targets.moduleForTarget(target).unknownMayWaitForStage);
+          target.exactComparisonNeedsStage);
     }).firstOrNull;
     if (initialBlock != null) {
       _haltForState(initialBlock, states[initialBlock.id]!);
@@ -300,11 +300,11 @@ class ReleaseCommand {
         output: output,
         git: git,
       );
-      final preflighted = <ReleaseTargetKind>{};
+      final preflighted = <StepKind>{};
       for (final target in targets) {
         if (!states[target.step.id]!.isAbsent) continue;
         final module = inspector.targets.moduleForTarget(target);
-        if (!preflighted.add(target.kind)) continue;
+        if (!preflighted.add(target.step.kind)) continue;
         if (!await module.preflight(preflight, unit)) {
           _showReleaseActions(targets, publicActions);
           return ExitCodes.refused;
@@ -572,25 +572,23 @@ class ReleaseCommand {
         (target) => target.step.id == step.id,
       );
       final module = inspector.targets.moduleForTarget(target);
-      if (module.latestVersionGuardsRelease) {
-        final currentVersion = Diagnostics();
-        await inspector.releaseMonotonicity(
-          unit,
-          [target],
-          currentVersion,
-          refreshRegistry: true,
+      final currentVersion = Diagnostics();
+      final readIndependentHistory = await inspector.releaseMonotonicity(
+        unit,
+        [target],
+        currentVersion,
+        refreshRegistry: true,
+      );
+      if (currentVersion.isNotEmpty) {
+        output.halt(
+          output.report.acted ? HaltKind.stoppedPartway : HaltKind.beforeActing,
         );
-        if (currentVersion.isNotEmpty) {
-          output.halt(
-            output.report.acted
-                ? HaltKind.stoppedPartway
-                : HaltKind.beforeActing,
-          );
-          output.problems(currentVersion.found);
-          _showReleaseActions(targets, publicActions);
-          return ExitCodes.refused;
-        }
+        output.problems(currentVersion.found);
+        _showReleaseActions(targets, publicActions);
+        return ExitCodes.refused;
+      }
 
+      if (readIndependentHistory) {
         // The latest-version read may have refreshed a registry cache, and a
         // candidate can appear while the operator is authorizing. Re-read the
         // exact coordinate from that same fresh provider view before acting.
@@ -686,8 +684,6 @@ class ReleaseCommand {
       final releaseContext = TargetReleaseContext(
         reads: inspector.targetReads,
         tools: tools,
-        git: git,
-        repository: git.originUrl,
         output: output,
         stage: stage,
         wait: _wait,
@@ -1025,42 +1021,36 @@ class ReleaseCommand {
         return null;
       }
     }
-    final stageBindings = inspector.targets.stageBindings(
+    final targetStages = inspector.targets.stages(
       unit: unit,
       targets: targets,
-      repository: git.originUrl,
-      sourceRoot: stage.sourceRoot,
     );
     Future<bool> prepareTargets(StageContributionPhase phase) async {
-      for (final binding in stageBindings.where(
+      for (final targetStage in targetStages.where(
         (item) => item.contract.phase == phase,
       )) {
-        final module = binding.module;
-        final target = binding.target;
-        final TargetStageResult result;
+        final target = targetStage.target;
+        final receiptName = targetStage.contract.step.name;
+        if (progress.any((record) => record.name == receiptName)) continue;
+        final StageStep? result;
         try {
-          result = await module.prepareStage(
+          result = await targetStage.prepare(
             TargetStageContext(
-              contract: binding.contract,
-              reads: inspector.targetReads,
+              contract: targetStage.contract,
               tools: tools,
               git: git,
-              repository: git.originUrl,
               output: output,
               stage: stage,
               sourceStep: sourceStep,
               progress: progress,
             ),
-            unit,
-            target,
           );
         } on Object catch (error) {
           _stageOperationFailed('${target.label} stage preparation', error);
           return false;
         }
-        if (!result.ok) return false;
-        if (result.steps.isEmpty) continue;
-        progress.addAll(result.steps);
+        if (result == null) return false;
+        progress.add(result);
         try {
           _persistStageProgress(stage, sourceArtifacts, progress);
         } on Object catch (error) {
@@ -1071,7 +1061,7 @@ class ReleaseCommand {
       return true;
     }
 
-    if (!await prepareTargets(StageContributionPhase.sourcePreflight)) {
+    if (!await prepareTargets(StageContributionPhase.beforeArtifacts)) {
       return null;
     }
 
@@ -1107,10 +1097,6 @@ class ReleaseCommand {
         output.halt(HaltKind.beforeActing);
         return null;
       }
-    }
-
-    if (!await prepareTargets(StageContributionPhase.beforeProducers)) {
-      return null;
     }
 
     final producerSteps = checklist.steps.where((step) {
@@ -1171,7 +1157,7 @@ class ReleaseCommand {
       }
     }
 
-    if (!await prepareTargets(StageContributionPhase.afterProducers)) {
+    if (!await prepareTargets(StageContributionPhase.afterArtifacts)) {
       return null;
     }
 
@@ -1669,7 +1655,7 @@ class ReleaseCommand {
     required List<TargetClaim> claims,
   }) async {
     final permanent = remaining.where((target) {
-      return inspector.targets.moduleForTarget(target).isPermanent;
+      return target.step.isPermanent;
     }).toList();
 
     output.blank();
@@ -1767,12 +1753,7 @@ class ReleaseCommand {
         return _chain(unit).archiveStep(step, unit.binaryProject);
       case StepKind.checksums:
         return _chain(unit).checksumsStep(step, unit.binaryProject);
-      case StepKind.tag ||
-            StepKind.prerequisite ||
-            StepKind.completeStage ||
-            StepKind.publishRegistry ||
-            StepKind.publishRelease ||
-            StepKind.publishFormula:
+      default:
         throw StateError(
           'step ${step.kind.name} is not a local stage producer',
         );

@@ -8,9 +8,8 @@ import 'stage_inspection.dart';
 import 'stage_receipt.dart';
 
 enum StageContributionPhase {
-  sourcePreflight,
-  beforeProducers,
-  afterProducers,
+  beforeArtifacts,
+  afterArtifacts,
 }
 
 typedef StageStepContractValidator = Iterable<StageIssue> Function(
@@ -45,93 +44,64 @@ final class StageContributionContract {
   final StageStepContract step;
 }
 
-/// Orders target-owned stage work by phase, declared inputs, then stable name.
+/// Orders the fixed target-owned stage work by position and stable name.
 ///
-/// An input names either a producer (`step:<name>`) or an artifact. When a
-/// target contribution produces that artifact, the consumer runs after it.
-/// Inputs supplied by the source snapshot or the shared binary producers are
-/// intentionally external to this target-only graph.
+/// Built-in targets do not form a dependency graph: their only real ordering
+/// boundary is whether work happens before or after shared artifact producers.
+/// Duplicate producer and output claims are still refused fail-closed.
 List<T> orderStageContributions<T>(
   Iterable<T> values,
   StageContributionContract Function(T value) contractOf,
 ) {
   final entries = List<T>.of(values);
-  final byName = <String, T>{};
-  for (final entry in entries) {
-    final name = contractOf(entry).step.name;
-    if (byName.containsKey(name)) {
-      throw StateError('two stage contracts claim the producer "$name"');
-    }
-    byName[name] = entry;
-  }
-
-  final outputOwners = <String, String>{};
+  final names = <String>{};
+  final outputs = <String, String>{};
   for (final entry in entries) {
     final contract = contractOf(entry);
-    final outputs = {
+    final name = contract.step.name;
+    if (!names.add(name)) {
+      throw StateError('two stage contracts claim the producer "$name"');
+    }
+    final claimed = {
       ...contract.step.outputs.keys,
       ...contract.step.optionalOutputs.keys,
     };
-    for (final output in outputs) {
-      final previous = outputOwners[output];
-      if (previous != null && previous != contract.step.name) {
+    for (final output in claimed) {
+      final previous = outputs[output];
+      if (previous != null) {
         throw StateError(
           'stage artifact "$output" is produced by both "$previous" and '
-          '"${contract.step.name}"',
+          '"$name"',
         );
       }
-      outputOwners[output] = contract.step.name;
+      outputs[output] = name;
     }
   }
-
-  final dependencies = <String, Set<String>>{};
   for (final entry in entries) {
     final contract = contractOf(entry);
-    final required = <String>{};
     for (final input in contract.step.inputs) {
       final producer = input.startsWith('step:')
           ? input.substring('step:'.length)
-          : outputOwners[input];
-      if (producer == null) continue;
-      final producerEntry = byName[producer];
-      if (producerEntry == null) continue;
-      final producerContract = contractOf(producerEntry);
-      if (producerContract.phase.index > contract.phase.index) {
+          : outputs[input];
+      if (producer != null && names.contains(producer)) {
         throw StateError(
-          'stage producer "${contract.step.name}" depends on later '
-          'producer "$producer"',
+          'target stage producer "${contract.step.name}" depends on target '
+          'producer "$producer"; use a shared artifact boundary instead',
         );
       }
-      required.add(producer);
-    }
-    dependencies[contract.step.name] = required;
-  }
-
-  final ordered = <T>[];
-  final completed = <String>{};
-  for (final phase in StageContributionPhase.values) {
-    final remaining =
-        entries.where((entry) => contractOf(entry).phase == phase).toList();
-    while (remaining.isNotEmpty) {
-      final ready = remaining
-          .where((entry) => dependencies[contractOf(entry).step.name]!
-              .every(completed.contains))
-          .toList()
-        ..sort((left, right) =>
-            contractOf(left).step.name.compareTo(contractOf(right).step.name));
-      if (ready.isEmpty) {
-        throw StateError(
-          'stage contribution dependency cycle among '
-          '${remaining.map((entry) => contractOf(entry).step.name).join(', ')}',
-        );
-      }
-      final next = ready.first;
-      remaining.remove(next);
-      ordered.add(next);
-      completed.add(contractOf(next).step.name);
     }
   }
-  return List<T>.unmodifiable(ordered);
+  entries.sort((left, right) {
+    final leftContract = contractOf(left);
+    final rightContract = contractOf(right);
+    final position = leftContract.phase.index.compareTo(
+      rightContract.phase.index,
+    );
+    return position != 0
+        ? position
+        : leftContract.step.name.compareTo(rightContract.step.name);
+  });
+  return List<T>.unmodifiable(entries);
 }
 
 final class StageContractContext {
@@ -185,10 +155,7 @@ class StageReceiptContract {
       const StageStepContract('source-snapshot'),
     ];
     steps.addAll(contributions
-        .where((item) => item.phase == StageContributionPhase.sourcePreflight)
-        .map((item) => item.step));
-    steps.addAll(contributions
-        .where((item) => item.phase == StageContributionPhase.beforeProducers)
+        .where((item) => item.phase == StageContributionPhase.beforeArtifacts)
         .map((item) => item.step));
 
     if (unit.shipsBinaries) {
@@ -256,7 +223,7 @@ class StageReceiptContract {
     }
 
     steps.addAll(contributions
-        .where((item) => item.phase == StageContributionPhase.afterProducers)
+        .where((item) => item.phase == StageContributionPhase.afterArtifacts)
         .map((item) => item.step));
 
     steps.add(const StageStepContract(
@@ -266,6 +233,22 @@ class StageReceiptContract {
     final names = steps.map((step) => step.name).toList();
     if (names.toSet().length != names.length) {
       throw StateError('two stage contracts claim the same producer name');
+    }
+    final outputOwners = <String, String>{};
+    for (final step in steps) {
+      for (final output in {
+        ...step.outputs.keys,
+        ...step.optionalOutputs.keys,
+      }) {
+        final previous = outputOwners[output];
+        if (previous != null) {
+          throw StateError(
+            'stage artifact "$output" is produced by both "$previous" and '
+            '"${step.name}"',
+          );
+        }
+        outputOwners[output] = step.name;
+      }
     }
     return StageReceiptContract._(
       unit: unit,

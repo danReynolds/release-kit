@@ -5,7 +5,6 @@ import 'package:release_kit/src/engine/config.dart';
 import 'package:release_kit/src/engine/diagnostic.dart';
 import 'package:release_kit/src/engine/resolve.dart';
 import 'package:release_kit/src/engine/source_tree.dart';
-import 'package:release_kit/src/engine/targets.dart';
 import 'package:release_kit/src/targets/catalog.dart';
 import 'package:release_kit/src/engine/stage_contract.dart';
 import 'package:test/test.dart';
@@ -19,22 +18,8 @@ void main() {
       TargetCatalog.targetStepKinds,
     );
     expect(
-      catalog.modules.map((module) => module.kind),
-      ReleaseTargetKind.values,
-    );
-    expect(
       TargetCatalog.targetStepKinds,
       StepKind.values.where((kind) => kind.phase == StepPhase.publish).toSet(),
-    );
-  });
-
-  test('a missing or duplicated target module is refused at construction', () {
-    final modules = TargetCatalog.builtIn().modules;
-
-    expect(() => TargetCatalog(modules.take(3)), throwsArgumentError);
-    expect(
-      () => TargetCatalog([...modules, modules.first]),
-      throwsArgumentError,
     );
   });
 
@@ -79,7 +64,7 @@ executables:
     );
     expect(
       targets.map((target) => target.kind).toSet(),
-      ReleaseTargetKind.values.toSet(),
+      {'gitTag', 'pubDev', 'githubRelease', 'homebrew'},
       reason: 'every accepted channel must emit its catalog target',
     );
     expect(
@@ -96,7 +81,7 @@ executables:
       [
         for (final target in targets)
           (
-            catalog.moduleForTarget(target).isPermanent,
+            target.step.isPermanent,
             catalog.moduleForTarget(target).permanenceNotice(target) != null,
           ),
       ],
@@ -119,7 +104,7 @@ executables:
           .toList(),
       [
         (
-          kind: ReleaseTargetKind.gitTag,
+          kind: 'gitTag',
           id: 'cli/tag/v1.2.3',
           label: 'Git tag',
           coordinate: 'v1.2.3',
@@ -128,7 +113,7 @@ executables:
           uses: 'release-manifest.json from GitHub Release',
         ),
         (
-          kind: ReleaseTargetKind.pubDev,
+          kind: 'pubDev',
           id: 'cli/pub.dev/example_tool@1.2.3',
           label: 'pub.dev · example_tool',
           coordinate: 'example_tool',
@@ -137,7 +122,7 @@ executables:
           uses: null,
         ),
         (
-          kind: ReleaseTargetKind.githubRelease,
+          kind: 'githubRelease',
           id: 'cli/github-release/v1.2.3',
           label: 'GitHub Release · example/tool',
           coordinate: 'example/tool/releases/tag/v1.2.3',
@@ -147,7 +132,7 @@ executables:
           uses: null,
         ),
         (
-          kind: ReleaseTargetKind.homebrew,
+          kind: 'homebrew',
           id: 'cli/homebrew/tool',
           label: 'Homebrew · example/homebrew-tools',
           coordinate: 'example/homebrew-tools/Formula/tool.rb',
@@ -158,11 +143,9 @@ executables:
       ],
     );
 
-    final contributions = catalog.stageBindings(
+    final contributions = catalog.stages(
       unit: unit,
       targets: targets,
-      repository: 'example/tool',
-      sourceRoot: '/stage/source',
     );
     expect(
       contributions
@@ -177,24 +160,43 @@ executables:
           .toList(),
       [
         (
-          StageContributionPhase.sourcePreflight,
+          StageContributionPhase.beforeArtifacts,
           'pub-preflight:example_tool',
           'step:source-snapshot',
           '',
         ),
         (
-          StageContributionPhase.beforeProducers,
+          StageContributionPhase.beforeArtifacts,
           'release-notes',
           'step:source-snapshot',
           'release-notes.md:notes',
         ),
         (
-          StageContributionPhase.afterProducers,
+          StageContributionPhase.afterArtifacts,
           'homebrew-formula',
           'tool-1.2.3-linux-x64.tar.gz',
           'tool.rb:formula',
         ),
       ],
+    );
+
+    expect(
+      () => StageReceiptContract.forUnit(
+        unit: unit,
+        repository: 'example/tool',
+        sourceRoot: '/stage/source',
+        targetContributions: const [
+          StageContributionContract(
+            phase: StageContributionPhase.afterArtifacts,
+            step: StageStepContract(
+              'bad-target',
+              outputs: {'SHA256SUMS': 'wrong'},
+            ),
+          ),
+        ],
+      ),
+      throwsStateError,
+      reason: 'a target cannot claim a core stage artifact',
     );
   });
 
@@ -236,7 +238,7 @@ version: 1.2.3
     final checklist = Checklist.derive(unit, resolution, diagnostics);
     final pubTargets = catalog
         .derive(unit, checklist)
-        .where((target) => target.kind == ReleaseTargetKind.pubDev)
+        .where((target) => target.kind == 'pubDev')
         .toList();
 
     expect(
@@ -245,11 +247,9 @@ version: 1.2.3
       reason: 'the release graph keeps dependency order',
     );
 
-    final staged = catalog.stageBindings(
+    final staged = catalog.stages(
       unit: unit,
       targets: pubTargets,
-      repository: null,
-      sourceRoot: '/stage/source',
     );
 
     expect(
@@ -259,56 +259,70 @@ version: 1.2.3
     );
   });
 
-  test('stage contribution inputs determine stable execution order', () {
-    const notes = StageContributionContract(
-      phase: StageContributionPhase.beforeProducers,
-      step: StageStepContract(
-        'z-release-notes',
-        outputs: {'release-notes.md': 'notes'},
-      ),
+  test('stage contributions have simple stable order and unique claims', () {
+    const beforeZ = StageContributionContract(
+      phase: StageContributionPhase.beforeArtifacts,
+      step: StageStepContract('z-before'),
     );
-    const upload = StageContributionContract(
-      phase: StageContributionPhase.beforeProducers,
-      step: StageStepContract(
-        'a-upload-notes',
-        inputs: {'release-notes.md'},
-      ),
+    const beforeA = StageContributionContract(
+      phase: StageContributionPhase.beforeArtifacts,
+      step: StageStepContract('a-before'),
     );
-    const independent = StageContributionContract(
-      phase: StageContributionPhase.beforeProducers,
-      step: StageStepContract('b-independent'),
+    const after = StageContributionContract(
+      phase: StageContributionPhase.afterArtifacts,
+      step: StageStepContract('after'),
     );
-
     expect(
       orderStageContributions(
-        const [upload, independent, notes],
+        const [after, beforeZ, beforeA],
         (contract) => contract,
       ).map((contract) => contract.step.name),
-      const ['b-independent', 'z-release-notes', 'a-upload-notes'],
+      const ['a-before', 'z-before', 'after'],
     );
 
-    const left = StageContributionContract(
-      phase: StageContributionPhase.beforeProducers,
+    const duplicateOutputA = StageContributionContract(
+      phase: StageContributionPhase.beforeArtifacts,
       step: StageStepContract(
-        'left',
-        inputs: {'right.txt'},
-        outputs: {'left.txt': 'test'},
+        'first',
+        outputs: {'same.txt': 'test'},
       ),
     );
-    const right = StageContributionContract(
-      phase: StageContributionPhase.beforeProducers,
+    const duplicateOutputB = StageContributionContract(
+      phase: StageContributionPhase.afterArtifacts,
       step: StageStepContract(
-        'right',
-        inputs: {'left.txt'},
-        outputs: {'right.txt': 'test'},
+        'second',
+        outputs: {'same.txt': 'test'},
       ),
     );
     expect(
       () => orderStageContributions(
-        const [left, right],
+        const [duplicateOutputA, duplicateOutputB],
         (contract) => contract,
       ),
       throwsStateError,
+    );
+
+    const producer = StageContributionContract(
+      phase: StageContributionPhase.beforeArtifacts,
+      step: StageStepContract(
+        'producer',
+        outputs: {'shared.txt': 'test'},
+      ),
+    );
+    const consumer = StageContributionContract(
+      phase: StageContributionPhase.afterArtifacts,
+      step: StageStepContract(
+        'consumer',
+        inputs: {'shared.txt'},
+      ),
+    );
+    expect(
+      () => orderStageContributions(
+        const [producer, consumer],
+        (contract) => contract,
+      ),
+      throwsStateError,
+      reason: 'target contributions cannot form a hidden dependency graph',
     );
   });
 
@@ -321,6 +335,16 @@ version: 1.2.3
       final source = File(path).readAsStringSync();
       expect(source, isNot(contains("../destinations/")), reason: path);
       expect(source, isNot(contains('ReleaseTargetKind.')), reason: path);
+      if (path.contains('/commands/')) {
+        for (final kind in const [
+          'StepKind.tag',
+          'StepKind.publishRegistry',
+          'StepKind.publishRelease',
+          'StepKind.publishFormula',
+        ]) {
+          expect(source, isNot(contains(kind)), reason: path);
+        }
+      }
     }
     final chain = File('lib/src/binary_chain.dart').readAsStringSync();
     expect(chain, isNot(contains("import 'destinations/")));

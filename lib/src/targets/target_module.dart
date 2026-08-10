@@ -4,10 +4,14 @@ import '../engine/git.dart';
 import '../engine/registry.dart';
 import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
+import '../engine/stage_contract.dart';
+import '../engine/stage_receipt.dart';
 import '../engine/targets.dart';
 import '../engine/tools.dart';
 import '../engine/verdict.dart';
 import '../engine/version.dart';
+import '../engine/workspace.dart';
+import '../output/output.dart';
 
 /// One built-in public target and the manifest-derived identity it reports.
 ///
@@ -17,7 +21,6 @@ import '../engine/version.dart';
 abstract base class TargetModule {
   const TargetModule();
 
-  ReleaseTargetKind get kind;
   StepKind get stepKind;
 
   TargetExpectation expectation({
@@ -32,25 +35,16 @@ abstract base class TargetModule {
     TargetExpectation target,
   );
 
-  Future<Inspection> inspectLatest(
+  /// A separate public-history read, when this lane has one.
+  ///
+  /// Null means the exact target inspection also answers "what version is
+  /// this lane at?" and no second monotonicity read is needed.
+  Future<Inspection?> inspectLatest(
     TargetReadContext context,
     ResolvedUnit unit,
     TargetExpectation target,
-  );
-
-  /// Which provider read answers the status question "what version is it at?"
-  Inspection currentVersionInspection({
-    required Inspection exact,
-    required Inspection latest,
-  }) =>
-      latest;
-
-  /// Whether a fresh latest-version read is required immediately before act.
-  bool get latestVersionGuardsRelease => true;
-
-  /// Whether an exact read may be unknown only because the private stage that
-  /// supplies its expected bytes has not been produced yet.
-  bool get unknownMayWaitForStage => false;
+  ) async =>
+      null;
 
   /// Whether this public history makes the matching local-tag-ahead diagnostic
   /// redundant.
@@ -91,14 +85,59 @@ abstract base class TargetModule {
     TargetExpectation target,
   );
 
-  /// Target-owned staged artifacts that cannot be made until all configured
-  /// archives can be produced on this host.
-  Map<String, String> artifactsBlockedByIncompleteArchives(
+  /// Performs this target's ambient, fail-before-staging readiness check.
+  ///
+  /// Every target must choose this explicitly. A silent inherited success
+  /// would let a new publisher omit credential checks and fail only after an
+  /// earlier target had acted.
+  Future<bool> preflight(
+    TargetPreflightContext context,
+    ResolvedUnit unit,
+  );
+
+  Future<TargetActOutcome> act(
+    TargetReleaseContext context,
     ResolvedUnit unit,
     TargetExpectation target,
-    String archiveProblem,
+    Inspection inspected,
+  );
+
+  Future<Inspection> settleAfterAct(
+    TargetReleaseContext context,
+    ResolvedUnit unit,
+    TargetExpectation target,
   ) =>
-      const {};
+      inspectExact(context.reads, unit, target);
+
+  Future<TargetFailure> classifyFailure(
+    TargetReleaseContext context,
+    ResolvedUnit unit,
+    TargetExpectation target,
+    Inspection state,
+    TargetActOutcome act, {
+    required bool actedBefore,
+  });
+
+  Iterable<String> completionLines(
+    ResolvedUnit unit,
+    TargetExpectation target,
+  ) =>
+      const [];
+
+  TargetStage? stage({
+    required ResolvedUnit unit,
+    required TargetExpectation target,
+  }) =>
+      null;
+
+  Future<Iterable<TargetClaim>> firstClaims(
+    TargetReadContext context,
+    ResolvedUnit unit,
+    TargetExpectation target,
+  ) async =>
+      const [];
+
+  String? permanenceNotice(TargetExpectation target) => null;
 }
 
 /// Read-only dependencies shared by the four built-in target modules.
@@ -129,4 +168,159 @@ final class TargetReadContext {
       return null;
     }
   }
+}
+
+final class TargetStageContext {
+  TargetStageContext({
+    required this.contract,
+    required this.tools,
+    required this.git,
+    required this.output,
+    required this.stage,
+    required this.sourceStep,
+    required Iterable<StageStep> progress,
+  }) : progress = List<StageStep>.unmodifiable(progress);
+
+  final StageContributionContract contract;
+  final Tools tools;
+  final GitState git;
+  String? get repository => git.originUrl;
+  final Output output;
+  final ReleaseStage stage;
+  Workspace get workspace => stage.directory.workspace;
+  final StageStep sourceStep;
+  final List<StageStep> progress;
+}
+
+typedef TargetStageProducer = Future<StageStep?> Function(
+  TargetStageContext context,
+);
+
+/// One optional, target-owned contribution to the reusable local stage.
+///
+/// Declaration, validation contract, and producer stay together so they
+/// cannot drift across two lifecycle hooks.
+final class TargetStage {
+  const TargetStage({
+    required this.target,
+    required this.contract,
+    required this.prepare,
+  });
+
+  final TargetExpectation target;
+  final StageContributionContract contract;
+  final TargetStageProducer prepare;
+}
+
+final class TargetClaim {
+  const TargetClaim({
+    required this.registrar,
+    required this.name,
+    required this.consequence,
+  });
+
+  final String registrar;
+  final String name;
+  final String consequence;
+}
+
+/// Runtime dependencies for one public target act.
+///
+/// The release coordinator owns ordering and authorization. A target owns its
+/// provider transaction and reconciliation through the shared read path.
+final class TargetReleaseContext {
+  const TargetReleaseContext({
+    required this.reads,
+    required this.tools,
+    required this.output,
+    required this.stage,
+    required this.wait,
+    required this.confirmDeadline,
+    required this.confirmInterval,
+  });
+
+  final TargetReadContext reads;
+  final Tools tools;
+  GitState get git => reads.git;
+  String? get repository => reads.repository;
+  final Output output;
+  final ReleaseStage stage;
+  Workspace get workspace => stage.directory.workspace;
+  final Future<void> Function(Duration duration) wait;
+  final Duration confirmDeadline;
+  final Duration confirmInterval;
+}
+
+/// Dependencies for an ambient target preflight performed before staging.
+final class TargetPreflightContext {
+  const TargetPreflightContext({
+    required this.tools,
+    required this.output,
+    required this.git,
+  });
+
+  final Tools tools;
+  final Output output;
+  final GitState git;
+}
+
+/// Provider-neutral facts returned by one target act.
+final class TargetActOutcome {
+  const TargetActOutcome({
+    required this.ok,
+    this.problem,
+    this.mayHaveActed = false,
+    this.privateEffect = TargetPrivateEffect.none,
+    this.permanent,
+    this.failureAlreadyReported = false,
+    this.diagnostic,
+    this.coordinate,
+    this.cleanupIfAbsent,
+    this.successNote,
+    this.includeInspectionDetail = false,
+    this.reconciledNote,
+  });
+
+  const TargetActOutcome.reportedFailure()
+      : this(ok: false, failureAlreadyReported: true);
+
+  final bool ok;
+  final String? problem;
+  final bool mayHaveActed;
+  final TargetPrivateEffect privateEffect;
+  final String? permanent;
+  final bool failureAlreadyReported;
+  final Diagnostic? diagnostic;
+  final String? coordinate;
+  final TargetCleanup? cleanupIfAbsent;
+  final String? successNote;
+  final bool includeInspectionDetail;
+  final String? reconciledNote;
+}
+
+/// A private provider-side effect that is not itself a published release.
+enum TargetPrivateEffect { none, changed, uncertain }
+
+/// A target-owned recovery action safe only after public absence is proven.
+typedef TargetCleanup = Future<TargetCleanupResult> Function();
+
+final class TargetCleanupResult {
+  const TargetCleanupResult({required this.ok, required this.detail});
+
+  final bool ok;
+  final String detail;
+}
+
+/// The target's final classification after an act and authoritative read-back.
+final class TargetFailure {
+  const TargetFailure({
+    required this.diagnostic,
+    required this.halt,
+    this.nextCommand,
+  });
+
+  final Diagnostic diagnostic;
+  final HaltKind halt;
+  bool get rerunHelps => halt != HaltKind.actedAndUnfixable;
+  final String? nextCommand;
 }

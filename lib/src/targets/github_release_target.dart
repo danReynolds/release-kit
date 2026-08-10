@@ -14,24 +14,17 @@ import '../engine/stage_inspection.dart';
 import '../engine/stage_receipt.dart';
 import '../engine/targets.dart';
 import '../engine/verdict.dart';
+import '../engine/workspace.dart';
 import '../output/output.dart';
 import '../transforms/digest.dart';
 import 'published_release_evidence.dart';
-import 'staged_release_assets.dart';
 import 'target_module.dart';
-import 'target_release.dart';
 
-final class GithubReleaseTargetModule extends TargetReleaseModule {
+final class GithubReleaseTargetModule extends TargetModule {
   const GithubReleaseTargetModule();
 
   @override
-  ReleaseTargetKind get kind => ReleaseTargetKind.githubRelease;
-
-  @override
   StepKind get stepKind => StepKind.publishRelease;
-
-  @override
-  bool get isPermanent => false;
 
   @override
   Future<bool> preflight(
@@ -51,7 +44,6 @@ final class GithubReleaseTargetModule extends TargetReleaseModule {
     );
     final artifacts = ReleaseAssets.expectedFor(project).toList()..sort();
     return TargetExpectation(
-      kind: kind,
       label: repository == null
           ? 'GitHub Release'
           : 'GitHub Release · $repository',
@@ -62,6 +54,7 @@ final class GithubReleaseTargetModule extends TargetReleaseModule {
       step: step,
       project: project,
       artifacts: artifacts,
+      exactComparisonNeedsStage: true,
     );
   }
 
@@ -194,9 +187,6 @@ final class GithubReleaseTargetModule extends TargetReleaseModule {
   }
 
   @override
-  bool get unknownMayWaitForStage => true;
-
-  @override
   String conflictRemedy(
     ResolvedUnit unit,
     TargetExpectation target,
@@ -227,7 +217,7 @@ final class GithubReleaseTargetModule extends TargetReleaseModule {
       );
     }
     final project = unit.binaryProject;
-    final assets = StagedReleaseAssets(
+    final assets = _StagedReleaseAssets(
       workspace: context.workspace,
       output: context.output,
     ).gather(project, unit.name);
@@ -272,7 +262,6 @@ final class GithubReleaseTargetModule extends TargetReleaseModule {
         DraftEffect.changed => TargetPrivateEffect.changed,
         DraftEffect.uncertain => TargetPrivateEffect.uncertain,
       },
-      terminal: outcome.isTerminal,
       permanent: outcome.permanent,
     );
   }
@@ -300,7 +289,7 @@ final class GithubReleaseTargetModule extends TargetReleaseModule {
       if (act.permanent != null) act.permanent!,
     ];
     final immutableConflict = state.verdict == Verdict.conflict;
-    final halt = act.terminal || immutableConflict
+    final halt = act.permanent != null || immutableConflict
         ? HaltKind.actedAndUnfixable
         : act.mayHaveActed ||
                 act.privateEffect == TargetPrivateEffect.uncertain ||
@@ -321,20 +310,17 @@ final class GithubReleaseTargetModule extends TargetReleaseModule {
             : details.join('\n'),
       ),
       halt: halt,
-      rerunHelps: halt != HaltKind.actedAndUnfixable,
     );
   }
 
   @override
-  StageContributionContract stageContract({
+  TargetStage stage({
     required ResolvedUnit unit,
     required TargetExpectation target,
-    required String? repository,
-    required String sourceRoot,
   }) {
     final project = target.project!;
-    return StageContributionContract(
-      phase: StageContributionPhase.beforeProducers,
+    final contract = StageContributionContract(
+      phase: StageContributionPhase.beforeArtifacts,
       step: StageStepContract(
         'release-notes',
         inputs: const {'step:source-snapshot'},
@@ -362,19 +348,18 @@ final class GithubReleaseTargetModule extends TargetReleaseModule {
         },
       ),
     );
+    return TargetStage(
+      target: target,
+      contract: contract,
+      prepare: (context) => _prepareStage(context, target),
+    );
   }
 
-  @override
-  Future<TargetStageResult> prepareStage(
+  Future<StageStep?> _prepareStage(
     TargetStageContext context,
-    ResolvedUnit unit,
     TargetExpectation target,
   ) async {
     final receiptName = context.contract.step.name;
-    if (context.progress.any((record) => record.name == receiptName)) {
-      return TargetStageResult.succeeded();
-    }
-
     final project = target.project!;
     final changelogPath = project.fileAt('CHANGELOG.md');
     final source = SnapshotSourceTree(context.stage.sourceRoot);
@@ -393,7 +378,7 @@ final class GithubReleaseTargetModule extends TargetReleaseModule {
         ),
       );
       context.output.halt(HaltKind.beforeActing);
-      return const TargetStageResult.failed();
+      return null;
     }
     if (notes.isEmpty) {
       context.output.problem(
@@ -406,25 +391,116 @@ final class GithubReleaseTargetModule extends TargetReleaseModule {
         ),
       );
       context.output.halt(HaltKind.beforeActing);
-      return const TargetStageResult.failed();
+      return null;
     }
 
     context.output.report.acted = true;
     context.workspace.write('release-notes.md', utf8.encode(notes));
-    return TargetStageResult.succeeded(
-      steps: [
-        StageStep(
-          name: receiptName,
-          inputs: [StageInput.step(context.sourceStep)],
-          outputs: [
-            StageArtifact.capture(
-              stage: context.stage.directory,
-              path: 'release-notes.md',
-              type: 'notes',
-            ),
-          ],
+    return StageStep(
+      name: receiptName,
+      inputs: [StageInput.step(context.sourceStep)],
+      outputs: [
+        StageArtifact.capture(
+          stage: context.stage.directory,
+          path: 'release-notes.md',
+          type: 'notes',
         ),
       ],
     );
   }
+}
+
+/// Reads the exact asset inventory the GitHub Release will publish.
+final class _StagedReleaseAssets {
+  const _StagedReleaseAssets({required this.workspace, required this.output});
+
+  final Workspace workspace;
+  final Output output;
+
+  List<_StagedReleaseAsset>? gather(
+    ResolvedProject project,
+    String unit,
+  ) {
+    final assets = <_StagedReleaseAsset>[];
+
+    _StagedReleaseAsset? read(
+      String name,
+      String producer,
+    ) {
+      final bytes = workspace.readBytes(name);
+      if (bytes == null) {
+        output.problem(
+          Diagnostic(
+            code: 'RK-WORK-001',
+            message: 'the workspace has no $name',
+            remedy: '$producer — re-running runs it',
+          ),
+          unit: unit,
+        );
+        return null;
+      }
+      return _StagedReleaseAsset(
+        name: name,
+        path: workspace.pathOf(name),
+        bytes: bytes,
+      );
+    }
+
+    for (final platform in project.binaryPlatforms) {
+      final executable = project.executable!;
+      final version = project.version.canonical;
+      final archive = read(
+        ReleaseAssets.archiveName(executable, version, platform),
+        'the archive steps produce it',
+      );
+      if (archive == null) return null;
+      assets.add(archive);
+
+      if (platform.startsWith('macos-')) {
+        for (final evidence in [
+          ReleaseAssets.notaryResultName(executable, version, platform),
+          ReleaseAssets.notaryLogName(executable, version, platform),
+        ]) {
+          final asset = read(evidence, 'the notarize step produces it');
+          if (asset == null) return null;
+          assets.add(asset);
+        }
+      }
+    }
+
+    final sums = read(
+      ReleaseAssets.checksums,
+      'the checksums step produces it',
+    );
+    if (sums == null) return null;
+    assets.add(sums);
+
+    if (project.channels.contains('homebrew')) {
+      final formula = read(
+        ReleaseAssets.formulaName(project.executable!),
+        'the Homebrew target renders it',
+      );
+      if (formula == null) return null;
+      assets.add(formula);
+    }
+    final manifest = read(
+      ReleaseAssets.manifest,
+      'the complete-stage step produces it',
+    );
+    if (manifest == null) return null;
+    assets.add(manifest);
+    return assets;
+  }
+}
+
+final class _StagedReleaseAsset {
+  const _StagedReleaseAsset({
+    required this.name,
+    required this.path,
+    required this.bytes,
+  });
+
+  final String name;
+  final String path;
+  final List<int> bytes;
 }
