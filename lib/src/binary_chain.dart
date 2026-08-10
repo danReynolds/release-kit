@@ -541,7 +541,7 @@ class BinaryChain {
   LocalProducerOutcome _notaryOutcome({
     required String resultName,
     required String logName,
-    required String? zipName,
+    required String zipName,
   }) {
     final resultBytes = workspace.readBytes(resultName)!;
     final logBytes = workspace.readBytes(logName)!;
@@ -560,7 +560,7 @@ class BinaryChain {
     }
     return LocalProducerOutcome.succeeded(
       outputs: [
-        if (zipName != null) LocalProducerOutput(zipName, 'notary-input'),
+        LocalProducerOutput(zipName, 'notary-input'),
         LocalProducerOutput(resultName, 'notary'),
         LocalProducerOutput(logName, 'notary'),
       ],
