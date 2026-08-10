@@ -465,7 +465,6 @@ class StageInspector {
       }
     }
     _inspectChecksums(stage, manifest, beforeComplete, issues);
-    _inspectNotary(stage, manifest, producers, issues);
   }
 
   static void _inspectArchive(
@@ -610,89 +609,6 @@ class StageInspector {
     }
   }
 
-  static void _inspectNotary(
-    StageDirectory stage,
-    ReleaseManifest manifest,
-    Map<String, StageStep> producers,
-    List<StageIssue> issues,
-  ) {
-    final results = manifest.artifacts
-        .where((item) => item.name.endsWith('.notary-result.json'));
-    for (final result in results) {
-      final base = result.name.substring(
-        0,
-        result.name.length - '.notary-result.json'.length,
-      );
-      final logName = '$base.notary-log.json';
-      final log = manifest.artifacts.where((item) => item.name == logName);
-      final producer = producers[result.name];
-      try {
-        if (log.length != 1 ||
-            producer == null ||
-            producer.name != producers[logName]?.name ||
-            !producer.name.startsWith('notarize:')) {
-          throw const FormatException(
-            'notary result and log do not share one producer',
-          );
-        }
-        final resultJson = _jsonObject(
-          File(stage.resolve(result.name)).readAsStringSync(),
-          'notary result',
-        );
-        final logJson = _jsonObject(
-          File(stage.resolve(logName)).readAsStringSync(),
-          'notary log',
-        );
-        final submission = resultJson['id'];
-        if (resultJson['status'] != 'Accepted' ||
-            submission is! String ||
-            submission.isEmpty) {
-          throw const FormatException(
-            'notary result is not an identified Accepted submission',
-          );
-        }
-        final logSubmission = logJson['id'] ?? logJson['jobId'];
-        if (logSubmission != null && logSubmission != submission) {
-          throw const FormatException(
-            'notary log identifies another submission',
-          );
-        }
-        final evidence = producer.evidence['notary'];
-        if (evidence is! Map ||
-            evidence['status'] != 'Accepted' ||
-            evidence['submission_id'] != submission ||
-            evidence['result_sha256'] != result.sha256 ||
-            evidence['log_sha256'] != log.single.sha256) {
-          throw const FormatException(
-            'notary receipt evidence disagrees with the published files',
-          );
-        }
-      } on Object catch (error) {
-        issues.add(StageIssue(
-          StageIssueKind.invalidNotary,
-          'notarization evidence is invalid: $error',
-          path: result.name,
-        ));
-      }
-    }
-    final orphanLogs = manifest.artifacts.where(
-      (item) =>
-          item.name.endsWith('.notary-log.json') &&
-          !manifest.artifacts.any(
-            (other) =>
-                other.name ==
-                '${item.name.substring(0, item.name.length - '.notary-log.json'.length)}.notary-result.json',
-          ),
-    );
-    for (final orphan in orphanLogs) {
-      issues.add(StageIssue(
-        StageIssueKind.invalidNotary,
-        'notary log has no matching result',
-        path: orphan.name,
-      ));
-    }
-  }
-
   static void _inspectInventory(
     StageDirectory stage,
     StageReceipt? receipt,
@@ -783,14 +699,6 @@ bool _sameMap(Map<String, String> left, Map<String, String> right) {
     if (right[entry.key] != entry.value) return false;
   }
   return true;
-}
-
-Map<String, Object?> _jsonObject(String document, String label) {
-  final value = jsonDecode(document);
-  if (value is! Map || value.keys.any((key) => key is! String)) {
-    throw FormatException('$label is not a JSON object');
-  }
-  return value.cast<String, Object?>();
 }
 
 String _relative(String root, String path) {

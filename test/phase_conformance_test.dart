@@ -1643,7 +1643,7 @@ executables:
       }
       expect(
         run.text,
-        contains('publish 5 assets to the v1.0.0 release'),
+        contains('publish 3 assets to the v1.0.0 release'),
       );
       expect(run.text, contains('released'));
     });
@@ -1874,7 +1874,7 @@ executables:
       expect(run.expected, contains('tool.rb'));
       expect(
         run.text,
-        contains('publish 8 assets to the v1.0.0 release'),
+        contains('publish 6 assets to the v1.0.0 release'),
         reason: run.text,
       );
 

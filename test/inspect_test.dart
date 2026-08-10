@@ -667,7 +667,7 @@ void classificationTables() {
       () async {
     // Both derivations read ReleaseAssets now, so comparing them to each
     // other would compare a thing to itself. The pin is the literal: this
-    // fixture's frozen six-name vector lives in the sibling test below, and
+    // fixture's frozen five-name vector lives in the sibling test below, and
     // a summary that says any other number has drifted from the grammar
     // whatever the grammar says.
     final resolution = await _binaryResolution();
@@ -677,7 +677,7 @@ void classificationTables() {
         steps.firstWhere((s) => s.kind == StepKind.publishRelease).summary;
     final counted = int.parse(
         RegExp(r'publish (\d+) assets').firstMatch(summary)!.group(1)!);
-    expect(counted, 7);
+    expect(counted, 5);
   });
 
   test('the expected asset set is derived, and derives everything', () async {
@@ -687,16 +687,14 @@ void classificationTables() {
       {
         'example-tool-1.0.0-linux-x64.tar.gz',
         'example-tool-1.0.0-macos-arm64.tar.gz',
-        'example-tool-1.0.0-macos-arm64.notary-result.json',
-        'example-tool-1.0.0-macos-arm64.notary-log.json',
         'example-tool.rb',
         'SHA256SUMS',
         'release-manifest.json',
       },
-      reason: 'emptied, every release inspects exact and nothing notices — '
-          'and the reference shape is the real keybay 0.1.0 release: '
-          'archives, notary evidence per macOS platform, the formula, the '
-          'checksums',
+      reason: 'emptied, every release inspects exact and nothing notices. '
+          'Notary evidence is stage-local: a consumer verifies the binary '
+          'with Apple directly, so the JSON files beside it stopped being '
+          'assets',
     );
   });
 }
