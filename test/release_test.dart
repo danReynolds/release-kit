@@ -117,6 +117,7 @@ Future<Ran> release({
   GitState? state,
   RegistryReader? registry,
   String? typed = '0.2.0',
+  String? preauthorized,
   bool dryRun = false,
   Map<String, ToolResult> results = const {},
   void Function(String key)? onRun,
@@ -297,6 +298,7 @@ Future<Ran> release({
     wait: (_) => Future<void>.delayed(Duration.zero),
     output: Output(sink: buffer.write, isTerminal: false, useColor: false),
     confirm: typed == null ? null : (_) async => typed,
+    preauthorized: preauthorized,
     stageOnly: dryRun,
     stageFor: stageFor,
     refreshStage: (unit, _) => stageFor(unit),
@@ -689,16 +691,38 @@ void main() {
     );
   });
 
-  test('an unconfirmed release publishes nothing', () async {
+  test('an unconfirmed release publishes nothing, and says so as data',
+      () async {
     final ran = await release(typed: 'yes');
     expect(ran.exitCode, ExitCodes.refused);
     expect(ran.text, contains('nothing was published'));
+    expect(
+      ran.problems.map((p) => p['code']),
+      contains('RK-AUTH-002'),
+      reason: 'every refusal carries a code — an exit-1 document with empty '
+          'problems and rerun_helps true tells an agent to loop forever',
+    );
+    expect((ran.report['halt'] as Map?)?['kind'], 'beforeActing');
     expect(
       ran.calls.where(
           (c) => c.startsWith('git tag') || c.contains('publish --force')),
       isEmpty,
       reason: 'read-only preflight may run; nothing public may',
     );
+  });
+
+  test('a wrong --confirm refuses before any credential is touched', () async {
+    final ran = await release(typed: '9.9.9', preauthorized: '9.9.9');
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(ran.problems.map((p) => p['code']), ['RK-AUTH-002']);
+    expect(
+      ran.calls,
+      isNot(contains('dart pub login')),
+      reason: 'a value that cannot authorize this release must not acquire '
+          'a publishing session or spend signing and notary work',
+    );
+    expect(ran.calls, isNot(contains('dart pub publish --dry-run')));
+    expect((ran.report['halt'] as Map?)?['kind'], 'beforeActing');
   });
 
   test('typing the version tags and publishes, in that order', () async {
@@ -722,6 +746,21 @@ void main() {
     );
 
     expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    expect(
+      (ran.report['repository'] as Map)['head'],
+      isNotNull,
+      reason: 'doc/json.md promises repository on every verb, and the '
+          'production-alpha retry checkpoint reads its head',
+    );
+    final unitDocument = (ran.report['units'] as List).cast<Map>().single;
+    expect(unitDocument['version'], '0.2.0');
+    expect(unitDocument['tag'], 'v0.2.0');
+    expect(
+      (ran.report['attachments'] as Map?)?['authorization-disclosures'],
+      contains('pub.dev never deletes a version'),
+      reason: 'what the prompt disclosed travels with the yes, so a --json '
+          '--confirm caller reads it on the surface that carries the yes',
+    );
     expect(
       ran.calls.where((call) => call == 'dart pub login'),
       hasLength(1),

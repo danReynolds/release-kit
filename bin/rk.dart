@@ -78,16 +78,18 @@ Future<void> main(List<String> args) async {
   // --confirm carries the exact version as its value: the typed yes for
   // scripts and agents, the same door init opens with --write. A bare
   // --confirm authorizes nothing and is refused below.
-  String? confirmVersion;
+  final confirmVersions = <String>{};
   final flags = <String>{};
   for (final flag in args.where((a) => a.startsWith('-'))) {
     if (flag.startsWith('--confirm=')) {
-      confirmVersion = flag.substring('--confirm='.length);
+      confirmVersions.add(flag.substring('--confirm='.length));
       flags.add('--confirm');
     } else {
       flags.add(flag);
     }
   }
+  final confirmVersion =
+      confirmVersions.length == 1 ? confirmVersions.single : null;
   final positional = args.where((a) => !a.startsWith('-')).toList();
   final json = flags.contains('--json');
 
@@ -162,12 +164,35 @@ Future<void> main(List<String> args) async {
       (confirmVersion == null || confirmVersion.isEmpty) &&
       !flags.contains('-h') &&
       !flags.contains('--help')) {
+    // Bare, empty, or contradictory: none of these name one version, and
+    // two authorizations are refused the way two positionals are — not
+    // repaired by picking one.
     output.problem(
       Diagnostic(
         code: 'RK-CLI-009',
         message: '--confirm names the exact version it authorizes',
-        remedy: 'rk release <unit> --confirm=<version> — the flag is the '
-            'typed yes, so it must say what it says yes to',
+        remedy: 'rk release <unit> --confirm=<version>, exactly once — the '
+            'flag is the typed yes, so it must say what it says yes to',
+      ),
+    );
+    exitCode = ExitCodes.usage;
+    if (json) stdout.write(output.report.encode(exit: ExitCodes.usage));
+    return;
+  }
+
+  if (flags.contains('--confirm') &&
+      flags.contains('--stage') &&
+      !flags.contains('-h') &&
+      !flags.contains('--help')) {
+    // Staging publishes nothing, so there is nothing the yes could apply
+    // to; accepting and discarding an authorization teaches callers that
+    // consent is decorative.
+    output.problem(
+      Diagnostic(
+        code: 'RK-CLI-005',
+        message: 'rk release --stage does not have --confirm',
+        remedy: 'staging publishes nothing, so it takes no authorization. '
+            'Stage first, then rk release <unit> --confirm=<version>',
       ),
     );
     exitCode = ExitCodes.usage;
@@ -406,6 +431,7 @@ Future<int> _release(
           : interactive && stdin.hasTerminal
               ? _promptOnTerminal
               : null,
+      preauthorized: confirmVersion,
       stageOnly: stageOnly,
       stageFor: stages.call,
       refreshStage: stages.refresh,

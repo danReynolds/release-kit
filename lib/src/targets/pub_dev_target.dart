@@ -10,6 +10,7 @@ import '../engine/stage_inspection.dart';
 import '../engine/stage_receipt.dart';
 import '../engine/targets.dart';
 import '../engine/verdict.dart';
+import '../engine/yaml.dart';
 import '../engine/version.dart';
 import '../output/output.dart';
 import 'target_module.dart';
@@ -350,26 +351,28 @@ final class PubDevTargetModule extends TargetModule {
         ? sourceRoot
         : '$sourceRoot/${project.pubspec.directory}';
 
-    // pub honours pubspec_overrides.yaml during the dry run's resolution but
-    // excludes it from the published archive, so a tracked overrides file
-    // makes every local validation pass against a dependency graph consumers
-    // never get. Refusing is the honest check; simulating a consumer was not.
-    for (final root in {sourceRoot, directory}) {
-      if (File('$root/pubspec_overrides.yaml').existsSync()) {
-        context.output.problem(
-          Diagnostic(
-            code: 'RK-PUB-008',
-            message: '${project.name}: a tracked pubspec_overrides.yaml '
-                'masks consumer resolution',
-            remedy: 'pub honours it locally and strips it from the archive, '
-                'so validation here would not see what consumers see. '
-                'Untrack it (git rm --cached) and re-stage.',
-          ),
-          unit: project.unitName,
-        );
-        context.output.halt(HaltKind.beforeActing);
-        return false;
-      }
+    // pub honours dependency overrides — the pubspec_overrides.yaml file
+    // and the dependency_overrides: section of pubspec.yaml — at the
+    // resolution root, and strips both from the published archive. A
+    // tracked override therefore makes every local validation pass against
+    // a dependency graph consumers never get; the dry run even exits 0
+    // with only a hint. Refusing is the honest check; simulating a
+    // consumer was not.
+    final masking = _maskedResolution(sourceRoot, directory);
+    if (masking != null) {
+      context.output.problem(
+        Diagnostic(
+          code: 'RK-PUB-008',
+          message: '${project.name}: tracked dependency overrides '
+              'mask consumer resolution',
+          remedy: '$masking is honoured locally and stripped from the '
+              'published archive, so validation here would not see what '
+              'consumers see. Remove it and re-stage.',
+        ),
+        unit: project.unitName,
+      );
+      context.output.halt(HaltKind.beforeActing);
+      return false;
     }
 
     final dry = await context.tools.run(
@@ -415,6 +418,55 @@ final class PubDevTargetModule extends TargetModule {
     }
 
     return true;
+  }
+
+  /// What masks resolution for the staged package, or null when nothing
+  /// does: the overrides file or a non-empty dependency_overrides section,
+  /// at the package or at its resolution root. Pub resolves a workspace
+  /// member (`resolution: workspace`) at the nearest ancestor declaring
+  /// `workspace:`; every other package resolves at itself.
+  String? _maskedResolution(String sourceRoot, String directory) {
+    String describe(String path) {
+      final prefix = '$sourceRoot/';
+      return path.startsWith(prefix) ? path.substring(prefix.length) : path;
+    }
+
+    for (final root in {directory, _resolutionRoot(sourceRoot, directory)}) {
+      final overrides = '$root/pubspec_overrides.yaml';
+      if (File(overrides).existsSync()) {
+        return describe(overrides);
+      }
+      final section =
+          _pubspecMap('$root/pubspec.yaml')?.map('dependency_overrides');
+      if (section != null && section.entries.isNotEmpty) {
+        return 'the dependency_overrides section in '
+            '${describe('$root/pubspec.yaml')}';
+      }
+    }
+    return null;
+  }
+
+  String _resolutionRoot(String sourceRoot, String directory) {
+    final member = _pubspecMap('$directory/pubspec.yaml');
+    if (member?.string('resolution') != 'workspace') return directory;
+    var dir = directory;
+    while (dir != sourceRoot && dir.length > sourceRoot.length) {
+      final cut = dir.lastIndexOf('/');
+      if (cut < 0) break;
+      dir = dir.substring(0, cut);
+      if (_pubspecMap('$dir/pubspec.yaml')?.has('workspace') == true) {
+        return dir;
+      }
+    }
+    // A member whose root is not in the staged source resolves nowhere pub
+    // can see; the package directory is the only root left to check.
+    return directory;
+  }
+
+  YamlMap? _pubspecMap(String path) {
+    final file = File(path);
+    if (!file.existsSync()) return null;
+    return parseYaml(file.readAsStringSync(), path, Diagnostics());
   }
 
   @override

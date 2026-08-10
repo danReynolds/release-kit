@@ -184,6 +184,23 @@ void main() {
           receipt.artifacts.map((artifact) => artifact.path), contains('rk'));
     });
 
+    test('an earlier schema refuses by version, not by field shape', () {
+      final receipt = _writeCompleteStage(stage);
+      final old = Map<String, Object?>.from(receipt.toJson())
+        ..['schema'] = stageSchemaVersion - 1
+        ..['complete'] = true;
+      expect(
+        () => StageReceipt.parse('${CanonicalJson.encode(old)}\n'),
+        throwsA(isA<FormatException>().having(
+          (error) => error.message,
+          'message',
+          contains('unsupported stage schema'),
+        )),
+        reason: 'the schema message is the one a reader can act on; the '
+            'field error it used to get named a symptom',
+      );
+    });
+
     test('receipt parser rejects unknown fields and non-canonical bytes', () {
       final receipt = _writeCompleteStage(stage);
       final withUnknown = Map<String, Object?>.from(receipt.toJson())

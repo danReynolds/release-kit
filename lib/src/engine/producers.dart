@@ -130,7 +130,8 @@ Iterable<StageIssue> _notaryEvidence(
       log == null ||
       notary['result_sha256'] != result.sha256 ||
       notary['log_sha256'] != log.sha256 ||
-      !_acceptedNotaryFile(context.stage, result.path, submission)) {
+      !_acceptedNotaryFile(context.stage, result.path, submission) ||
+      !_logNamesSubmission(context.stage, log.path, submission)) {
     return [
       StageIssue(
         StageIssueKind.invalidNotary,
@@ -163,6 +164,24 @@ Iterable<StageIssue> _checksumsEvidence(
     ];
   }
   return const [];
+}
+
+/// Apple's log carries the submission under `id` or `jobId`; when it names
+/// one, it must be the submission the result named — a log for different
+/// bytes is not evidence about these.
+bool _logNamesSubmission(
+  StageDirectory stage,
+  String path,
+  String submission,
+) {
+  try {
+    final decoded = jsonDecode(File(stage.resolve(path)).readAsStringSync());
+    if (decoded is! Map) return false;
+    final named = decoded['id'] ?? decoded['jobId'];
+    return named == null || named == submission;
+  } on Object {
+    return false;
+  }
 }
 
 bool _acceptedNotaryFile(

@@ -1120,6 +1120,42 @@ void main() {
     );
   });
 
+  test(
+      'a finalized receipt whose terminal step was displaced still refuses '
+      'silent replacement', () async {
+    final staged = await harness.run(
+      stageOnly: true,
+      confirm: (_) async => fail('stage mode must not authorize'),
+    );
+    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    final receipt = harness.stage.requireReceipt();
+    final steps = [...receipt.steps];
+    final terminal = steps.removeLast();
+    expect(terminal.name, 'complete-stage');
+    steps.insert(steps.length - 1, terminal);
+    StageReceiptStore(harness.stage.directory)
+        .write(StageReceipt(identity: receipt.identity, steps: steps));
+
+    final released = await harness.run(
+      stageOnly: false,
+      confirm: (_) async => fail('a damaged reviewed stage must refuse '
+          'before authorization'),
+    );
+
+    expect(released.code, ExitCodes.refused, reason: released.text);
+    expect(released.problemCodes, contains('RK-STAGE-002'));
+    expect(
+      harness.stage.inspect().receipt,
+      isNotNull,
+      reason: 'the reviewed bytes were kept for the operator, not reset',
+    );
+    expect(
+      released.keys.where((key) => key.startsWith('dart compile exe')),
+      isEmpty,
+      reason: 'a reviewed stage is never silently rebuilt',
+    );
+  });
+
   test('a digest-consistent receipt cannot invent smoke evidence', () async {
     final staged = await harness.run(
       stageOnly: true,

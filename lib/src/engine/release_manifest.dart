@@ -4,6 +4,11 @@ import 'canonical_json.dart';
 import 'stage.dart';
 import 'stage_receipt.dart';
 
+/// Bumped freely until the first published release; after it, a bump
+/// orphans every manifest already public — the historical read paths
+/// (formula authentication, same-version re-inspection) parse only the
+/// current schema — so a post-release bump must teach the parser each
+/// retired schema it still needs to read.
 const releaseManifestSchemaVersion = 2;
 
 /// One public file, deliberately stripped of its local stage path and all
