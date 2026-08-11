@@ -316,13 +316,56 @@ Future<Ran> release({
 }
 
 void releaseCommandContract() {
-  test('release requires an explicit unit even when only one exists', () async {
-    final ran = await release(only: null);
+  test('the only unit a repository has needs no naming', () async {
+    // A unit is what ships together, so one unit is the whole release and
+    // there is nothing to disambiguate — the same resolution `rk status`
+    // performs when it is given no unit either.
+    final registry = _MutableRegistry(<String>['0.1.0']);
+    final ran = await release(
+      only: null,
+      registry: registry,
+      onRun: (key) {
+        if (key == 'dart pub publish --force') {
+          registry.goLive('0.2.0');
+          registry.archives['keybay@0.2.0'] = publishedBytes();
+        }
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    expect(ran.calls, contains('dart pub publish --force'));
+  });
+
+  test('two units are two releases, and rk will not pick one', () async {
+    final ran = await release(
+      only: null,
+      config: '''
+schema = 1
+
+[release.core]
+path = "packages/keybay"
+publish = ["pub.dev"]
+
+[release.other]
+path = "packages/other"
+publish = ["pub.dev"]
+''',
+      source: MemorySourceTree({
+        'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
+        'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
+        'packages/other/pubspec.yaml': 'name: other\nversion: 0.2.0\n',
+        'packages/other/CHANGELOG.md': '## 0.2.0\n',
+      }, description: '/repo/keybay'),
+    );
 
     expect(ran.exitCode, ExitCodes.usage);
     expect(ran.problems.map((problem) => problem['code']), ['RK-CLI-004']);
-    expect(ran.text, contains('name the unit to release'));
-    expect(ran.calls, isEmpty, reason: 'omitting the unit must not start work');
+    expect(ran.text, contains('core, other'));
+    expect(
+      ran.calls,
+      isEmpty,
+      reason: 'an ambiguous release must not start work',
+    );
   });
 }
 

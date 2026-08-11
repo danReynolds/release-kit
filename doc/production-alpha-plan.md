@@ -21,7 +21,7 @@ machine, with an austere surface and no hidden release state:
 ```text
 rk init
 rk status [unit]
-rk release <unit> [--stage]
+rk release [unit] [--stage]
 ```
 
 Bare `rk` remains `rk status`. Remote CI is important, but it follows the
