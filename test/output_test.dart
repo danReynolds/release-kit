@@ -1,5 +1,6 @@
 import 'package:release_kit/src/engine/diagnostic.dart';
 import 'package:release_kit/src/engine/verdict.dart';
+import 'package:release_kit/src/engine/checklist.dart';
 import 'package:release_kit/src/output/output.dart';
 import 'package:test/test.dart';
 
@@ -30,6 +31,43 @@ String withoutControls(String text) =>
     text.replaceAll(RegExp('\x1b\\[[0-9;]*[A-Za-z]'), '').replaceAll('\r', '');
 
 void main() {
+  test('a problem printed while a step is running survives it', () {
+    // The regression that reverted the grouped live board: producers print
+    // nothing but diagnostics now, and a transient region that erased what
+    // sat above it deleted the only account of why a release stopped.
+    final buffer = StringBuffer();
+    final output = Output(
+      sink: buffer.write,
+      isTerminal: true,
+      useColor: false,
+      terminalWidth: 80,
+    );
+
+    final activity = output.begin(
+      Step(
+        id: 'cli/build/macos-arm64',
+        kind: StepKind.build,
+        unit: 'cli',
+        summary: 'build tool for macos-arm64',
+        needs: const [],
+      ),
+    );
+    output.problem(
+      Diagnostic(
+        code: 'RK-BUILD-001',
+        message: 'macos-arm64: the build did not produce a working binary',
+        remedy: 'see the compiler output',
+      ),
+      unit: 'cli',
+    );
+    activity.failed('the build failed');
+    output.close();
+
+    expect(buffer.toString(), contains('RK-BUILD-001'));
+    expect(buffer.toString(), contains('did not produce a working binary'));
+    expect(buffer.toString(), contains('see the compiler output'));
+  });
+
   test('a plain line carries no glyph', () {
     final (out, captured) = make();
     out.line('core', note: '0.2.0 published');

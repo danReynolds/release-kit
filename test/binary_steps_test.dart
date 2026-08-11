@@ -295,9 +295,9 @@ executables:
       ),
     );
     expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
-    // Stated in the receipt, which is where it is durable and where the
-    // report reads it back from. The producer prints no step line of its
-    // own: the coordinator draws the file this made.
+    // Recorded, not printed: the producer reports and the coordinator
+    // draws. The receipt is where this is durable and where the settled
+    // report reads it back from.
     final signature = ok.evidence['signature']! as Map;
     expect(signature['first_identity'], isTrue);
     expect(signature['certificate'], contains('Developer ID Application: Dan'));

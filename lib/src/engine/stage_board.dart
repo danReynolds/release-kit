@@ -41,6 +41,11 @@ class StageBoard {
           rowOf['checksums'] = row;
         } else if (artifact == ReleaseAssets.manifest) {
           rowOf['complete-stage'] = row;
+        } else if (artifact.endsWith('.rb')) {
+          // Without this the formula row never completed, and `○` — added
+          // because blank read as skipped — was left on the one file that
+          // had in fact been produced.
+          rowOf['homebrew-formula'] = row;
         }
       }
       if (rows.isNotEmpty) {
@@ -93,33 +98,6 @@ class StageBoard {
   StageBoardRow? rowFor(String producer) => _rowOf[producer];
 
   bool get isEmpty => groups.isEmpty;
-
-  /// The block a terminal shows while the stage fills, one line per row.
-  ///
-  /// The mark leads so the trailing column stays free for what the row has
-  /// to say, and so nothing shifts sideways when the block settles.
-  List<String> liveLines(String frame) => [
-        for (final group in groups) ...[
-          '    ${group.label}',
-          for (final row in group.rows)
-            _line(
-              switch (row.state) {
-                StageBoardRowState.pending => '○',
-                StageBoardRowState.active => frame,
-                StageBoardRowState.done => '✓',
-                StageBoardRowState.failed => '✗',
-              },
-              row.name,
-              row.phase ?? (row.state == StageBoardRowState.done ? '' : ''),
-            ),
-        ],
-      ];
-
-  static String _line(String mark, String name, String note) {
-    final label = '      $name';
-    final padded = label.length >= 46 ? label : label.padRight(46);
-    return note.isEmpty ? '$mark $label' : '$mark $padded $note';
-  }
 }
 
 class StageBoardGroup {

@@ -41,6 +41,8 @@ final class HomebrewTargetModule extends TargetModule {
     final tap = repository == null ? unit.homebrewTap : unit.tapFor(repository);
     return TargetExpectation(
       label: tap == null ? 'Homebrew' : 'Homebrew · $tap',
+      kindLabel: 'Homebrew',
+      identity: tap ?? 'no tap configured',
       coordinate: tap == null
           ? 'Formula/${project.executable}.rb'
           : '$tap/Formula/${project.executable}.rb',

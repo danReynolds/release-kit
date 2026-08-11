@@ -1727,8 +1727,6 @@ executables:
             .expand((unit) => (unit['steps'] as List).cast<Map>())
             .map((step) => step['summary'])),
         contains('publish 3 assets to the v1.0.0 release'),
-        reason: 'the document carries every step; the report no longer '
-            'previews public acts it has not performed',
       );
       expect(run.text, contains('released'));
     });
@@ -2196,12 +2194,15 @@ executables:
 
         expect(run.code, ExitCodes.ok, reason: run.text);
         expect(run.text, contains('First release · permanent once published'));
-        expect(run.text, contains('io.github.example.tool'));
         expect(
           run.text,
-          isNot(contains('sealed into the designated requirement')),
-          reason: 'what permanent costs is an argument for the moment of '
-              'consent, not for a rehearsal',
+          matches(RegExp(r'macOS code identifier\s+io\.github\.example\.tool')),
+          reason: 'a swap of the identifier and the team survived a weaker '
+              'assertion that only looked for the value',
+        );
+        expect(
+          run.text,
+          matches(RegExp(r'Apple team\s+D \(TEAM123456\)')),
         );
       });
 

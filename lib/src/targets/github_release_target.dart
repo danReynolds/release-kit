@@ -47,6 +47,10 @@ final class GithubReleaseTargetModule extends TargetModule {
       label: repository == null
           ? 'GitHub Release'
           : 'GitHub Release · $repository',
+      kindLabel: 'GitHub Release',
+      // Without an origin there is no repository to name, and echoing the
+      // tag here would print the Git tag row's identity twice.
+      identity: repository ?? 'no origin remote',
       coordinate: repository == null
           ? unit.tag
           : '$repository/releases/tag/${unit.tag}',

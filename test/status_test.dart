@@ -499,8 +499,8 @@ void main() {
         'keybay': ['0.1.0', '0.2.0']
       }),
     );
-    expect(text, contains('pub.dev'));
-    expect(text, contains('Published'));
+    expect(text, matches(RegExp(r'pub\.dev\s+keybay')));
+    expect(text, matches(RegExp(r'^\s+Published$', multiLine: true)));
     expect(text, isNot(contains('prevent')));
     expect(text, isNot(contains('rk release')));
   });
@@ -520,16 +520,23 @@ void main() {
   });
 
   test('names staging as the next command when local is ahead', () async {
-    final text = await statusOf(
+    final run = await statusRun(
       source: tree(),
       state: git(tags: ['v0.2.0']),
       registry: FakeRegistry({
         'keybay': ['0.1.0']
       }),
     );
+    final text = run.text;
     expect(text, isNot(contains('prevent')));
     expect(text, contains('0.1.0 › 0.2.0'));
     expect(text, isNot(contains('ready')));
+    expect(
+      run.report['next'],
+      ['rk release core --stage'],
+      reason: 'an unstaged unit is staged first; a mutation collapsing this '
+          'to the publish form survived the whole suite',
+    );
   });
 
   test('the Git lane reports the latest older tag, not an invented absence',
@@ -543,8 +550,8 @@ void main() {
     );
     expect(text, contains('0.1.0 › 0.2.0'));
     expect(
-      text,
-      isNot(contains('· v0.2.0')),
+      text.split('\n').first,
+      isNot(contains('v0.2.0')),
       reason: 'the tag repeats the version under the default pattern',
     );
     expect(
@@ -729,8 +736,8 @@ executables:
       final run = await running;
 
       final tagRow = run.text.indexOf('Git tag');
-      final pubRow = run.text.indexOf('pub.dev');
-      final githubRow = run.text.indexOf('GitHub Release');
+      final pubRow = run.text.indexOf('pub.dev ');
+      final githubRow = run.text.indexOf('GitHub Release ');
       expect(tagRow, greaterThanOrEqualTo(0), reason: '$completionOrder');
       expect(pubRow, greaterThan(tagRow), reason: '$completionOrder');
       expect(githubRow, greaterThan(pubRow), reason: '$completionOrder');
@@ -839,12 +846,12 @@ executables:
     );
 
     expect(text, contains('Git tag'));
-    expect(text, contains('pub.dev'));
+    expect(text, matches(RegExp(r'pub\.dev\s+keybay')));
     expect(text, contains('0.1.0 › 0.2.0'));
     expect(text, isNot(contains('prevent')));
     expect(text, isNot(contains('→')));
     expect(
-      _targetLine(text, 'pub.dev').trimLeft(),
+      _targetLine(text, 'pub.dev ').trimLeft(),
       startsWith('pub.dev'),
       reason: 'ordinary absent work has no problem mark',
     );
@@ -957,7 +964,7 @@ executables:
     );
     expect(
       agreed.text,
-      contains('Published'),
+      matches(RegExp(r'^\s+Published$', multiLine: true)),
       reason: 'an arrow to where it already is describes no movement',
     );
 
@@ -979,7 +986,7 @@ executables:
     expect(split.text, contains('0.1.0 › 0.2.0'));
     expect(
       split.text,
-      isNot(contains('Published')),
+      isNot(matches(RegExp(r'^\s+Published$', multiLine: true))),
       reason: 'targets disagree, so the header invents no single answer',
     );
   });
@@ -1040,9 +1047,12 @@ executables:
       ),
     );
 
-    expect(run.text, contains('? › 0.2.0'));
     expect(
-        run.text, contains('current public version could not be established'));
+      run.text,
+      contains('current public version could not be established'),
+      reason: 'an unread history is an issue, not a row condition — the '
+          'candidate coordinate really is absent',
+    );
     expect(run.text, contains('provider history was unreadable'));
     expect(run.text, contains('prevent'));
 
@@ -1052,7 +1062,7 @@ executables:
       (target) => (target as Map)['kind'] == 'githubRelease',
     ) as Map;
     expect(
-      _targetLine(run.text, 'GitHub Release').trimLeft(),
+      _targetLine(run.text, 'GitHub Release ').trimLeft(),
       startsWith('✗'),
       reason: 'the target-linked issue, not the absent verdict, marks the row',
     );
@@ -1096,7 +1106,13 @@ executables:
       ),
     );
 
-    expect(run.text, contains('0.3.0 › 0.2.0'));
+    expect(
+      run.text,
+      contains('0.2.0 · behind 0.3.0'),
+      reason: '› means becomes, so an arrow here claimed rk would turn the '
+          'newer published version into the older one',
+    );
+    expect(run.text, isNot(contains('0.3.0 › 0.2.0')));
     expect(run.text, contains('ahead of the target 0.2.0'));
     expect(run.text, contains('RK-MONO-003'));
     expect(
@@ -1108,7 +1124,7 @@ executables:
     final pub = targets.singleWhere(
       (target) => (target as Map)['kind'] == 'pubDev',
     ) as Map;
-    expect(_targetLine(run.text, 'pub.dev').trimLeft(), startsWith('✗'));
+    expect(_targetLine(run.text, 'pub.dev ').trimLeft(), startsWith('✗'));
     expect(pub['verdict'], 'absent');
     expect(
       (run.report['problems'] as List).cast<Map>().any(
@@ -1178,7 +1194,7 @@ executables:
     final expected = ReleaseAssets.expectedFor(made!.unit.binaryProject);
     expect(
       run.text,
-      contains('Staged'),
+      matches(RegExp('${expected.length} artifacts')),
     );
     final staged = (((run.report['units'] as List).single as Map)['targets']
             as List)
@@ -1436,7 +1452,7 @@ executables:
         allOf(contains('stage does not validate'), contains('stage.json')),
       ),
     );
-    expect(run.text, isNot(contains('Staged')));
+    expect(run.text, isNot(matches(RegExp(r'^\s+Staged$', multiLine: true))));
     expect(run.text, contains('does not record its Dart compiler'));
     expect(run.text, contains('RK-STAGE-002'));
   });
@@ -1719,7 +1735,7 @@ void _reviewFixes() {
         .singleWhere((problem) => problem['code'] == 'RK-MONO-002');
     expect(monotonicity['target'], pub['id']);
     expect(
-      _targetLine(run.text, 'pub.dev').trimLeft(),
+      _targetLine(run.text, 'pub.dev ').trimLeft(),
       startsWith('✗'),
     );
   });
@@ -1763,7 +1779,7 @@ void _phase23Fixes() {
         'keybay': ['0.2.0']
       }),
     );
-    expect(text, contains('Published'));
+    expect(text, matches(RegExp(r'^\s+Published$', multiLine: true)));
     expect(
       text,
       isNot(contains('files are uncommitted')),
@@ -1816,7 +1832,7 @@ void statusReviewRegressions() {
       state: git(),
       registry: FakeRegistry({}, unreachable: true),
     );
-    expect(run.text, contains('pub.dev'));
+    expect(run.text, matches(RegExp(r'pub\.dev\s+keybay')));
     expect(run.text, contains('could not be read'));
     expect(
       run.text,
@@ -1902,7 +1918,7 @@ executables:
 
     expect(run.text, contains('Git tag'));
     expect(run.text, contains('GitHub Release'));
-    expect(run.text, contains('Published'));
+    expect(run.text, matches(RegExp(r'^\s+Published$', multiLine: true)));
     expect(
       run.text,
       isNot(contains('build keybay')),

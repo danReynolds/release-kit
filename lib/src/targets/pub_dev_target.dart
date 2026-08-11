@@ -32,6 +32,8 @@ final class PubDevTargetModule extends TargetModule {
     );
     return TargetExpectation(
       label: 'pub.dev · ${project.name}',
+      kindLabel: 'pub.dev',
+      identity: project.name,
       coordinate: project.name,
       targetVersion: project.version.canonical,
       step: step,

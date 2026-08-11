@@ -65,6 +65,65 @@ void main() {
       );
     });
 
+    test('a real file the cwd happens to hold is not this program', () {
+      // `dart compile exe bin/rk.dart -o rk` puts a real file named rk at a
+      // checkout root. Invoked by bare name from there, Platform.script
+      // resolves to it — and hashing it made rk's identity, and therefore
+      // every stage id, a function of the directory rk ran in.
+      final impostor = File('${scratch.path}/rk-impostor')
+        ..writeAsBytesSync(utf8.encode('SOMETHING ELSE ENTIRELY'));
+
+      expect(
+        rkProgramDigest(impostor, executable),
+        rkProgramDigest(null, executable),
+        reason: 'a stage reviewed in one directory must be the stage '
+            'published from another',
+      );
+    });
+
+    test('a Dart-suffixed name in the current directory is still not us', () {
+      // The suffix test alone let the phantom back in: invoke a compiled
+      // binary named `rk.dart` and argv[0] resolves to a real file in the
+      // cwd whose name ends in .dart. A phantom is always <cwd>/<one
+      // segment>, which is the shape this now refuses.
+      final here = Directory.current.path;
+      final phantom = File('$here/rk-phantom-probe.dart')
+        ..writeAsBytesSync(utf8.encode('NOT THIS PROGRAM'));
+      addTearDown(() => phantom.deleteSync());
+
+      expect(
+        rkProgramDigest(phantom, executable),
+        rkProgramDigest(null, executable),
+        reason: 'the directory rk runs in cannot change what rk is',
+      );
+    });
+
+    test('a snapshot the VM is running is this program', () {
+      // The pub.dev install runs a snapshot through the Dart VM, where the
+      // snapshot is rk and the executable is the toolchain.
+      final snapshot = File('${scratch.path}/rk.snapshot')
+        ..writeAsBytesSync(utf8.encode('SNAPSHOT'));
+
+      expect(
+        rkProgramDigest(snapshot, executable),
+        isNot(rkProgramDigest(null, executable)),
+        reason: 'the snapshot is the implementation, not the VM that runs it',
+      );
+    });
+
+    test('an unreadable neighbour is skipped, not thrown at', () {
+      final locked = File('${scratch.path}/rk-locked')
+        ..writeAsBytesSync(utf8.encode('LOCKED'));
+      Process.runSync('chmod', ['000', locked.path]);
+      addTearDown(() => Process.runSync('chmod', ['644', locked.path]));
+
+      expect(
+        () => rkProgramDigest(locked, executable),
+        returnsNormally,
+        reason: 'existing but unreadable is not evidence either',
+      );
+    });
+
     test('nothing readable is refused rather than guessed', () {
       expect(
         () => rkProgramDigest(

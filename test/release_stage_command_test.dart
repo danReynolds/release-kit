@@ -911,10 +911,19 @@ void main() {
 
       expect(failed.code, ExitCodes.refused, reason: failed.text);
       expect(failed.problemCodes, contains(failure.code));
+      expect(
+        failed.text,
+        contains(failure.code),
+        reason: 'a producer that fails says so on the surface a person '
+            'reads, not only in the document — a live region that erased '
+            'the diagnostics above it left the operator with a halt '
+            'sentence and no cause',
+      );
       expect(prompts, 0, reason: 'authorization follows complete staging');
       expect(failed.publicMutations, isEmpty);
       expect(harness.stage.inspect().reusable, isFalse);
       expect(failed.text, contains('Release targets'));
+
       expect('not attempted'.allMatches(failed.text), hasLength(4));
       final unit = (failed.report['units'] as List).single as Map;
       final actions = {
@@ -974,6 +983,7 @@ void main() {
       expect(failed.publicMutations, isEmpty);
       expect(harness.stage.inspect().reusable, isFalse);
       expect(failed.text, contains('Release targets'));
+
       expect('not attempted'.allMatches(failed.text), hasLength(4));
 
       Directory(harness.stage.directory.resolve(failure.path)).deleteSync();

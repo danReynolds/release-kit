@@ -74,9 +74,8 @@ class StatusCommand {
 
     output.repository(
       name: tree.description.split('/').last,
-      branch: git.branch == null
-          ? null
-          : '${git.branch}@${git.head.substring(0, 7)}',
+      branch: git.branch,
+      commit: git.shortHead,
       uncommitted: git.uncommitted.length,
       head: git.head,
       remote: git.originUrl,
@@ -695,7 +694,14 @@ class StatusCommand {
     // naming a place and then the state of that place made two headers
     // argue about one fact.
     final movement = agreedCurrent != null && agreedCurrent != version
-        ? '$agreedCurrent › $version'
+        ? Version.tryParse(agreedCurrent) != null &&
+                Version.tryParse(version) != null &&
+                Version.tryParse(agreedCurrent)! > Version.tryParse(version)!
+            // Not movement: the world is ahead of this release, which the
+            // monotonicity check refuses. An arrow here would claim rk
+            // turns the newer version into the older one.
+            ? '$version · behind $agreedCurrent'
+            : '$agreedCurrent › $version'
         : version;
     final tag = snapshot.unit.tag == 'v$version' ? null : snapshot.unit.tag;
     output.unit(
@@ -733,7 +739,6 @@ class StatusCommand {
         snapshot.targets.every((t) => t.currentKnown) && currents.length == 1;
     final verdicts = snapshot.targets.map((t) => t.inspection.verdict).toSet();
     final agreed = verdicts.length == 1 ? verdicts.single : null;
-    final anyExact = snapshot.targets.any((t) => t.inspection.isExact);
 
     output.blank();
     output.line(
@@ -742,7 +747,7 @@ class StatusCommand {
         Verdict.absent => 'Not published',
         Verdict.conflict => 'Does not match',
         Verdict.unknown => 'Could not be read',
-        null => anyExact ? 'Partly published' : 'Not published',
+        null => 'Public targets',
       },
       depth: 1,
       tone: Tone.header,
@@ -767,13 +772,15 @@ class StatusCommand {
                     Verdict.conflict => Mark.blocked,
                     Verdict.absent || Verdict.unknown => Mark.none,
                   },
-        note: speaks
-            ? _condition(state)
-            : headerStatedMovement
-                ? target.identity
-                : '${target.identity} · '
-                    '${target.currentKnown ? target.currentVersion ?? '—' : '?'}'
-                    ' › ${target.expectation.targetVersion}',
+        note: [
+          target.identity,
+          if (!headerStatedMovement &&
+              target.currentKnown &&
+              target.currentVersion != null &&
+              target.currentVersion != target.expectation.targetVersion)
+            '${target.currentVersion} › ${target.expectation.targetVersion}',
+          if (agreed == null || speaks || linked) _condition(state),
+        ].join(' · '),
         depth: 2,
         labelWidth: 30,
         tone: tone,
@@ -794,7 +801,7 @@ class StatusCommand {
           if (target.expectation.kind == 'pubDev')
             (
               target,
-              'package source',
+              '${target.identity} source',
               staged ? ArtifactStatus.staged : ArtifactStatus.notStaged
             )
           else if (target.artifacts.isNotEmpty)
@@ -817,7 +824,7 @@ class StatusCommand {
         ArtifactStatus.staged => 'Staged',
         ArtifactStatus.notStaged => 'Not staged',
         ArtifactStatus.invalid => 'Cannot be staged',
-        null => 'Partly staged',
+        null => 'Stage',
       },
       depth: 1,
       tone: Tone.header,
@@ -830,7 +837,9 @@ class StatusCommand {
       output.line(
         target.kindLabel,
         mark: agreed != null ? Mark.none : _artifactMark(status),
-        note: summary,
+        // The word survives whatever the heading says: the plan requires
+        // that marks and colour are never the only signal.
+        note: agreed != null ? summary : '$summary · ${_artifactNote(status)}',
         depth: 2,
         labelWidth: 30,
         tone: Tone.plain,
@@ -876,6 +885,12 @@ class StatusCommand {
       ],
     );
   }
+
+  static String _artifactNote(ArtifactStatus status) => switch (status) {
+        ArtifactStatus.notStaged => 'not staged',
+        ArtifactStatus.staged => 'staged',
+        ArtifactStatus.invalid => 'invalid',
+      };
 
   static Mark _artifactMark(ArtifactStatus status) => switch (status) {
         ArtifactStatus.notStaged => Mark.none,
