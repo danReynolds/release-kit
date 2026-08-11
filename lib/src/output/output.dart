@@ -287,14 +287,6 @@ class Output {
   }
 
   Activity? _live;
-  LiveBlock? _liveBlock;
-
-  /// Opens a live block whose lines [lines] supplies on every tick.
-  LiveBlock live(List<String> Function(String frame) lines) {
-    _liveBlock?.close();
-    _clearTransient();
-    return _liveBlock = LiveBlock._(this, lines);
-  }
 
   /// Ends the run's rendering.
   ///
@@ -305,8 +297,6 @@ class Output {
   void close() {
     _live?.abandon();
     _live = null;
-    _liveBlock?.close();
-    _liveBlock = null;
     _clearTransient();
   }
 
@@ -602,67 +592,6 @@ class Output {
 
 /// The transient fixed-height list used while status reads targets in
 /// parallel.
-/// A block of lines that redraws in place while work runs, and leaves
-/// nothing behind.
-///
-/// The caller owns what the lines say; this owns only the terminal
-/// mechanics — the spinner tick, the redraw, and the erase. `TargetChecks`
-/// predates it and keeps its own copy; a second live region that invented
-/// its own erase would be the third place a stray escape could survive a
-/// crash.
-class LiveBlock {
-  LiveBlock._(this._output, this._lines) {
-    if (!_output.isTerminal) return;
-    _draw();
-    _ticker = Timer.periodic(
-      const Duration(milliseconds: 120),
-      (_) => _draw(),
-    );
-  }
-
-  final Output _output;
-  final List<String> Function(String frame) _lines;
-
-  Timer? _ticker;
-  var _drawnLines = 0;
-  var _spin = 0;
-  var _closed = false;
-
-  static const _frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-
-  /// Redraws now, because the caller changed what the lines say.
-  void refresh() {
-    if (_closed || !_output.isTerminal) return;
-    _draw();
-  }
-
-  void _draw() {
-    _erase();
-    final frame = _frames[_spin++ % _frames.length];
-    final lines = _lines(frame);
-    for (final line in lines) {
-      _output.sink('$line\n');
-    }
-    _drawnLines = lines.length;
-  }
-
-  void _erase() {
-    for (var i = 0; i < _drawnLines; i++) {
-      _output.sink('\x1b[1A\r\x1b[2K');
-    }
-    _drawnLines = 0;
-  }
-
-  /// Erases the block. What happened is printed by the caller, once.
-  void close() {
-    if (_closed) return;
-    _closed = true;
-    _ticker?.cancel();
-    _erase();
-    if (identical(_output._liveBlock, this)) _output._liveBlock = null;
-  }
-}
-
 class TargetChecks {
   TargetChecks._(this._output, Duration delay) {
     if (!_output.isTerminal) return;

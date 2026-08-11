@@ -653,6 +653,7 @@ void main() {
     final ran = await release(dryRun: true);
     expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
     expect(ran.text, contains('0.2.0 staged'));
+    expect(ran.text, contains('it publishes nothing'));
     expect(
       ran.calls.where((c) => c.startsWith('git tag')),
       isEmpty,

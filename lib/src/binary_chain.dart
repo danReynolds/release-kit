@@ -103,6 +103,7 @@ class BinaryChain {
 
     final name = binaryName(platform, executable);
 
+    final activity = output.begin(step);
     File(workspace.pathOf(name)).parent.createSync(recursive: true);
     final built = await DartCliBuilder(
       tools: tools,
@@ -116,6 +117,7 @@ class BinaryChain {
       expectedVersion: project.version.canonical,
     );
     if (!built.ok) {
+      activity.failed(built.problem ?? 'the build failed');
       output.problem(
         Diagnostic(
           code: 'RK-BUILD-001',
@@ -138,13 +140,17 @@ class BinaryChain {
 
     if (signing == null) {
       if (built.unproven case final unproven?) {
+        activity.done('built, not executed');
         output.step(
           step,
+          mark: Mark.done,
           verdict: Verdict.exact,
           detail: 'built, not executed — $unproven',
           note: 'built, not executed — $unproven',
           show: false,
         );
+      } else {
+        activity.done('built');
       }
       return LocalProducerOutcome.succeeded(
         outputs: [LocalProducerOutput(name, 'executable')],
@@ -152,10 +158,10 @@ class BinaryChain {
       );
     }
 
-    return _sign(step, name, smoke, signing);
+    return _sign(step, activity, name, smoke, signing);
   }
 
-  /// The signing half of a macOS build.
+  /// The signing half of a macOS build, continuing [buildStep]'s activity.
   ///
   /// The requirement is derived from the release users already installed —
   /// asking the certificate about to sign what it will sign with is a
@@ -164,6 +170,7 @@ class BinaryChain {
   /// release was refused (RK-SIGN-009).
   Future<LocalProducerOutcome> _sign(
     Step step,
+    Activity activity,
     String name,
     Map<String, Object?> smoke,
     MacSigning signing,
@@ -178,6 +185,7 @@ class BinaryChain {
         publishedRequirement == null ? null : teamOf(publishedRequirement);
 
     if (publishedRequirement != null && team == null) {
+      activity.failed('the published release names no team rk can read');
       output.problem(
         Diagnostic(
           code: 'RK-SIGN-001',
@@ -201,6 +209,7 @@ class BinaryChain {
       expectedCertificateSha256: signing.certificateSha256,
     );
     if (!signed.ok) {
+      activity.failed(signed.problem ?? 'signing failed');
       output.problem(
         Diagnostic(
           code: 'RK-SIGN-002',
@@ -221,6 +230,7 @@ class BinaryChain {
     if (publishedRequirement != null) {
       final produced = signed.requirement ?? '(unreadable)';
       if (produced != publishedRequirement) {
+        activity.abandon();
         output.problem(
           Diagnostic(
             code: 'RK-SIGN-003',
@@ -255,10 +265,18 @@ class BinaryChain {
           'the produced signature differs from the published identity',
         );
       }
+      activity.done(smoke['status'] == 'passed'
+          ? 'built · signed · matches the published identity'
+          : 'built, not executed · signed · matches the published identity');
     } else {
       // A first signed release makes an identity permanent, so it is named
       // rather than assumed: the certificate that signed and the identifier
       // every later release must reproduce.
+      activity.done(
+        '${smoke['status'] == 'passed' ? 'built' : 'built, not executed'} · '
+        'signed · first release · ${signed.certificate ?? 'unknown '
+            'certificate'} · ${signing.codeId}',
+      );
     }
     final signedSha256 = Sha256.hex(workspace.readBytes(name)!);
     return LocalProducerOutcome.succeeded(
@@ -353,9 +371,15 @@ class BinaryChain {
 
     // The wait is Apple's, and silence during it reads as a hang — this is
     // the step Activity exists for.
+    final activity = output.begin(
+      step,
+      typically: const Duration(minutes: 5),
+    );
+    activity.update('waiting on Apple');
     final notarized =
         await MacOsNotarizer(tools: tools).submit(workspace.pathOf(zip));
     if (!notarized.ok) {
+      activity.failed(notarized.problem ?? 'Apple rejected the submission');
       output.problem(
         Diagnostic(
           code: 'RK-NOTARY-002',
@@ -377,6 +401,7 @@ class BinaryChain {
         ? null
         : await MacOsNotarizer(tools: tools).log(submission);
     if (log == null || !log.ok) {
+      activity.failed('the notarization log could not be fetched');
       output.problem(
         Diagnostic(
           code: 'RK-NOTARY-003',
@@ -393,6 +418,7 @@ class BinaryChain {
       );
     }
     workspace.write(logName, utf8.encode(log.stdout));
+    activity.done('notarized');
     return _notaryOutcome(
       resultName: resultName,
       logName: logName,
@@ -439,7 +465,6 @@ class BinaryChain {
     workspace.write(name, bytes);
     output.step(
       step,
-      show: false,
       mark: Mark.done,
       verdict: Verdict.exact,
       detail: name,
@@ -479,7 +504,6 @@ class BinaryChain {
         ReleaseAssets.checksums, utf8.encode(Checksums.render(assets)));
     output.step(
       step,
-      show: false,
       mark: Mark.done,
       verdict: Verdict.exact,
       detail: '${assets.length} archives',

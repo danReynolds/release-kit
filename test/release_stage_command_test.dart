@@ -1035,6 +1035,7 @@ void main() {
           reason: '${boundary.step} retained ${entry.key}',
         );
       }
+      expect(resumed.text, contains('resuming the validated staged work'));
       expect(harness.stage.inspect().reusable, isTrue);
       expect(resumed.publicMutations, isEmpty);
     });

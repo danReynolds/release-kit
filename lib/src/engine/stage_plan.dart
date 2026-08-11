@@ -346,37 +346,56 @@ String _rkImplementationSha256() {
 /// What identifies this rk when its Dart sources are not on disk to read —
 /// an installed binary, or a snapshot run by the Dart VM.
 ///
-/// Only files that are actually there are read. [Platform.script] cannot be
-/// trusted for a compiled executable: invoked by bare name, as a shell that
-/// passes a bare `argv[0]` does, Dart resolves it against the *current
-/// directory*, so it names a file that does not exist — `rk status` in any
-/// other repository named a phantom `<cwd>/rk`. Reading it unconditionally
-/// made every stage inspection fail with RK-STAGE-002, which is to say it
-/// made an installed rk unusable, while [Platform.resolvedExecutable] — the
-/// path that is always real — sat beside it in the same list. Skipping the
-/// phantom also makes the digest identical however rk was invoked.
+/// [Platform.script] cannot be trusted for a compiled executable. Invoked by
+/// bare name, Dart resolves it against the *current directory*, so it names
+/// whatever happens to sit there — and `dart compile exe bin/rk.dart -o rk`
+/// puts a real file at exactly that path. Testing that the phantom exists
+/// was therefore the wrong question: it made the identity of rk a function
+/// of the directory rk was run from, so a stage reviewed in one directory
+/// was invisible from another and rk silently rebuilt and re-notarized
+/// instead of publishing the reviewed bytes.
+///
+/// The right question is whether the file is the running program. A Dart
+/// artifact — a script, a snapshot, an AOT blob — is one, because only the
+/// VM is handed one. Anything else is the cwd talking, and is ignored.
 ///
 /// Public so a test can hold this to account without a compiled binary and
 /// a shell that lies about argv[0].
 String rkProgramDigest(File? script, File executable) {
+  const artifacts = {'.dart', '.snapshot', '.dill', '.aot', '.jit'};
   final seen = <String>{};
   final inventory = <String, String>{};
   for (final file in [if (script != null) script, executable]) {
-    if (!file.existsSync()) continue;
-    String path;
-    try {
-      path = file.resolveSymbolicLinksSync();
-    } on Object {
-      path = file.absolute.path;
-    }
+    final path = _realPath(file);
+    if (path == null) continue;
+    final isProgram = identical(file, executable) ||
+        artifacts.any(path.endsWith) ||
+        path == _realPath(executable);
+    if (!isProgram) continue;
     if (!seen.add(path)) continue;
-    inventory['program-${inventory.length + 1}'] =
-        Sha256.hex(File(path).readAsBytesSync());
+    try {
+      inventory['program-${inventory.length + 1}'] =
+          Sha256.hex(File(path).readAsBytesSync());
+    } on Object catch (error) {
+      // Existing but unreadable is not evidence either, and letting the
+      // read throw reproduced the failure this exists to prevent.
+      if (identical(file, executable)) {
+        throw StateError('the rk implementation could not be read: $error');
+      }
+    }
   }
   if (inventory.isEmpty) {
     throw StateError('the rk implementation could not be identified');
   }
   return Sha256.hex(utf8.encode(CanonicalJson.encode(inventory)));
+}
+
+String? _realPath(File file) {
+  try {
+    return file.resolveSymbolicLinksSync();
+  } on Object {
+    return file.existsSync() ? file.absolute.path : null;
+  }
 }
 
 Directory? _releaseKitSourceRoot(File script) {

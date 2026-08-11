@@ -53,7 +53,7 @@ fails, and the count below is checked against the rows.
 | `RK-CLI-001` | rk does not have ${unknown.join( | `bin/rk.dart` |
 | `RK-CLI-002` | this is not a git repository | `bin/rk.dart` |
 | `RK-CLI-003` | no unit named "$only" | `lib/src/commands/release.dart`, `lib/src/commands/status.dart` |
-| `RK-CLI-004` | name the unit to release | `lib/src/commands/release.dart`, `bin/rk.dart` |
+| `RK-CLI-004` | name the unit to release | `lib/src/commands/release.dart` |
 | `RK-CLI-005` | rk $command does not have ${inapplicable.join( | `bin/rk.dart` |
 | `RK-CLI-007` | — | `bin/rk.dart` |
 | `RK-CLI-008` | rk has no command named "$command" | `bin/rk.dart` |
