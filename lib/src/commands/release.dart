@@ -13,6 +13,7 @@ import '../engine/resolve.dart';
 import '../engine/release_stage.dart';
 import '../engine/source_tree.dart';
 import '../engine/stage_inspection.dart';
+import '../engine/stage_board.dart';
 import '../engine/stage_contract.dart';
 import '../engine/stage_receipt.dart';
 import '../engine/targets.dart';
@@ -364,19 +365,6 @@ class ReleaseCommand {
         '${unit.projects.expand((p) => p.channels).toSet().join(', ')}');
     output.blank();
 
-    for (final step in checklist.steps) {
-      final state = states[step.id]!;
-      output.step(
-        step,
-        mark: state.isExact ? Mark.satisfied : Mark.none,
-        verdict: state.verdict,
-        detail: state.detail,
-        note: state.isExact ? (state.detail ?? 'already done') : null,
-        action: step.isPublic ? publicActions[step.id]!.wire : null,
-        depth: 0,
-      );
-    }
-
     final prepared = await _prepareStage(
       unit,
       checklist,
@@ -413,20 +401,23 @@ class ReleaseCommand {
       return ExitCodes.refused;
     }
 
+    output.line('${unit.name} ${unit.version} staged', mark: Mark.done);
+    _renderBoard(
+      StageBoard.forUnit(unit, targets),
+      progressOf: prepared.receiptSteps,
+    );
+
     if (stageOnly) {
-      _sayClaims(
+      _sayStageClaims(
         prepared.claims,
         prepared.firstCertificate,
         prepared.codeId,
       );
       output.blank();
-      output.line(
-        '${unit.name} ${unit.version} staged',
-        mark: Mark.done,
-        note: stage.directory.identity.id,
-      );
-      output.say('validated at ${stage.directory.path}');
-      output.next('rk release ${unit.name}');
+      output.say(stage.directory.path);
+      // The next command is data for whoever is driving; the operator who
+      // just staged does not need to be told what staging is for.
+      output.report.next('rk release ${unit.name}');
       return ExitCodes.ok;
     }
 
@@ -1009,6 +1000,7 @@ class ReleaseCommand {
       final firstIdentity = signatureMap['first_identity'] == true;
       return _PreparedStage(
         claims: claims,
+        receiptSteps: inspected.receipt!.steps,
         publishedRequirement: signatureMap['published_requirement'] as String?,
         firstCertificate:
             firstIdentity ? signatureMap['certificate'] as String? : null,
@@ -1027,12 +1019,10 @@ class ReleaseCommand {
       return null;
     }
 
-    output.say(
-      stageOnly
-          ? 'staging prepares real release bytes and may use signing and '
-              'notary credentials or contact Apple; it publishes nothing.'
-          : 'preparing the exact private stage before authorization.',
-    );
+    final board = StageBoard.forUnit(unit, targets);
+    // A live block only while a terminal is watching: a log, a pipe, and an
+    // agent get the settled report once, with no redraws in it.
+    final live = board.isEmpty ? null : output.live(board.liveLines);
 
     final progress = <StageStep>[];
     late final List<StageArtifact> sourceArtifacts;
@@ -1041,7 +1031,6 @@ class ReleaseCommand {
       progress.addAll(inspected.receipt!.steps);
       sourceStep = progress.first;
       sourceArtifacts = List<StageArtifact>.from(sourceStep.outputs);
-      output.say('resuming the validated staged work already on disk.');
     } else {
       try {
         stage.reset();
@@ -1080,7 +1069,14 @@ class ReleaseCommand {
       )) {
         final target = targetStage.target;
         final receiptName = targetStage.contract.step.name;
-        if (progress.any((record) => record.name == receiptName)) continue;
+        final row = board.rowFor(receiptName);
+        if (progress.any((record) => record.name == receiptName)) {
+          row?.finish();
+          live?.refresh();
+          continue;
+        }
+        row?.begin('checking');
+        live?.refresh();
         final StageStep? result;
         try {
           result = await targetStage.prepare(
@@ -1095,11 +1091,19 @@ class ReleaseCommand {
             ),
           );
         } on Object catch (error) {
+          row?.fail('did not complete');
+          live?.close();
           _stageOperationFailed('${target.label} stage preparation', error);
           return false;
         }
-        if (result == null) return false;
+        if (result == null) {
+          row?.fail('refused');
+          live?.close();
+          return false;
+        }
         progress.add(result);
+        row?.finish(note: _contributionNote(result));
+        live?.refresh();
         try {
           _persistStageProgress(stage, sourceArtifacts, progress);
         } on Object catch (error) {
@@ -1155,17 +1159,21 @@ class ReleaseCommand {
           step.kind != StepKind.completeStage;
     }).toList();
     for (final step in producerSteps) {
+      final row = board.rowFor(receiptNameFor(step));
       if (_producerRecorded(progress, step)) {
         output.step(
           step,
-          mark: Mark.satisfied,
           verdict: Verdict.exact,
           detail: 'validated in the interrupted stage',
-          note: 'validated in the interrupted stage',
+          show: false,
         );
+        row?.finish();
+        live?.refresh();
         continue;
       }
       output.report.acted = true;
+      row?.begin(_phaseOf(step));
+      live?.refresh();
       final LocalProducerOutcome act;
       try {
         act = await _actProducer(
@@ -1177,12 +1185,18 @@ class ReleaseCommand {
           certificateSha256: certificateSha256,
         );
       } on Object catch (error) {
+        row?.fail('did not complete');
+        live?.close();
         return _stageOperationFailed(step.summary, error);
       }
       if (!act.ok) {
+        row?.fail(act.problem ?? 'did not complete');
+        live?.close();
         if (!output.report.halted) output.halt(HaltKind.stoppedPartway);
         return null;
       }
+      row?.finish();
+      live?.refresh();
       try {
         progress.add(
             _captureProducerStep(stage, unit, step, sourceStep, progress, act));
@@ -1224,13 +1238,15 @@ class ReleaseCommand {
       checklist.steps.singleWhere(
         (step) => step.kind == StepKind.completeStage,
       ),
-      mark: Mark.done,
       verdict: Verdict.exact,
       detail: 'staged and validated',
-      note: 'staged and validated',
+      show: false,
     );
+    board.rowFor('complete-stage')?.finish();
+    live?.close();
     return _PreparedStage(
       claims: claims,
+      receiptSteps: List<StageStep>.unmodifiable(progress),
       publishedRequirement: publishedRequirement,
       firstCertificate: firstCertificate,
       codeId: codeId,
@@ -1852,6 +1868,28 @@ class ReleaseCommand {
   /// it is what `firstCertificate` carries.
   /// Says the first-claim disclosures and returns them, so the caller can
   /// carry them onto the machine surface beside the yes they gate.
+  /// The names this release makes unreclaimable, without the paragraphs.
+  ///
+  /// A rehearsal exists to be read before these become permanent, so the
+  /// facts belong here — but what "permanent" costs is an argument for the
+  /// moment of consent, and [_sayClaims] makes it there, once, before the
+  /// version is typed.
+  void _sayStageClaims(
+    List<TargetClaim> claims,
+    String? firstCertificate,
+    String? codeId,
+  ) {
+    if (claims.isEmpty && firstCertificate == null) return;
+    output.blank();
+    output.say('claims permanently');
+    for (final claim in claims) {
+      output.say('${claim.registrar.padRight(17)}${claim.name}', depth: 1);
+    }
+    if (firstCertificate != null) {
+      output.say('macOS identity   $codeId', depth: 1);
+    }
+  }
+
   List<String> _sayClaims(
     List<TargetClaim> claims,
     String? firstCertificate,
@@ -1877,6 +1915,75 @@ class ReleaseCommand {
     }
     return ['this release claims, for the first time:', ...firstOf];
   }
+
+  /// What a producer is doing to the file it is making, while it does it.
+  static String _phaseOf(Step step) => switch (step.kind) {
+        StepKind.build => step.platform?.startsWith('macos-') == true
+            ? 'building and signing'
+            : 'building',
+        StepKind.notarize => 'notarizing',
+        StepKind.archive => 'archiving',
+        StepKind.checksums => 'checksumming',
+        _ => 'working',
+      };
+
+  /// What a target's own stage check proved, in its own words.
+  static String? _contributionNote(StageStep step) =>
+      step.evidence['publish_dry_run'] == 'passed'
+          ? 'pub dry run passed'
+          : null;
+
+  /// The settled stage, grouped by the target that will publish each file.
+  ///
+  /// The notes are read back out of the receipt rather than remembered from
+  /// the run: what a signature or a notarization proved is recorded there,
+  /// and a second copy composed at print time could disagree with it.
+  void _renderBoard(StageBoard board, {required List<StageStep> progressOf}) {
+    // Four producers can report against one file — a macOS archive is
+    // built, signed, notarized and packed — so what they proved
+    // accumulates. Assigning the note per step let the last one silently
+    // erase the identity the first one established.
+    final marks = <StageBoardRow, List<String>>{};
+    for (final step in progressOf) {
+      final row = board.rowFor(step.name);
+      if (row == null) continue;
+      final signature = step.evidence['signature'];
+      final notary = step.evidence['notary'];
+      final found = marks.putIfAbsent(row, () => <String>[]);
+      if (signature is Map && signature['certificate'] is String) {
+        found.add(
+          '[signed] ${_shortCertificate(signature['certificate'] as String)}',
+        );
+      }
+      if (notary is Map && notary['status'] == 'Accepted') {
+        found.add('[notarized]');
+      }
+      if (step.evidence['publish_dry_run'] == 'passed') {
+        found.add('pub dry run passed');
+      }
+    }
+    marks.forEach((row, found) {
+      if (found.isNotEmpty) row.note = found.join('  ');
+    });
+
+    for (final group in board.groups) {
+      output.line(group.label, depth: 1);
+      for (final row in group.rows) {
+        output.line(
+          row.name,
+          note: row.note,
+          depth: 2,
+          labelWidth: 44,
+          noteTone: Tone.muted,
+        );
+      }
+    }
+  }
+
+  /// Every Developer ID certificate begins the same way; what varies is the
+  /// team it names.
+  static String _shortCertificate(String certificate) =>
+      certificate.replaceFirst('Developer ID Application: ', '');
 
   /// A conventional identifier to *suggest*, never to use.
   ///
@@ -1943,12 +2050,18 @@ enum _ReleaseAction {
 class _PreparedStage {
   const _PreparedStage({
     required this.claims,
+    required this.receiptSteps,
     this.publishedRequirement,
     this.firstCertificate,
     this.codeId,
   });
 
   final List<TargetClaim> claims;
+
+  /// The completed receipt, which is where the settled report reads what
+  /// each producer proved — a certificate, Apple's verdict — instead of
+  /// carrying prose composed while the work ran.
+  final List<StageStep> receiptSteps;
   final String? publishedRequirement;
   final String? firstCertificate;
   final String? codeId;

@@ -295,8 +295,13 @@ executables:
       ),
     );
     expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
-    expect(buffer.toString(), contains('first release'));
-    expect(buffer.toString(), contains('Developer ID Application: Dan'));
+    // Stated in the receipt, which is where it is durable and where the
+    // report reads it back from. The producer prints no step line of its
+    // own: the coordinator draws the file this made.
+    final signature = ok.evidence['signature']! as Map;
+    expect(signature['first_identity'], isTrue);
+    expect(signature['certificate'], contains('Developer ID Application: Dan'));
+    expect(signature['code_id'], 'io.github.example.tool');
     // Asserted on the argv, not on the buffer. `contains('tool')` was
     // satisfied by the build line `build tool for macos-arm64` that the
     // step above had already written into the same buffer, so the whole
