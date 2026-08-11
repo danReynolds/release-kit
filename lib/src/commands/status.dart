@@ -694,7 +694,14 @@ class StatusCommand {
     // naming a place and then the state of that place made two headers
     // argue about one fact.
     final movement = agreedCurrent != null && agreedCurrent != version
-        ? '$agreedCurrent › $version'
+        ? Version.tryParse(agreedCurrent) != null &&
+                Version.tryParse(version) != null &&
+                Version.tryParse(agreedCurrent)! > Version.tryParse(version)!
+            // Not movement: the world is ahead of this release, which the
+            // monotonicity check refuses. An arrow here would claim rk
+            // turns the newer version into the older one.
+            ? '$version · behind $agreedCurrent'
+            : '$agreedCurrent › $version'
         : version;
     final tag = snapshot.unit.tag == 'v$version' ? null : snapshot.unit.tag;
     output.unit(
@@ -772,7 +779,7 @@ class StatusCommand {
               target.currentVersion != null &&
               target.currentVersion != target.expectation.targetVersion)
             '${target.currentVersion} › ${target.expectation.targetVersion}',
-          if (agreed == null || speaks) _condition(state),
+          if (agreed == null || speaks || linked) _condition(state),
         ].join(' · '),
         depth: 2,
         labelWidth: 30,

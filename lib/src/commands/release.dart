@@ -1028,8 +1028,6 @@ class ReleaseCommand {
       return null;
     }
 
-    final board = StageBoard.forUnit(unit, targets);
-
     final progress = <StageStep>[];
     late final List<StageArtifact> sourceArtifacts;
     late final StageStep sourceStep;
@@ -1075,12 +1073,9 @@ class ReleaseCommand {
       )) {
         final target = targetStage.target;
         final receiptName = targetStage.contract.step.name;
-        final row = board.rowFor(receiptName);
         if (progress.any((record) => record.name == receiptName)) {
-          row?.finish();
           continue;
         }
-        row?.begin('checking');
         final StageStep? result;
         try {
           result = await targetStage.prepare(
@@ -1095,16 +1090,13 @@ class ReleaseCommand {
             ),
           );
         } on Object catch (error) {
-          row?.fail('did not complete');
           _stageOperationFailed('${target.label} stage preparation', error);
           return false;
         }
         if (result == null) {
-          row?.fail('refused');
           return false;
         }
         progress.add(result);
-        row?.finish(note: _contributionNote(result));
         try {
           _persistStageProgress(stage, sourceArtifacts, progress);
         } on Object catch (error) {
@@ -1160,8 +1152,6 @@ class ReleaseCommand {
           step.kind != StepKind.completeStage;
     }).toList();
     for (final step in producerSteps) {
-      final row = board.rowFor(receiptNameFor(step));
-      final activity = output.begin(step, depth: 0);
       if (_producerRecorded(progress, step)) {
         output.step(
           step,
@@ -1169,11 +1159,10 @@ class ReleaseCommand {
           detail: 'validated in the interrupted stage',
           show: false,
         );
-        row?.finish();
         continue;
       }
       output.report.acted = true;
-      row?.begin(_phaseOf(step));
+      final activity = output.begin(step, depth: 0);
       final LocalProducerOutcome act;
       try {
         act = await _actProducer(
@@ -1186,16 +1175,17 @@ class ReleaseCommand {
         );
       } on Object catch (error) {
         activity.failed('did not complete');
-        row?.fail('did not complete');
         return _stageOperationFailed(step.summary, error);
       }
       if (!act.ok) {
         activity.failed(act.problem ?? 'did not complete');
-        row?.fail(act.problem ?? 'did not complete');
         if (!output.report.halted) output.halt(HaltKind.stoppedPartway);
         return null;
       }
-      row?.finish();
+      // Without this the step recorded nothing on success: the document
+      // called a finished build `unknown`, and the spinner outlived the
+      // work it described by minutes.
+      activity.done(_phaseOf(step));
       try {
         progress.add(
             _captureProducerStep(stage, unit, step, sourceStep, progress, act));
@@ -1241,7 +1231,6 @@ class ReleaseCommand {
       detail: 'staged and validated',
       show: false,
     );
-    board.rowFor('complete-stage')?.finish();
     return _PreparedStage(
       claims: claims,
       receiptSteps: List<StageStep>.unmodifiable(progress),
@@ -1952,12 +1941,6 @@ class ReleaseCommand {
         StepKind.checksums => 'checksumming',
         _ => 'working',
       };
-
-  /// What a target's own stage check proved, in its own words.
-  static String? _contributionNote(StageStep step) =>
-      step.evidence['publish_dry_run'] == 'passed'
-          ? 'pub dry run passed'
-          : null;
 
   /// The settled stage, grouped by the target that will publish each file.
   ///

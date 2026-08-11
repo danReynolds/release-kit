@@ -81,6 +81,23 @@ void main() {
       );
     });
 
+    test('a Dart-suffixed name in the current directory is still not us', () {
+      // The suffix test alone let the phantom back in: invoke a compiled
+      // binary named `rk.dart` and argv[0] resolves to a real file in the
+      // cwd whose name ends in .dart. A phantom is always <cwd>/<one
+      // segment>, which is the shape this now refuses.
+      final here = Directory.current.path;
+      final phantom = File('$here/rk-phantom-probe.dart')
+        ..writeAsBytesSync(utf8.encode('NOT THIS PROGRAM'));
+      addTearDown(() => phantom.deleteSync());
+
+      expect(
+        rkProgramDigest(phantom, executable),
+        rkProgramDigest(null, executable),
+        reason: 'the directory rk runs in cannot change what rk is',
+      );
+    });
+
     test('a snapshot the VM is running is this program', () {
       // The pub.dev install runs a snapshot through the Dart VM, where the
       // snapshot is rk and the executable is the toolchain.

@@ -368,9 +368,14 @@ String rkProgramDigest(File? script, File executable) {
   for (final file in [if (script != null) script, executable]) {
     final path = _realPath(file);
     if (path == null) continue;
+    final cwd = Directory.current.path;
+    final phantom = path ==
+            '$cwd${Platform.pathSeparator}'
+                '${path.split(Platform.pathSeparator).last}' &&
+        path != _realPath(executable);
     final isProgram = identical(file, executable) ||
-        artifacts.any(path.endsWith) ||
-        path == _realPath(executable);
+        path == _realPath(executable) ||
+        (!phantom && artifacts.any(path.endsWith));
     if (!isProgram) continue;
     if (!seen.add(path)) continue;
     try {

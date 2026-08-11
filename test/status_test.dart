@@ -1106,7 +1106,13 @@ executables:
       ),
     );
 
-    expect(run.text, contains('0.3.0 › 0.2.0'));
+    expect(
+      run.text,
+      contains('0.2.0 · behind 0.3.0'),
+      reason: '› means becomes, so an arrow here claimed rk would turn the '
+          'newer published version into the older one',
+    );
+    expect(run.text, isNot(contains('0.3.0 › 0.2.0')));
     expect(run.text, contains('ahead of the target 0.2.0'));
     expect(run.text, contains('RK-MONO-003'));
     expect(
