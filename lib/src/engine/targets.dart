@@ -14,6 +14,8 @@ class TargetExpectation {
     required this.coordinate,
     required this.targetVersion,
     required this.step,
+    required this.kindLabel,
+    required this.identity,
     required Iterable<String> artifacts,
     this.project,
     this.uses,
@@ -28,6 +30,13 @@ class TargetExpectation {
   final Step step;
   final ResolvedProject? project;
   final List<String> artifacts;
+
+  /// The destination kind, and the one thing this target points at. Derived
+  /// from the label by string-splitting once, which produced a GitHub row
+  /// whose identity was the Git tag and two pub packages that rendered
+  /// identically — a destination knows both of these about itself.
+  final String kindLabel;
+  final String identity;
 
   /// A concise reference to an artifact inventoried by another target.
   final String? uses;
@@ -75,6 +84,19 @@ class TargetObservation {
   final bool currentKnown;
   final String? currentDetail;
   final List<ArtifactObservation> artifacts;
+
+  /// The kind of destination, without the thing it points at.
+  String get kindLabel => expectation.kindLabel;
+
+  /// What this row is about, when the section heading has already said what
+  /// state it is in — a tag name, a package, a repository. A row that
+  /// carried neither state nor identity read as unfinished.
+  String get identity => expectation.identity;
+
+  /// What this target has waiting for it here.
+  String get stagedSummary => artifacts.length == 1
+      ? artifacts.single.name
+      : '${artifacts.length} artifacts';
 }
 
 /// A report issue linked to its unit but independent of rendering.

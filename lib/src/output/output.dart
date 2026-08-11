@@ -174,6 +174,7 @@ class Output {
   void repository({
     required String name,
     String? branch,
+    String? commit,
     int? uncommitted,
     String? head,
     String? remote,
@@ -187,7 +188,9 @@ class Output {
     );
     heading([
       name,
-      if (branch != null) branch,
+      // The commit rides beside the branch for a reader; the document keeps
+      // them apart, because `branch` promises a branch name.
+      if (branch != null) commit == null ? branch : '$branch@$commit',
       if (uncommitted != null && uncommitted > 0) '$uncommitted uncommitted',
     ].join(' · '));
   }

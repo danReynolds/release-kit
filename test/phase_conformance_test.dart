@@ -1722,7 +1722,10 @@ executables:
         at = index;
       }
       expect(
-        run.text,
+        ((run.json['units'] as List)
+            .cast<Map<String, Object?>>()
+            .expand((unit) => (unit['steps'] as List).cast<Map>())
+            .map((step) => step['summary'])),
         contains('publish 3 assets to the v1.0.0 release'),
       );
       expect(run.text, contains('released'));
@@ -1818,7 +1821,7 @@ executables:
         );
       }
       expect(run.text, contains('1.0.0 staged'));
-      expect(run.text, contains('it publishes nothing'));
+      expect(run.calls, isNot(contains('dart pub login')));
     });
 
     test('stage spans every platform and still touches nothing public',
@@ -1953,7 +1956,10 @@ executables:
       // the one most able to drift. Named to say so.
       expect(run.expected, contains('tool.rb'));
       expect(
-        run.text,
+        ((run.json['units'] as List)
+            .cast<Map<String, Object?>>()
+            .expand((unit) => (unit['steps'] as List).cast<Map>())
+            .map((step) => step['summary'])),
         contains('publish 6 assets to the v1.0.0 release'),
         reason: run.text,
       );
@@ -2187,8 +2193,17 @@ executables:
         final run = await binaryDrive(dryRun: true, label: '-dryclaim');
 
         expect(run.code, ExitCodes.ok, reason: run.text);
-        expect(run.text, contains('this release claims, for the first time:'));
-        expect(run.text, contains('macOS identity   io.github.example.tool'));
+        expect(run.text, contains('First release · permanent once published'));
+        expect(
+          run.text,
+          matches(RegExp(r'macOS code identifier\s+io\.github\.example\.tool')),
+          reason: 'a swap of the identifier and the team survived a weaker '
+              'assertion that only looked for the value',
+        );
+        expect(
+          run.text,
+          matches(RegExp(r'Apple team\s+D \(TEAM123456\)')),
+        );
       });
 
       test('a dry run still refuses when nothing states the program name',

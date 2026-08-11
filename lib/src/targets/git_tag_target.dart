@@ -34,6 +34,8 @@ final class GitTagTargetModule extends TargetModule {
   }) =>
       TargetExpectation(
         label: 'Git tag',
+        kindLabel: 'Git tag',
+        identity: unit.tag,
         coordinate: unit.tag,
         targetVersion: unit.version.canonical,
         step: step,
