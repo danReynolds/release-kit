@@ -75,6 +75,24 @@ class TargetObservation {
   final bool currentKnown;
   final String? currentDetail;
   final List<ArtifactObservation> artifacts;
+
+  /// The kind of destination, without the thing it points at.
+  String get kindLabel => expectation.label.split(' · ').first;
+
+  /// What this row is about, when the section heading has already said what
+  /// state it is in — a tag name, a package, a repository. A row that
+  /// carried neither state nor identity read as unfinished.
+  String get identity {
+    final parts = expectation.label.split(' · ');
+    return parts.length > 1
+        ? parts.sublist(1).join(' · ')
+        : expectation.coordinate;
+  }
+
+  /// What this target has waiting for it here.
+  String get stagedSummary => artifacts.length == 1
+      ? artifacts.single.name
+      : '${artifacts.length} artifacts';
 }
 
 /// A report issue linked to its unit but independent of rendering.

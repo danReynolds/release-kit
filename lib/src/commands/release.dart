@@ -361,8 +361,10 @@ class ReleaseCommand {
       }
     }
 
-    output.heading('${unit.name} ${unit.version} › '
-        '${unit.projects.expand((p) => p.channels).toSet().join(', ')}');
+    // `›` is version movement. The groups below already say where these
+    // are going, and the arrow had started meaning two things.
+    output.heading('${unit.name} ${unit.version} · '
+        '${stageOnly ? 'staging' : 'releasing'}');
     output.blank();
 
     final prepared = await _prepareStage(
@@ -408,13 +410,20 @@ class ReleaseCommand {
     );
 
     if (stageOnly) {
+      output.blank();
+      output.line(
+        'Written to',
+        note: stage.directory.path,
+        depth: 1,
+        labelWidth: 12,
+        noteTone: Tone.muted,
+      );
       _sayStageClaims(
         prepared.claims,
         prepared.firstCertificate,
         prepared.codeId,
+        settled: false,
       );
-      output.blank();
-      output.say(stage.directory.path);
       // The next command is data for whoever is driving; the operator who
       // just staged does not need to be told what staging is for.
       output.report.next('rk release ${unit.name}');
@@ -1877,16 +1886,44 @@ class ReleaseCommand {
   void _sayStageClaims(
     List<TargetClaim> claims,
     String? firstCertificate,
-    String? codeId,
-  ) {
+    String? codeId, {
+    required bool settled,
+  }) {
     if (claims.isEmpty && firstCertificate == null) return;
     output.blank();
-    output.say('claims permanently');
+    // Tense matters: at staging nothing public has happened yet, so saying
+    // these *are* permanent would be false a moment before it is true.
+    output.line(
+      settled
+          ? 'First release · these become permanent'
+          : 'First release · permanent once published',
+      depth: 1,
+      tone: Tone.header,
+    );
     for (final claim in claims) {
-      output.say('${claim.registrar.padRight(17)}${claim.name}', depth: 1);
+      output.line(
+        '${claim.registrar} package',
+        note: claim.name,
+        depth: 2,
+        labelWidth: 26,
+        noteTone: Tone.muted,
+      );
     }
     if (firstCertificate != null) {
-      output.say('macOS identity   $codeId', depth: 1);
+      output.line(
+        'macOS code identifier',
+        note: codeId,
+        depth: 2,
+        labelWidth: 26,
+        noteTone: Tone.muted,
+      );
+      output.line(
+        'Apple team',
+        note: _shortCertificate(firstCertificate),
+        depth: 2,
+        labelWidth: 26,
+        noteTone: Tone.muted,
+      );
     }
   }
 
@@ -1951,19 +1988,17 @@ class ReleaseCommand {
       final notary = step.evidence['notary'];
       final found = marks.putIfAbsent(row, () => <String>[]);
       if (signature is Map && signature['certificate'] is String) {
-        found.add(
-          '[signed] ${_shortCertificate(signature['certificate'] as String)}',
-        );
+        found.add('signed');
       }
       if (notary is Map && notary['status'] == 'Accepted') {
-        found.add('[notarized]');
+        found.add('notarized');
       }
       if (step.evidence['publish_dry_run'] == 'passed') {
         found.add('pub dry run passed');
       }
     }
     marks.forEach((row, found) {
-      if (found.isNotEmpty) row.note = found.join('  ');
+      if (found.isNotEmpty) row.note = found.join(' · ');
     });
 
     for (final group in board.groups) {

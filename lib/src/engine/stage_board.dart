@@ -30,7 +30,7 @@ class StageBoard {
     for (final target in targets) {
       final rows = <StageBoardRow>[];
       if (target.kind == 'pubDev') {
-        final row = StageBoardRow('staged source');
+        final row = StageBoardRow('package source');
         rows.add(row);
         rowOf['pub-preflight:${target.project!.name}'] = row;
       }
@@ -43,7 +43,15 @@ class StageBoard {
           rowOf['complete-stage'] = row;
         }
       }
-      if (rows.isNotEmpty) groups.add(StageBoardGroup(target.label, rows));
+      if (rows.isNotEmpty) {
+        // Production order, not alphabetical. Checksums cover the archives
+        // and the manifest covers everything, so listing them first put the
+        // last rows to fill at the top, where a pending mark reads as
+        // skipped rather than as not yet.
+        rows.sort(
+            (left, right) => _rank(left.name).compareTo(_rank(right.name)));
+        groups.add(StageBoardGroup(target.label, rows));
+      }
     }
 
     // Every producer of one platform's binary reports against that
@@ -69,6 +77,13 @@ class StageBoard {
     return StageBoard._(List.unmodifiable(groups), rowOf);
   }
 
+  static int _rank(String name) {
+    if (name == ReleaseAssets.checksums) return 2;
+    if (name == ReleaseAssets.manifest) return 3;
+    if (name.endsWith('.rb')) return 1;
+    return 0;
+  }
+
   final List<StageBoardGroup> groups;
   final Map<String, StageBoardRow> _rowOf;
 
@@ -89,7 +104,7 @@ class StageBoard {
           for (final row in group.rows)
             _line(
               switch (row.state) {
-                StageBoardRowState.pending => ' ',
+                StageBoardRowState.pending => '○',
                 StageBoardRowState.active => frame,
                 StageBoardRowState.done => '✓',
                 StageBoardRowState.failed => '✗',
