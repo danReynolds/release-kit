@@ -243,7 +243,14 @@ Future<void> main(List<String> args) async {
       Diagnostic(
         code: 'RK-CLI-004',
         message: 'name the unit to release',
-        remedy: _usage.trim(),
+        // Not the whole usage: a caller who typed `release` knows the verb
+        // and is missing one word, and answering that with every flag rk
+        // has buries the one word. The units cannot be named here — this
+        // refuses before reading release.toml, so a broken config reports
+        // itself rather than being pre-empted by a usage error — so it
+        // names the command that does list them.
+        remedy: 'rk release <unit>, or rk release <unit> --stage. '
+            'rk status lists what this repository releases.',
       ),
     );
     exitCode = ExitCodes.usage;

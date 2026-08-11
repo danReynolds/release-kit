@@ -188,6 +188,16 @@ void main() {
     expect(run.problems.map((problem) => problem['code']), ['RK-CLI-004']);
     expect(run.problems.single['message'], 'name the unit to release');
     expect(
+      run.problems.single['remedy'],
+      allOf(contains('rk release <unit>'), contains('rk status')),
+    );
+    expect(
+      run.all,
+      isNot(contains('--write')),
+      reason: 'one missing word is answered with the missing word, not with '
+          'every flag rk has',
+    );
+    expect(
       run.all,
       isNot(contains('release.toml:')),
       reason: 'the parser must refuse before it reads repository state',
