@@ -2195,8 +2195,8 @@ executables:
         final run = await binaryDrive(dryRun: true, label: '-dryclaim');
 
         expect(run.code, ExitCodes.ok, reason: run.text);
-        expect(run.text, contains('claims permanently'));
-        expect(run.text, contains('macOS identity   io.github.example.tool'));
+        expect(run.text, contains('First release · permanent once published'));
+        expect(run.text, contains('io.github.example.tool'));
         expect(
           run.text,
           isNot(contains('sealed into the designated requirement')),
