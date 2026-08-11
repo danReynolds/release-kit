@@ -10,10 +10,10 @@ supports, end to end:
 
 ```
 rk status <unit> --json                 where things stand; read-only
-rk release <unit> --stage --json        produce and validate the exact stage
+rk release [unit] --stage --json        produce and validate the exact stage
 rk status <unit> --json                 confirm: staged, good to release
-rk release <unit> --confirm=<v> --json  authorize exactly v, publish, read back
-rk release <unit> --confirm=<v> --json  idempotent: already-exact, no second act
+rk release [unit] --confirm=<v> --json  authorize exactly v, publish, read back
+rk release [unit] --confirm=<v> --json  idempotent: already-exact, no second act
 ```
 
 `--confirm=<version>` is the typed yes carried as a flag — the same door

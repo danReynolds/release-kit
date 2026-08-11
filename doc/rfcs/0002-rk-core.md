@@ -253,7 +253,9 @@ once. Keybay needs none of this: its 0.1.0 release supplies every baseline.
 
 `rk init` · `rk status` · `rk release`. Bare `rk` runs `status`.
 
-`status` takes an optional unit. `release` takes one unit and optionally
+`status` takes an optional unit. `release` takes an optional unit — a
+repository that defines exactly one has nothing to disambiguate, while two
+units are two releases and rk names them rather than choosing — and optionally
 `--stage`. `init` takes no positional. Bare invocation works in a single-unit
 repository and, in a multi-unit one, lists the units and stops — choosing
 what to publish permanently is not an arrow key.
@@ -272,10 +274,10 @@ what to publish permanently is not an arrow key.
   version, the exact artifacts it consumes, concrete issues and fixes, and
   whether there are no known issues or an exact stage is good to release. It
   never builds, signs, notarizes, packages, or writes a stage.
-- **`rk release <unit> --stage`** — perform every local and package preflight
+- **`rk release [unit] --stage`** — perform every local and package preflight
   for real and write a complete immutable stage, but make no public mutation
   and never run a registry login.
-- **`rk release <unit>`** — revalidate and reuse an exact stage, or create the
+- **`rk release [unit]`** — revalidate and reuse an exact stage, or create the
   same stage internally, then authorize and publish. It inspects each target
   before acting and with the same operation afterward. `exact` skips,
   `absent` acts, and `conflict` or `unknown` stops. In an interactive run with

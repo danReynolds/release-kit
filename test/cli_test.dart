@@ -84,11 +84,11 @@ void main() {
       expect(run.problems.map((p) => p['code']), contains('RK-CLI-007'));
     });
 
-    test('release help names its required unit without requiring one', () {
+    test('release help shows the unit as optional', () {
       final run = repo(['release', '--help']);
       expect(run.code, 0, reason: run.all);
-      expect(run.all, contains('rk release <unit>'));
-      expect(run.all, contains('rk release <unit> --stage'));
+      expect(run.all, contains('rk release [unit]'));
+      expect(run.all, contains('rk release [unit] --stage'));
     });
 
     test('a bare --confirm authorizes nothing and is refused', () {
@@ -177,30 +177,44 @@ void main() {
     expect(Directory('${loose.path}/.rk').existsSync(), isFalse);
   });
 
-  test('release without a unit is refused before repository preparation', () {
+  test('a release.toml rk cannot read reports itself', () {
+    // Resolving "the only unit" means reading the config, so a config that
+    // cannot be read is what a bare `rk release` now reports. That is the
+    // more useful refusal anyway: naming a unit would not have helped, and
+    // the same file blocks every other verb too.
     final broken = Rk.repository(scratch, 'missing-release-unit', {
       'release.toml': 'this is deliberately not release config\n',
     });
 
     final run = broken(['release', '--json']);
 
-    expect(run.code, 2, reason: run.all);
-    expect(run.problems.map((problem) => problem['code']), ['RK-CLI-004']);
-    expect(run.problems.single['message'], 'name the unit to release');
+    expect(run.code, 1, reason: run.all);
+    expect(run.all, contains('release.toml'));
     expect(
-      run.problems.single['remedy'],
-      allOf(contains('rk release <unit>'), contains('rk status')),
+      run.problems.map((problem) => problem['code']),
+      isNot(contains('RK-CLI-004')),
+      reason: 'the unreadable file is the problem, not the missing word',
     );
+  });
+
+  test('a repository with no unit is answered by the config, not the parser',
+      () {
+    // There is no second answer for "no units": resolution already refuses
+    // with the table to add, which is more use than any usage line.
+    final empty = Rk.repository(scratch, 'no-units', {
+      'release.toml': 'schema = 1\n',
+    });
+
+    final run = empty(['release', '--json']);
+
+    expect(run.code, 1, reason: run.all);
+    expect(run.problems.map((problem) => problem['code']), ['RK-CONF-004']);
+    expect(run.all, contains('[release.core]'));
     expect(
       run.all,
       isNot(contains('--write')),
       reason: 'one missing word is answered with the missing word, not with '
           'every flag rk has',
-    );
-    expect(
-      run.all,
-      isNot(contains('release.toml:')),
-      reason: 'the parser must refuse before it reads repository state',
     );
   });
 

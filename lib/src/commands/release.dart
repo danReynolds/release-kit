@@ -120,33 +120,41 @@ class ReleaseCommand {
   final String? preauthorized;
 
   Future<int> run({String? only}) async {
-    if (only == null) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-CLI-004',
-          message: 'name the unit to release',
-          remedy: 'rk release <unit> releases one of: '
-              '${resolution.units.map((u) => u.name).join(', ')}',
-        ),
-      );
-      return ExitCodes.usage;
+    if (only != null) {
+      final named = resolution.units.where((u) => u.name == only).toList();
+      if (named.isEmpty) {
+        output.problem(
+          Diagnostic(
+            code: 'RK-CLI-003',
+            message: 'no unit named "$only"',
+            remedy: 'this repository releases: '
+                '${resolution.units.map((u) => u.name).join(', ')}',
+          ),
+        );
+        return ExitCodes.usage;
+      }
+      return _release(named.single);
     }
 
-    final units = resolution.units.where((u) => u.name == only).toList();
+    // A unit is what ships together — several packages under one tag and one
+    // version — so a repository that defines one has nothing to
+    // disambiguate, and naming it is ceremony `rk status` never asked for.
+    // Two units are two releases, each with its own tag, version, and typed
+    // authorization; rk will not perform both from one word.
+    if (resolution.units.length == 1) return _release(resolution.units.single);
 
-    if (units.isEmpty) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-CLI-003',
-          message: 'no unit named "$only"',
-          remedy: 'this repository releases: '
-              '${resolution.units.map((u) => u.name).join(', ')}',
-        ),
-      );
-      return ExitCodes.usage;
-    }
-
-    return _release(units.single);
+    // A repository with no unit at all never reaches here: resolution
+    // refuses it as RK-CONF-004, with an example of the table to add.
+    output.problem(
+      Diagnostic(
+        code: 'RK-CLI-004',
+        message: 'name the unit to release',
+        remedy: 'each unit is its own release, with its own tag and version. '
+            'rk release <unit> releases one of: '
+            '${resolution.units.map((u) => u.name).join(', ')}',
+      ),
+    );
+    return ExitCodes.usage;
   }
 
   Future<int> _release(ResolvedUnit unit) async {

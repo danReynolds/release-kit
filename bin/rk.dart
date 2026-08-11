@@ -41,8 +41,8 @@ Usage
   rk --version                    print this binary's version
   rk status [unit]                status all units or one
   rk init                         propose release.toml; write only on a yes
-  rk release <unit>               stage, confirm, then publish one unit
-  rk release <unit> --stage       prepare its exact stage; publish nothing
+  rk release [unit]               stage, confirm, then publish one unit
+  rk release [unit] --stage       prepare its exact stage; publish nothing
 
 Flags
   --version   print this binary's version and exit
@@ -229,32 +229,6 @@ Future<void> main(List<String> args) async {
     } else {
       stdout.write(_usage);
     }
-    return;
-  }
-
-  // Release is deliberately never inferred. Even a repository with one unit
-  // must name it: a bare `rk release` would otherwise begin real producer
-  // work — including signing or notarization — when the operator has not said
-  // which release they intend. Refuse here, before reading release.toml or
-  // inspecting the repository, and enforce the same invariant again in the
-  // command for callers that do not enter through this parser.
-  if (command == 'release' && target == null) {
-    output.problem(
-      Diagnostic(
-        code: 'RK-CLI-004',
-        message: 'name the unit to release',
-        // Not the whole usage: a caller who typed `release` knows the verb
-        // and is missing one word, and answering that with every flag rk
-        // has buries the one word. The units cannot be named here — this
-        // refuses before reading release.toml, so a broken config reports
-        // itself rather than being pre-empted by a usage error — so it
-        // names the command that does list them.
-        remedy: 'rk release <unit>, or rk release <unit> --stage. '
-            'rk status lists what this repository releases.',
-      ),
-    );
-    exitCode = ExitCodes.usage;
-    if (json) stdout.write(output.report.encode(exit: ExitCodes.usage));
     return;
   }
 

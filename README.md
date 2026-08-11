@@ -28,9 +28,9 @@ no `--force`.
 dart pub global activate release_kit    # the command is rk
 rk status                              # where things stand. Read-only.
 rk init                                # propose a release.toml
-rk release <unit> --stage              # exact reusable stage, nothing public
-rk release <unit>                      # plan, confirm, act
-rk release <unit> --confirm=<version>  # the typed yes as a flag, for agents
+rk release [unit] --stage              # exact reusable stage, nothing public
+rk release [unit]                      # plan, confirm, act
+rk release [unit] --confirm=<version>  # the typed yes as a flag, for agents
 ```
 
 Most releases are driven by agents: every verb speaks `--json`
