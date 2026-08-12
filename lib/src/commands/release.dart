@@ -631,8 +631,7 @@ class ReleaseCommand {
         _destinationChanged(targetKind, targets, publicActions);
         return ExitCodes.refused;
       }
-      final session = await module.acquireSession(before, unit, grouped);
-      if (session == null) {
+      if (!await module.acquireSession(before, unit, grouped)) {
         _showReleaseActions(targets, publicActions);
         return ExitCodes.refused;
       }
@@ -643,7 +642,7 @@ class ReleaseCommand {
         environment: _refreshEnvironment(),
       );
       final effective = module.effectiveEndpoint(after, unit, grouped);
-      if (session.endpoint != baseline || effective != baseline) {
+      if (effective != baseline) {
         _destinationChanged(targetKind, targets, publicActions);
         return ExitCodes.refused;
       }

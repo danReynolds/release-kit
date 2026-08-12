@@ -1,5 +1,5 @@
 import 'config.dart';
-import 'native_workspace.dart';
+import 'dart_workspace.dart';
 import 'pubspec.dart';
 import 'source_tree.dart';
 
@@ -116,12 +116,12 @@ final class InitPlan {
     required String? githubRepository,
     String? ambientPubHostedUrl,
   }) {
-    final native = NativeWorkspaceDiscovery.dart(
+    final native = DartWorkspaceDiscovery(
       tree,
       trackedManifests: gitBound,
     );
     final notices = [...native.notices];
-    bool registryAvailableFor(NativeProjectDiscovery project) =>
+    bool registryAvailableFor(DartProjectDiscovery project) =>
         !project.isGroupingRoot &&
         project.version != null &&
         !project.vetoesRegistry &&

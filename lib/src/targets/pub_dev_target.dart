@@ -188,7 +188,7 @@ final class PubDevTargetModule extends TargetModule {
   }
 
   @override
-  Future<TargetSession?> acquireSession(
+  Future<bool> acquireSession(
     TargetReadinessContext context,
     ResolvedUnit unit,
     List<TargetExpectation> targets,
@@ -203,11 +203,7 @@ final class PubDevTargetModule extends TargetModule {
     } on ProcessException {
       code = -1;
     }
-    if (code == 0) {
-      return TargetSession(
-        endpoint: effectiveEndpoint(context, unit, targets),
-      );
-    }
+    if (code == 0) return true;
 
     context.output.problem(
       Diagnostic(
@@ -220,7 +216,7 @@ final class PubDevTargetModule extends TargetModule {
       unit: unit.name,
     );
     context.output.halt(HaltKind.beforeActing);
-    return null;
+    return false;
   }
 
   @override

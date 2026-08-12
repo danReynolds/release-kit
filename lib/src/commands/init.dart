@@ -139,7 +139,7 @@ class InitCommand {
     while (true) {
       output.report.initPlan(plan.toJson());
       final selector = select;
-      if (selector != null) {
+      if (selector != null && plan.candidates.isNotEmpty) {
         final selected = await selector(plan);
         if (selected == null) {
           output.say('nothing was written.');

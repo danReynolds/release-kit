@@ -74,50 +74,6 @@ final class PublishedReleaseEvidence {
     );
   }
 
-  Future<({Inspection inspection, List<int>? bytes})> currentManifestAsset(
-    ResolvedUnit unit,
-    String assetName,
-  ) async {
-    final tag = requiredTargetTag(unit, PublishTarget.gitTag);
-    final object = context.git.tagObject(tag);
-    final commit = context.git.tagTarget(tag);
-    if (object == null || commit == null) {
-      return (
-        inspection: const Inspection.unknown(
-          'the release tag object could not be read',
-        ),
-        bytes: null,
-      );
-    }
-    final binding = await GitTag(
-      tools: context.tools!,
-      root: context.git.root,
-    ).manifestBinding(
-      tag: tag,
-      expectedObject: object,
-      expectedCommit: commit,
-    );
-    if (binding case TagManifestBound(:final digest)) {
-      try {
-        final expected = manifestExpectation(unit, digest);
-        final read = await GithubRelease(
-          tools: context.tools!,
-          repository: context.repository!,
-          workingDirectory: context.git.root,
-        ).readManifestBoundAsset(expected, assetName);
-        return (inspection: read.inspection, bytes: read.bytes);
-      } on Object catch (error) {
-        return (
-          inspection: Inspection.unknown(
-            'the expected release manifest could not be derived: $error',
-          ),
-          bytes: null,
-        );
-      }
-    }
-    return (inspection: bindingInspection(binding), bytes: null);
-  }
-
   GithubManifestExpectation manifestExpectation(
     ResolvedUnit unit,
     String digest, {
@@ -154,52 +110,6 @@ final class PublishedReleaseEvidence {
       manifestSha256: digest,
       publicAssets: publicAssets ?? expectedReleaseAssets(unit),
     );
-  }
-
-  Future<({Inspection inspection, List<int>? bytes})> historicalManifestAsset(
-    ResolvedUnit unit,
-    Version version,
-    String assetName,
-  ) async {
-    final tag = requiredTargetTagPattern(unit, PublishTarget.gitTag)
-        .replaceAll('{version}', version.canonical);
-    final object = context.git.tagObject(tag);
-    final commit = context.git.tagTarget(tag);
-    if (object == null || commit == null) {
-      return (
-        inspection: Inspection.unknown(
-          'the earlier release tag $tag is not available in this checkout',
-        ),
-        bytes: null,
-      );
-    }
-    final binding = await GitTag(
-      tools: context.tools!,
-      root: context.git.root,
-    ).manifestBinding(
-      tag: tag,
-      expectedObject: object,
-      expectedCommit: commit,
-    );
-    if (binding case TagManifestBound(:final digest)) {
-      final read = await GithubRelease(
-        tools: context.tools!,
-        repository: context.repository!,
-        workingDirectory: context.git.root,
-      ).readHistoricalManifestBoundAsset(
-        GithubHistoricalManifestExpectation(
-          unit: unit.name,
-          version: version.canonical,
-          tag: tag,
-          sourceCommit: commit,
-          manifestSha256: digest,
-          title: '${unit.name} ${version.canonical}',
-        ),
-        assetName,
-      );
-      return (inspection: read.inspection, bytes: read.bytes);
-    }
-    return (inspection: bindingInspection(binding), bytes: null);
   }
 
   Future<PublishedDestinationBindingRead> historicalDestinationBinding(
@@ -301,11 +211,12 @@ PublishedDestinationBindingRead _selectDestinationBinding(
   }
   final matches = manifest.destinations
       .where(
-        (binding) =>
-            binding.target == target.configName &&
-            binding.project == project &&
-            binding.coordinate == coordinate &&
-            binding.path == path,
+        (binding) => binding.names(
+          target: target.configName,
+          project: project,
+          coordinate: coordinate,
+          path: path,
+        ),
       )
       .toList();
   if (matches.length != 1) {

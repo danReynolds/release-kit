@@ -9,7 +9,7 @@ import 'stage_receipt.dart';
 /// (formula authentication, same-version re-inspection) parse only the
 /// current schema — so a post-release bump must teach the parser each
 /// retired schema it still needs to read.
-const releaseManifestSchemaVersion = 5;
+const releaseManifestSchemaVersion = 3;
 
 /// One public file, deliberately stripped of its local stage path and all
 /// producer evidence.
@@ -82,6 +82,91 @@ class ReleaseManifestArtifact {
       };
 }
 
+/// One private staged output and the destination that will receive it.
+///
+/// This exact shape is frozen into the terminal receipt. The public manifest
+/// receives the same identity and media type, but never the private
+/// [stagedPath].
+final class StagedDestinationBinding {
+  StagedDestinationBinding({
+    required this.target,
+    required this.project,
+    required this.coordinate,
+    required this.path,
+    required String stagedPath,
+    required this.mediaType,
+  }) : stagedPath = StagePath.require(stagedPath) {
+    _requireDestinationIdentity(target, project, coordinate, path);
+    _requireMediaType(mediaType);
+  }
+
+  factory StagedDestinationBinding.fromEvidence(Object? value) {
+    final map = _strictMap(
+      value,
+      const {
+        'coordinate',
+        'media_type',
+        'path',
+        'project',
+        'staged_path',
+        'target',
+      },
+      'staged destination binding',
+    );
+    return StagedDestinationBinding(
+      target: _string(map, 'target'),
+      project: _string(map, 'project'),
+      coordinate: _string(map, 'coordinate'),
+      path: _string(map, 'path'),
+      stagedPath: _string(map, 'staged_path'),
+      mediaType: _string(map, 'media_type'),
+    );
+  }
+
+  static List<StagedDestinationBinding> listFromEvidence(Object? value) {
+    if (value == null) return const [];
+    if (value is! List) {
+      throw const FormatException(
+        'complete-stage destination bindings are not an array',
+      );
+    }
+    return List.unmodifiable(value.map(StagedDestinationBinding.fromEvidence));
+  }
+
+  final String target;
+  final String project;
+  final String coordinate;
+  final String path;
+  final String stagedPath;
+  final String mediaType;
+
+  String get identity =>
+      _destinationBindingIdentity(target, project, coordinate, path);
+
+  Map<String, Object?> toEvidence() => {
+        'coordinate': coordinate,
+        'media_type': mediaType,
+        'path': path,
+        'project': project,
+        'staged_path': stagedPath,
+        'target': target,
+      };
+
+  ReleaseManifestDestinationBinding bind(StageArtifact artifact) {
+    if (artifact.path != stagedPath) {
+      throw ArgumentError('destination binding captured a different output');
+    }
+    return ReleaseManifestDestinationBinding.fromStage(
+      target: target,
+      project: project,
+      coordinate: coordinate,
+      path: path,
+      mediaType: mediaType,
+      artifact: artifact,
+    );
+  }
+}
+
 /// One destination-owned file and the exact public coordinate that receives
 /// it.
 ///
@@ -100,21 +185,11 @@ class ReleaseManifestDestinationBinding {
     required this.size,
     required this.sha256,
   }) {
-    if (!RegExp(r'^[a-z][a-z0-9.-]*$').hasMatch(target)) {
-      throw ArgumentError('destination target is not a lowercase token: '
-          '$target');
-    }
-    _requirePublicText('destination project', project);
-    _requirePublicText('destination coordinate', coordinate);
-    _requireDestinationPath(path);
+    _requireDestinationIdentity(target, project, coordinate, path);
     if (!RegExp(r'^[a-z][a-z0-9._-]*$').hasMatch(type)) {
       throw ArgumentError('destination type is not a lowercase token: $type');
     }
-    if (!RegExp(
-      r'^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$',
-    ).hasMatch(mediaType)) {
-      throw ArgumentError('destination media type is invalid: $mediaType');
-    }
+    _requireMediaType(mediaType);
     if (size < 0) {
       throw ArgumentError('destination size cannot be negative');
     }
@@ -188,6 +263,22 @@ class ReleaseManifestDestinationBinding {
   final int size;
   final String sha256;
 
+  String get identity =>
+      _destinationBindingIdentity(target, project, coordinate, path);
+  String get publicIdentity =>
+      _publicDestinationIdentity(target, coordinate, path);
+
+  bool names({
+    required String target,
+    required String project,
+    required String coordinate,
+    required String path,
+  }) =>
+      this.target == target &&
+      this.project == project &&
+      this.coordinate == coordinate &&
+      this.path == path;
+
   Map<String, Object?> toJson() => {
         'coordinate': coordinate,
         'media_type': mediaType,
@@ -234,8 +325,7 @@ class ReleaseManifest {
     }
     final destinationPaths = <String>{};
     for (final binding in this.destinations) {
-      final key = '${binding.target}\u0000${binding.coordinate}\u0000'
-          '${binding.path}';
+      final key = binding.publicIdentity;
       if (!destinationPaths.add(key)) {
         throw ArgumentError(
           'duplicate destination path: ${binding.target} '
@@ -326,17 +416,8 @@ class ReleaseManifest {
 int _compareDestinationBindings(
   ReleaseManifestDestinationBinding left,
   ReleaseManifestDestinationBinding right,
-) {
-  for (final comparison in [
-    left.target.compareTo(right.target),
-    left.project.compareTo(right.project),
-    left.coordinate.compareTo(right.coordinate),
-    left.path.compareTo(right.path),
-  ]) {
-    if (comparison != 0) return comparison;
-  }
-  return 0;
-}
+) =>
+    left.identity.compareTo(right.identity);
 
 Map<String, Object?> _strictMap(
   Object? value,
@@ -370,6 +451,44 @@ void _requirePublicText(String label, String value) {
     throw ArgumentError('$label is empty or contains control characters');
   }
 }
+
+void _requireDestinationIdentity(
+  String target,
+  String project,
+  String coordinate,
+  String path,
+) {
+  if (!RegExp(r'^[a-z][a-z0-9.-]*$').hasMatch(target)) {
+    throw ArgumentError('destination target is not a lowercase token: '
+        '$target');
+  }
+  _requirePublicText('destination project', project);
+  _requirePublicText('destination coordinate', coordinate);
+  _requireDestinationPath(path);
+}
+
+void _requireMediaType(String mediaType) {
+  if (!RegExp(
+    r'^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$',
+  ).hasMatch(mediaType)) {
+    throw ArgumentError('destination media type is invalid: $mediaType');
+  }
+}
+
+String _destinationBindingIdentity(
+  String target,
+  String project,
+  String coordinate,
+  String path,
+) =>
+    '$target\u0000$project\u0000$coordinate\u0000$path';
+
+String _publicDestinationIdentity(
+  String target,
+  String coordinate,
+  String path,
+) =>
+    '$target\u0000$coordinate\u0000$path';
 
 void _requireDestinationPath(String path) {
   if (path.isEmpty ||

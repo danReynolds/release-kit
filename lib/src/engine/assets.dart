@@ -1,4 +1,4 @@
-import 'artifact_contribution.dart';
+import 'release_asset.dart';
 import 'resolve.dart';
 
 /// The names a release publishes, written once.
@@ -99,21 +99,16 @@ abstract final class ReleaseAssets {
   ) =>
       '$executable-$version-$platform.notary-log.json';
 
-  /// The formula ships with the release too, so the release is
-  /// self-describing: the tap's copy is a pointer, this one is the record.
+  /// The formula's public filename inside its Homebrew tap.
+  ///
+  /// Formula bytes are destination-owned and do not enter the GitHub Release
+  /// inventory. Their digest and tap path are bound by the release manifest.
   static String formulaName(String executable) => '$executable.rb';
 
   static List<ReleaseAssetSpec> contributedBy(ResolvedProject project) => [
         for (final platform in [...project.binaryPlatforms]..sort())
           ReleaseAssetSpec(
-            blob: ProducedBlobRef(
-              producerId: project.name,
-              stagedPath: archivePath(project, platform),
-              type: 'archive',
-              mediaType: 'application/gzip',
-              project: project.name,
-              platform: platform,
-            ),
+            stagedPath: archivePath(project, platform),
             publicName: archiveName(
               project.executable!,
               project.version.canonical,
@@ -135,12 +130,7 @@ abstract final class ReleaseAssets {
       ...contributed,
       if (contributed.isNotEmpty)
         ReleaseAssetSpec.generated(
-          blob: ProducedBlobRef(
-            producerId: 'bundle',
-            stagedPath: checksumPath,
-            type: 'checksums',
-            mediaType: 'text/plain',
-          ),
+          stagedPath: checksumPath,
           publicName: checksums,
         ),
     ]);
@@ -150,21 +140,4 @@ abstract final class ReleaseAssets {
         for (final asset in bundleFor(unit)) asset.publicName,
         manifest,
       };
-
-  /// Every name a release of [project] carries.
-  ///
-  /// The single derivation. Anything that produces, expects, or counts these
-  /// reads it rather than re-spelling it.
-  static Set<String> expectedFor(ResolvedProject project) {
-    final executable = project.executable;
-    if (executable == null || project.binaryPlatforms.isEmpty) return const {};
-    final version = project.version.canonical;
-
-    return {
-      for (final platform in project.binaryPlatforms)
-        archiveName(executable, version, platform),
-      checksums,
-      manifest,
-    };
-  }
 }

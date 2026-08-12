@@ -7,7 +7,7 @@ import 'canonical_json.dart';
 import 'workspace.dart';
 
 /// Increment this only when the identity or receipt contract changes.
-const stageSchemaVersion = 6;
+const stageSchemaVersion = 5;
 
 /// The content address of one resolved release plan at one exact Git tree.
 class StageIdentity {

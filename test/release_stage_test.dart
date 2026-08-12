@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:release_kit/src/engine/config.dart';
 import 'package:release_kit/src/engine/assets.dart';
 import 'package:release_kit/src/engine/diagnostic.dart';
+import 'package:release_kit/src/engine/release_asset.dart';
 import 'package:release_kit/src/engine/release_manifest.dart';
 import 'package:release_kit/src/engine/release_stage.dart';
 import 'package:release_kit/src/engine/resolve.dart';
@@ -254,7 +255,7 @@ void main() {
     _recordArchives(release, {_asset: 'archive'});
 
     final receipt = release.finalize(
-      publicArtifacts: {_asset},
+      releaseAssets: _fixtureReleaseAssets({_asset}),
       evidence: {
         'smoke': {'status': 'passed'},
       },
@@ -323,7 +324,9 @@ void main() {
       ),
     ]);
 
-    final receipt = homebrewStage.finalize(publicArtifacts: {_asset});
+    final receipt = homebrewStage.finalize(
+      releaseAssets: _fixtureReleaseAssets({_asset}),
+    );
     final manifest = ReleaseManifest.parse(
       File(homebrewStage.directory.resolve(ReleaseAssets.manifest))
           .readAsStringSync(),
@@ -398,7 +401,9 @@ executables:
   test('final receipt preserves producer input and evidence records', () {
     _recordArchives(release, {_asset: 'archive'});
 
-    final finalized = release.finalize(publicArtifacts: {_asset});
+    final finalized = release.finalize(
+      releaseAssets: _fixtureReleaseAssets({_asset}),
+    );
 
     expect(
       finalized.steps.map((step) => step.name),
@@ -630,7 +635,9 @@ executables:
     );
 
     expect(
-      () => release.finalize(publicArtifacts: {_asset}),
+      () => release.finalize(
+        releaseAssets: _fixtureReleaseAssets({_asset}),
+      ),
       throwsStateError,
     );
     expect(
@@ -645,7 +652,9 @@ executables:
     _recordArchives(release, const {});
 
     expect(
-      () => release.finalize(publicArtifacts: {_asset}),
+      () => release.finalize(
+        releaseAssets: _fixtureReleaseAssets({_asset}),
+      ),
       throwsStateError,
     );
     expect(
@@ -696,11 +705,15 @@ executables:
 
   test('public manifest inventory is deterministic across insertion order', () {
     _recordArchives(release, {'z.tar.gz': 'z', 'a.tar.gz': 'a'});
-    release.finalize(publicArtifacts: {'z.tar.gz', 'a.tar.gz'});
+    release.finalize(
+      releaseAssets: _fixtureReleaseAssets({'z.tar.gz', 'a.tar.gz'}),
+    );
     final first = File(release.directory.resolve('release-manifest.json'))
         .readAsStringSync();
 
-    release.finalize(publicArtifacts: {'a.tar.gz', 'z.tar.gz'});
+    release.finalize(
+      releaseAssets: _fixtureReleaseAssets({'a.tar.gz', 'z.tar.gz'}),
+    );
     final second = File(release.directory.resolve('release-manifest.json'))
         .readAsStringSync();
     final manifest = ReleaseManifest.parse(second);
@@ -911,7 +924,7 @@ ResolvedUnit _resolveUnit(
 
 void _complete(ReleaseStage release) {
   _recordArchives(release, {_asset: 'archive'});
-  release.finalize(publicArtifacts: {_asset});
+  release.finalize(releaseAssets: _fixtureReleaseAssets({_asset}));
 }
 
 StageReceipt _completeEveryArtifactType(ReleaseStage release) {
@@ -1088,14 +1101,29 @@ StageReceipt _completeEveryArtifactType(ReleaseStage release) {
     formula,
     checksums,
   ]);
-  return release.finalize(publicArtifacts: {
-    _asset,
-    'SHA256SUMS',
-    _notaryResult,
-    _notaryLog,
-    'tool.rb',
-  });
+  return release.finalize(
+    releaseAssets: _fixtureReleaseAssets({
+      _asset,
+      'SHA256SUMS',
+      _notaryResult,
+      _notaryLog,
+      'tool.rb',
+    }),
+  );
 }
+
+List<ReleaseAssetSpec> _fixtureReleaseAssets(Iterable<String> paths) => [
+      for (final path in paths)
+        path.toLowerCase() == ReleaseAssets.checksums.toLowerCase()
+            ? ReleaseAssetSpec.generated(
+                stagedPath: path,
+                publicName: path,
+              )
+            : ReleaseAssetSpec(
+                stagedPath: path,
+                publicName: path,
+              ),
+    ];
 
 void _recordArchives(ReleaseStage release, Map<String, String> archives) {
   final sourceArtifacts = release.materializeSource();

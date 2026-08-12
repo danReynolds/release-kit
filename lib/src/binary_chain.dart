@@ -467,11 +467,11 @@ class BinaryChain {
   ) async {
     final assets = <String, List<int>>{};
     for (final contribution in ReleaseAssets.contributionsFor(unit)) {
-      final bytes = workspace.readBytes(contribution.blob.stagedPath);
+      final bytes = workspace.readBytes(contribution.stagedPath);
       if (bytes == null) {
         return _missingArtifact(
           step,
-          contribution.blob.stagedPath,
+          contribution.stagedPath,
           'the archive steps produce it',
         );
       }

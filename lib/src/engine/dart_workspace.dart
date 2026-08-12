@@ -2,23 +2,20 @@ import 'diagnostic.dart';
 import 'pubspec.dart';
 import 'source_tree.dart';
 
-/// Adapter-owned native discovery facts for a source root.
+/// Dart discovery facts shared by init and unbound source staging.
 ///
-/// Dart is the only adapter today. Keeping its manifest candidates and source
-/// closure in one result prevents init and staging from growing separate
-/// ecosystem-specific guesses. This remains an internal seam, not TOML.
-final class NativeWorkspaceDiscovery {
-  NativeWorkspaceDiscovery._({
-    required Iterable<String> manifests,
+/// Keeping manifest candidates and source roots together prevents the two
+/// paths from growing different workspace rules.
+final class DartWorkspaceDiscovery {
+  DartWorkspaceDiscovery._({
     required Iterable<String> sourceRoots,
     required Iterable<String> notices,
-    required Iterable<NativeProjectDiscovery> projects,
-  })  : manifests = List.unmodifiable(manifests),
-        sourceRoots = Set.unmodifiable(sourceRoots),
+    required Iterable<DartProjectDiscovery> projects,
+  })  : sourceRoots = Set.unmodifiable(sourceRoots),
         notices = List.unmodifiable(notices),
         projects = List.unmodifiable(projects);
 
-  factory NativeWorkspaceDiscovery.dart(
+  factory DartWorkspaceDiscovery(
     SourceTree tree, {
     bool trackedManifests = false,
   }) {
@@ -37,8 +34,7 @@ final class NativeWorkspaceDiscovery {
       );
     }
     if (!tree.exists('pubspec.yaml')) {
-      return NativeWorkspaceDiscovery._(
-        manifests: const [],
+      return DartWorkspaceDiscovery._(
         sourceRoots: const [],
         notices: const [],
         projects: const [],
@@ -90,20 +86,14 @@ final class NativeWorkspaceDiscovery {
     );
   }
 
-  final List<String> manifests;
   final Set<String> sourceRoots;
   final List<String> notices;
-  final List<NativeProjectDiscovery> projects;
+  final List<DartProjectDiscovery> projects;
 }
 
-/// Adapter-normalized static facts consumed by init policy.
-///
-/// This is deliberately internal and concrete. A second built-in ecosystem
-/// can report the same facts without teaching the selector how to parse its
-/// native manifest; adding its actual target remains an explicit product
-/// change rather than a generic configuration/plugin surface.
-final class NativeProjectDiscovery {
-  const NativeProjectDiscovery({
+/// Pubspec facts consumed by init policy.
+final class DartProjectDiscovery {
+  const DartProjectDiscovery({
     required this.name,
     required this.path,
     required this.version,
@@ -124,7 +114,7 @@ final class NativeProjectDiscovery {
   final bool isExampleOrFixture;
 }
 
-NativeWorkspaceDiscovery _dartResult(
+DartWorkspaceDiscovery _dartResult(
   SourceTree tree, {
   required Iterable<String> manifests,
   required Iterable<String> sourceRoots,
@@ -132,7 +122,7 @@ NativeWorkspaceDiscovery _dartResult(
   required String missingDescription,
 }) {
   final allNotices = [...notices];
-  final projects = <NativeProjectDiscovery>[];
+  final projects = <DartProjectDiscovery>[];
   for (final path in manifests) {
     final source = tree.read(path);
     if (source == null) {
@@ -146,7 +136,7 @@ NativeWorkspaceDiscovery _dartResult(
           '${diagnostics.found.map((item) => item.message).join('; ')}');
       continue;
     }
-    projects.add(NativeProjectDiscovery(
+    projects.add(DartProjectDiscovery(
       name: pubspec.name,
       path: pubspec.directory,
       version: pubspec.version?.canonical,
@@ -157,8 +147,7 @@ NativeWorkspaceDiscovery _dartResult(
       isExampleOrFixture: _isExampleOrFixture(pubspec.directory),
     ));
   }
-  return NativeWorkspaceDiscovery._(
-    manifests: manifests,
+  return DartWorkspaceDiscovery._(
     sourceRoots: sourceRoots,
     notices: allNotices,
     projects: projects,

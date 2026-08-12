@@ -15,9 +15,9 @@ import '../transforms/digest.dart';
 /// and publishes once — an interrupted upload must never leave a permanent
 /// release missing files.
 ///
-/// The draft is a staging area, not memory: the workspace holds every artifact,
-/// so a draft that is not exactly right is deleted and rebuilt rather than
-/// repaired in place.
+/// The draft is a staging area, not memory: the workspace holds every artifact.
+/// rk resumes only an exact uploaded prefix; an ambiguous or divergent draft is
+/// left untouched for the operator to inspect.
 class GithubRelease {
   GithubRelease({
     required this.tools,
@@ -121,11 +121,11 @@ class GithubRelease {
   /// Inspects the complete public release identity, including downloaded
   /// asset bytes.
   ///
-  /// [inspect] remains the inventory-only compatibility surface for callers
-  /// that do not yet hold a stage receipt. Once a receipt exists, this is the
-  /// stronger question: tag, title, body, asset names, and every asset digest
-  /// must all match. A download failure is unknown rather than a digest
-  /// mismatch — not being able to read bytes is not evidence about them.
+  /// Before a stage exists, [inspect] can answer only inventory. Once a receipt
+  /// exists, this is the stronger question: tag, title, body, asset names, and
+  /// every asset digest must all match. A download failure is unknown rather
+  /// than a digest mismatch — not being able to read bytes is not evidence
+  /// about them.
   Future<Inspection> inspectExact(GithubReleaseExpectation expected) =>
       _inspect(
         tag: expected.tag,
@@ -175,101 +175,6 @@ class GithubRelease {
       title: expected.title,
     );
     return GithubManifestRead._(observed.inspection, observed.manifest);
-  }
-
-  /// Reads one ordinary release asset through the manifest-bound inspection.
-  ///
-  /// This is deliberately not a second download surface. The release title,
-  /// body, complete inventory, externally bound manifest digest, manifest
-  /// coordinates, and every artifact digest are checked first by the same
-  /// observation as [inspectManifest]. Bytes are returned only when that whole
-  /// observation is exact; unknown and conflict observations never expose
-  /// partially verified downloads.
-  Future<GithubManifestAssetRead> readManifestBoundAsset(
-    GithubManifestExpectation expected,
-    String assetName,
-  ) async {
-    if (assetName == ReleaseAssets.manifest) {
-      return const GithubManifestAssetRead._(
-        Inspection.unknown(
-          'release-manifest.json is verification metadata, not a readable '
-          'release artifact',
-        ),
-        null,
-      );
-    }
-    if (!expected.publicAssets.contains(assetName)) {
-      return GithubManifestAssetRead._(
-        Inspection.unknown(
-          '$assetName is not a configured public release asset',
-        ),
-        null,
-      );
-    }
-
-    final observation = await _observeManifest(expected);
-    if (!observation.inspection.isExact) {
-      return GithubManifestAssetRead._(observation.inspection, null);
-    }
-    final bytes = observation.verifiedBytes[assetName];
-    if (bytes == null) {
-      // An exact manifest observation necessarily verified every configured
-      // non-manifest asset. Keep this guard fail-closed if that invariant is
-      // ever broken by a future manifest schema.
-      return GithubManifestAssetRead._(
-        Inspection.unknown(
-          '$assetName was not available after release verification',
-        ),
-        null,
-      );
-    }
-    return GithubManifestAssetRead._(observation.inspection, bytes);
-  }
-
-  /// Reads an asset from an older, self-describing release.
-  ///
-  /// The tag supplies the two external anchors that the release cannot choose
-  /// for itself: its peeled source commit and the manifest digest. The bound
-  /// manifest may then describe its own stage identity and complete artifact
-  /// inventory. This lets a later run recover an exact historical formula
-  /// without retaining that release's local stage, resolved plan, or changelog
-  /// body.
-  Future<GithubManifestAssetRead> readHistoricalManifestBoundAsset(
-    GithubHistoricalManifestExpectation expected,
-    String assetName,
-  ) async {
-    if (assetName == ReleaseAssets.manifest) {
-      return const GithubManifestAssetRead._(
-        Inspection.unknown(
-          'release-manifest.json is verification metadata, not a readable '
-          'release artifact',
-        ),
-        null,
-      );
-    }
-
-    final observation = await _observeManifestRelease(
-      unit: expected.unit,
-      version: expected.version,
-      tag: expected.tag,
-      manifestSha256: expected.manifestSha256,
-      sourceCommit: expected.sourceCommit,
-      title: expected.title,
-    );
-    if (!observation.inspection.isExact) {
-      return GithubManifestAssetRead._(observation.inspection, null);
-    }
-    final bytes = observation.verifiedBytes[assetName];
-    if (bytes == null) {
-      return GithubManifestAssetRead._(
-        Inspection.conflict(
-          'the published release manifest does not declare $assetName',
-          evidence: {assetName: 'missing from release manifest'},
-        ),
-        null,
-      );
-    }
-    return GithubManifestAssetRead._(observation.inspection, bytes);
   }
 
   Future<_ManifestObservation> _observeManifest(
@@ -430,7 +335,7 @@ class GithubRelease {
       return _ManifestObservation.failed(manifestSurface);
     }
 
-    final assets = await _observeAssetBytes(
+    final assets = await _inspectAssetBytes(
       tag,
       {
         for (final artifact in manifest.artifacts)
@@ -440,13 +345,9 @@ class GithubRelease {
       knownBytes: {ReleaseAssets.manifest: manifestBytes},
       expectedBy: 'release manifest',
     );
-    return assets.inspection.isExact
-        ? _ManifestObservation.exact(
-            assets.inspection,
-            manifest,
-            assets.verifiedBytes,
-          )
-        : _ManifestObservation.failed(assets.inspection);
+    return assets.isExact
+        ? _ManifestObservation.exact(assets, manifest)
+        : _ManifestObservation.failed(assets);
   }
 
   Future<Inspection> _inspect({
@@ -573,24 +474,9 @@ class GithubRelease {
     Map<String, String> expectedDigests, {
     Map<String, List<int>> knownBytes = const {},
     String expectedBy = 'staged release',
-  }) async =>
-      (await _observeAssetBytes(
-        tag,
-        expectedDigests,
-        knownBytes: knownBytes,
-        expectedBy: expectedBy,
-      ))
-          .inspection;
-
-  Future<_AssetObservation> _observeAssetBytes(
-    String tag,
-    Map<String, String> expectedDigests, {
-    Map<String, List<int>> knownBytes = const {},
-    String expectedBy = 'staged release',
   }) async {
     try {
       final names = expectedDigests.keys.toList()..sort();
-      final verifiedBytes = <String, List<int>>{};
       // Assets are independent immutable coordinates. Reading them serially
       // multiplied the per-command timeout by the inventory size (five alpha
       // assets could mean ten minutes). Start every missing download
@@ -624,38 +510,28 @@ class GithubRelease {
           mismatches[name] = 'sha256 $actual, expected $expected';
           continue;
         }
-        verifiedBytes[name] = List<int>.unmodifiable(bytes);
       }
       // A proven immutable mismatch outranks an unreadable sibling. Unknown
       // means rk lacks a fact; it cannot erase a conflict already established.
       if (mismatches.isNotEmpty) {
-        return _AssetObservation.failed(
-          Inspection.conflict(
-            'published asset bytes differ from the $expectedBy',
-            evidence: mismatches,
-          ),
+        return Inspection.conflict(
+          'published asset bytes differ from the $expectedBy',
+          evidence: mismatches,
         );
       }
       if (unreadable.isNotEmpty) {
-        return _AssetObservation.failed(
-          Inspection.unknown(unreadable.entries.first.value),
-        );
+        return Inspection.unknown(unreadable.entries.first.value);
       }
-      return _AssetObservation.exact(
-        Inspection.exact(
-          detail: 'published metadata and asset bytes match',
-          evidence: {
-            for (final name in names)
-              name: 'sha256 ${expectedDigests[name]!.toLowerCase()}',
-          },
-        ),
-        verifiedBytes,
+      return Inspection.exact(
+        detail: 'published metadata and asset bytes match',
+        evidence: {
+          for (final name in names)
+            name: 'sha256 ${expectedDigests[name]!.toLowerCase()}',
+        },
       );
     } on Object catch (error) {
-      return _AssetObservation.failed(
-        Inspection.unknown(
-          'published asset bytes could not be read: $error',
-        ),
+      return Inspection.unknown(
+        'published asset bytes could not be read: $error',
       );
     }
   }
@@ -1608,18 +1484,6 @@ class GithubHistoricalManifestExpectation {
   final String? title;
 }
 
-/// The result of reading one artifact through a manifest-bound release check.
-///
-/// [bytes] is non-null exactly when [inspection] is exact. The list is an
-/// immutable defensive copy, so a caller cannot mutate the verified value it
-/// was handed.
-class GithubManifestAssetRead {
-  const GithubManifestAssetRead._(this.inspection, this.bytes);
-
-  final Inspection inspection;
-  final List<int>? bytes;
-}
-
 /// An authenticated release manifest, withheld unless the whole observation
 /// is exact.
 class GithubManifestRead {
@@ -1630,49 +1494,18 @@ class GithubManifestRead {
 }
 
 class _ManifestObservation {
-  const _ManifestObservation._(
-    this.inspection,
-    this.manifest,
-    this.verifiedBytes,
-  );
+  const _ManifestObservation._(this.inspection, this.manifest);
 
   const _ManifestObservation.failed(Inspection inspection)
-      : this._(inspection, null, const {});
+      : this._(inspection, null);
 
   _ManifestObservation.exact(
     Inspection inspection,
     ReleaseManifest manifest,
-    Map<String, List<int>> verifiedBytes,
-  ) : this._(
-          inspection,
-          manifest,
-          Map.unmodifiable({
-            for (final entry in verifiedBytes.entries)
-              entry.key: List<int>.unmodifiable(entry.value),
-          }),
-        );
+  ) : this._(inspection, manifest);
 
   final Inspection inspection;
   final ReleaseManifest? manifest;
-  final Map<String, List<int>> verifiedBytes;
-}
-
-class _AssetObservation {
-  const _AssetObservation._(this.inspection, this.verifiedBytes);
-
-  const _AssetObservation.failed(Inspection inspection)
-      : this._(inspection, const {});
-
-  _AssetObservation.exact(
-    Inspection inspection,
-    Map<String, List<int>> verifiedBytes,
-  ) : this._(
-          inspection,
-          Map.unmodifiable(verifiedBytes),
-        );
-
-  final Inspection inspection;
-  final Map<String, List<int>> verifiedBytes;
 }
 
 class _ReleaseObservation {

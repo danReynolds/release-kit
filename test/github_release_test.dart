@@ -429,28 +429,6 @@ void main() {
           workingDirectory: '/repo',
         ).inspectManifest(expected);
 
-    Future<GithubManifestAssetRead> readManifestAsset(
-      Tools tools,
-      GithubManifestExpectation expected,
-      String name,
-    ) =>
-        GithubRelease(
-          tools: tools,
-          repository: 'example/tool',
-          workingDirectory: '/repo',
-        ).readManifestBoundAsset(expected, name);
-
-    Future<GithubManifestAssetRead> readHistoricalManifestAsset(
-      Tools tools,
-      GithubHistoricalManifestExpectation expected,
-      String name,
-    ) =>
-        GithubRelease(
-          tools: tools,
-          repository: 'example/tool',
-          workingDirectory: '/repo',
-        ).readHistoricalManifestBoundAsset(expected, name);
-
     _DownloadTools downloadable(
       List<int> manifest, {
       String? response,
@@ -491,25 +469,6 @@ void main() {
       expect(tools.downloadRequests, [manifestName, asset]);
     });
 
-    test('a named asset is returned by that same exact observation', () async {
-      final manifest = manifestBytes();
-      final tools = downloadable(manifest);
-      final read = await readManifestAsset(
-        tools,
-        expectation(manifest),
-        asset,
-      );
-
-      expect(read.inspection.verdict, Verdict.exact);
-      expect(read.bytes, assetBytes);
-      expect(tools.downloadRequests, [manifestName, asset]);
-      expect(
-        () => read.bytes![0] = 0,
-        throwsUnsupportedError,
-        reason: 'verified bytes must not be mutable after the check',
-      );
-    });
-
     test('current and historical reads expose only an authenticated manifest',
         () async {
       final manifest = manifestBytes();
@@ -543,88 +502,6 @@ void main() {
       );
       expect(conflicted.inspection.verdict, Verdict.conflict);
       expect(conflicted.manifest, isNull);
-    });
-
-    test('no bytes escape when a different declared artifact conflicts',
-        () async {
-      const other = 'z-formula.rb';
-      final otherBytes = utf8.encode('class Tool < Formula; end\n');
-      final manifest = manifestBytes(artifacts: [
-        ReleaseManifestArtifact(
-          name: asset,
-          type: 'archive',
-          size: assetBytes.length,
-          sha256: Sha256.hex(assetBytes),
-        ),
-        ReleaseManifestArtifact(
-          name: other,
-          type: 'formula',
-          size: otherBytes.length,
-          sha256: Sha256.hex(otherBytes),
-        ),
-      ]);
-      final tools = downloadable(
-        manifest,
-        response: view(assets: const [asset, other, manifestName]),
-        downloads: {
-          asset: assetBytes,
-          other: utf8.encode('tampered formula'),
-          manifestName: manifest,
-        },
-      );
-      final read = await readManifestAsset(
-        tools,
-        expectation(
-          manifest,
-          publicAssets: const {asset, other, manifestName},
-        ),
-        asset,
-      );
-
-      expect(read.inspection.verdict, Verdict.conflict);
-      expect(read.inspection.evidence, contains(other));
-      expect(read.bytes, isNull);
-      expect(
-        tools.downloadRequests,
-        unorderedEquals([manifestName, asset, other]),
-        reason: 'the requested bytes are not trusted until every digest is '
-            'checked',
-      );
-    });
-
-    test('unknown observations expose no downloaded bytes', () async {
-      final manifest = manifestBytes();
-      final read = await readManifestAsset(
-        downloadable(manifest, failure: 'operation timed out'),
-        expectation(manifest),
-        asset,
-      );
-
-      expect(read.inspection.verdict, Verdict.unknown);
-      expect(read.bytes, isNull);
-    });
-
-    test('verification metadata and unconfigured names are not readable',
-        () async {
-      final manifest = manifestBytes();
-      final tools = downloadable(manifest);
-
-      final metadata = await readManifestAsset(
-        tools,
-        expectation(manifest),
-        manifestName,
-      );
-      final unconfigured = await readManifestAsset(
-        tools,
-        expectation(manifest),
-        'other.zip',
-      );
-
-      expect(metadata.inspection.verdict, Verdict.unknown);
-      expect(metadata.bytes, isNull);
-      expect(unconfigured.inspection.verdict, Verdict.unknown);
-      expect(unconfigured.bytes, isNull);
-      expect(tools.downloadRequests, isEmpty);
     });
 
     test('a release absent from a readable repository is absent', () async {
@@ -799,243 +676,72 @@ void main() {
       expect(tools.downloadRequests, isEmpty);
     });
 
-    group('historical self-describing asset reads', () {
-      const formula = 'tool.rb';
-      final formulaBytes = utf8.encode('class Tool < Formula; end\n');
-
-      List<int> historicalManifest({
-        StageIdentity? stage,
-        List<ReleaseManifestArtifact>? artifacts,
-      }) =>
-          manifestBytes(
-            stage: stage,
-            artifacts: artifacts ??
-                [
-                  ReleaseManifestArtifact(
-                    name: asset,
-                    type: 'archive',
-                    size: assetBytes.length,
-                    sha256: Sha256.hex(assetBytes),
-                  ),
-                  ReleaseManifestArtifact(
-                    name: formula,
-                    type: 'formula',
-                    size: formulaBytes.length,
-                    sha256: Sha256.hex(formulaBytes),
-                  ),
-                ],
-          );
-
-      String historicalView({
-        List<String> assets = const [asset, formula, manifestName],
-        bool includeTitle = true,
-        String title = 'tool 1.0.0',
-      }) =>
-          jsonEncode({
+    group('historical self-describing manifests', () {
+      String historicalView() => jsonEncode({
             'tag_name': 'v1.0.0',
             'draft': false,
             'id': 41,
-            if (includeTitle) 'name': title,
-            // Deliberately no body: old changelog text is not an input to a
-            // historical Homebrew resume.
-            'assets': [
-              for (final name in assets) {'name': name},
+            'name': 'tool 1.0.0',
+            // Historical verification does not depend on old changelog text.
+            'assets': const [
+              {'name': asset},
+              {'name': manifestName},
             ],
           });
 
-      test('tag anchors recover an immutable formula without stage or body',
+      Future<GithubManifestRead> read(
+        Tools tools,
+        GithubHistoricalManifestExpectation expected,
+      ) =>
+          GithubRelease(
+            tools: tools,
+            repository: 'example/tool',
+            workingDirectory: '/repo',
+          ).readHistoricalManifest(expected);
+
+      test('tag anchors authenticate an older release without its body',
           () async {
-        final manifest = historicalManifest();
+        final manifest = manifestBytes();
         final tools = downloadable(
           manifest,
           response: historicalView(),
-          downloads: {
-            asset: assetBytes,
-            formula: formulaBytes,
-            manifestName: manifest,
-          },
         );
-
-        final read = await readHistoricalManifestAsset(
+        final result = await read(
           tools,
-          historicalExpectation(
-            manifest,
-            title: 'tool 1.0.0',
-          ),
-          formula,
+          historicalExpectation(manifest, title: 'tool 1.0.0'),
         );
 
-        expect(read.inspection.verdict, Verdict.exact);
-        expect(read.bytes, formulaBytes);
-        expect(
-          tools.downloadRequests,
-          unorderedEquals([manifestName, asset, formula]),
-        );
-        expect(() => read.bytes![0] = 0, throwsUnsupportedError);
+        expect(result.inspection.verdict, Verdict.exact);
+        expect(result.manifest?.unit, 'cli');
+        expect(tools.downloadRequests, [manifestName, asset]);
       });
 
       test('the manifest source must equal the peeled tag commit', () async {
-        final manifest = historicalManifest();
-        final read = await readHistoricalManifestAsset(
-          downloadable(
-            manifest,
-            response: historicalView(),
-            downloads: {
-              asset: assetBytes,
-              formula: formulaBytes,
-              manifestName: manifest,
-            },
-          ),
+        final manifest = manifestBytes();
+        final result = await read(
+          downloadable(manifest, response: historicalView()),
           historicalExpectation(
             manifest,
             sourceCommit: otherIdentity.headCommit,
           ),
-          formula,
         );
 
-        expect(read.inspection.verdict, Verdict.conflict);
-        expect(
-          read.inspection.evidence.keys,
-          containsAll(['source commit']),
-        );
-        expect(read.bytes, isNull);
+        expect(result.inspection.verdict, Verdict.conflict);
+        expect(result.inspection.evidence, contains('source commit'));
+        expect(result.manifest, isNull);
       });
 
-      test('release inventory must equal the bound manifest inventory',
-          () async {
-        final manifest = historicalManifest();
-        final tools = downloadable(
-          manifest,
-          response: historicalView(
-            assets: const [asset, formula, manifestName, 'surprise.txt'],
-          ),
-          downloads: {manifestName: manifest},
-        );
-
-        final read = await readHistoricalManifestAsset(
-          tools,
-          historicalExpectation(manifest),
-          formula,
-        );
-
-        expect(read.inspection.verdict, Verdict.conflict);
-        expect(read.inspection.evidence, contains('surprise.txt'));
-        expect(read.bytes, isNull);
-        expect(tools.downloadRequests, [manifestName]);
-      });
-
-      test('a later bad digest withholds already verified requested bytes',
-          () async {
-        const later = 'z-proof.txt';
-        final laterBytes = utf8.encode('expected proof');
-        final manifest = historicalManifest(artifacts: [
-          ReleaseManifestArtifact(
-            name: formula,
-            type: 'formula',
-            size: formulaBytes.length,
-            sha256: Sha256.hex(formulaBytes),
-          ),
-          ReleaseManifestArtifact(
-            name: later,
-            type: 'metadata',
-            size: laterBytes.length,
-            sha256: Sha256.hex(laterBytes),
-          ),
-        ]);
-        final tools = downloadable(
-          manifest,
-          response: historicalView(
-            assets: const [formula, later, manifestName],
-          ),
-          downloads: {
-            formula: formulaBytes,
-            later: utf8.encode('tampered proof'),
-            manifestName: manifest,
-          },
-        );
-
-        final read = await readHistoricalManifestAsset(
-          tools,
-          historicalExpectation(manifest),
-          formula,
-        );
-
-        expect(read.inspection.verdict, Verdict.conflict);
-        expect(read.inspection.evidence, contains(later));
-        expect(read.bytes, isNull);
-        expect(tools.downloadRequests.first, manifestName);
-        expect(
-          tools.downloadRequests.skip(1),
-          unorderedEquals([formula, later]),
-          reason: 'manifest-bound assets are checked in parallel',
-        );
-      });
-
-      test('an unsupported manifest schema is rejected by parse', () async {
-        final valid = utf8.decode(historicalManifest());
-        final manifest = utf8.encode(valid.replaceFirst(
-          '"schema":$releaseManifestSchemaVersion',
-          '"schema":99',
-        ));
-        final read = await readHistoricalManifestAsset(
-          downloadable(
-            manifest,
-            response: historicalView(),
-            downloads: {manifestName: manifest},
-          ),
-          historicalExpectation(manifest),
-          formula,
-        );
-
-        expect(read.inspection.verdict, Verdict.conflict);
-        expect(read.inspection.detail, contains('manifest is invalid'));
-        expect(read.bytes, isNull);
-      });
-
-      test('a malformed external source anchor is unknown without a query',
-          () async {
-        final manifest = historicalManifest();
+      test('a malformed source anchor is unknown without a query', () async {
+        final manifest = manifestBytes();
         final tools = downloadable(manifest);
-        final read = await readHistoricalManifestAsset(
+        final result = await read(
           tools,
           historicalExpectation(manifest, sourceCommit: 'short'),
-          formula,
         );
 
-        expect(read.inspection.verdict, Verdict.unknown);
-        expect(read.bytes, isNull);
+        expect(result.inspection.verdict, Verdict.unknown);
+        expect(result.manifest, isNull);
         expect(tools.downloadRequests, isEmpty);
-      });
-
-      test('the requested asset itself must be declared by the manifest',
-          () async {
-        final manifest = historicalManifest(artifacts: [
-          ReleaseManifestArtifact(
-            name: asset,
-            type: 'archive',
-            size: assetBytes.length,
-            sha256: Sha256.hex(assetBytes),
-          ),
-        ]);
-        final read = await readHistoricalManifestAsset(
-          downloadable(
-            manifest,
-            response: historicalView(
-              assets: const [asset, manifestName],
-            ),
-            downloads: {
-              asset: assetBytes,
-              manifestName: manifest,
-            },
-          ),
-          historicalExpectation(manifest),
-          formula,
-        );
-
-        expect(read.inspection.verdict, Verdict.conflict);
-        expect(
-            read.inspection.evidence[formula], 'missing from release manifest');
-        expect(read.bytes, isNull);
       });
     });
   });

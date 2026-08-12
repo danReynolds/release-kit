@@ -38,7 +38,7 @@ final class GithubReleaseTargetModule extends TargetModule {
       true;
 
   @override
-  Future<TargetSession?> acquireSession(
+  Future<bool> acquireSession(
     TargetReadinessContext context,
     ResolvedUnit unit,
     List<TargetExpectation> targets,
@@ -47,17 +47,13 @@ final class GithubReleaseTargetModule extends TargetModule {
     try {
       status = await context.tools.run(
         'gh',
-        const ['auth', 'status'],
+        const ['auth', 'status', '--active', '--hostname', 'github.com'],
         workingDirectory: context.git.root,
       );
     } on ProcessException {
       status = ToolResult(exitCode: -1, stdout: '', stderr: '');
     }
-    if (status.ok) {
-      return TargetSession(
-        endpoint: effectiveEndpoint(context, unit, targets),
-      );
-    }
+    if (status.ok) return true;
     context.output.problem(
       Diagnostic(
         code: 'RK-GITHUB-010',
@@ -69,7 +65,7 @@ final class GithubReleaseTargetModule extends TargetModule {
       unit: unit.name,
     );
     context.output.halt(HaltKind.beforeActing);
-    return null;
+    return false;
   }
 
   @override
@@ -482,7 +478,7 @@ final class _StagedReleaseAssets {
     );
     final planned = <String, String>{
       for (final asset in ReleaseAssets.bundleFor(unit))
-        asset.publicName: asset.blob.stagedPath,
+        asset.publicName: asset.stagedPath,
       ReleaseAssets.manifest: ReleaseAssets.manifest,
     };
     final assets = <GithubReleaseAssetUpload>[];

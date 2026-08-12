@@ -408,7 +408,10 @@ class _Reader {
     }
     final homebrewTap = _unitText(value, 'homebrew_tap');
     if (homebrewTap != null &&
-        !RegExp(r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$').hasMatch(homebrewTap)) {
+        (!_githubCoordinate.hasMatch(homebrewTap) ||
+            homebrewTap
+                .split('/')
+                .any((part) => part == '.' || part == '..'))) {
       _diagnostics.add(
         'RK-CONF-040',
         'homebrew_tap must be a GitHub owner/repository',
@@ -665,3 +668,7 @@ class _Reader {
     return value;
   }
 }
+
+final RegExp _githubCoordinate = RegExp(
+  r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$',
+);

@@ -456,17 +456,27 @@ class StageInspector {
               if (entry.key is String && entry.value is String)
                 entry.key as String: entry.value as String,
           }
-        : {for (final name in manifestNames) name: name};
-    final destinationBindings = _receiptDestinationBindings(
-      complete.evidence['destination_bindings'],
-      issues,
-    );
-    if (destinationBindings == null) return;
+        : <String, String>{};
+    final List<StagedDestinationBinding> destinationBindings;
+    try {
+      destinationBindings = StagedDestinationBinding.listFromEvidence(
+        complete.evidence['destination_bindings'],
+      );
+    } on Object catch (error) {
+      issues.add(StageIssue(
+        StageIssueKind.invalidManifest,
+        'complete-stage has malformed destination bindings: $error',
+        path: 'release-manifest.json',
+      ));
+      return;
+    }
     final expectedCompleteInputs = {
       ...bindings.values,
       for (final binding in destinationBindings) binding.stagedPath,
     };
-    if (bindings.length != manifestNames.length ||
+    if (encodedBindings is! Map ||
+        encodedBindings.length != bindings.length ||
+        bindings.length != manifestNames.length ||
         bindings.keys.toSet().difference(manifestNames).isNotEmpty ||
         manifestNames.difference(bindings.keys.toSet()).isNotEmpty ||
         completeInputs.keys
@@ -499,7 +509,7 @@ class StageInspector {
         continue;
       }
     }
-    final receiptDestinations = <String, _ReceiptDestinationBinding>{};
+    final receiptDestinations = <String, StagedDestinationBinding>{};
     for (final binding in destinationBindings) {
       if (receiptDestinations[binding.identity] != null) {
         issues.add(const StageIssue(
@@ -511,13 +521,7 @@ class StageInspector {
       receiptDestinations[binding.identity] = binding;
     }
     final manifestDestinationIdentities = {
-      for (final binding in manifest.destinations)
-        _destinationIdentity(
-          target: binding.target,
-          project: binding.project,
-          coordinate: binding.coordinate,
-          path: binding.path,
-        ),
+      for (final binding in manifest.destinations) binding.identity,
     };
     if (receiptDestinations.length != manifestDestinationIdentities.length ||
         receiptDestinations.keys
@@ -531,12 +535,7 @@ class StageInspector {
       ));
     }
     for (final item in manifest.destinations) {
-      final receiptBinding = receiptDestinations[_destinationIdentity(
-        target: item.target,
-        project: item.project,
-        coordinate: item.coordinate,
-        path: item.path,
-      )];
+      final receiptBinding = receiptDestinations[item.identity];
       final local = receiptBinding == null
           ? null
           : beforeComplete[receiptBinding.stagedPath];
@@ -819,91 +818,3 @@ List<StageIssue> _deduplicate(List<StageIssue> issues) {
         issue,
   ];
 }
-
-List<_ReceiptDestinationBinding>? _receiptDestinationBindings(
-  Object? encoded,
-  List<StageIssue> issues,
-) {
-  if (encoded == null) return const [];
-  const keys = {
-    'coordinate',
-    'media_type',
-    'path',
-    'project',
-    'staged_path',
-    'target',
-  };
-  if (encoded is! List) {
-    issues.add(const StageIssue(
-      StageIssueKind.invalidManifest,
-      'complete-stage destination bindings are not an array',
-      path: 'release-manifest.json',
-    ));
-    return null;
-  }
-  final result = <_ReceiptDestinationBinding>[];
-  for (final value in encoded) {
-    if (value is! Map ||
-        value.keys.toSet().difference(keys).isNotEmpty ||
-        keys.difference(value.keys.toSet()).isNotEmpty ||
-        value.values.any((item) => item is! String)) {
-      issues.add(const StageIssue(
-        StageIssueKind.invalidManifest,
-        'complete-stage has a malformed destination binding',
-        path: 'release-manifest.json',
-      ));
-      return null;
-    }
-    try {
-      result.add(_ReceiptDestinationBinding(
-        target: value['target'] as String,
-        project: value['project'] as String,
-        coordinate: value['coordinate'] as String,
-        path: value['path'] as String,
-        stagedPath: StagePath.require(value['staged_path'] as String),
-        mediaType: value['media_type'] as String,
-      ));
-    } on Object catch (error) {
-      issues.add(StageIssue(
-        StageIssueKind.invalidManifest,
-        'complete-stage has an unsafe destination binding: $error',
-        path: 'release-manifest.json',
-      ));
-      return null;
-    }
-  }
-  return result;
-}
-
-final class _ReceiptDestinationBinding {
-  const _ReceiptDestinationBinding({
-    required this.target,
-    required this.project,
-    required this.coordinate,
-    required this.path,
-    required this.stagedPath,
-    required this.mediaType,
-  });
-
-  final String target;
-  final String project;
-  final String coordinate;
-  final String path;
-  final String stagedPath;
-  final String mediaType;
-
-  String get identity => _destinationIdentity(
-        target: target,
-        project: project,
-        coordinate: coordinate,
-        path: path,
-      );
-}
-
-String _destinationIdentity({
-  required String target,
-  required String project,
-  required String coordinate,
-  required String path,
-}) =>
-    '$target\u0000$project\u0000$coordinate\u0000$path';

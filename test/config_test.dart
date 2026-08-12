@@ -60,17 +60,24 @@ publish = ["pub.dev"]
     });
 
     test('a custom Homebrew tap is an owner/repository coordinate', () {
-      expect(
-        refusedWith('''
+      for (final tap in [
+        'https://github.com/example/homebrew-tools',
+        '../homebrew-tools',
+        'example/..',
+      ]) {
+        expect(
+          refusedWith('''
 schema = 2
 
 [release.cli]
 publish = ["git-tag", "github-release", "homebrew"]
 binary_platforms = ["macos-arm64"]
-homebrew_tap = "https://github.com/example/homebrew-tools"
+homebrew_tap = "$tap"
 '''),
-        'RK-CONF-040',
-      );
+          'RK-CONF-040',
+          reason: tap,
+        );
+      }
     });
 
     test('an inline list splits into typed unit and project targets', () {

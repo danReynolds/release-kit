@@ -212,7 +212,7 @@ class GitSourceTree implements SourceTree {
 /// A repository-shaped directory with no Git identity.
 ///
 /// Configuration supplies the roots worth staging. Discovery is deliberately
-/// handled by native workspace membership in `rk init`; this class never
+/// handled by Dart workspace membership in `rk init`; this class never
 /// guesses release units by recursively searching unrelated directories.
 class FileSystemSourceTree implements SourceTree {
   FileSystemSourceTree(this.root, {Iterable<String> roots = const ['.']})

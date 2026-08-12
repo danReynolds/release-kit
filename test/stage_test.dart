@@ -627,6 +627,10 @@ StageReceipt _writeCompleteStage(StageDirectory stage) {
         name: 'complete-stage',
         inputs: [StageInput.artifact(artifact)],
         outputs: [manifest],
+        evidence: const {
+          'release_assets': {'rk': 'rk'},
+          'destination_bindings': [],
+        },
       ),
     ],
   );

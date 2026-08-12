@@ -50,7 +50,7 @@ StageStepContract contractFor(ResolvedUnit unit, Step step) {
       receiptNameFor(step),
       inputs: {
         for (final contribution in ReleaseAssets.contributionsFor(unit))
-          contribution.blob.stagedPath,
+          contribution.stagedPath,
       },
       outputs: {ReleaseAssets.checksumPath: 'checksums'},
       validate: _checksumsEvidence,
@@ -161,7 +161,7 @@ Iterable<StageIssue> _checksumsEvidence(
   final checksums = step.evidence['checksums'];
   final publicNameByPath = {
     for (final contribution in ReleaseAssets.contributionsFor(context.unit))
-      contribution.blob.stagedPath: contribution.publicName,
+      contribution.stagedPath: contribution.publicName,
   };
   final expected = {
     for (final input in step.inputs)

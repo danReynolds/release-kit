@@ -26,7 +26,7 @@ import 'package:release_kit/src/engine/diagnostic.dart';
 import 'package:release_kit/src/engine/git.dart';
 import 'package:release_kit/src/engine/inspect.dart';
 import 'package:release_kit/src/engine/init_plan.dart';
-import 'package:release_kit/src/engine/native_workspace.dart';
+import 'package:release_kit/src/engine/dart_workspace.dart';
 import 'package:release_kit/src/engine/publish_target.dart';
 import 'package:release_kit/src/output/output.dart';
 import 'package:release_kit/src/engine/registry.dart';
@@ -638,7 +638,7 @@ Set<String> _filesystemSourceRoots(
 ) {
   final roots = <String>{
     'release.toml',
-    ...NativeWorkspaceDiscovery.dart(tree).sourceRoots,
+    ...DartWorkspaceDiscovery(tree).sourceRoots,
     for (final unit in resolution.units)
       for (final project in unit.projects) project.pubspec.directory,
   };

@@ -1018,13 +1018,14 @@ void main() {
   test(
       'a missing GitHub session refuses after staging and before authorization',
       () async {
-    harness.tools.runFailure = (call) => call.key == 'gh auth status'
-        ? ToolResult(
-            exitCode: 1,
-            stdout: '',
-            stderr: 'expired credential details that must stay private',
-          )
-        : null;
+    harness.tools.runFailure =
+        (call) => call.key == 'gh auth status --active --hostname github.com'
+            ? ToolResult(
+                exitCode: 1,
+                stdout: '',
+                stderr: 'expired credential details that must stay private',
+              )
+            : null;
     var authorizationPrompts = 0;
 
     final failed = await harness.run(
@@ -1037,7 +1038,10 @@ void main() {
 
     expect(failed.code, ExitCodes.refused, reason: failed.text);
     expect(failed.problemCodes, contains('RK-GITHUB-010'));
-    expect(failed.keys, contains('gh auth status'));
+    expect(
+      failed.keys,
+      contains('gh auth status --active --hostname github.com'),
+    );
     expect(failed.keys, contains('dart pub publish --dry-run'));
     expect(harness.stage.inspect().reusable, isTrue);
     expect(authorizationPrompts, 0);

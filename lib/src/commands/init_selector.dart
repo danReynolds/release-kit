@@ -138,7 +138,7 @@ final class InitSelector {
       ..writeln('${option.label} — ${availability.reason}'
           '${candidate.selected.contains(option) ? ' · selected' : ''}')
       ..writeln()
-      ..writeln('↑↓ unit   ←→ option   space toggle   enter review');
+      ..writeln('↑↓ unit   ←→ option   space toggle   enter review   q cancel');
     if (message.isNotEmpty) buffer.writeln(message);
     return buffer.toString();
   }
@@ -207,6 +207,7 @@ String _fit(String value, int width) {
 InitSelectorKey readInitSelectorKey(int Function() readByte) {
   final first = readByte();
   if (first < 0 || first == 3) return InitSelectorKey.cancel;
+  if (first == 113 || first == 81) return InitSelectorKey.cancel;
   if (first == 10 || first == 13) return InitSelectorKey.review;
   if (first == 32) return InitSelectorKey.toggle;
   if (first != 27) return InitSelectorKey.ignore;

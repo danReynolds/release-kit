@@ -127,10 +127,10 @@ abstract base class TargetModule {
   /// Acquires or refreshes the native publication session after the exact
   /// stage exists and before authorization.
   ///
-  /// Returning null means the module already reported a refusal. Every
+  /// Returning false means the module already reported a refusal. Every
   /// module chooses explicitly, including destinations whose native tool has
   /// no separate session-acquisition command.
-  Future<TargetSession?> acquireSession(
+  Future<bool> acquireSession(
     TargetReadinessContext context,
     ResolvedUnit unit,
     List<TargetExpectation> targets,
@@ -320,14 +320,6 @@ final class TargetReadinessContext {
   final Output output;
   final GitState git;
   final Map<String, String> environment;
-}
-
-final class TargetSession {
-  const TargetSession({required this.endpoint});
-
-  /// Opaque destination identity, compared only for equality and never
-  /// reported because it can include credential-bearing native coordinates.
-  final String endpoint;
 }
 
 /// Provider-neutral facts returned by one target act.

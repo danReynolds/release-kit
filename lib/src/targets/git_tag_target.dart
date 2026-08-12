@@ -31,12 +31,12 @@ final class GitTagTargetModule extends TargetModule {
       true;
 
   @override
-  Future<TargetSession?> acquireSession(
+  Future<bool> acquireSession(
     TargetReadinessContext context,
     ResolvedUnit unit,
     List<TargetExpectation> targets,
   ) async =>
-      TargetSession(endpoint: effectiveEndpoint(context, unit, targets));
+      true;
 
   @override
   TargetExpectation expectation({

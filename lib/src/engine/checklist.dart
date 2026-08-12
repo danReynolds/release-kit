@@ -431,10 +431,10 @@ class Step {
   /// Whether this step's effect can never be taken back.
   ///
   /// Only a registry publication: pub.dev burns a version number forever, so a
-  /// mistake there costs a version rather than a retry. A release, its assets,
-  /// a formula and even a tag can all be removed — rk deletes and recreates a
-  /// wrong draft as a matter of course — and marking those permanent too would
-  /// spend the operator's attention on the steps that do not need it.
+  /// mistake there costs a version rather than a retry. Tags, releases, and
+  /// formulas are still guarded against destructive repair, but they are not
+  /// irrevocable provider acts, so marking them permanent would spend the
+  /// operator's attention on the wrong steps.
   bool get isPermanent => kind.isPermanent;
 
   @override

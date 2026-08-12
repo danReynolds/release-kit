@@ -26,7 +26,7 @@ must say what it says yes to.
 
 | key | meaning |
 |---|---|
-| `rk` | schema version (currently `6`) |
+| `rk` | schema version (currently `4`) |
 | `command` | the verb that ran |
 | `mode` | present only where the run has one: `{stage}` on `release` |
 | `observed_at` | UTC ISO 8601 — when rk read the world |

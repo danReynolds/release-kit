@@ -2,7 +2,7 @@ import 'dart:io';
 import 'dart:math';
 
 import '../transforms/digest.dart';
-import 'artifact_contribution.dart';
+import 'release_asset.dart';
 import 'assets.dart';
 import 'publish_target.dart';
 import 'release_manifest.dart';
@@ -182,23 +182,12 @@ class ReleaseStage {
           File(directory.resolve('release-manifest.json')).readAsStringSync(),
         );
         final wantedDestinations = {
-          for (final binding in _destinationBindings())
-            _destinationIdentity(
-              target: binding.target,
-              project: binding.project,
-              coordinate: binding.coordinate,
-              path: binding.path,
-            ),
+          for (final binding in _destinationBindings()) binding.identity,
         };
         final manifestDestinations = {
           for (final binding in manifest.destinations)
             if (binding.type == 'formula' && binding.mediaType == 'text/x-ruby')
-              _destinationIdentity(
-                target: binding.target,
-                project: binding.project,
-                coordinate: binding.coordinate,
-                path: binding.path,
-              ),
+              binding.identity,
         };
         if (manifest.unit != unit.name ||
             manifest.version != unit.version.canonical ||
@@ -411,32 +400,19 @@ class ReleaseStage {
 
   /// Finalizes the public manifest and the strict local receipt.
   ///
-  /// [publicArtifacts] are workspace-relative filenames that will be
-  /// published. The manifest deliberately does not list itself, avoiding a
-  /// self-digest cycle; the local receipt does capture it like every other
-  /// staged file.
+  /// The manifest deliberately does not list itself, avoiding a self-digest
+  /// cycle; the local receipt does capture it like every other staged file.
   StageReceipt finalize({
-    Set<String>? publicArtifacts,
-    Iterable<ReleaseAssetSpec>? releaseAssets,
+    required Iterable<ReleaseAssetSpec> releaseAssets,
     Map<String, Object?> evidence = const {},
   }) {
-    if ((publicArtifacts == null) == (releaseAssets == null)) {
-      throw ArgumentError(
-        'finalize needs exactly one public artifact inventory',
-      );
-    }
-    final bindings = releaseAssets == null
-        ? [
-            for (final path in publicArtifacts!)
-              _PublicArtifactBinding(publicName: path, stagedPath: path),
-          ]
-        : [
-            for (final asset in validateReleaseAssetSpecs(releaseAssets))
-              _PublicArtifactBinding(
-                publicName: asset.publicName,
-                stagedPath: asset.blob.stagedPath,
-              ),
-          ];
+    final bindings = [
+      for (final asset in validateReleaseAssetSpecs(releaseAssets))
+        _PublicArtifactBinding(
+          publicName: asset.publicName,
+          stagedPath: asset.stagedPath,
+        ),
+    ];
     final publicNames = bindings.map((binding) => binding.publicName).toSet();
     final stagedPaths = bindings.map((binding) => binding.stagedPath).toSet();
     if (publicNames.length != bindings.length ||
@@ -476,22 +452,10 @@ class ReleaseStage {
       final existingPublic =
           existingManifest.artifacts.map((artifact) => artifact.name).toSet();
       final existingDestinations = {
-        for (final binding in existingManifest.destinations)
-          _destinationIdentity(
-            target: binding.target,
-            project: binding.project,
-            coordinate: binding.coordinate,
-            path: binding.path,
-          ),
+        for (final binding in existingManifest.destinations) binding.identity,
       };
       final wantedDestinations = {
-        for (final binding in destinationBindings)
-          _destinationIdentity(
-            target: binding.target,
-            project: binding.project,
-            coordinate: binding.coordinate,
-            path: binding.path,
-          ),
+        for (final binding in destinationBindings) binding.identity,
       };
       if (existingPublic.length != publicNames.length ||
           existingPublic.difference(publicNames).isNotEmpty ||
@@ -569,14 +533,7 @@ class ReleaseStage {
       ],
       destinations: [
         for (final binding in destinationBindings)
-          ReleaseManifestDestinationBinding.fromStage(
-            target: binding.target,
-            project: binding.project,
-            coordinate: binding.coordinate,
-            path: binding.path,
-            mediaType: binding.mediaType,
-            artifact: byPath[binding.stagedPath]!,
-          ),
+          binding.bind(byPath[binding.stagedPath]!),
       ],
     );
     manifest.writeTo(directory);
@@ -599,7 +556,7 @@ class ReleaseStage {
     final orderedBindings = [...bindings]
       ..sort((left, right) => left.publicName.compareTo(right.publicName));
     final orderedDestinationBindings = [...destinationBindings]
-      ..sort(_compareDestinationArtifactBindings);
+      ..sort((left, right) => left.identity.compareTo(right.identity));
     final completeInputs = <String, StageArtifact>{
       for (final binding in orderedBindings)
         binding.stagedPath: byPath[binding.stagedPath]!,
@@ -625,14 +582,7 @@ class ReleaseStage {
             },
             'destination_bindings': [
               for (final binding in orderedDestinationBindings)
-                {
-                  'coordinate': binding.coordinate,
-                  'media_type': binding.mediaType,
-                  'path': binding.path,
-                  'project': binding.project,
-                  'staged_path': binding.stagedPath,
-                  'target': binding.target,
-                },
+                binding.toEvidence(),
             ],
             if (compiler != null) 'dart_compiler': compiler!.toJson(),
           },
@@ -666,12 +616,7 @@ class ReleaseStage {
       for (final artifact in receipt.artifacts) artifact.path: artifact,
     };
     if (encoded is! Map) {
-      return Map.unmodifiable({
-        for (final artifact in ReleaseManifest.parse(
-          File(directory.resolve(ReleaseAssets.manifest)).readAsStringSync(),
-        ).artifacts)
-          artifact.name: byPath[artifact.name]!,
-      });
+      throw StateError('complete stage has no release asset bindings');
     }
     return Map.unmodifiable({
       for (final entry in encoded.entries)
@@ -743,7 +688,7 @@ class ReleaseStage {
     return 'executable';
   }
 
-  List<_DestinationArtifactBinding> _destinationBindings() {
+  List<StagedDestinationBinding> _destinationBindings() {
     final projects = unit.projects
         .where(
           (project) => project.publish.contains(PublishTarget.homebrew),
@@ -758,7 +703,7 @@ class ReleaseStage {
     }
     return [
       for (final project in projects)
-        _DestinationArtifactBinding(
+        StagedDestinationBinding(
           target: PublishTarget.homebrew.configName,
           project: project.name,
           coordinate: unit.tapFor(sourceRepository),
@@ -779,50 +724,6 @@ final class _PublicArtifactBinding {
   final String publicName;
   final String stagedPath;
 }
-
-final class _DestinationArtifactBinding {
-  const _DestinationArtifactBinding({
-    required this.target,
-    required this.project,
-    required this.coordinate,
-    required this.path,
-    required this.stagedPath,
-    required this.mediaType,
-  });
-
-  final String target;
-  final String project;
-  final String coordinate;
-  final String path;
-  final String stagedPath;
-  final String mediaType;
-}
-
-int _compareDestinationArtifactBindings(
-  _DestinationArtifactBinding left,
-  _DestinationArtifactBinding right,
-) =>
-    _destinationIdentity(
-      target: left.target,
-      project: left.project,
-      coordinate: left.coordinate,
-      path: left.path,
-    ).compareTo(
-      _destinationIdentity(
-        target: right.target,
-        project: right.project,
-        coordinate: right.coordinate,
-        path: right.path,
-      ),
-    );
-
-String _destinationIdentity({
-  required String target,
-  required String project,
-  required String coordinate,
-  required String path,
-}) =>
-    '$target\u0000$project\u0000$coordinate\u0000$path';
 
 void _setGitFileMode(String path, GitTreeEntry entry) {
   final permissions = entry.executable ? '755' : '644';

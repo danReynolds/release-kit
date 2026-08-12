@@ -11,6 +11,7 @@ import 'package:release_kit/src/engine/diagnostic.dart';
 import 'package:release_kit/src/engine/git.dart';
 import 'package:release_kit/src/engine/inspect.dart';
 import 'package:release_kit/src/engine/registry.dart';
+import 'package:release_kit/src/engine/release_asset.dart';
 import 'package:release_kit/src/engine/release_stage.dart';
 import 'package:release_kit/src/engine/resolve.dart';
 import 'package:release_kit/src/engine/source_tree.dart';
@@ -1224,8 +1225,7 @@ executables:
     // The report collapses a set that agrees; the document keeps every
     // name, which is where a caller reading filenames should be reading
     // them anyway.
-    final expected =
-        ReleaseAssets.expectedFor(made!.unit.binaryProjects.single);
+    final expected = ReleaseAssets.expectedForUnit(made!.unit);
     expect(
       run.text,
       matches(RegExp('${expected.length} artifacts')),
@@ -1579,7 +1579,7 @@ ReleaseStage _completedStage({
       identity: identity,
     ),
   );
-  final public = ReleaseAssets.expectedFor(unit.binaryProjects.single).toSet()
+  final public = ReleaseAssets.expectedForUnit(unit).toSet()
     ..remove(ReleaseAssets.manifest);
   final sourceArtifacts = stage.materializeSource();
   final sourceStep = StageStep(
@@ -1742,9 +1742,22 @@ ReleaseStage _completedStage({
     ));
   }
   stage.writeProgress(steps);
-  stage.finalize(publicArtifacts: public);
+  stage.finalize(releaseAssets: _fixtureReleaseAssets(public));
   return stage;
 }
+
+List<ReleaseAssetSpec> _fixtureReleaseAssets(Iterable<String> paths) => [
+      for (final path in paths)
+        path.toLowerCase() == ReleaseAssets.checksums.toLowerCase()
+            ? ReleaseAssetSpec.generated(
+                stagedPath: path,
+                publicName: path,
+              )
+            : ReleaseAssetSpec(
+                stagedPath: path,
+                publicName: path,
+              ),
+    ];
 
 // Regressions from the phase 2-3 review.
 void _reviewFixes() {

@@ -1,4 +1,4 @@
-import 'artifact_contribution.dart';
+import 'release_asset.dart';
 import 'config.dart';
 import 'diagnostic.dart';
 import 'publish_target.dart';

@@ -32,6 +32,7 @@ void main() {
       expect(output, contains('Homebrew'));
       expect(output, contains('space toggle'));
       expect(output, contains('enter review'));
+      expect(output, contains('q cancel'));
     }
     expect(wide, contains('Produce'));
     expect(wide, contains('Publish'));
@@ -69,6 +70,8 @@ void main() {
     expect(read([32]), InitSelectorKey.toggle);
     expect(read([13]), InitSelectorKey.review);
     expect(read([3]), InitSelectorKey.cancel);
+    expect(read([113]), InitSelectorKey.cancel);
+    expect(read([81]), InitSelectorKey.cancel);
     expect(read([]), InitSelectorKey.cancel);
     expect(read([27]), InitSelectorKey.ignore);
   });

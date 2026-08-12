@@ -62,6 +62,31 @@ void main() {
     expect(buffer.toString(), contains('already exists'));
   });
 
+  test('an empty repository skips the selector and reports no candidates',
+      () async {
+    var selections = 0;
+    final output = Output(
+      sink: (_) {},
+      isTerminal: true,
+      useColor: false,
+    );
+    final code = await InitCommand(
+      tree: MemorySourceTree(const {}),
+      output: output,
+      gitBound: false,
+      select: (plan) async {
+        selections++;
+        return plan;
+      },
+      write: (_, __) {},
+      confirm: (_) async => true,
+    ).run();
+
+    expect(code, ExitCodes.ok);
+    expect(selections, 0);
+    expect(problemCodes(output.report), contains('RK-INIT-003'));
+  });
+
   test('declining writes nothing', () async {
     final buffer = StringBuffer();
     final written = <String, String>{};
