@@ -1,10 +1,11 @@
 import 'assets.dart';
 import 'checklist.dart';
 import 'producers.dart';
+import 'publish_target.dart';
 import 'resolve.dart';
 import 'targets.dart';
 
-/// What a stage is making, grouped by the target that will publish it.
+/// What a stage is making, grouped by its destination or local output.
 ///
 /// The steps rk runs and the files it produces are not the same list: four
 /// producers — build, sign, notarize, archive — make one macOS archive, and
@@ -15,7 +16,7 @@ import 'targets.dart';
 class StageBoard {
   StageBoard._(this.groups, this._rowOf);
 
-  /// The rows one unit's stage will fill, in publication order.
+  /// The rows one unit's stage will fill, in release order.
   ///
   /// A target that publishes no file of its own — a Git tag — contributes no
   /// group. A Homebrew formula is shown under Homebrew because it is private
@@ -57,6 +58,18 @@ class StageBoard {
       }
     }
 
+    final binaryProject = unit.binaryProject;
+    final publishesBinaryArchives =
+        unit.publish.contains(PublishTarget.githubRelease);
+    if (binaryProject != null && !publishesBinaryArchives) {
+      groups.add(
+        StageBoardGroup('Local binaries', [
+          for (final platform in [...binaryProject.binaryPlatforms]..sort())
+            StageBoardRow(ReleaseAssets.archivePath(binaryProject, platform)),
+        ]),
+      );
+    }
+
     // Every producer of one platform's binary reports against that
     // platform's archive: the binary itself never leaves the stage.
     for (final step in Checklist.localProducerSteps(unit)) {
@@ -64,11 +77,13 @@ class StageBoard {
       final projectName = step.project;
       if (platform == null || projectName == null) continue;
       final project = unit.project(projectName);
-      final archive = ReleaseAssets.archiveName(
-        project.executable!,
-        project.version.canonical,
-        platform,
-      );
+      final archive = publishesBinaryArchives
+          ? ReleaseAssets.archiveName(
+              project.executable!,
+              project.version.canonical,
+              platform,
+            )
+          : ReleaseAssets.archivePath(project, platform);
       for (final group in groups) {
         for (final row in group.rows) {
           if (row.name == archive) rowOf[receiptNameFor(step)] = row;

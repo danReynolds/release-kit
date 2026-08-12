@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-130 codes across 25 families.
+129 codes across 25 families.
 
 
 ## RK-AUTH — Authorization
@@ -80,13 +80,12 @@ fails, and the count below is checked against the rows.
 | `RK-CONF-016` | — | `lib/src/engine/config.dart` |
 | `RK-CONF-017` | a project path in "$unit" must be text | `lib/src/engine/config.dart` |
 | `RK-CONF-018` | the project path "$value" leaves the repository | `lib/src/engine/config.dart` |
-| `RK-CONF-019` | a project in "$unit" does not say where to publish | `lib/src/engine/config.dart` |
+| `RK-CONF-019` | unit "$name" selects no release output | `lib/src/engine/config.dart` |
 | `RK-CONF-020` | publish must be a list of channels | `lib/src/engine/config.dart` |
 | `RK-CONF-022` | unknown channel "$channel" | `lib/src/engine/config.dart` |
 | `RK-CONF-023` | "$channel" is listed twice | `lib/src/engine/config.dart` |
 | `RK-CONF-024` | homebrew needs github-release, which hosts the archives it points at | `lib/src/engine/config.dart` |
 | `RK-CONF-025` | a project in "$unit" ships binaries but names no platforms | `lib/src/engine/config.dart` |
-| `RK-CONF-026` | a project in "$unit" names platforms but ships no binaries | `lib/src/engine/config.dart` |
 | `RK-CONF-027` | binary_platforms must be a non-empty list | `lib/src/engine/config.dart` |
 | `RK-CONF-028` | unknown platform "$platform" | `lib/src/engine/config.dart` |
 | `RK-CONF-029` | "$platform" is listed twice | `lib/src/engine/config.dart` |

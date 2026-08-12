@@ -568,6 +568,46 @@ publish = ["pub.dev"]
     );
   });
 
+  test('a binary-only unit names its local output and direct next command',
+      () async {
+    const localBinaryConfig = '''
+schema = 2
+
+[release.cli]
+path = "packages/keybay"
+binary_platforms = ["linux-x64"]
+''';
+    final binaryTree = MemorySourceTree({
+      'packages/keybay/pubspec.yaml': '''
+name: keybay
+version: 0.2.0
+executables:
+  keybay: keybay
+''',
+      'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
+    }, description: '/repo/keybay');
+
+    final run = await statusRun(
+      withConfig: localBinaryConfig,
+      source: binaryTree,
+      state: git(),
+      registry: FakeRegistry(const {}),
+      capabilities: HostCapabilities(
+        hostPlatform: 'linux-x64',
+        containerRuntime: null,
+        hasNativeAssets: false,
+      ),
+    );
+
+    expect(run.text, contains('Not staged'));
+    expect(run.text, contains('Local binaries'));
+    expect(
+      run.text,
+      contains('producers/keybay/archives/keybay-0.2.0-linux-x64.tar.gz'),
+    );
+    expect(run.report['next'], ['rk release cli']);
+  });
+
   test('the Git lane reports the latest older tag, not an invented absence',
       () async {
     final text = await statusOf(

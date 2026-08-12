@@ -27,13 +27,6 @@ enum PublishTarget {
         _ => const {},
       };
 
-  /// Whether this destination consumes standalone archive contributions.
-  /// Producer configuration depends on a capability, not on GitHub's name.
-  bool get consumesStandaloneArchives => switch (this) {
-        PublishTarget.githubRelease => true,
-        _ => false,
-      };
-
   /// Whether the destination's public identity depends on Git history.
   /// Non-Git projects remain valid for registry-only releases; selecting one
   /// of these targets is the explicit point where Git becomes required.

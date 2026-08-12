@@ -152,11 +152,11 @@ and restores cursor and terminal modes on every exit.
 
 Dependencies are deterministic:
 
-- Binary enables GitHub and Git tag.
+- Binary is an independent local output and enables nothing else.
 - GitHub enables Git tag.
 - Homebrew enables Binary, GitHub, and Git tag.
 - Removing a prerequisite removes its dependants.
-- A project is included exactly when at least one publication target is
+- A project is included exactly when at least one release output is
   selected.
 
 Review previews the exact schema-2 TOML and `.gitignore` addition. Back returns
@@ -300,9 +300,10 @@ Read-only initialization was exercised against real repository snapshots:
 - Fleury selected its public packages without treating executable declarations
   as standalone distribution intent.
 
-A real Keybay PTY run selected Homebrew, observed the Binary/GitHub/Git-tag
-cascade, reviewed the proposal, and cancelled without writing. That run found
-and led to fixes for long names and large-workspace viewport behavior.
+A real Keybay PTY run selected Homebrew, observed its Binary/GitHub/Git-tag
+prerequisite cascade, reviewed the proposal, and cancelled without writing.
+That run found and led to fixes for long names and large-workspace viewport
+behavior.
 
 The automated contract covers:
 

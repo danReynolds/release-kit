@@ -183,20 +183,6 @@ class ReleaseCommand {
       tag: unit.tag,
     );
 
-    if (stageOnly && !git.isBound) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-SRC-002',
-          message: 'an unbound stage cannot be authorized by a later run',
-          remedy: 'without Git, build, authorize, and begin publication in '
-              'one invocation: rk release ${unit.name}',
-        ),
-        unit: unit.name,
-      );
-      output.halt(HaltKind.beforeActing);
-      return ExitCodes.refused;
-    }
-
     if (preauthorized != null && preauthorized != unit.version.canonical) {
       output.problem(
         Diagnostic(
@@ -224,6 +210,21 @@ class ReleaseCommand {
     if (problems.isNotEmpty) {
       output.halt(HaltKind.beforeActing);
       output.problems(problems.found);
+      return ExitCodes.refused;
+    }
+    final publicSteps = checklist.steps.where((step) => step.isPublic).toList();
+    final localOnly = publicSteps.isEmpty;
+    if (stageOnly && !git.isBound && !localOnly) {
+      output.problem(
+        Diagnostic(
+          code: 'RK-SRC-002',
+          message: 'an unbound stage cannot be authorized by a later run',
+          remedy: 'without Git, build, authorize, and begin publication in '
+              'one invocation: rk release ${unit.name}',
+        ),
+        unit: unit.name,
+      );
+      output.halt(HaltKind.beforeActing);
       return ExitCodes.refused;
     }
     final targets = inspector.targets.derive(
@@ -301,7 +302,6 @@ class ReleaseCommand {
       return ExitCodes.refused;
     }
 
-    final publicSteps = checklist.steps.where((step) => step.isPublic).toList();
     final publicActions = {
       for (final step in publicSteps)
         step.id: states[step.id]!.isExact
@@ -366,7 +366,7 @@ class ReleaseCommand {
         _showReleaseActions(targets, publicActions);
         return ExitCodes.refused;
       }
-      if (!_requireAuthorizer(unit)) {
+      if (!localOnly && !_requireAuthorizer(unit)) {
         _showReleaseActions(targets, publicActions);
         return ExitCodes.refused;
       }
@@ -398,7 +398,7 @@ class ReleaseCommand {
     // `›` is version movement. The groups below already say where these
     // are going, and the arrow had started meaning two things.
     output.heading('${unit.name} ${unit.version} · '
-        '${stageOnly ? 'staging' : 'releasing'}');
+        '${stageOnly || localOnly ? 'staging' : 'releasing'}');
     output.blank();
 
     final prepared = await _prepareStage(
@@ -443,7 +443,7 @@ class ReleaseCommand {
       progressOf: prepared.receiptSteps,
     );
 
-    if (stageOnly) {
+    if (stageOnly || localOnly) {
       output.blank();
       output.line(
         'Written to',
@@ -454,12 +454,12 @@ class ReleaseCommand {
       );
       _sayStageClaims(
         prepared.claims,
-        prepared.signing,
+        localOnly ? null : prepared.signing,
         settled: false,
       );
       // The next command is data for whoever is driving; the operator who
       // just staged does not need to be told what staging is for.
-      output.report.next('rk release ${unit.name}');
+      if (!localOnly) output.report.next('rk release ${unit.name}');
       return ExitCodes.ok;
     }
 
@@ -1881,7 +1881,11 @@ class ReleaseCommand {
     ResolvedUnit unit,
     ResolvedProject? project,
   ) async {
-    if (project == null) return (ok: true, requirement: null);
+    if (project == null ||
+        !unit.publish.contains(PublishTarget.githubRelease) ||
+        unit.tagPattern == null) {
+      return (ok: true, requirement: null);
+    }
     final repository = git.originUrl;
     if (repository == null) return (ok: true, requirement: null);
 
@@ -1953,7 +1957,8 @@ class ReleaseCommand {
   ResolvedProject? _macosProject(ResolvedUnit unit) {
     final project = unit.binaryProject;
     return project != null &&
-            project.binaryPlatforms.any((platform) => platform.startsWith('macos-'))
+            project.binaryPlatforms
+                .any((platform) => platform.startsWith('macos-'))
         ? project
         : null;
   }

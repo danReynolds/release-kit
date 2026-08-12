@@ -62,11 +62,34 @@ executables:
     expect(plan.renderToml(), contains('binary_platforms = ['));
 
     final disabled = plan.toggle(0, InitOption.gitTag);
-    expect(disabled.plan.candidates.single.selected, {InitOption.pubDev});
+    expect(
+      disabled.plan.candidates.single.selected,
+      {InitOption.pubDev, InitOption.binary},
+      reason: 'removing public destinations keeps a valid local output',
+    );
     expect(disabled.message, contains('disabled'));
   });
 
-  test('a unit is included exactly when it has a selected target', () {
+  test('GitHub Release does not imply a binary', () {
+    var plan = discover({
+      'pubspec.yaml': '''
+name: tool
+version: 1.2.3
+executables:
+  tool: tool
+''',
+    });
+
+    plan = plan.toggle(0, InitOption.githubRelease).plan;
+
+    expect(
+      plan.candidates.single.selected,
+      {InitOption.gitTag, InitOption.pubDev, InitOption.githubRelease},
+    );
+    expect(plan.renderToml(), isNot(contains('binary_platforms')));
+  });
+
+  test('a unit is included exactly when it has a selected release output', () {
     var plan = discover({'pubspec.yaml': 'name: a\nversion: 1.0.0\n'});
 
     plan = plan.toggle(0, InitOption.gitTag).plan;
@@ -76,6 +99,36 @@ executables:
 
     plan = plan.toggle(0, InitOption.gitTag).plan;
     expect(plan.included.single.name, 'a');
+  });
+
+  test('Binary is an independent local output', () {
+    var plan = discover(
+      {
+        'pubspec.yaml': '''
+name: tool
+version: 1.2.3
+publish_to: none
+executables:
+  tool: tool
+''',
+      },
+      gitBound: false,
+      hasRemote: false,
+      githubRepository: null,
+    );
+
+    final candidate = plan.candidates.single;
+    expect(candidate.selected, isEmpty);
+    expect(candidate.availability[InitOption.binary]!.available, isTrue);
+    expect(
+        candidate.availability[InitOption.githubRelease]!.available, isFalse);
+
+    plan = plan.toggle(0, InitOption.binary).plan;
+    expect(plan.candidates.single.selected, {InitOption.binary});
+    expect(plan.included.single.name, 'tool');
+    expect(plan.renderToml(), contains('binary_platforms = ['));
+    expect(plan.renderToml(), isNot(contains('publish =')));
+    expect(InitPlan.effectsFor(InitOption.binary), isEmpty);
   });
 
   test('several units expose tags but do not invent their grouping', () {

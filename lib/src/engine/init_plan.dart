@@ -140,7 +140,8 @@ final class InitPlan {
       final tagAvailable = packageUsable && gitBound && hasRemote;
       final githubAvailable = tagAvailable && githubRepository != null;
       final oneExecutable = project.executables.length == 1;
-      final binaryAvailable = packageUsable && oneExecutable && githubAvailable;
+      final binaryAvailable = packageUsable && oneExecutable;
+      final homebrewAvailable = binaryAvailable && githubAvailable;
       final selected = <InitOption>{
         if (registryAvailable) InitOption.pubDev,
         if (registryAvailable && tagAvailable && releasable == 1)
@@ -188,10 +189,8 @@ final class InitPlan {
                 ? project.executables.isEmpty
                     ? 'no executable is declared'
                     : 'several executables need a hand-authored decision'
-                : !githubAvailable
-                    ? 'standalone binaries require GitHub Release'
-                    : 'a package version is required'),
-        InitOption.homebrew: binaryAvailable
+                : 'a package version is required'),
+        InitOption.homebrew: homebrewAvailable
             ? const InitAvailability.available(
                 'formula in the conventional or configured tap',
               )
@@ -231,7 +230,7 @@ final class InitPlan {
   final String? githubRepository;
 
   List<InitCandidate> get included =>
-      candidates.where((candidate) => _targets(candidate).isNotEmpty).toList();
+      candidates.where((candidate) => candidate.selected.isNotEmpty).toList();
 
   InitToggleResult toggle(int index, InitOption option) {
     final candidate = candidates[index];
@@ -266,7 +265,7 @@ final class InitPlan {
         if (selected.remove(item)) changed.add(item);
       }
     }
-    final included = selected.any(_isTarget);
+    final included = selected.isNotEmpty;
     final plan = _replace(
       index,
       candidate.copyWith(selected: Set.unmodifiable(selected)),
@@ -300,8 +299,10 @@ final class InitPlan {
           'github-release',
         if (candidate.selected.contains(InitOption.homebrew)) 'homebrew',
       ];
-      buffer.write(
-          'publish = [${publish.map((item) => '"$item"').join(', ')}]\n');
+      if (publish.isNotEmpty) {
+        buffer.write(
+            'publish = [${publish.map((item) => '"$item"').join(', ')}]\n');
+      }
       if (candidate.selected.contains(InitOption.binary)) {
         buffer.write('binary_platforms = '
             '[${ReleaseConfig.supportedPlatformsList.map((item) => '"$item"').join(', ')}]\n');
@@ -342,10 +343,7 @@ final class InitPlan {
       );
 
   static Set<InitOption> effectsFor(InitOption option) => switch (option) {
-        InitOption.binary => const {
-            InitOption.githubRelease,
-            InitOption.gitTag,
-          },
+        InitOption.binary => const {},
         InitOption.githubRelease => const {InitOption.gitTag},
         InitOption.homebrew => const {
             InitOption.binary,
@@ -360,15 +358,3 @@ final class InitPlan {
     return cleaned.isEmpty ? 'main' : cleaned;
   }
 }
-
-Set<InitOption> _targets(InitCandidate candidate) =>
-    candidate.selected.where(_isTarget).toSet();
-
-bool _isTarget(InitOption option) => switch (option) {
-      InitOption.gitTag ||
-      InitOption.pubDev ||
-      InitOption.githubRelease ||
-      InitOption.homebrew =>
-        true,
-      _ => false,
-    };

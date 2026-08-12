@@ -346,12 +346,15 @@ class _Reader {
     final complete = projects.length == attempted;
     if (complete &&
         unitPublish.isEmpty &&
-        projects.every((project) => project.publish.isEmpty)) {
+        projects.every(
+          (project) =>
+              project.publish.isEmpty && project.binaryPlatforms.isEmpty,
+        )) {
       _diagnostics.add(
         'RK-CONF-019',
-        'unit "$name" does not say where to publish',
+        'unit "$name" selects no release output',
         source: location,
-        remedy: 'add publish with at least one target',
+        remedy: 'add a publish target or binary_platforms',
       );
     }
 
@@ -379,18 +382,6 @@ class _Reader {
           );
         }
       }
-    }
-    if (complete &&
-        projects.any((p) => p.binaryPlatforms.isNotEmpty) &&
-        !unitPublish.any((target) => target.consumesStandaloneArchives)) {
-      _diagnostics.add(
-        'RK-CONF-026',
-        'unit "$name" builds standalone binaries but has no GitHub Release',
-        source:
-            projects.firstWhere((p) => p.binaryPlatforms.isNotEmpty).location,
-        remedy: 'add "github-release" and "git-tag" to the unit publish '
-            'list, or remove binary_platforms',
-      );
     }
     if (complete && value.has('homebrew_tap') && homebrewProjects.isEmpty) {
       _diagnostics.add(

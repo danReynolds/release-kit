@@ -148,7 +148,8 @@ Rules:
   At most one project in a unit may declare it. Several registry packages may
   still release together, but separate standalone programs are separate units
   with independent signing identities and public lifecycles.
-  GitHub Release may carry only metadata when no producer contributes assets;
+  It may stand alone as a local release output. GitHub Release publishes the
+  archives only when both are selected, and may otherwise carry only metadata;
   Homebrew requires binaries. Its vocabulary is closed and enumerable;
   identifiers match
   the public asset names (`linux-x64`, not `linux-gnu-x64`), since Dart
@@ -268,7 +269,7 @@ selection remains explicit; initialization has its own per-candidate selector.
   that proposal. No network and nothing irreversible before confirmation. It
   never edits an existing config,
   never adds a project silently, scans **git-tracked manifests only**, does
-  not prefill `binary_platforms` without a platform-bearing channel, and
+  not prefill `binary_platforms`, and
   never infers a binary channel from an `executables:` block — declaring an
   executable means `dart pub global activate` works, not "ship a signed
   tarball." A repository with nothing releasable exits 0.
@@ -282,8 +283,9 @@ selection remains explicit; initialization has its own per-candidate selector.
   for real and write a complete immutable stage, but make no public mutation
   and never run a registry login.
 - **`rk release [unit]`** — revalidate and reuse an exact stage, or create the
-  same stage internally, then authorize and publish. It inspects each target
-  before acting and with the same operation afterward. `exact` skips,
+  same stage internally. A unit with only local binary output stops there and
+  reports the archive paths; otherwise it authorizes and publishes. It inspects
+  each target before acting and with the same operation afterward. `exact` skips,
   `absent` acts, and `conflict` or `unknown` stops. In an interactive run with
   unfinished targets, it acquires native publication sessions only after the
   complete private stage is validated and before authorization. Re-running is
@@ -335,9 +337,9 @@ not authorization.
   signed-tag path remains ledgered, not built.
 
 Every tag binds the digest of its complete stage manifest to the source
-commit. Binary releases also publish the manifest itself with their GitHub
-assets, so their inventory remains recoverable after the local stage is
-deleted. A pub.dev-only release has no separate public artifact to name: its
+commit. A binary release that selects GitHub also publishes the manifest with
+its GitHub assets, so its inventory remains recoverable after the local stage
+is deleted. A pub.dev-only release has no separate public artifact to name: its
 truth is recovered directly from the peeled source commit and the registry
 archive's exact contents. A signed tag authenticates its binding; an unsigned
 tag proves consistency but not signer authenticity.

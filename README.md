@@ -29,7 +29,7 @@ dart pub global activate release_kit    # the command is rk
 rk status                              # where things stand. Read-only.
 rk init                                # propose a release.toml
 rk release [unit] --stage              # exact reusable stage, nothing public
-rk release [unit]                      # plan, confirm, act
+rk release [unit]                      # make outputs; publish if configured
 rk release [unit] --confirm=<version>  # the typed yes as a flag, for agents
 ```
 
@@ -37,13 +37,14 @@ With a capable terminal, `init` opens a compact per-project selector for
 Binary, Git tag, pub.dev, GitHub, and Homebrew. A project is included when at
 least one release output is selected. The selector starts conservatively:
 native package publication may be selected when unambiguous, executables only
-expose capability, and GitHub/Homebrew binaries remain opt-in. Selecting a
-dependent target enables its prerequisites; turning a prerequisite off removes
-its dependents. Conventional example, fixture, and test paths are omitted from
-discovery. Review writes one small schema-2 file, Back returns to the selector,
-and field customization stays in TOML. Without a usable terminal, `init` prints
-the same conservative proposal and writes nothing; `init --write` accepts it
-directly.
+expose capability, and Binary, GitHub, and Homebrew remain opt-in. Binary makes
+standalone archives locally and implies no destination; Homebrew selects Binary
+and the public prerequisites its formula needs. Turning a prerequisite off
+removes its dependents. Conventional example, fixture, and test paths are
+omitted from discovery. Review writes one small schema-2 file, Back returns to
+the selector, and field customization stays in TOML. Without a usable terminal,
+`init` prints the same conservative proposal and writes nothing; `init --write`
+accepts it directly.
 
 Most releases are driven by agents: every verb speaks `--json`
 ([doc/json.md](doc/json.md) is the contract and the drive loop), and

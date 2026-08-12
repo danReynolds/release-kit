@@ -52,6 +52,14 @@ path = "packages/tool"
 publish = ["pub.dev"]
 ''';
 
+const _localBinaryConfig = '''
+schema = 2
+
+[release.tool]
+path = "packages/tool"
+binary_platforms = ["linux-x64"]
+''';
+
 const _pubspec = '''
 name: tool
 version: 1.2.3
@@ -119,6 +127,31 @@ void main() {
     expect(run.problemCodes, ['RK-SRC-002']);
     expect(run.publicMutations, isEmpty);
     expect(unbound.stage.inspect().receipt, isNull);
+  });
+
+  test('a binary-only release writes local archives without authorization',
+      () async {
+    for (final unbound in [false, true]) {
+      final local = _Harness(localBinaryOnly: true, unbound: unbound);
+      addTearDown(local.close);
+
+      final run = await local.run(
+        stageOnly: false,
+        confirm: (_) async => fail('local output needs no authorization'),
+      );
+
+      expect(run.code, ExitCodes.ok, reason: run.text);
+      expect(run.publicMutations, isEmpty);
+      expect(run.text, contains('tool 1.2.3 · staging'));
+      expect(run.text, contains('Local binaries'));
+      expect(
+        run.text,
+        contains('producers/tool/archives/tool-1.2.3-linux-x64.tar.gz'),
+      );
+      expect(run.text, contains('Written to'));
+      expect(run.report['next'], isEmpty);
+      expect(local.stage.inspect().reusable, isTrue);
+    }
   });
 
   test('non-Git existing version is compared after staging, not blocked early',
@@ -1576,9 +1609,13 @@ void _interruptAfter(ReleaseStage stage, String stepName) {
 }
 
 class _Harness {
-  _Harness({bool unbound = false}) {
+  _Harness({bool unbound = false, bool localBinaryOnly = false}) {
     root = Directory.systemTemp.createTempSync('rk-stage-command-');
-    final config = unbound ? _pubOnlyConfig : _config;
+    final config = localBinaryOnly
+        ? _localBinaryConfig
+        : unbound
+            ? _pubOnlyConfig
+            : _config;
     source = MemorySourceTree({
       'release.toml': config,
       'packages/tool/pubspec.yaml': _pubspec,

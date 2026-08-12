@@ -291,11 +291,11 @@ are absent, and that exact stage is gone. The operator must restore the stage
 from the staging machine. Durable remote staging would remove this operational
 constraint, but remains deliberately outside the local production alpha.
 
-For a binary release, the public GitHub Release carries the manifest with the
-artifact inventory, digests, source commit, and plan identity needed after
-`.rk/work` is deleted. Its digest is also bound into the annotated release
-tag. A pub.dev-only release has no honest standalone artifact filename to
-invent: its public truth is recovered directly from the tag's peeled source
+When a binary release selects GitHub, the public release carries the manifest
+with the artifact inventory, digests, source commit, and plan identity needed
+after `.rk/work` is deleted. Its digest is also bound into the annotated
+release tag. A pub.dev-only release has no honest standalone artifact filename
+to invent: its public truth is recovered directly from the tag's peeled source
 commit and the registry archive's exact contents. Its stage manifest remains
 local evidence; the tag retains its digest, but that digest alone is not
 presented as a downloadable public manifest. A signed tag authenticates its
