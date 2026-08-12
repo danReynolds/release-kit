@@ -112,20 +112,23 @@ final class InitPlan {
       trackedManifests: gitBound,
     );
     final notices = [...native.notices];
+    final projects = native.projects
+        .where((project) => !project.isExampleOrFixture)
+        .toList();
+    final omitted = native.projects.length - projects.length;
     bool registryAvailableFor(DartProjectDiscovery project) =>
         !project.isGroupingRoot &&
         project.version != null &&
         !project.vetoesRegistry &&
-        !project.isExampleOrFixture &&
         (project.publishTo == null ||
             isPubDevDestination(project.publishTo!)) &&
         (project.publishTo != null ||
             ambientPubHostedUrl == null ||
             isPubDevDestination(ambientPubHostedUrl));
-    final releasable = native.projects.where(registryAvailableFor).length;
+    final releasable = projects.where(registryAvailableFor).length;
     final candidates = <InitCandidate>[];
     var vetoed = 0;
-    for (final project in native.projects) {
+    for (final project in projects) {
       if (project.vetoesRegistry) vetoed++;
       final packageUsable = !project.isGroupingRoot && project.version != null;
       final repositoryPubDev =
@@ -148,25 +151,17 @@ final class InitPlan {
             ? const InitAvailability.available(
                 'native Dart package coordinate',
               )
-            : project.isExampleOrFixture &&
-                    packageUsable &&
-                    !project.vetoesRegistry &&
-                    repositoryPubDev &&
-                    ambientPubDev
-                ? const InitAvailability.available(
-                    'native coordinate; example and fixture paths start unselected',
-                  )
-                : InitAvailability.unavailable(project.isGroupingRoot
-                    ? 'workspace root — select its packages instead'
-                    : project.version == null
-                        ? 'the native manifest declares no version'
-                        : project.vetoesRegistry
-                            ? 'publish_to: none vetoes registry publication'
-                            : !repositoryPubDev
-                                ? 'publish_to names a custom registry; this build has no matching target'
-                                : !ambientPubDev
-                                    ? 'PUB_HOSTED_URL redirects the default registry; declare publish_to in the pubspec first'
-                                    : 'a package version is required'),
+            : InitAvailability.unavailable(project.isGroupingRoot
+                ? 'workspace root — select its packages instead'
+                : project.version == null
+                    ? 'the native manifest declares no version'
+                    : project.vetoesRegistry
+                        ? 'publish_to: none vetoes registry publication'
+                        : !repositoryPubDev
+                            ? 'publish_to names a custom registry; this build has no matching target'
+                            : !ambientPubDev
+                                ? 'PUB_HOSTED_URL redirects the default registry; declare publish_to in the pubspec first'
+                                : 'a package version is required'),
         InitOption.gitTag: tagAvailable
             ? InitAvailability.available(selected.contains(InitOption.gitTag)
                 ? 'usable Git remote; selected conservatively'
@@ -212,6 +207,12 @@ final class InitPlan {
         availability: Map.unmodifiable(availability),
         selected: Set.unmodifiable(selected),
       ));
+    }
+    if (omitted > 0) {
+      notices.add(
+        '$omitted ${omitted == 1 ? 'package' : 'packages'} under '
+        'example, fixture, or test paths omitted',
+      );
     }
     if (vetoed > 0) notices.add('$vetoed excluded by publish_to: none');
     return InitPlan(

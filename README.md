@@ -39,10 +39,11 @@ least one release output is selected. The selector starts conservatively:
 native package publication may be selected when unambiguous, executables only
 expose capability, and GitHub/Homebrew binaries remain opt-in. Selecting a
 dependent target enables its prerequisites; turning a prerequisite off removes
-its dependents. Review writes one small schema-2 file, Back returns to the
-selector, and field customization stays in TOML. Without a usable terminal,
-`init` prints the same conservative proposal and writes nothing;
-`init --write` accepts it directly.
+its dependents. Conventional example, fixture, and test paths are omitted from
+discovery. Review writes one small schema-2 file, Back returns to the selector,
+and field customization stays in TOML. Without a usable terminal, `init` prints
+the same conservative proposal and writes nothing; `init --write` accepts it
+directly.
 
 Most releases are driven by agents: every verb speaks `--json`
 ([doc/json.md](doc/json.md) is the contract and the drive loop), and

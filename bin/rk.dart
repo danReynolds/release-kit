@@ -444,6 +444,9 @@ final class _StdioInitTerminal implements InitTerminal {
   int get height => stdout.terminalLines;
 
   @override
+  bool get useColor => !Platform.environment.containsKey('NO_COLOR');
+
+  @override
   int readByte() => stdin.readByteSync();
 
   @override

@@ -38,6 +38,19 @@ void main() {
     expect(narrow, contains('› tool'));
   });
 
+  test('color highlights exactly the focused cell without changing layout', () {
+    final selector = InitSelector(plan());
+    final plain = selector.render(120);
+    final colored = selector.render(120, useColor: true);
+
+    expect(RegExp(r'\x1b\[1;36m').allMatches(colored), hasLength(1));
+    expect(colored, isNot(contains(';7m')));
+    expect(
+      colored.replaceAll(RegExp(r'\x1b\[[0-9;]*m'), ''),
+      plain,
+    );
+  });
+
   test('arrows move focus and space applies dependency cascades', () {
     final selector = InitSelector(plan());
     selector
@@ -146,6 +159,9 @@ final class FakeTerminal implements InitTerminal {
 
   @override
   int get height => 24;
+
+  @override
+  bool get useColor => false;
 
   @override
   Future<void> flush() async {}

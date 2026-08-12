@@ -192,7 +192,7 @@ publish_to: https://token@packages.example.invalid
     expect(ambient.toJson().toString(), isNot(contains('packages.example')));
   });
 
-  test('tracked examples stay visible without becoming release intent', () {
+  test('tracked examples and fixtures are omitted from init discovery', () {
     final plan = discover({
       'pubspec.yaml': 'name: rk\nversion: 1.0.0\n',
       'examples/tool/pubspec.yaml': '''
@@ -207,14 +207,11 @@ executables:
 
     final root = plan.candidates.singleWhere((item) => item.name == 'rk');
     expect(root.selected, {InitOption.pubDev, InitOption.gitTag});
-    for (final name in ['example_tool', 'fixture_package']) {
-      final candidate =
-          plan.candidates.singleWhere((item) => item.name == name);
-      expect(candidate.selected, isEmpty);
-      expect(candidate.availability[InitOption.pubDev]!.available, isTrue);
-      expect(candidate.availability[InitOption.pubDev]!.reason,
-          contains('start unselected'));
-    }
+    expect(plan.candidates, hasLength(1));
+    expect(
+      plan.notices,
+      contains('2 packages under example, fixture, or test paths omitted'),
+    );
     expect(plan.renderToml(), isNot(contains('release.example_tool')));
   });
 }
