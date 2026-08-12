@@ -78,7 +78,7 @@ worktree. The local acceptance evidence is:
 - a real local bare Git origin proves absent-to-exact annotated-tag creation,
   manifest binding, push read-back, and an idempotent retry;
 - producer and receipt fault matrices prove that failed local work cannot
-  reach a public act and that only an exact validated prefix resumes;
+  reach a public act and that only an exact validated draft subset resumes;
 - automated status cases cover the final-state matrix, parallel completion
   orders, pipe, JSON, `NO_COLOR`, and `TERM=dumb`; actual CLI review covers an
   ordinary online/unreachable report; and

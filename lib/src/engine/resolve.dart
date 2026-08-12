@@ -1,4 +1,3 @@
-import 'release_asset.dart';
 import 'config.dart';
 import 'diagnostic.dart';
 import 'publish_target.dart';
@@ -91,7 +90,7 @@ class Resolution {
 
     for (final unit in units) {
       _checkUnitVersions(unit, diagnostics);
-      _checkReleaseAssetNames(unit, diagnostics);
+      _checkSingleBinaryProject(unit, diagnostics);
     }
     _rejectSharedTags(units, diagnostics);
 
@@ -308,58 +307,26 @@ class Resolution {
     }
   }
 
-  /// Public names are a destination contract. Private producer paths are
-  /// qualified, but two projections with the same destination-normalized
-  /// filename must refuse before either producer can write a byte.
-  static void _checkReleaseAssetNames(
+  /// One release unit may ship one standalone program.
+  ///
+  /// Several registry packages can still share a version and tag. Several
+  /// programs have independent signing identities and public lifecycles, so
+  /// they belong in separate units instead of growing a second aggregation
+  /// model inside a unit.
+  static void _checkSingleBinaryProject(
     ResolvedUnit unit,
     Diagnostics diagnostics,
   ) {
-    final seen = <String, (ResolvedProject, String, String)>{};
-    for (final project in unit.projects.where((p) => p.config.wantsBinaries)) {
-      for (final platform in project.binaryPlatforms) {
-        final name = standaloneArchiveName(
-          project.executable!,
-          project.version.canonical,
-          platform,
-        );
-        final normalized = name.toLowerCase();
-        final first = seen[normalized];
-        if (first == null) {
-          seen[normalized] = (project, platform, name);
-          continue;
-        }
-        diagnostics.add(
-          'RK-RES-011',
-          'the projects "${first.$1.name}" and "${project.name}" both '
-              'contribute the release asset "$name"',
-          source: project.config.location,
-          remedy: 'public release filenames must be unique; change the '
-              'native executable name or release these projects in separate '
-              'units',
-        );
-      }
-    }
-
-    final formulaOwners = <String, ResolvedProject>{};
-    for (final project in unit.projects.where(
-      (project) => project.publish.contains(PublishTarget.homebrew),
-    )) {
-      final path = 'Formula/${project.executable!}.rb';
-      final first = formulaOwners[path.toLowerCase()];
-      if (first == null) {
-        formulaOwners[path.toLowerCase()] = project;
-        continue;
-      }
-      diagnostics.add(
-        'RK-RES-013',
-        'the projects "${first.name}" and "${project.name}" both publish '
-            'the Homebrew path "$path"',
-        source: project.config.location,
-        remedy: 'one tap path can hold one formula; change the native '
-            'executable name or publish these projects from separate units',
-      );
-    }
+    final binary = unit.projects.where((p) => p.config.wantsBinaries).toList();
+    if (binary.length < 2) return;
+    diagnostics.add(
+      'RK-RES-009',
+      'the unit "${unit.name}" ships binaries from ${binary.length} projects',
+      source: binary[1].config.location,
+      remedy: 'a release unit ships one standalone program; give '
+          '${binary.map((project) => project.name).join(', ')} separate '
+          'units',
+    );
   }
 
   /// Projects in one unit are at one version.
@@ -428,13 +395,12 @@ class ResolvedUnit {
 
   String? get tag => tagPattern?.replaceAll('{version}', version.canonical);
 
-  bool get shipsBinaries => projects.any((p) => p.config.wantsBinaries);
+  /// The unit's standalone program, when it has one. Resolution refuses a
+  /// second binary-producing project (RK-RES-009).
+  ResolvedProject? get binaryProject =>
+      projects.where((project) => project.config.wantsBinaries).firstOrNull;
 
-  /// Binary-producing projects in declaration order. The project/package name
-  /// is repository-unique (RK-RES-007), so it is also the stable producer id
-  /// without adding a configuration concept.
-  List<ResolvedProject> get binaryProjects =>
-      List.unmodifiable(projects.where((p) => p.config.wantsBinaries));
+  bool get shipsBinaries => binaryProject != null;
 
   /// A project carried by a typed checklist step. Project names are unique
   /// across the resolution (RK-RES-007), so they are stable producer ids too.

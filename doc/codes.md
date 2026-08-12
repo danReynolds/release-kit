@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-131 codes across 25 families.
+130 codes across 25 families.
 
 
 ## RK-AUTH — Authorization
@@ -218,10 +218,9 @@ meanings and are not reused.
 | `RK-RES-006` | — | `lib/src/engine/resolve.dart` |
 | `RK-RES-007` | the package "$name" is declared by two projects | `lib/src/engine/resolve.dart` |
 | `RK-RES-008` | the projects in "${unit.name}" are at different versions:  ${versions.join( | `lib/src/engine/resolve.dart` |
+| `RK-RES-009` | a release unit ships binaries from several projects | `lib/src/engine/resolve.dart` |
 | `RK-RES-010` | the units "${first.name}" and "${unit.name}" would share the tag  "${unit.tagPattern}" | `lib/src/engine/resolve.dart` |
-| `RK-RES-011` | two projects contribute the same public release filename | `lib/src/engine/resolve.dart` |
 | `RK-RES-012` | a tagged unit needs an explicit tag pattern when several units tag | `lib/src/engine/resolve.dart` |
-| `RK-RES-013` | two projects publish the same Homebrew formula path | `lib/src/engine/resolve.dart` |
 | `RK-RES-014` | a package names a custom package registry but is asked to publish to pub.dev | `lib/src/engine/resolve.dart` |
 
 ## RK-SIGN — Signing identity

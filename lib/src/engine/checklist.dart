@@ -234,12 +234,8 @@ class Checklist {
   /// the pipeline's names, order, and dependency edges. The receipt contract
   /// and the coordinator both consume this list; nothing else respells it.
   static List<Step> localProducerSteps(ResolvedUnit unit) {
-    final steps = <Step>[];
-    for (final project in unit.projects) {
-      if (!project.config.wantsBinaries) continue;
-      steps.addAll(_localBinarySteps(unit, project));
-    }
-    return steps;
+    final project = unit.binaryProject;
+    return project == null ? const [] : _localBinarySteps(unit, project);
   }
 
   static List<Step> _localBinarySteps(

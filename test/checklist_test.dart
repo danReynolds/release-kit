@@ -135,9 +135,9 @@ publish = ["git-tag", "github-release"]
     );
   });
 
-  test('several standalone producers stay qualified behind one bundle', () {
-    final resolution = resolve(
-        '''
+  test('a unit refuses several standalone producers', () {
+    final diagnostics = Diagnostics();
+    final config = ReleaseConfig.parse('''
 schema = 2
 
 [release.tools]
@@ -151,7 +151,9 @@ binary_platforms = ["linux-x64"]
 [[release.tools.project]]
 path = "packages/admin"
 binary_platforms = ["linux-x64"]
-''',
+''', 'release.toml', diagnostics)!;
+    final resolution = Resolution.resolve(
+        config,
         MemorySourceTree({
           'packages/server/pubspec.yaml': '''
 name: server_cli
@@ -165,19 +167,11 @@ version: 1.0.0
 executables:
   admin: admin
 ''',
-        }));
-    final unit = resolution.unit('tools')!;
-    final checklist = Checklist.derive(unit, resolution, Diagnostics());
+        }),
+        diagnostics);
 
-    expect(checklist.steps.map((step) => step.id), [
-      'tools/build/server_cli/linux-x64',
-      'tools/archive/server_cli/linux-x64',
-      'tools/build/admin_cli/linux-x64',
-      'tools/archive/admin_cli/linux-x64',
-      'tools/stage/complete',
-      'tools/tag/tools-v1.0.0',
-      'tools/github-release/tools-v1.0.0',
-    ]);
+    expect(resolution, isNull);
+    expect(diagnostics.found.single.code, 'RK-RES-009');
   });
 
   test('the binary chain covers every declared platform', () {

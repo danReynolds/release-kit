@@ -16,8 +16,8 @@ import '../transforms/digest.dart';
 /// release missing files.
 ///
 /// The draft is a staging area, not memory: the workspace holds every artifact.
-/// rk resumes only an exact uploaded prefix; an ambiguous or divergent draft is
-/// left untouched for the operator to inspect.
+/// rk resumes only an exact uploaded subset; an ambiguous or divergent draft
+/// is left untouched for the operator to inspect.
 class GithubRelease {
   GithubRelease({
     required this.tools,
@@ -723,7 +723,7 @@ class GithubRelease {
     }
     try {
       String draftId;
-      var uploadedPrefix = 0;
+      late List<GithubReleaseAssetUpload> missing;
       if (existing case [final candidate]) {
         final observed = await _viewById(candidate.id);
         if (observed is! _Found) {
@@ -731,21 +731,21 @@ class GithubRelease {
             'private draft ${candidate.id} could not be read for recovery',
           );
         }
-        final prefix = _inspectDraftPrefix(
+        final reconciliation = _inspectDraftSubset(
           observed.release,
           tag: tag,
           title: title,
           body: notes,
           expected: ordered,
         );
-        if (!prefix.inspection.isExact) {
+        if (!reconciliation.inspection.isExact) {
           return failed(
-            'private draft ${candidate.id} is not an exact resumable prefix: '
-            '${prefix.inspection.detail ?? prefix.inspection.verdict.name}',
+            'private draft ${candidate.id} is not an exact resumable subset: '
+            '${reconciliation.inspection.detail ?? reconciliation.inspection.verdict.name}',
           );
         }
         draftId = candidate.id;
-        uploadedPrefix = prefix.length;
+        missing = reconciliation.missing;
       } else {
         final createInput = File('${scratch.path}/create.json');
         await createInput.writeAsString(jsonEncode({
@@ -791,23 +791,24 @@ class GithubRelease {
           return failed(
               'private draft $draftId could not be read after create');
         }
-        final prefix = _inspectDraftPrefix(
+        final reconciliation = _inspectDraftSubset(
           observed.release,
           tag: tag,
           title: title,
           body: notes,
           expected: ordered,
         );
-        if (!prefix.inspection.isExact || prefix.length != 0) {
+        if (!reconciliation.inspection.isExact ||
+            reconciliation.missing.length != ordered.length) {
           return failed(
             'private draft $draftId did not start as the frozen empty release: '
-            '${prefix.inspection.detail ?? prefix.inspection.verdict.name}',
+            '${reconciliation.inspection.detail ?? reconciliation.inspection.verdict.name}',
           );
         }
+        missing = reconciliation.missing;
       }
 
-      for (var index = uploadedPrefix; index < ordered.length; index++) {
-        final asset = ordered[index];
+      for (final asset in missing) {
         final name = asset.publicName;
         draftEffect = DraftEffect.uncertain;
         final uploaded = await tools.run(
@@ -857,18 +858,20 @@ class GithubRelease {
           // finished nor that it landed the staged bytes. Reconcile only from
           // GitHub's digest on this exact private draft id.
           draftEffect = DraftEffect.changed;
-          final prefix = _inspectDraftPrefix(
+          final reconciliation = _inspectDraftSubset(
             observed.release,
             tag: tag,
             title: title,
             body: notes,
             expected: ordered,
           );
-          if (!prefix.inspection.isExact || prefix.length != index + 1) {
+          if (!reconciliation.inspection.isExact ||
+              reconciliation.missing
+                  .any((missing) => missing.publicName == name)) {
             return failed(
               'uploading $name to private draft $draftId could not be '
               'reconciled by bytes: '
-              '${prefix.inspection.detail ?? prefix.inspection.verdict.name}',
+              '${reconciliation.inspection.detail ?? reconciliation.inspection.verdict.name}',
             );
           }
         }
@@ -1074,7 +1077,8 @@ class GithubRelease {
     return (problem: null, notes: notes, assets: List.unmodifiable(ordered));
   }
 
-  ({Inspection inspection, int length}) _inspectDraftPrefix(
+  ({Inspection inspection, List<GithubReleaseAssetUpload> missing})
+      _inspectDraftSubset(
     _Release draft, {
     required String tag,
     required String title,
@@ -1085,14 +1089,14 @@ class GithubRelease {
       return (
         inspection:
             const Inspection.conflict('the candidate release is not private'),
-        length: 0,
+        missing: const [],
       );
     }
     if (!draft.titleReadable || !draft.bodyReadable || draft.assets == null) {
       return (
         inspection: const Inspection.unknown(
             'the private draft metadata or inventory is unreadable'),
-        length: 0,
+        missing: const [],
       );
     }
     final differences = <String, String>{};
@@ -1103,37 +1107,32 @@ class GithubRelease {
       differences['title'] = 'private draft title differs';
     }
     if (draft.body != body) differences['body'] = 'private draft body differs';
-    final length = draft.assets!.length;
-    if (length > expected.length) {
-      differences['assets'] =
-          'found $length, expected at most ${expected.length}';
-    } else {
-      final prefix =
-          expected.take(length).map((asset) => asset.publicName).toSet();
-      final missing = prefix.difference(draft.assets!);
-      final extra = draft.assets!.difference(prefix);
-      for (final name in missing) {
-        differences[name] = 'missing from canonical prefix';
-      }
-      for (final name in extra) {
-        differences[name] = 'not in canonical prefix';
-      }
+    final expectedNames = expected.map((asset) => asset.publicName).toSet();
+    final extra = draft.assets!.difference(expectedNames);
+    for (final name in extra) {
+      differences[name] = 'not in the frozen release inventory';
     }
+    final missing = [
+      for (final asset in expected)
+        if (!draft.assets!.contains(asset.publicName)) asset,
+    ];
     if (differences.isNotEmpty) {
       return (
         inspection: Inspection.conflict(
             'private draft differs from the frozen release',
             evidence: differences),
-        length: length,
+        missing: missing,
       );
     }
-    final prefix = expected.take(length).toList();
+    final present = expected
+        .where((asset) => draft.assets!.contains(asset.publicName))
+        .toList();
     final bytes = _inspectDraftAssets(
       draft,
-      {for (final asset in prefix) asset.publicName: asset.sha256},
-      {for (final asset in prefix) asset.publicName: asset.size},
+      {for (final asset in present) asset.publicName: asset.sha256},
+      {for (final asset in present) asset.publicName: asset.size},
     );
-    return (inspection: bytes, length: length);
+    return (inspection: bytes, missing: missing);
   }
 
   Future<_Lookup> _viewById(String id) async {

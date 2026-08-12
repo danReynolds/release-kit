@@ -158,7 +158,7 @@ dependencies:
     expect(problem.remedy, contains('stdio'));
   });
 
-  test('two binary projects in one unit receive independent producer ids', () {
+  test('two binary projects must be declared as separate release units', () {
     final diagnostics = Diagnostics();
     final config = ReleaseConfig.parse('''
 schema = 2
@@ -187,80 +187,9 @@ binary_platforms = ["macos-arm64"]
       diagnostics,
     );
 
-    expect(resolution, isNotNull, reason: diagnostics.found.join('\n'));
-    expect(
-      resolution!.unit('tools')!.binaryProjects.map((project) => project.name),
-      ['one', 'two'],
-    );
-    expect(diagnostics.found, isEmpty);
-  });
-
-  test('two producers with one public filename refuse during resolution', () {
-    final diagnostics = Diagnostics();
-    final config = ReleaseConfig.parse('''
-schema = 2
-
-[release.tools]
-tag = "tools-v{version}"
-publish = ["git-tag", "github-release"]
-
-[[release.tools.project]]
-path = "packages/one"
-binary_platforms = ["linux-x64"]
-
-[[release.tools.project]]
-path = "packages/two"
-binary_platforms = ["linux-x64"]
-''', 'release.toml', diagnostics)!;
-
-    final resolution = Resolution.resolve(
-      config,
-      MemorySourceTree({
-        'packages/one/pubspec.yaml':
-            'name: one\nversion: 1.0.0\nexecutables:\n  tool: one\n',
-        'packages/two/pubspec.yaml':
-            'name: two\nversion: 1.0.0\nexecutables:\n  tool: two\n',
-      }),
-      diagnostics,
-    );
-
     expect(resolution, isNull);
-    expect(diagnostics.found.single.code, 'RK-RES-011');
-  });
-
-  test('two Homebrew projects with one formula path refuse before staging', () {
-    final diagnostics = Diagnostics();
-    final config = ReleaseConfig.parse('''
-schema = 2
-
-[release.tools]
-tag = "tools-v{version}"
-publish = ["git-tag", "github-release"]
-
-[[release.tools.project]]
-path = "packages/one"
-publish = ["homebrew"]
-binary_platforms = ["linux-x64"]
-
-[[release.tools.project]]
-path = "packages/two"
-publish = ["homebrew"]
-binary_platforms = ["macos-arm64"]
-''', 'release.toml', diagnostics)!;
-
-    final resolution = Resolution.resolve(
-      config,
-      MemorySourceTree({
-        'packages/one/pubspec.yaml':
-            'name: one\nversion: 1.0.0\nexecutables:\n  tool: one\n',
-        'packages/two/pubspec.yaml':
-            'name: two\nversion: 1.0.0\nexecutables:\n  tool: two\n',
-      }),
-      diagnostics,
-    );
-
-    expect(resolution, isNull);
-    expect(diagnostics.found.single.code, 'RK-RES-013');
+    expect(diagnostics.found.single.code, 'RK-RES-009');
+    expect(diagnostics.found.single.remedy, contains('separate units'));
   });
 
   test('two tagged units keep explicit, distinct namespaces', () {

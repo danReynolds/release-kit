@@ -101,27 +101,22 @@ abstract final class ReleaseAssets {
   /// inventory. Their digest and tap path are bound by the release manifest.
   static String formulaName(String executable) => '$executable.rb';
 
-  static List<ReleaseAssetSpec> contributedBy(ResolvedProject project) => [
-        for (final platform in [...project.binaryPlatforms]..sort())
-          ReleaseAssetSpec(
-            stagedPath: archivePath(project, platform),
-            publicName: archiveName(
-              project.executable!,
-              project.version.canonical,
-              platform,
-            ),
-          ),
-      ];
-
-  /// Every producer contribution, validated before producer work starts.
-  static List<ReleaseAssetSpec> contributionsFor(ResolvedUnit unit) =>
-      validateReleaseAssetSpecs([
-        for (final project in unit.projects) ...contributedBy(project),
-      ]);
-
   /// The complete public inventory excluding the manifest itself.
-  static List<ReleaseAssetSpec> bundleFor(ResolvedUnit unit) =>
-      contributionsFor(unit);
+  static List<ReleaseAssetSpec> bundleFor(ResolvedUnit unit) {
+    final project = unit.binaryProject;
+    if (project == null) return const [];
+    return validateReleaseAssetSpecs([
+      for (final platform in [...project.binaryPlatforms]..sort())
+        ReleaseAssetSpec(
+          stagedPath: archivePath(project, platform),
+          publicName: archiveName(
+            project.executable!,
+            project.version.canonical,
+            platform,
+          ),
+        ),
+    ]);
+  }
 
   static Set<String> expectedForUnit(ResolvedUnit unit) => {
         for (final asset in bundleFor(unit)) asset.publicName,

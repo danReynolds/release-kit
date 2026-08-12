@@ -145,6 +145,9 @@ Rules:
   Homebrew publication belong to the project. A single-project shorthand may
   list both scopes together; a multi-project unit separates them.
 - `binary_platforms` is the explicit standalone Dart CLI production decision.
+  At most one project in a unit may declare it. Several registry packages may
+  still release together, but separate standalone programs are separate units
+  with independent signing identities and public lifecycles.
   GitHub Release may carry only metadata when no producer contributes assets;
   Homebrew requires binaries. Its vocabulary is closed and enumerable;
   identifiers match
@@ -530,12 +533,14 @@ not assumed reproducible and the recovery-critical stage must be retained.
 This reduces the draft rule to three cases:
 
 - **no draft** — create it and upload the full inventory;
-- **a draft matching this release exactly** — adopt and publish;
+- **a draft containing a verified subset of this release** — upload the
+  difference, re-verify the complete inventory, and publish;
 - **a draft that is anything else** — refuse and name the mismatch. rk never
   deletes a draft it did not prove it owns.
 
 Adoption requires exactly one same-tag draft whose metadata and assets are a
-canonical digest-verified prefix of the frozen local request. Local paths,
+digest-verified subset of the frozen local request. Inventory order carries no
+meaning. Local paths,
 sizes, and digests are validated before the first API mutation. A new draft is
 created only when none exists, then every staged asset is uploaded, its full
 inventory is re-read, and one `draft: false` update makes it public. Thus no

@@ -785,7 +785,8 @@ void main() {
           path.split('/').last: File(path).readAsBytesSync(),
       };
       final assets = <String, List<int>>{
-        for (final name in initialDraftNames) name: stagedBytes[name]!,
+        for (final name in initialDraftNames)
+          name: stagedBytes[name] ?? utf8.encode('unexpected:$name'),
       };
       Map<String, Object?> draftAssetJson(String name, int index) {
         final bytes = draftAssetOverrides[name] ?? assets[name]!;
@@ -968,8 +969,7 @@ void main() {
       expect(run.tools.calls, isEmpty);
     });
 
-    test(
-        'one exact canonical draft prefix is adopted and only its suffix uploads',
+    test('one exact draft subset is adopted and only its difference uploads',
         () async {
       final run = await publish(
         slurp: jsonEncode([
@@ -977,7 +977,7 @@ void main() {
             {'tag_name': 'v1.0.0', 'draft': true, 'id': 11},
           ],
         ]),
-        initialDraftNames: const ['a.tar.gz'],
+        initialDraftNames: const ['b.tar.gz'],
       );
 
       expect(run.outcome.ok, isTrue, reason: run.outcome.problem ?? '');
@@ -988,7 +988,7 @@ void main() {
       expect(
         run.tools.calls
             .singleWhere((call) => call.contains('uploads.github.com')),
-        contains('name=b.tar.gz'),
+        contains('name=a.tar.gz'),
       );
       expect(
         run.tools.calls.any(
@@ -1000,10 +1000,57 @@ void main() {
           run.tools.calls.any((call) => call.contains(' -X DELETE ')), isFalse);
     });
 
-    test('a non-prefix or metadata-different draft refuses without mutation',
+    test('a complete exact draft publishes without re-uploading assets',
+        () async {
+      final run = await publish(
+        slurp: jsonEncode([
+          [
+            {'tag_name': 'v1.0.0', 'draft': true, 'id': 11},
+          ],
+        ]),
+        initialDraftNames: const ['b.tar.gz', 'a.tar.gz'],
+      );
+
+      expect(run.outcome.ok, isTrue, reason: run.outcome.problem ?? '');
+      expect(
+        run.tools.calls.any((call) => call.contains('uploads.github.com')),
+        isFalse,
+      );
+      expect(
+        run.tools.calls.any((call) => call.contains(' -X PATCH ')),
+        isTrue,
+      );
+    });
+
+    test('an existing subset with different bytes refuses before upload',
+        () async {
+      final run = await publish(
+        slurp: jsonEncode([
+          [
+            {'tag_name': 'v1.0.0', 'draft': true, 'id': 11},
+          ],
+        ]),
+        initialDraftNames: const ['b.tar.gz'],
+        draftAssetOverrides: {
+          'b.tar.gz': utf8.encode('wrong archive bytes'),
+        },
+      );
+
+      expect(run.outcome.ok, isFalse);
+      expect(run.outcome.draftEffect, DraftEffect.none);
+      expect(run.outcome.problem, contains('staged release'));
+      expect(
+        run.tools.calls.any((call) =>
+            call.contains('uploads.github.com') ||
+            call.contains(' -X PATCH ')),
+        isFalse,
+      );
+    });
+
+    test('an extra asset or different metadata refuses without mutation',
         () async {
       for (final scenario in [
-        (names: const ['b.tar.gz'], title: 'tool 1.0.0'),
+        (names: const ['extra.zip'], title: 'tool 1.0.0'),
         (names: const <String>[], title: 'Different'),
       ]) {
         final run = await publish(

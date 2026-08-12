@@ -76,13 +76,12 @@ binary_platforms = ["macos-arm64", "linux-x64"]
 [[release.tools.project]]
 path = "packages/admin_cli"
 publish = ["pub.dev"]
-binary_platforms = ["macos-arm64", "linux-x64"]
 ```
 
-Both projects contribute archives to one GitHub Release. Only `server_cli`
-publishes a Homebrew formula. Producer steps, paths, receipts, signing state,
-and signing state are qualified by project before public-name collision
-checks.
+Both packages share a version, tag, and GitHub Release. `server_cli` is the
+unit's one standalone program and publishes its archives and Homebrew formula;
+`admin_cli` is a registry package. A second standalone program is a separate
+release unit with its own signing identity and public lifecycle.
 
 ### Sparse Homebrew override
 
@@ -187,8 +186,7 @@ Bundle assembly validates the complete specification before publication:
 - private paths must remain inside the stage;
 - public names must be one safe filename;
 - reserved names belong only to rk;
-- case-equivalent public names collide;
-- several projects cannot claim the same public name; and
+- case-equivalent public names collide; and
 - Homebrew formulas cannot also be release assets.
 
 `release-manifest.json` is always present on a selected GitHub Release and
@@ -201,7 +199,7 @@ free-form receipt evidence.
 
 ## Homebrew
 
-Each Homebrew project produces one formula from its standalone archive
+The Homebrew project produces one formula from its standalone archive
 contract. The formula is a private stage output published only to
 `Formula/<executable>.rb` in the selected tap.
 
@@ -229,7 +227,7 @@ asset inventory before authorization.
 Retry behavior is fail-closed:
 
 - an exact published release is skipped;
-- an exact draft prefix is adopted and resumed;
+- an exact draft subset is adopted and only its missing assets are uploaded;
 - any different or ambiguous same-tag draft is refused;
 - local paths and digests are validated before remote mutation; and
 - rk never deletes an ambiguous draft to make progress.

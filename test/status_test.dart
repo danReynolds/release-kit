@@ -1592,7 +1592,7 @@ ReleaseStage _completedStage({
     evidence: {'commit': identity.headCommit, 'tree': identity.headTree},
   );
   final steps = <StageStep>[sourceStep];
-  final project = unit.binaryProjects.single;
+  final project = unit.binaryProject!;
   final executable = project.executable!;
   final archives = <StageArtifact>[];
   for (final platform in project.binaryPlatforms) {

@@ -485,31 +485,26 @@ class ReleaseCommand {
       return ExitCodes.ok;
     }
 
-    final macosProjects = _macosProjects(unit, checklist);
-    final refreshedBaselines = await _signingBaselines(unit, macosProjects);
-    if (!refreshedBaselines.ok) {
+    final macosProject = _macosProject(unit);
+    final refreshedBaseline = await _signingBaseline(unit, macosProject);
+    if (!refreshedBaseline.ok) {
       _showReleaseActions(targets, publicActions);
       return ExitCodes.refused;
     }
-    for (final project in macosProjects) {
-      final preparedSigning = prepared.signing[project.name];
-      if (preparedSigning == null ||
-          refreshedBaselines.requirements[project.name] !=
-              preparedSigning.publishedRequirement) {
-        final qualifiesProject = macosProjects.length > 1;
-        output.problem(Diagnostic(
-          code: 'RK-SIGN-013',
-          message: 'the published signing identity'
-              '${qualifiesProject ? ' for ${project.name}' : ''} changed '
-              'after staging',
-          remedy: 'The reviewed signature was built against a different '
-              'public baseline. Rebuild it explicitly: '
-              'rk release ${unit.name} --stage.',
-        ));
-        output.halt(HaltKind.beforeActing);
-        _showReleaseActions(targets, publicActions);
-        return ExitCodes.refused;
-      }
+    if (macosProject != null &&
+        (prepared.signing == null ||
+            refreshedBaseline.requirement !=
+                prepared.signing!.publishedRequirement)) {
+      output.problem(Diagnostic(
+        code: 'RK-SIGN-013',
+        message: 'the published signing identity changed after staging',
+        remedy: 'The reviewed signature was built against a different '
+            'public baseline. Rebuild it explicitly: '
+            'rk release ${unit.name} --stage.',
+      ));
+      output.halt(HaltKind.beforeActing);
+      _showReleaseActions(targets, publicActions);
+      return ExitCodes.refused;
     }
 
     if (!_releaseContextStillValid(
@@ -1109,14 +1104,12 @@ class ReleaseCommand {
   ) async {
     final claims = await _firstClaims(unit, targets);
     if (inspected.reusable) {
-      final signing = <String, _ProjectSigningContext>{};
+      _ProjectSigningContext? signing;
       for (final step in inspected.receipt!.steps.where(
         (step) => isMacosBuildReceipt(step.name),
       )) {
-        final projectName = _macosBuildProject(step.name)!;
         final signature = step.evidence['signature']! as Map;
         final recovered = _ProjectSigningContext(
-          projectName: projectName,
           publishedRequirement: signature['published_requirement'] as String?,
           firstIdentity: signature['first_identity']! as bool,
           certificateName: signature['certificate']! as String,
@@ -1124,13 +1117,12 @@ class ReleaseCommand {
           designatedRequirement: signature['designated_requirement'] as String?,
           codeId: signature['code_id']! as String,
         );
-        final previous = signing[projectName];
-        if (previous != null && !previous.sameRecordedIdentity(recovered)) {
+        if (signing != null && !signing.sameRecordedIdentity(recovered)) {
           output.problem(
             Diagnostic(
               code: 'RK-STAGE-003',
               message: 'the completed stage records conflicting signing '
-                  'identities for $projectName',
+                  'identities',
               remedy: 'rebuild it explicitly: '
                   'rk release ${unit.name} --stage',
             ),
@@ -1139,7 +1131,7 @@ class ReleaseCommand {
           output.halt(HaltKind.beforeActing);
           return null;
         }
-        signing[projectName] = recovered;
+        signing = recovered;
       }
       return _PreparedStage(
         claims: claims,
@@ -1242,16 +1234,16 @@ class ReleaseCommand {
       return null;
     }
 
-    final signing = <String, _ProjectSigningContext>{};
-    final macosProjects = _macosProjects(unit, checklist);
-    final baselines = await _signingBaselines(unit, macosProjects);
-    if (!baselines.ok) return null;
-    for (final project in macosProjects) {
-      final publishedRequirement = baselines.requirements[project.name];
+    _ProjectSigningContext? signing;
+    final macosProject = _macosProject(unit);
+    final baseline = await _signingBaseline(unit, macosProject);
+    if (!baseline.ok) return null;
+    if (macosProject != null) {
+      final publishedRequirement = baseline.requirement;
       final keychain = await _signingCertificate(unit, publishedRequirement);
       if (!keychain.ok) return null;
       final codeId = publishedRequirement == null
-          ? project.executable
+          ? macosProject.executable
           : BinaryChain.identifierOf(publishedRequirement);
       if (codeId == null || codeId.isEmpty) {
         output.problem(Diagnostic(
@@ -1262,8 +1254,7 @@ class ReleaseCommand {
         output.halt(HaltKind.beforeActing);
         return null;
       }
-      signing[project.name] = _ProjectSigningContext(
-        projectName: project.name,
+      signing = _ProjectSigningContext(
         publishedRequirement: publishedRequirement,
         firstIdentity: publishedRequirement == null,
         certificateName: keychain.identity!.name,
@@ -1742,7 +1733,7 @@ class ReleaseCommand {
   Future<bool> _authorize(
     ResolvedUnit unit,
     List<TargetExpectation> remaining, {
-    required Map<String, _ProjectSigningContext> signing,
+    required _ProjectSigningContext? signing,
     required List<TargetClaim> claims,
   }) async {
     final permanent = remaining.where((target) {
@@ -1836,10 +1827,9 @@ class ReleaseCommand {
   Future<LocalProducerOutcome> _actProducer(
     Step step,
     ResolvedUnit unit,
-    Map<String, _ProjectSigningContext> signing,
+    _ProjectSigningContext? signing,
   ) async {
     final project = unit.project(step.project!);
-    final projectSigning = signing[project.name];
     switch (step.kind) {
       case StepKind.build:
         return _chain(unit).buildStep(
@@ -1847,10 +1837,10 @@ class ReleaseCommand {
           project,
           signing: step.platform!.startsWith('macos-')
               ? MacSigning(
-                  publishedRequirement: projectSigning!.publishedRequirement,
-                  codeId: projectSigning.codeId,
-                  identity: projectSigning.identity,
-                  certificateSha256: projectSigning.certificateSha256,
+                  publishedRequirement: signing!.publishedRequirement,
+                  codeId: signing.codeId,
+                  identity: signing.identity,
+                  certificateSha256: signing.certificateSha256,
                 )
               : null,
         );
@@ -1887,20 +1877,13 @@ class ReleaseCommand {
   /// `ok`, and the sign step uses the native executable name.
   /// `unreadable` refuses the whole run before anything public acts. Not
   /// knowing the baseline is not permission to ship a new one.
-  Future<({bool ok, Map<String, String?> requirements})> _signingBaselines(
+  Future<({bool ok, String? requirement})> _signingBaseline(
     ResolvedUnit unit,
-    List<ResolvedProject> projects,
+    ResolvedProject? project,
   ) async {
-    if (projects.isEmpty) {
-      return (ok: true, requirements: const <String, String?>{});
-    }
+    if (project == null) return (ok: true, requirement: null);
     final repository = git.originUrl;
-    if (repository == null) {
-      return (
-        ok: true,
-        requirements: {for (final project in projects) project.name: null},
-      );
-    }
+    if (repository == null) return (ok: true, requirement: null);
 
     final published = PublishedIdentity(
       tools: tools,
@@ -1923,81 +1906,56 @@ class ReleaseCommand {
         unit: unit.name,
       );
       output.halt(HaltKind.beforeActing);
-      return (ok: false, requirements: const <String, String?>{});
+      return (ok: false, requirement: null);
     }
 
-    final requirements = <String, String?>{};
-    final qualifyProject = projects.length > 1;
-    for (final project in projects) {
-      String? requirement;
-      for (final tag in history.tags!) {
-        final scratch = Directory.systemTemp.createTempSync('rk-identity-');
-        final reading = await published.read(
-          tag: tag,
-          executable: project.executable!,
-          into: '${scratch.path}/published-identity',
-          expectedPublished: true,
-        );
-        try {
-          scratch.deleteSync(recursive: true);
-        } on FileSystemException {
-          // The published identity answer does not depend on scratch cleanup.
-        }
-        switch (reading.answer) {
-          case IdentityAnswer.found:
-            requirement = reading.requirement;
-            break;
-          case IdentityAnswer.none:
-            // A public release without this project's macOS binary is not its
-            // signing baseline. Continue independently for every producer.
-            continue;
-          case IdentityAnswer.unreadable:
-            output.problem(
-              Diagnostic(
-                code: 'RK-SIGN-004',
-                message: 'the identity users already installed'
-                    '${qualifyProject ? ' for ${project.name}' : ''} could not '
-                    'be read',
-                remedy: '${reading.why}\n'
-                    'rk found a published signing candidate at $tag; until '
-                    'that release can be read, a new signature cannot be '
-                    'proven continuous with it.',
-              ),
-              unit: unit.name,
-            );
-            output.halt(HaltKind.beforeActing);
-            return (
-              ok: false,
-              requirements: const <String, String?>{},
-            );
-        }
-        if (requirement != null) break;
+    for (final tag in history.tags!) {
+      final scratch = Directory.systemTemp.createTempSync('rk-identity-');
+      final reading = await published.read(
+        tag: tag,
+        executable: project.executable!,
+        into: '${scratch.path}/published-identity',
+        expectedPublished: true,
+      );
+      try {
+        scratch.deleteSync(recursive: true);
+      } on FileSystemException {
+        // The published identity answer does not depend on scratch cleanup.
       }
-      requirements[project.name] = requirement;
+      switch (reading.answer) {
+        case IdentityAnswer.found:
+          return (ok: true, requirement: reading.requirement);
+        case IdentityAnswer.none:
+          // A release without this unit's macOS binary is not its signing
+          // baseline. Continue to the next older release.
+          continue;
+        case IdentityAnswer.unreadable:
+          output.problem(
+            Diagnostic(
+              code: 'RK-SIGN-004',
+              message: 'the identity users already installed could not be '
+                  'read',
+              remedy: '${reading.why}\n'
+                  'rk found a published signing candidate at $tag; until '
+                  'that release can be read, a new signature cannot be '
+                  'proven continuous with it.',
+            ),
+            unit: unit.name,
+          );
+          output.halt(HaltKind.beforeActing);
+          return (ok: false, requirement: null);
+      }
     }
-    return (
-      ok: true,
-      requirements: Map<String, String?>.unmodifiable(requirements),
-    );
+    return (ok: true, requirement: null);
   }
 
-  /// Every project with at least one macOS build, in checklist order.
-  ///
-  /// A project can build several macOS variants, but they all reproduce the
-  /// same published program identity. Keeping the project as the key prevents
-  /// one binary producer from lending its baseline or certificate to another.
-  List<ResolvedProject> _macosProjects(
-    ResolvedUnit unit,
-    Checklist checklist,
-  ) {
-    final seen = <String>{};
-    return [
-      for (final step in checklist.steps)
-        if (step.kind == StepKind.build &&
-            step.platform!.startsWith('macos-') &&
-            seen.add(step.project!))
-          unit.project(step.project!),
-    ];
+  /// The unit's binary project when it ships a macOS build.
+  ResolvedProject? _macosProject(ResolvedUnit unit) {
+    final project = unit.binaryProject;
+    return project != null &&
+            project.binaryPlatforms.any((platform) => platform.startsWith('macos-'))
+        ? project
+        : null;
   }
 
   /// Every name this release takes for good, in one block.
@@ -2025,11 +1983,11 @@ class ReleaseCommand {
   /// version is typed.
   void _sayStageClaims(
     List<TargetClaim> claims,
-    Map<String, _ProjectSigningContext> signing, {
+    _ProjectSigningContext? signing, {
     required bool settled,
   }) {
-    final firstSignings = _firstSignings(signing);
-    if (claims.isEmpty && firstSignings.isEmpty) return;
+    final firstSigning = signing?.firstCertificate == null ? null : signing;
+    if (claims.isEmpty && firstSigning == null) return;
     output.blank();
     // Tense matters: at staging nothing public has happened yet, so saying
     // these *are* permanent would be false a moment before it is true.
@@ -2049,18 +2007,17 @@ class ReleaseCommand {
         noteTone: Tone.muted,
       );
     }
-    final qualify = firstSignings.length > 1;
-    for (final project in firstSignings) {
+    if (firstSigning != null) {
       output.line(
-        'macOS code identifier${qualify ? ' · ${project.projectName}' : ''}',
-        note: project.codeId,
+        'macOS code identifier',
+        note: firstSigning.codeId,
         depth: 2,
         labelWidth: 26,
         noteTone: Tone.muted,
       );
       output.line(
-        'Apple team${qualify ? ' · ${project.projectName}' : ''}',
-        note: _shortCertificate(project.firstCertificate!),
+        'Apple team',
+        note: _shortCertificate(firstSigning.firstCertificate!),
         depth: 2,
         labelWidth: 26,
         noteTone: Tone.muted,
@@ -2070,22 +2027,20 @@ class ReleaseCommand {
 
   List<String> _sayClaims(
     List<TargetClaim> claims,
-    Map<String, _ProjectSigningContext> signing,
+    _ProjectSigningContext? signing,
   ) {
-    final firstSignings = _firstSignings(signing);
-    final qualify = firstSignings.length > 1;
+    final firstSigning = signing?.firstCertificate == null ? null : signing;
     final firstOf = <String>[
       for (final claim in claims)
         '${claim.registrar.padRight(17)}${claim.name}\n'
             '                 ${claim.consequence}',
-      for (final project in firstSignings)
-        '${(qualify ? 'macOS identity · ${project.projectName}' : 'macOS identity').padRight(17)}'
-            '${project.codeId}\n'
+      if (firstSigning != null)
+        '${'macOS identity'.padRight(17)}${firstSigning.codeId}\n'
             '                 permanent: sealed into the designated '
             'requirement, and into\n'
             '                 every Keychain item this program creates. '
             'Signed by\n'
-            '                 ${project.firstCertificate}',
+            '                 ${firstSigning.firstCertificate}',
     ];
     if (firstOf.isEmpty) return const [];
     output.blank();
@@ -2095,13 +2050,6 @@ class ReleaseCommand {
     }
     return ['this release claims, for the first time:', ...firstOf];
   }
-
-  static List<_ProjectSigningContext> _firstSignings(
-    Map<String, _ProjectSigningContext> signing,
-  ) =>
-      signing.values
-          .where((project) => project.firstCertificate != null)
-          .toList(growable: false);
 
   /// The settled stage, grouped by the target that will publish each file.
   ///
@@ -2171,8 +2119,8 @@ class _PreparedStage {
   _PreparedStage({
     required this.claims,
     required this.receiptSteps,
-    required Map<String, _ProjectSigningContext> signing,
-  }) : signing = Map.unmodifiable(signing);
+    required this.signing,
+  });
 
   final List<TargetClaim> claims;
 
@@ -2181,14 +2129,12 @@ class _PreparedStage {
   /// carrying prose composed while the work ran.
   final List<StageStep> receiptSteps;
 
-  /// Signing identity is project-owned. The stable project name is both the
-  /// producer key and the bridge back from qualified build receipt names.
-  final Map<String, _ProjectSigningContext> signing;
+  /// The unit's signing identity, when it ships a macOS binary.
+  final _ProjectSigningContext? signing;
 }
 
 final class _ProjectSigningContext {
   const _ProjectSigningContext({
-    required this.projectName,
     required this.publishedRequirement,
     required this.firstIdentity,
     required this.certificateName,
@@ -2198,7 +2144,6 @@ final class _ProjectSigningContext {
     this.designatedRequirement,
   });
 
-  final String projectName;
   final String? publishedRequirement;
   final bool firstIdentity;
   final String certificateName;
@@ -2213,16 +2158,10 @@ final class _ProjectSigningContext {
   String? get firstCertificate => firstIdentity ? certificateName : null;
 
   bool sameRecordedIdentity(_ProjectSigningContext other) =>
-      projectName == other.projectName &&
       publishedRequirement == other.publishedRequirement &&
       firstIdentity == other.firstIdentity &&
       certificateName == other.certificateName &&
       certificateSha256 == other.certificateSha256 &&
       designatedRequirement == other.designatedRequirement &&
       codeId == other.codeId;
-}
-
-String? _macosBuildProject(String receiptName) {
-  if (!isMacosBuildReceipt(receiptName)) return null;
-  return receiptName.split(':')[1];
 }
