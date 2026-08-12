@@ -1,9 +1,11 @@
-schema = 1
+schema = 2
 
 [release.core]
+tag = "core-v{version}"
 path = "packages/core"
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]
 
 [release.cli]
+tag = "cli-v{version}"
 path = "packages/cli"
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]

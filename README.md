@@ -8,13 +8,13 @@ re-running is always safe, and refusing to guess.
 
 rk manages the release steps and defers authentication to the native tools
 that own it (`dart pub`, `codesign`, `notarytool`, `gh`, `git`). A normal
-interactive release with unfinished pub.dev targets runs one native
-`dart pub login` before private staging; `status` and `release --stage` never
-log in. Login proves only that a current session exists, not that it may upload
-every package. The attempted publish and exact public read-back remain the
-authority, and a retry records an already-exact target without publishing it
-again. rk stores no secrets and keeps no authoritative release ledger: public
-targets are truth.
+release completes and validates its private stage before it asks native tools
+for publication sessions (`dart pub login`, `gh auth status`). `status` and
+`release --stage` never acquire them. A session proves only that credentials
+are usable, not that they may change the intended destination. The attempted
+publish and exact public read-back remain the authority, and a retry records
+an already-exact target without publishing it again. rk stores no secrets and
+keeps no authoritative release ledger: public targets are truth.
 A private stage is disposable before publication begins and after every target
 is exact; during a partial binary release, retain it so the remaining targets
 receive the exact signed and notarized bytes already bound by the public ones.
@@ -32,6 +32,16 @@ rk release [unit] --stage              # exact reusable stage, nothing public
 rk release [unit]                      # plan, confirm, act
 rk release [unit] --confirm=<version>  # the typed yes as a flag, for agents
 ```
+
+With a capable terminal, `init` opens a compact per-project selector for Use,
+Binary, Git tag, pub.dev, GitHub, and Homebrew. It starts conservatively:
+native package publication may be selected when unambiguous, executables only
+expose capability, and GitHub/Homebrew binaries remain opt-in. Selecting a
+dependent target enables its prerequisites; turning a prerequisite off removes
+its dependents. Review writes one small schema-2 file, Back returns to the
+selector, and field customization stays in TOML. Without a usable terminal,
+`init` prints the same conservative proposal and writes nothing;
+`init --write` accepts it directly.
 
 Most releases are driven by agents: every verb speaks `--json`
 ([doc/json.md](doc/json.md) is the contract and the drive loop), and
@@ -94,5 +104,8 @@ The current path to a supervised local release is the
 [production-alpha plan](doc/production-alpha-plan.md). The design is
 [RFC 0002](doc/rfcs/0002-rk-core.md); the threat catalog and assurance ladder
 it prices against is [RFC 0001](doc/rfcs/0001-rk-secure-release-compiler.md).
+The implemented design for schema 2, interactive initialization, optional
+Git, and destination-neutral artifacts is the
+[initialization and target plan](doc/init-target-artifact-plan.md).
 [doc/plan.md](doc/plan.md) preserves the original build plan, review records,
 and evidence ledger.

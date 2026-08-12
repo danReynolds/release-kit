@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:release_kit/src/engine/config.dart';
+import 'package:release_kit/src/engine/assets.dart';
 import 'package:release_kit/src/engine/diagnostic.dart';
 import 'package:release_kit/src/engine/release_manifest.dart';
 import 'package:release_kit/src/engine/release_stage.dart';
@@ -17,10 +18,17 @@ import 'package:test/test.dart';
 const _commit = '1111111111111111111111111111111111111111';
 const _tree = '2222222222222222222222222222222222222222';
 const _config = '''
-schema = 1
+schema = 2
 
 [release.tool]
-publish = ["github-release"]
+publish = ["git-tag", "github-release"]
+binary_platforms = ["macos-arm64"]
+''';
+const _homebrewConfig = '''
+schema = 2
+
+[release.tool]
+publish = ["git-tag", "github-release", "homebrew"]
 binary_platforms = ["macos-arm64"]
 ''';
 const _asset = 'tool-1.2.3-macos-arm64.tar.gz';
@@ -91,6 +99,35 @@ void main() {
       contains('hello'),
       reason: 'the staged snapshot no longer reads the mutable source tree',
     );
+  });
+
+  test('unbound source is byte-bound locally without inventing a revision', () {
+    final unbound = ReleaseStage(
+      unit: unit,
+      source: source,
+      directory: StageDirectory(
+        repositoryRoot: repository.path,
+        identity: StageIdentity.forUnboundPlan(
+          runId: 'one-invocation',
+          resolvedPlan: {'unit': unit.name},
+        ),
+      ),
+    );
+    final outputs = unbound.materializeSource();
+    unbound.writeProgress([
+      StageStep(
+        name: 'source-snapshot',
+        inputs: [StageInput.plan(unbound.directory.identity)],
+        outputs: outputs,
+        evidence: const {'source_binding': 'unbound'},
+      ),
+    ]);
+
+    final inspected = unbound.inspect();
+    expect(inspected.validProgress, isTrue, reason: '${inspected.issues}');
+    expect(unbound.unboundSourceProblem(), isNull);
+    source.files['bin/tool.dart'] = 'void main() => print("changed");\n';
+    expect(unbound.unboundSourceProblem(), 'bin/tool.dart changed');
   });
 
   test('materializes the committed tree, not later worktree bytes', () {
@@ -246,6 +283,116 @@ void main() {
     expect(manifest.encode(), isNot(contains(repository.path)));
     expect(resumed.inspect().reusable, isTrue);
     expect(resumed.requireReceipt().identity.id, identity.id);
+  });
+
+  test('finalization binds a private formula only to its tap destination', () {
+    final homebrewSource = MemorySourceTree({...source.files});
+    homebrewSource.files['release.toml'] = _homebrewConfig;
+    final homebrewUnit = _resolveUnit(
+      homebrewSource,
+      configDocument: _homebrewConfig,
+    );
+    final homebrewStage = ReleaseStage(
+      unit: homebrewUnit,
+      source: homebrewSource,
+      repository: 'owner/repo',
+      directory: StageDirectory(
+        repositoryRoot: repository.path,
+        identity: identity,
+      ),
+    );
+    _recordArchives(homebrewStage, {_asset: 'archive'});
+    final progress = StageReceiptStore(homebrewStage.directory).read()!;
+    final project = homebrewUnit.project('tool');
+    final formulaPath = ReleaseAssets.formulaPath(project);
+    homebrewStage.directory.writeBytesAtomically(
+      formulaPath,
+      utf8.encode('class Tool < Formula\nend\n'),
+    );
+    final formula = StageArtifact.capture(
+      stage: homebrewStage.directory,
+      path: formulaPath,
+      type: 'formula',
+    );
+    homebrewStage.writeProgress([
+      ...progress.steps,
+      StageStep(
+        name: 'homebrew-formula:tool',
+        inputs: [StageInput.artifact(progress.artifacts.last)],
+        outputs: [formula],
+      ),
+    ]);
+
+    final receipt = homebrewStage.finalize(publicArtifacts: {_asset});
+    final manifest = ReleaseManifest.parse(
+      File(homebrewStage.directory.resolve(ReleaseAssets.manifest))
+          .readAsStringSync(),
+    );
+    final destination = manifest.destinations.single;
+
+    expect(manifest.artifacts.map((artifact) => artifact.name), [_asset]);
+    expect(destination.target, 'homebrew');
+    expect(destination.project, 'tool');
+    expect(destination.coordinate, 'owner/homebrew-tap');
+    expect(destination.path, 'Formula/tool.rb');
+    expect(destination.sha256, formula.sha256);
+    expect(manifest.encode(), isNot(contains(formulaPath)));
+    expect(
+      receipt.steps.last.inputs.map((input) => input.name),
+      contains(formulaPath),
+    );
+    expect(homebrewStage.releaseAssets(), isNot(contains(formulaPath)));
+    expect(homebrewStage.inspect().reusable, isTrue);
+  });
+
+  test('completed manifest coordinates must match the resolved unit', () {
+    _complete(release);
+
+    final nextVersionSource = _source();
+    nextVersionSource.files['pubspec.yaml'] = '''
+name: tool
+version: 1.2.4
+executables:
+  tool: tool
+''';
+    final nextVersion = _resolveUnit(nextVersionSource);
+    ResolvedUnit changed({
+      String? name,
+      String? tagPattern,
+      List<ResolvedProject>? projects,
+    }) =>
+        ResolvedUnit(
+          name: name ?? unit.name,
+          publish: unit.publish,
+          tagPattern: tagPattern,
+          tagWasDeclared: true,
+          projects: projects ?? unit.projects,
+          location: unit.location,
+          homebrewTap: unit.homebrewTap,
+        );
+
+    final mismatches = <String, ResolvedUnit>{
+      'unit': changed(name: 'other', tagPattern: unit.tagPattern),
+      'version': changed(
+        tagPattern: unit.tag,
+        projects: nextVersion.projects,
+      ),
+      'tag': changed(tagPattern: 'release-{version}'),
+      'nullable tag': changed(tagPattern: null),
+    };
+    for (final entry in mismatches.entries) {
+      final resumed = ReleaseStage(
+        unit: entry.value,
+        source: source,
+        directory: release.directory,
+      ).inspect();
+      expect(resumed.reusable, isFalse, reason: entry.key);
+      expect(
+        resumed.issues.map((issue) => issue.kind),
+        contains(StageIssueKind.invalidManifest),
+        reason: entry.key,
+      );
+    }
   });
 
   test('final receipt preserves producer input and evidence records', () {
@@ -742,9 +889,16 @@ executables:
       'README.md': '# Tool\n',
     });
 
-ResolvedUnit _resolveUnit(SourceTree source) {
+ResolvedUnit _resolveUnit(
+  SourceTree source, {
+  String configDocument = _config,
+}) {
   final diagnostics = Diagnostics();
-  final config = ReleaseConfig.parse(_config, 'release.toml', diagnostics);
+  final config = ReleaseConfig.parse(
+    configDocument,
+    'release.toml',
+    diagnostics,
+  );
   if (config == null) {
     fail('fixture config did not parse: ${diagnostics.found.join('\n')}');
   }
@@ -866,22 +1020,6 @@ StageReceipt _completeEveryArtifactType(ReleaseStage release) {
   );
 
   release.directory.writeBytesAtomically(
-    'SHA256SUMS',
-    utf8.encode('${archive.sha256}  $_asset\n'),
-  );
-  final checksums = StageStep(
-    name: 'checksums',
-    inputs: [StageInput.artifact(archive)],
-    outputs: [
-      StageArtifact.capture(
-        stage: release.directory,
-        path: 'SHA256SUMS',
-        type: 'checksums',
-      ),
-    ],
-  );
-
-  release.directory.writeBytesAtomically(
     'release-notes.md',
     utf8.encode('## 1.2.3\n\n- production alpha fixture\n'),
   );
@@ -913,14 +1051,42 @@ StageReceipt _completeEveryArtifactType(ReleaseStage release) {
     ],
   );
 
+  final formulaArtifact = formula.outputs.single;
+  release.directory.writeBytesAtomically(
+    'SHA256SUMS',
+    utf8.encode([
+      '${archive.sha256}  $_asset',
+      '${notaryLog.sha256}  $_notaryLog',
+      '${notaryResult.sha256}  $_notaryResult',
+      '${formulaArtifact.sha256}  tool.rb',
+      '',
+    ].join('\n')),
+  );
+  final checksums = StageStep(
+    name: 'checksums',
+    inputs: [
+      StageInput.artifact(archive),
+      StageInput.artifact(notaryLog),
+      StageInput.artifact(notaryResult),
+      StageInput.artifact(formulaArtifact),
+    ],
+    outputs: [
+      StageArtifact.capture(
+        stage: release.directory,
+        path: 'SHA256SUMS',
+        type: 'checksums',
+      ),
+    ],
+  );
+
   release.writeProgress([
     source,
     sign,
     notarize,
     archiveStep,
-    checksums,
     notes,
     formula,
+    checksums,
   ]);
   return release.finalize(publicArtifacts: {
     _asset,

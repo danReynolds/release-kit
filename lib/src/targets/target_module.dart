@@ -1,6 +1,7 @@
 import '../engine/checklist.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
+import '../engine/publish_target.dart';
 import '../engine/registry.dart';
 import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
@@ -13,6 +14,33 @@ import '../engine/version.dart';
 import '../engine/workspace.dart';
 import '../output/output.dart';
 
+/// The tag coordinate guaranteed by a selected tag-backed target.
+///
+/// Untagged units legitimately carry no tag. Target derivation is the boundary
+/// where configuration has already proved that a Git tag, GitHub Release, or
+/// Homebrew target is selected and therefore has a tag prerequisite.
+String requiredTargetTag(ResolvedUnit unit, PublishTarget target) {
+  assert(_selects(unit, target));
+  assert(unit.publish.contains(PublishTarget.gitTag));
+  final tag = unit.tag;
+  assert(tag != null);
+  return tag!;
+}
+
+/// The tag pattern guaranteed by a selected tag-backed target.
+String requiredTargetTagPattern(ResolvedUnit unit, PublishTarget target) {
+  assert(_selects(unit, target));
+  assert(unit.publish.contains(PublishTarget.gitTag));
+  final pattern = unit.tagPattern;
+  assert(pattern != null);
+  return pattern!;
+}
+
+bool _selects(ResolvedUnit unit, PublishTarget target) =>
+    target.scope == TargetScope.unit
+        ? unit.publish.contains(target)
+        : unit.projects.any((project) => project.publish.contains(target));
+
 /// One built-in public target and the manifest-derived identity it reports.
 ///
 /// This is intentionally a closed application seam, not a runtime plugin API.
@@ -21,6 +49,7 @@ import '../output/output.dart';
 abstract base class TargetModule {
   const TargetModule();
 
+  PublishTarget get target;
   StepKind get stepKind;
 
   TargetExpectation expectation({
@@ -91,9 +120,36 @@ abstract base class TargetModule {
   /// would let a new publisher omit credential checks and fail only after an
   /// earlier target had acted.
   Future<bool> preflight(
-    TargetPreflightContext context,
+    TargetReadinessContext context,
     ResolvedUnit unit,
   );
+
+  /// Acquires or refreshes the native publication session after the exact
+  /// stage exists and before authorization.
+  ///
+  /// Returning null means the module already reported a refusal. Every
+  /// module chooses explicitly, including destinations whose native tool has
+  /// no separate session-acquisition command.
+  Future<TargetSession?> acquireSession(
+    TargetReadinessContext context,
+    ResolvedUnit unit,
+    List<TargetExpectation> targets,
+  );
+
+  /// The effective destination bound before staging and checked after native
+  /// credential acquisition. It is never serialized: an origin URL can carry
+  /// credentials even though GitState normally redacts it for reports.
+  String effectiveEndpoint(
+    TargetReadinessContext context,
+    ResolvedUnit unit,
+    List<TargetExpectation> targets,
+  ) {
+    final coordinates = targets.map((item) => item.coordinate).toList()..sort();
+    return [
+      if (target.requiresGit) context.git.originUrl ?? 'unbound',
+      ...coordinates,
+    ].join('\n');
+  }
 
   Future<TargetActOutcome> act(
     TargetReleaseContext context,
@@ -251,17 +307,27 @@ final class TargetReleaseContext {
   final Duration confirmInterval;
 }
 
-/// Dependencies for an ambient target preflight performed before staging.
-final class TargetPreflightContext {
-  const TargetPreflightContext({
+/// Dependencies shared by safe readiness and later session acquisition.
+final class TargetReadinessContext {
+  TargetReadinessContext({
     required this.tools,
     required this.output,
     required this.git,
-  });
+    required Map<String, String> environment,
+  }) : environment = Map.unmodifiable(environment);
 
   final Tools tools;
   final Output output;
   final GitState git;
+  final Map<String, String> environment;
+}
+
+final class TargetSession {
+  const TargetSession({required this.endpoint});
+
+  /// Opaque destination identity, compared only for equality and never
+  /// reported because it can include credential-bearing native coordinates.
+  final String endpoint;
 }
 
 /// Provider-neutral facts returned by one target act.

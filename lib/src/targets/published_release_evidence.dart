@@ -2,6 +2,8 @@ import '../destinations/git_tag.dart';
 import '../destinations/github_release.dart';
 import '../engine/assets.dart';
 import '../engine/changelog.dart';
+import '../engine/publish_target.dart';
+import '../engine/release_manifest.dart';
 import '../engine/resolve.dart';
 import '../engine/source_tree.dart';
 import '../engine/verdict.dart';
@@ -18,12 +20,67 @@ final class PublishedReleaseEvidence {
 
   final TargetReadContext context;
 
+  Future<PublishedDestinationBindingRead> currentDestinationBinding(
+    ResolvedUnit unit, {
+    required PublishTarget target,
+    required String project,
+    required String coordinate,
+    required String path,
+  }) async {
+    final tag = requiredTargetTag(unit, PublishTarget.gitTag);
+    final object = context.git.tagObject(tag);
+    final commit = context.git.tagTarget(tag);
+    if (object == null || commit == null) {
+      return const PublishedDestinationBindingRead(
+        Inspection.unknown('the release tag object could not be read'),
+        null,
+      );
+    }
+    final tagBinding = await GitTag(
+      tools: context.tools!,
+      root: context.git.root,
+    ).manifestBinding(
+      tag: tag,
+      expectedObject: object,
+      expectedCommit: commit,
+    );
+    if (tagBinding case TagManifestBound(:final digest)) {
+      try {
+        final read = await GithubRelease(
+          tools: context.tools!,
+          repository: context.repository!,
+          workingDirectory: context.git.root,
+        ).readManifest(manifestExpectation(unit, digest));
+        return _selectDestinationBinding(
+          read.inspection,
+          read.manifest,
+          target: target,
+          project: project,
+          coordinate: coordinate,
+          path: path,
+        );
+      } on Object catch (error) {
+        return PublishedDestinationBindingRead(
+          Inspection.unknown(
+            'the expected release manifest could not be derived: $error',
+          ),
+          null,
+        );
+      }
+    }
+    return PublishedDestinationBindingRead(
+      bindingInspection(tagBinding),
+      null,
+    );
+  }
+
   Future<({Inspection inspection, List<int>? bytes})> currentManifestAsset(
     ResolvedUnit unit,
     String assetName,
   ) async {
-    final object = context.git.tagObject(unit.tag);
-    final commit = context.git.tagTarget(unit.tag);
+    final tag = requiredTargetTag(unit, PublishTarget.gitTag);
+    final object = context.git.tagObject(tag);
+    final commit = context.git.tagTarget(tag);
     if (object == null || commit == null) {
       return (
         inspection: const Inspection.unknown(
@@ -36,7 +93,7 @@ final class PublishedReleaseEvidence {
       tools: context.tools!,
       root: context.git.root,
     ).manifestBinding(
-      tag: unit.tag,
+      tag: tag,
       expectedObject: object,
       expectedCommit: commit,
     );
@@ -66,21 +123,34 @@ final class PublishedReleaseEvidence {
     String digest, {
     Set<String>? publicAssets,
   }) {
-    final project = unit.binaryProject;
+    final tag = requiredTargetTag(unit, PublishTarget.gitTag);
     final source = GitCommitSourceTree(context.git.root, context.git.head);
-    final changelog = source.read(project.fileAt('CHANGELOG.md'));
-    final notes =
-        changelog == null ? null : Changelog.entry(changelog, project.version);
-    if (notes == null) {
-      throw StateError('release notes are absent from the released commit');
+    final entries = <({String project, String body})>[];
+    for (final project in unit.projects) {
+      final changelog = source.read(project.fileAt('CHANGELOG.md'));
+      final notes = changelog == null
+          ? null
+          : Changelog.entry(changelog, project.version);
+      if (notes == null) {
+        throw StateError(
+          'release notes for ${project.name} are absent from the released '
+          'commit',
+        );
+      }
+      entries.add((project: project.name, body: notes));
     }
+    final body = entries.length == 1
+        ? entries.single.body
+        : entries
+            .map((entry) => '## ${entry.project}\n\n${entry.body}')
+            .join('\n\n');
     return GithubManifestExpectation(
       unit: unit.name,
       version: unit.version.canonical,
-      tag: unit.tag,
+      tag: tag,
       sourceCommit: context.git.head,
-      title: '${project.name} ${unit.version}',
-      body: notes,
+      title: '${unit.name} ${unit.version}',
+      body: body,
       manifestSha256: digest,
       publicAssets: publicAssets ?? expectedReleaseAssets(unit),
     );
@@ -91,7 +161,8 @@ final class PublishedReleaseEvidence {
     Version version,
     String assetName,
   ) async {
-    final tag = unit.tagPattern.replaceAll('{version}', version.canonical);
+    final tag = requiredTargetTagPattern(unit, PublishTarget.gitTag)
+        .replaceAll('{version}', version.canonical);
     final object = context.git.tagObject(tag);
     final commit = context.git.tagTarget(tag);
     if (object == null || commit == null) {
@@ -122,13 +193,70 @@ final class PublishedReleaseEvidence {
           tag: tag,
           sourceCommit: commit,
           manifestSha256: digest,
-          title: '${unit.binaryProject.name} ${version.canonical}',
+          title: '${unit.name} ${version.canonical}',
         ),
         assetName,
       );
       return (inspection: read.inspection, bytes: read.bytes);
     }
     return (inspection: bindingInspection(binding), bytes: null);
+  }
+
+  Future<PublishedDestinationBindingRead> historicalDestinationBinding(
+    ResolvedUnit unit,
+    Version version, {
+    required PublishTarget target,
+    required ResolvedProject project,
+    required String coordinate,
+    required String path,
+  }) async {
+    final tag = requiredTargetTagPattern(unit, PublishTarget.gitTag)
+        .replaceAll('{version}', version.canonical);
+    final object = context.git.tagObject(tag);
+    final commit = context.git.tagTarget(tag);
+    if (object == null || commit == null) {
+      return PublishedDestinationBindingRead(
+        Inspection.unknown(
+          'the earlier release tag $tag is not available in this checkout',
+        ),
+        null,
+      );
+    }
+    final tagBinding = await GitTag(
+      tools: context.tools!,
+      root: context.git.root,
+    ).manifestBinding(
+      tag: tag,
+      expectedObject: object,
+      expectedCommit: commit,
+    );
+    if (tagBinding case TagManifestBound(:final digest)) {
+      final read = await GithubRelease(
+        tools: context.tools!,
+        repository: context.repository!,
+        workingDirectory: context.git.root,
+      ).readHistoricalManifest(
+        GithubHistoricalManifestExpectation(
+          unit: unit.name,
+          version: version.canonical,
+          tag: tag,
+          sourceCommit: commit,
+          manifestSha256: digest,
+        ),
+      );
+      return _selectDestinationBinding(
+        read.inspection,
+        read.manifest,
+        target: target,
+        project: project.name,
+        coordinate: coordinate,
+        path: path,
+      );
+    }
+    return PublishedDestinationBindingRead(
+      bindingInspection(tagBinding),
+      null,
+    );
   }
 
   static Inspection bindingInspection(TagManifestBinding binding) =>
@@ -153,7 +281,48 @@ final class PublishedReleaseEvidence {
       };
 }
 
-Set<String> expectedReleaseAssets(ResolvedUnit unit) => {
-      for (final project in unit.projects)
-        ...ReleaseAssets.expectedFor(project),
-    };
+final class PublishedDestinationBindingRead {
+  const PublishedDestinationBindingRead(this.inspection, this.binding);
+
+  final Inspection inspection;
+  final ReleaseManifestDestinationBinding? binding;
+}
+
+PublishedDestinationBindingRead _selectDestinationBinding(
+  Inspection inspection,
+  ReleaseManifest? manifest, {
+  required PublishTarget target,
+  required String project,
+  required String coordinate,
+  required String path,
+}) {
+  if (!inspection.isExact || manifest == null) {
+    return PublishedDestinationBindingRead(inspection, null);
+  }
+  final matches = manifest.destinations
+      .where(
+        (binding) =>
+            binding.target == target.configName &&
+            binding.project == project &&
+            binding.coordinate == coordinate &&
+            binding.path == path,
+      )
+      .toList();
+  if (matches.length != 1) {
+    return PublishedDestinationBindingRead(
+      Inspection.conflict(
+        'the published release manifest does not bind exactly one '
+        '${target.configName} destination for $project',
+        evidence: {
+          '$coordinate/$path':
+              matches.isEmpty ? 'missing from manifest' : 'declared twice',
+        },
+      ),
+      null,
+    );
+  }
+  return PublishedDestinationBindingRead(inspection, matches.single);
+}
+
+Set<String> expectedReleaseAssets(ResolvedUnit unit) =>
+    ReleaseAssets.expectedForUnit(unit);

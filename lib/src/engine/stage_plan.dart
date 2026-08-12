@@ -6,6 +6,7 @@ import '../transforms/digest.dart';
 import '../version.dart';
 import 'canonical_json.dart';
 import 'git.dart';
+import 'publish_target.dart';
 import 'resolve.dart';
 import 'stage.dart';
 
@@ -233,6 +234,7 @@ Map<String, Object?> stagePlanFor(
   GitState git, {
   required DartCompilerIdentity compiler,
   required RkImplementationIdentity rk,
+  Map<String, String>? environment,
 }) =>
     {
       'unit': {
@@ -240,11 +242,14 @@ Map<String, Object?> stagePlanFor(
         'version': unit.version.canonical,
         'tag': unit.tag,
         'tag_pattern': unit.tagPattern,
-        'code_id': unit.codeId,
         'homebrew_tap': unit.homebrewTap,
+        'targets': unit.publish.map((target) => target.configName).toList()
+          ..sort(),
       },
-      'repository': git.originUrl,
-      'tag_signing': git.signingConfigured ? 'configured' : 'unsigned',
+      'source_binding': git.isBound ? 'git' : 'unbound',
+      if (git.isBound) 'repository': git.originUrl,
+      if (unit.publish.contains(PublishTarget.gitTag))
+        'tag_signing': git.signingConfigured ? 'configured' : 'unsigned',
       'projects': [
         for (final project in unit.projects)
           {
@@ -252,7 +257,13 @@ Map<String, Object?> stagePlanFor(
             'version': project.version.canonical,
             'path': project.pubspec.directory,
             'executable': project.executable,
-            'targets': project.channels.toList()..sort(),
+            'targets':
+                project.publish.map((target) => target.configName).toList()
+                  ..sort(),
+            if (project.publish.contains(PublishTarget.pubDev))
+              'registry_endpoint': project.pubspec.effectivePublishDestination(
+                environment ?? Platform.environment,
+              ),
             'binary_platforms': [...project.binaryPlatforms]..sort(),
           },
       ],

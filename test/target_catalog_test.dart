@@ -1,8 +1,10 @@
 import 'dart:io';
 
+import 'package:release_kit/src/engine/assets.dart';
 import 'package:release_kit/src/engine/checklist.dart';
 import 'package:release_kit/src/engine/config.dart';
 import 'package:release_kit/src/engine/diagnostic.dart';
+import 'package:release_kit/src/engine/publish_target.dart';
 import 'package:release_kit/src/engine/resolve.dart';
 import 'package:release_kit/src/engine/source_tree.dart';
 import 'package:release_kit/src/targets/catalog.dart';
@@ -15,8 +17,8 @@ void main() {
     final catalog = TargetCatalog.builtIn();
 
     expect(
-      catalog.modules.map((module) => module.stepKind),
-      TargetCatalog.targetStepKinds,
+      catalog.modules.map((module) => module.target).toSet(),
+      PublishTarget.values.toSet(),
     );
     expect(
       TargetCatalog.targetStepKinds,
@@ -28,12 +30,12 @@ void main() {
     final catalog = TargetCatalog.builtIn();
     final diagnostics = Diagnostics();
     final config = ReleaseConfig.parse('''
-schema = 1
+schema = 2
 
 [release.cli]
 tag = "v{version}"
 homebrew_tap = "example/homebrew-tools"
-publish = ["pub.dev", "github-release", "homebrew"]
+publish = ["git-tag", "pub.dev", "github-release", "homebrew"]
 binary_platforms = ["linux-x64"]
 ''', 'release.toml', diagnostics)!;
     final resolution = Resolution.resolve(
@@ -59,9 +61,12 @@ executables:
     );
 
     expect(
-      unit.projects.expand((project) => project.channels).toSet(),
-      ReleaseConfig.channels,
-      reason: 'the fixture must exercise every accepted publish channel',
+      {
+        ...unit.publish,
+        ...unit.projects.expand((project) => project.publish),
+      },
+      PublishTarget.values.toSet(),
+      reason: 'the fixture must exercise every accepted publish target',
     );
     expect(
       targets.map((target) => target.kind).toSet(),
@@ -129,17 +134,17 @@ executables:
           coordinate: 'example/tool/releases/tag/v1.2.3',
           version: '1.2.3',
           artifacts: 'SHA256SUMS,release-manifest.json,'
-              'tool-1.2.3-linux-x64.tar.gz,tool.rb',
+              'tool-1.2.3-linux-x64.tar.gz',
           uses: null,
         ),
         (
           kind: 'homebrew',
-          id: 'cli/homebrew/tool',
+          id: 'cli/homebrew/example_tool/tool',
           label: 'Homebrew · example/homebrew-tools',
           coordinate: 'example/homebrew-tools/Formula/tool.rb',
           version: '1.2.3',
-          artifacts: '',
-          uses: 'tool.rb from GitHub Release',
+          artifacts: 'tool.rb',
+          uses: 'tool.rb bound in the release manifest',
         ),
       ],
     );
@@ -174,9 +179,9 @@ executables:
         ),
         (
           StageContributionPhase.afterArtifacts,
-          'homebrew-formula',
-          'tool-1.2.3-linux-x64.tar.gz',
-          'tool.rb:formula',
+          'homebrew-formula:example_tool',
+          'producers/example_tool/archives/tool-1.2.3-linux-x64.tar.gz',
+          'producers/example_tool/homebrew/tool.rb:formula',
         ),
       ],
     );
@@ -191,7 +196,7 @@ executables:
             phase: StageContributionPhase.afterArtifacts,
             step: StageStepContract(
               'bad-target',
-              outputs: {'SHA256SUMS': 'wrong'},
+              outputs: {ReleaseAssets.checksumPath: 'wrong'},
             ),
           ),
         ],
@@ -206,10 +211,11 @@ executables:
     final catalog = TargetCatalog.builtIn();
     final diagnostics = Diagnostics();
     final config = ReleaseConfig.parse('''
-schema = 1
+schema = 2
 
 [release.apps]
 tag = "apps-v{version}"
+publish = ["git-tag"]
 
 [[release.apps.project]]
 path = "packages/a_app"
@@ -258,6 +264,32 @@ version: 1.2.3
       staged.map((binding) => binding.target.coordinate),
       ['a_app', 'z_core'],
       reason: 'stage receipts require package-name order',
+    );
+  });
+
+  test('a pub-only graph derives no Git tag target', () {
+    final catalog = TargetCatalog.builtIn();
+    final diagnostics = Diagnostics();
+    final config = ReleaseConfig.parse('''
+schema = 2
+
+[release.core]
+publish = ["pub.dev"]
+''', 'release.toml', diagnostics)!;
+    final resolution = Resolution.resolve(
+      config,
+      MemorySourceTree({
+        'pubspec.yaml': 'name: example\nversion: 1.2.3\n',
+      }),
+      diagnostics,
+    );
+    expect(resolution, isNotNull, reason: diagnostics.found.join('\n'));
+    final unit = resolution!.unit('core')!;
+    final checklist = Checklist.derive(unit, resolution, diagnostics);
+
+    expect(
+      catalog.derive(unit, checklist).map((target) => target.kind),
+      ['pubDev'],
     );
   });
 

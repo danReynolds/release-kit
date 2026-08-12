@@ -145,10 +145,10 @@ void main() {
     repository = Directory.systemTemp.createTempSync('rk-compiler-stage-');
     source = MemorySourceTree({
       'release.toml': '''
-schema = 1
+schema = 2
 
 [release.tool]
-publish = ["github-release"]
+publish = ["git-tag", "github-release"]
 binary_platforms = ["linux-x64"]
 ''',
       'pubspec.yaml': '''
@@ -280,6 +280,122 @@ executables:
     expect(Directory('${repository.path}/.rk').existsSync(), isFalse);
   });
 
+  test('an untagged stage is independent of Git signing policy', () {
+    final pubOnlySource = MemorySourceTree({
+      'release.toml': '''
+schema = 2
+
+[release.tool]
+publish = ["pub.dev"]
+''',
+      'pubspec.yaml': 'name: tool\nversion: 1.2.3\n',
+      'CHANGELOG.md': '## 1.2.3\n',
+    });
+    final diagnostics = Diagnostics();
+    final config = ReleaseConfig.parse(
+      pubOnlySource.read('release.toml')!,
+      'release.toml',
+      diagnostics,
+    )!;
+    final pubOnly =
+        Resolution.resolve(config, pubOnlySource, diagnostics)!.units.single;
+    GitState state(bool signing) => GitState(
+          root: repository.path,
+          head: _head,
+          headTree: _tree,
+          branch: 'main',
+          isClean: true,
+          uncommitted: const [],
+          headIsPushed: false,
+          tags: const [],
+          signingConfigured: signing,
+          originUrl: 'example/tool',
+        );
+    final compiler = DartCompilerIdentity.recorded(
+      executable: '/toolchains/dart',
+      version: 'Dart SDK version: fixture',
+      sha256: 'a' * 64,
+    );
+    final rk = RkImplementationIdentity.recorded(
+      version: '0.0.1',
+      stageSchema: stageSchemaVersion,
+      sha256: 'b' * 64,
+    );
+
+    final unsigned = stagePlanFor(
+      pubOnly,
+      state(false),
+      compiler: compiler,
+      rk: rk,
+    );
+    final signed = stagePlanFor(
+      pubOnly,
+      state(true),
+      compiler: compiler,
+      rk: rk,
+    );
+
+    expect(unsigned, signed);
+    expect(unsigned, isNot(contains('tag_signing')));
+  });
+
+  test('the effective native registry endpoint keys the private stage', () {
+    final pubSource = MemorySourceTree({
+      'release.toml': '''
+schema = 2
+
+[release.tool]
+publish = ["pub.dev"]
+''',
+      'pubspec.yaml': 'name: tool\nversion: 1.2.3\n',
+      'CHANGELOG.md': '## 1.2.3\n',
+    });
+    final diagnostics = Diagnostics();
+    final pubConfig = ReleaseConfig.parse(
+      pubSource.read('release.toml')!,
+      'release.toml',
+      diagnostics,
+    )!;
+    final pubUnit =
+        Resolution.resolve(pubConfig, pubSource, diagnostics)!.units.single;
+    final compiler = DartCompilerIdentity.recorded(
+      executable: '/toolchains/dart',
+      version: 'Dart SDK version: fixture',
+      sha256: 'a' * 64,
+    );
+    final rk = RkImplementationIdentity.recorded(
+      version: '0.0.1',
+      stageSchema: stageSchemaVersion,
+      sha256: 'b' * 64,
+    );
+    final first = StageIdentity.forPlan(
+      headCommit: git.head,
+      headTree: git.headTree,
+      resolvedPlan: stagePlanFor(
+        pubUnit,
+        git,
+        compiler: compiler,
+        rk: rk,
+        environment: const {'PUB_HOSTED_URL': 'https://pub.dev'},
+      ),
+    );
+    final redirected = StageIdentity.forPlan(
+      headCommit: git.head,
+      headTree: git.headTree,
+      resolvedPlan: stagePlanFor(
+        pubUnit,
+        git,
+        compiler: compiler,
+        rk: rk,
+        environment: const {
+          'PUB_HOSTED_URL': 'https://packages.example.invalid'
+        },
+      ),
+    );
+
+    expect(redirected.id, isNot(first.id));
+  });
+
   test('the resolved executable bytes are part of the compiler identity', () {
     if (Platform.isWindows) return;
     final tools = Directory.systemTemp.createTempSync('rk-fake-dart-');
@@ -332,6 +448,7 @@ executables:
 }
 
 void _complete(ReleaseStage stage) {
+  final project = stage.unit.projects.single;
   final sourceStep = StageStep(
     name: 'source-snapshot',
     inputs: [
@@ -357,14 +474,15 @@ void _complete(ReleaseStage stage) {
   );
 
   final binaryBytes = utf8.encode('tool fixture');
-  stage.directory.writeBytesAtomically('linux-x64/tool', binaryBytes);
+  final binaryPath = ReleaseAssets.binaryPath(project, 'linux-x64');
+  stage.directory.writeBytesAtomically(binaryPath, binaryBytes);
   final binary = StageArtifact.capture(
     stage: stage.directory,
-    path: 'linux-x64/tool',
+    path: binaryPath,
     type: 'executable',
   );
   final buildStep = StageStep(
-    name: 'build:linux-x64',
+    name: 'build:tool:linux-x64',
     inputs: [StageInput.step(sourceStep)],
     outputs: [binary],
     evidence: const {
@@ -376,14 +494,15 @@ void _complete(ReleaseStage stage) {
   final archiveBytes = ArchiveBuilder.gzip(ArchiveBuilder.tar([
     ArchiveEntry(name: 'tool', bytes: binaryBytes, executable: true),
   ]));
-  stage.directory.writeBytesAtomically(archiveName, archiveBytes);
+  final archivePath = ReleaseAssets.archivePath(project, 'linux-x64');
+  stage.directory.writeBytesAtomically(archivePath, archiveBytes);
   final archive = StageArtifact.capture(
     stage: stage.directory,
-    path: archiveName,
+    path: archivePath,
     type: 'archive',
   );
   final archiveStep = StageStep(
-    name: 'archive:linux-x64',
+    name: 'archive:tool:linux-x64',
     inputs: [StageInput.artifact(binary)],
     outputs: [archive],
     evidence: {
@@ -394,16 +513,16 @@ void _complete(ReleaseStage stage) {
   );
 
   stage.directory.writeBytesAtomically(
-    ReleaseAssets.checksums,
+    ReleaseAssets.checksumPath,
     utf8.encode('${archive.sha256}  $archiveName\n'),
   );
   final checksumsStep = StageStep(
-    name: 'checksums',
+    name: 'bundle:checksums',
     inputs: [StageInput.artifact(archive)],
     outputs: [
       StageArtifact.capture(
         stage: stage.directory,
-        path: ReleaseAssets.checksums,
+        path: ReleaseAssets.checksumPath,
         type: 'checksums',
       ),
     ],
@@ -419,5 +538,5 @@ void _complete(ReleaseStage stage) {
     archiveStep,
     checksumsStep,
   ]);
-  stage.finalize(publicArtifacts: {archiveName, ReleaseAssets.checksums});
+  stage.finalize(releaseAssets: ReleaseAssets.bundleFor(stage.unit));
 }

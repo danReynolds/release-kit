@@ -9,11 +9,13 @@ class PubDevTarget implements PublicationInspector {
     required this.registry,
     required this.comparator,
     required this.source,
+    this.allowCurrentSourceFallback = true,
   });
 
   final RegistryReader registry;
   final Comparator comparator;
   final SourceTree source;
+  final bool allowCurrentSourceFallback;
 
   @override
   Future<Inspection> inspectProject(
@@ -33,6 +35,13 @@ class PubDevTarget implements PublicationInspector {
 
     final published = package.at(project.version);
     if (published == null) return const Inspection.absent();
+
+    if (expectedSource == null && !allowCurrentSourceFallback) {
+      return const Inspection.unknown(
+        'the package exists, but source comparison is unavailable without '
+        'the current unbound release stage',
+      );
+    }
 
     final List<int> archive;
     try {

@@ -1,3 +1,4 @@
+import 'artifact_contribution.dart';
 import 'resolve.dart';
 
 /// The names a release publishes, written once.
@@ -31,13 +32,53 @@ abstract final class ReleaseAssets {
 
   /// Public binding from release bytes back to their source and stage plan.
   static const manifest = 'release-manifest.json';
+  static const checksumPath = 'bundle/SHA256SUMS';
+
+  static String producerRoot(ResolvedProject project) =>
+      'producers/${project.name}';
+
+  static String binaryPath(
+    ResolvedProject project,
+    String platform,
+  ) =>
+      '${producerRoot(project)}/$platform/${project.executable}';
+
+  static String notaryInputPath(
+    ResolvedProject project,
+    String platform,
+  ) =>
+      '${producerRoot(project)}/$platform/${project.executable}.zip';
+
+  static String archivePath(
+    ResolvedProject project,
+    String platform,
+  ) =>
+      '${producerRoot(project)}/archives/'
+      '${archiveName(project.executable!, project.version.canonical, platform)}';
+
+  static String notaryResultPath(
+    ResolvedProject project,
+    String platform,
+  ) =>
+      '${producerRoot(project)}/evidence/'
+      '${notaryResultName(project.executable!, project.version.canonical, platform)}';
+
+  static String notaryLogPath(
+    ResolvedProject project,
+    String platform,
+  ) =>
+      '${producerRoot(project)}/evidence/'
+      '${notaryLogName(project.executable!, project.version.canonical, platform)}';
+
+  static String formulaPath(ResolvedProject project) =>
+      '${producerRoot(project)}/homebrew/${formulaName(project.executable!)}';
 
   static String archiveName(
     String executable,
     String version,
     String platform,
   ) =>
-      '$executable-$version-$platform.tar.gz';
+      standaloneArchiveName(executable, version, platform);
 
   /// Apple's verdict, verbatim — and its log, which says what the verdict
   /// covered. Stage evidence, not published assets: a consumer verifies the
@@ -62,6 +103,54 @@ abstract final class ReleaseAssets {
   /// self-describing: the tap's copy is a pointer, this one is the record.
   static String formulaName(String executable) => '$executable.rb';
 
+  static List<ReleaseAssetSpec> contributedBy(ResolvedProject project) => [
+        for (final platform in [...project.binaryPlatforms]..sort())
+          ReleaseAssetSpec(
+            blob: ProducedBlobRef(
+              producerId: project.name,
+              stagedPath: archivePath(project, platform),
+              type: 'archive',
+              mediaType: 'application/gzip',
+              project: project.name,
+              platform: platform,
+            ),
+            publicName: archiveName(
+              project.executable!,
+              project.version.canonical,
+              platform,
+            ),
+          ),
+      ];
+
+  /// Every producer contribution, validated before producer work starts.
+  static List<ReleaseAssetSpec> contributionsFor(ResolvedUnit unit) =>
+      validateReleaseAssetSpecs([
+        for (final project in unit.projects) ...contributedBy(project),
+      ]);
+
+  /// The complete generated public inventory excluding the manifest itself.
+  static List<ReleaseAssetSpec> bundleFor(ResolvedUnit unit) {
+    final contributed = contributionsFor(unit);
+    return validateReleaseAssetSpecs([
+      ...contributed,
+      if (contributed.isNotEmpty)
+        ReleaseAssetSpec.generated(
+          blob: ProducedBlobRef(
+            producerId: 'bundle',
+            stagedPath: checksumPath,
+            type: 'checksums',
+            mediaType: 'text/plain',
+          ),
+          publicName: checksums,
+        ),
+    ]);
+  }
+
+  static Set<String> expectedForUnit(ResolvedUnit unit) => {
+        for (final asset in bundleFor(unit)) asset.publicName,
+        manifest,
+      };
+
   /// Every name a release of [project] carries.
   ///
   /// The single derivation. Anything that produces, expects, or counts these
@@ -74,7 +163,6 @@ abstract final class ReleaseAssets {
     return {
       for (final platform in project.binaryPlatforms)
         archiveName(executable, version, platform),
-      if (project.channels.contains('homebrew')) formulaName(executable),
       checksums,
       manifest,
     };

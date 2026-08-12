@@ -26,20 +26,98 @@ executables:
 });
 
 const keybayConfig = '''
-schema = 1
+schema = 2
 
 [release.core]
+tag = "keybay-v{version}"
 path = "packages/keybay"
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]
 
 [release.cli]
+tag = "keybay_cli-v{version}"
 path = "packages/keybay_cli"
-publish = ["pub.dev", "github-release", "homebrew"]
+publish = ["git-tag", "pub.dev", "github-release", "homebrew"]
 binary_platforms = ["linux-x64", "linux-arm64", "macos-arm64"]
 ''';
 
 void main() {
   frozenIdVectors();
+
+  group('schema 2 tag dependency rules', () {
+    final tree = MemorySourceTree({
+      'pubspec.yaml': 'name: example\nversion: 1.2.3\n',
+    });
+
+    test('a pub-only unit has no tag graph', () {
+      final resolution = resolve('''
+schema = 2
+
+[release.core]
+publish = ["pub.dev"]
+''', tree);
+      final unit = resolution.unit('core')!;
+      final checklist = Checklist.derive(unit, resolution, Diagnostics());
+
+      expect(unit.tag, isNull);
+      expect(checklist.steps.map((step) => step.id), [
+        'core/stage/complete',
+        'core/pub.dev/example@1.2.3',
+      ]);
+      expect(
+        checklist['core/pub.dev/example@1.2.3']!.needs,
+        ['core/stage/complete'],
+      );
+    });
+
+    test('an explicit tag sits between stage and registry publication', () {
+      final resolution = resolve('''
+schema = 2
+
+[release.core]
+tag = "release-v{version}"
+publish = ["git-tag", "pub.dev"]
+''', tree);
+      final unit = resolution.unit('core')!;
+      final checklist = Checklist.derive(unit, resolution, Diagnostics());
+
+      expect(unit.tag, 'release-v1.2.3');
+      expect(checklist.steps.map((step) => step.id), [
+        'core/stage/complete',
+        'core/tag/release-v1.2.3',
+        'core/pub.dev/example@1.2.3',
+      ]);
+      expect(
+        checklist['core/tag/release-v1.2.3']!.needs,
+        ['core/stage/complete'],
+      );
+      expect(
+        checklist['core/pub.dev/example@1.2.3']!.needs,
+        ['core/tag/release-v1.2.3'],
+      );
+    });
+
+    test('a metadata-only GitHub release has notes, manifest, and no checksum',
+        () {
+      final resolution = resolve('''
+schema = 2
+
+[release.core]
+publish = ["git-tag", "github-release"]
+''', tree);
+      final unit = resolution.unit('core')!;
+      final checklist = Checklist.derive(unit, resolution, Diagnostics());
+
+      expect(checklist.steps.map((step) => step.id), [
+        'core/stage/complete',
+        'core/tag/v1.2.3',
+        'core/github-release/v1.2.3',
+      ]);
+      expect(
+        checklist.steps.where((step) => step.kind == StepKind.checksums),
+        isEmpty,
+      );
+    });
+  });
 
   test('a registry-only unit stages before its tag and publish', () {
     final resolution = resolve(keybayConfig, keybayTree);
@@ -62,29 +140,75 @@ void main() {
     );
   });
 
+  test('several standalone producers stay qualified behind one bundle', () {
+    final resolution = resolve(
+        '''
+schema = 2
+
+[release.tools]
+tag = "tools-v{version}"
+publish = ["git-tag", "github-release"]
+
+[[release.tools.project]]
+path = "packages/server"
+binary_platforms = ["linux-x64"]
+
+[[release.tools.project]]
+path = "packages/admin"
+binary_platforms = ["linux-x64"]
+''',
+        MemorySourceTree({
+          'packages/server/pubspec.yaml': '''
+name: server_cli
+version: 1.0.0
+executables:
+  server: server
+''',
+          'packages/admin/pubspec.yaml': '''
+name: admin_cli
+version: 1.0.0
+executables:
+  admin: admin
+''',
+        }));
+    final unit = resolution.unit('tools')!;
+    final checklist = Checklist.derive(unit, resolution, Diagnostics());
+
+    expect(checklist.steps.map((step) => step.id), [
+      'tools/build/server_cli/linux-x64',
+      'tools/archive/server_cli/linux-x64',
+      'tools/build/admin_cli/linux-x64',
+      'tools/archive/admin_cli/linux-x64',
+      'tools/bundle/SHA256SUMS',
+      'tools/stage/complete',
+      'tools/tag/tools-v1.0.0',
+      'tools/github-release/tools-v1.0.0',
+    ]);
+  });
+
   test('the binary chain covers every declared platform', () {
     final resolution = resolve(keybayConfig, keybayTree);
     final checklist =
         Checklist.derive(resolution.unit('cli')!, resolution, Diagnostics());
     final ids = checklist.steps.map((s) => s.id).toList();
 
-    expect(ids, contains('cli/build/linux-x64'));
-    expect(ids, contains('cli/build/macos-arm64'));
+    expect(ids, contains('cli/build/keybay_cli/linux-x64'));
+    expect(ids, contains('cli/build/keybay_cli/macos-arm64'));
     expect(
-      checklist['cli/build/macos-arm64']!.summary,
+      checklist['cli/build/keybay_cli/macos-arm64']!.summary,
       contains('build and sign'),
       reason: 'only macOS binaries are signed, inside their build step',
     );
     expect(
-      checklist['cli/build/linux-x64']!.summary,
+      checklist['cli/build/keybay_cli/linux-x64']!.summary,
       isNot(contains('sign')),
     );
-    expect(ids, contains('cli/notarize/macos-arm64'));
-    expect(ids, contains('cli/archive/linux-x64'));
-    expect(ids, contains('cli/checksums/SHA256SUMS'));
+    expect(ids, contains('cli/notarize/keybay_cli/macos-arm64'));
+    expect(ids, contains('cli/archive/keybay_cli/linux-x64'));
+    expect(ids, contains('cli/bundle/SHA256SUMS'));
     expect(ids, contains('cli/stage/complete'));
     expect(ids, contains('cli/github-release/keybay_cli-v0.2.0'));
-    expect(ids, contains('cli/homebrew/keybay'));
+    expect(ids, contains('cli/homebrew/keybay_cli/keybay'));
   });
 
   test('notarization sits between the signed build and its archive', () {
@@ -99,20 +223,20 @@ void main() {
           'the receipt, and the validators speak the same producer names',
     );
     expect(
-      checklist['cli/build/macos-arm64']!.summary,
+      checklist['cli/build/keybay_cli/macos-arm64']!.summary,
       contains('build and sign'),
     );
     expect(
-      checklist['cli/notarize/macos-arm64']!.needs,
-      ['cli/build/macos-arm64'],
+      checklist['cli/notarize/keybay_cli/macos-arm64']!.needs,
+      ['cli/build/keybay_cli/macos-arm64'],
     );
     expect(
-      checklist['cli/archive/macos-arm64']!.needs,
-      ['cli/notarize/macos-arm64'],
+      checklist['cli/archive/keybay_cli/macos-arm64']!.needs,
+      ['cli/notarize/keybay_cli/macos-arm64'],
     );
     expect(
-      checklist['cli/archive/linux-x64']!.needs,
-      ['cli/build/linux-x64'],
+      checklist['cli/archive/keybay_cli/linux-x64']!.needs,
+      ['cli/build/keybay_cli/linux-x64'],
       reason: 'a Linux archive follows its build directly',
     );
   });
@@ -179,7 +303,7 @@ void main() {
     final checklist =
         Checklist.derive(resolution.unit('cli')!, resolution, Diagnostics());
     expect(
-      checklist['cli/homebrew/keybay']!.needs,
+      checklist['cli/homebrew/keybay_cli/keybay']!.needs,
       ['cli/github-release/keybay_cli-v0.2.0'],
     );
   });
@@ -190,11 +314,11 @@ void main() {
         Checklist.derive(resolution.unit('cli')!, resolution, Diagnostics());
 
     expect(checklist['cli/pub.dev/keybay_cli@0.2.0']!.isPermanent, isTrue);
-    expect(checklist['cli/build/linux-x64']!.isPermanent, isFalse);
-    expect(checklist['cli/build/linux-x64']!.isPublic, isFalse);
-    expect(checklist['cli/homebrew/keybay']!.isPublic, isTrue);
+    expect(checklist['cli/build/keybay_cli/linux-x64']!.isPermanent, isFalse);
+    expect(checklist['cli/build/keybay_cli/linux-x64']!.isPublic, isFalse);
+    expect(checklist['cli/homebrew/keybay_cli/keybay']!.isPublic, isTrue);
     expect(
-      checklist['cli/homebrew/keybay']!.isPermanent,
+      checklist['cli/homebrew/keybay_cli/keybay']!.isPermanent,
       isFalse,
       reason: 'a formula moves forward again; a published version cannot',
     );
@@ -220,10 +344,11 @@ dev_dependencies:
     });
 
     const config = '''
-schema = 1
+schema = 2
 
 [release.framework]
 tag = "fleury-v{version}"
+publish = ["git-tag"]
 
 [[release.framework.project]]
 path = "packages/fleury_widgets"
@@ -280,7 +405,7 @@ dependencies:
     });
 
     const config = '''
-schema = 1
+schema = 2
 
 [release.framework]
 path = "packages/fleury"
@@ -338,7 +463,7 @@ publish = ["pub.dev"]
     test('a third-party dependency is not a prerequisite', () {
       final resolution = resolve(
           '''
-schema = 1
+schema = 2
 
 [release.lib]
 publish = ["pub.dev"]
@@ -365,7 +490,7 @@ dependencies:
     test('a constraint the release cannot satisfy is refused', () {
       final resolution = resolve(
           '''
-schema = 1
+schema = 2
 
 [release.framework]
 path = "packages/fleury"
@@ -416,19 +541,19 @@ executables:
 
     expect(checklist.steps.map((s) => s.id).toList(), [
       'cli/requires/pub.dev/keybay/0.2.0',
-      'cli/build/linux-arm64',
-      'cli/archive/linux-arm64',
-      'cli/build/linux-x64',
-      'cli/archive/linux-x64',
-      'cli/build/macos-arm64',
-      'cli/notarize/macos-arm64',
-      'cli/archive/macos-arm64',
-      'cli/checksums/SHA256SUMS',
+      'cli/build/keybay_cli/linux-arm64',
+      'cli/archive/keybay_cli/linux-arm64',
+      'cli/build/keybay_cli/linux-x64',
+      'cli/archive/keybay_cli/linux-x64',
+      'cli/build/keybay_cli/macos-arm64',
+      'cli/notarize/keybay_cli/macos-arm64',
+      'cli/archive/keybay_cli/macos-arm64',
+      'cli/bundle/SHA256SUMS',
       'cli/stage/complete',
       'cli/tag/keybay_cli-v0.2.0',
       'cli/pub.dev/keybay_cli@0.2.0',
       'cli/github-release/keybay_cli-v0.2.0',
-      'cli/homebrew/keybay',
+      'cli/homebrew/keybay_cli/keybay',
     ]);
   });
 }

@@ -89,9 +89,11 @@ addressed here beyond fail-closed defaults.
   inspection before and after its act.
 - **Verdict** — `absent`, `exact`, `conflict`, or `unknown`.
 - **Stage** — the immutable, complete set of release inputs, artifacts, and
-  evidence under `.rk/work/stages/<stage-id>`. Its atomic receipt binds the
-  full source commit and tree, canonical plan, toolchain, artifact digests,
-  signature, and notarization evidence. It is reusable acceleration, not a
+  evidence under `.rk/work/stages/<stage-id>`. A Git-bound receipt binds the
+  full source commit and tree; an unbound receipt is scoped to one invocation
+  and deliberately claims no revision. Both bind the canonical plan,
+  toolchain, exact source snapshot, artifact digests, signature, and
+  notarization evidence. A stage is reusable acceleration, not a
   database of public truth. It is recovery-critical only between the first
   and last public acts of a binary release: signing and notarization are not
   byte-reproducible, so an interrupted release must retain those exact bytes.
@@ -107,15 +109,15 @@ One file, `release.toml`, at the repository root. Keybay's complete
 configuration:
 
 ```toml
-schema = 1
+schema = 2
 
-[release.core]                 # tag keybay-v{version}
+[release.core]
 path = "packages/keybay"
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]
 
-[release.cli]                  # tag keybay_cli-v{version}
+[release.cli]
 path = "packages/keybay_cli"
-publish = ["pub.dev", "github-release", "homebrew"]
+publish = ["git-tag", "pub.dev", "github-release", "homebrew"]
 binary_platforms = ["linux-x64", "linux-arm64", "macos-arm64"]
 ```
 
@@ -125,16 +127,27 @@ Rules:
   errors.
 - A unit with one project declares it inline; a unit with several uses
   `[[release.<unit>.project]]` rows. Both is an error. No empty headers.
-- `tag` is optional for a single-project unit and derives from the
-  publication target's documented convention — for pub.dev, `v{version}`
-  when the repository publishes one package and `<package>-v{version}` when
-  it publishes several. A multi-project unit must declare it, because a set
-  of packages has no canonical name. An explicit `tag` always wins.
+- `git-tag` is explicit. When selected, `tag` is optional for a
+  single-project unit and derives as `v{version}` when it is the repository's
+  only tagged unit. When several units are tagged, every unit declares its
+  pattern so adding a unit cannot silently rename an existing public tag
+  namespace. A tagged multi-project unit also declares it because a set of
+  packages has no native canonical name. Without `git-tag`, no tag is derived
+  or reported.
+- Git is a capability, not a prerequisite for rk itself. Registry-only
+  projects may release from an unbound filesystem source. `git-tag`, GitHub
+  Release, and Homebrew require Git and are refused explicitly when the
+  source is unbound. rk records no invented directory revision in that mode.
 - Project paths are canonicalized; duplicates and nesting fail. No
   recursive discovery: a project releases only if listed.
-- `publish` is an unordered set of closed channel names; duplicates fail.
-- `binary_platforms` is required by platform-bearing channels and rejected
-  without one. Its vocabulary is closed and enumerable; identifiers match
+- `publish` is an unordered set of closed target names; duplicates fail.
+  Git tag and GitHub Release belong to the release unit; registry and
+  Homebrew publication belong to the project. A single-project shorthand may
+  list both scopes together; a multi-project unit separates them.
+- `binary_platforms` is the explicit standalone Dart CLI production decision.
+  GitHub Release may carry only metadata when no producer contributes assets;
+  Homebrew requires binaries. Its vocabulary is closed and enumerable;
+  identifiers match
   the public asset names (`linux-x64`, not `linux-gnu-x64`), since Dart
   offers no libc selection and the glibc floor is a recorded fact rather
   than an authoring choice. It is declared rather than defaulted because
@@ -203,47 +216,29 @@ release matches the last one" — impossible to typo and self-maintaining:
 
 | Fact | Derived from |
 |---|---|
-| Apple team, code identifier | the designated requirement of the macOS binary in the current published release |
+| Apple team, code identifier | the designated requirement of the macOS binary in the current published release; for the first bare CLI signature, the native executable name |
 | Tag signer | the signature on the previous release's tag |
 | Homebrew tap | `<repository owner>/homebrew-tap`, Homebrew's convention |
 
-There is deliberately no `code_id` row. The tap convention is *resolved by
-`brew tap`*, so deferring to it defers to a system that enforces it, and a
-wrong tap fails loudly and is fixable. Nothing resolves
-`io.github.<owner>.<command>`; a wrong identifier is silent, permanent, and
-sealed into every Keychain ACL the program creates. rk suggests it and
-refuses to choose it.
+There is deliberately no `code_id` row or `[identity]` block. The producer
+reproduces an established published requirement. On the first bare CLI
+release, `codesign`'s native convention is the executable name; the stage
+discloses the resolved identifier before authorization. App bundles use their
+native bundle identifier. `apple_team` and `tag_signer` are also derived rather
+than declared. The only identity override currently retained is
+`homebrew_tap`, because a real nonconventional destination exists.
 
-*Amended (as built):* there is no `[identity]` block. Two optional
-settings live on the unit that owns them — `code_id` and `homebrew_tap` —
-because a program identity and a tap belong to what is being shipped, and
-a repository with two binary units has two of each; a single global table
-would have signed both as one program. `apple_team` is gone entirely: the
-keychain rule below was always the specification, and requiring the
-declaration was drift. `tag_signer` is gone too — it was accepted,
-stored, and read by nothing.
-
-The remaining override matters in two cases. A **deliberate migration** —
-a new tap — overrides a `conflict` on purpose. A new *team* is not
+The remaining override supports a deliberate tap destination. A new *team* is not
 overridable as built: a signature that disagrees with the published
-identity is refused (RK-SIGN-003), and a `code_id` that disagrees with it
-is refused before anything acts (RK-SIGN-005). Changing the team that
+identity is refused (RK-SIGN-003). Changing the team that
 distributes a program breaks Keychain continuity for existing users, so it
 is a refusal rather than a setting. A **first release** has no baseline: the Apple team
 comes from the keychain, filtered to `Developer ID Application` identities
 (one is unambiguous; several fail closed with the list; none reports that a
 certificate must be installed), and rk does not read `.xcodeproj` files,
 which in practice belong to example apps with unrelated identities. The
-code identifier has no source *in the system*, because it is a name a
-human chooses and cannot change without breaking Keychain continuity for
-existing users. So on a first signed release `code_id` is **required**, not
-optional: rk refuses (RK-SIGN-009) and offers `io.github.<owner>.<command>`
-in the remedy as text to read and edit. It offers rather than derives,
-because the rule reproduces rk's own declared identifier exactly and misses
-keybay's — where `.cli` was chosen so one signed program in a two-unit
-repository would not claim the bare product name — and because two real
-packages by one owner that both declare `executables: cli` collide under
-it. Every release after the first reads the identifier off the binary users
+code identifier for a bare CLI comes from the native executable declaration.
+Every release after the first reads the identifier off the binary users
 installed. The prompt names both halves of what becomes permanent, the
 certificate and the identifier, before the version is typed. A tag signer, where
 earlier tags are unsigned or absent, is the key about to sign, confirmed
@@ -257,12 +252,18 @@ once. Keybay needs none of this: its 0.1.0 release supplies every baseline.
 repository that defines exactly one has nothing to disambiguate, while two
 units are two releases and rk names them rather than choosing — and optionally
 `--stage`. `init` takes no positional. Bare invocation works in a single-unit
-repository and, in a multi-unit one, lists the units and stops — choosing
-what to publish permanently is not an arrow key.
+repository and, in a multi-unit one, lists the units and stops. Release unit
+selection remains explicit; initialization has its own per-candidate selector.
 
-- **`rk init`** — write `release.toml`. Reads the repository, shows the
-  config it proposes, writes it on confirmation. No network, no settings,
-  nothing irreversible, no questions. It never edits an existing config,
+- **`rk init`** — propose `release.toml`. Reads the repository and, on a
+  capable terminal, presents a compact per-project matrix of release choices.
+  It starts from conservative selections, applies visible prerequisite
+  cascades, previews the exact config and `.gitignore` change, and writes only
+  on confirmation. Back returns to selection; customization is intentionally
+  left to the resulting TOML rather than a field editor. Without a usable TTY
+  it prints the conservative proposal and writes nothing; `--write` accepts
+  that proposal. No network and nothing irreversible before confirmation. It
+  never edits an existing config,
   never adds a project silently, scans **git-tracked manifests only**, does
   not prefill `binary_platforms` without a platform-bearing channel, and
   never infers a binary channel from an `executables:` block — declaring an
@@ -281,13 +282,15 @@ what to publish permanently is not an arrow key.
   same stage internally, then authorize and publish. It inspects each target
   before acting and with the same operation afterward. `exact` skips,
   `absent` acts, and `conflict` or `unknown` stops. In an interactive run with
-  one or more unfinished pub.dev targets, it runs exactly one native
-  `dart pub login` before private staging. Re-running is resume.
+  unfinished targets, it acquires native publication sessions only after the
+  complete private stage is validated and before authorization. Re-running is
+  resume.
 
-The login is a release preflight, not a target verdict or public act. Success
-proves only that Dart has a current session; it cannot prove that account is an
-uploader for every package. Only the publish attempt followed by exact public
-read-back completes a pub.dev target, and an idempotent rerun records that
+Session acquisition is not a target verdict or public act. Success proves only
+that a native tool has a usable session; it cannot prove write authority for
+the intended package or repository. The effective destination is frozen and
+rechecked around acquisition. Only the publish attempt followed by exact
+public read-back completes a target, and an idempotent rerun records that
 already-exact result without publishing again.
 
 There is no historical verification verb. Published truth is established by
@@ -374,6 +377,10 @@ final report. A pipe or JSON caller receives no spinner or cursor movement.
 The final report has one section per configured target — Git tag, pub.dev,
 GitHub Release, Homebrew, or a later adapter — and shows `current -> target`,
 the public condition in words, and the exact filenames that target consumes.
+The machine report also records `source_binding` (`gitCommit` or `unbound`)
+and `source_comparison` (`exact` or `unavailable`) independently from the
+target verdict. The human report calls out the exceptional unbound case once
+rather than repeating it under every target.
 For artifacts, `✓` means the exact artifact is validated in the matching
 stage, no mark means it has not been produced and no production problem is
 known, and `✗` means rk already knows it cannot be produced or validated. The
@@ -489,8 +496,10 @@ before concluding anything — destination APIs lag their own writes.
 ### Staging and reuse
 
 Every release completes and atomically receipts its stage before the first
-public act. The stage id binds its schema, full commit and tree identity, and
-canonical release plan, including the exact producer implementation and the
+public act. A Git-bound stage id binds its schema, full commit and tree
+identity, and canonical release plan. An unbound stage id instead includes a
+one-invocation nonce: it may proceed through a one-shot registry release, but
+cannot be handed to a later authorization run. Both plans include the exact producer implementation and the
 version plus digest of the PATH-resolved compiler executable. Production
 invokes that resolved path rather than resolving `dart` a second time, without
 depending on the SDK's private on-disk layout. The receipt then binds every
@@ -522,22 +531,16 @@ This reduces the draft rule to three cases:
 
 - **no draft** — create it and upload the full inventory;
 - **a draft matching this release exactly** — adopt and publish;
-- **a draft that is anything else** — delete it, recreate, upload the full
-  inventory.
+- **a draft that is anything else** — refuse and name the mismatch. rk never
+  deletes a draft it did not prove it owns.
 
-*Amended (7b, as built):* the middle case is folded into the third — every
-same-tag draft is deleted by id and the release recreated, because with
-the stage holding every artifact, proving a draft exactly right costs
-more than recreating it. Adoption returns when CI makes the draft the only
-copy, per the paragraph below. The create is delegated to
-the GitHub API: create a private draft, upload every staged asset, re-read its
-metadata and complete inventory, then send one `draft: false` update. Thus no
-permanent release is intentionally created with a partial asset set.
-
-Deleting is safe precisely because the draft is not the only copy. Its
-worst case is re-uploading a few files, which is cheaper than the machinery
-required to repair one in place. Draft deletion is the only deletion rk
-performs, it applies only to unpublished drafts, and it is announced.
+Adoption requires exactly one same-tag draft whose metadata and assets are a
+canonical digest-verified prefix of the frozen local request. Local paths,
+sizes, and digests are validated before the first API mutation. A new draft is
+created only when none exists, then every staged asset is uploaded, its full
+inventory is re-read, and one `draft: false` update makes it public. Thus no
+permanent release is intentionally created with a partial asset set and no
+remote draft is deleted as cleanup.
 
 **The flip re-verifies against reality**: enumerate the draft's assets,
 require the exact inventory, confirm every digest, recompute the checksums
@@ -579,11 +582,12 @@ pages.
 
 ### Cleanup
 
-Published assets are the product and are never cleaned up. Local stages are
-disposable acceleration and may be deleted after release; public truth remains
-recoverable from target inspection, using the published manifest for binary
-releases and the tagged source plus registry archive for pub.dev-only
-releases. A failed step or non-clean verdict keeps its evidence for diagnosis.
+Published assets are the product and are never cleaned up. Git-bound local
+stages become disposable acceleration after release because public truth is
+recoverable from target inspection. An unbound stage is the only retained
+expected payload unless the provider durably binds its digest; deleting it
+therefore downgrades later comparison to `unknown`, never to permission to
+publish again. A failed step or non-clean verdict keeps its evidence for diagnosis.
 Residue from an abandoned release is surfaced by `status` and deleted only by
 a human.
 
@@ -606,11 +610,12 @@ wrong credential fails as loudly as a missing one.
 | Tag signing | operator SSH signing key |
 
 Native tools remain the credential owners and rk never reads their secrets.
-For a normal interactive release with unfinished pub.dev targets, rk runs one
-native `dart pub login` attached to the terminal before private staging.
-`status` and `release --stage` never run it. Failure is `RK-PUB-007` with the
-remedy to run `dart pub login` from a terminal and rerun the unit release.
-Success proves a current session, not uploader authority for any package;
+For a normal release, rk performs safe readiness checks first, builds and
+validates the complete private stage, refreshes public observations, then
+acquires native sessions before authorization. `dart pub login` remains
+attached to the terminal; GitHub checks its existing `gh` session. `status`
+and `release --stage` never acquire sessions. Failure is target-specific and
+halts before acting. Success proves a usable session, not write authority;
 publish and exact read-back remain the final proof. Publishers also run
 attached to the terminal so native prompts can pass through.
 
@@ -696,8 +701,8 @@ act(expected, stage)
   time — the pub.dev package and, when it applies, the macOS code
   identifier — with its consequence, before the version is typed.
 
-  A normal interactive release invokes one native `dart pub login` before
-  private staging when at least one configured pub.dev target is unfinished.
+  A normal release invokes one native `dart pub login` after the private stage
+  is complete when at least one configured pub.dev target is unfinished.
   Stage-only runs never log in. A successful login creates no auth-specific
   target state and proves no package-level uploader permission; the actual
   publish and exact archive read-back decide completion, while an idempotent
@@ -766,7 +771,7 @@ yes, not a standing `--force`, and never guessed. Consentless publication
 (no operator anywhere in the loop) stays refused; signed-tag authorization
 remains the intended CI path, its signer policy and non-interactive
 execution ledgered rather than implied by the current implementation.
-The interactive `dart pub login` preflight does not change this boundary and
+The late native `dart pub login` session acquisition does not change this boundary and
 is not a CI credential design; trusted publishing remains part of the deferred
 remote-CI work below.
 

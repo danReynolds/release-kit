@@ -23,11 +23,11 @@ import 'package:test/test.dart';
 import 'status_test.dart' show FakeRegistry;
 
 const _config = '''
-schema = 1
+schema = 2
 
 [release.core]
 path = "packages/keybay"
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]
 ''';
 
 const _tagObject = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
@@ -115,6 +115,7 @@ class Ran {
 Future<Ran> release({
   MemorySourceTree? source,
   GitState? state,
+  Map<String, String> Function()? refreshEnvironment,
   RegistryReader? registry,
   String? typed = '0.2.0',
   String? preauthorized,
@@ -303,6 +304,7 @@ Future<Ran> release({
     stageFor: stageFor,
     refreshStage: (unit, _) => stageFor(unit),
     refreshGit: () => effectiveGit,
+    refreshEnvironment: refreshEnvironment,
   );
   final code = await command.run(only: only);
 
@@ -336,19 +338,59 @@ void releaseCommandContract() {
     expect(ran.calls, contains('dart pub publish --force'));
   });
 
-  test('two units are two releases, and rk will not pick one', () async {
+  test('pub-only release neither requires nor creates a Git tag', () async {
+    final registry = _MutableRegistry(<String>['0.1.0']);
     final ran = await release(
-      only: null,
       config: '''
-schema = 1
+schema = 2
 
 [release.core]
 path = "packages/keybay"
 publish = ["pub.dev"]
+''',
+      state: _git(pushed: false),
+      registry: registry,
+      onRun: (key) {
+        if (key == 'dart pub publish --force') {
+          registry.goLive('0.2.0');
+          registry.archives['keybay@0.2.0'] = publishedBytes();
+        }
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    expect((ran.report['units'] as List).cast<Map>().single['tag'], isNull);
+    expect(ran.calls, contains('dart pub publish --force'));
+    expect(
+      ran.calls.where((call) =>
+          call.startsWith('git tag') ||
+          call.startsWith('git push') ||
+          call.startsWith('git ls-remote')),
+      isEmpty,
+    );
+    expect(
+      ran.steps.singleWhere(
+        (step) => step['kind'] == 'publishRegistry',
+      )['target'],
+      'pubDev',
+    );
+  });
+
+  test('two units are two releases, and rk will not pick one', () async {
+    final ran = await release(
+      only: null,
+      config: '''
+schema = 2
+
+[release.core]
+tag = "keybay-v{version}"
+path = "packages/keybay"
+publish = ["git-tag", "pub.dev"]
 
 [release.other]
+tag = "other-v{version}"
 path = "packages/other"
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]
 ''',
       source: MemorySourceTree({
         'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
@@ -374,13 +416,12 @@ publish = ["pub.dev"]
 /// mutations lived in it.
 void signingBaselineRegressions() {
   const binaryConfig = '''
-schema = 1
+schema = 2
 
 [release.cli]
 path = "packages/tool"
-publish = ["github-release"]
+publish = ["git-tag", "github-release"]
 binary_platforms = ["macos-arm64"]
-code_id = "com.example.tool"
 ''';
 
   MemorySourceTree binaryTree() => MemorySourceTree({
@@ -466,53 +507,6 @@ executables:
       reason: 'nothing may act before the baseline is known',
     );
     expect(ran.text, isNot(contains('RK-INT-001')));
-  });
-
-  test(
-      'a declared identity that disagrees with the published release is '
-      'refused before anything acts', () async {
-    // The declaration says com.example.tool; the release users installed
-    // says io.github.other.tool. Left to the sign step, this surfaced as a
-    // signature mismatch after the tag was public, blaming the keychain.
-    final ran = await release(
-      config: binaryConfig,
-      source: binaryTree(),
-      state: _git(tags: ['v0.9.0']),
-      registry: FakeRegistry({}),
-      typed: '1.0.0',
-      only: 'cli',
-      answers: (key) {
-        if (key.contains('/releases/tags/v0.9.0')) {
-          return ToolResult(
-            exitCode: 0,
-            stdout: '{"assets":[{"name":"tool-0.9.0-macos-arm64.tar.gz"}]}',
-            stderr: '',
-          );
-        }
-        if (key.startsWith('gh release download')) {
-          return ToolResult(exitCode: 0, stdout: '', stderr: '');
-        }
-        if (key.startsWith('codesign -d -r-')) {
-          return ToolResult(
-            exitCode: 0,
-            stdout: 'designated => identifier "io.github.other.tool" and '
-                'certificate leaf[subject.OU] = "TEAM123456"',
-            stderr: '',
-          );
-        }
-        return forge(key, publishedTags: const ['v0.9.0']);
-      },
-    );
-
-    expect(ran.exitCode, ExitCodes.refused, reason: ran.text);
-    expect(ran.problems.map((p) => p['code']), contains('RK-SIGN-005'));
-    expect(ran.text, contains('io.github.other.tool'));
-    expect(ran.text, contains('com.example.tool'));
-    expect(
-      ran.calls.where((c) => c.startsWith('git tag')),
-      isEmpty,
-      reason: 'the disagreement is knowable before the first act',
-    );
   });
 
   test('the baseline is read from the newest lower version, not the oldest',
@@ -673,7 +667,7 @@ void main() {
     );
   });
 
-  test('a missing pub session refuses before staging or any public act',
+  test('a missing pub session refuses after staging and before authorization',
       () async {
     final ran = await release(
       results: {
@@ -694,7 +688,7 @@ void main() {
     expect(ran.text, contains('dart pub login did not complete'));
     expect(ran.text, contains('no public target changed'));
     expect(ran.calls, contains('dart pub login'));
-    expect(ran.calls, isNot(contains('dart pub publish --dry-run')));
+    expect(ran.calls, contains('dart pub publish --dry-run'));
     expect(ran.calls.where((call) => call.startsWith('git tag ')), isEmpty);
     expect(ran.calls, isNot(contains('dart pub publish --force')));
     expect('not attempted'.allMatches(ran.text), hasLength(2));
@@ -718,7 +712,7 @@ void main() {
     expect(ran.problems.map((problem) => problem['code']), ['RK-PUB-007']);
     expect(ran.problems.map((problem) => problem['code']),
         isNot(contains('RK-INT-001')));
-    expect(ran.calls, isNot(contains('dart pub publish --dry-run')));
+    expect(ran.calls, contains('dart pub publish --dry-run'));
     expect(ran.calls.where((call) => call.startsWith('git tag ')), isEmpty);
   });
 
@@ -816,8 +810,8 @@ void main() {
     final push = ran.calls.indexOf(_tagPush);
     final publish = ran.calls.indexOf('dart pub publish --force');
     final orderedCalls = [
-      pubLogin,
       pubValidation,
+      pubLogin,
       tag,
       push,
       publish,
@@ -826,7 +820,8 @@ void main() {
     expect(
       orderedCalls,
       orderedEquals([...orderedCalls]..sort()),
-      reason: 'everything read-only runs before anything public: the first '
+      reason: 'package validation and session acquisition both run before '
+          'anything public: the first '
           'real run once discovered a validation refusal only after the '
           'signed tag was pushed',
     );
@@ -841,6 +836,64 @@ void main() {
       contains('byte-identical'),
       reason: 'the version existing is not the right bytes existing',
     );
+  });
+
+  test('a destination redirected during login refuses without disclosing it',
+      () async {
+    var redirected = false;
+    final ran = await release(
+      typed: '0.2.0',
+      refreshEnvironment: () => {
+        'PUB_HOSTED_URL': redirected
+            ? 'https://token:secret@packages.example.invalid/private'
+            : 'https://pub.dev',
+      },
+      onRun: (key) {
+        if (key == 'dart pub login') redirected = true;
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(ran.problems.map((problem) => problem['code']),
+        contains('RK-DEST-001'));
+    expect(ran.calls, contains('dart pub publish --dry-run'));
+    expect(ran.calls, contains('dart pub login'));
+    expect(ran.calls.where((call) => call.startsWith('git tag ')), isEmpty);
+    expect(ran.calls, isNot(contains('dart pub publish --force')));
+    expect(ran.text, isNot(contains('token')));
+    expect(ran.text, isNot(contains('secret')));
+    expect(ran.text, isNot(contains('packages.example.invalid')));
+  });
+
+  test('an ambient custom registry refuses safely before staging', () async {
+    final ran = await release(
+      refreshEnvironment: () => const {
+        'PUB_HOSTED_URL': 'https://token@packages.example.invalid',
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(ran.problems.map((problem) => problem['code']), ['RK-PUB-009']);
+    expect(ran.calls, isNot(contains('dart pub publish --dry-run')));
+    expect(ran.calls, isNot(contains('dart pub login')));
+    expect(ran.calls.where((call) => call.startsWith('git tag ')), isEmpty);
+    expect(ran.text, isNot(contains('token')));
+    expect(ran.text, isNot(contains('packages.example.invalid')));
+  });
+
+  test('stage-only refuses an ambient custom registry before validation',
+      () async {
+    final ran = await release(
+      dryRun: true,
+      refreshEnvironment: () => const {
+        'PUB_HOSTED_URL': 'https://token@packages.example.invalid',
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(ran.problems.map((problem) => problem['code']), ['RK-PUB-009']);
+    expect(ran.calls, isNot(contains('dart pub publish --dry-run')));
+    expect(ran.calls, isNot(contains('dart pub login')));
   });
 
   test('warnings-only validation publishes, with the warnings shown first',
@@ -1130,15 +1183,17 @@ class _MutableRegistry extends FakeRegistry {
 /// release was prose-only under --json.
 void reviewRegressions() {
   const twoUnits = '''
-schema = 1
+schema = 2
 
 [release.core]
+tag = "keybay-v{version}"
 path = "packages/keybay"
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]
 
 [release.cli]
+tag = "keybay_cli-v{version}"
 path = "packages/cli"
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]
 ''';
 
   MemorySourceTree twoUnitTree() => MemorySourceTree({
@@ -1444,11 +1499,11 @@ dependencies:
     // not — a release that halted on its own work could never start.
     final ran = await release(
       config: '''
-schema = 1
+schema = 2
 
 [release.cli]
 path = "packages/keybay"
-publish = ["github-release"]
+publish = ["git-tag", "github-release"]
 binary_platforms = ["macos-arm64"]
 ''',
       source: MemorySourceTree({

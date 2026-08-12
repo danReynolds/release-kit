@@ -176,8 +176,18 @@ class HomebrewTarget {
   Future<Inspection> inspect({
     required String formulaPath,
     required List<int>? expectedBytes,
+    String? expectedSha256,
     Future<Inspection> Function(List<int> bytes)? inspectEarlierRelease,
   }) async {
+    if (expectedBytes != null && expectedSha256 != null) {
+      throw ArgumentError(
+        'Homebrew inspection accepts expected bytes or a digest, not both',
+      );
+    }
+    if (expectedSha256 != null &&
+        !RegExp(r'^[0-9a-f]{64}$').hasMatch(expectedSha256)) {
+      throw ArgumentError('expected formula digest is not lowercase SHA-256');
+    }
     final result = await tools.run(
       'gh',
       ['api', 'repos/$tap/contents/$formulaPath'],
@@ -219,12 +229,14 @@ class HomebrewTarget {
           'the tap answered something unreadable: $error');
     }
 
-    if (expectedBytes != null && _sameBytes(publicBytes, expectedBytes)) {
+    final publicSha256 = Sha256.hex(publicBytes);
+    if ((expectedBytes != null && _sameBytes(publicBytes, expectedBytes)) ||
+        (expectedSha256 != null && publicSha256 == expectedSha256)) {
       final version = HomebrewFormula.versionIn(publicBytes);
       return Inspection.exact(
         detail: 'formula bytes match the release',
         evidence: {
-          'sha256': Sha256.hex(publicBytes),
+          'sha256': publicSha256,
           if (version != null) 'version': version.canonical,
         },
       );
@@ -255,7 +267,8 @@ class HomebrewTarget {
       'the public formula is not an exact release formula',
       evidence: {
         if (expectedBytes != null) 'expected sha256': Sha256.hex(expectedBytes),
-        'public sha256': Sha256.hex(publicBytes),
+        if (expectedSha256 != null) 'expected sha256': expectedSha256,
+        'public sha256': publicSha256,
       },
     );
   }

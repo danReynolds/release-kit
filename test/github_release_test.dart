@@ -394,7 +394,7 @@ void main() {
           unit: unit,
           version: version,
           tag: tag,
-          sourceCommit: (stage ?? identity).headCommit,
+          sourceCommit: (stage ?? identity).headCommit!,
           title: title,
           body: body,
           manifestSha256: manifestSha256 ?? Sha256.hex(bytes),
@@ -414,7 +414,7 @@ void main() {
           unit: unit,
           version: version,
           tag: tag,
-          sourceCommit: sourceCommit ?? identity.headCommit,
+          sourceCommit: sourceCommit ?? identity.headCommit!,
           title: title,
           manifestSha256: manifestSha256 ?? Sha256.hex(bytes),
         );
@@ -508,6 +508,41 @@ void main() {
         throwsUnsupportedError,
         reason: 'verified bytes must not be mutable after the check',
       );
+    });
+
+    test('current and historical reads expose only an authenticated manifest',
+        () async {
+      final manifest = manifestBytes();
+      final currentTools = downloadable(manifest);
+      final release = GithubRelease(
+        tools: currentTools,
+        repository: 'example/tool',
+        workingDirectory: '/repo',
+      );
+
+      final current = await release.readManifest(expectation(manifest));
+      expect(current.inspection.verdict, Verdict.exact);
+      expect(current.manifest?.unit, 'cli');
+      expect(current.manifest?.artifacts.single.name, asset);
+
+      final historicalTools = downloadable(manifest);
+      final historical = await GithubRelease(
+        tools: historicalTools,
+        repository: 'example/tool',
+        workingDirectory: '/repo',
+      ).readHistoricalManifest(historicalExpectation(manifest));
+      expect(historical.inspection.verdict, Verdict.exact);
+      expect(historical.manifest?.commit, identity.headCommit);
+
+      final conflicted = await GithubRelease(
+        tools: downloadable(manifest),
+        repository: 'example/tool',
+        workingDirectory: '/repo',
+      ).readManifest(
+        expectation(manifest, manifestSha256: zeroDigest),
+      );
+      expect(conflicted.inspection.verdict, Verdict.conflict);
+      expect(conflicted.manifest, isNull);
     });
 
     test('no bytes escape when a different declared artifact conflicts',
@@ -674,8 +709,8 @@ void main() {
     test('stateless verification anchors source, not today\'s stage identity',
         () async {
       final builtElsewhere = StageIdentity.forPlan(
-        headCommit: identity.headCommit,
-        headTree: identity.headTree,
+        headCommit: identity.headCommit!,
+        headTree: identity.headTree!,
         resolvedPlan: const {
           'unit': 'cli',
           'version': '1.0.0',
@@ -690,7 +725,7 @@ void main() {
           unit: 'cli',
           version: '1.0.0',
           tag: 'v1.0.0',
-          sourceCommit: identity.headCommit,
+          sourceCommit: identity.headCommit!,
           title: 'tool 1.0.0',
           body: 'release notes\n',
           manifestSha256: Sha256.hex(manifest),
@@ -1009,6 +1044,9 @@ void main() {
     Future<({PublishOutcome outcome, RecordingTools tools})> publish({
       String slurp = '[[]]',
       bool duplicateAssetNames = false,
+      List<String> initialDraftNames = const [],
+      String draftTitle = 'tool 1.0.0',
+      String draftBody = 'notes',
       String? createFailure,
       bool unreadDraftsAfterCreate = false,
       String? uploadFailure,
@@ -1040,7 +1078,9 @@ void main() {
         for (final path in paths)
           path.split('/').last: File(path).readAsBytesSync(),
       };
-      final assets = <String, List<int>>{};
+      final assets = <String, List<int>>{
+        for (final name in initialDraftNames) name: stagedBytes[name]!,
+      };
       Map<String, Object?> draftAssetJson(String name, int index) {
         final bytes = draftAssetOverrides[name] ?? assets[name]!;
         return {
@@ -1114,15 +1154,17 @@ void main() {
               key.startsWith('gh release download ')) {
             return ToolResult(exitCode: 0, stdout: '', stderr: '');
           }
-          if (key == 'gh api repos/example/tool/releases/7') {
+          if (RegExp(r'^gh api repos/example/tool/releases/\d+$')
+              .hasMatch(key)) {
+            final id = int.parse(key.split('/').last);
             return ToolResult(
               exitCode: 0,
               stdout: jsonEncode({
                 'tag_name': 'v1.0.0',
                 'draft': draft,
-                'id': 7,
-                'name': 'tool 1.0.0',
-                'body': 'notes',
+                'id': id,
+                'name': draftTitle,
+                'body': draftBody,
                 'assets': [
                   for (var index = 0; index < assets.length; index++)
                     draftAssetJson(assets.keys.elementAt(index), index),
@@ -1149,25 +1191,21 @@ void main() {
         tag: 'v1.0.0',
         title: 'tool 1.0.0',
         notesPath: notes.path,
-        assetPaths: paths,
-        assetSha256: {
-          for (final entry in stagedBytes.entries)
-            entry.key: Sha256.hex(entry.value),
-        },
-        assetSizes: {
-          for (final entry in stagedBytes.entries)
-            entry.key: entry.value.length,
-        },
+        assets: [
+          for (final path in paths)
+            GithubReleaseAssetUpload(
+              publicName: path.split('/').last,
+              stagedPath: path,
+              size: File(path).lengthSync(),
+              sha256: Sha256.hex(File(path).readAsBytesSync()),
+            ),
+        ],
       );
       return (outcome: outcome, tools: tools);
     }
 
-    test('same-tag drafts are deleted by id, across pages; nothing else is',
+    test('multiple same-tag drafts refuse without deleting or creating',
         () async {
-      // Two drafts carry the tag on different pages — the porcelain delete
-      // addressed whichever it found first, and a single-page read capped
-      // at 100 missed the second entirely. A published release and another
-      // tag's draft must both survive the sweep.
       final run = await publish(
         slurp: jsonEncode([
           [
@@ -1180,24 +1218,14 @@ void main() {
           ],
         ]),
       );
-      expect(run.outcome.ok, isTrue, reason: run.outcome.problem ?? '');
-
-      final deletes = run.tools.calls
-          .where((c) => c.startsWith('gh api -X DELETE'))
-          .toList();
-      expect(deletes, hasLength(2));
-      expect(deletes.any((c) => c.endsWith('/releases/11')), isTrue);
-      expect(deletes.any((c) => c.endsWith('/releases/12')), isTrue);
+      expect(run.outcome.ok, isFalse);
       expect(
-        deletes.any((c) => c.endsWith('/releases/13')),
-        isFalse,
-        reason: 'another tag\'s draft is not in the way',
-      );
+          run.outcome.problem, contains('will not choose, replace, or delete'));
+      expect(run.outcome.draftEffect, DraftEffect.none);
       expect(
-        deletes.any((c) => c.endsWith('/releases/99')),
-        isFalse,
-        reason: 'a published release is never swept',
-      );
+          run.tools.calls.any((call) => call.contains(' -X DELETE ')), isFalse);
+      expect(
+          run.tools.calls.any((call) => call.contains(' -X POST ')), isFalse);
     });
 
     test('a malformed draft sweep refuses before creating another draft',
@@ -1217,7 +1245,7 @@ void main() {
       );
     });
 
-    test('a deleted same-tag draft is reported when later validation fails',
+    test('local request validation runs before any remote read or mutation',
         () async {
       final run = await publish(
         slurp: jsonEncode([
@@ -1229,15 +1257,68 @@ void main() {
       );
 
       expect(run.outcome.ok, isFalse);
-      expect(run.outcome.mayHaveActed, isFalse,
-          reason: 'a private deletion is not a public release');
-      expect(run.outcome.draftEffect, DraftEffect.changed);
+      expect(run.outcome.mayHaveActed, isFalse);
+      expect(run.outcome.draftEffect, DraftEffect.none);
+      expect(run.tools.calls, isEmpty);
+    });
+
+    test(
+        'one exact canonical draft prefix is adopted and only its suffix uploads',
+        () async {
+      final run = await publish(
+        slurp: jsonEncode([
+          [
+            {'tag_name': 'v1.0.0', 'draft': true, 'id': 11},
+          ],
+        ]),
+        initialDraftNames: const ['SHA256SUMS'],
+      );
+
+      expect(run.outcome.ok, isTrue, reason: run.outcome.problem ?? '');
+      expect(
+        run.tools.calls.where((call) => call.contains('uploads.github.com')),
+        hasLength(1),
+      );
+      expect(
+        run.tools.calls
+            .singleWhere((call) => call.contains('uploads.github.com')),
+        contains('name=a.tar.gz'),
+      );
       expect(
         run.tools.calls.any(
-          (call) => call.contains('POST repos/example/tool/releases'),
+          (call) => call.contains('POST repos/example/tool/releases --input'),
         ),
         isFalse,
       );
+      expect(
+          run.tools.calls.any((call) => call.contains(' -X DELETE ')), isFalse);
+    });
+
+    test('a non-prefix or metadata-different draft refuses without mutation',
+        () async {
+      for (final scenario in [
+        (names: const ['a.tar.gz'], title: 'tool 1.0.0'),
+        (names: const <String>[], title: 'Different'),
+      ]) {
+        final run = await publish(
+          slurp: jsonEncode([
+            [
+              {'tag_name': 'v1.0.0', 'draft': true, 'id': 11},
+            ],
+          ]),
+          initialDraftNames: scenario.names,
+          draftTitle: scenario.title,
+        );
+        expect(run.outcome.ok, isFalse, reason: '$scenario');
+        expect(run.outcome.draftEffect, DraftEffect.none);
+        expect(
+          run.tools.calls.any((call) =>
+              call.contains('uploads.github.com') ||
+              call.contains(' -X PATCH ') ||
+              call.contains(' -X DELETE ')),
+          isFalse,
+        );
+      }
     });
 
     test('a lost create response reports uncertain private state, not public',
@@ -1280,10 +1361,11 @@ void main() {
           (call) => call.contains('PATCH repos/example/tool/releases/7'));
       expect(create, greaterThanOrEqualTo(0));
       expect(uploads, hasLength(2));
-      expect(reads, hasLength(2));
-      expect(create, lessThan(uploads.first));
-      expect(uploads.last, lessThan(reads.first));
-      expect(reads.first, lessThan(patch));
+      expect(reads, hasLength(3));
+      expect(create, lessThan(reads.first));
+      expect(reads.first, lessThan(uploads.first));
+      expect(uploads.last, lessThan(reads[1]));
+      expect(reads[1], lessThan(patch));
       expect(patch, lessThan(reads.last));
       for (final index in uploads) {
         final call = run.tools.calls[index];
@@ -1336,11 +1418,12 @@ void main() {
         for (var i = 0; i < run.tools.calls.length; i++)
           if (run.tools.calls[i].contains('uploads.github.com')) i,
       ];
-      final firstDraftRead = run.tools.calls.indexWhere(
-        (call) => call == 'gh api repos/example/tool/releases/7',
-      );
-      expect(firstDraftRead, greaterThan(uploads.first));
-      expect(firstDraftRead, lessThan(uploads.last));
+      final draftReads = [
+        for (var i = 0; i < run.tools.calls.length; i++)
+          if (run.tools.calls[i] == 'gh api repos/example/tool/releases/7') i,
+      ];
+      expect(draftReads[1], greaterThan(uploads.first));
+      expect(draftReads[1], lessThan(uploads.last));
     });
 
     test('exact same-tag bytes cannot mask wrong bytes on the draft id',
@@ -1373,7 +1456,7 @@ void main() {
         uploadFailure: 'connection lost',
         failedUploadLands: true,
         draftAssetOverrides: {
-          'a.tar.gz': utf8.encode('a.tar'),
+          'SHA256SUMS': utf8.encode('SHA'),
         },
       );
 

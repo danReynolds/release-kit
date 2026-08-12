@@ -17,8 +17,9 @@ class StageBoard {
 
   /// The rows one unit's stage will fill, in publication order.
   ///
-  /// A target that publishes no file of its own — a Git tag, a Homebrew
-  /// formula that ships inside the GitHub release — contributes no group.
+  /// A target that publishes no file of its own — a Git tag — contributes no
+  /// group. A Homebrew formula is shown under Homebrew because it is private
+  /// input to that destination, not a GitHub Release asset.
   /// pub.dev contributes one row per package: it uploads no file rk makes,
   /// but it does validate the staged source, and that check is the most
   /// common reason a release stops later than it should have.
@@ -38,14 +39,14 @@ class StageBoard {
         final row = StageBoardRow(artifact);
         rows.add(row);
         if (artifact == ReleaseAssets.checksums) {
-          rowOf['checksums'] = row;
+          rowOf['bundle:checksums'] = row;
         } else if (artifact == ReleaseAssets.manifest) {
           rowOf['complete-stage'] = row;
         } else if (artifact.endsWith('.rb')) {
           // Without this the formula row never completed, and `○` — added
           // because blank read as skipped — was left on the one file that
           // had in fact been produced.
-          rowOf['homebrew-formula'] = row;
+          rowOf['homebrew-formula:${target.project!.name}'] = row;
         }
       }
       if (rows.isNotEmpty) {
@@ -61,20 +62,19 @@ class StageBoard {
 
     // Every producer of one platform's binary reports against that
     // platform's archive: the binary itself never leaves the stage.
-    if (unit.shipsBinaries) {
-      final project = unit.binaryProject;
-      for (final step in Checklist.localProducerSteps(unit)) {
-        final platform = step.platform;
-        if (platform == null) continue;
-        final archive = ReleaseAssets.archiveName(
-          project.executable!,
-          project.version.canonical,
-          platform,
-        );
-        for (final group in groups) {
-          for (final row in group.rows) {
-            if (row.name == archive) rowOf[receiptNameFor(step)] = row;
-          }
+    for (final step in Checklist.localProducerSteps(unit)) {
+      final platform = step.platform;
+      final projectName = step.project;
+      if (platform == null || projectName == null) continue;
+      final project = unit.project(projectName);
+      final archive = ReleaseAssets.archiveName(
+        project.executable!,
+        project.version.canonical,
+        platform,
+      );
+      for (final group in groups) {
+        for (final row in group.rows) {
+          if (row.name == archive) rowOf[receiptNameFor(step)] = row;
         }
       }
     }

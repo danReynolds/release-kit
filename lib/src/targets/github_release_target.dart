@@ -7,16 +7,17 @@ import '../engine/assets.dart';
 import '../engine/checklist.dart';
 import '../engine/changelog.dart';
 import '../engine/diagnostic.dart';
+import '../engine/publish_target.dart';
+import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
 import '../engine/source_tree.dart';
 import '../engine/stage_contract.dart';
 import '../engine/stage_inspection.dart';
 import '../engine/stage_receipt.dart';
 import '../engine/targets.dart';
+import '../engine/tools.dart';
 import '../engine/verdict.dart';
-import '../engine/workspace.dart';
 import '../output/output.dart';
-import '../transforms/digest.dart';
 import 'published_release_evidence.dart';
 import 'target_module.dart';
 
@@ -24,14 +25,52 @@ final class GithubReleaseTargetModule extends TargetModule {
   const GithubReleaseTargetModule();
 
   @override
+  PublishTarget get target => PublishTarget.githubRelease;
+
+  @override
   StepKind get stepKind => StepKind.publishRelease;
 
   @override
   Future<bool> preflight(
-    TargetPreflightContext context,
+    TargetReadinessContext context,
     ResolvedUnit unit,
   ) async =>
       true;
+
+  @override
+  Future<TargetSession?> acquireSession(
+    TargetReadinessContext context,
+    ResolvedUnit unit,
+    List<TargetExpectation> targets,
+  ) async {
+    ToolResult status;
+    try {
+      status = await context.tools.run(
+        'gh',
+        const ['auth', 'status'],
+        workingDirectory: context.git.root,
+      );
+    } on ProcessException {
+      status = ToolResult(exitCode: -1, stdout: '', stderr: '');
+    }
+    if (status.ok) {
+      return TargetSession(
+        endpoint: effectiveEndpoint(context, unit, targets),
+      );
+    }
+    context.output.problem(
+      Diagnostic(
+        code: 'RK-GITHUB-010',
+        message: 'the GitHub CLI has no usable session',
+        remedy: 'Run gh auth login from a terminal, then re-run rk release '
+            '${unit.name}. Authentication does not prove write permission; '
+            'the exact publish and read-back remain authoritative.',
+      ),
+      unit: unit.name,
+    );
+    context.output.halt(HaltKind.beforeActing);
+    return null;
+  }
 
   @override
   TargetExpectation expectation({
@@ -39,10 +78,8 @@ final class GithubReleaseTargetModule extends TargetModule {
     required Step step,
     String? repository,
   }) {
-    final project = unit.projects.firstWhere(
-      (project) => project.name == step.project,
-    );
-    final artifacts = ReleaseAssets.expectedFor(project).toList()..sort();
+    final tag = requiredTargetTag(unit, PublishTarget.githubRelease);
+    final artifacts = ReleaseAssets.expectedForUnit(unit).toList()..sort();
     return TargetExpectation(
       label: repository == null
           ? 'GitHub Release'
@@ -51,12 +88,9 @@ final class GithubReleaseTargetModule extends TargetModule {
       // Without an origin there is no repository to name, and echoing the
       // tag here would print the Git tag row's identity twice.
       identity: repository ?? 'no origin remote',
-      coordinate: repository == null
-          ? unit.tag
-          : '$repository/releases/tag/${unit.tag}',
+      coordinate: repository == null ? tag : '$repository/releases/tag/$tag',
       targetVersion: unit.version.canonical,
       step: step,
-      project: project,
       artifacts: artifacts,
       exactComparisonNeedsStage: true,
     );
@@ -68,6 +102,7 @@ final class GithubReleaseTargetModule extends TargetModule {
     ResolvedUnit unit,
     TargetExpectation target,
   ) async {
+    final tag = requiredTargetTag(unit, PublishTarget.githubRelease);
     final tools = context.tools;
     if (tools == null) {
       return const Inspection.unknown('no tools to read the forge with');
@@ -84,11 +119,11 @@ final class GithubReleaseTargetModule extends TargetModule {
     );
     final stage = context.reusableStage(unit);
     if (stage == null) {
-      final inventory = await destination.inspect(unit.tag, expected);
+      final inventory = await destination.inspect(tag, expected);
       if (!inventory.isExact) return inventory;
 
-      final object = context.git.tagObject(unit.tag);
-      final commit = context.git.tagTarget(unit.tag);
+      final object = context.git.tagObject(tag);
+      final commit = context.git.tagTarget(tag);
       if (object == null || commit == null) {
         return const Inspection.unknown(
           'the release exists, but this checkout has no readable annotated '
@@ -99,7 +134,7 @@ final class GithubReleaseTargetModule extends TargetModule {
         tools: tools,
         root: context.git.root,
       ).manifestBinding(
-        tag: unit.tag,
+        tag: tag,
         expectedObject: object,
         expectedCommit: commit,
       );
@@ -138,14 +173,23 @@ final class GithubReleaseTargetModule extends TargetModule {
     }
 
     final receipt = stage.requireReceipt();
-    final byPath = {
-      for (final artifact in receipt.artifacts) artifact.path: artifact,
+    final releaseAssets = stage.releaseAssets();
+    final manifest = receipt.artifacts.singleWhere(
+      (artifact) => artifact.path == ReleaseAssets.manifest,
+    );
+    final staged = {
+      ...releaseAssets,
+      ReleaseAssets.manifest: manifest,
     };
-    final missing = expected.difference(byPath.keys.toSet());
-    if (missing.isNotEmpty) {
+    final missing = expected.difference(staged.keys.toSet());
+    final extra = staged.keys.toSet().difference(expected);
+    if (missing.isNotEmpty || extra.isNotEmpty) {
       return Inspection.conflict(
-        'the completed stage is missing release assets',
-        evidence: {for (final name in missing) name: 'missing from stage'},
+        'the completed stage has a different release-asset inventory',
+        evidence: {
+          for (final name in missing) name: 'missing from stage',
+          for (final name in extra) name: 'not expected by this target',
+        },
       );
     }
     final notes = File(stage.directory.resolve('release-notes.md'));
@@ -154,14 +198,13 @@ final class GithubReleaseTargetModule extends TargetModule {
         'the completed stage has no release notes',
       );
     }
-    final project = unit.binaryProject;
     return destination.inspectExact(
       GithubReleaseExpectation(
-        tag: unit.tag,
-        title: '${project.name} ${unit.version}',
+        tag: tag,
+        title: '${unit.name} ${unit.version}',
         body: notes.readAsStringSync(),
         assetSha256: {
-          for (final name in expected) name: byPath[name]!.sha256,
+          for (final name in expected) name: staged[name]!.sha256,
         },
       ),
     );
@@ -189,7 +232,9 @@ final class GithubReleaseTargetModule extends TargetModule {
       tools: tools,
       repository: repository,
       workingDirectory: context.git.root,
-    ).inspectLatestVersion(unit.tagPattern);
+    ).inspectLatestVersion(
+      requiredTargetTagPattern(unit, PublishTarget.githubRelease),
+    );
   }
 
   @override
@@ -208,6 +253,7 @@ final class GithubReleaseTargetModule extends TargetModule {
     TargetExpectation target,
     Inspection inspected,
   ) async {
+    final tag = requiredTargetTag(unit, PublishTarget.githubRelease);
     final repository = context.repository;
     if (repository == null) {
       return TargetActOutcome(
@@ -222,11 +268,9 @@ final class GithubReleaseTargetModule extends TargetModule {
         ),
       );
     }
-    final project = unit.binaryProject;
     final assets = _StagedReleaseAssets(
-      workspace: context.workspace,
       output: context.output,
-    ).gather(target, unit.name);
+    ).gather(context.stage, unit);
     if (assets == null) return const TargetActOutcome.reportedFailure();
     final notesPath = context.workspace.pathOf('release-notes.md');
     if (!File(notesPath).existsSync()) {
@@ -248,16 +292,10 @@ final class GithubReleaseTargetModule extends TargetModule {
     );
     context.output.progress('publishing ${assets.length} assets');
     final outcome = await release.publish(
-      tag: unit.tag,
-      title: '${project.name} ${unit.version}',
+      tag: tag,
+      title: '${unit.name} ${unit.version}',
       notesPath: notesPath,
-      assetPaths: assets.map((asset) => asset.path).toList(),
-      assetSha256: {
-        for (final asset in assets) asset.name: Sha256.hex(asset.bytes),
-      },
-      assetSizes: {
-        for (final asset in assets) asset.name: asset.bytes.length,
-      },
+      assets: assets,
     );
     return TargetActOutcome(
       ok: outcome.ok,
@@ -324,7 +362,6 @@ final class GithubReleaseTargetModule extends TargetModule {
     required ResolvedUnit unit,
     required TargetExpectation target,
   }) {
-    final project = target.project!;
     final contract = StageContributionContract(
       phase: StageContributionPhase.beforeArtifacts,
       step: StageStepContract(
@@ -332,12 +369,10 @@ final class GithubReleaseTargetModule extends TargetModule {
         inputs: const {'step:source-snapshot'},
         outputs: const {'release-notes.md': 'notes'},
         validate: (context, step) {
-          final changelog = File(
-            '${context.sourceRoot}/${project.fileAt('CHANGELOG.md')}',
+          final expected = _releaseNotes(
+            unit,
+            SnapshotSourceTree(context.sourceRoot),
           );
-          final expected = changelog.existsSync()
-              ? Changelog.entry(changelog.readAsStringSync(), project.version)
-              : null;
           final actual = File(context.stage.resolve('release-notes.md'));
           if (expected != null &&
               actual.existsSync() &&
@@ -366,19 +401,15 @@ final class GithubReleaseTargetModule extends TargetModule {
     TargetExpectation target,
   ) async {
     final receiptName = context.contract.step.name;
-    final project = target.project!;
-    final changelogPath = project.fileAt('CHANGELOG.md');
     final source = SnapshotSourceTree(context.stage.sourceRoot);
-    final contents = source.read(changelogPath);
-    final notes =
-        contents == null ? null : Changelog.entry(contents, project.version);
+    final notes = _releaseNotes(context.stage.unit, source);
     if (notes == null) {
       context.output.problem(
         Diagnostic(
           code: 'RK-CHG-003',
-          message: 'the changelog entry for ${project.version} could not be '
-              'extracted',
-          source: SourceLocation(changelogPath, 1),
+          message: 'the changelog entries for ${context.stage.unit.version} '
+              'could not be extracted',
+          source: context.stage.unit.location,
           remedy: 'validation saw a heading for it; the file changed since, '
               'or this is a bug in rk',
         ),
@@ -390,10 +421,11 @@ final class GithubReleaseTargetModule extends TargetModule {
       context.output.problem(
         Diagnostic(
           code: 'RK-CHG-004',
-          message: 'the changelog entry for ${project.version} is empty',
-          source: SourceLocation(changelogPath, 1),
+          message: 'the changelog entries for ${context.stage.unit.version} '
+              'are empty',
+          source: context.stage.unit.location,
           remedy: 'the release body is this entry — write what changed '
-              'under the ${project.version} heading',
+              'under each ${context.stage.unit.version} heading',
         ),
       );
       context.output.halt(HaltKind.beforeActing);
@@ -416,37 +448,63 @@ final class GithubReleaseTargetModule extends TargetModule {
   }
 }
 
+String? _releaseNotes(ResolvedUnit unit, SourceTree source) {
+  final entries = <({String project, String body})>[];
+  for (final project in unit.projects) {
+    final contents = source.read(project.fileAt('CHANGELOG.md'));
+    final body =
+        contents == null ? null : Changelog.entry(contents, project.version);
+    if (body == null) return null;
+    entries.add((project: project.name, body: body));
+  }
+  if (entries.length == 1) return entries.single.body;
+  return entries
+      .map((entry) => '## ${entry.project}\n\n${entry.body}')
+      .join('\n\n');
+}
+
 /// Reads the exact asset inventory the GitHub Release will publish.
 final class _StagedReleaseAssets {
-  const _StagedReleaseAssets({required this.workspace, required this.output});
+  const _StagedReleaseAssets({required this.output});
 
-  final Workspace workspace;
   final Output output;
 
-  /// The exact inventory is the expectation's, so the act can never upload
-  /// a set the inspection would not expect back.
-  List<_StagedReleaseAsset>? gather(
-    TargetExpectation target,
-    String unit,
+  /// Joins the static public-name/private-path bundle to the exact captured
+  /// artifacts frozen by complete-stage.
+  List<GithubReleaseAssetUpload>? gather(
+    ReleaseStage stage,
+    ResolvedUnit unit,
   ) {
-    final assets = <_StagedReleaseAsset>[];
-    for (final name in target.artifacts) {
-      final bytes = workspace.readBytes(name);
-      if (bytes == null) {
+    final receipt = stage.requireReceipt();
+    final frozen = stage.releaseAssets();
+    final manifest = receipt.artifacts.singleWhere(
+      (artifact) => artifact.path == ReleaseAssets.manifest,
+    );
+    final planned = <String, String>{
+      for (final asset in ReleaseAssets.bundleFor(unit))
+        asset.publicName: asset.blob.stagedPath,
+      ReleaseAssets.manifest: ReleaseAssets.manifest,
+    };
+    final assets = <GithubReleaseAssetUpload>[];
+    for (final entry in planned.entries) {
+      final artifact =
+          entry.key == ReleaseAssets.manifest ? manifest : frozen[entry.key];
+      if (artifact == null || artifact.path != entry.value) {
         output.problem(
           Diagnostic(
             code: 'RK-WORK-001',
-            message: 'the workspace has no $name',
-            remedy: '${_producerOf(name)} — re-running runs it',
+            message: 'the completed stage has no exact ${entry.key} binding',
+            remedy: '${_producerOf(entry.key)} — re-running runs it',
           ),
-          unit: unit,
+          unit: unit.name,
         );
         return null;
       }
-      assets.add(_StagedReleaseAsset(
-        name: name,
-        path: workspace.pathOf(name),
-        bytes: bytes,
+      assets.add(GithubReleaseAssetUpload(
+        publicName: entry.key,
+        stagedPath: stage.directory.resolve(artifact.path),
+        size: artifact.size,
+        sha256: artifact.sha256,
       ));
     }
     return assets;
@@ -459,19 +517,6 @@ final class _StagedReleaseAssets {
     if (name == ReleaseAssets.manifest) {
       return 'the complete-stage step produces it';
     }
-    if (name.endsWith('.rb')) return 'the Homebrew target renders it';
     return 'the archive steps produce it';
   }
-}
-
-final class _StagedReleaseAsset {
-  const _StagedReleaseAsset({
-    required this.name,
-    required this.path,
-    required this.bytes,
-  });
-
-  final String name;
-  final String path;
-  final List<int> bytes;
 }

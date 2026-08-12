@@ -19,7 +19,7 @@ List<Diagnostic> rejected(String source) {
 void main() {
   test('parses keybay\'s complete configuration', () {
     final document = parse('''
-schema = 1
+schema = 2
 
 [release.core]                 # tag keybay-v{version}
 path = "packages/keybay"
@@ -31,7 +31,7 @@ publish = ["pub.dev", "github-release", "homebrew"]
 binary_platforms = ["linux-x64", "linux-arm64", "macos-arm64"]
 ''')!;
 
-    expect(document.root['schema'], 1);
+    expect(document.root['schema'], 2);
 
     final release = document.root['release'] as TomlTable;
     final core = release['core'] as TomlTable;
@@ -46,7 +46,7 @@ binary_platforms = ["linux-x64", "linux-arm64", "macos-arm64"]
 
   test('parses a multi-project unit as an array of tables', () {
     final document = parse('''
-schema = 1
+schema = 2
 
 [release.framework]
 tag = "fleury-v{version}"
@@ -84,16 +84,16 @@ binary_platforms = [
   "linux-arm64",
   "macos-arm64",
 ]
-schema = 1
+schema = 2
 ''')!;
     expect(document.root['binary_platforms'], hasLength(3));
-    expect(document.root['schema'], 1,
+    expect(document.root['schema'], 2,
         reason: 'parsing resumes after the list');
   });
 
   test('remembers where each key was written', () {
     final document = parse('''
-schema = 1
+schema = 2
 
 [release.core]
 path = "packages/keybay"
@@ -122,7 +122,7 @@ path = "packages/keybay"
     });
 
     test('floats', () {
-      expect(rejected('schema = 1.5'), isNotEmpty);
+      expect(rejected('schema = 2.5'), isNotEmpty);
     });
 
     test('negative integers', () {
@@ -166,7 +166,7 @@ path = "packages/keybay"
     });
 
     test('a duplicated key in one table', () {
-      expect(rejected('schema = 1\nschema = 2'), isNotEmpty);
+      expect(rejected('schema = 2\nschema = 2'), isNotEmpty);
     });
 
     test('a table defined twice', () {
@@ -182,7 +182,7 @@ path = "packages/keybay"
   });
 
   test('reports the line a problem is on', () {
-    final found = rejected('schema = 1\n\npath = true');
+    final found = rejected('schema = 2\n\npath = true');
     expect(found.single.source?.line, 3);
   });
 }

@@ -3,6 +3,7 @@ import 'dart:io';
 
 import '../transforms/digest.dart';
 import 'release_manifest.dart';
+import 'producers.dart';
 import 'stage.dart';
 import 'stage_archive.dart';
 import 'stage_receipt.dart';
@@ -302,8 +303,10 @@ class StageInspector {
       _structure(issues, 'source-snapshot must be the first receipt step');
     } else {
       final expectedInputs = {
-        'stage:commit': Sha256.hex(utf8.encode(receipt.identity.headCommit)),
-        'stage:tree': Sha256.hex(utf8.encode(receipt.identity.headTree)),
+        if (receipt.identity.isGitBound)
+          'stage:commit': Sha256.hex(utf8.encode(receipt.identity.headCommit!)),
+        if (receipt.identity.isGitBound)
+          'stage:tree': Sha256.hex(utf8.encode(receipt.identity.headTree!)),
         'stage:plan': receipt.identity.planSha256,
       };
       final actualInputs = {
@@ -312,7 +315,9 @@ class StageInspector {
       if (!_sameMap(expectedInputs, actualInputs)) {
         _structure(
           issues,
-          'source-snapshot is not bound to commit, tree, and plan',
+          receipt.identity.isGitBound
+              ? 'source-snapshot is not bound to commit, tree, and plan'
+              : 'source-snapshot is not bound to its plan',
         );
       }
       if (source.outputs.isEmpty ||
@@ -325,8 +330,13 @@ class StageInspector {
           'source-snapshot must record its source files',
         );
       }
-      if (source.evidence['commit'] != receipt.identity.headCommit ||
-          source.evidence['tree'] != receipt.identity.headTree) {
+      final expectedEvidence = receipt.identity.isGitBound
+          ? <String, Object?>{
+              'commit': receipt.identity.headCommit,
+              'tree': receipt.identity.headTree,
+            }
+          : <String, Object?>{'source_binding': 'unbound'};
+      if (!_sameMap(expectedEvidence, source.evidence)) {
         _structure(
           issues,
           'source-snapshot evidence disagrees with the stage identity',
@@ -338,7 +348,7 @@ class StageInspector {
     // otherwise a crash after a bad archive was receipted would turn that
     // false claim into a trusted input on the next run.
     for (final step in receipt.steps) {
-      if (step.name.startsWith('build:macos-')) {
+      if (isMacosBuildReceipt(step.name)) {
         _inspectSignature(step, issues);
       }
       if (step.name.startsWith('archive:')) {
@@ -384,9 +394,13 @@ class StageInspector {
   ) {
     switch (name) {
       case 'stage:commit':
-        return Sha256.hex(utf8.encode(identity.headCommit));
+        return identity.headCommit == null
+            ? null
+            : Sha256.hex(utf8.encode(identity.headCommit!));
       case 'stage:tree':
-        return Sha256.hex(utf8.encode(identity.headTree));
+        return identity.headTree == null
+            ? null
+            : Sha256.hex(utf8.encode(identity.headTree!));
       case 'stage:plan':
         return identity.planSha256;
     }
@@ -435,22 +449,48 @@ class StageInspector {
     final completeInputs = {
       for (final input in complete.inputs) input.name: input.sha256,
     };
-    if (completeInputs.keys.toSet().difference(manifestNames).isNotEmpty ||
-        manifestNames.difference(completeInputs.keys.toSet()).isNotEmpty) {
+    final encodedBindings = complete.evidence['release_assets'];
+    final bindings = encodedBindings is Map
+        ? {
+            for (final entry in encodedBindings.entries)
+              if (entry.key is String && entry.value is String)
+                entry.key as String: entry.value as String,
+          }
+        : {for (final name in manifestNames) name: name};
+    final destinationBindings = _receiptDestinationBindings(
+      complete.evidence['destination_bindings'],
+      issues,
+    );
+    if (destinationBindings == null) return;
+    final expectedCompleteInputs = {
+      ...bindings.values,
+      for (final binding in destinationBindings) binding.stagedPath,
+    };
+    if (bindings.length != manifestNames.length ||
+        bindings.keys.toSet().difference(manifestNames).isNotEmpty ||
+        manifestNames.difference(bindings.keys.toSet()).isNotEmpty ||
+        completeInputs.keys
+            .toSet()
+            .difference(expectedCompleteInputs)
+            .isNotEmpty ||
+        expectedCompleteInputs
+            .difference(completeInputs.keys.toSet())
+            .isNotEmpty) {
       issues.add(const StageIssue(
         StageIssueKind.invalidManifest,
-        'complete-stage inputs do not exactly name the public inventory',
+        'complete-stage inputs do not exactly bind the publication inventory',
         path: 'release-manifest.json',
       ));
     }
 
     for (final item in manifest.artifacts) {
-      final local = beforeComplete[item.name];
+      final stagedPath = bindings[item.name];
+      final local = stagedPath == null ? null : beforeComplete[stagedPath];
       if (local == null ||
           local.type != item.type ||
           local.size != item.size ||
           local.sha256 != item.sha256 ||
-          completeInputs[item.name] != item.sha256) {
+          completeInputs[stagedPath] != item.sha256) {
         issues.add(StageIssue(
           StageIssueKind.invalidManifest,
           'manifest metadata does not match the producer receipt',
@@ -459,7 +499,62 @@ class StageInspector {
         continue;
       }
     }
-    _inspectChecksums(stage, manifest, beforeComplete, issues);
+    final receiptDestinations = <String, _ReceiptDestinationBinding>{};
+    for (final binding in destinationBindings) {
+      if (receiptDestinations[binding.identity] != null) {
+        issues.add(const StageIssue(
+          StageIssueKind.invalidManifest,
+          'complete-stage repeats a destination binding',
+          path: 'release-manifest.json',
+        ));
+      }
+      receiptDestinations[binding.identity] = binding;
+    }
+    final manifestDestinationIdentities = {
+      for (final binding in manifest.destinations)
+        _destinationIdentity(
+          target: binding.target,
+          project: binding.project,
+          coordinate: binding.coordinate,
+          path: binding.path,
+        ),
+    };
+    if (receiptDestinations.length != manifestDestinationIdentities.length ||
+        receiptDestinations.keys
+            .toSet()
+            .difference(manifestDestinationIdentities)
+            .isNotEmpty) {
+      issues.add(const StageIssue(
+        StageIssueKind.invalidManifest,
+        'complete-stage destination evidence does not match the manifest',
+        path: 'release-manifest.json',
+      ));
+    }
+    for (final item in manifest.destinations) {
+      final receiptBinding = receiptDestinations[_destinationIdentity(
+        target: item.target,
+        project: item.project,
+        coordinate: item.coordinate,
+        path: item.path,
+      )];
+      final local = receiptBinding == null
+          ? null
+          : beforeComplete[receiptBinding.stagedPath];
+      if (receiptBinding == null ||
+          receiptBinding.mediaType != item.mediaType ||
+          local == null ||
+          local.type != item.type ||
+          local.size != item.size ||
+          local.sha256 != item.sha256 ||
+          completeInputs[receiptBinding.stagedPath] != item.sha256) {
+        issues.add(StageIssue(
+          StageIssueKind.invalidManifest,
+          'destination metadata does not match the producer receipt',
+          path: '${item.coordinate}/${item.path}',
+        ));
+      }
+    }
+    _inspectChecksums(stage, manifest, beforeComplete, bindings, issues);
   }
 
   static void _inspectArchive(
@@ -550,6 +645,7 @@ class StageInspector {
     StageDirectory stage,
     ReleaseManifest manifest,
     Map<String, StageArtifact> artifacts,
+    Map<String, String> bindings,
     List<StageIssue> issues,
   ) {
     final checksumItems =
@@ -565,7 +661,11 @@ class StageInspector {
       return;
     }
     try {
-      final lines = File(stage.resolve('SHA256SUMS')).readAsLinesSync();
+      final checksumPath = bindings['SHA256SUMS'];
+      if (checksumPath == null || artifacts[checksumPath] == null) {
+        throw const FormatException('SHA256SUMS has no staged blob binding');
+      }
+      final lines = File(stage.resolve(checksumPath)).readAsLinesSync();
       final found = <String, String>{};
       for (final line in lines) {
         if (line.isEmpty) continue;
@@ -577,19 +677,21 @@ class StageInspector {
           throw const FormatException('SHA256SUMS has a malformed line');
         }
       }
-      final archives = {
+      final covered = {
         for (final item in manifest.artifacts.where(
-          (item) => item.type == 'archive',
+          (item) => item.type != 'checksums',
         ))
           item.name: item.sha256,
       };
-      if (!_sameMap(found, archives)) {
+      if (!_sameMap(found, covered)) {
         throw const FormatException(
-          'SHA256SUMS does not exactly cover the release archives',
+          'SHA256SUMS does not exactly cover the contributed release assets',
         );
       }
       for (final entry in found.entries) {
-        if (artifacts[entry.key]?.sha256 != entry.value) {
+        final stagedPath = bindings[entry.key];
+        if (stagedPath == null ||
+            artifacts[stagedPath]?.sha256 != entry.value) {
           throw FormatException(
             'SHA256SUMS digest disagrees for ${entry.key}',
           );
@@ -688,7 +790,7 @@ void _structure(List<StageIssue> issues, String message) {
   ));
 }
 
-bool _sameMap(Map<String, String> left, Map<String, String> right) {
+bool _sameMap(Map<String, Object?> left, Map<String, Object?> right) {
   if (left.length != right.length) return false;
   for (final entry in left.entries) {
     if (right[entry.key] != entry.value) return false;
@@ -717,3 +819,91 @@ List<StageIssue> _deduplicate(List<StageIssue> issues) {
         issue,
   ];
 }
+
+List<_ReceiptDestinationBinding>? _receiptDestinationBindings(
+  Object? encoded,
+  List<StageIssue> issues,
+) {
+  if (encoded == null) return const [];
+  const keys = {
+    'coordinate',
+    'media_type',
+    'path',
+    'project',
+    'staged_path',
+    'target',
+  };
+  if (encoded is! List) {
+    issues.add(const StageIssue(
+      StageIssueKind.invalidManifest,
+      'complete-stage destination bindings are not an array',
+      path: 'release-manifest.json',
+    ));
+    return null;
+  }
+  final result = <_ReceiptDestinationBinding>[];
+  for (final value in encoded) {
+    if (value is! Map ||
+        value.keys.toSet().difference(keys).isNotEmpty ||
+        keys.difference(value.keys.toSet()).isNotEmpty ||
+        value.values.any((item) => item is! String)) {
+      issues.add(const StageIssue(
+        StageIssueKind.invalidManifest,
+        'complete-stage has a malformed destination binding',
+        path: 'release-manifest.json',
+      ));
+      return null;
+    }
+    try {
+      result.add(_ReceiptDestinationBinding(
+        target: value['target'] as String,
+        project: value['project'] as String,
+        coordinate: value['coordinate'] as String,
+        path: value['path'] as String,
+        stagedPath: StagePath.require(value['staged_path'] as String),
+        mediaType: value['media_type'] as String,
+      ));
+    } on Object catch (error) {
+      issues.add(StageIssue(
+        StageIssueKind.invalidManifest,
+        'complete-stage has an unsafe destination binding: $error',
+        path: 'release-manifest.json',
+      ));
+      return null;
+    }
+  }
+  return result;
+}
+
+final class _ReceiptDestinationBinding {
+  const _ReceiptDestinationBinding({
+    required this.target,
+    required this.project,
+    required this.coordinate,
+    required this.path,
+    required this.stagedPath,
+    required this.mediaType,
+  });
+
+  final String target;
+  final String project;
+  final String coordinate;
+  final String path;
+  final String stagedPath;
+  final String mediaType;
+
+  String get identity => _destinationIdentity(
+        target: target,
+        project: project,
+        coordinate: coordinate,
+        path: path,
+      );
+}
+
+String _destinationIdentity({
+  required String target,
+  required String project,
+  required String coordinate,
+  required String path,
+}) =>
+    '$target\u0000$project\u0000$coordinate\u0000$path';

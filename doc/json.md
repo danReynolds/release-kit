@@ -26,14 +26,15 @@ must say what it says yes to.
 
 | key | meaning |
 |---|---|
-| `rk` | schema version (currently `3`) |
+| `rk` | schema version (currently `6`) |
 | `command` | the verb that ran |
 | `mode` | present only where the run has one: `{stage}` on `release` |
 | `observed_at` | UTC ISO 8601 — when rk read the world |
 | `exit` | mirrors the process exit code |
 | `rerun_helps` | whether re-running would move things forward — false on conflicts, where a human has to decide. Re-running is always *safe*: the same inspection precedes every act |
-| `repository` | `{name, branch?, head?, remote, uncommitted?}`. `head` is the full 40-char SHA. `remote` is always present and null when no origin exists — a forge slug (`owner/name`), not a URL |
-| `units[]` | per-unit: `{name, version, tag, steps[], targets[]?}` |
+| `repository` | `{name, branch?, head?, remote, uncommitted?, source_binding?, source_comparison?}`. `head` is the full 40-char SHA and is absent for unbound source. `remote` is always present and null when no origin exists. Status and release report `source_binding` as `gitCommit` or `unbound`, independently from `source_comparison` (`exact` or `unavailable`) |
+| `init` | present on `init`: `{source: {binding, git_remote, github_repository?}, notices[], candidates[]}`. Each candidate reports its unit, native project/path/version/executables, `use`, and every option's `available`, redacted `reason`, `selected`, and deterministic `effects[]` |
+| `units[]` | per-unit: `{name, version, tag, steps[], targets[]?}`. `tag` is null when Git tagging is not selected |
 | `problems[]` | `{code, message, remedy?, source?, unit?, target?}` — every refusal and blockage, with its `RK-*` code. `target`, when present, is the affected target id and makes that target's human row `✗` |
 | `next[]` | the commands that would advance things, as data. The human report does not print them; this is where they live |
 | `halt` | `{kind, sentence}` when the run halted |
@@ -42,9 +43,9 @@ must say what it says yes to.
 
 `halt.kind` is one of `beforeActing`, `stoppedPartway`, `lostTrack`,
 `unfixableByRerun`, or `actedAndUnfixable`. `beforeActing` means no public
-target changed; a native preflight such as `dart pub login` may still have
-refreshed local session state. The accompanying sentence states what changed
-and whether re-running can advance the work.
+target changed; late native session acquisition may still have refreshed local
+credential state. The accompanying sentence states what changed and whether
+re-running can advance the work.
 
 ## One fact, one place
 
@@ -56,11 +57,14 @@ target's verdict reads it where the settled observation lives.
 
 ## Steps
 
-Keyed by frozen `id` (treat ids as opaque tokens; `kind` is the stable
-dimension for dashboards). Fields: `id`, `kind`, `summary`, `verdict`,
+Keyed by frozen `id` (treat ids as opaque tokens). Fields: `id`, `kind`,
+optional concrete `target`, `summary`, `verdict`,
 `permanent?`, `public?`, `needs[]`, `detail?`, `evidence?`, `took_ms?`, and
 optional `action` during `release`.
 
+`kind` describes lifecycle mechanics; `target` is the stable destination id
+for public steps (for example `pubDev` or `githubRelease`). More than one
+registry can therefore share `publishRegistry` without becoming ambiguous.
 `action` records what this release invocation did with a public target:
 `not_attempted`, `attempted`, `already_exact`, `completed`, or `failed`.
 It is an execution result, not another target-state vocabulary; `verdict`
@@ -80,8 +84,11 @@ read-back; an idempotent retry records `already_exact`.
 
 Each `units[].targets[]` entry is the settled observation the human report
 renders as one target row: `id`, `kind`, `label`, `coordinate`, `current_known`,
-`current_version`, `target_version`, `verdict`, optional `detail`, optional
-`uses`, and `artifacts[]`. `uses` refers to an artifact inventoried under
+`current_version`, `target_version`, `verdict`, `source_binding`,
+`source_comparison`, optional `detail`, optional `uses`, and `artifacts[]`.
+The source fields stay independent of the target verdict: a non-Git target may
+be remotely exact while source comparison remains unavailable. `uses` refers
+to an artifact inventoried under
 another target without duplicating it. An artifact is
 `{name, status, problem?}`, where `status` is
 `notStaged`, `staged`, or `invalid`. These are stage facts, not release

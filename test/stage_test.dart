@@ -126,6 +126,28 @@ void main() {
         throwsFormatException,
       );
     });
+
+    test('unbound identities are invocation-scoped and claim no revision', () {
+      final first = StageIdentity.forUnboundPlan(
+        runId: 'run-a',
+        resolvedPlan: const {'unit': 'tool'},
+      );
+      final sameRun = StageIdentity.forUnboundPlan(
+        runId: 'run-a',
+        resolvedPlan: const {'unit': 'tool'},
+      );
+      final laterRun = StageIdentity.forUnboundPlan(
+        runId: 'run-b',
+        resolvedPlan: const {'unit': 'tool'},
+      );
+
+      expect(first.id, sameRun.id);
+      expect(first.id, isNot(laterRun.id));
+      expect(first.isGitBound, isFalse);
+      expect(first.headCommit, isNull);
+      expect(first.headTree, isNull);
+      expect(StageIdentity.fromJson(first.toJson()).id, first.id);
+    });
   });
 
   group('stage receipt and inspection', () {
@@ -161,7 +183,7 @@ void main() {
       expect(parsed.identity.id, stage.identity.id);
       expect(parsed.complete, isTrue);
       final build = parsed.steps.singleWhere(
-        (step) => step.name == 'build:macos-arm64',
+        (step) => step.name == 'build:rk:macos-arm64',
       );
       expect(build.inputs.single.name, 'step:source-snapshot');
       expect(
@@ -376,11 +398,11 @@ void main() {
     test('a signed macOS build requires a certificate SHA-256 binding', () {
       final receipt = _writeCompleteStage(stage);
       final build = receipt.steps.singleWhere(
-        (step) => step.name == 'build:macos-arm64',
+        (step) => step.name == 'build:rk:macos-arm64',
       );
       final binary = build.outputs.single;
       final sign = StageStep(
-        name: 'build:macos-arm64',
+        name: 'build:rk:macos-arm64',
         inputs: build.inputs,
         outputs: build.outputs,
         evidence: {
@@ -412,11 +434,11 @@ void main() {
     test('a signed macOS build states whether the identity is first', () {
       final receipt = _writeCompleteStage(stage);
       final build = receipt.steps.singleWhere(
-        (step) => step.name == 'build:macos-arm64',
+        (step) => step.name == 'build:rk:macos-arm64',
       );
       final binary = build.outputs.single;
       final sign = StageStep(
-        name: 'build:macos-arm64',
+        name: 'build:rk:macos-arm64',
         inputs: build.inputs,
         outputs: build.outputs,
         evidence: {
@@ -478,6 +500,16 @@ void main() {
             artifact: archive,
           ),
         ],
+        destinations: [
+          ReleaseManifestDestinationBinding.fromStage(
+            target: 'homebrew',
+            project: 'rk',
+            coordinate: 'example/homebrew-tap',
+            path: 'Formula/rk.rb',
+            mediaType: 'text/x-ruby',
+            artifact: archive,
+          ),
+        ],
       );
       manifest.writeTo(stage);
       final document =
@@ -486,6 +518,8 @@ void main() {
 
       expect(parsed.commit, stage.identity.headCommit);
       expect(parsed.artifacts.single.sha256, archive.sha256);
+      expect(parsed.destinations.single.sha256, archive.sha256);
+      expect(parsed.destinations.single.path, 'Formula/rk.rb');
       expect(document, contains(_commit));
       expect(
         document,
@@ -493,6 +527,7 @@ void main() {
         reason: 'the plan is local evidence no external reader can verify',
       );
       expect(document, isNot(contains(repository.path)));
+      expect(document, isNot(contains('artifacts/rk.tar.gz')));
       expect(document, isNot(contains('Developer ID')));
       expect(document, isNot(contains('notary')));
     });
@@ -550,7 +585,7 @@ StageReceipt _writeCompleteStage(StageDirectory stage) {
     type: 'executable',
   );
   final build = StageStep(
-    name: 'build:macos-arm64',
+    name: 'build:rk:macos-arm64',
     inputs: [StageInput.step(sourceStep)],
     outputs: [artifact],
     evidence: {

@@ -1,4 +1,5 @@
 import 'diagnostic.dart';
+import 'publish_target.dart';
 import 'ref_name.dart';
 import 'toml.dart';
 
@@ -14,10 +15,10 @@ class ReleaseConfig {
   final List<UnitConfig> units;
 
   /// The only schema version this build understands.
-  static const supportedSchema = 1;
+  static const supportedSchema = 2;
 
-  /// The channels a project may publish to.
-  static const channels = {'pub.dev', 'github-release', 'homebrew'};
+  static final targetNames =
+      Set<String>.unmodifiable(PublishTarget.values.map((t) => t.configName));
 
   /// The closed, enumerable platform vocabulary, matching public asset names.
   static const supportedPlatformsList = [
@@ -25,9 +26,6 @@ class ReleaseConfig {
     'linux-arm64',
     'macos-arm64',
   ];
-
-  /// Channels that produce per-platform binaries.
-  static const platformBearingChannels = {'github-release', 'homebrew'};
 
   static ReleaseConfig? parse(
     String source,
@@ -43,28 +41,19 @@ class ReleaseConfig {
 class UnitConfig {
   UnitConfig({
     required this.name,
+    required this.publish,
     required this.tagPattern,
     required this.projects,
     required this.location,
-    this.codeId,
     this.homebrewTap,
   });
 
   final String name;
+  final Set<PublishTarget> publish;
 
   /// The declared tag pattern, or null when it should be derived from the
   /// publication target's convention once package names are known.
   final String? tagPattern;
-
-  /// The macOS code identifier for this unit's binary, for the one release
-  /// that has no published binary to derive it from.
-  ///
-  /// Per unit, not per repository: a repository with two binary units has
-  /// two program identities, and a single global value would have signed
-  /// both as the same program. Every release after the first derives this
-  /// from the binary users already installed, so a declaration that ever
-  /// disagrees with what is published is refused rather than obeyed.
-  final String? codeId;
 
   /// `owner/homebrew-tap` when the tap is not the conventional one.
   final String? homebrewTap;
@@ -76,7 +65,7 @@ class UnitConfig {
 class ProjectConfig {
   ProjectConfig({
     required this.path,
-    required this.channels,
+    required this.publish,
     required this.binaryPlatforms,
     required this.location,
   });
@@ -84,15 +73,14 @@ class ProjectConfig {
   /// Repository-relative directory, canonicalized; "." for the root.
   final String path;
 
-  final Set<String> channels;
+  final Set<PublishTarget> publish;
 
-  /// Empty unless a platform-bearing channel was requested.
+  /// Empty unless standalone Dart CLI archives were explicitly requested.
   final List<String> binaryPlatforms;
 
   final SourceLocation location;
 
-  bool get wantsBinaries =>
-      channels.any(ReleaseConfig.platformBearingChannels.contains);
+  bool get wantsBinaries => binaryPlatforms.isNotEmpty;
 }
 
 class _Reader {
@@ -105,7 +93,7 @@ class _Reader {
   static final _unitName = RegExp(r'^[a-z][a-z0-9_-]{0,62}$');
 
   ReleaseConfig? run() {
-    _schema();
+    if (!_schema()) return null;
     _unknownTopLevel();
 
     final units = _units();
@@ -118,10 +106,6 @@ class _Reader {
     if (!value.has(key)) return null;
     final entry = value[key];
     if (entry is String) {
-      // Empty is not the same as omitted, and for `code_id` the difference is
-      // permanent: `codesign -i ""` does not refuse, it silently substitutes a
-      // filename-derived default, so a blank declaration ships a signature
-      // nobody chose under an identifier nobody can predict.
       if (entry.trim().isEmpty) {
         _diagnostics.add(
           'RK-CONF-037',
@@ -142,7 +126,7 @@ class _Reader {
     return null;
   }
 
-  void _schema() {
+  bool _schema() {
     final value = _root['schema'];
     if (value == null) {
       _diagnostics.add(
@@ -151,7 +135,7 @@ class _Reader {
         source: SourceLocation(_path, 1),
         remedy: 'add: schema = ${ReleaseConfig.supportedSchema}',
       );
-      return;
+      return false;
     }
     if (value is! int || value != ReleaseConfig.supportedSchema) {
       _diagnostics.add(
@@ -159,9 +143,16 @@ class _Reader {
         'this rk understands schema ${ReleaseConfig.supportedSchema}, '
             'and this file declares $value',
         source: _root.locationOf('schema'),
-        remedy: 'upgrade rk, or set schema = ${ReleaseConfig.supportedSchema}',
+        remedy: value == 1
+            ? 'schema 2 makes Git tagging explicit: add "git-tag" where '
+                'wanted, keep registry targets on project rows, move GitHub '
+                'Release to the unit publish list, remove code_id (the '
+                'producer derives it), and review the result'
+            : 'upgrade rk, or use schema ${ReleaseConfig.supportedSchema}',
       );
+      return false;
     }
+    return true;
   }
 
   void _unknownTopLevel() {
@@ -172,18 +163,7 @@ class _Reader {
         'RK-CONF-003',
         'unknown setting "$key"',
         source: _root.locationOf(key),
-        // `[identity]` is named because it is the one that used to be
-        // valid, and a remedy that only says what is allowed leaves an
-        // operator holding a file rk wrote no path forward. Two of its
-        // four settings moved and two were deleted; a remedy that named
-        // none of them is how a breaking change becomes a puzzle.
-        remedy: key == 'identity'
-            ? 'release.toml holds only ${known.join(', ')}. [identity] is '
-                'gone: code_id and homebrew_tap moved onto the unit that '
-                'reads them, and apple_team and tag_signer were removed — '
-                'the certificate is derived from the release users already '
-                'installed, and the tag signer from git.'
-            : 'release.toml holds only ${known.join(', ')}',
+        remedy: 'release.toml holds only ${known.join(', ')}',
       );
     }
   }
@@ -245,7 +225,6 @@ class _Reader {
       'publish',
       'binary_platforms',
       'project',
-      'code_id',
       'homebrew_tap',
     };
     for (final key in value.keys) {
@@ -258,15 +237,10 @@ class _Reader {
       );
     }
 
-    final tag = _tagPattern(name, value);
-    // An omitted path means the repository root, so any project-level key —
-    // not just path — marks a unit that declares its project inline.
-    final inline = value.has('path') ||
-        value.has('publish') ||
-        value.has('binary_platforms');
     final rows = value['project'];
+    final hasRows = rows != null;
 
-    if (inline && rows != null) {
+    if (hasRows && (value.has('path') || value.has('binary_platforms'))) {
       _diagnostics.add(
         'RK-CONF-009',
         'unit "$name" declares a project inline and also as rows',
@@ -277,6 +251,47 @@ class _Reader {
       return null;
     }
 
+    final selected = _publish(name, value, location);
+    if (selected == null) return null;
+    final unitPublish = <PublishTarget>{};
+    final inlinePublish = <PublishTarget>{};
+    for (final target in selected) {
+      if (target.scope == TargetScope.unit) {
+        unitPublish.add(target);
+      } else if (hasRows) {
+        _diagnostics.add(
+          'RK-CONF-038',
+          '"${target.configName}" belongs to a project in "$name"',
+          source: value.locationOf('publish'),
+          remedy: 'move it to the relevant [[release.$name.project]] row',
+        );
+      } else {
+        inlinePublish.add(target);
+      }
+    }
+
+    final tag = _tagPattern(name, value);
+    if (value.has('tag') && !unitPublish.contains(PublishTarget.gitTag)) {
+      _diagnostics.add(
+        'RK-CONF-039',
+        'unit "$name" declares a tag but does not publish a Git tag',
+        source: value.locationOf('tag'),
+        remedy: 'add "git-tag" to publish, or remove tag',
+      );
+    }
+    for (final target in unitPublish) {
+      for (final prerequisite in target.prerequisites) {
+        if (unitPublish.contains(prerequisite)) continue;
+        _diagnostics.add(
+          'RK-CONF-024',
+          '${target.configName} needs ${prerequisite.configName}',
+          source: value.locationOf('publish'),
+          remedy: 'add "${prerequisite.configName}", or drop '
+              '"${target.configName}"',
+        );
+      }
+    }
+
     final projects = <ProjectConfig>[];
     // How many rows were *attempted*, so a row that failed to parse can be
     // told apart from a row that is absent. `_project` returns null on any
@@ -284,9 +299,15 @@ class _Reader {
     // count "rk could not read this project" becomes "this unit has no such
     // project" — the same collapse the verdicts are built to prevent.
     var attempted = 0;
-    if (inline) {
+    if (!hasRows) {
       attempted = 1;
-      final project = _project(name, value, location, inline: true);
+      final project = _project(
+        name,
+        value,
+        location,
+        inline: true,
+        inlinePublish: inlinePublish,
+      );
       if (project != null) projects.add(project);
     } else if (rows is TomlArray) {
       attempted = rows.tables.length;
@@ -294,7 +315,7 @@ class _Reader {
         final project = _project(name, row, row.location, inline: false);
         if (project != null) projects.add(project);
       }
-    } else if (rows != null) {
+    } else {
       _diagnostics.add(
         'RK-CONF-010',
         'unit "$name" has a malformed project list',
@@ -314,7 +335,9 @@ class _Reader {
       return null;
     }
 
-    if (projects.length > 1 && tag == null) {
+    if (projects.length > 1 &&
+        unitPublish.contains(PublishTarget.gitTag) &&
+        tag == null) {
       _diagnostics.add(
         'RK-CONF-012',
         'unit "$name" releases several projects, so its tag cannot be derived',
@@ -325,39 +348,56 @@ class _Reader {
       return null;
     }
 
-    // A setting nothing in this unit can read is refused, the same way a
-    // project naming platforms it does not ship gets RK-CONF-026 two hundred
-    // lines down. Both were repository-global under `[identity]`; moving
-    // them onto the unit made *which* unit a choice, and in a two-unit repo
-    // it is a coin flip. Put `code_id` on the wrong one and it parses
-    // clean, `_declarationAgrees` never fires — there is no sign step on
-    // that unit to fire it — and the binary unit's first signed release
-    // falls back to the package name, permanently, with nothing said.
-    // Only ask "can this unit read the setting" when every row parsed. One
-    // typo'd platform name used to drop the signing project and then accuse
-    // a correctly placed `code_id` of sitting on a unit that signs nothing —
-    // a remedy that, followed, deletes a correct declaration. Both readings
-    // resume once the real diagnostic beside them is fixed.
     final complete = projects.length == attempted;
-    final signs = !complete ||
-        projects.any(
-          (p) => p.binaryPlatforms
-              .any((platform) => platform.startsWith('macos-')),
-        );
-    if (!signs && value.has('code_id')) {
+    if (complete &&
+        unitPublish.isEmpty &&
+        projects.every((project) => project.publish.isEmpty)) {
       _diagnostics.add(
-        'RK-CONF-035',
-        'unit "$name" declares code_id but signs nothing',
-        source: value.locationOf('code_id'),
-        remedy: 'code_id is the macOS program identity, read only when a '
-            'macOS binary is signed — move it to the unit whose '
-            'binary_platforms name a macos- target, or remove it',
+        'RK-CONF-019',
+        'unit "$name" does not say where to publish',
+        source: location,
+        remedy: 'add publish with at least one target',
       );
-      return null;
+    }
+
+    final homebrewProjects = projects
+        .where((p) => p.publish.contains(PublishTarget.homebrew))
+        .toList();
+    if (complete && homebrewProjects.isNotEmpty) {
+      for (final prerequisite in PublishTarget.homebrew.prerequisites) {
+        if (unitPublish.contains(prerequisite)) continue;
+        _diagnostics.add(
+          'RK-CONF-024',
+          'homebrew needs ${prerequisite.configName}',
+          source: homebrewProjects.first.location,
+          remedy: 'add "${prerequisite.configName}" and its prerequisites '
+              'to the unit publish list, or drop "homebrew"',
+        );
+      }
+      for (final project in homebrewProjects) {
+        if (project.binaryPlatforms.isEmpty) {
+          _diagnostics.add(
+            'RK-CONF-025',
+            'a Homebrew project in "$name" names no binary platforms',
+            source: project.location,
+            remedy: 'add binary_platforms, or drop "homebrew"',
+          );
+        }
+      }
     }
     if (complete &&
-        value.has('homebrew_tap') &&
-        !projects.any((p) => p.channels.contains('homebrew'))) {
+        projects.any((p) => p.binaryPlatforms.isNotEmpty) &&
+        !unitPublish.any((target) => target.consumesStandaloneArchives)) {
+      _diagnostics.add(
+        'RK-CONF-026',
+        'unit "$name" builds standalone binaries but has no GitHub Release',
+        source:
+            projects.firstWhere((p) => p.binaryPlatforms.isNotEmpty).location,
+        remedy: 'add "github-release" and "git-tag" to the unit publish '
+            'list, or remove binary_platforms',
+      );
+    }
+    if (complete && value.has('homebrew_tap') && homebrewProjects.isEmpty) {
       _diagnostics.add(
         'RK-CONF-036',
         'unit "$name" declares homebrew_tap but does not publish to homebrew',
@@ -366,12 +406,23 @@ class _Reader {
       );
       return null;
     }
+    final homebrewTap = _unitText(value, 'homebrew_tap');
+    if (homebrewTap != null &&
+        !RegExp(r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$').hasMatch(homebrewTap)) {
+      _diagnostics.add(
+        'RK-CONF-040',
+        'homebrew_tap must be a GitHub owner/repository',
+        source: value.locationOf('homebrew_tap'),
+        remedy: 'use a coordinate such as "some-org/homebrew-tools"; '
+            'omit it for the conventional owner/homebrew-tap',
+      );
+    }
 
     return UnitConfig(
       name: name,
+      publish: Set.unmodifiable(unitPublish),
       tagPattern: tag,
-      codeId: _unitText(value, 'code_id'),
-      homebrewTap: _unitText(value, 'homebrew_tap'),
+      homebrewTap: homebrewTap,
       projects: projects,
       location: location,
     );
@@ -434,9 +485,10 @@ class _Reader {
     TomlTable table,
     SourceLocation location, {
     required bool inline,
+    Set<PublishTarget> inlinePublish = const {},
   }) {
     const known = {'path', 'publish', 'binary_platforms'};
-    const unitLevel = {'tag', 'project', 'code_id', 'homebrew_tap'};
+    const unitLevel = {'tag', 'project', 'homebrew_tap'};
     for (final key in table.keys) {
       if (known.contains(key)) continue;
       if (inline && unitLevel.contains(key)) continue;
@@ -454,15 +506,31 @@ class _Reader {
     }
 
     final path = _projectPath(unit, table, location);
-    final channels = _channels(unit, table, location);
-    if (path == null || channels == null) return null;
+    final selected = inline
+        ? inlinePublish
+        : _publish(unit, table, location, allowMissing: true);
+    if (path == null || selected == null) return null;
 
-    final platforms = _platforms(unit, table, channels, location);
+    if (!inline) {
+      for (final target in selected) {
+        if (target.scope == TargetScope.project) continue;
+        _diagnostics.add(
+          'RK-CONF-038',
+          '"${target.configName}" belongs to the unit "$unit"',
+          source: table.locationOf('publish'),
+          remedy: 'move it to [release.$unit]',
+        );
+      }
+    }
+
+    final projectPublish =
+        selected.where((target) => target.scope == TargetScope.project).toSet();
+    final platforms = _platforms(unit, table, location);
     if (platforms == null) return null;
 
     return ProjectConfig(
       path: path,
-      channels: channels,
+      publish: Set.unmodifiable(projectPublish),
       binaryPlatforms: platforms,
       location: location,
     );
@@ -503,109 +571,67 @@ class _Reader {
     return parts.isEmpty ? '.' : parts.join('/');
   }
 
-  Set<String>? _channels(
+  Set<PublishTarget>? _publish(
     String unit,
     TomlTable table,
-    SourceLocation location,
-  ) {
+    SourceLocation location, {
+    bool allowMissing = true,
+  }) {
     final value = table['publish'];
     if (value == null) {
+      if (allowMissing) return const {};
       _diagnostics.add(
         'RK-CONF-019',
-        'a project in "$unit" does not say where to publish',
+        'unit "$unit" does not say where to publish',
         source: location,
-        remedy: 'add publish = ["pub.dev"]',
+        remedy: 'add publish with at least one target',
       );
       return null;
     }
     if (value is! List<String>) {
       _diagnostics.add(
         'RK-CONF-020',
-        'publish must be a list of channels',
+        'publish must be a list of targets',
         source: table.locationOf('publish'),
-        remedy: 'as in publish = ["pub.dev", "github-release"]',
-      );
-      return null;
-    }
-    if (value.isEmpty) {
-      _diagnostics.add(
-        'RK-CONF-021',
-        'a project in "$unit" publishes to nothing',
-        source: table.locationOf('publish'),
-        remedy: 'remove the project, or give it a channel',
+        remedy: 'as in publish = ["git-tag", "pub.dev"]',
       );
       return null;
     }
 
-    final seen = <String>{};
-    for (final channel in value) {
-      if (!ReleaseConfig.channels.contains(channel)) {
+    final names = <String>{};
+    final selected = <PublishTarget>{};
+    for (final name in value) {
+      final target = PublishTarget.named(name);
+      if (target == null) {
         _diagnostics.add(
           'RK-CONF-022',
-          'unknown channel "$channel"',
+          'unknown target "$name"',
           source: table.locationOf('publish'),
-          remedy: 'rk publishes to '
-              '${ReleaseConfig.channels.join(', ')}',
+          remedy: 'rk publishes to ${ReleaseConfig.targetNames.join(', ')}',
         );
         return null;
       }
-      if (!seen.add(channel)) {
+      if (!names.add(name)) {
         _diagnostics.add(
           'RK-CONF-023',
-          '"$channel" is listed twice',
+          '"$name" is listed twice',
           source: table.locationOf('publish'),
           remedy: 'publish is a set; order and repetition carry no meaning',
         );
         return null;
       }
+      selected.add(target);
     }
-
-    if (seen.contains('homebrew') && !seen.contains('github-release')) {
-      _diagnostics.add(
-        'RK-CONF-024',
-        'homebrew needs github-release, which hosts the archives it points at',
-        source: table.locationOf('publish'),
-        remedy: 'add "github-release", or drop "homebrew"',
-      );
-      return null;
-    }
-
-    return seen;
+    return selected;
   }
 
   List<String>? _platforms(
     String unit,
     TomlTable table,
-    Set<String> channels,
     SourceLocation location,
   ) {
-    final wantsBinaries =
-        channels.any(ReleaseConfig.platformBearingChannels.contains);
     final value = table['binary_platforms'];
-
-    if (value == null) {
-      if (wantsBinaries) {
-        _diagnostics.add(
-          'RK-CONF-025',
-          'a project in "$unit" ships binaries but names no platforms',
-          source: location,
-          remedy: 'add binary_platforms, as in '
-              '["linux-x64", "linux-arm64", "macos-arm64"]',
-        );
-        return null;
-      }
-      return const [];
-    }
-
-    if (!wantsBinaries) {
-      _diagnostics.add(
-        'RK-CONF-026',
-        'a project in "$unit" names platforms but ships no binaries',
-        source: table.locationOf('binary_platforms'),
-        remedy: 'remove binary_platforms, or publish to github-release',
-      );
-      return null;
-    }
+    if (value == null) return const [];
     if (value is! List<String> || value.isEmpty) {
       _diagnostics.add(
         'RK-CONF-027',

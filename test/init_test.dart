@@ -43,7 +43,7 @@ void main() {
     );
     expect(
       config,
-      isNot(contains('publish = ["pub.dev", "github-release"')),
+      isNot(contains('publish = ["git-tag", "pub.dev", "github-release"')),
       reason: 'binary channels are the human\'s decision',
     );
     expect(buffer.toString(), contains('workspace root'));
@@ -53,7 +53,7 @@ void main() {
     final buffer = StringBuffer();
     final written = <String, String>{};
     await InitCommand(
-      tree: MemorySourceTree({'release.toml': 'schema = 1\n'}),
+      tree: MemorySourceTree({'release.toml': 'schema = 2\n'}),
       output: Output(sink: buffer.write, isTerminal: false, useColor: false),
       write: (path, contents) => written[path] = contents,
       confirm: (_) async => true,
@@ -73,6 +73,32 @@ void main() {
     ).run();
     expect(written, isEmpty);
     expect(buffer.toString(), contains('nothing was written'));
+  });
+
+  test('a concurrent .gitignore edit is never overwritten', () async {
+    final files = <String, String>{
+      'pubspec.yaml': 'name: a\nversion: 1.0.0\n',
+      '.gitignore': 'build/\n',
+    };
+    final written = <String, String>{};
+    final output = Output(
+      sink: (_) {},
+      isTerminal: false,
+      useColor: false,
+    );
+    final code = await InitCommand(
+      tree: MemorySourceTree(files),
+      output: output,
+      write: (path, contents) => written[path] = contents,
+      confirm: (_) async {
+        files['.gitignore'] = 'build/\ncoverage/\n';
+        return true;
+      },
+    ).run();
+
+    expect(code, ExitCodes.refused);
+    expect(written, isEmpty);
+    expect(problemCodes(output.report), contains('RK-INIT-005'));
   });
 
   test('proposal and prompt remain readable on a narrow terminal', () async {
@@ -108,7 +134,7 @@ void main() {
         .toList();
     expect(visible.every((line) => line.runes.length <= width), isTrue);
     expect(visible.join('\n'), contains('write release.toml'));
-    expect(visible.join('\n'), contains('[Y/n]'));
+    expect(visible.join('\n'), contains('[Y/n/b]'));
     expect(visible.join('\n'), contains('nothing was written'));
     expect(buffer.toString(), isNot(contains('…')));
   });
@@ -127,7 +153,8 @@ void main() {
     expect(buffer.toString(), contains('nothing here can be released'));
   });
 
-  test('a single package gets the bare tag convention', () async {
+  test('a repository without a usable remote does not infer Git tagging',
+      () async {
     final written = <String, String>{};
     await InitCommand(
       tree: MemorySourceTree({'pubspec.yaml': 'name: solo\nversion: 1.0.0\n'}),
@@ -135,8 +162,28 @@ void main() {
       write: (path, contents) => written[path] = contents,
       confirm: (_) async => true,
     ).run();
-    expect(written['release.toml'], contains('# tag v{version}'));
-    expect(written['release.toml'], isNot(contains('solo-v')));
+    expect(written['release.toml'], contains('publish = ["pub.dev"]'));
+    expect(written['release.toml'], isNot(contains('git-tag')));
+  });
+
+  test('non-Git discovery follows only native workspace membership', () async {
+    final written = <String, String>{};
+    await InitCommand(
+      tree: MemorySourceTree({
+        'pubspec.yaml': 'name: root\npublish_to: none\nworkspace:\n'
+            '  - packages/member\n',
+        'packages/member/pubspec.yaml': 'name: member\nversion: 1.0.0\n',
+        'vendor/accidental/pubspec.yaml': 'name: accidental\nversion: 9.9.9\n',
+      }),
+      gitBound: false,
+      output: Output(sink: (_) {}, isTerminal: false, useColor: false),
+      write: (path, contents) => written[path] = contents,
+      confirm: (_) async => true,
+    ).run();
+
+    expect(written['release.toml'], contains('[release.member]'));
+    expect(written['release.toml'], isNot(contains('accidental')));
+    expect(written.containsKey('.gitignore'), isFalse);
   });
 }
 
@@ -208,7 +255,7 @@ workspace:
 
     expect(
       output.report.attachments['release.toml'],
-      contains('publish = ["pub.dev"]'),
+      contains('publish = ["git-tag", "pub.dev"]'),
       reason: 'an agent reads the proposal from the document; a human writes '
           'it at a terminal',
     );
@@ -308,7 +355,7 @@ void closeoutRegressions() {
       return output.report;
     }
 
-    final exists = await run({'release.toml': 'schema = 1\n'});
+    final exists = await run({'release.toml': 'schema = 2\n'});
     final nothing = await run({
       'pubspec.yaml': 'name: x\nversion: 1.0.0\npublish_to: none\n',
     });

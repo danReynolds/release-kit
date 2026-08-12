@@ -19,7 +19,7 @@ class Report {
   final String command;
 
   /// Wire format version, bumped only when a key changes meaning.
-  static const schema = 3;
+  static const schema = 6;
 
   /// Units by name, in the order they were first mentioned.
   ///
@@ -31,6 +31,7 @@ class Report {
   final List<Map<String, Object?>> _problems = [];
   final List<String> _next = [];
   Map<String, Object?>? _repository;
+  Map<String, Object?>? _init;
   Map<String, Object?>? _halt;
 
   /// Whether re-running would move the release forward.
@@ -61,6 +62,8 @@ class Report {
     int? uncommitted,
     String? head,
     String? remote,
+    String? sourceBinding,
+    String? sourceComparison,
   }) {
     // remote is null-when-absent rather than absent-when-absent: an
     // absent key and a null value are a parser fork forty repos would
@@ -70,6 +73,8 @@ class Report {
       if (branch != null) 'branch': branch,
       if (head != null) 'head': head,
       'remote': remote,
+      if (sourceBinding != null) 'source_binding': sourceBinding,
+      if (sourceComparison != null) 'source_comparison': sourceComparison,
       if (uncommitted != null) 'uncommitted': uncommitted,
     };
   }
@@ -79,7 +84,7 @@ class Report {
   void unit({
     required String name,
     required String version,
-    required String tag,
+    required String? tag,
   }) {
     _entry(name)
       ..['version'] = version
@@ -103,6 +108,7 @@ class Report {
     required String summary,
     String verdict = 'unknown',
     String? kind,
+    String? target,
     bool? permanent,
     bool? public,
     List<String> needs = const [],
@@ -120,6 +126,7 @@ class Report {
     steps.add({
       'id': id,
       if (kind != null) 'kind': kind,
+      if (target != null) 'target': target,
       'summary': summary,
       'verdict': verdict,
       if (permanent != null) 'permanent': permanent,
@@ -148,6 +155,8 @@ class Report {
     String? currentVersion,
     String? detail,
     String? uses,
+    String? sourceBinding,
+    String? sourceComparison,
     required List<Map<String, Object?>> artifacts,
   }) {
     final entry = _entry(unit);
@@ -165,6 +174,8 @@ class Report {
       'current_version': currentVersion,
       'target_version': targetVersion,
       'verdict': verdict,
+      if (sourceBinding != null) 'source_binding': sourceBinding,
+      if (sourceComparison != null) 'source_comparison': sourceComparison,
       if (detail != null) 'detail': detail,
       if (uses != null) 'uses': uses,
       'artifacts': artifacts,
@@ -198,6 +209,8 @@ class Report {
 
   void attach(String name, String contents) => attachments[name] = contents;
 
+  void initPlan(Map<String, Object?> plan) => _init = plan;
+
   /// Whether a halt sentence has been recorded, so a generic late halt can
   /// yield to a specific one already diagnosed.
   bool get halted => _halt != null;
@@ -226,6 +239,7 @@ class Report {
             'exit': exit,
             'rerun_helps': rerunHelps,
             if (_repository != null) 'repository': _repository,
+            if (_init != null) 'init': _init,
             'units': _units.values.toList(),
             'problems': _problems,
             'next': _next,

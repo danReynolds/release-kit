@@ -1,5 +1,6 @@
 import '../engine/checklist.dart';
 import '../engine/diagnostic.dart';
+import '../engine/publish_target.dart';
 import '../engine/resolve.dart';
 import '../engine/stage_contract.dart';
 import '../engine/targets.dart';
@@ -22,23 +23,26 @@ final class TargetCatalog {
           GithubReleaseTargetModule(),
           HomebrewTargetModule(),
         ] {
-    final byStep = <StepKind, TargetModule>{};
+    final byTarget = <PublishTarget, TargetModule>{};
     for (final module in modules) {
-      if (byStep[module.stepKind] != null) {
-        throw StateError('two target modules handle ${module.stepKind.name}');
+      if (byTarget[module.target] != null) {
+        throw StateError('two target modules handle '
+            '${module.target.configName}');
       }
       if (!module.stepKind.isPublic) {
         throw StateError('${module.stepKind.name} is not a public step');
       }
-      byStep[module.stepKind] = module;
+      byTarget[module.target] = module;
     }
-    final missing = targetStepKinds.difference(byStep.keys.toSet());
+    final missing =
+        PublishTarget.values.toSet().difference(byTarget.keys.toSet());
     if (missing.isNotEmpty) {
       throw StateError(
-        'missing target modules: ${missing.map((kind) => kind.name).join(', ')}',
+        'missing target modules: '
+        '${missing.map((target) => target.configName).join(', ')}',
       );
     }
-    _byStep = Map.unmodifiable(byStep);
+    _byTarget = Map.unmodifiable(byTarget);
   }
 
   factory TargetCatalog.builtIn() => _builtIn;
@@ -49,12 +53,12 @@ final class TargetCatalog {
   );
 
   final List<TargetModule> modules;
-  late final Map<StepKind, TargetModule> _byStep;
+  late final Map<PublishTarget, TargetModule> _byTarget;
 
-  TargetModule? moduleForStep(Step step) => _byStep[step.kind];
+  TargetModule? moduleForStep(Step step) => _byTarget[step.target];
 
   TargetModule moduleForTarget(TargetExpectation target) =>
-      _byStep[target.step.kind]!;
+      _byTarget[target.target]!;
 
   List<TargetExpectation> derive(
     ResolvedUnit unit,
@@ -63,7 +67,7 @@ final class TargetCatalog {
   }) {
     final targets = <TargetExpectation>[];
     for (final step in checklist.steps) {
-      final module = _byStep[step.kind];
+      final module = _byTarget[step.target];
       if (module == null) {
         if (step.isPublic) {
           throw StateError(
@@ -76,7 +80,9 @@ final class TargetCatalog {
         step: step,
         repository: repository,
       );
-      if (target.step.id != step.id || target.step.kind != module.stepKind) {
+      if (target.step.id != step.id ||
+          target.step.kind != module.stepKind ||
+          target.target != module.target) {
         throw StateError('${module.runtimeType} derived the wrong target');
       }
       if (step.isPermanent != (module.permanenceNotice(target) != null)) {

@@ -1,6 +1,7 @@
 import 'package:release_kit/src/engine/diagnostic.dart';
 import 'package:release_kit/src/engine/verdict.dart';
 import 'package:release_kit/src/engine/checklist.dart';
+import 'package:release_kit/src/engine/publish_target.dart';
 import 'package:release_kit/src/output/output.dart';
 import 'package:test/test.dart';
 
@@ -31,6 +32,26 @@ String withoutControls(String text) =>
     text.replaceAll(RegExp('\x1b\\[[0-9;]*[A-Za-z]'), '').replaceAll('\r', '');
 
 void main() {
+  test('public steps preserve concrete target identity in JSON', () {
+    final (out, _) = make();
+    out.step(
+      Step(
+        id: 'core/pub.dev/core@1.2.3',
+        kind: StepKind.publishRegistry,
+        target: PublishTarget.pubDev,
+        unit: 'core',
+        project: 'core',
+        summary: 'publish core 1.2.3 to pub.dev',
+        needs: const [],
+      ),
+      show: false,
+    );
+
+    final document = out.report.encode(exit: 0);
+    expect(document, contains('"kind": "publishRegistry"'));
+    expect(document, contains('"target": "pubDev"'));
+  });
+
   test('a problem printed while a step is running survives it', () {
     // The regression that reverted the grouped live board: producers print
     // nothing but diagnostics now, and a transient region that erased what
@@ -271,7 +292,7 @@ void main() {
       code: 'RK-CONF-019',
       message: 'a project in "core" does not say where to publish',
       source: SourceLocation('release.toml', 4),
-      remedy: 'add publish = ["pub.dev"]',
+      remedy: 'add publish = ["git-tag", "pub.dev"]',
     );
 
     test('lead with where and what, and carry the fix', () {

@@ -178,6 +178,8 @@ class Output {
     int? uncommitted,
     String? head,
     String? remote,
+    String? sourceBinding,
+    String? sourceComparison,
   }) {
     report.repository(
       name: name,
@@ -185,6 +187,8 @@ class Output {
       uncommitted: uncommitted,
       head: head,
       remote: remote,
+      sourceBinding: sourceBinding,
+      sourceComparison: sourceComparison,
     );
     heading([
       name,
@@ -201,7 +205,7 @@ class Output {
   void unit(
     String name, {
     required String version,
-    required String tag,
+    required String? tag,
     String? state,
     String? display,
   }) {
@@ -250,6 +254,7 @@ class Output {
       summary: step.summary,
       verdict: verdict.name,
       kind: step.kind.name,
+      target: step.target?.wireName,
       detail: detail,
       evidence: evidence,
       permanent: step.isPermanent,

@@ -2,6 +2,8 @@ import 'dart:io';
 
 import '../engine/checklist.dart';
 import '../engine/diagnostic.dart';
+import '../engine/publish_target.dart';
+import '../engine/pubspec.dart';
 import '../engine/registry.dart';
 import '../engine/resolve.dart';
 import '../engine/source_tree.dart';
@@ -17,6 +19,9 @@ import 'target_module.dart';
 
 final class PubDevTargetModule extends TargetModule {
   const PubDevTargetModule();
+
+  @override
+  PublishTarget get target => PublishTarget.pubDev;
 
   @override
   StepKind get stepKind => StepKind.publishRegistry;
@@ -41,6 +46,10 @@ final class PubDevTargetModule extends TargetModule {
       // pub publishes the staged source directory. There is no honest public
       // archive filename to invent for this row.
       artifacts: const [],
+      // Git-bound status can compare the immutable commit immediately.
+      // Unbound status deliberately returns unknown until this invocation has
+      // captured the exact source snapshot, so release may stage then decide.
+      exactComparisonNeedsStage: true,
     );
   }
 
@@ -140,8 +149,49 @@ final class PubDevTargetModule extends TargetModule {
 
   @override
   Future<bool> preflight(
-    TargetPreflightContext context,
+    TargetReadinessContext context,
     ResolvedUnit unit,
+  ) async {
+    final redirected = unit.projects
+        .where((project) => project.publish.contains(PublishTarget.pubDev))
+        .any((project) => !isPubDevDestination(
+              project.pubspec.effectivePublishDestination(context.environment),
+            ));
+    if (!redirected) return true;
+    context.output.problem(
+      Diagnostic(
+        code: 'RK-PUB-009',
+        message: 'the native Dart configuration redirects pub.dev publication',
+        remedy: 'rk will not publish a pub.dev target to an ambient or custom '
+            'registry. Remove PUB_HOSTED_URL, or declare the intended native '
+            'publish_to and use a future matching target. The URL is omitted '
+            'because it may contain credentials.',
+      ),
+      unit: unit.name,
+    );
+    context.output.halt(HaltKind.beforeActing);
+    return false;
+  }
+
+  @override
+  String effectiveEndpoint(
+    TargetReadinessContext context,
+    ResolvedUnit unit,
+    List<TargetExpectation> targets,
+  ) {
+    final endpoints = <String>[
+      for (final target in targets)
+        target.project!.pubspec
+            .effectivePublishDestination(context.environment),
+    ]..sort();
+    return endpoints.join('\n');
+  }
+
+  @override
+  Future<TargetSession?> acquireSession(
+    TargetReadinessContext context,
+    ResolvedUnit unit,
+    List<TargetExpectation> targets,
   ) async {
     int code;
     try {
@@ -153,7 +203,11 @@ final class PubDevTargetModule extends TargetModule {
     } on ProcessException {
       code = -1;
     }
-    if (code == 0) return true;
+    if (code == 0) {
+      return TargetSession(
+        endpoint: effectiveEndpoint(context, unit, targets),
+      );
+    }
 
     context.output.problem(
       Diagnostic(
@@ -166,7 +220,7 @@ final class PubDevTargetModule extends TargetModule {
       unit: unit.name,
     );
     context.output.halt(HaltKind.beforeActing);
-    return false;
+    return null;
   }
 
   @override

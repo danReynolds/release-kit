@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:release_kit/src/destinations/homebrew.dart';
 import 'package:release_kit/src/engine/tools.dart';
 import 'package:release_kit/src/engine/verdict.dart';
+import 'package:release_kit/src/transforms/digest.dart';
 import 'package:test/test.dart';
 
 const _assets = {
@@ -122,6 +123,19 @@ void main() {
       );
       expect(result.verdict, Verdict.exact);
       expect(result.evidence, contains('sha256'));
+    });
+
+    test('is exact from an authenticated manifest digest without local bytes',
+        () async {
+      final public = utf8.encode('version "1.0.0"\nsha256 "aaaa"\n');
+      final result = await target(public).inspect(
+        formulaPath: 'Formula/tool.rb',
+        expectedBytes: null,
+        expectedSha256: Sha256.hex(public),
+      );
+
+      expect(result.verdict, Verdict.exact);
+      expect(result.evidence['sha256'], Sha256.hex(public));
     });
 
     test('a byte-exact older immutable formula is ordinary work', () async {

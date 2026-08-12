@@ -579,11 +579,11 @@ void main() {
       final parsed = ReleaseConfig.parse(
           config ??
               '''
-schema = 1
+schema = 2
 
 [release.core]
 path = "packages/keybay"
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]
 ''',
           'release.toml',
           diagnostics)!;
@@ -819,11 +819,11 @@ publish = ["pub.dev"]
         archives: {},
         tags: {},
         config: '''
-schema = 1
+schema = 2
 
 [release.core]
 path = "dart/packages/keybay"
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]
 ''',
         sourceFiles: {
           'dart/pubspec.yaml': 'name: dart_workspace\n'
@@ -1189,7 +1189,6 @@ publish = ["pub.dev"]
     List<String>? certTeams,
     bool keychainReadable = true,
     String? previousTag,
-    bool declaresCodeId = true,
     bool publishedNamesTeam = true,
     bool publishStaged = false,
     bool baselineChangesBeforeConsent = false,
@@ -1200,13 +1199,12 @@ publish = ["pub.dev"]
     final buffer = StringBuffer();
     final diagnostics = Diagnostics();
     final config = ReleaseConfig.parse('''
-schema = 1
+schema = 2
 
 [release.cli]
 path = "packages/tool"
-publish = ["github-release"${homebrew ? ', "homebrew"' : ''}]
+publish = ["git-tag", "github-release"${homebrew ? ', "homebrew"' : ''}]
 binary_platforms = [${platforms.map((p) => '"$p"').join(', ')}]
-${declaresCodeId ? 'code_id = "io.github.example.tool"' : ''}
 ''', 'release.toml', diagnostics)!;
     final tree = MemorySourceTree({
       'packages/tool/pubspec.yaml': '''
@@ -2016,7 +2014,7 @@ executables:
       // one place it is too late to matter.
       expect(
         run.text,
-        contains('macOS identity   io.github.example.tool'),
+        contains('macOS identity   tool'),
         reason: 'the identifier is what becomes permanent, and it is on its '
             'own line so a wrong one is seen rather than hunted for',
       );
@@ -2098,37 +2096,20 @@ executables:
       );
     });
 
-    test('nothing published and nothing declared is refused, not guessed',
+    test('an unpublished CLI uses its executable as signing identity',
         () async {
-      // The identifier used to fall back to the pub package name, chosen at
-      // the one moment that makes it permanent: macOS stores the designated
-      // requirement in the ACL of every Keychain item the program creates,
-      // so a wrong one is an auth dialog on every access, forever. Nothing
-      // in the system states it — not the keychain, not the pubspec, not the
-      // forge — so rk refuses and suggests instead of choosing.
       final run = await binaryDrive(
-        dryRun: false,
+        dryRun: true,
         label: '-nocodeid',
-        declaresCodeId: false,
       );
 
-      expect(run.code, ExitCodes.refused, reason: run.text);
-      expect(run.text, contains('RK-SIGN-009'));
-      expect((run.json['halt']! as Map)['kind'], 'beforeActing');
+      expect(run.code, ExitCodes.ok, reason: run.text);
       expect(
-        run.calls.any((c) => c.startsWith('git push origin')),
-        isFalse,
-        reason: 'refused before the tag is public',
+        run.text,
+        matches(RegExp(r'macOS code identifier\s+tool')),
+        reason: 'the producer owns the identity it can derive from its native '
+            'executable rather than requiring release.toml to restate it',
       );
-      expect(
-        run.calls.any((c) => c.startsWith('codesign --force')),
-        isFalse,
-        reason: 'and before anything is signed under a guessed name',
-      );
-      // The remedy offers the convention as text to read and edit. It is a
-      // suggestion, never a fallback — the rule reproduces rk's own declared
-      // identifier and misses keybay's deliberate `.cli` suffix.
-      expect(run.text, contains('code_id = "io.github.example.tool"'));
     });
 
     group('the keychain is read before anything acts, not midway', () {
@@ -2196,7 +2177,7 @@ executables:
         expect(run.text, contains('First release · permanent once published'));
         expect(
           run.text,
-          matches(RegExp(r'macOS code identifier\s+io\.github\.example\.tool')),
+          matches(RegExp(r'macOS code identifier\s+tool')),
           reason: 'a swap of the identifier and the team survived a weaker '
               'assertion that only looked for the value',
         );
@@ -2206,19 +2187,15 @@ executables:
         );
       });
 
-      test('a dry run still refuses when nothing states the program name',
+      test('a dry run derives the native program name before signing',
           () async {
-        // --stage signs for real, so it needs a real identifier. The
-        // refusal is gated on `willSign`, never on dryRun.
         final run = await binaryDrive(
           dryRun: true,
           label: '-drynoid',
-          declaresCodeId: false,
         );
 
-        expect(run.code, ExitCodes.refused, reason: run.text);
-        expect(run.text, contains('RK-SIGN-009'));
-        expect(run.calls.any((c) => c.startsWith('codesign --force')), isFalse);
+        expect(run.code, ExitCodes.ok, reason: run.text);
+        expect(run.text, matches(RegExp(r'macOS code identifier\s+tool')));
       });
 
       test('a certificate for the wrong team refuses before the publish',

@@ -5,6 +5,7 @@ import '../engine/assets.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
 import '../engine/inspect.dart';
+import '../engine/publish_target.dart';
 import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
 import '../engine/source_tree.dart';
@@ -57,7 +58,7 @@ class StatusCommand {
     }
 
     final repositoryProblems = Diagnostics();
-    _checkRepositoryState(repositoryProblems);
+    _checkRepositoryState(repositoryProblems, units);
 
     // Every public read is started before rendering. Future.wait preserves
     // this configured order even when providers answer in another one.
@@ -75,11 +76,22 @@ class StatusCommand {
     output.repository(
       name: tree.description.split('/').last,
       branch: git.branch,
-      commit: git.shortHead,
+      commit: git.isBound ? git.shortHead : null,
       uncommitted: git.uncommitted.length,
-      head: git.head,
+      head: git.isBound ? git.head : null,
       remote: git.originUrl,
+      sourceBinding: git.isBound ? 'gitCommit' : 'unbound',
+      sourceComparison: git.isBound ? 'exact' : 'unavailable',
     );
+    if (!git.isBound) {
+      output.line(
+        'Source',
+        note: 'unbound · comparison unavailable',
+        depth: 1,
+        labelWidth: 18,
+        noteTone: Tone.muted,
+      );
+    }
 
     for (final snapshot in snapshots) {
       _renderUnit(snapshot);
@@ -415,7 +427,12 @@ class StatusCommand {
       currentDetail: currentInspection.detail,
       artifacts: [
         for (final name in expectation.artifacts)
-          _observeArtifact(name, stage, artifactProblems[name]),
+          _observeArtifact(
+            expectation,
+            name,
+            stage,
+            artifactProblems[name],
+          ),
       ],
     );
   }
@@ -440,6 +457,7 @@ class StatusCommand {
   }
 
   ArtifactObservation _observeArtifact(
+    TargetExpectation target,
     String name,
     StageInspection? stage,
     String? productionProblem,
@@ -458,12 +476,36 @@ class StatusCommand {
       );
     }
 
+    final complete = stage.receipt!.steps.last;
+    var stagedPath = name;
+    final releaseBindings = complete.evidence['release_assets'];
+    if (releaseBindings is Map && releaseBindings[name] is String) {
+      stagedPath = releaseBindings[name] as String;
+    }
+    final destinationBindings = complete.evidence['destination_bindings'];
+    if (destinationBindings is List) {
+      for (final value in destinationBindings) {
+        if (value is! Map ||
+            value['target'] != target.kind ||
+            value['project'] != target.project?.name ||
+            value['staged_path'] is! String) {
+          continue;
+        }
+        final destinationPath = value['path'];
+        if (destinationPath == name ||
+            destinationPath is String && destinationPath.endsWith('/$name')) {
+          stagedPath = value['staged_path'] as String;
+          break;
+        }
+      }
+    }
+
     final related = stage.issues.where((issue) {
       final path = issue.path;
       if (path == null) return false;
-      return path == name ||
-          path.startsWith('$name/') ||
-          name.startsWith('$path/');
+      return path == stagedPath ||
+          path.startsWith('$stagedPath/') ||
+          stagedPath.startsWith('$path/');
     }).toList();
     if (!stage.reusable) {
       final usefulIssues = related.isEmpty ? stage.issues : related;
@@ -478,7 +520,7 @@ class StatusCommand {
     }
 
     final recorded = stage.receipt!.artifacts.any(
-      (artifact) => artifact.path == name,
+      (artifact) => artifact.path == stagedPath,
     );
     if (!recorded) {
       return ArtifactObservation(
@@ -703,19 +745,21 @@ class StatusCommand {
             ? '$version · behind $agreedCurrent'
             : '$agreedCurrent › $version'
         : version;
-    final tag = snapshot.unit.tag == 'v$version' ? null : snapshot.unit.tag;
+    final resolvedTag = snapshot.unit.tag;
+    final displayedTag =
+        resolvedTag == null || resolvedTag == 'v$version' ? null : resolvedTag;
     output.unit(
       snapshot.unit.name,
       version: version,
-      tag: snapshot.unit.tag,
-      display: tag == null ? movement : '$movement · $tag',
+      tag: resolvedTag,
+      display: displayedTag == null ? movement : '$movement · $displayedTag',
     );
     for (final step in snapshot.checklist.steps) {
       // Public targets are recorded once, in targets[], where the settled
       // observation lives; recording them under steps[] too made two
       // spellings of the same fact and left a caller guessing which one is
       // canonical.
-      if (step.kind.targetName != null) continue;
+      if (step.target != null) continue;
       _record(step, snapshot.states[step.id]!);
     }
     for (final target in snapshot.targets) {
@@ -875,6 +919,8 @@ class StatusCommand {
       currentVersion: target.currentVersion,
       detail: state.detail,
       uses: target.expectation.uses,
+      sourceBinding: git.isBound ? 'gitCommit' : 'unbound',
+      sourceComparison: git.isBound ? 'exact' : 'unavailable',
       artifacts: [
         for (final artifact in target.artifacts)
           {
@@ -977,11 +1023,16 @@ class StatusCommand {
     );
   }
 
-  void _checkRepositoryState(Diagnostics problems) {
+  void _checkRepositoryState(
+    Diagnostics problems,
+    Iterable<ResolvedUnit> units,
+  ) {
     final uncommitted = git.uncommittedProblem();
     if (uncommitted != null) problems.report(uncommitted);
-    final unpushed = git.unpushedProblem();
-    if (unpushed != null) problems.report(unpushed);
+    if (units.any((unit) => unit.publish.contains(PublishTarget.gitTag))) {
+      final unpushed = git.unpushedProblem();
+      if (unpushed != null) problems.report(unpushed);
+    }
   }
 }
 

@@ -99,6 +99,12 @@ fails, and the count below is checked against the rows.
 | `RK-CONF-036` | unit "$name" declares homebrew_tap but does not publish to  homebrew | `lib/src/engine/config.dart` |
 | `RK-CONF-037` | $key is empty | `lib/src/engine/config.dart` |
 
+## RK-DEST — Effective publication destinations
+
+| code | says | declared in |
+|---|---|---|
+| `RK-DEST-001` | a target changed destination while preparing publication | `lib/src/commands/release.dart` |
+
 ## RK-DART — Dart-specific facts
 
 | code | says | declared in |
@@ -126,6 +132,12 @@ fails, and the count below is checked against the rows.
 | `RK-GIT-008` | the worktree state could not be read | `lib/src/engine/git.dart` |
 | `RK-GIT-006` | the repository could not be listed | `lib/src/commands/init.dart` |
 
+## RK-GITHUB — GitHub Releases
+
+| code | says | declared in |
+|---|---|---|
+| `RK-GITHUB-010` | the GitHub CLI has no usable session | `lib/src/targets/github_release_target.dart` |
+
 ## RK-HOST — What this machine can produce
 
 | code | says | declared in |
@@ -139,6 +151,9 @@ fails, and the count below is checked against the rows.
 | `RK-INIT-001` | the config rk would propose is one rk itself refuses | `lib/src/commands/init.dart` |
 | `RK-INIT-002` | release.toml already exists | `lib/src/commands/init.dart` |
 | `RK-INIT-003` | nothing here can be released | `lib/src/commands/init.dart` |
+| `RK-INIT-004` | release.toml appeared before rk could write it | `lib/src/commands/init.dart` |
+| `RK-INIT-005` | .gitignore changed while init was being reviewed | `lib/src/commands/init.dart` |
+| `RK-INIT-006` | release.toml was written but .gitignore was not updated | `lib/src/commands/init.dart` |
 
 ## RK-INT — rk itself
 
@@ -179,6 +194,7 @@ fails, and the count below is checked against the rows.
 | `RK-PUB-006` | the immutable public archive differs from the release source | `lib/src/targets/pub_dev_target.dart` |
 | `RK-PUB-007` | dart pub login did not complete | `lib/src/targets/pub_dev_target.dart` |
 | `RK-PUB-008` | ${project.name}: tracked dependency overrides mask consumer resolution | `lib/src/targets/pub_dev_target.dart` |
+| `RK-PUB-009` | the native Dart configuration redirects pub.dev publication | `lib/src/targets/pub_dev_target.dart` |
 
 RK-PUB-002 (the consumer-resolve probe) and RK-PUB-004 are retired historical
 meanings and are not reused.
@@ -204,6 +220,7 @@ meanings and are not reused.
 | `RK-RES-008` | the projects in "${unit.name}" are at different versions:  ${versions.join( | `lib/src/engine/resolve.dart` |
 | `RK-RES-009` | ${shipping.length} projects in "${unit.name}" ship binaries | `lib/src/engine/resolve.dart` |
 | `RK-RES-010` | the units "${first.name}" and "${unit.name}" would share the tag  "${unit.tagPattern}" | `lib/src/engine/resolve.dart` |
+| `RK-RES-014` | a package names a custom package registry but is asked to publish to pub.dev | `lib/src/engine/resolve.dart` |
 
 ## RK-SIGN — Signing identity
 
