@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-121 codes across 24 families.
+131 codes across 25 families.
 
 
 ## RK-AUTH — Authorization
@@ -51,7 +51,6 @@ fails, and the count below is checked against the rows.
 | code | says | declared in |
 |---|---|---|
 | `RK-CLI-001` | rk does not have ${unknown.join( | `bin/rk.dart` |
-| `RK-CLI-002` | this is not a git repository | `bin/rk.dart` |
 | `RK-CLI-003` | no unit named "$only" | `lib/src/commands/release.dart`, `lib/src/commands/status.dart` |
 | `RK-CLI-004` | name the unit to release | `lib/src/commands/release.dart` |
 | `RK-CLI-005` | rk $command does not have ${inapplicable.join( | `bin/rk.dart` |
@@ -83,7 +82,6 @@ fails, and the count below is checked against the rows.
 | `RK-CONF-018` | the project path "$value" leaves the repository | `lib/src/engine/config.dart` |
 | `RK-CONF-019` | a project in "$unit" does not say where to publish | `lib/src/engine/config.dart` |
 | `RK-CONF-020` | publish must be a list of channels | `lib/src/engine/config.dart` |
-| `RK-CONF-021` | a project in "$unit" publishes to nothing | `lib/src/engine/config.dart` |
 | `RK-CONF-022` | unknown channel "$channel" | `lib/src/engine/config.dart` |
 | `RK-CONF-023` | "$channel" is listed twice | `lib/src/engine/config.dart` |
 | `RK-CONF-024` | homebrew needs github-release, which hosts the archives it points at | `lib/src/engine/config.dart` |
@@ -95,9 +93,11 @@ fails, and the count below is checked against the rows.
 | `RK-CONF-032` | $key must be text | `lib/src/engine/config.dart` |
 | `RK-CONF-033` | git will not accept the tag pattern for "$unit": $issue | `lib/src/engine/config.dart` |
 | `RK-CONF-034` | release.toml is there and rk could not read it | `bin/rk.dart` |
-| `RK-CONF-035` | unit "$name" declares code_id but signs nothing | `lib/src/engine/config.dart` |
 | `RK-CONF-036` | unit "$name" declares homebrew_tap but does not publish to  homebrew | `lib/src/engine/config.dart` |
 | `RK-CONF-037` | $key is empty | `lib/src/engine/config.dart` |
+| `RK-CONF-038` | a target is declared at the wrong unit or project scope | `lib/src/engine/config.dart` |
+| `RK-CONF-039` | a unit declares a tag without selecting git-tag | `lib/src/engine/config.dart` |
+| `RK-CONF-040` | homebrew_tap is not a GitHub owner/repository coordinate | `lib/src/engine/config.dart` |
 
 ## RK-DEST — Effective publication destinations
 
@@ -218,8 +218,10 @@ meanings and are not reused.
 | `RK-RES-006` | — | `lib/src/engine/resolve.dart` |
 | `RK-RES-007` | the package "$name" is declared by two projects | `lib/src/engine/resolve.dart` |
 | `RK-RES-008` | the projects in "${unit.name}" are at different versions:  ${versions.join( | `lib/src/engine/resolve.dart` |
-| `RK-RES-009` | ${shipping.length} projects in "${unit.name}" ship binaries | `lib/src/engine/resolve.dart` |
 | `RK-RES-010` | the units "${first.name}" and "${unit.name}" would share the tag  "${unit.tagPattern}" | `lib/src/engine/resolve.dart` |
+| `RK-RES-011` | two projects contribute the same public release filename | `lib/src/engine/resolve.dart` |
+| `RK-RES-012` | a tagged unit needs an explicit tag pattern when several units tag | `lib/src/engine/resolve.dart` |
+| `RK-RES-013` | two projects publish the same Homebrew formula path | `lib/src/engine/resolve.dart` |
 | `RK-RES-014` | a package names a custom package registry but is asked to publish to pub.dev | `lib/src/engine/resolve.dart` |
 
 ## RK-SIGN — Signing identity
@@ -230,7 +232,6 @@ meanings and are not reused.
 | `RK-SIGN-002` | $platform: signing failed | `lib/src/binary_chain.dart` |
 | `RK-SIGN-003` | the signature does not match the identity users  already installed | `lib/src/binary_chain.dart` |
 | `RK-SIGN-004` | the identity users already installed could not be read | `lib/src/commands/release.dart` |
-| `RK-SIGN-005` | code_id disagrees with the release users already installed | `lib/src/commands/release.dart` |
 | `RK-SIGN-006` | the login keychain could not be read | `lib/src/commands/release.dart` |
 | `RK-SIGN-007` | no Developer ID Application certificate is installed | `lib/src/commands/release.dart` |
 | `RK-SIGN-008` | this machine has ${certificates.length} Developer ID  certificates and nothing published says which distributes this | `lib/src/commands/release.dart` |
@@ -239,6 +240,13 @@ meanings and are not reused.
 | `RK-SIGN-011` | several certificates for the published team | `lib/src/commands/release.dart` |
 | `RK-SIGN-012` | the selected signing certificate fingerprint could not be read | `lib/src/commands/release.dart` |
 | `RK-SIGN-013` | the published signing identity changed after staging | `lib/src/commands/release.dart` |
+
+## RK-SRC — Source binding
+
+| code | says | declared in |
+|---|---|---|
+| `RK-SRC-001` | a unit selects targets that require Git from unbound source | `bin/rk.dart` |
+| `RK-SRC-002` | an unbound stage cannot be authorized by a later run | `lib/src/commands/release.dart` |
 
 ## RK-STAGE — The private release stage
 

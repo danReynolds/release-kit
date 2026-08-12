@@ -23,7 +23,6 @@ String receiptNameFor(Step step) => switch (step.kind) {
       StepKind.build => 'build:${step.project}:${step.platform}',
       StepKind.notarize => 'notarize:${step.project}:${step.platform}',
       StepKind.archive => 'archive:${step.project}:${step.platform}',
-      StepKind.checksums => 'bundle:checksums',
       _ => throw StateError('${step.kind.name} is not a local producer'),
     };
 
@@ -45,17 +44,6 @@ List<StageStepContract> localProducerContracts(ResolvedUnit unit) => [
 
 /// The receipt contract one local checklist step must satisfy.
 StageStepContract contractFor(ResolvedUnit unit, Step step) {
-  if (step.kind == StepKind.checksums) {
-    return StageStepContract(
-      receiptNameFor(step),
-      inputs: {
-        for (final contribution in ReleaseAssets.contributionsFor(unit))
-          contribution.stagedPath,
-      },
-      outputs: {ReleaseAssets.checksumPath: 'checksums'},
-      validate: _checksumsEvidence,
-    );
-  }
   final project = unit.project(step.project!);
   final platform = step.platform;
   final binary =
@@ -90,9 +78,6 @@ StageStepContract contractFor(ResolvedUnit unit, Step step) {
           ReleaseAssets.archivePath(project, platform!): 'archive',
         },
       );
-
-    case StepKind.checksums:
-      throw StateError('checksums are handled by the unit bundle');
 
     default:
       throw StateError('${step.kind.name} is not a local producer');
@@ -153,36 +138,6 @@ Iterable<StageIssue> _notaryEvidence(
   return const [];
 }
 
-/// The checksums evidence binds every archive input, and the file agrees.
-Iterable<StageIssue> _checksumsEvidence(
-  StageContractContext context,
-  StageStep step,
-) {
-  final checksums = step.evidence['checksums'];
-  final publicNameByPath = {
-    for (final contribution in ReleaseAssets.contributionsFor(context.unit))
-      contribution.stagedPath: contribution.publicName,
-  };
-  final expected = {
-    for (final input in step.inputs)
-      publicNameByPath[input.name] ?? input.name: input.sha256,
-  };
-  final output = step.outputs.firstOrNull;
-  if (checksums is! Map ||
-      !_sameMap(checksums, expected) ||
-      output == null ||
-      !_checksumFileMatches(context.stage, output.path, expected)) {
-    return [
-      const StageIssue(
-        StageIssueKind.invalidChecksums,
-        'checksums evidence does not exactly bind every archive input',
-        path: ReleaseAssets.checksumPath,
-      ),
-    ];
-  }
-  return const [];
-}
-
 /// Apple's log carries the submission under `id` or `jobId`; when it names
 /// one, it must be the submission the result named — a log for different
 /// bytes is not evidence about these.
@@ -215,30 +170,6 @@ bool _acceptedNotaryFile(
     return false;
   }
 }
-
-bool _checksumFileMatches(
-  StageDirectory stage,
-  String path,
-  Map<String, String> expected,
-) {
-  try {
-    final found = <String, String>{};
-    for (final line in File(stage.resolve(path)).readAsLinesSync()) {
-      if (line.isEmpty) continue;
-      final match =
-          RegExp(r'^([0-9a-f]{64})  ([^/\\\u0000]+)$').firstMatch(line);
-      if (match == null || found.containsKey(match.group(2))) return false;
-      found[match.group(2)!] = match.group(1)!;
-    }
-    return _sameMap(found, expected);
-  } on Object {
-    return false;
-  }
-}
-
-bool _sameMap(Map left, Map right) =>
-    left.length == right.length &&
-    left.entries.every((entry) => right[entry.key] == entry.value);
 
 StageIssue _structure(String message) => StageIssue(
       StageIssueKind.invalidStructure,

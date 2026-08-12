@@ -3,11 +3,10 @@ import 'dart_workspace.dart';
 import 'pubspec.dart';
 import 'source_tree.dart';
 
-enum InitOption { use, binary, gitTag, pubDev, githubRelease, homebrew }
+enum InitOption { binary, gitTag, pubDev, githubRelease, homebrew }
 
 extension InitOptionLabel on InitOption {
   String get label => switch (this) {
-        InitOption.use => 'Use',
         InitOption.binary => 'Binary',
         InitOption.gitTag => 'Git tag',
         InitOption.pubDev => 'pub.dev',
@@ -16,7 +15,6 @@ extension InitOptionLabel on InitOption {
       };
 
   String get wireName => switch (this) {
-        InitOption.use => 'use',
         InitOption.binary => 'binary',
         InitOption.gitTag => 'git-tag',
         InitOption.pubDev => 'pub.dev',
@@ -46,7 +44,6 @@ final class InitCandidate {
     required this.executables,
     required this.availability,
     required this.selected,
-    required this.use,
   });
 
   final String name;
@@ -55,19 +52,16 @@ final class InitCandidate {
   final List<String> executables;
   final Map<InitOption, InitAvailability> availability;
   final Set<InitOption> selected;
-  final bool use;
 
   String get unit => InitPlan.unitName(name);
 
-  InitCandidate copyWith({Set<InitOption>? selected, bool? use}) =>
-      InitCandidate(
+  InitCandidate copyWith({Set<InitOption>? selected}) => InitCandidate(
         name: name,
         path: path,
         version: version,
         executables: executables,
         availability: availability,
         selected: selected ?? this.selected,
-        use: use ?? this.use,
       );
 
   Map<String, Object?> toJson() => {
@@ -76,11 +70,8 @@ final class InitCandidate {
         'path': path,
         'version': version,
         'executables': executables,
-        'use': use,
         'options': {
-          for (final option in InitOption.values.where(
-            (option) => option != InitOption.use,
-          ))
+          for (final option in InitOption.values)
             option.wireName: {
               ...availability[option]!.toJson(),
               'selected': selected.contains(option),
@@ -153,11 +144,6 @@ final class InitPlan {
           InitOption.gitTag,
       };
       final availability = <InitOption, InitAvailability>{
-        InitOption.use: packageUsable
-            ? const InitAvailability.available('include this release unit')
-            : InitAvailability.unavailable(project.isGroupingRoot
-                ? 'workspace root — select its packages instead'
-                : 'the native manifest declares no version'),
         InitOption.pubDev: registryAvailable
             ? const InitAvailability.available(
                 'native Dart package coordinate',
@@ -170,13 +156,17 @@ final class InitPlan {
                 ? const InitAvailability.available(
                     'native coordinate; example and fixture paths start unselected',
                   )
-                : InitAvailability.unavailable(project.vetoesRegistry
-                    ? 'publish_to: none vetoes registry publication'
-                    : !repositoryPubDev
-                        ? 'publish_to names a custom registry; this build has no matching target'
-                        : !ambientPubDev
-                            ? 'PUB_HOSTED_URL redirects the default registry; declare publish_to in the pubspec first'
-                            : 'a package version is required'),
+                : InitAvailability.unavailable(project.isGroupingRoot
+                    ? 'workspace root — select its packages instead'
+                    : project.version == null
+                        ? 'the native manifest declares no version'
+                        : project.vetoesRegistry
+                            ? 'publish_to: none vetoes registry publication'
+                            : !repositoryPubDev
+                                ? 'publish_to names a custom registry; this build has no matching target'
+                                : !ambientPubDev
+                                    ? 'PUB_HOSTED_URL redirects the default registry; declare publish_to in the pubspec first'
+                                    : 'a package version is required'),
         InitOption.gitTag: tagAvailable
             ? InitAvailability.available(selected.contains(InitOption.gitTag)
                 ? 'usable Git remote; selected conservatively'
@@ -221,7 +211,6 @@ final class InitPlan {
         executables: project.executables,
         availability: Map.unmodifiable(availability),
         selected: Set.unmodifiable(selected),
-        use: selected.isNotEmpty,
       ));
     }
     if (vetoed > 0) notices.add('$vetoed excluded by publish_to: none');
@@ -240,38 +229,11 @@ final class InitPlan {
   final bool hasRemote;
   final String? githubRepository;
 
-  List<InitCandidate> get included => candidates
-      .where((candidate) => candidate.use && _targets(candidate).isNotEmpty)
-      .toList();
+  List<InitCandidate> get included =>
+      candidates.where((candidate) => _targets(candidate).isNotEmpty).toList();
 
   InitToggleResult toggle(int index, InitOption option) {
     final candidate = candidates[index];
-    if (option == InitOption.use) {
-      var selected = candidate.selected;
-      final enable = !candidate.use;
-      if (enable && selected.isEmpty) {
-        final fallback = [
-          InitOption.pubDev,
-          InitOption.gitTag,
-          InitOption.githubRelease,
-        ].firstWhere(
-          (item) => candidate.availability[item]!.available,
-          orElse: () => InitOption.use,
-        );
-        if (fallback == InitOption.use) {
-          return InitToggleResult(
-            this,
-            candidate.availability[InitOption.use]!.reason,
-          );
-        }
-        selected = {fallback};
-      }
-      return InitToggleResult(
-        _replace(index, candidate.copyWith(use: enable, selected: selected)),
-        enable ? '${candidate.unit} included' : '${candidate.unit} excluded',
-      );
-    }
-
     final availability = candidate.availability[option]!;
     if (!availability.available) {
       return InitToggleResult(this, availability.reason);
@@ -303,17 +265,17 @@ final class InitPlan {
         if (selected.remove(item)) changed.add(item);
       }
     }
-    final use = selected.any(_isTarget);
+    final included = selected.any(_isTarget);
     final plan = _replace(
       index,
-      candidate.copyWith(selected: Set.unmodifiable(selected), use: use),
+      candidate.copyWith(selected: Set.unmodifiable(selected)),
     );
     final names = changed.map((item) => item.label).join(', ');
     return InitToggleResult(
       plan,
       selected.contains(option)
           ? '$names enabled'
-          : '$names disabled${use ? '' : '; unit excluded'}',
+          : '$names disabled${included ? '' : '; unit excluded'}',
     );
   }
 

@@ -10,7 +10,7 @@ import 'resolve.dart';
 ///
 /// They were spelled in four places: the chain that produces them, the
 /// inspector that expects them, the checklist that counts them, and literals
-/// for the checksums file. That is not untidiness, it is a latent and
+/// for generated bundle files. That is not untidiness, it is a latent and
 /// permanently unfixable failure. `GithubRelease.inspect` returns
 /// `Verdict.conflict` for *any* difference between expected and published —
 /// missing or extra — and a published release cannot be edited, so the
@@ -27,12 +27,8 @@ import 'resolve.dart';
 /// `checklist.dart` imports `diagnostic`, `resolve` and `version`, and
 /// `inspect.dart` imports `checklist.dart` one way.
 abstract final class ReleaseAssets {
-  /// The checksums file, which every binary release carries exactly one of.
-  static const checksums = 'SHA256SUMS';
-
   /// Public binding from release bytes back to their source and stage plan.
   static const manifest = 'release-manifest.json';
-  static const checksumPath = 'bundle/SHA256SUMS';
 
   static String producerRoot(ResolvedProject project) =>
       'producers/${project.name}';
@@ -101,7 +97,7 @@ abstract final class ReleaseAssets {
 
   /// The formula's public filename inside its Homebrew tap.
   ///
-  /// Formula bytes are destination-owned and do not enter the GitHub Release
+  /// Formula bytes belong to the tap and do not enter the GitHub Release
   /// inventory. Their digest and tap path are bound by the release manifest.
   static String formulaName(String executable) => '$executable.rb';
 
@@ -123,18 +119,9 @@ abstract final class ReleaseAssets {
         for (final project in unit.projects) ...contributedBy(project),
       ]);
 
-  /// The complete generated public inventory excluding the manifest itself.
-  static List<ReleaseAssetSpec> bundleFor(ResolvedUnit unit) {
-    final contributed = contributionsFor(unit);
-    return validateReleaseAssetSpecs([
-      ...contributed,
-      if (contributed.isNotEmpty)
-        ReleaseAssetSpec.generated(
-          stagedPath: checksumPath,
-          publicName: checksums,
-        ),
-    ]);
-  }
+  /// The complete public inventory excluding the manifest itself.
+  static List<ReleaseAssetSpec> bundleFor(ResolvedUnit unit) =>
+      contributionsFor(unit);
 
   static Set<String> expectedForUnit(ResolvedUnit unit) => {
         for (final asset in bundleFor(unit)) asset.publicName,

@@ -1737,7 +1737,7 @@ executables:
             .cast<Map<String, Object?>>()
             .expand((unit) => (unit['steps'] as List).cast<Map>())
             .map((step) => step['summary'])),
-        contains('publish 3 assets to the v1.0.0 release'),
+        contains('publish 2 assets to the v1.0.0 release'),
       );
       expect(run.text, contains('released'));
     });
@@ -1966,7 +1966,7 @@ executables:
             .cast<Map<String, Object?>>()
             .expand((unit) => (unit['steps'] as List).cast<Map>())
             .map((step) => step['summary'])),
-        contains('publish 5 assets to the v1.0.0 release'),
+        contains('publish 4 assets to the v1.0.0 release'),
         reason: run.text,
       );
 

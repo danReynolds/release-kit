@@ -40,10 +40,8 @@ void main() {
       'rk-$version-macos-arm64.notary-log.json',
       'rk-$version-linux-x64.tar.gz',
       'rk-$version-linux-arm64.tar.gz',
-      'SHA256SUMS',
       'release-manifest.json',
       'shasum -a 256 release-manifest.json',
-      'shasum -a 256 -c SHA256SUMS',
       'tar -tzf',
       'rk $version',
       'codesign --verify --strict',
@@ -68,22 +66,19 @@ void main() {
       'rk-$version-linux-arm64.tar.gz',
     ];
     for (final archive in archives) {
+      _expectNextLine(
+        staged,
+        'shasum -a 256 $archive',
+        RegExp('^[0-9a-f]{64}[ \\t]+\\*?${RegExp.escape(archive)}\$'),
+        reason: 'each staged archive must have an independently recorded '
+            'digest matching the release manifest',
+      );
       _expectExactLines(
         staged,
         'tar -tzf $archive',
         ['rk', 'LICENSE', 'README.md'],
       );
     }
-    final checksumResults = RegExp(
-      r'^(\S+): (?:OK|FAILED)$',
-      multiLine: true,
-    ).allMatches(staged).map((match) => match.group(0)).toList();
-    expect(checksumResults, hasLength(archives.length));
-    expect(
-      checksumResults.toSet(),
-      {for (final archive in archives) '$archive: OK'},
-      reason: 'SHA256SUMS must verify exactly the three release archives',
-    );
     expect(
       staged,
       contains(
@@ -227,9 +222,8 @@ void main() {
       'https://github.com/danReynolds/release-kit/releases/download/'
           'v$version/$asset',
       'https://github.com/danReynolds/release-kit/releases/download/'
-          'v$version/SHA256SUMS',
-      'shasum -a 256 -c',
-      '$asset: OK',
+          'v$version/release-manifest.json',
+      'shasum -a 256 $asset',
       './rk --version',
       './rk --help',
       'rk $version',
@@ -242,8 +236,8 @@ void main() {
         '^${RegExp.escape(assetDigest)}[ \\t]+\\*?${RegExp.escape(asset)}\$',
         multiLine: true,
       )),
-      reason: 'the selected public checksum line must bind the downloaded '
-          'asset to the recorded digest',
+      reason: 'the downloaded asset digest must match its manifest-bound '
+          'recorded digest',
     );
     _expectNextLine(
       githubConsumer,

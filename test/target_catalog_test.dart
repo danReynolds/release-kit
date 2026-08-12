@@ -133,7 +133,7 @@ executables:
           label: 'GitHub Release · example/tool',
           coordinate: 'example/tool/releases/tag/v1.2.3',
           version: '1.2.3',
-          artifacts: 'SHA256SUMS,release-manifest.json,'
+          artifacts: 'release-manifest.json,'
               'tool-1.2.3-linux-x64.tar.gz',
           uses: null,
         ),
@@ -196,7 +196,7 @@ executables:
             phase: StageContributionPhase.afterArtifacts,
             step: StageStepContract(
               'bad-target',
-              outputs: {ReleaseAssets.checksumPath: 'wrong'},
+              outputs: {ReleaseAssets.manifest: 'wrong'},
             ),
           ),
         ],

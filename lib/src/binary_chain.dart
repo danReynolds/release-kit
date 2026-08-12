@@ -20,8 +20,8 @@ import 'transforms/macos.dart';
 ///
 /// It sits at the top of `lib/src` because it belongs to none of the
 /// directories below it. It is not a verb — no argument parsing, no exit
-/// codes; its API is buildStep, notarizeStep, archiveStep, and
-/// checksumsStep, each called by `commands/release.dart`. And it is not an
+/// codes; its API is buildStep, notarizeStep, and archiveStep, each called by
+/// `commands/release.dart`. And it is not an
 /// adapter by this codebase's own test, the one `destinations/git_tag.dart`
 /// states: it holds an [Output] at thirty-odd sites, where every file in
 /// `builds/`, `transforms/` and `destinations/` holds one at zero.
@@ -455,48 +455,6 @@ class BinaryChain {
         'inventory': StageArchiveInventory.evidence(
           StageArchiveInventory.parse(bytes),
         ),
-      },
-    );
-  }
-
-  // ---- checksums ----
-
-  Future<LocalProducerOutcome> checksumsStep(
-    Step step,
-    ResolvedUnit unit,
-  ) async {
-    final assets = <String, List<int>>{};
-    for (final contribution in ReleaseAssets.contributionsFor(unit)) {
-      final bytes = workspace.readBytes(contribution.stagedPath);
-      if (bytes == null) {
-        return _missingArtifact(
-          step,
-          contribution.stagedPath,
-          'the archive steps produce it',
-        );
-      }
-      assets[contribution.publicName] = bytes;
-    }
-
-    workspace.write(
-        ReleaseAssets.checksumPath, utf8.encode(Checksums.render(assets)));
-    output.step(
-      step,
-      show: false,
-      mark: Mark.done,
-      verdict: Verdict.exact,
-      detail: '${assets.length} archives',
-      note: '${assets.length} archives',
-    );
-    return LocalProducerOutcome.succeeded(
-      outputs: const [
-        LocalProducerOutput(ReleaseAssets.checksumPath, 'checksums'),
-      ],
-      evidence: {
-        'checksums': {
-          for (final entry in assets.entries)
-            entry.key: Sha256.hex(entry.value),
-        },
       },
     );
   }

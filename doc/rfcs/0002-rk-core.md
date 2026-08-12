@@ -543,8 +543,8 @@ permanent release is intentionally created with a partial asset set and no
 remote draft is deleted as cleanup.
 
 **The flip re-verifies against reality**: enumerate the draft's assets,
-require the exact inventory, confirm every digest, recompute the checksums
-file and formula from those digests and compare against what is staged.
+require the exact inventory, confirm every digest, and compare the staged
+formula against the manifest-bound archive digests.
 Only then publish once, and confirm the release reports immutable.
 
 The post-create inspection downloads or hashes the public assets and compares
@@ -673,12 +673,13 @@ act(expected, stage)
   retains and revalidates that exact evidence instead of resubmitting.
   `codesign --test-requirement=notarized -v` remains the binding check on
   the exact signed bytes.
-- **`archive` + `checksums`** (transforms): deterministic tar.gz per
+- **`archive`** (transform): deterministic tar.gz per
   platform — fixed entry order, zeroed mtimes, normalized modes, no gzip
   timestamp — containing the executable, LICENSE, and README, with frozen
-  public asset names; plus `SHA256SUMS`. Determinism is a requirement, not
-  polish: without byte-reproducibility, "is this the artifact I would have
-  made" is undecidable and reuse degenerates into acceptability.
+  public asset names. The release manifest records each archive's size and
+  SHA-256. Determinism is a requirement, not polish: without
+  byte-reproducibility, "is this the artifact I would have made" is
+  undecidable and reuse degenerates into acceptability.
 - **`pub-dev`** (destination): inspection via the pub.dev API; publish via
   `dart pub publish` against the operator's session; post-publish
   re-download and logical content compare, since pub rewraps archives —
@@ -748,7 +749,6 @@ What makes the CLI sufficient is already required for other reasons:
   <unit>/build/<platform>       (on macOS the build signs too)
   <unit>/notarize/<platform>
   <unit>/archive/<platform>
-  <unit>/checksums/SHA256SUMS
   <unit>/github-release/<tag>
   <unit>/homebrew/<formula>
   ```

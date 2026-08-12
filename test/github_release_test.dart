@@ -213,7 +213,7 @@ void main() {
       final downloads = {
         'a.tar.gz': utf8.encode('a'),
         'b.tar.gz': utf8.encode('b'),
-        'SHA256SUMS': utf8.encode('sums'),
+        'c.tar.gz': utf8.encode('c'),
       };
       final tools = _ConcurrentDownloadTools(
         response: jsonEncode({
@@ -774,7 +774,7 @@ void main() {
       final paths = <String>[];
       for (final name in duplicateAssetNames
           ? const ['left/a.tar.gz', 'right/a.tar.gz']
-          : const ['a.tar.gz', 'SHA256SUMS']) {
+          : const ['a.tar.gz', 'b.tar.gz']) {
         final file = File('${scratch.path}/$name');
         file.parent.createSync(recursive: true);
         file.writeAsStringSync(name);
@@ -977,7 +977,7 @@ void main() {
             {'tag_name': 'v1.0.0', 'draft': true, 'id': 11},
           ],
         ]),
-        initialDraftNames: const ['SHA256SUMS'],
+        initialDraftNames: const ['a.tar.gz'],
       );
 
       expect(run.outcome.ok, isTrue, reason: run.outcome.problem ?? '');
@@ -988,7 +988,7 @@ void main() {
       expect(
         run.tools.calls
             .singleWhere((call) => call.contains('uploads.github.com')),
-        contains('name=a.tar.gz'),
+        contains('name=b.tar.gz'),
       );
       expect(
         run.tools.calls.any(
@@ -1003,7 +1003,7 @@ void main() {
     test('a non-prefix or metadata-different draft refuses without mutation',
         () async {
       for (final scenario in [
-        (names: const ['a.tar.gz'], title: 'tool 1.0.0'),
+        (names: const ['b.tar.gz'], title: 'tool 1.0.0'),
         (names: const <String>[], title: 'Different'),
       ]) {
         final run = await publish(
@@ -1162,14 +1162,15 @@ void main() {
         uploadFailure: 'connection lost',
         failedUploadLands: true,
         draftAssetOverrides: {
-          'SHA256SUMS': utf8.encode('SHA'),
+          'b.tar.gz': utf8.encode('truncated'),
         },
       );
 
       expect(run.outcome.ok, isFalse);
       expect(run.outcome.mayHaveActed, isFalse);
       expect(run.outcome.draftEffect, DraftEffect.changed);
-      expect(run.outcome.problem, contains('could not be reconciled by bytes'));
+      expect(
+          run.outcome.problem, contains('does not contain the staged bytes'));
       expect(
         run.tools.calls.any((call) => call.contains(' -X PATCH ')),
         isFalse,

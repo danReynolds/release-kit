@@ -1055,7 +1055,6 @@ void main() {
       name: 'archive write',
       path: 'producers/tool/archives/tool-1.2.3-linux-x64.tar.gz',
     ),
-    (name: 'checksum write', path: ReleaseAssets.checksumPath),
     (
       name: 'formula write',
       path: 'producers/tool/homebrew/tool.rb',
@@ -1109,7 +1108,6 @@ void main() {
     (step: 'release-notes', preflightDone: true, buildDone: false),
     (step: 'build:tool:linux-x64', preflightDone: true, buildDone: true),
     (step: 'archive:tool:linux-x64', preflightDone: true, buildDone: true),
-    (step: 'bundle:checksums', preflightDone: true, buildDone: true),
     (step: 'homebrew-formula:tool', preflightDone: true, buildDone: true),
   ]) {
     test('an interrupted ${boundary.step} prefix resumes from exact bytes',

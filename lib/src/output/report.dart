@@ -19,7 +19,7 @@ class Report {
   final String command;
 
   /// Wire format version, bumped only when a key changes meaning.
-  static const schema = 4;
+  static const schema = 5;
 
   /// Units by name, in the order they were first mentioned.
   ///

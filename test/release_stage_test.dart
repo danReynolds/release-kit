@@ -331,14 +331,13 @@ void main() {
       File(homebrewStage.directory.resolve(ReleaseAssets.manifest))
           .readAsStringSync(),
     );
-    final destination = manifest.destinations.single;
+    final formulaBinding = manifest.formulas.single;
 
     expect(manifest.artifacts.map((artifact) => artifact.name), [_asset]);
-    expect(destination.target, 'homebrew');
-    expect(destination.project, 'tool');
-    expect(destination.coordinate, 'owner/homebrew-tap');
-    expect(destination.path, 'Formula/tool.rb');
-    expect(destination.sha256, formula.sha256);
+    expect(formulaBinding.project, 'tool');
+    expect(formulaBinding.tap, 'owner/homebrew-tap');
+    expect(formulaBinding.path, 'Formula/tool.rb');
+    expect(formulaBinding.sha256, formula.sha256);
     expect(manifest.encode(), isNot(contains(formulaPath)));
     expect(
       receipt.steps.last.inputs.map((input) => input.name),
@@ -440,7 +439,6 @@ executables:
         'notary-input',
         'notary',
         'archive',
-        'checksums',
         'notes',
         'formula',
         'manifest',
@@ -485,7 +483,6 @@ executables:
       'build:macos-arm64',
       'notarize:macos-arm64',
       'archive:$_asset',
-      'checksums',
       'release-notes',
       'homebrew-formula',
       'complete-stage',
@@ -827,67 +824,6 @@ executables:
       contains(StageIssueKind.invalidManifest),
     );
   });
-
-  test('SHA256SUMS is parsed and must exactly cover archive digests', () {
-    _recordArchives(release, {_asset: 'archive'});
-    final progress = StageReceiptStore(release.directory).read()!;
-    final archive = progress.artifacts.singleWhere((a) => a.path == _asset);
-    release.directory.writeBytesAtomically(
-      'SHA256SUMS',
-      utf8.encode('${'f' * 64}  $_asset\n'),
-    );
-    final checksums = StageArtifact.capture(
-      stage: release.directory,
-      path: 'SHA256SUMS',
-      type: 'checksums',
-    );
-    final checksumStep = StageStep(
-      name: 'checksums',
-      inputs: [StageInput.artifact(archive)],
-      outputs: [checksums],
-    );
-    ReleaseManifest(
-      unit: unit.name,
-      version: unit.version.canonical,
-      tag: unit.tag,
-      commit: identity.headCommit,
-      artifacts: [
-        ReleaseManifestArtifact.fromStage(
-          publicName: _asset,
-          artifact: archive,
-        ),
-        ReleaseManifestArtifact.fromStage(
-          publicName: 'SHA256SUMS',
-          artifact: checksums,
-        ),
-      ],
-    ).writeTo(release.directory);
-    final manifest = StageArtifact.capture(
-      stage: release.directory,
-      path: 'release-manifest.json',
-      type: 'manifest',
-    );
-    StageReceiptStore(release.directory).write(StageReceipt(
-      identity: identity,
-      steps: [
-        ...progress.steps,
-        checksumStep,
-        StageStep(
-          name: 'complete-stage',
-          inputs: [
-            StageInput.artifact(archive),
-            StageInput.artifact(checksums),
-          ],
-          outputs: [manifest],
-        ),
-      ],
-    ));
-
-    expect(
-      release.inspect().issues.map((issue) => issue.kind),
-      contains(StageIssueKind.invalidChecksums),
-    );
-  });
 }
 
 MemorySourceTree _source() => MemorySourceTree({
@@ -1064,34 +1000,6 @@ StageReceipt _completeEveryArtifactType(ReleaseStage release) {
     ],
   );
 
-  final formulaArtifact = formula.outputs.single;
-  release.directory.writeBytesAtomically(
-    'SHA256SUMS',
-    utf8.encode([
-      '${archive.sha256}  $_asset',
-      '${notaryLog.sha256}  $_notaryLog',
-      '${notaryResult.sha256}  $_notaryResult',
-      '${formulaArtifact.sha256}  tool.rb',
-      '',
-    ].join('\n')),
-  );
-  final checksums = StageStep(
-    name: 'checksums',
-    inputs: [
-      StageInput.artifact(archive),
-      StageInput.artifact(notaryLog),
-      StageInput.artifact(notaryResult),
-      StageInput.artifact(formulaArtifact),
-    ],
-    outputs: [
-      StageArtifact.capture(
-        stage: release.directory,
-        path: 'SHA256SUMS',
-        type: 'checksums',
-      ),
-    ],
-  );
-
   release.writeProgress([
     source,
     sign,
@@ -1099,12 +1007,10 @@ StageReceipt _completeEveryArtifactType(ReleaseStage release) {
     archiveStep,
     notes,
     formula,
-    checksums,
   ]);
   return release.finalize(
     releaseAssets: _fixtureReleaseAssets({
       _asset,
-      'SHA256SUMS',
       _notaryResult,
       _notaryLog,
       'tool.rb',
@@ -1114,15 +1020,7 @@ StageReceipt _completeEveryArtifactType(ReleaseStage release) {
 
 List<ReleaseAssetSpec> _fixtureReleaseAssets(Iterable<String> paths) => [
       for (final path in paths)
-        path.toLowerCase() == ReleaseAssets.checksums.toLowerCase()
-            ? ReleaseAssetSpec.generated(
-                stagedPath: path,
-                publicName: path,
-              )
-            : ReleaseAssetSpec(
-                stagedPath: path,
-                publicName: path,
-              ),
+        ReleaseAssetSpec(stagedPath: path, publicName: path),
     ];
 
 void _recordArchives(ReleaseStage release, Map<String, String> archives) {

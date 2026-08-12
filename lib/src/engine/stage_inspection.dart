@@ -25,7 +25,6 @@ enum StageIssueKind {
   unreadable,
   invalidStructure,
   invalidManifest,
-  invalidChecksums,
   invalidArchive,
   invalidNotary,
 }
@@ -457,22 +456,22 @@ class StageInspector {
                 entry.key as String: entry.value as String,
           }
         : <String, String>{};
-    final List<StagedDestinationBinding> destinationBindings;
+    final List<StagedFormulaBinding> formulaBindings;
     try {
-      destinationBindings = StagedDestinationBinding.listFromEvidence(
-        complete.evidence['destination_bindings'],
+      formulaBindings = StagedFormulaBinding.listFromEvidence(
+        complete.evidence['formula_bindings'],
       );
     } on Object catch (error) {
       issues.add(StageIssue(
         StageIssueKind.invalidManifest,
-        'complete-stage has malformed destination bindings: $error',
+        'complete-stage has malformed formula bindings: $error',
         path: 'release-manifest.json',
       ));
       return;
     }
     final expectedCompleteInputs = {
       ...bindings.values,
-      for (final binding in destinationBindings) binding.stagedPath,
+      for (final binding in formulaBindings) binding.stagedPath,
     };
     if (encodedBindings is! Map ||
         encodedBindings.length != bindings.length ||
@@ -509,51 +508,49 @@ class StageInspector {
         continue;
       }
     }
-    final receiptDestinations = <String, StagedDestinationBinding>{};
-    for (final binding in destinationBindings) {
-      if (receiptDestinations[binding.identity] != null) {
+    final receiptFormulas = <String, StagedFormulaBinding>{};
+    for (final binding in formulaBindings) {
+      if (receiptFormulas[binding.identity] != null) {
         issues.add(const StageIssue(
           StageIssueKind.invalidManifest,
-          'complete-stage repeats a destination binding',
+          'complete-stage repeats a formula binding',
           path: 'release-manifest.json',
         ));
       }
-      receiptDestinations[binding.identity] = binding;
+      receiptFormulas[binding.identity] = binding;
     }
-    final manifestDestinationIdentities = {
-      for (final binding in manifest.destinations) binding.identity,
+    final manifestFormulaIdentities = {
+      for (final formula in manifest.formulas) formula.identity,
     };
-    if (receiptDestinations.length != manifestDestinationIdentities.length ||
-        receiptDestinations.keys
+    if (receiptFormulas.length != manifestFormulaIdentities.length ||
+        receiptFormulas.keys
             .toSet()
-            .difference(manifestDestinationIdentities)
+            .difference(manifestFormulaIdentities)
             .isNotEmpty) {
       issues.add(const StageIssue(
         StageIssueKind.invalidManifest,
-        'complete-stage destination evidence does not match the manifest',
+        'complete-stage formula evidence does not match the manifest',
         path: 'release-manifest.json',
       ));
     }
-    for (final item in manifest.destinations) {
-      final receiptBinding = receiptDestinations[item.identity];
+    for (final item in manifest.formulas) {
+      final receiptBinding = receiptFormulas[item.identity];
       final local = receiptBinding == null
           ? null
           : beforeComplete[receiptBinding.stagedPath];
       if (receiptBinding == null ||
-          receiptBinding.mediaType != item.mediaType ||
           local == null ||
-          local.type != item.type ||
+          local.type != 'formula' ||
           local.size != item.size ||
           local.sha256 != item.sha256 ||
           completeInputs[receiptBinding.stagedPath] != item.sha256) {
         issues.add(StageIssue(
           StageIssueKind.invalidManifest,
-          'destination metadata does not match the producer receipt',
-          path: '${item.coordinate}/${item.path}',
+          'formula metadata does not match the producer receipt',
+          path: '${item.tap}/${item.path}',
         ));
       }
     }
-    _inspectChecksums(stage, manifest, beforeComplete, bindings, issues);
   }
 
   static void _inspectArchive(
@@ -636,71 +633,6 @@ class StageInspector {
         StageIssueKind.invalidStructure,
         problem,
         path: 'stage.json',
-      ));
-    }
-  }
-
-  static void _inspectChecksums(
-    StageDirectory stage,
-    ReleaseManifest manifest,
-    Map<String, StageArtifact> artifacts,
-    Map<String, String> bindings,
-    List<StageIssue> issues,
-  ) {
-    final checksumItems =
-        manifest.artifacts.where((item) => item.type == 'checksums').toList();
-    if (checksumItems.isEmpty) return;
-    if (checksumItems.length != 1 ||
-        checksumItems.single.name != 'SHA256SUMS') {
-      issues.add(const StageIssue(
-        StageIssueKind.invalidChecksums,
-        'the manifest must carry one SHA256SUMS checksums file',
-        path: 'SHA256SUMS',
-      ));
-      return;
-    }
-    try {
-      final checksumPath = bindings['SHA256SUMS'];
-      if (checksumPath == null || artifacts[checksumPath] == null) {
-        throw const FormatException('SHA256SUMS has no staged blob binding');
-      }
-      final lines = File(stage.resolve(checksumPath)).readAsLinesSync();
-      final found = <String, String>{};
-      for (final line in lines) {
-        if (line.isEmpty) continue;
-        final match =
-            RegExp(r'^([0-9a-f]{64})  ([^/\\\u0000]+)$').firstMatch(line);
-        if (match == null ||
-            found.putIfAbsent(match.group(2)!, () => match.group(1)!) !=
-                match.group(1)) {
-          throw const FormatException('SHA256SUMS has a malformed line');
-        }
-      }
-      final covered = {
-        for (final item in manifest.artifacts.where(
-          (item) => item.type != 'checksums',
-        ))
-          item.name: item.sha256,
-      };
-      if (!_sameMap(found, covered)) {
-        throw const FormatException(
-          'SHA256SUMS does not exactly cover the contributed release assets',
-        );
-      }
-      for (final entry in found.entries) {
-        final stagedPath = bindings[entry.key];
-        if (stagedPath == null ||
-            artifacts[stagedPath]?.sha256 != entry.value) {
-          throw FormatException(
-            'SHA256SUMS digest disagrees for ${entry.key}',
-          );
-        }
-      }
-    } on Object catch (error) {
-      issues.add(StageIssue(
-        StageIssueKind.invalidChecksums,
-        'checksum evidence is invalid: $error',
-        path: 'SHA256SUMS',
       ));
     }
   }

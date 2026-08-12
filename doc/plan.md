@@ -129,7 +129,7 @@ minute 40 of an announced release.
 - `macos-sign` and `macos-notarize`, with the signature compared against the
   requirement `PublishedIdentity` derives from the release users already
   installed (its gate is red until this wiring lands).
-- Deterministic `archive` and `checksums`.
+- Deterministic archives with digests in the release manifest.
 
 ## Phase 7b — the destinations
 
@@ -491,7 +491,7 @@ flow is real. Three things are wrong underneath it:
 
 **Phase 7 — binary chain. Keep; wire and finish.** Better than expected and
 mostly proven rather than asserted: SHA-256 against the published vectors and
-agreeing with the system tool, `SHA256SUMS` that `shasum -c` reads, archives
+agreeing with the system tool, archives
 demonstrated byte-reproducible and readable by real `tar`, capability
 resolution that discovers rather than declares, and a formula renderer tested
 against Ruby quote injection. What is outstanding is narrow: signing is not
@@ -615,8 +615,8 @@ Recorded because the reviews found them claimed-as-shipped when they are not:
   a hand-edited formula that keeps the version line reads `exact` to
   status. The same verify pass owes the release's other assets their digest
   re-proof (the RFC's flip re-verification, amended in 7b to a
-  name-inventory confirm): download each published asset, prove it against
-  SHA256SUMS, and SHA256SUMS against the archives.
+  name-inventory confirm): download each published asset and prove its digest
+  against the release manifest.
 
 **Phase 3 — probes and status.** Self-audit before the independent review,
 prompted by the question "are we ready for phase 4". The audit found the worst
@@ -809,8 +809,8 @@ could disagree with the CHANGELOG. The asset set grew to the real keybay
 archives per platform, `.notary-result.json` and `.notary-log.json` per
 macOS platform (the notarize step now publishes Apple's verdict and its
 log, and its skip requires the evidence files, not just Apple's word), the
-formula riding with the release so it is self-describing, and the
-checksums. The formula step got a real inspection — the tap read publicly
+formula riding with the release so it is self-describing. The formula step
+got a real inspection — the tap read publicly
 via `gh api contents`, 404-disciplined, exact meaning "points at this
 version" — where the stub answered `unknown` and, once homebrew was
 actually driven, blocked every release carrying it. And `HomebrewTap` held
@@ -885,9 +885,8 @@ codesign behaviour. Fixed in closeout:
   MemoryWorkspace lacked.
 
 Ledgered to 7b, whose done-when already demands it: a multi-platform drive
-(the reviewer ran one by hand: the product is correct — checksums covers
-both platforms and the ordering holds — the gap is coverage, not
-behaviour).
+(the reviewer ran one by hand: the product is correct — the manifest covers
+both platforms and the ordering holds — the gap is coverage, not behaviour).
 
 **Phase 6 — the independent review.** Thirteen mutations, six survived, and
 a "not yet" verdict on the one mutating verb outside release. The high
@@ -1028,7 +1027,7 @@ the steps after it, making the checklist's ten steps a fiction. Each step is
 now its own act over the workspace interface — read by name, do one thing,
 write by name — and the gate proves it by driving a full binary release at
 the command layer with a fresh chain instance per step: build, sign,
-notarize, archive, checksums, publish, each acting separately and in order.
+notarize, archive, publish, each acting separately and in order.
 Reuse follows identity, not existence: only a signed binary codesign
 re-verifies at the right version and a zip Apple already notarized are
 reused; everything else rebuilds. Signing derives its requirement from the

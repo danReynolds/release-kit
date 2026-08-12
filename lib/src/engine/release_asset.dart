@@ -13,21 +13,11 @@ String standaloneArchiveName(
     '$executable-$version-$platform.tar.gz';
 
 /// One static, pre-write projection from a private staged output to its public
-/// release filename. Ordinary outputs cannot claim rk-owned names.
+/// release filename. Producer outputs cannot claim rk-owned names.
 final class ReleaseAssetSpec {
   ReleaseAssetSpec({required String stagedPath, required this.publicName})
       : stagedPath = StagePath.require(stagedPath) {
-    _requirePublicName(publicName, allowGenerated: false);
-  }
-
-  ReleaseAssetSpec.generated({
-    required String stagedPath,
-    required this.publicName,
-  }) : stagedPath = StagePath.require(stagedPath) {
-    _requirePublicName(publicName, allowGenerated: true);
-    if (publicName.toLowerCase() != 'sha256sums') {
-      throw ArgumentError('unknown generated release asset: $publicName');
-    }
+    _requirePublicName(publicName);
   }
 
   final String stagedPath;
@@ -53,15 +43,14 @@ List<ReleaseAssetSpec> validateReleaseAssetSpecs(
   return List<ReleaseAssetSpec>.unmodifiable(ordered);
 }
 
-void _requirePublicName(String value, {required bool allowGenerated}) {
-  final reserved = const {'sha256sums', 'release-manifest.json'}
-      .contains(value.toLowerCase());
+void _requirePublicName(String value) {
+  final reserved = value.toLowerCase() == 'release-manifest.json';
   if (value.isEmpty ||
       value == '.' ||
       value == '..' ||
       value.contains('/') ||
       value.contains(r'\') ||
-      (reserved && !allowGenerated) ||
+      reserved ||
       value.codeUnits.any((unit) => unit < 0x20 || unit == 0x7f)) {
     throw ArgumentError('public asset name must be one safe filename: $value');
   }

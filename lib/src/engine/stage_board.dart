@@ -38,9 +38,7 @@ class StageBoard {
       for (final artifact in target.artifacts) {
         final row = StageBoardRow(artifact);
         rows.add(row);
-        if (artifact == ReleaseAssets.checksums) {
-          rowOf['bundle:checksums'] = row;
-        } else if (artifact == ReleaseAssets.manifest) {
+        if (artifact == ReleaseAssets.manifest) {
           rowOf['complete-stage'] = row;
         } else if (artifact.endsWith('.rb')) {
           // Without this the formula row never completed, and `○` — added
@@ -50,10 +48,9 @@ class StageBoard {
         }
       }
       if (rows.isNotEmpty) {
-        // Production order, not alphabetical. Checksums cover the archives
-        // and the manifest covers everything, so listing them first put the
-        // last rows to fill at the top, where a pending mark reads as
-        // skipped rather than as not yet.
+        // Production order, not alphabetical. The manifest covers everything,
+        // so listing it first would put the last row to fill at the top, where
+        // a pending mark reads as skipped rather than as not yet.
         rows.sort(
             (left, right) => _rank(left.name).compareTo(_rank(right.name)));
         groups.add(StageBoardGroup(target.label, rows));
@@ -83,7 +80,6 @@ class StageBoard {
   }
 
   static int _rank(String name) {
-    if (name == ReleaseAssets.checksums) return 2;
     if (name == ReleaseAssets.manifest) return 3;
     if (name.endsWith('.rb')) return 1;
     return 0;

@@ -27,7 +27,6 @@ executables:
     });
     final tool = plan.candidates.single;
 
-    expect(tool.use, isTrue);
     expect(tool.selected, {InitOption.gitTag, InitOption.pubDev});
     expect(tool.availability[InitOption.binary]!.available, isTrue);
     expect(tool.availability[InitOption.githubRelease]!.available, isTrue);
@@ -67,17 +66,16 @@ executables:
     expect(disabled.message, contains('disabled'));
   });
 
-  test('excluding and restoring a unit retains its session choices', () {
+  test('a unit is included exactly when it has a selected target', () {
     var plan = discover({'pubspec.yaml': 'name: a\nversion: 1.0.0\n'});
-    final selected = plan.candidates.single.selected;
 
-    plan = plan.toggle(0, InitOption.use).plan;
-    expect(plan.candidates.single.use, isFalse);
-    expect(plan.candidates.single.selected, selected);
+    plan = plan.toggle(0, InitOption.gitTag).plan;
+    plan = plan.toggle(0, InitOption.pubDev).plan;
+    expect(plan.candidates.single.selected, isEmpty);
+    expect(plan.included, isEmpty);
 
-    plan = plan.toggle(0, InitOption.use).plan;
-    expect(plan.candidates.single.use, isTrue);
-    expect(plan.candidates.single.selected, selected);
+    plan = plan.toggle(0, InitOption.gitTag).plan;
+    expect(plan.included.single.name, 'a');
   });
 
   test('several units expose tags but do not invent their grouping', () {
@@ -133,13 +131,11 @@ workspace:
       'pubspec.yaml': 'name: internal\nversion: 1.0.0\npublish_to: none\n',
     });
     final internal = plan.candidates.single;
-    expect(internal.use, isFalse);
     expect(internal.selected, isEmpty);
     expect(
         internal.availability[InitOption.pubDev]!.reason, contains('vetoes'));
 
-    plan = plan.toggle(0, InitOption.use).plan;
-    expect(plan.candidates.single.use, isTrue);
+    plan = plan.toggle(0, InitOption.gitTag).plan;
     expect(plan.candidates.single.selected, {InitOption.gitTag});
   });
 
@@ -156,7 +152,6 @@ workspace:
     );
     final internal =
         plan.candidates.singleWhere((item) => item.name == 'internal');
-    expect(internal.use, isFalse);
     expect(internal.selected, isEmpty);
     expect(plan.renderToml(), isNot(contains('[release.internal]')));
   });
@@ -169,7 +164,7 @@ version: 1.0.0
 publish_to: https://token@packages.example.invalid
 ''',
     });
-    expect(declared.candidates.single.use, isFalse);
+    expect(declared.candidates.single.selected, isEmpty);
     expect(declared.candidates.single.availability[InitOption.pubDev]!.reason,
         contains('custom registry'));
 
@@ -192,7 +187,7 @@ publish_to: https://token@packages.example.invalid
       githubRepository: 'owner/repo',
       ambientPubHostedUrl: 'https://token@packages.example.invalid',
     );
-    expect(ambient.candidates.single.use, isFalse);
+    expect(ambient.candidates.single.selected, isEmpty);
     expect(ambient.toJson().toString(), isNot(contains('token')));
     expect(ambient.toJson().toString(), isNot(contains('packages.example')));
   });
@@ -215,7 +210,7 @@ executables:
     for (final name in ['example_tool', 'fixture_package']) {
       final candidate =
           plan.candidates.singleWhere((item) => item.name == name);
-      expect(candidate.use, isFalse);
+      expect(candidate.selected, isEmpty);
       expect(candidate.availability[InitOption.pubDev]!.available, isTrue);
       expect(candidate.availability[InitOption.pubDev]!.reason,
           contains('start unselected'));

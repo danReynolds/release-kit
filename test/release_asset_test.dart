@@ -31,7 +31,6 @@ void main() {
       'nested/tool.tar.gz',
       r'nested\tool.tar.gz',
       'tool\u007f.tar.gz',
-      'SHA256SUMS',
       'release-manifest.json',
     ]) {
       expect(
@@ -43,21 +42,6 @@ void main() {
         reason: name,
       );
     }
-  });
-
-  test('only the checksum assembler may claim its reserved name', () {
-    final generated = ReleaseAssetSpec.generated(
-      stagedPath: 'bundle/SHA256SUMS',
-      publicName: 'SHA256SUMS',
-    );
-    expect(generated.publicName, 'SHA256SUMS');
-    expect(
-      () => ReleaseAssetSpec.generated(
-        stagedPath: generated.stagedPath,
-        publicName: 'release-manifest.json',
-      ),
-      throwsArgumentError,
-    );
   });
 
   test('inventory is stable regardless of specification order', () {

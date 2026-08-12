@@ -20,18 +20,17 @@ final class PublishedReleaseEvidence {
 
   final TargetReadContext context;
 
-  Future<PublishedDestinationBindingRead> currentDestinationBinding(
+  Future<PublishedFormulaRead> currentFormula(
     ResolvedUnit unit, {
-    required PublishTarget target,
     required String project,
-    required String coordinate,
+    required String tap,
     required String path,
   }) async {
     final tag = requiredTargetTag(unit, PublishTarget.gitTag);
     final object = context.git.tagObject(tag);
     final commit = context.git.tagTarget(tag);
     if (object == null || commit == null) {
-      return const PublishedDestinationBindingRead(
+      return const PublishedFormulaRead(
         Inspection.unknown('the release tag object could not be read'),
         null,
       );
@@ -51,16 +50,15 @@ final class PublishedReleaseEvidence {
           repository: context.repository!,
           workingDirectory: context.git.root,
         ).readManifest(manifestExpectation(unit, digest));
-        return _selectDestinationBinding(
+        return _selectFormula(
           read.inspection,
           read.manifest,
-          target: target,
           project: project,
-          coordinate: coordinate,
+          tap: tap,
           path: path,
         );
       } on Object catch (error) {
-        return PublishedDestinationBindingRead(
+        return PublishedFormulaRead(
           Inspection.unknown(
             'the expected release manifest could not be derived: $error',
           ),
@@ -68,7 +66,7 @@ final class PublishedReleaseEvidence {
         );
       }
     }
-    return PublishedDestinationBindingRead(
+    return PublishedFormulaRead(
       bindingInspection(tagBinding),
       null,
     );
@@ -112,12 +110,11 @@ final class PublishedReleaseEvidence {
     );
   }
 
-  Future<PublishedDestinationBindingRead> historicalDestinationBinding(
+  Future<PublishedFormulaRead> historicalFormula(
     ResolvedUnit unit,
     Version version, {
-    required PublishTarget target,
     required ResolvedProject project,
-    required String coordinate,
+    required String tap,
     required String path,
   }) async {
     final tag = requiredTargetTagPattern(unit, PublishTarget.gitTag)
@@ -125,7 +122,7 @@ final class PublishedReleaseEvidence {
     final object = context.git.tagObject(tag);
     final commit = context.git.tagTarget(tag);
     if (object == null || commit == null) {
-      return PublishedDestinationBindingRead(
+      return PublishedFormulaRead(
         Inspection.unknown(
           'the earlier release tag $tag is not available in this checkout',
         ),
@@ -154,16 +151,15 @@ final class PublishedReleaseEvidence {
           manifestSha256: digest,
         ),
       );
-      return _selectDestinationBinding(
+      return _selectFormula(
         read.inspection,
         read.manifest,
-        target: target,
         project: project.name,
-        coordinate: coordinate,
+        tap: tap,
         path: path,
       );
     }
-    return PublishedDestinationBindingRead(
+    return PublishedFormulaRead(
       bindingInspection(tagBinding),
       null,
     );
@@ -191,48 +187,46 @@ final class PublishedReleaseEvidence {
       };
 }
 
-final class PublishedDestinationBindingRead {
-  const PublishedDestinationBindingRead(this.inspection, this.binding);
+final class PublishedFormulaRead {
+  const PublishedFormulaRead(this.inspection, this.formula);
 
   final Inspection inspection;
-  final ReleaseManifestDestinationBinding? binding;
+  final ReleaseManifestFormula? formula;
 }
 
-PublishedDestinationBindingRead _selectDestinationBinding(
+PublishedFormulaRead _selectFormula(
   Inspection inspection,
   ReleaseManifest? manifest, {
-  required PublishTarget target,
   required String project,
-  required String coordinate,
+  required String tap,
   required String path,
 }) {
   if (!inspection.isExact || manifest == null) {
-    return PublishedDestinationBindingRead(inspection, null);
+    return PublishedFormulaRead(inspection, null);
   }
-  final matches = manifest.destinations
+  final matches = manifest.formulas
       .where(
-        (binding) => binding.names(
-          target: target.configName,
+        (formula) => formula.names(
           project: project,
-          coordinate: coordinate,
+          tap: tap,
           path: path,
         ),
       )
       .toList();
   if (matches.length != 1) {
-    return PublishedDestinationBindingRead(
+    return PublishedFormulaRead(
       Inspection.conflict(
-        'the published release manifest does not bind exactly one '
-        '${target.configName} destination for $project',
+        'the published release manifest does not bind exactly one Homebrew '
+        'formula for $project',
         evidence: {
-          '$coordinate/$path':
+          '$tap/$path':
               matches.isEmpty ? 'missing from manifest' : 'declared twice',
         },
       ),
       null,
     );
   }
-  return PublishedDestinationBindingRead(inspection, matches.single);
+  return PublishedFormulaRead(inspection, matches.single);
 }
 
 Set<String> expectedReleaseAssets(ResolvedUnit unit) =>

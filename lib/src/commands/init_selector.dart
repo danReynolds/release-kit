@@ -85,7 +85,7 @@ final class InitSelector {
   }
 
   String render(int width, {int height = 24}) =>
-      width >= 94 ? _matrix(height) : _card();
+      width >= 88 ? _matrix(height) : _card();
 
   String _matrix(int height) {
     const nameWidth = 24;
@@ -100,14 +100,13 @@ final class InitSelector {
           '${visibleRows < plan.candidates.length ? ' · ${row + 1}/${plan.candidates.length}' : ''}')
       ..writeln()
       ..writeln('                         Produce              Publish')
-      ..writeln('  Use  Unit${' ' * (nameWidth - 4)}'
+      ..writeln('  Unit${' ' * (nameWidth - 4)}'
           'Binary   Git tag   pub.dev   GitHub   Homebrew');
     for (var index = start; index < end; index++) {
       final item = plan.candidates[index];
       final cursor = index == row ? '›' : ' ';
-      buffer.write('$cursor ${_cell(item, InitOption.use).padRight(5)}');
-      buffer.write(_fit(item.unit, nameWidth).padRight(nameWidth));
-      for (final option in InitOption.values.skip(1)) {
+      buffer.write('$cursor ${_fit(item.unit, nameWidth).padRight(nameWidth)}');
+      for (final option in InitOption.values) {
         buffer.write(_cell(item, option).padRight(_cellWidth(option)));
       }
       buffer.writeln();
@@ -145,7 +144,6 @@ final class InitSelector {
 }
 
 String _cell(InitCandidate candidate, InitOption option) {
-  if (option == InitOption.use) return candidate.use ? '[x]' : '[ ]';
   final availability = candidate.availability[option]!;
   if (!availability.available) return '—';
   return candidate.selected.contains(option) ? '[x]' : '[ ]';
@@ -157,7 +155,6 @@ int _cellWidth(InitOption option) => switch (option) {
       InitOption.pubDev => 10,
       InitOption.githubRelease => 9,
       InitOption.homebrew => 0,
-      InitOption.use => 5,
     };
 
 /// Runs one selector session and always restores the terminal modes it found.

@@ -507,9 +507,6 @@ final class _StagedReleaseAssets {
   }
 
   static String _producerOf(String name) {
-    if (name == ReleaseAssets.checksums) {
-      return 'the checksums step produces it';
-    }
     if (name == ReleaseAssets.manifest) {
       return 'the complete-stage step produces it';
     }

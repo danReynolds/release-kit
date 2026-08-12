@@ -490,7 +490,6 @@ void _complete(ReleaseStage stage) {
     },
   );
 
-  final archiveName = ReleaseAssets.archiveName('tool', '1.2.3', 'linux-x64');
   final archiveBytes = ArchiveBuilder.gzip(ArchiveBuilder.tar([
     ArchiveEntry(name: 'tool', bytes: binaryBytes, executable: true),
   ]));
@@ -512,31 +511,11 @@ void _complete(ReleaseStage stage) {
     },
   );
 
-  stage.directory.writeBytesAtomically(
-    ReleaseAssets.checksumPath,
-    utf8.encode('${archive.sha256}  $archiveName\n'),
-  );
-  final checksumsStep = StageStep(
-    name: 'bundle:checksums',
-    inputs: [StageInput.artifact(archive)],
-    outputs: [
-      StageArtifact.capture(
-        stage: stage.directory,
-        path: ReleaseAssets.checksumPath,
-        type: 'checksums',
-      ),
-    ],
-    evidence: {
-      'checksums': {archiveName: archive.sha256},
-    },
-  );
-
   stage.writeProgress([
     sourceStep,
     notesStep,
     buildStep,
     archiveStep,
-    checksumsStep,
   ]);
   stage.finalize(releaseAssets: ReleaseAssets.bundleFor(stage.unit));
 }

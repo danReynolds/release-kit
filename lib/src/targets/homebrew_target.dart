@@ -97,30 +97,17 @@ final class HomebrewTargetModule extends TargetModule {
       }
       expectedBytes = expected.readAsBytesSync();
     } else if (context.git.hasTag(tag)) {
-      final current =
-          await PublishedReleaseEvidence(context).currentDestinationBinding(
+      final current = await PublishedReleaseEvidence(context).currentFormula(
         unit,
-        target: PublishTarget.homebrew,
         project: project.name,
-        coordinate: tap,
+        tap: tap,
         path: 'Formula/$executable.rb',
       );
       if (current.inspection.verdict == Verdict.conflict ||
           current.inspection.verdict == Verdict.unknown) {
         return current.inspection;
       }
-      final binding = current.binding!;
-      if (binding.type != 'formula' || binding.mediaType != 'text/x-ruby') {
-        return Inspection.conflict(
-          'the release manifest binds the Homebrew destination with the '
-          'wrong artifact type',
-          evidence: {
-            'type': binding.type,
-            'media type': binding.mediaType,
-          },
-        );
-      }
-      expectedSha256 = binding.sha256;
+      expectedSha256 = current.formula!.sha256;
     }
 
     return HomebrewTarget(
@@ -158,20 +145,15 @@ final class HomebrewTargetModule extends TargetModule {
     }
     final project = target.project!;
     final path = 'Formula/${project.executable!}.rb';
-    final read =
-        await PublishedReleaseEvidence(context).historicalDestinationBinding(
+    final read = await PublishedReleaseEvidence(context).historicalFormula(
       unit,
       version,
-      target: PublishTarget.homebrew,
       project: project,
-      coordinate: tap,
+      tap: tap,
       path: path,
     );
     if (!read.inspection.isExact) return read.inspection;
-    final binding = read.binding!;
-    if (binding.type != 'formula' ||
-        binding.mediaType != 'text/x-ruby' ||
-        binding.sha256 != Sha256.hex(publicBytes)) {
+    if (read.formula!.sha256 != Sha256.hex(publicBytes)) {
       final tag = pattern.replaceAll('{version}', version.canonical);
       return Inspection.conflict(
         'the tap formula differs from the formula bound to $tag',

@@ -220,7 +220,7 @@ rk release rk
 
 `--stage` performs every local and package preflight for real: source
 snapshot, package dry-run, build and sign as one step, smoke test where
-possible, notarization, archive, checksums, release notes, release
+possible, notarization, archives, release notes, release
 manifest, and formula rendering. It may read public targets, use signing and
 notary credentials, and contact Apple. It must not create or push a tag,
 publish a registry package, create a GitHub Release, push a tap, or run
@@ -597,7 +597,8 @@ a session, not package uploader permission.
    external transcript. From that directory, independently:
    - hash `release-manifest.json` with the exact command
      `shasum -a 256 release-manifest.json`;
-   - run `shasum -a 256 -c SHA256SUMS`;
+   - hash each archive with `shasum -a 256 <archive>` and confirm the digest
+     matches its `release-manifest.json` entry;
    - list each archive with the exact command `tar -tzf <archive>` and confirm
      its inventory is exactly `rk`, `LICENSE`, and `README.md`;
    - extract each runnable archive into a fresh temporary directory and require
@@ -640,10 +641,10 @@ a session, not package uploader permission.
       then run `"$alpha_pub_cache/bin/rk" --version` and
       `"$alpha_pub_cache/bin/rk" --help` by that exact path.
     - In another fresh directory, download the selected GitHub archive and the
-      published `SHA256SUMS`. Select that archive's checksum line, run
-      `shasum -a 256 -c` against it, extract the archive, and run the extracted
-      `./rk --version` and `./rk --help`. The checksum source URL and archive
-      URL must both be the public `v0.0.1` GitHub Release.
+      published `release-manifest.json`. Select that archive's digest, compare
+      it with `shasum -a 256 <archive>`, extract the archive, and run the
+      extracted `./rk --version` and `./rk --help`. The manifest URL and
+      archive URL must both be the public `v0.0.1` GitHub Release.
     - Then make each consumed binary do rk's actual work, which `--version`
       and `--help` do not: from `alpha_consumer_repo`, with that binary's
       directory first on `PATH`, run `rk status rk` **by bare name** —

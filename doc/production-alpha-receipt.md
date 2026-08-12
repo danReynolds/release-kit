@@ -42,7 +42,8 @@ Target URLs: <exact Git tag, pub.dev version, and GitHub Release URLs>
 no `dart pub login` invocation>
 <the exact stage path printed by rk>
 <`shasum -a 256 release-manifest.json` and its output>
-<`shasum -a 256 -c SHA256SUMS` output, run from the stage directory>
+<`shasum -a 256 <archive>` output for each archive, matching its digest in
+`release-manifest.json`>
 <`$ tar -tzf <archive>` and the exact `rk`, `LICENSE`, `README.md` inventory,
 repeated for each of the three release archives>
 <a fresh `alpha_macos_dir`, extraction of the macOS archive into it, and
@@ -101,10 +102,10 @@ uploader authority>
 ### GitHub Release consumer
 
 ```text
-<download both the chosen archive URL and the public SHA256SUMS URL into a
-fresh directory>
-<select that archive's public checksum line and show successful
-`shasum -a 256 -c` output ending in `<asset>: OK`>
+<download both the chosen archive URL and `release-manifest.json` into a fresh
+directory>
+<select that archive's digest from the manifest and show that
+`shasum -a 256 <asset>` agrees>
 <extract the archive there and show the extracted `./rk --version` output as
 `rk <version>` and `./rk --help` with the three-verb surface>
 ```

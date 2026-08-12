@@ -889,7 +889,7 @@ files.
 | Requested channel | Native requirement | Other requirement | Derived result |
 |---|---|---|---|
 | `pub.dev` | Dart package not vetoed by `publish_to` | Tag version equals package version; package already exists and its automated publisher matches protected policy | Accepted package archive or content inventory, OIDC publication, public reconciliation |
-| `github-release` | Exactly one Dart executable | Explicit `binary_platforms` and protected release-immutability policy | Per-platform binaries, macOS signing/notarization where applicable, fixed archives, checksums, build metadata, and a verified immutable release |
+| `github-release` | Exactly one Dart executable | Explicit `binary_platforms` and protected release-immutability policy | Per-platform binaries, macOS signing/notarization where applicable, fixed archives, manifest-bound digests, build metadata, and a verified immutable release |
 | `homebrew` | Same executable used by `github-release` | `github-release` also explicitly requested | Formula generated from publicly verified immutable archive URLs and hashes |
 
 Additional rules:
@@ -930,7 +930,7 @@ Additional rules:
 - All projects in one unit must resolve to the tag version. Version divergence
   requires separate release units.
 
-Signing, notarization, checksums, build metadata, policy-authorized provenance,
+Signing, notarization, manifest digests, build metadata, policy-authorized provenance,
 public acceptance, and formula generation are derived security stages. They are
 not author-selectable destinations or optional flags.
 
@@ -2603,7 +2603,7 @@ select a production backend, or authorize production implementation.
   after that evidence is applied. Current evidence supports screening out,
   with named reasons the screen may overturn: `dist` for a Dart fleet, because
   its only Dart-capable builder is experimental executable configuration and
-  its remaining value—archives, checksums, formula generation—must be owned by
+  its remaining value—archives, manifest digests, formula generation—must be owned by
   the composition anyway; and Conveyor, because its unique value is cross-OS
   signing and notarization, exactly the authority a proprietary,
   source-unavailable binary cannot hold under the hard invariants, leaving no

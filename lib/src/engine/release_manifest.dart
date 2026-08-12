@@ -9,7 +9,7 @@ import 'stage_receipt.dart';
 /// (formula authentication, same-version re-inspection) parse only the
 /// current schema — so a post-release bump must teach the parser each
 /// retired schema it still needs to read.
-const releaseManifestSchemaVersion = 3;
+const releaseManifestSchemaVersion = 4;
 
 /// One public file, deliberately stripped of its local stage path and all
 /// producer evidence.
@@ -82,212 +82,168 @@ class ReleaseManifestArtifact {
       };
 }
 
-/// One private staged output and the destination that will receive it.
+/// One private staged Homebrew formula and the tap path that will receive it.
 ///
 /// This exact shape is frozen into the terminal receipt. The public manifest
-/// receives the same identity and media type, but never the private
-/// [stagedPath].
-final class StagedDestinationBinding {
-  StagedDestinationBinding({
-    required this.target,
+/// receives the same public identity, but never the private [stagedPath].
+final class StagedFormulaBinding {
+  StagedFormulaBinding({
     required this.project,
-    required this.coordinate,
+    required this.tap,
     required this.path,
     required String stagedPath,
-    required this.mediaType,
   }) : stagedPath = StagePath.require(stagedPath) {
-    _requireDestinationIdentity(target, project, coordinate, path);
-    _requireMediaType(mediaType);
+    _requirePublicText('formula project', project);
+    _requirePublicText('formula tap', tap);
+    _requireDestinationPath(path);
   }
 
-  factory StagedDestinationBinding.fromEvidence(Object? value) {
+  factory StagedFormulaBinding.fromEvidence(Object? value) {
     final map = _strictMap(
       value,
       const {
-        'coordinate',
-        'media_type',
         'path',
         'project',
         'staged_path',
-        'target',
+        'tap',
       },
-      'staged destination binding',
+      'staged formula binding',
     );
-    return StagedDestinationBinding(
-      target: _string(map, 'target'),
+    return StagedFormulaBinding(
       project: _string(map, 'project'),
-      coordinate: _string(map, 'coordinate'),
+      tap: _string(map, 'tap'),
       path: _string(map, 'path'),
       stagedPath: _string(map, 'staged_path'),
-      mediaType: _string(map, 'media_type'),
     );
   }
 
-  static List<StagedDestinationBinding> listFromEvidence(Object? value) {
+  static List<StagedFormulaBinding> listFromEvidence(Object? value) {
     if (value == null) return const [];
     if (value is! List) {
       throw const FormatException(
-        'complete-stage destination bindings are not an array',
+        'complete-stage formula bindings are not an array',
       );
     }
-    return List.unmodifiable(value.map(StagedDestinationBinding.fromEvidence));
+    return List.unmodifiable(value.map(StagedFormulaBinding.fromEvidence));
   }
 
-  final String target;
   final String project;
-  final String coordinate;
+  final String tap;
   final String path;
   final String stagedPath;
-  final String mediaType;
 
-  String get identity =>
-      _destinationBindingIdentity(target, project, coordinate, path);
+  String get identity => _formulaIdentity(project, tap, path);
 
   Map<String, Object?> toEvidence() => {
-        'coordinate': coordinate,
-        'media_type': mediaType,
         'path': path,
         'project': project,
         'staged_path': stagedPath,
-        'target': target,
+        'tap': tap,
       };
 
-  ReleaseManifestDestinationBinding bind(StageArtifact artifact) {
+  ReleaseManifestFormula bind(StageArtifact artifact) {
     if (artifact.path != stagedPath) {
-      throw ArgumentError('destination binding captured a different output');
+      throw ArgumentError('formula binding captured a different output');
     }
-    return ReleaseManifestDestinationBinding.fromStage(
-      target: target,
+    return ReleaseManifestFormula.fromStage(
       project: project,
-      coordinate: coordinate,
+      tap: tap,
       path: path,
-      mediaType: mediaType,
       artifact: artifact,
     );
   }
 }
 
-/// One destination-owned file and the exact public coordinate that receives
-/// it.
+/// One Homebrew formula and the exact public tap path that receives it.
 ///
 /// Unlike [ReleaseManifestArtifact], this file is not necessarily a release
-/// asset. In particular, a Homebrew formula belongs only in its tap. The
-/// manifest carries enough public evidence to authenticate those destination
-/// bytes later, while the private stage path remains solely in `stage.json`.
-class ReleaseManifestDestinationBinding {
-  ReleaseManifestDestinationBinding({
-    required this.target,
+/// asset: it belongs only in its tap. The manifest carries enough public
+/// evidence to authenticate those bytes later, while the private stage path
+/// remains solely in `stage.json`.
+class ReleaseManifestFormula {
+  ReleaseManifestFormula({
     required this.project,
-    required this.coordinate,
+    required this.tap,
     required this.path,
-    required this.type,
-    required this.mediaType,
     required this.size,
     required this.sha256,
   }) {
-    _requireDestinationIdentity(target, project, coordinate, path);
-    if (!RegExp(r'^[a-z][a-z0-9._-]*$').hasMatch(type)) {
-      throw ArgumentError('destination type is not a lowercase token: $type');
-    }
-    _requireMediaType(mediaType);
+    _requirePublicText('formula project', project);
+    _requirePublicText('formula tap', tap);
+    _requireDestinationPath(path);
     if (size < 0) {
-      throw ArgumentError('destination size cannot be negative');
+      throw ArgumentError('formula size cannot be negative');
     }
     if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(sha256)) {
-      throw ArgumentError(
-        'destination must carry a lowercase SHA-256 digest',
-      );
+      throw ArgumentError('formula must carry a lowercase SHA-256 digest');
     }
   }
 
-  factory ReleaseManifestDestinationBinding.fromStage({
-    required String target,
+  factory ReleaseManifestFormula.fromStage({
     required String project,
-    required String coordinate,
+    required String tap,
     required String path,
-    required String mediaType,
     required StageArtifact artifact,
   }) =>
-      ReleaseManifestDestinationBinding(
-        target: target,
+      ReleaseManifestFormula(
         project: project,
-        coordinate: coordinate,
+        tap: tap,
         path: path,
-        type: artifact.type,
-        mediaType: mediaType,
         size: artifact.size,
         sha256: artifact.sha256,
       );
 
-  factory ReleaseManifestDestinationBinding.fromJson(Object? value) {
+  factory ReleaseManifestFormula.fromJson(Object? value) {
     final map = _strictMap(
       value,
       const {
-        'coordinate',
-        'media_type',
         'path',
         'project',
         'sha256',
         'size',
-        'target',
-        'type',
+        'tap',
       },
-      'destination binding',
+      'formula binding',
     );
     final size = map['size'];
     if (size is! int) {
-      throw const FormatException('destination size is not an integer');
+      throw const FormatException('formula size is not an integer');
     }
-    return ReleaseManifestDestinationBinding(
-      target: _string(map, 'target'),
+    return ReleaseManifestFormula(
       project: _string(map, 'project'),
-      coordinate: _string(map, 'coordinate'),
+      tap: _string(map, 'tap'),
       path: _string(map, 'path'),
-      type: _string(map, 'type'),
-      mediaType: _string(map, 'media_type'),
       size: size,
       sha256: _string(map, 'sha256'),
     );
   }
 
-  final String target;
   final String project;
 
-  /// Provider coordinate, such as `owner/homebrew-tap`.
-  final String coordinate;
+  /// Tap repository, such as `owner/homebrew-tap`.
+  final String tap;
 
   /// Public path inside that coordinate, such as `Formula/tool.rb`.
   final String path;
-  final String type;
-  final String mediaType;
   final int size;
   final String sha256;
 
-  String get identity =>
-      _destinationBindingIdentity(target, project, coordinate, path);
-  String get publicIdentity =>
-      _publicDestinationIdentity(target, coordinate, path);
+  String get identity => _formulaIdentity(project, tap, path);
+  String get publicIdentity => _publicFormulaIdentity(tap, path);
 
   bool names({
-    required String target,
     required String project,
-    required String coordinate,
+    required String tap,
     required String path,
   }) =>
-      this.target == target &&
-      this.project == project &&
-      this.coordinate == coordinate &&
-      this.path == path;
+      this.project == project && this.tap == tap && this.path == path;
 
   Map<String, Object?> toJson() => {
-        'coordinate': coordinate,
-        'media_type': mediaType,
         'path': path,
         'project': project,
         'sha256': sha256,
         'size': size,
-        'target': target,
-        'type': type,
+        'tap': tap,
       };
 }
 
@@ -303,13 +259,13 @@ class ReleaseManifest {
     required this.tag,
     required this.commit,
     required Iterable<ReleaseManifestArtifact> artifacts,
-    Iterable<ReleaseManifestDestinationBinding> destinations = const [],
+    Iterable<ReleaseManifestFormula> formulas = const [],
   })  : artifacts = List<ReleaseManifestArtifact>.unmodifiable(
           artifacts.toList()
             ..sort((left, right) => left.name.compareTo(right.name)),
         ),
-        destinations = List<ReleaseManifestDestinationBinding>.unmodifiable(
-          destinations.toList()..sort(_compareDestinationBindings),
+        formulas = List<ReleaseManifestFormula>.unmodifiable(
+          formulas.toList()..sort(_compareFormulas),
         ) {
     _requirePublicText('unit', unit);
     _requirePublicText('version', version);
@@ -323,13 +279,12 @@ class ReleaseManifest {
         throw ArgumentError('duplicate public artifact: ${artifact.name}');
       }
     }
-    final destinationPaths = <String>{};
-    for (final binding in this.destinations) {
-      final key = binding.publicIdentity;
-      if (!destinationPaths.add(key)) {
+    final formulaPaths = <String>{};
+    for (final formula in this.formulas) {
+      final key = formula.publicIdentity;
+      if (!formulaPaths.add(key)) {
         throw ArgumentError(
-          'duplicate destination path: ${binding.target} '
-          '${binding.coordinate}/${binding.path}',
+          'duplicate formula path: ${formula.tap}/${formula.path}',
         );
       }
     }
@@ -341,7 +296,7 @@ class ReleaseManifest {
       decoded,
       const {
         'artifacts',
-        'destinations',
+        'formulas',
         'schema',
         'source',
         'tag',
@@ -363,9 +318,9 @@ class ReleaseManifest {
     if (artifacts is! List) {
       throw const FormatException('manifest artifacts is not an array');
     }
-    final destinations = map['destinations'];
-    if (destinations is! List) {
-      throw const FormatException('manifest destinations is not an array');
+    final formulas = map['formulas'];
+    if (formulas is! List) {
+      throw const FormatException('manifest formulas is not an array');
     }
     return ReleaseManifest(
       unit: _string(map, 'unit'),
@@ -373,8 +328,7 @@ class ReleaseManifest {
       tag: map['tag'] == null ? null : _string(map, 'tag'),
       commit: source['commit'] == null ? null : _string(source, 'commit'),
       artifacts: artifacts.map(ReleaseManifestArtifact.fromJson),
-      destinations:
-          destinations.map(ReleaseManifestDestinationBinding.fromJson),
+      formulas: formulas.map(ReleaseManifestFormula.fromJson),
     );
   }
 
@@ -388,12 +342,11 @@ class ReleaseManifest {
   final String? commit;
 
   final List<ReleaseManifestArtifact> artifacts;
-  final List<ReleaseManifestDestinationBinding> destinations;
+  final List<ReleaseManifestFormula> formulas;
 
   Map<String, Object?> toJson() => {
         'artifacts': artifacts.map((artifact) => artifact.toJson()).toList(),
-        'destinations':
-            destinations.map((binding) => binding.toJson()).toList(),
+        'formulas': formulas.map((formula) => formula.toJson()).toList(),
         'schema': releaseManifestSchemaVersion,
         'source': {'commit': commit},
         'tag': tag,
@@ -413,9 +366,9 @@ class ReleaseManifest {
   }
 }
 
-int _compareDestinationBindings(
-  ReleaseManifestDestinationBinding left,
-  ReleaseManifestDestinationBinding right,
+int _compareFormulas(
+  ReleaseManifestFormula left,
+  ReleaseManifestFormula right,
 ) =>
     left.identity.compareTo(right.identity);
 
@@ -452,43 +405,18 @@ void _requirePublicText(String label, String value) {
   }
 }
 
-void _requireDestinationIdentity(
-  String target,
+String _formulaIdentity(
   String project,
-  String coordinate,
-  String path,
-) {
-  if (!RegExp(r'^[a-z][a-z0-9.-]*$').hasMatch(target)) {
-    throw ArgumentError('destination target is not a lowercase token: '
-        '$target');
-  }
-  _requirePublicText('destination project', project);
-  _requirePublicText('destination coordinate', coordinate);
-  _requireDestinationPath(path);
-}
-
-void _requireMediaType(String mediaType) {
-  if (!RegExp(
-    r'^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$',
-  ).hasMatch(mediaType)) {
-    throw ArgumentError('destination media type is invalid: $mediaType');
-  }
-}
-
-String _destinationBindingIdentity(
-  String target,
-  String project,
-  String coordinate,
+  String tap,
   String path,
 ) =>
-    '$target\u0000$project\u0000$coordinate\u0000$path';
+    '$project\u0000$tap\u0000$path';
 
-String _publicDestinationIdentity(
-  String target,
-  String coordinate,
+String _publicFormulaIdentity(
+  String tap,
   String path,
 ) =>
-    '$target\u0000$coordinate\u0000$path';
+    '$tap\u0000$path';
 
 void _requireDestinationPath(String path) {
   if (path.isEmpty ||

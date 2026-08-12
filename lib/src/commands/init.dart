@@ -332,14 +332,12 @@ class InitCommand {
   List<String> _reasons(InitPlan plan) => {
         ...plan.notices,
         for (final candidate in plan.candidates)
-          if (!candidate.use)
+          if (!plan.included.contains(candidate))
             '${candidate.name}: '
                 '${_excludedReason(candidate)}',
       }.toList();
 
   String _excludedReason(InitCandidate candidate) {
-    final use = candidate.availability[InitOption.use]!;
-    if (!use.available) return use.reason;
     final registry = candidate.availability[InitOption.pubDev]!;
     if (!registry.available) return registry.reason;
     return 'not selected';

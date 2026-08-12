@@ -96,8 +96,7 @@ publish = ["git-tag", "pub.dev"]
       );
     });
 
-    test('a metadata-only GitHub release has notes, manifest, and no checksum',
-        () {
+    test('a metadata-only GitHub release has notes and a manifest', () {
       final resolution = resolve('''
 schema = 2
 
@@ -112,10 +111,6 @@ publish = ["git-tag", "github-release"]
         'core/tag/v1.2.3',
         'core/github-release/v1.2.3',
       ]);
-      expect(
-        checklist.steps.where((step) => step.kind == StepKind.checksums),
-        isEmpty,
-      );
     });
   });
 
@@ -179,7 +174,6 @@ executables:
       'tools/archive/server_cli/linux-x64',
       'tools/build/admin_cli/linux-x64',
       'tools/archive/admin_cli/linux-x64',
-      'tools/bundle/SHA256SUMS',
       'tools/stage/complete',
       'tools/tag/tools-v1.0.0',
       'tools/github-release/tools-v1.0.0',
@@ -205,7 +199,6 @@ executables:
     );
     expect(ids, contains('cli/notarize/keybay_cli/macos-arm64'));
     expect(ids, contains('cli/archive/keybay_cli/linux-x64'));
-    expect(ids, contains('cli/bundle/SHA256SUMS'));
     expect(ids, contains('cli/stage/complete'));
     expect(ids, contains('cli/github-release/keybay_cli-v0.2.0'));
     expect(ids, contains('cli/homebrew/keybay_cli/keybay'));
@@ -250,7 +243,6 @@ executables:
               StepKind.build,
               StepKind.notarize,
               StepKind.archive,
-              StepKind.checksums,
             }.contains(step.kind))
         .map((step) => step.id)
         .toList();
@@ -548,7 +540,6 @@ executables:
       'cli/build/keybay_cli/macos-arm64',
       'cli/notarize/keybay_cli/macos-arm64',
       'cli/archive/keybay_cli/macos-arm64',
-      'cli/bundle/SHA256SUMS',
       'cli/stage/complete',
       'cli/tag/keybay_cli-v0.2.0',
       'cli/pub.dev/keybay_cli@0.2.0',

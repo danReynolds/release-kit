@@ -25,7 +25,6 @@ import 'package:release_kit/src/engine/verdict.dart';
 import 'package:release_kit/src/engine/version.dart';
 import 'package:release_kit/src/output/output.dart';
 import 'package:release_kit/src/transforms/archive.dart';
-import 'package:release_kit/src/transforms/digest.dart';
 import 'package:test/test.dart';
 
 /// An origin that lists exactly the tags git holds locally.
@@ -1707,25 +1706,6 @@ ReleaseStage _completedStage({
       },
     ));
   }
-  stage.directory.writeBytesAtomically(
-    ReleaseAssets.checksums,
-    utf8.encode(Checksums.render({
-      for (final archive in archives)
-        archive.path:
-            File(stage.directory.resolve(archive.path)).readAsBytesSync(),
-    })),
-  );
-  steps.add(StageStep(
-    name: 'checksums',
-    inputs: [for (final archive in archives) StageInput.artifact(archive)],
-    outputs: [
-      StageArtifact.capture(
-        stage: stage.directory,
-        path: ReleaseAssets.checksums,
-        type: 'checksums',
-      ),
-    ],
-  ));
   final formula = ReleaseAssets.formulaName(executable);
   if (public.contains(formula)) {
     stage.directory.writeBytesAtomically(formula, utf8.encode('formula'));
@@ -1748,15 +1728,7 @@ ReleaseStage _completedStage({
 
 List<ReleaseAssetSpec> _fixtureReleaseAssets(Iterable<String> paths) => [
       for (final path in paths)
-        path.toLowerCase() == ReleaseAssets.checksums.toLowerCase()
-            ? ReleaseAssetSpec.generated(
-                stagedPath: path,
-                publicName: path,
-              )
-            : ReleaseAssetSpec(
-                stagedPath: path,
-                publicName: path,
-              ),
+        ReleaseAssetSpec(stagedPath: path, publicName: path),
     ];
 
 // Regressions from the phase 2-3 review.

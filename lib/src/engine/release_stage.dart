@@ -181,31 +181,28 @@ class ReleaseStage {
         final manifest = ReleaseManifest.parse(
           File(directory.resolve('release-manifest.json')).readAsStringSync(),
         );
-        final wantedDestinations = {
-          for (final binding in _destinationBindings()) binding.identity,
+        final wantedFormulas = {
+          for (final binding in _formulaBindings()) binding.identity,
         };
-        final manifestDestinations = {
-          for (final binding in manifest.destinations)
-            if (binding.type == 'formula' && binding.mediaType == 'text/x-ruby')
-              binding.identity,
+        final manifestFormulas = {
+          for (final formula in manifest.formulas) formula.identity,
         };
         if (manifest.unit != unit.name ||
             manifest.version != unit.version.canonical ||
             manifest.tag != unit.tag ||
-            manifestDestinations.length != manifest.destinations.length ||
-            manifestDestinations.length != wantedDestinations.length ||
-            manifestDestinations.difference(wantedDestinations).isNotEmpty) {
+            manifestFormulas.length != wantedFormulas.length ||
+            manifestFormulas.difference(wantedFormulas).isNotEmpty) {
           issues.add(const StageIssue(
             StageIssueKind.invalidManifest,
             'release manifest names different release coordinates or '
-            'destinations',
+            'Homebrew formulas',
             path: 'release-manifest.json',
           ));
         }
       } on Object catch (error) {
         issues.add(StageIssue(
           StageIssueKind.invalidManifest,
-          'release manifest destinations could not be validated: $error',
+          'release manifest formulas could not be validated: $error',
           path: 'release-manifest.json',
         ));
       }
@@ -420,17 +417,17 @@ class ReleaseStage {
       throw ArgumentError(
           'release assets must name unique public files and blobs');
     }
-    final destinationBindings = _destinationBindings();
-    final destinationStagedPaths = {
-      for (final binding in destinationBindings) binding.stagedPath,
+    final formulaBindings = _formulaBindings();
+    final formulaStagedPaths = {
+      for (final binding in formulaBindings) binding.stagedPath,
     };
-    final duplicatedDestinations = stagedPaths.intersection(
-      destinationStagedPaths,
+    final duplicatedFormulas = stagedPaths.intersection(
+      formulaStagedPaths,
     );
-    if (duplicatedDestinations.isNotEmpty) {
+    if (duplicatedFormulas.isNotEmpty) {
       throw ArgumentError(
-        'destination-owned artifacts cannot also be release assets: '
-        '${duplicatedDestinations.join(', ')}',
+        'Homebrew formulas cannot also be release assets: '
+        '${duplicatedFormulas.join(', ')}',
       );
     }
     StageReceipt? progress;
@@ -451,16 +448,16 @@ class ReleaseStage {
       );
       final existingPublic =
           existingManifest.artifacts.map((artifact) => artifact.name).toSet();
-      final existingDestinations = {
-        for (final binding in existingManifest.destinations) binding.identity,
+      final existingFormulas = {
+        for (final formula in existingManifest.formulas) formula.identity,
       };
-      final wantedDestinations = {
-        for (final binding in destinationBindings) binding.identity,
+      final wantedFormulas = {
+        for (final binding in formulaBindings) binding.identity,
       };
       if (existingPublic.length != publicNames.length ||
           existingPublic.difference(publicNames).isNotEmpty ||
-          existingDestinations.length != wantedDestinations.length ||
-          existingDestinations.difference(wantedDestinations).isNotEmpty) {
+          existingFormulas.length != wantedFormulas.length ||
+          existingFormulas.difference(wantedFormulas).isNotEmpty) {
         throw StateError(
           'the completed stage has a different publication inventory',
         );
@@ -499,7 +496,7 @@ class ReleaseStage {
     final byPath = {
       for (final artifact in beforeManifest) artifact.path: artifact
     };
-    final boundStagedPaths = {...stagedPaths, ...destinationStagedPaths};
+    final boundStagedPaths = {...stagedPaths, ...formulaStagedPaths};
     final missing = boundStagedPaths.difference(byPath.keys.toSet());
     if (missing.isNotEmpty) {
       throw StateError(
@@ -531,8 +528,8 @@ class ReleaseStage {
             artifact: byPath[binding.stagedPath]!,
           ),
       ],
-      destinations: [
-        for (final binding in destinationBindings)
+      formulas: [
+        for (final binding in formulaBindings)
           binding.bind(byPath[binding.stagedPath]!),
       ],
     );
@@ -555,12 +552,12 @@ class ReleaseStage {
     );
     final orderedBindings = [...bindings]
       ..sort((left, right) => left.publicName.compareTo(right.publicName));
-    final orderedDestinationBindings = [...destinationBindings]
+    final orderedFormulaBindings = [...formulaBindings]
       ..sort((left, right) => left.identity.compareTo(right.identity));
     final completeInputs = <String, StageArtifact>{
       for (final binding in orderedBindings)
         binding.stagedPath: byPath[binding.stagedPath]!,
-      for (final binding in orderedDestinationBindings)
+      for (final binding in orderedFormulaBindings)
         binding.stagedPath: byPath[binding.stagedPath]!,
     };
     final receipt = StageReceipt(
@@ -580,8 +577,8 @@ class ReleaseStage {
               for (final binding in orderedBindings)
                 binding.publicName: binding.stagedPath,
             },
-            'destination_bindings': [
-              for (final binding in orderedDestinationBindings)
+            'formula_bindings': [
+              for (final binding in orderedFormulaBindings)
                 binding.toEvidence(),
             ],
             if (compiler != null) 'dart_compiler': compiler!.toJson(),
@@ -675,9 +672,6 @@ class ReleaseStage {
     if (path.startsWith('source/')) return 'source';
     if (path == 'release-manifest.json') return 'manifest';
     if (path == 'release-notes.md') return 'notes';
-    if (path == ReleaseAssets.checksumPath || path == 'SHA256SUMS') {
-      return 'checksums';
-    }
     if (path.endsWith('.tar.gz')) return 'archive';
     if (path.endsWith('.rb')) return 'formula';
     if (path.endsWith('.notary-result.json') ||
@@ -688,7 +682,7 @@ class ReleaseStage {
     return 'executable';
   }
 
-  List<StagedDestinationBinding> _destinationBindings() {
+  List<StagedFormulaBinding> _formulaBindings() {
     final projects = unit.projects
         .where(
           (project) => project.publish.contains(PublishTarget.homebrew),
@@ -698,18 +692,16 @@ class ReleaseStage {
     final sourceRepository = repository;
     if (sourceRepository == null) {
       throw StateError(
-        'Homebrew destination bindings need a source repository coordinate',
+        'Homebrew formula bindings need a source repository coordinate',
       );
     }
     return [
       for (final project in projects)
-        StagedDestinationBinding(
-          target: PublishTarget.homebrew.configName,
+        StagedFormulaBinding(
           project: project.name,
-          coordinate: unit.tapFor(sourceRepository),
+          tap: unit.tapFor(sourceRepository),
           path: 'Formula/${project.executable!}.rb',
           stagedPath: ReleaseAssets.formulaPath(project),
-          mediaType: 'text/x-ruby',
         ),
     ];
   }

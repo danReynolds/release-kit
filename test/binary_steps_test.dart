@@ -207,23 +207,6 @@ executables:
     expect((inventory.single as Map)['mode'], '0755');
     expect(workspace.exists(ReleaseAssets.archivePath(project, 'macos-arm64')),
         isTrue);
-
-    final checksummed =
-        await chain(tools).checksumsStep(step(StepKind.checksums), unit);
-    expect(checksummed.ok, isTrue, reason: checksummed.problem);
-    expect(
-      checksummed.outputs.map((output) => (output.path, output.type)),
-      [(ReleaseAssets.checksumPath, 'checksums')],
-    );
-    expect(
-      (checksummed.evidence['checksums']! as Map).keys,
-      ['tool-1.0.0-macos-arm64.tar.gz'],
-    );
-    expect(workspace.exists(ReleaseAssets.checksumPath), isTrue);
-    expect(
-      utf8.decode(workspace.readBytes(ReleaseAssets.checksumPath)!),
-      contains('tool-1.0.0-macos-arm64.tar.gz'),
-    );
   });
 
   test('a later step with an empty workspace refuses, naming the producer',

@@ -239,19 +239,6 @@ class Checklist {
       if (!project.config.wantsBinaries) continue;
       steps.addAll(_localBinarySteps(unit, project));
     }
-    final contributions = ReleaseAssets.contributionsFor(unit);
-    if (contributions.isNotEmpty) {
-      steps.add(Step(
-        id: '${unit.name}/bundle/SHA256SUMS',
-        kind: StepKind.checksums,
-        unit: unit.name,
-        summary: 'checksums for ${contributions.length} release assets',
-        needs: [
-          for (final step in steps)
-            if (step.kind == StepKind.archive) step.id,
-        ],
-      ));
-    }
     return steps;
   }
 
@@ -322,7 +309,6 @@ enum StepKind {
   build,
   notarize,
   archive,
-  checksums,
 
   /// The locally validated release receipt exists and is complete.
   completeStage,
@@ -344,7 +330,6 @@ extension StepKindFacts on StepKind {
         StepKind.build ||
         StepKind.notarize ||
         StepKind.archive ||
-        StepKind.checksums ||
         StepKind.completeStage =>
           StepPhase.stage,
         StepKind.tag ||

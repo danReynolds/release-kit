@@ -500,13 +500,11 @@ void main() {
             artifact: archive,
           ),
         ],
-        destinations: [
-          ReleaseManifestDestinationBinding.fromStage(
-            target: 'homebrew',
+        formulas: [
+          ReleaseManifestFormula.fromStage(
             project: 'rk',
-            coordinate: 'example/homebrew-tap',
+            tap: 'example/homebrew-tap',
             path: 'Formula/rk.rb',
-            mediaType: 'text/x-ruby',
             artifact: archive,
           ),
         ],
@@ -518,8 +516,8 @@ void main() {
 
       expect(parsed.commit, stage.identity.headCommit);
       expect(parsed.artifacts.single.sha256, archive.sha256);
-      expect(parsed.destinations.single.sha256, archive.sha256);
-      expect(parsed.destinations.single.path, 'Formula/rk.rb');
+      expect(parsed.formulas.single.sha256, archive.sha256);
+      expect(parsed.formulas.single.path, 'Formula/rk.rb');
       expect(document, contains(_commit));
       expect(
         document,
@@ -629,7 +627,7 @@ StageReceipt _writeCompleteStage(StageDirectory stage) {
         outputs: [manifest],
         evidence: const {
           'release_assets': {'rk': 'rk'},
-          'destination_bindings': [],
+          'formula_bindings': [],
         },
       ),
     ],

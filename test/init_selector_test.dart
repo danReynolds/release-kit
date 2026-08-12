@@ -24,7 +24,6 @@ void main() {
     final narrow = selector.render(60);
 
     for (final output in [wide, narrow]) {
-      expect(output, contains('Use'));
       expect(output, contains('Binary'));
       expect(output, contains('Git tag'));
       expect(output, contains('pub.dev'));
@@ -42,7 +41,6 @@ void main() {
   test('arrows move focus and space applies dependency cascades', () {
     final selector = InitSelector(plan());
     selector
-      ..handle(InitSelectorKey.right)
       ..handle(InitSelectorKey.right)
       ..handle(InitSelectorKey.right)
       ..handle(InitSelectorKey.right)
@@ -94,7 +92,7 @@ void main() {
     final rendered = selector.render(120, height: 16);
 
     expect(rendered, contains('21/30'));
-    expect(rendered, contains('› [x]  ${selector.candidate.unit}'));
+    expect(rendered, contains('› ${selector.candidate.unit}'));
     expect(rendered, isNot(contains('package_0 ')));
     expect(rendered.split('\n').length, lessThanOrEqualTo(16));
   });

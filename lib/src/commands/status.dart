@@ -482,11 +482,10 @@ class StatusCommand {
     if (releaseBindings is Map && releaseBindings[name] is String) {
       stagedPath = releaseBindings[name] as String;
     }
-    final destinationBindings = complete.evidence['destination_bindings'];
-    if (destinationBindings is List) {
-      for (final value in destinationBindings) {
+    final formulaBindings = complete.evidence['formula_bindings'];
+    if (formulaBindings is List && target.target == PublishTarget.homebrew) {
+      for (final value in formulaBindings) {
         if (value is! Map ||
-            value['target'] != target.kind ||
             value['project'] != target.project?.name ||
             value['staged_path'] is! String) {
           continue;
@@ -564,8 +563,6 @@ class StatusCommand {
       final summary = blocked.entries
           .map((entry) => '${entry.key}: ${entry.value}')
           .join('; ');
-      problems[ReleaseAssets.checksums] =
-          'cannot be finalized until every archive exists: $summary';
       problems[ReleaseAssets.manifest] =
           'cannot be finalized until every release artifact exists: $summary';
     }

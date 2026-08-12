@@ -204,7 +204,6 @@ void classificationTables() {
         StepKind.build: false,
         StepKind.notarize: false,
         StepKind.archive: false,
-        StepKind.checksums: false,
         StepKind.completeStage: false,
       },
       reason: 'a prerequisite dropped from this set stops blocking a release '
@@ -692,7 +691,7 @@ void classificationTables() {
         steps.firstWhere((s) => s.kind == StepKind.publishRelease).summary;
     final counted = int.parse(
         RegExp(r'publish (\d+) assets').firstMatch(summary)!.group(1)!);
-    expect(counted, 4);
+    expect(counted, 3);
   });
 
   test('the expected asset set is derived, and derives everything', () async {
@@ -702,7 +701,6 @@ void classificationTables() {
       {
         'example-tool-1.0.0-linux-x64.tar.gz',
         'example-tool-1.0.0-macos-arm64.tar.gz',
-        'SHA256SUMS',
         'release-manifest.json',
       },
       reason: 'emptied, every release inspects exact and nothing notices. '

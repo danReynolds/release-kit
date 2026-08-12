@@ -10,6 +10,7 @@ import '../output/output.dart';
 import '../engine/inspect.dart';
 import '../engine/producers.dart';
 import '../engine/publish_target.dart';
+import '../engine/public_release_gate.dart';
 import '../engine/resolve.dart';
 import '../engine/release_stage.dart';
 import '../engine/source_tree.dart';
@@ -464,41 +465,16 @@ class ReleaseCommand {
 
     // Public reality is refreshed after staging. Unknown and conflict never
     // grant permission; exact work is skipped; only absent work may act.
-    for (final step in publicSteps) {
-      states[step.id] = await inspector.inspect(step, unit);
-      publicActions[step.id] = states[step.id]!.isExact
-          ? _ReleaseAction.alreadyExact
-          : _ReleaseAction.notAttempted;
-      output.step(
-        step,
-        verdict: states[step.id]!.verdict,
-        detail: states[step.id]!.detail,
-        evidence: states[step.id]!.evidence,
-        action: publicActions[step.id]!.wire,
-        show: false,
-      );
-      if (states[step.id]!.isExact || states[step.id]!.isAbsent) continue;
-      _haltForState(step, states[step.id]!);
-      _showReleaseActions(targets, publicActions);
-      return ExitCodes.refused;
-    }
-
-    final refreshedVersions = Diagnostics();
-    await inspector.releaseMonotonicity(
-      unit,
-      targets,
-      refreshedVersions,
-      refreshRegistry: true,
+    final gate = PublicReleaseGate(inspector);
+    var remaining = await _refreshPublicGate(
+      gate: gate,
+      unit: unit,
+      publicSteps: publicSteps,
+      targets: targets,
+      states: states,
+      actions: publicActions,
     );
-    if (refreshedVersions.isNotEmpty) {
-      output.halt(HaltKind.beforeActing);
-      output.problems(refreshedVersions.found);
-      _showReleaseActions(targets, publicActions);
-      return ExitCodes.refused;
-    }
-
-    var remaining =
-        publicSteps.where((step) => states[step.id]!.isAbsent).toList();
+    if (remaining == null) return ExitCodes.refused;
     if (remaining.isEmpty) {
       output.blank();
       output.line(
@@ -563,38 +539,15 @@ class ReleaseCommand {
     // after every potentially slow signing/context check. The per-target loop
     // still reads again after consent; this snapshot exists so the operator
     // never authorizes a stale remaining set.
-    for (final step in publicSteps) {
-      states[step.id] = await inspector.inspect(step, unit);
-      publicActions[step.id] = states[step.id]!.isExact
-          ? _ReleaseAction.alreadyExact
-          : _ReleaseAction.notAttempted;
-      output.step(
-        step,
-        verdict: states[step.id]!.verdict,
-        detail: states[step.id]!.detail,
-        evidence: states[step.id]!.evidence,
-        action: publicActions[step.id]!.wire,
-        show: false,
-      );
-      if (states[step.id]!.isExact || states[step.id]!.isAbsent) continue;
-      _haltForState(step, states[step.id]!);
-      _showReleaseActions(targets, publicActions);
-      return ExitCodes.refused;
-    }
-    final authorizationVersions = Diagnostics();
-    await inspector.releaseMonotonicity(
-      unit,
-      targets,
-      authorizationVersions,
-      refreshRegistry: true,
+    remaining = await _refreshPublicGate(
+      gate: gate,
+      unit: unit,
+      publicSteps: publicSteps,
+      targets: targets,
+      states: states,
+      actions: publicActions,
     );
-    if (authorizationVersions.isNotEmpty) {
-      output.halt(HaltKind.beforeActing);
-      output.problems(authorizationVersions.found);
-      _showReleaseActions(targets, publicActions);
-      return ExitCodes.refused;
-    }
-    remaining = publicSteps.where((step) => states[step.id]!.isAbsent).toList();
+    if (remaining == null) return ExitCodes.refused;
     if (remaining.isEmpty) {
       output.blank();
       output.line(
@@ -942,6 +895,55 @@ class ReleaseCommand {
       );
     }
     return inspector.inspect(step, unit);
+  }
+
+  /// Applies one engine-owned public snapshot to the command report.
+  ///
+  /// Returning null means the gate refused. An empty list means every target
+  /// is already exact. Keeping that distinction here lets both temporal
+  /// checkpoints share one presentation without hiding when they occur.
+  Future<List<Step>?> _refreshPublicGate({
+    required PublicReleaseGate gate,
+    required ResolvedUnit unit,
+    required List<Step> publicSteps,
+    required List<TargetExpectation> targets,
+    required Map<String, Inspection> states,
+    required Map<String, _ReleaseAction> actions,
+  }) async {
+    final snapshot = await gate.refresh(
+      unit: unit,
+      steps: publicSteps,
+      targets: targets,
+    );
+    for (final step in publicSteps) {
+      final state = snapshot.states[step.id]!;
+      states[step.id] = state;
+      actions[step.id] = state.isExact
+          ? _ReleaseAction.alreadyExact
+          : _ReleaseAction.notAttempted;
+      output.step(
+        step,
+        verdict: state.verdict,
+        detail: state.detail,
+        evidence: state.evidence,
+        action: actions[step.id]!.wire,
+        show: false,
+      );
+    }
+
+    final blocked = snapshot.blocked;
+    if (blocked != null) {
+      _haltForState(blocked, snapshot.states[blocked.id]!);
+      _showReleaseActions(targets, actions);
+      return null;
+    }
+    if (snapshot.monotonicityProblems.isNotEmpty) {
+      output.halt(HaltKind.beforeActing);
+      output.problems(snapshot.monotonicityProblems);
+      _showReleaseActions(targets, actions);
+      return null;
+    }
+    return snapshot.remaining;
   }
 
   void _reportTargetFailure(Step step, TargetFailure failure) {
@@ -1836,9 +1838,6 @@ class ReleaseCommand {
     ResolvedUnit unit,
     Map<String, _ProjectSigningContext> signing,
   ) async {
-    if (step.kind == StepKind.checksums) {
-      return _chain(unit).checksumsStep(step, unit);
-    }
     final project = unit.project(step.project!);
     final projectSigning = signing[project.name];
     switch (step.kind) {
@@ -1859,8 +1858,6 @@ class ReleaseCommand {
         return _chain(unit).notarizeStep(step, project);
       case StepKind.archive:
         return _chain(unit).archiveStep(step, project);
-      case StepKind.checksums:
-        throw StateError('checksums are handled by the unit bundle');
       default:
         throw StateError(
           'step ${step.kind.name} is not a local stage producer',

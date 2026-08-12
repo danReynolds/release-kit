@@ -3,7 +3,7 @@
 Status: implemented and validated, 2026-08-12.
 
 This record captures the decisions behind schema 2, `rk init`, optional Git,
-aggregate GitHub Releases, and Homebrew destination bindings. RFC 0002 owns
+aggregate GitHub Releases, and Homebrew formula bindings. RFC 0002 owns
 the complete release protocol; this document records the narrower product
 choices and review outcomes that produced the implementation.
 
@@ -81,7 +81,8 @@ binary_platforms = ["macos-arm64", "linux-x64"]
 
 Both projects contribute archives to one GitHub Release. Only `server_cli`
 publishes a Homebrew formula. Producer steps, paths, receipts, signing state,
-and checksums are qualified by project before public-name collision checks.
+and signing state are qualified by project before public-name collision
+checks.
 
 ### Sparse Homebrew override
 
@@ -143,7 +144,7 @@ With a capable terminal, init shows one row per discovered project and these
 on/off choices:
 
 ```text
-Use  Binary  Git tag  pub.dev  GitHub  Homebrew
+Binary  Git tag  pub.dev  GitHub  Homebrew
 ```
 
 Arrow keys move, Space toggles, Enter reviews, and Ctrl-C or EOF cancels.
@@ -156,7 +157,8 @@ Dependencies are deterministic:
 - GitHub enables Git tag.
 - Homebrew enables Binary, GitHub, and Git tag.
 - Removing a prerequisite removes its dependants.
-- Turning Use off preserves the row's choices for the current session.
+- A project is included exactly when at least one publication target is
+  selected.
 
 Review previews the exact schema-2 TOML and `.gitignore` addition. Back returns
 to selection. Writing uses exclusive creation and refuses a concurrent config
@@ -187,15 +189,14 @@ Bundle assembly validates the complete specification before publication:
 - reserved names belong only to rk;
 - case-equivalent public names collide;
 - several projects cannot claim the same public name; and
-- destination-owned files cannot also be release assets.
+- Homebrew formulas cannot also be release assets.
 
-`SHA256SUMS` is generated only when at least one producer contributes a public
-asset. `release-manifest.json` is always present on a selected GitHub Release.
-A metadata-only release therefore carries release notes and the manifest, but
-no checksums file.
+`release-manifest.json` is always present on a selected GitHub Release and
+records the size and SHA-256 digest of every public asset. A metadata-only
+release therefore carries release notes and the manifest only.
 
-The manifest records public release assets separately from destination-owned
-files. It never exposes private stage paths, commands, logs, credentials, or
+The manifest records public release assets separately from Homebrew formulas.
+It never exposes private stage paths, commands, logs, credentials, or
 free-form receipt evidence.
 
 ## Homebrew
@@ -204,13 +205,11 @@ Each Homebrew project produces one formula from its standalone archive
 contract. The formula is a private stage output published only to
 `Formula/<executable>.rb` in the selected tap.
 
-The release manifest binds:
+The release manifest binds each formula's:
 
-- target;
 - project;
-- tap coordinate;
+- tap;
 - formula path;
-- media and semantic type; and
 - size and SHA-256 digest.
 
 This lets status authenticate current or historical tap bytes through:
@@ -284,7 +283,7 @@ changes were:
 - require explicit tag namespaces when several tagged units exist;
 - preserve concrete target identity alongside lifecycle kind;
 - qualify producer state by project;
-- separate public assets from destination-owned formula bytes;
+- separate public assets from Homebrew formula bytes;
 - support metadata-only GitHub Releases;
 - reject destructive GitHub draft recovery;
 - make source binding independent from destination exactness; and
