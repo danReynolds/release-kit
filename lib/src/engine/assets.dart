@@ -1,3 +1,4 @@
+import 'release_asset.dart';
 import 'resolve.dart';
 
 /// The names a release publishes, written once.
@@ -9,7 +10,7 @@ import 'resolve.dart';
 ///
 /// They were spelled in four places: the chain that produces them, the
 /// inspector that expects them, the checklist that counts them, and literals
-/// for the checksums file. That is not untidiness, it is a latent and
+/// for generated bundle files. That is not untidiness, it is a latent and
 /// permanently unfixable failure. `GithubRelease.inspect` returns
 /// `Verdict.conflict` for *any* difference between expected and published —
 /// missing or extra — and a published release cannot be edited, so the
@@ -26,18 +27,54 @@ import 'resolve.dart';
 /// `checklist.dart` imports `diagnostic`, `resolve` and `version`, and
 /// `inspect.dart` imports `checklist.dart` one way.
 abstract final class ReleaseAssets {
-  /// The checksums file, which every binary release carries exactly one of.
-  static const checksums = 'SHA256SUMS';
-
   /// Public binding from release bytes back to their source and stage plan.
   static const manifest = 'release-manifest.json';
+
+  static String producerRoot(ResolvedProject project) =>
+      'producers/${project.name}';
+
+  static String binaryPath(
+    ResolvedProject project,
+    String platform,
+  ) =>
+      '${producerRoot(project)}/$platform/${project.executable}';
+
+  static String notaryInputPath(
+    ResolvedProject project,
+    String platform,
+  ) =>
+      '${producerRoot(project)}/$platform/${project.executable}.zip';
+
+  static String archivePath(
+    ResolvedProject project,
+    String platform,
+  ) =>
+      '${producerRoot(project)}/archives/'
+      '${archiveName(project.executable!, project.version.canonical, platform)}';
+
+  static String notaryResultPath(
+    ResolvedProject project,
+    String platform,
+  ) =>
+      '${producerRoot(project)}/evidence/'
+      '${notaryResultName(project.executable!, project.version.canonical, platform)}';
+
+  static String notaryLogPath(
+    ResolvedProject project,
+    String platform,
+  ) =>
+      '${producerRoot(project)}/evidence/'
+      '${notaryLogName(project.executable!, project.version.canonical, platform)}';
+
+  static String formulaPath(ResolvedProject project) =>
+      '${producerRoot(project)}/homebrew/${formulaName(project.executable!)}';
 
   static String archiveName(
     String executable,
     String version,
     String platform,
   ) =>
-      '$executable-$version-$platform.tar.gz';
+      standaloneArchiveName(executable, version, platform);
 
   /// Apple's verdict, verbatim — and its log, which says what the verdict
   /// covered. Stage evidence, not published assets: a consumer verifies the
@@ -58,25 +95,31 @@ abstract final class ReleaseAssets {
   ) =>
       '$executable-$version-$platform.notary-log.json';
 
-  /// The formula ships with the release too, so the release is
-  /// self-describing: the tap's copy is a pointer, this one is the record.
+  /// The formula's public filename inside its Homebrew tap.
+  ///
+  /// Formula bytes belong to the tap and do not enter the GitHub Release
+  /// inventory. Their digest and tap path are bound by the release manifest.
   static String formulaName(String executable) => '$executable.rb';
 
-  /// Every name a release of [project] carries.
-  ///
-  /// The single derivation. Anything that produces, expects, or counts these
-  /// reads it rather than re-spelling it.
-  static Set<String> expectedFor(ResolvedProject project) {
-    final executable = project.executable;
-    if (executable == null || project.binaryPlatforms.isEmpty) return const {};
-    final version = project.version.canonical;
-
-    return {
-      for (final platform in project.binaryPlatforms)
-        archiveName(executable, version, platform),
-      if (project.channels.contains('homebrew')) formulaName(executable),
-      checksums,
-      manifest,
-    };
+  /// The complete public inventory excluding the manifest itself.
+  static List<ReleaseAssetSpec> bundleFor(ResolvedUnit unit) {
+    final project = unit.binaryProject;
+    if (project == null) return const [];
+    return validateReleaseAssetSpecs([
+      for (final platform in [...project.binaryPlatforms]..sort())
+        ReleaseAssetSpec(
+          stagedPath: archivePath(project, platform),
+          publicName: archiveName(
+            project.executable!,
+            project.version.canonical,
+            platform,
+          ),
+        ),
+    ]);
   }
+
+  static Set<String> expectedForUnit(ResolvedUnit unit) => {
+        for (final asset in bundleFor(unit)) asset.publicName,
+        manifest,
+      };
 }

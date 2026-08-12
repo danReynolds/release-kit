@@ -15,9 +15,9 @@ import '../transforms/digest.dart';
 /// and publishes once — an interrupted upload must never leave a permanent
 /// release missing files.
 ///
-/// The draft is a staging area, not memory: the workspace holds every artifact,
-/// so a draft that is not exactly right is deleted and rebuilt rather than
-/// repaired in place.
+/// The draft is a staging area, not memory: the workspace holds every artifact.
+/// rk resumes only an exact uploaded subset; an ambiguous or divergent draft
+/// is left untouched for the operator to inspect.
 class GithubRelease {
   GithubRelease({
     required this.tools,
@@ -121,11 +121,11 @@ class GithubRelease {
   /// Inspects the complete public release identity, including downloaded
   /// asset bytes.
   ///
-  /// [inspect] remains the inventory-only compatibility surface for callers
-  /// that do not yet hold a stage receipt. Once a receipt exists, this is the
-  /// stronger question: tag, title, body, asset names, and every asset digest
-  /// must all match. A download failure is unknown rather than a digest
-  /// mismatch — not being able to read bytes is not evidence about them.
+  /// Before a stage exists, [inspect] can answer only inventory. Once a receipt
+  /// exists, this is the stronger question: tag, title, body, asset names, and
+  /// every asset digest must all match. A download failure is unknown rather
+  /// than a digest mismatch — not being able to read bytes is not evidence
+  /// about them.
   Future<Inspection> inspectExact(GithubReleaseExpectation expected) =>
       _inspect(
         tag: expected.tag,
@@ -147,78 +147,26 @@ class GithubRelease {
   ) async =>
       (await _observeManifest(expected)).inspection;
 
-  /// Reads one ordinary release asset through the manifest-bound inspection.
+  /// Returns the parsed manifest only after the same externally anchored,
+  /// exact release verification used by [inspectManifest].
   ///
-  /// This is deliberately not a second download surface. The release title,
-  /// body, complete inventory, externally bound manifest digest, manifest
-  /// coordinates, and every artifact digest are checked first by the same
-  /// observation as [inspectManifest]. Bytes are returned only when that whole
-  /// observation is exact; unknown and conflict observations never expose
-  /// partially verified downloads.
-  Future<GithubManifestAssetRead> readManifestBoundAsset(
+  /// Destination targets use this to authenticate manifest records that are
+  /// deliberately not GitHub assets. A parsed document is never exposed from
+  /// an unknown or conflicting observation.
+  Future<GithubManifestRead> readManifest(
     GithubManifestExpectation expected,
-    String assetName,
   ) async {
-    if (assetName == ReleaseAssets.manifest) {
-      return const GithubManifestAssetRead._(
-        Inspection.unknown(
-          'release-manifest.json is verification metadata, not a readable '
-          'release artifact',
-        ),
-        null,
-      );
-    }
-    if (!expected.publicAssets.contains(assetName)) {
-      return GithubManifestAssetRead._(
-        Inspection.unknown(
-          '$assetName is not a configured public release asset',
-        ),
-        null,
-      );
-    }
-
-    final observation = await _observeManifest(expected);
-    if (!observation.inspection.isExact) {
-      return GithubManifestAssetRead._(observation.inspection, null);
-    }
-    final bytes = observation.verifiedBytes[assetName];
-    if (bytes == null) {
-      // An exact manifest observation necessarily verified every configured
-      // non-manifest asset. Keep this guard fail-closed if that invariant is
-      // ever broken by a future manifest schema.
-      return GithubManifestAssetRead._(
-        Inspection.unknown(
-          '$assetName was not available after release verification',
-        ),
-        null,
-      );
-    }
-    return GithubManifestAssetRead._(observation.inspection, bytes);
+    final observed = await _observeManifest(expected);
+    return GithubManifestRead._(observed.inspection, observed.manifest);
   }
 
-  /// Reads an asset from an older, self-describing release.
-  ///
-  /// The tag supplies the two external anchors that the release cannot choose
-  /// for itself: its peeled source commit and the manifest digest. The bound
-  /// manifest may then describe its own stage identity and complete artifact
-  /// inventory. This lets a later run recover an exact historical formula
-  /// without retaining that release's local stage, resolved plan, or changelog
-  /// body.
-  Future<GithubManifestAssetRead> readHistoricalManifestBoundAsset(
+  /// Historical counterpart to [readManifest]. The peeled tag commit and the
+  /// tag-bound manifest digest are the external anchors; today's configuration
+  /// is not used to reconstruct the older release inventory.
+  Future<GithubManifestRead> readHistoricalManifest(
     GithubHistoricalManifestExpectation expected,
-    String assetName,
   ) async {
-    if (assetName == ReleaseAssets.manifest) {
-      return const GithubManifestAssetRead._(
-        Inspection.unknown(
-          'release-manifest.json is verification metadata, not a readable '
-          'release artifact',
-        ),
-        null,
-      );
-    }
-
-    final observation = await _observeManifestRelease(
+    final observed = await _observeManifestRelease(
       unit: expected.unit,
       version: expected.version,
       tag: expected.tag,
@@ -226,20 +174,7 @@ class GithubRelease {
       sourceCommit: expected.sourceCommit,
       title: expected.title,
     );
-    if (!observation.inspection.isExact) {
-      return GithubManifestAssetRead._(observation.inspection, null);
-    }
-    final bytes = observation.verifiedBytes[assetName];
-    if (bytes == null) {
-      return GithubManifestAssetRead._(
-        Inspection.conflict(
-          'the published release manifest does not declare $assetName',
-          evidence: {assetName: 'missing from release manifest'},
-        ),
-        null,
-      );
-    }
-    return GithubManifestAssetRead._(observation.inspection, bytes);
+    return GithubManifestRead._(observed.inspection, observed.manifest);
   }
 
   Future<_ManifestObservation> _observeManifest(
@@ -358,7 +293,8 @@ class GithubRelease {
     if (manifest.tag != tag) {
       differences['manifest tag'] = 'published ${manifest.tag}, expected $tag';
     }
-    if (manifest.commit.toLowerCase() != sourceCommit.toLowerCase()) {
+    if (manifest.commit == null ||
+        manifest.commit!.toLowerCase() != sourceCommit.toLowerCase()) {
       differences['source commit'] = 'published ${manifest.commit}, expected '
           '${sourceCommit.toLowerCase()}';
     }
@@ -399,7 +335,7 @@ class GithubRelease {
       return _ManifestObservation.failed(manifestSurface);
     }
 
-    final assets = await _observeAssetBytes(
+    final assets = await _inspectAssetBytes(
       tag,
       {
         for (final artifact in manifest.artifacts)
@@ -409,12 +345,9 @@ class GithubRelease {
       knownBytes: {ReleaseAssets.manifest: manifestBytes},
       expectedBy: 'release manifest',
     );
-    return assets.inspection.isExact
-        ? _ManifestObservation.exact(
-            assets.inspection,
-            assets.verifiedBytes,
-          )
-        : _ManifestObservation.failed(assets.inspection);
+    return assets.isExact
+        ? _ManifestObservation.exact(assets, manifest)
+        : _ManifestObservation.failed(assets);
   }
 
   Future<Inspection> _inspect({
@@ -541,24 +474,9 @@ class GithubRelease {
     Map<String, String> expectedDigests, {
     Map<String, List<int>> knownBytes = const {},
     String expectedBy = 'staged release',
-  }) async =>
-      (await _observeAssetBytes(
-        tag,
-        expectedDigests,
-        knownBytes: knownBytes,
-        expectedBy: expectedBy,
-      ))
-          .inspection;
-
-  Future<_AssetObservation> _observeAssetBytes(
-    String tag,
-    Map<String, String> expectedDigests, {
-    Map<String, List<int>> knownBytes = const {},
-    String expectedBy = 'staged release',
   }) async {
     try {
       final names = expectedDigests.keys.toList()..sort();
-      final verifiedBytes = <String, List<int>>{};
       // Assets are independent immutable coordinates. Reading them serially
       // multiplied the per-command timeout by the inventory size (five alpha
       // assets could mean ten minutes). Start every missing download
@@ -592,38 +510,28 @@ class GithubRelease {
           mismatches[name] = 'sha256 $actual, expected $expected';
           continue;
         }
-        verifiedBytes[name] = List<int>.unmodifiable(bytes);
       }
       // A proven immutable mismatch outranks an unreadable sibling. Unknown
       // means rk lacks a fact; it cannot erase a conflict already established.
       if (mismatches.isNotEmpty) {
-        return _AssetObservation.failed(
-          Inspection.conflict(
-            'published asset bytes differ from the $expectedBy',
-            evidence: mismatches,
-          ),
+        return Inspection.conflict(
+          'published asset bytes differ from the $expectedBy',
+          evidence: mismatches,
         );
       }
       if (unreadable.isNotEmpty) {
-        return _AssetObservation.failed(
-          Inspection.unknown(unreadable.entries.first.value),
-        );
+        return Inspection.unknown(unreadable.entries.first.value);
       }
-      return _AssetObservation.exact(
-        Inspection.exact(
-          detail: 'published metadata and asset bytes match',
-          evidence: {
-            for (final name in names)
-              name: 'sha256 ${expectedDigests[name]!.toLowerCase()}',
-          },
-        ),
-        verifiedBytes,
+      return Inspection.exact(
+        detail: 'published metadata and asset bytes match',
+        evidence: {
+          for (final name in names)
+            name: 'sha256 ${expectedDigests[name]!.toLowerCase()}',
+        },
       );
     } on Object catch (error) {
-      return _AssetObservation.failed(
-        Inspection.unknown(
-          'published asset bytes could not be read: $error',
-        ),
+      return Inspection.unknown(
+        'published asset bytes could not be read: $error',
       );
     }
   }
@@ -770,9 +678,7 @@ class GithubRelease {
     required String tag,
     required String title,
     required String notesPath,
-    required List<String> assetPaths,
-    required Map<String, String> assetSha256,
-    required Map<String, int> assetSizes,
+    required List<GithubReleaseAssetUpload> assets,
   }) async {
     var draftEffect = DraftEffect.none;
     PublishOutcome failed(String problem) => PublishOutcome.failed(
@@ -780,57 +686,33 @@ class GithubRelease {
           draftEffect: draftEffect,
         );
 
-    final existing = await _drafts(tag);
-    if (existing == null) {
-      return failed('GitHub could not be read');
-    }
-    for (final release in existing) {
-      // By id, not by tag: several drafts can carry the same tag, and the
-      // porcelain delete addresses whichever one it finds first.
-      draftEffect = DraftEffect.uncertain;
-      final deleted = await tools.run(
-        'gh',
-        ['api', '-X', 'DELETE', 'repos/$repository/releases/${release.id}'],
-        workingDirectory: workingDirectory,
-      );
-      if (!deleted.ok) {
-        return failed(
-          'a draft (${release.id}) is in the way and could not be removed: '
-          '${deleted.summary}',
-        );
-      }
-      draftEffect = DraftEffect.changed;
-    }
-
     final url = 'https://github.com/$repository/releases/tag/$tag';
-    final names = assetPaths.map(_fileName).toList();
-    if (names.toSet().length != names.length) {
+    final local = _validateUploadRequest(
+      tag: tag,
+      title: title,
+      notesPath: notesPath,
+      assets: assets,
+    );
+    if (local.problem != null) return failed(local.problem!);
+    final notes = local.notes!;
+    final ordered = local.assets!;
+    final names = [for (final asset in ordered) asset.publicName];
+    final assetSha256 = {
+      for (final asset in ordered) asset.publicName: asset.sha256,
+    };
+    final assetSizes = {
+      for (final asset in ordered) asset.publicName: asset.size,
+    };
+
+    // Local shape and bytes are validated before this first remote read. A
+    // malformed request can therefore never delete, create, or fill a draft.
+    final existing = await _drafts(tag);
+    if (existing == null) return failed('GitHub could not be read');
+    if (existing.length > 1) {
       return failed(
-        'two staged assets have the same public filename',
+        '${existing.length} private drafts already use $tag; rk will not '
+        'choose, replace, or delete one',
       );
-    }
-    final namedDigests = assetSha256.keys.toSet();
-    final namedSizes = assetSizes.keys.toSet();
-    final stagedNames = names.toSet();
-    if (namedDigests.length != stagedNames.length ||
-        namedDigests.difference(stagedNames).isNotEmpty ||
-        stagedNames.difference(namedDigests).isNotEmpty ||
-        namedSizes.length != stagedNames.length ||
-        namedSizes.difference(stagedNames).isNotEmpty ||
-        stagedNames.difference(namedSizes).isNotEmpty) {
-      return failed(
-        'the staged asset paths, sizes, and digests name different files',
-      );
-    }
-    for (final entry in assetSha256.entries) {
-      if (!_isSha256(entry.value)) {
-        return failed(
-          'the expected digest for ${entry.key} is not SHA-256',
-        );
-      }
-    }
-    if (assetSizes.values.any((size) => size < 0)) {
-      return failed('a staged asset has an invalid expected size');
     }
 
     final Directory scratch;
@@ -840,50 +722,94 @@ class GithubRelease {
       return failed('the private draft could not be prepared: $error');
     }
     try {
-      final notes = await File(notesPath).readAsString();
-      final createInput = File('${scratch.path}/create.json');
-      await createInput.writeAsString(jsonEncode({
-        'tag_name': tag,
-        'name': title,
-        'body': notes,
-        'draft': true,
-      }));
-      final effectBeforeCreate = draftEffect;
-      draftEffect = DraftEffect.uncertain;
-      final created = await tools.run(
-        'gh',
-        [
-          'api',
-          '-X',
-          'POST',
-          'repos/$repository/releases',
-          '--input',
-          createInput.path,
-        ],
-        workingDirectory: workingDirectory,
-      );
-
-      String? draftId = _releaseIdIn(created.stdout);
-      if (draftId == null) {
-        // A lost response can still have created a private draft. Re-read the
-        // private surface before calling it a failure; after the initial sweep,
-        // one same-tag draft is unambiguous and safe to continue filling.
-        final afterCreate = await _drafts(tag);
-        if (afterCreate == null || afterCreate.length != 1) {
-          if (afterCreate?.isEmpty == true) {
-            draftEffect = effectBeforeCreate;
-          }
+      String draftId;
+      late List<GithubReleaseAssetUpload> missing;
+      if (existing case [final candidate]) {
+        final observed = await _viewById(candidate.id);
+        if (observed is! _Found) {
           return failed(
-            'the private draft could not be identified after create: '
-            '${created.summary}',
+            'private draft ${candidate.id} could not be read for recovery',
           );
         }
-        draftId = afterCreate.single.id;
-      }
-      draftEffect = DraftEffect.changed;
+        final reconciliation = _inspectDraftSubset(
+          observed.release,
+          tag: tag,
+          title: title,
+          body: notes,
+          expected: ordered,
+        );
+        if (!reconciliation.inspection.isExact) {
+          return failed(
+            'private draft ${candidate.id} is not an exact resumable subset: '
+            '${reconciliation.inspection.detail ?? reconciliation.inspection.verdict.name}',
+          );
+        }
+        draftId = candidate.id;
+        missing = reconciliation.missing;
+      } else {
+        final createInput = File('${scratch.path}/create.json');
+        await createInput.writeAsString(jsonEncode({
+          'tag_name': tag,
+          'name': title,
+          'body': notes,
+          'draft': true,
+        }));
+        draftEffect = DraftEffect.uncertain;
+        final created = await tools.run(
+          'gh',
+          [
+            'api',
+            '-X',
+            'POST',
+            'repos/$repository/releases',
+            '--input',
+            createInput.path,
+          ],
+          workingDirectory: workingDirectory,
+        );
 
-      for (var index = 0; index < assetPaths.length; index++) {
-        final name = names[index];
+        final createdId = _releaseIdIn(created.stdout);
+        if (createdId == null) {
+          final afterCreate = await _drafts(tag);
+          if (afterCreate == null || afterCreate.length != 1) {
+            if (afterCreate?.isEmpty == true) draftEffect = DraftEffect.none;
+            return failed(
+              'the private draft could not be identified after create: '
+              '${created.summary}',
+            );
+          }
+          draftId = afterCreate.single.id;
+        } else {
+          draftId = createdId;
+        }
+        draftEffect = DraftEffect.changed;
+
+        // A create response proves only an id. Verify the exact empty draft
+        // metadata before placing the first byte into it.
+        final observed = await _viewById(draftId);
+        if (observed is! _Found) {
+          return failed(
+              'private draft $draftId could not be read after create');
+        }
+        final reconciliation = _inspectDraftSubset(
+          observed.release,
+          tag: tag,
+          title: title,
+          body: notes,
+          expected: ordered,
+        );
+        if (!reconciliation.inspection.isExact ||
+            reconciliation.missing.length != ordered.length) {
+          return failed(
+            'private draft $draftId did not start as the frozen empty release: '
+            '${reconciliation.inspection.detail ?? reconciliation.inspection.verdict.name}',
+          );
+        }
+        missing = reconciliation.missing;
+      }
+
+      for (final asset in missing) {
+        final name = asset.publicName;
         draftEffect = DraftEffect.uncertain;
         final uploaded = await tools.run(
           'gh',
@@ -894,7 +820,7 @@ class GithubRelease {
             '-H',
             'Content-Type: application/octet-stream',
             '--input',
-            assetPaths[index],
+            asset.stagedPath,
             // An absolute upload endpoint keeps github.com as gh's auth
             // authority. Selecting uploads.github.com with --hostname instead
             // asks gh for a separate host login and builds an Enterprise-style
@@ -932,15 +858,20 @@ class GithubRelease {
           // finished nor that it landed the staged bytes. Reconcile only from
           // GitHub's digest on this exact private draft id.
           draftEffect = DraftEffect.changed;
-          final bytes = _inspectDraftAssets(
+          final reconciliation = _inspectDraftSubset(
             observed.release,
-            {name: assetSha256[name]!},
-            {name: assetSizes[name]!},
+            tag: tag,
+            title: title,
+            body: notes,
+            expected: ordered,
           );
-          if (!bytes.isExact) {
+          if (!reconciliation.inspection.isExact ||
+              reconciliation.missing
+                  .any((missing) => missing.publicName == name)) {
             return failed(
               'uploading $name to private draft $draftId could not be '
-              'reconciled by bytes: ${bytes.detail ?? bytes.verdict.name}',
+              'reconciled by bytes: '
+              '${reconciliation.inspection.detail ?? reconciliation.inspection.verdict.name}',
             );
           }
         }
@@ -1049,6 +980,159 @@ class GithubRelease {
         // Public truth does not depend on scratch cleanup.
       }
     }
+  }
+
+  ({String? problem, String? notes, List<GithubReleaseAssetUpload>? assets})
+      _validateUploadRequest({
+    required String tag,
+    required String title,
+    required String notesPath,
+    required List<GithubReleaseAssetUpload> assets,
+  }) {
+    if (tag.trim().isEmpty || title.trim().isEmpty) {
+      return (
+        problem: 'the release tag or title is empty',
+        notes: null,
+        assets: null
+      );
+    }
+    final notesType = FileSystemEntity.typeSync(notesPath, followLinks: false);
+    if (notesType != FileSystemEntityType.file) {
+      return (
+        problem: 'the staged release notes are missing or not a regular file',
+        notes: null,
+        assets: null,
+      );
+    }
+    final String notes;
+    try {
+      notes = File(notesPath).readAsStringSync();
+    } on Object catch (error) {
+      return (
+        problem: 'the staged release notes could not be read: $error',
+        notes: null,
+        assets: null
+      );
+    }
+
+    final ordered = List<GithubReleaseAssetUpload>.of(assets)
+      ..sort((left, right) => left.publicName.compareTo(right.publicName));
+    final names = <String>{};
+    final paths = <String>{};
+    for (final asset in ordered) {
+      final normalized = asset.publicName.toLowerCase();
+      if (!names.add(normalized)) {
+        return (
+          problem: 'two staged assets have the same public filename',
+          notes: null,
+          assets: null
+        );
+      }
+      if (!paths.add(asset.stagedPath)) {
+        return (
+          problem: 'two public assets refer to the same staged file',
+          notes: null,
+          assets: null
+        );
+      }
+      if (!_isPublicAssetName(asset.publicName)) {
+        return (
+          problem: 'invalid public asset filename: ${asset.publicName}',
+          notes: null,
+          assets: null
+        );
+      }
+      if (!_isSha256(asset.sha256) || asset.size < 0) {
+        return (
+          problem: 'invalid size or SHA-256 for ${asset.publicName}',
+          notes: null,
+          assets: null
+        );
+      }
+      if (FileSystemEntity.typeSync(asset.stagedPath, followLinks: false) !=
+          FileSystemEntityType.file) {
+        return (
+          problem: '${asset.publicName} is missing or not a regular file',
+          notes: null,
+          assets: null
+        );
+      }
+      try {
+        final bytes = File(asset.stagedPath).readAsBytesSync();
+        if (bytes.length != asset.size || Sha256.hex(bytes) != asset.sha256) {
+          return (
+            problem: '${asset.publicName} differs from its staged receipt',
+            notes: null,
+            assets: null
+          );
+        }
+      } on Object catch (error) {
+        return (
+          problem: '${asset.publicName} could not be read: $error',
+          notes: null,
+          assets: null
+        );
+      }
+    }
+    return (problem: null, notes: notes, assets: List.unmodifiable(ordered));
+  }
+
+  ({Inspection inspection, List<GithubReleaseAssetUpload> missing})
+      _inspectDraftSubset(
+    _Release draft, {
+    required String tag,
+    required String title,
+    required String body,
+    required List<GithubReleaseAssetUpload> expected,
+  }) {
+    if (!draft.isDraft) {
+      return (
+        inspection:
+            const Inspection.conflict('the candidate release is not private'),
+        missing: const [],
+      );
+    }
+    if (!draft.titleReadable || !draft.bodyReadable || draft.assets == null) {
+      return (
+        inspection: const Inspection.unknown(
+            'the private draft metadata or inventory is unreadable'),
+        missing: const [],
+      );
+    }
+    final differences = <String, String>{};
+    if (draft.tag != tag) {
+      differences['tag'] = 'published ${draft.tag}, expected $tag';
+    }
+    if (draft.title != title) {
+      differences['title'] = 'private draft title differs';
+    }
+    if (draft.body != body) differences['body'] = 'private draft body differs';
+    final expectedNames = expected.map((asset) => asset.publicName).toSet();
+    final extra = draft.assets!.difference(expectedNames);
+    for (final name in extra) {
+      differences[name] = 'not in the frozen release inventory';
+    }
+    final missing = [
+      for (final asset in expected)
+        if (!draft.assets!.contains(asset.publicName)) asset,
+    ];
+    if (differences.isNotEmpty) {
+      return (
+        inspection: Inspection.conflict(
+            'private draft differs from the frozen release',
+            evidence: differences),
+        missing: missing,
+      );
+    }
+    final present = expected
+        .where((asset) => draft.assets!.contains(asset.publicName))
+        .toList();
+    final bytes = _inspectDraftAssets(
+      draft,
+      {for (final asset in present) asset.publicName: asset.sha256},
+      {for (final asset in present) asset.publicName: asset.size},
+    );
+    return (inspection: bytes, missing: missing);
   }
 
   Future<_Lookup> _viewById(String id) async {
@@ -1238,11 +1322,6 @@ class GithubRelease {
     }
   }
 
-  static String _fileName(String path) {
-    final cut = path.lastIndexOf('/');
-    return cut < 0 ? path : path.substring(cut + 1);
-  }
-
   static String? _releaseIdIn(String response) {
     try {
       final decoded = jsonDecode(response);
@@ -1262,6 +1341,14 @@ class GithubRelease {
     return tag.substring(prefix.length, end);
   }
 }
+
+bool _isPublicAssetName(String name) =>
+    name.isNotEmpty &&
+    name != '.' &&
+    name != '..' &&
+    !name.contains('/') &&
+    !name.contains(r'\') &&
+    !name.codeUnits.any((unit) => unit < 0x20 || unit == 0x7f);
 
 class _Release {
   _Release({
@@ -1304,6 +1391,21 @@ class _ReleaseAsset {
   final String? state;
   final int? size;
   final String? digest;
+}
+
+/// One exact staged file and the independent filename GitHub presents.
+class GithubReleaseAssetUpload {
+  const GithubReleaseAssetUpload({
+    required this.publicName,
+    required this.stagedPath,
+    required this.size,
+    required this.sha256,
+  });
+
+  final String publicName;
+  final String stagedPath;
+  final int size;
+  final String sha256;
 }
 
 /// The immutable GitHub Release identity recorded by a completed stage.
@@ -1381,55 +1483,28 @@ class GithubHistoricalManifestExpectation {
   final String? title;
 }
 
-/// The result of reading one artifact through a manifest-bound release check.
-///
-/// [bytes] is non-null exactly when [inspection] is exact. The list is an
-/// immutable defensive copy, so a caller cannot mutate the verified value it
-/// was handed.
-class GithubManifestAssetRead {
-  const GithubManifestAssetRead._(this.inspection, this.bytes);
+/// An authenticated release manifest, withheld unless the whole observation
+/// is exact.
+class GithubManifestRead {
+  const GithubManifestRead._(this.inspection, this.manifest);
 
   final Inspection inspection;
-  final List<int>? bytes;
+  final ReleaseManifest? manifest;
 }
 
 class _ManifestObservation {
-  const _ManifestObservation._(this.inspection, this.verifiedBytes);
+  const _ManifestObservation._(this.inspection, this.manifest);
 
   const _ManifestObservation.failed(Inspection inspection)
-      : this._(inspection, const {});
+      : this._(inspection, null);
 
   _ManifestObservation.exact(
     Inspection inspection,
-    Map<String, List<int>> verifiedBytes,
-  ) : this._(
-          inspection,
-          Map.unmodifiable({
-            for (final entry in verifiedBytes.entries)
-              entry.key: List<int>.unmodifiable(entry.value),
-          }),
-        );
+    ReleaseManifest manifest,
+  ) : this._(inspection, manifest);
 
   final Inspection inspection;
-  final Map<String, List<int>> verifiedBytes;
-}
-
-class _AssetObservation {
-  const _AssetObservation._(this.inspection, this.verifiedBytes);
-
-  const _AssetObservation.failed(Inspection inspection)
-      : this._(inspection, const {});
-
-  _AssetObservation.exact(
-    Inspection inspection,
-    Map<String, List<int>> verifiedBytes,
-  ) : this._(
-          inspection,
-          Map.unmodifiable(verifiedBytes),
-        );
-
-  final Inspection inspection;
-  final Map<String, List<int>> verifiedBytes;
+  final ReleaseManifest? manifest;
 }
 
 class _ReleaseObservation {

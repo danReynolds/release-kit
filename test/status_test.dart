@@ -11,6 +11,7 @@ import 'package:release_kit/src/engine/diagnostic.dart';
 import 'package:release_kit/src/engine/git.dart';
 import 'package:release_kit/src/engine/inspect.dart';
 import 'package:release_kit/src/engine/registry.dart';
+import 'package:release_kit/src/engine/release_asset.dart';
 import 'package:release_kit/src/engine/release_stage.dart';
 import 'package:release_kit/src/engine/resolve.dart';
 import 'package:release_kit/src/engine/source_tree.dart';
@@ -24,7 +25,6 @@ import 'package:release_kit/src/engine/verdict.dart';
 import 'package:release_kit/src/engine/version.dart';
 import 'package:release_kit/src/output/output.dart';
 import 'package:release_kit/src/transforms/archive.dart';
-import 'package:release_kit/src/transforms/digest.dart';
 import 'package:test/test.dart';
 
 /// An origin that lists exactly the tags git holds locally.
@@ -385,11 +385,11 @@ MemorySourceTree tree({
     }, description: '/repo/keybay');
 
 const config = '''
-schema = 1
+schema = 2
 
 [release.core]
 path = "packages/keybay"
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]
 ''';
 
 Future<String> statusOf({
@@ -517,6 +517,35 @@ void main() {
 
     expect(tag['artifacts'], isEmpty);
     expect(run.text, isNot(contains(ReleaseAssets.manifest)));
+  });
+
+  test('non-Git status separates destination truth from source comparison',
+      () async {
+    final run = await statusRun(
+      withConfig: '''
+schema = 2
+
+[release.core]
+path = "packages/keybay"
+publish = ["pub.dev"]
+''',
+      source: tree(),
+      state: GitState.unbound('/repo'),
+      registry: FakeRegistry({
+        'keybay': ['0.2.0']
+      }),
+    );
+
+    final repository = run.report['repository'] as Map;
+    expect(repository['source_binding'], 'unbound');
+    expect(repository['source_comparison'], 'unavailable');
+    expect(repository.containsKey('head'), isFalse);
+    final unit = (run.report['units'] as List).single as Map;
+    final target = (unit['targets'] as List).single as Map;
+    expect(target['verdict'], 'exact');
+    expect(target['source_binding'], 'unbound');
+    expect(target['source_comparison'], 'unavailable');
+    expect(run.text, contains('unbound · comparison unavailable'));
   });
 
   test('names staging as the next command when local is ahead', () async {
@@ -684,11 +713,11 @@ void main() {
 
 void statusTargetContract() {
   const binaryConfig = '''
-schema = 1
+schema = 2
 
 [release.cli]
 path = "packages/keybay"
-publish = ["pub.dev", "github-release"]
+publish = ["git-tag", "pub.dev", "github-release"]
 binary_platforms = ["macos-arm64"]
 ''';
   final binaryTree = MemorySourceTree({
@@ -897,12 +926,12 @@ executables:
         reason: 'settled facts wrap; only transient progress may truncate');
   });
 
-  test('Homebrew refers to its GitHub-owned formula without duplicating it',
+  test('Homebrew owns its formula without adding it to GitHub inventory',
       () async {
     final run = await statusRun(
       withConfig: binaryConfig.replaceFirst(
-        'publish = ["pub.dev", "github-release"]',
-        'publish = ["pub.dev", "github-release", "homebrew"]',
+        'publish = ["git-tag", "pub.dev", "github-release"]',
+        'publish = ["git-tag", "pub.dev", "github-release", "homebrew"]',
       ),
       source: binaryTree,
       state: git(),
@@ -934,10 +963,14 @@ executables:
     expect(
       (github['artifacts'] as List)
           .map((artifact) => (artifact as Map)['name']),
+      isNot(contains('keybay.rb')),
+    );
+    expect(
+      (homebrew['artifacts'] as List)
+          .map((artifact) => (artifact as Map)['name']),
       contains('keybay.rb'),
     );
-    expect(homebrew['artifacts'], isEmpty);
-    expect(homebrew['uses'], 'keybay.rb from GitHub Release');
+    expect(homebrew['uses'], contains('keybay.rb'));
     expect(tag['artifacts'], isEmpty);
     expect(
       tag['uses'],
@@ -1191,7 +1224,7 @@ executables:
     // The report collapses a set that agrees; the document keeps every
     // name, which is where a caller reading filenames should be reading
     // them anyway.
-    final expected = ReleaseAssets.expectedFor(made!.unit.binaryProject);
+    final expected = ReleaseAssets.expectedForUnit(made!.unit);
     expect(
       run.text,
       matches(RegExp('${expected.length} artifacts')),
@@ -1545,7 +1578,7 @@ ReleaseStage _completedStage({
       identity: identity,
     ),
   );
-  final public = ReleaseAssets.expectedFor(unit.binaryProject).toSet()
+  final public = ReleaseAssets.expectedForUnit(unit).toSet()
     ..remove(ReleaseAssets.manifest);
   final sourceArtifacts = stage.materializeSource();
   final sourceStep = StageStep(
@@ -1559,7 +1592,7 @@ ReleaseStage _completedStage({
     evidence: {'commit': identity.headCommit, 'tree': identity.headTree},
   );
   final steps = <StageStep>[sourceStep];
-  final project = unit.binaryProject;
+  final project = unit.binaryProject!;
   final executable = project.executable!;
   final archives = <StageArtifact>[];
   for (final platform in project.binaryPlatforms) {
@@ -1673,25 +1706,6 @@ ReleaseStage _completedStage({
       },
     ));
   }
-  stage.directory.writeBytesAtomically(
-    ReleaseAssets.checksums,
-    utf8.encode(Checksums.render({
-      for (final archive in archives)
-        archive.path:
-            File(stage.directory.resolve(archive.path)).readAsBytesSync(),
-    })),
-  );
-  steps.add(StageStep(
-    name: 'checksums',
-    inputs: [for (final archive in archives) StageInput.artifact(archive)],
-    outputs: [
-      StageArtifact.capture(
-        stage: stage.directory,
-        path: ReleaseAssets.checksums,
-        type: 'checksums',
-      ),
-    ],
-  ));
   final formula = ReleaseAssets.formulaName(executable);
   if (public.contains(formula)) {
     stage.directory.writeBytesAtomically(formula, utf8.encode('formula'));
@@ -1708,9 +1722,14 @@ ReleaseStage _completedStage({
     ));
   }
   stage.writeProgress(steps);
-  stage.finalize(publicArtifacts: public);
+  stage.finalize(releaseAssets: _fixtureReleaseAssets(public));
   return stage;
 }
+
+List<ReleaseAssetSpec> _fixtureReleaseAssets(Iterable<String> paths) => [
+      for (final path in paths)
+        ReleaseAssetSpec(stagedPath: path, publicName: path),
+    ];
 
 // Regressions from the phase 2-3 review.
 void _reviewFixes() {
@@ -1846,15 +1865,17 @@ void statusReviewRegressions() {
       'unit that must go first', () async {
     final run = await statusRun(
       withConfig: '''
-schema = 1
+schema = 2
 
 [release.core]
+tag = "keybay-v{version}"
 path = "packages/keybay"
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]
 
 [release.cli]
+tag = "keybay_cli-v{version}"
 path = "packages/cli"
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]
 ''',
       source: MemorySourceTree({
         'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
@@ -1887,11 +1908,11 @@ dependencies:
       () async {
     final run = await statusRun(
       withConfig: '''
-schema = 1
+schema = 2
 
 [release.cli]
 path = "packages/keybay"
-publish = ["pub.dev", "github-release"]
+publish = ["git-tag", "pub.dev", "github-release"]
 binary_platforms = ["macos-arm64"]
 ''',
       source: MemorySourceTree({
@@ -1931,7 +1952,7 @@ executables:
     ];
     expect(
       steps.map((s) => s['id']),
-      contains('cli/build/macos-arm64'),
+      contains('cli/build/keybay/macos-arm64'),
       reason: 'the document may carry more than the terminal shows — a '
           'caller keying on step ids wants the whole checklist',
     );

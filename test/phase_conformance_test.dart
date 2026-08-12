@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'package:release_kit/src/builds/capability.dart';
 import 'package:release_kit/src/commands/release.dart';
 import 'package:release_kit/src/destinations/pub_dev.dart';
+import 'package:release_kit/src/engine/assets.dart';
 import 'package:release_kit/src/engine/compare.dart';
 import 'package:release_kit/src/engine/config.dart';
 import 'package:release_kit/src/engine/diagnostic.dart';
@@ -579,11 +580,11 @@ void main() {
       final parsed = ReleaseConfig.parse(
           config ??
               '''
-schema = 1
+schema = 2
 
 [release.core]
 path = "packages/keybay"
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]
 ''',
           'release.toml',
           diagnostics)!;
@@ -819,11 +820,11 @@ publish = ["pub.dev"]
         archives: {},
         tags: {},
         config: '''
-schema = 1
+schema = 2
 
 [release.core]
 path = "dart/packages/keybay"
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]
 ''',
         sourceFiles: {
           'dart/pubspec.yaml': 'name: dart_workspace\n'
@@ -1036,8 +1037,11 @@ publish = ["pub.dev"]
       final run = repo(['init']);
 
       expect(run.code, 0, reason: run.all);
-      expect(run.all, contains('2 releasable packages'));
-      expect(run.all, contains('example_workspace is a workspace root'));
+      expect(run.all, contains('2 selected units'));
+      expect(
+        run.all,
+        contains('example_workspace: workspace root — select its packages'),
+      );
       expect(run.all, contains('publish = ["pub.dev"]'));
       expect(
         run.all,
@@ -1189,7 +1193,6 @@ publish = ["pub.dev"]
     List<String>? certTeams,
     bool keychainReadable = true,
     String? previousTag,
-    bool declaresCodeId = true,
     bool publishedNamesTeam = true,
     bool publishStaged = false,
     bool baselineChangesBeforeConsent = false,
@@ -1200,13 +1203,12 @@ publish = ["pub.dev"]
     final buffer = StringBuffer();
     final diagnostics = Diagnostics();
     final config = ReleaseConfig.parse('''
-schema = 1
+schema = 2
 
 [release.cli]
 path = "packages/tool"
-publish = ["github-release"${homebrew ? ', "homebrew"' : ''}]
+publish = ["git-tag", "github-release"${homebrew ? ', "homebrew"' : ''}]
 binary_platforms = [${platforms.map((p) => '"$p"').join(', ')}]
-${declaresCodeId ? 'code_id = "io.github.example.tool"' : ''}
 ''', 'release.toml', diagnostics)!;
     final tree = MemorySourceTree({
       'packages/tool/pubspec.yaml': '''
@@ -1245,6 +1247,7 @@ executables:
           return ReleaseStage(
             unit: unit,
             source: tree,
+            repository: git.originUrl,
             directory: StageDirectory(
               repositoryRoot: root.path,
               identity: StageIdentity.forPlan(
@@ -1259,8 +1262,6 @@ executables:
             ),
           );
         });
-    final work = stageFor(resolution.unit('cli')!).directory.path;
-
     const releaseTagObject = '4444444444444444444444444444444444444444';
     final pushed = <String>{...remoteTags};
     final uploaded = <String>{};
@@ -1269,15 +1270,25 @@ executables:
     String? notesAtCreate;
     List<int>? publishedFormula;
     var publishedIdentityReads = 0;
+    File stagedPublicAsset(String name) {
+      final stage = stageFor(resolution.unit('cli')!);
+      final artifact = name == ReleaseAssets.manifest
+          ? stage.requireReceipt().artifacts.singleWhere(
+                (item) => item.path == ReleaseAssets.manifest,
+              )
+          : stage.releaseAssets()[name]!;
+      return File(stage.directory.resolve(artifact.path));
+    }
+
     List<Map<String, Object?>> uploadedAssets() => [
           for (final (index, name) in uploaded.indexed)
             {
               'id': 100 + index,
               'name': name,
               'state': 'uploaded',
-              'size': File('$work/$name').lengthSync(),
-              'digest':
-                  'sha256:${Sha256.hex(File('$work/$name').readAsBytesSync())}',
+              'size': stagedPublicAsset(name).lengthSync(),
+              'digest': 'sha256:'
+                  '${Sha256.hex(stagedPublicAsset(name).readAsBytesSync())}',
             },
         ];
     final signingTeams = certTeams ??
@@ -1323,7 +1334,7 @@ executables:
           final destination = words[words.indexOf('--output') + 1];
           File(destination)
             ..parent.createSync(recursive: true)
-            ..writeAsBytesSync(File('$work/$name').readAsBytesSync());
+            ..writeAsBytesSync(stagedPublicAsset(name).readAsBytesSync());
         }
         if (key.startsWith('dart compile exe')) {
           final out = key.split(' -o ').last.split(' ').first;
@@ -1376,7 +1387,7 @@ executables:
           );
         }
         if (key == 'git cat-file tag $releaseTagObject') {
-          final manifest = File('$work/release-manifest.json');
+          final manifest = stagedPublicAsset(ReleaseAssets.manifest);
           final digest = Sha256.hex(manifest.readAsBytesSync());
           return ToolResult(
             exitCode: 0,
@@ -1536,7 +1547,7 @@ executables:
                     'tag_name': 'v1.0.0',
                     'draft': !released,
                     'id': 7,
-                    'name': 'tool 1.0.0',
+                    'name': 'cli 1.0.0',
                     'body': notesAtCreate,
                     'assets': uploadedAssets(),
                   })
@@ -1573,7 +1584,7 @@ executables:
                   exitCode: 0,
                   stdout: jsonEncode({
                     'tag_name': 'v1.0.0',
-                    'name': 'tool 1.0.0',
+                    'name': 'cli 1.0.0',
                     'body': notesAtCreate,
                     'draft': false,
                     'id': 7,
@@ -1726,7 +1737,7 @@ executables:
             .cast<Map<String, Object?>>()
             .expand((unit) => (unit['steps'] as List).cast<Map>())
             .map((step) => step['summary'])),
-        contains('publish 3 assets to the v1.0.0 release'),
+        contains('publish 2 assets to the v1.0.0 release'),
       );
       expect(run.text, contains('released'));
     });
@@ -1895,18 +1906,10 @@ executables:
   ///
   /// This group was deleted as collateral when `--rehearse` was cut, and the
   /// commit that did it never said so. What it guards is the one seam
-  /// `engine/assets.dart` does *not* close: `expectedFor` unified the
-  /// expectation side, but the producer still gathers archives and notary
-  /// evidence in `gatherAssets` and splices the formula in by hand. So the
-  /// two can still disagree — and `GithubRelease.publish` verifies only
-  /// against what it just uploaded, never against the expected set. One name
-  /// out of step publishes green, and the *next* inspect returns
-  /// `Verdict.conflict` on a release that cannot be edited: permanently
-  /// unfixable, against a release rk made itself.
-  ///
-  /// Mutation-proven, both directions: dropping the formula from the upload
-  /// list, and replacing the body with anything but the changelog entry,
-  /// each pass the whole suite without this group.
+  /// `engine/assets.dart` closes: the producer and inspector consume one
+  /// derived GitHub inventory, while the formula is separately bound to its
+  /// tap through the manifest. The drive proves both destinations and the
+  /// changelog-derived body through the command layer.
   group('phase 7b — the destinations', () {
     test(
         'DONE WHEN, drive half: what the release publishes is exactly what '
@@ -1952,15 +1955,18 @@ executables:
             'expectedAssets derives — any difference is a conflict verdict '
             'on the next run, and a published release cannot be edited',
       );
-      // The formula is the name the producer splices in by hand, so it is
-      // the one most able to drift. Named to say so.
-      expect(run.expected, contains('tool.rb'));
+      expect(
+        run.expected,
+        isNot(contains('tool.rb')),
+        reason: 'the formula belongs only in its tap; the release manifest '
+            'binds its destination and digest',
+      );
       expect(
         ((run.json['units'] as List)
             .cast<Map<String, Object?>>()
             .expand((unit) => (unit['steps'] as List).cast<Map>())
             .map((step) => step['summary'])),
-        contains('publish 6 assets to the v1.0.0 release'),
+        contains('publish 4 assets to the v1.0.0 release'),
         reason: run.text,
       );
 
@@ -2016,7 +2022,7 @@ executables:
       // one place it is too late to matter.
       expect(
         run.text,
-        contains('macOS identity   io.github.example.tool'),
+        contains('macOS identity   tool'),
         reason: 'the identifier is what becomes permanent, and it is on its '
             'own line so a wrong one is seen rather than hunted for',
       );
@@ -2098,37 +2104,20 @@ executables:
       );
     });
 
-    test('nothing published and nothing declared is refused, not guessed',
+    test('an unpublished CLI uses its executable as signing identity',
         () async {
-      // The identifier used to fall back to the pub package name, chosen at
-      // the one moment that makes it permanent: macOS stores the designated
-      // requirement in the ACL of every Keychain item the program creates,
-      // so a wrong one is an auth dialog on every access, forever. Nothing
-      // in the system states it — not the keychain, not the pubspec, not the
-      // forge — so rk refuses and suggests instead of choosing.
       final run = await binaryDrive(
-        dryRun: false,
+        dryRun: true,
         label: '-nocodeid',
-        declaresCodeId: false,
       );
 
-      expect(run.code, ExitCodes.refused, reason: run.text);
-      expect(run.text, contains('RK-SIGN-009'));
-      expect((run.json['halt']! as Map)['kind'], 'beforeActing');
+      expect(run.code, ExitCodes.ok, reason: run.text);
       expect(
-        run.calls.any((c) => c.startsWith('git push origin')),
-        isFalse,
-        reason: 'refused before the tag is public',
+        run.text,
+        matches(RegExp(r'macOS code identifier\s+tool')),
+        reason: 'the producer owns the identity it can derive from its native '
+            'executable rather than requiring release.toml to restate it',
       );
-      expect(
-        run.calls.any((c) => c.startsWith('codesign --force')),
-        isFalse,
-        reason: 'and before anything is signed under a guessed name',
-      );
-      // The remedy offers the convention as text to read and edit. It is a
-      // suggestion, never a fallback — the rule reproduces rk's own declared
-      // identifier and misses keybay's deliberate `.cli` suffix.
-      expect(run.text, contains('code_id = "io.github.example.tool"'));
     });
 
     group('the keychain is read before anything acts, not midway', () {
@@ -2196,7 +2185,7 @@ executables:
         expect(run.text, contains('First release · permanent once published'));
         expect(
           run.text,
-          matches(RegExp(r'macOS code identifier\s+io\.github\.example\.tool')),
+          matches(RegExp(r'macOS code identifier\s+tool')),
           reason: 'a swap of the identifier and the team survived a weaker '
               'assertion that only looked for the value',
         );
@@ -2206,19 +2195,15 @@ executables:
         );
       });
 
-      test('a dry run still refuses when nothing states the program name',
+      test('a dry run derives the native program name before signing',
           () async {
-        // --stage signs for real, so it needs a real identifier. The
-        // refusal is gated on `willSign`, never on dryRun.
         final run = await binaryDrive(
           dryRun: true,
           label: '-drynoid',
-          declaresCodeId: false,
         );
 
-        expect(run.code, ExitCodes.refused, reason: run.text);
-        expect(run.text, contains('RK-SIGN-009'));
-        expect(run.calls.any((c) => c.startsWith('codesign --force')), isFalse);
+        expect(run.code, ExitCodes.ok, reason: run.text);
+        expect(run.text, matches(RegExp(r'macOS code identifier\s+tool')));
       });
 
       test('a certificate for the wrong team refuses before the publish',

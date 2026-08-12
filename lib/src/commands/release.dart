@@ -9,6 +9,8 @@ import '../engine/git.dart';
 import '../output/output.dart';
 import '../engine/inspect.dart';
 import '../engine/producers.dart';
+import '../engine/publish_target.dart';
+import '../engine/public_release_gate.dart';
 import '../engine/resolve.dart';
 import '../engine/release_stage.dart';
 import '../engine/source_tree.dart';
@@ -50,6 +52,7 @@ class ReleaseCommand {
     ReleaseStage Function(ResolvedUnit unit)? stageFor,
     ReleaseStage Function(ResolvedUnit unit, GitState git)? refreshStage,
     GitState Function()? refreshGit,
+    Map<String, String> Function()? refreshEnvironment,
     Future<void> Function(Duration)? wait,
     HostCapabilities? capabilities,
   })  : _wait = wait ?? _sleep,
@@ -68,6 +71,8 @@ class ReleaseCommand {
                       inspector.targets.stageContractResolver(resolution),
                 ).call(unit)),
         _refreshGit = refreshGit ?? (() => git),
+        _refreshEnvironment = refreshEnvironment ??
+            (() => Map<String, String>.of(Platform.environment)),
         _capabilities = capabilities;
 
   static Future<void> _sleep(Duration duration) =>
@@ -111,6 +116,7 @@ class ReleaseCommand {
   final ReleaseStage Function(ResolvedUnit unit) _stageFor;
   final ReleaseStage Function(ResolvedUnit unit, GitState git) _refreshStage;
   final GitState Function() _refreshGit;
+  final Map<String, String> Function() _refreshEnvironment;
   final Map<String, BinaryChain> _chains = {};
 
   /// The exact version a noninteractive caller pre-authorized
@@ -166,14 +172,30 @@ class ReleaseCommand {
       name: tree.description.split('/').last,
       branch: git.branch,
       uncommitted: git.uncommitted.length,
-      head: git.head,
+      head: git.isBound ? git.head : null,
       remote: git.originUrl,
+      sourceBinding: git.isBound ? 'gitCommit' : 'unbound',
+      sourceComparison: git.isBound ? 'exact' : 'unavailable',
     );
     output.report.unit(
       name: unit.name,
       version: unit.version.canonical,
       tag: unit.tag,
     );
+
+    if (stageOnly && !git.isBound) {
+      output.problem(
+        Diagnostic(
+          code: 'RK-SRC-002',
+          message: 'an unbound stage cannot be authorized by a later run',
+          remedy: 'without Git, build, authorize, and begin publication in '
+              'one invocation: rk release ${unit.name}',
+        ),
+        unit: unit.name,
+      );
+      output.halt(HaltKind.beforeActing);
+      return ExitCodes.refused;
+    }
 
     if (preauthorized != null && preauthorized != unit.version.canonical) {
       output.problem(
@@ -212,6 +234,7 @@ class ReleaseCommand {
     final targetByStep = {
       for (final target in targets) target.step.id: target,
     };
+    final endpointBaselines = <PublishTarget, String>{};
 
     final ReleaseStage stage;
     try {
@@ -265,10 +288,13 @@ class ReleaseCommand {
       final state = states[step.id]!;
       if (!Inspector.blocks(step, state)) return false;
       final target = targetByStep[step.id];
+      final mayNeedUnboundStage =
+          target?.step.target != PublishTarget.pubDev || !git.isBound;
       return !(stageInspection.reusable == false &&
           state.verdict == Verdict.unknown &&
           target != null &&
-          target.exactComparisonNeedsStage);
+          target.exactComparisonNeedsStage &&
+          mayNeedUnboundStage);
     }).firstOrNull;
     if (initialBlock != null) {
       _haltForState(initialBlock, states[initialBlock.id]!);
@@ -326,9 +352,9 @@ class ReleaseCommand {
     }
 
     if (!stageOnly) {
-      // Do not acquire or refresh a native publishing session when the stage
-      // facts already prove this run must stop. Stage-only mode keeps its
-      // explicit ability to replace reviewed-but-invalid bytes.
+      // Stage-only mode keeps its explicit ability to replace
+      // reviewed-but-invalid bytes. A real release refuses that ambiguity
+      // before any local preparation.
       final stageProblem = _stagePreparationProblem(
         unit,
         stageInspection,
@@ -344,21 +370,29 @@ class ReleaseCommand {
         _showReleaseActions(targets, publicActions);
         return ExitCodes.refused;
       }
-      final preflight = TargetPreflightContext(
-        tools: tools,
-        output: output,
-        git: git,
-      );
-      final preflighted = <StepKind>{};
-      for (final target in targets) {
-        if (!states[target.step.id]!.isAbsent) continue;
-        final module = inspector.targets.moduleForTarget(target);
-        if (!preflighted.add(target.step.kind)) continue;
-        if (!await module.preflight(preflight, unit)) {
-          _showReleaseActions(targets, publicActions);
-          return ExitCodes.refused;
-        }
+    }
+
+    // Safe ambient readiness applies to stage-only too: it may not acquire a
+    // credential, but it should not spend substantial producer work on bytes
+    // the current native endpoint can never publish as configured.
+    final preflight = TargetReadinessContext(
+      tools: tools,
+      output: output,
+      git: git,
+      environment: _refreshEnvironment(),
+    );
+    final outstanding =
+        targets.where((target) => !states[target.step.id]!.isExact).toList();
+    for (final targetKind in outstanding.map((item) => item.target).toSet()) {
+      final grouped =
+          outstanding.where((item) => item.target == targetKind).toList();
+      final module = inspector.targets.moduleForTarget(grouped.first);
+      if (!await module.preflight(preflight, unit)) {
+        if (!stageOnly) _showReleaseActions(targets, publicActions);
+        return ExitCodes.refused;
       }
+      endpointBaselines[targetKind] =
+          module.effectiveEndpoint(preflight, unit, grouped);
     }
 
     // `›` is version movement. The groups below already say where these
@@ -420,8 +454,7 @@ class ReleaseCommand {
       );
       _sayStageClaims(
         prepared.claims,
-        prepared.firstCertificate,
-        prepared.codeId,
+        prepared.signing,
         settled: false,
       );
       // The next command is data for whoever is driving; the operator who
@@ -432,41 +465,16 @@ class ReleaseCommand {
 
     // Public reality is refreshed after staging. Unknown and conflict never
     // grant permission; exact work is skipped; only absent work may act.
-    for (final step in publicSteps) {
-      states[step.id] = await inspector.inspect(step, unit);
-      publicActions[step.id] = states[step.id]!.isExact
-          ? _ReleaseAction.alreadyExact
-          : _ReleaseAction.notAttempted;
-      output.step(
-        step,
-        verdict: states[step.id]!.verdict,
-        detail: states[step.id]!.detail,
-        evidence: states[step.id]!.evidence,
-        action: publicActions[step.id]!.wire,
-        show: false,
-      );
-      if (states[step.id]!.isExact || states[step.id]!.isAbsent) continue;
-      _haltForState(step, states[step.id]!);
-      _showReleaseActions(targets, publicActions);
-      return ExitCodes.refused;
-    }
-
-    final refreshedVersions = Diagnostics();
-    await inspector.releaseMonotonicity(
-      unit,
-      targets,
-      refreshedVersions,
-      refreshRegistry: true,
+    final gate = PublicReleaseGate(inspector);
+    var remaining = await _refreshPublicGate(
+      gate: gate,
+      unit: unit,
+      publicSteps: publicSteps,
+      targets: targets,
+      states: states,
+      actions: publicActions,
     );
-    if (refreshedVersions.isNotEmpty) {
-      output.halt(HaltKind.beforeActing);
-      output.problems(refreshedVersions.found);
-      _showReleaseActions(targets, publicActions);
-      return ExitCodes.refused;
-    }
-
-    var remaining =
-        publicSteps.where((step) => states[step.id]!.isAbsent).toList();
+    if (remaining == null) return ExitCodes.refused;
     if (remaining.isEmpty) {
       output.blank();
       output.line(
@@ -477,25 +485,26 @@ class ReleaseCommand {
       return ExitCodes.ok;
     }
 
-    if (checklist.steps.any((step) =>
-        step.kind == StepKind.build && step.platform!.startsWith('macos-'))) {
-      final refreshedBaseline = await _signingBaseline(unit);
-      if (!refreshedBaseline.ok) {
-        _showReleaseActions(targets, publicActions);
-        return ExitCodes.refused;
-      }
-      if (refreshedBaseline.requirement != prepared.publishedRequirement) {
-        output.problem(Diagnostic(
-          code: 'RK-SIGN-013',
-          message: 'the published signing identity changed after staging',
-          remedy: 'The reviewed signature was built against a different '
-              'public baseline. Rebuild it explicitly: '
-              'rk release ${unit.name} --stage.',
-        ));
-        output.halt(HaltKind.beforeActing);
-        _showReleaseActions(targets, publicActions);
-        return ExitCodes.refused;
-      }
+    final macosProject = _macosProject(unit);
+    final refreshedBaseline = await _signingBaseline(unit, macosProject);
+    if (!refreshedBaseline.ok) {
+      _showReleaseActions(targets, publicActions);
+      return ExitCodes.refused;
+    }
+    if (macosProject != null &&
+        (prepared.signing == null ||
+            refreshedBaseline.requirement !=
+                prepared.signing!.publishedRequirement)) {
+      output.problem(Diagnostic(
+        code: 'RK-SIGN-013',
+        message: 'the published signing identity changed after staging',
+        remedy: 'The reviewed signature was built against a different '
+            'public baseline. Rebuild it explicitly: '
+            'rk release ${unit.name} --stage.',
+      ));
+      output.halt(HaltKind.beforeActing);
+      _showReleaseActions(targets, publicActions);
+      return ExitCodes.refused;
     }
 
     if (!_releaseContextStillValid(
@@ -525,38 +534,15 @@ class ReleaseCommand {
     // after every potentially slow signing/context check. The per-target loop
     // still reads again after consent; this snapshot exists so the operator
     // never authorizes a stale remaining set.
-    for (final step in publicSteps) {
-      states[step.id] = await inspector.inspect(step, unit);
-      publicActions[step.id] = states[step.id]!.isExact
-          ? _ReleaseAction.alreadyExact
-          : _ReleaseAction.notAttempted;
-      output.step(
-        step,
-        verdict: states[step.id]!.verdict,
-        detail: states[step.id]!.detail,
-        evidence: states[step.id]!.evidence,
-        action: publicActions[step.id]!.wire,
-        show: false,
-      );
-      if (states[step.id]!.isExact || states[step.id]!.isAbsent) continue;
-      _haltForState(step, states[step.id]!);
-      _showReleaseActions(targets, publicActions);
-      return ExitCodes.refused;
-    }
-    final authorizationVersions = Diagnostics();
-    await inspector.releaseMonotonicity(
-      unit,
-      targets,
-      authorizationVersions,
-      refreshRegistry: true,
+    remaining = await _refreshPublicGate(
+      gate: gate,
+      unit: unit,
+      publicSteps: publicSteps,
+      targets: targets,
+      states: states,
+      actions: publicActions,
     );
-    if (authorizationVersions.isNotEmpty) {
-      output.halt(HaltKind.beforeActing);
-      output.problems(authorizationVersions.found);
-      _showReleaseActions(targets, publicActions);
-      return ExitCodes.refused;
-    }
-    remaining = publicSteps.where((step) => states[step.id]!.isAbsent).toList();
+    if (remaining == null) return ExitCodes.refused;
     if (remaining.isEmpty) {
       output.blank();
       output.line(
@@ -567,11 +553,53 @@ class ReleaseCommand {
       return ExitCodes.ok;
     }
 
+    // Native sessions are deliberately late: package validation, builds,
+    // signing, notarization, bundle assembly, and exact remote reads have all
+    // completed. The operator is not asked to refresh credentials for bytes
+    // rk may later refuse. Each adapter's effective endpoint is frozen before
+    // staging and re-read after acquisition so ambient config cannot redirect
+    // the authorized publication.
+    final remainingTargets = [
+      for (final step in remaining) targetByStep[step.id]!,
+    ];
+    for (final targetKind
+        in remainingTargets.map((item) => item.target).toSet()) {
+      final grouped =
+          remainingTargets.where((item) => item.target == targetKind).toList();
+      final module = inspector.targets.moduleForTarget(grouped.first);
+      final before = TargetReadinessContext(
+        tools: tools,
+        output: output,
+        git: _refreshGit(),
+        environment: _refreshEnvironment(),
+      );
+      final baseline = endpointBaselines[targetKind];
+      final beforeEndpoint = module.effectiveEndpoint(before, unit, grouped);
+      if (baseline == null || beforeEndpoint != baseline) {
+        _destinationChanged(targetKind, targets, publicActions);
+        return ExitCodes.refused;
+      }
+      if (!await module.acquireSession(before, unit, grouped)) {
+        _showReleaseActions(targets, publicActions);
+        return ExitCodes.refused;
+      }
+      final after = TargetReadinessContext(
+        tools: tools,
+        output: output,
+        git: _refreshGit(),
+        environment: _refreshEnvironment(),
+      );
+      final effective = module.effectiveEndpoint(after, unit, grouped);
+      if (effective != baseline) {
+        _destinationChanged(targetKind, targets, publicActions);
+        return ExitCodes.refused;
+      }
+    }
+
     if (!await _authorize(
       unit,
       [for (final step in remaining) targetByStep[step.id]!],
-      firstCertificate: prepared.firstCertificate,
-      codeId: prepared.codeId,
+      signing: prepared.signing,
       claims: prepared.claims,
     )) {
       _showReleaseActions(targets, publicActions);
@@ -828,6 +856,24 @@ class ReleaseCommand {
     return ExitCodes.ok;
   }
 
+  void _destinationChanged(
+    PublishTarget target,
+    List<TargetExpectation> targets,
+    Map<String, _ReleaseAction> actions,
+  ) {
+    output.problem(Diagnostic(
+      code: 'RK-DEST-001',
+      message: '${target.configName} changed destination while preparing '
+          'publication',
+      remedy: 'no public target changed. Restore the repository or native '
+          'publisher configuration used before staging, then re-run. rk does '
+          'not print destination values here because native coordinates may '
+          'contain credentials.',
+    ));
+    output.halt(HaltKind.beforeActing);
+    _showReleaseActions(targets, actions);
+  }
+
   Future<Inspection> _observeForRelease(
     Step step,
     ResolvedUnit unit,
@@ -844,6 +890,55 @@ class ReleaseCommand {
       );
     }
     return inspector.inspect(step, unit);
+  }
+
+  /// Applies one engine-owned public snapshot to the command report.
+  ///
+  /// Returning null means the gate refused. An empty list means every target
+  /// is already exact. Keeping that distinction here lets both temporal
+  /// checkpoints share one presentation without hiding when they occur.
+  Future<List<Step>?> _refreshPublicGate({
+    required PublicReleaseGate gate,
+    required ResolvedUnit unit,
+    required List<Step> publicSteps,
+    required List<TargetExpectation> targets,
+    required Map<String, Inspection> states,
+    required Map<String, _ReleaseAction> actions,
+  }) async {
+    final snapshot = await gate.refresh(
+      unit: unit,
+      steps: publicSteps,
+      targets: targets,
+    );
+    for (final step in publicSteps) {
+      final state = snapshot.states[step.id]!;
+      states[step.id] = state;
+      actions[step.id] = state.isExact
+          ? _ReleaseAction.alreadyExact
+          : _ReleaseAction.notAttempted;
+      output.step(
+        step,
+        verdict: state.verdict,
+        detail: state.detail,
+        evidence: state.evidence,
+        action: actions[step.id]!.wire,
+        show: false,
+      );
+    }
+
+    final blocked = snapshot.blocked;
+    if (blocked != null) {
+      _haltForState(blocked, snapshot.states[blocked.id]!);
+      _showReleaseActions(targets, actions);
+      return null;
+    }
+    if (snapshot.monotonicityProblems.isNotEmpty) {
+      output.halt(HaltKind.beforeActing);
+      output.problems(snapshot.monotonicityProblems);
+      _showReleaseActions(targets, actions);
+      return null;
+    }
+    return snapshot.remaining;
   }
 
   void _reportTargetFailure(Step step, TargetFailure failure) {
@@ -943,29 +1038,38 @@ class ReleaseCommand {
       return false;
     }
 
-    if (current.head != git.head) {
+    if (current.isBound != git.isBound) {
+      drift.add('the source binding changed');
+    } else if (git.isBound && current.head != git.head) {
       drift.add(
           'HEAD is ${current.shortHead}; staged HEAD was ${git.shortHead}');
     }
-    if (current.headTree != git.headTree) {
+    if (git.isBound && current.headTree != git.headTree) {
       drift.add('the HEAD tree changed');
     }
-    if (!current.isClean) {
+    if (git.isBound && !current.isClean) {
       final detail = current.worktreeStatusError ??
           (current.uncommitted.isEmpty
               ? 'the worktree is not clean'
               : 'uncommitted: ${current.uncommitted.join(', ')}');
       drift.add(detail);
     }
-    if (!current.headIsPushed) {
+    if (unit.publish.contains(PublishTarget.gitTag) && !current.headIsPushed) {
       drift.add('HEAD is no longer present on a remote branch');
     }
-    if (current.originUrl != git.originUrl) {
+    if (git.isBound && current.originUrl != git.originUrl) {
       drift.add('origin is ${current.originUrl ?? 'unreadable'}; staged origin '
           'was ${git.originUrl ?? 'unreadable'}');
     }
-    if (current.signingConfigured != git.signingConfigured) {
+    if (unit.publish.contains(PublishTarget.gitTag) &&
+        current.signingConfigured != git.signingConfigured) {
       drift.add('the Git tag-signing policy changed');
+    }
+    if (!git.isBound) {
+      final sourceProblem = stage.unboundSourceProblem();
+      if (sourceProblem != null) {
+        drift.add('the unbound source changed: $sourceProblem');
+      }
     }
 
     try {
@@ -1000,20 +1104,39 @@ class ReleaseCommand {
   ) async {
     final claims = await _firstClaims(unit, targets);
     if (inspected.reusable) {
-      final signing = inspected.receipt!.steps
-          .where((step) => step.name.startsWith('build:macos-'))
-          .firstOrNull
-          ?.evidence;
-      final signature = signing?['signature'];
-      final signatureMap = signature is Map ? signature : const {};
-      final firstIdentity = signatureMap['first_identity'] == true;
+      _ProjectSigningContext? signing;
+      for (final step in inspected.receipt!.steps.where(
+        (step) => isMacosBuildReceipt(step.name),
+      )) {
+        final signature = step.evidence['signature']! as Map;
+        final recovered = _ProjectSigningContext(
+          publishedRequirement: signature['published_requirement'] as String?,
+          firstIdentity: signature['first_identity']! as bool,
+          certificateName: signature['certificate']! as String,
+          certificateSha256: signature['certificate_sha256']! as String,
+          designatedRequirement: signature['designated_requirement'] as String?,
+          codeId: signature['code_id']! as String,
+        );
+        if (signing != null && !signing.sameRecordedIdentity(recovered)) {
+          output.problem(
+            Diagnostic(
+              code: 'RK-STAGE-003',
+              message: 'the completed stage records conflicting signing '
+                  'identities',
+              remedy: 'rebuild it explicitly: '
+                  'rk release ${unit.name} --stage',
+            ),
+            unit: unit.name,
+          );
+          output.halt(HaltKind.beforeActing);
+          return null;
+        }
+        signing = recovered;
+      }
       return _PreparedStage(
         claims: claims,
         receiptSteps: inspected.receipt!.steps,
-        publishedRequirement: signatureMap['published_requirement'] as String?,
-        firstCertificate:
-            firstIdentity ? signatureMap['certificate'] as String? : null,
-        codeId: signatureMap['code_id'] as String?,
+        signing: signing,
       );
     }
 
@@ -1111,39 +1234,34 @@ class ReleaseCommand {
       return null;
     }
 
-    String? publishedRequirement;
-    String? firstCertificate;
-    SigningIdentity? signingIdentity;
-    String? certificateSha256;
-    String? codeId;
-    if (checklist.steps.any((step) =>
-        step.kind == StepKind.build && step.platform!.startsWith('macos-'))) {
-      final baseline = await _signingBaseline(unit);
-      if (!baseline.ok) return null;
-      publishedRequirement = baseline.requirement;
-      if (publishedRequirement != null &&
-          !_declarationAgrees(unit, publishedRequirement)) {
-        return null;
-      }
+    _ProjectSigningContext? signing;
+    final macosProject = _macosProject(unit);
+    final baseline = await _signingBaseline(unit, macosProject);
+    if (!baseline.ok) return null;
+    if (macosProject != null) {
+      final publishedRequirement = baseline.requirement;
       final keychain = await _signingCertificate(unit, publishedRequirement);
       if (!keychain.ok) return null;
-      firstCertificate = keychain.firstCertificate;
-      signingIdentity = keychain.identity;
-      certificateSha256 = keychain.certificateSha256;
-      codeId = publishedRequirement == null
-          ? unit.codeId
-          : BinaryChain.identifierOf(publishedRequirement) ?? unit.codeId;
-      if (codeId == null) {
+      final codeId = publishedRequirement == null
+          ? macosProject.executable
+          : BinaryChain.identifierOf(publishedRequirement);
+      if (codeId == null || codeId.isEmpty) {
         output.problem(Diagnostic(
           code: 'RK-SIGN-009',
           message: 'no release states what this program is called',
-          remedy: 'Add to [release.${unit.name}]: code_id = '
-              '"${_conventionalCodeId(unit)}". The first signature makes '
-              'this identity permanent.',
+          remedy: 'declare one executable in the native project manifest',
         ));
         output.halt(HaltKind.beforeActing);
         return null;
       }
+      signing = _ProjectSigningContext(
+        publishedRequirement: publishedRequirement,
+        firstIdentity: publishedRequirement == null,
+        certificateName: keychain.identity!.name,
+        codeId: codeId,
+        identity: keychain.identity,
+        certificateSha256: keychain.certificateSha256,
+      );
     }
 
     final producerSteps = checklist.steps.where((step) {
@@ -1168,24 +1286,21 @@ class ReleaseCommand {
         act = await _actProducer(
           step,
           unit,
-          publishedRequirement,
-          codeId,
-          signingIdentity: signingIdentity,
-          certificateSha256: certificateSha256,
+          signing,
         );
       } on Object catch (error) {
-        activity.failed('did not complete');
+        activity.abandon();
         return _stageOperationFailed(step.summary, error);
       }
       if (!act.ok) {
-        activity.failed(act.problem ?? 'did not complete');
+        activity.abandon();
         if (!output.report.halted) output.halt(HaltKind.stoppedPartway);
         return null;
       }
-      // Without this the step recorded nothing on success: the document
-      // called a finished build `unknown`, and the spinner outlived the
-      // work it described by minutes.
-      activity.done(_phaseOf(step));
+      // Clears the spinner without writing a step: Report.step replaces by
+      // id, so recording here overwrote the evidence the producer had just
+      // put there.
+      activity.abandon();
       try {
         progress.add(
             _captureProducerStep(stage, unit, step, sourceStep, progress, act));
@@ -1200,17 +1315,15 @@ class ReleaseCommand {
     }
 
     try {
-      final publicArtifacts = {
-        for (final target in targets)
-          for (final artifact in target.artifacts)
-            if (artifact != ReleaseAssets.manifest) artifact,
-      };
       stage.finalize(
-        publicArtifacts: publicArtifacts,
+        releaseAssets: ReleaseAssets.bundleFor(unit),
         evidence: {
           'requested_mode': stageOnly ? 'stage' : 'one-shot',
-          'source_commit': stage.directory.identity.headCommit,
-          'source_tree': stage.directory.identity.headTree,
+          if (stage.directory.identity.isGitBound)
+            'source_commit': stage.directory.identity.headCommit,
+          if (stage.directory.identity.isGitBound)
+            'source_tree': stage.directory.identity.headTree,
+          if (!stage.directory.identity.isGitBound) 'source_binding': 'unbound',
         },
       );
     } on Object catch (error) {
@@ -1234,9 +1347,7 @@ class ReleaseCommand {
     return _PreparedStage(
       claims: claims,
       receiptSteps: List<StageStep>.unmodifiable(progress),
-      publishedRequirement: publishedRequirement,
-      firstCertificate: firstCertificate,
-      codeId: codeId,
+      signing: signing,
     );
   }
 
@@ -1286,15 +1397,19 @@ class ReleaseCommand {
       StageStep(
         name: 'source-snapshot',
         inputs: [
-          StageInput.commit(stage.directory.identity),
-          StageInput.tree(stage.directory.identity),
+          if (stage.directory.identity.isGitBound)
+            StageInput.commit(stage.directory.identity),
+          if (stage.directory.identity.isGitBound)
+            StageInput.tree(stage.directory.identity),
           StageInput.plan(stage.directory.identity),
         ],
         outputs: sourceArtifacts,
-        evidence: {
-          'commit': stage.directory.identity.headCommit,
-          'tree': stage.directory.identity.headTree,
-        },
+        evidence: stage.directory.identity.isGitBound
+            ? {
+                'commit': stage.directory.identity.headCommit,
+                'tree': stage.directory.identity.headTree,
+              }
+            : const {'source_binding': 'unbound'},
       );
 
   void _persistStageProgress(
@@ -1459,8 +1574,10 @@ class ReleaseCommand {
   void _validate(ResolvedUnit unit, Diagnostics problems) {
     final uncommitted = git.uncommittedProblem();
     if (uncommitted != null) problems.report(uncommitted);
-    final unpushed = git.unpushedProblem();
-    if (unpushed != null) problems.report(unpushed);
+    if (unit.publish.contains(PublishTarget.gitTag)) {
+      final unpushed = git.unpushedProblem();
+      if (unpushed != null) problems.report(unpushed);
+    }
     for (final project in unit.projects) {
       Changelog.check(
         tree: tree,
@@ -1474,9 +1591,9 @@ class ReleaseCommand {
 
   /// Whether this machine can sign, resolved before anything acts.
   ///
-  /// Returns the certificate a *first* signed release will make permanent,
-  /// or null when there is a published identity to reproduce instead. The
-  /// The keychain used to be read only by `MacOsSigner.sign`, where its answer
+  /// Returns the exact certificate this project must sign with. Whether it is
+  /// a first identity is kept separately in the project signing context. The
+  /// keychain used to be read only by `MacOsSigner.sign`, where its answer
   /// arrived too late to make a useful preflight decision in the older
   /// publish-before-build pipeline. The current stage-before-public order
   /// keeps both this check and signing ahead of the tag, but the explicit
@@ -1484,7 +1601,6 @@ class ReleaseCommand {
   Future<
       ({
         bool ok,
-        String? firstCertificate,
         SigningIdentity? identity,
         String? certificateSha256,
       })> _signingCertificate(
@@ -1574,7 +1690,6 @@ class ReleaseCommand {
       output.halt(HaltKind.beforeActing);
       return (
         ok: false,
-        firstCertificate: null,
         identity: null,
         certificateSha256: null,
       );
@@ -1602,14 +1717,12 @@ class ReleaseCommand {
       output.halt(HaltKind.beforeActing);
       return (
         ok: false,
-        firstCertificate: null,
         identity: null,
         certificateSha256: null,
       );
     }
     return (
       ok: true,
-      firstCertificate: publishedRequirement == null ? selected.name : null,
       identity: selected,
       certificateSha256: fingerprint,
     );
@@ -1620,8 +1733,7 @@ class ReleaseCommand {
   Future<bool> _authorize(
     ResolvedUnit unit,
     List<TargetExpectation> remaining, {
-    required String? firstCertificate,
-    required String? codeId,
+    required _ProjectSigningContext? signing,
     required List<TargetClaim> claims,
   }) async {
     final permanent = remaining.where((target) {
@@ -1648,7 +1760,7 @@ class ReleaseCommand {
       disclosed.add(ground);
     }
 
-    disclosed.addAll(_sayClaims(claims, firstCertificate, codeId));
+    disclosed.addAll(_sayClaims(claims, signing));
 
     // Weaker assurance is accepted knowingly or not at all: a platform
     // nothing here can run ships with its smoke test missing, and that is
@@ -1715,31 +1827,27 @@ class ReleaseCommand {
   Future<LocalProducerOutcome> _actProducer(
     Step step,
     ResolvedUnit unit,
-    String? publishedRequirement,
-    String? codeId, {
-    SigningIdentity? signingIdentity,
-    String? certificateSha256,
-  }) async {
+    _ProjectSigningContext? signing,
+  ) async {
+    final project = unit.project(step.project!);
     switch (step.kind) {
       case StepKind.build:
         return _chain(unit).buildStep(
           step,
-          unit.binaryProject,
+          project,
           signing: step.platform!.startsWith('macos-')
               ? MacSigning(
-                  publishedRequirement: publishedRequirement,
-                  codeId: codeId!,
-                  identity: signingIdentity,
-                  certificateSha256: certificateSha256,
+                  publishedRequirement: signing!.publishedRequirement,
+                  codeId: signing.codeId,
+                  identity: signing.identity,
+                  certificateSha256: signing.certificateSha256,
                 )
               : null,
         );
       case StepKind.notarize:
-        return _chain(unit).notarizeStep(step, unit.binaryProject);
+        return _chain(unit).notarizeStep(step, project);
       case StepKind.archive:
-        return _chain(unit).archiveStep(step, unit.binaryProject);
-      case StepKind.checksums:
-        return _chain(unit).checksumsStep(step, unit.binaryProject);
+        return _chain(unit).archiveStep(step, project);
       default:
         throw StateError(
           'step ${step.kind.name} is not a local stage producer',
@@ -1766,12 +1874,14 @@ class ReleaseCommand {
   /// newest-to-oldest for the latest release that actually shipped a macOS
   /// binary. That binary is the only authority on what identity this program
   /// has. `none` — no earlier signed release — is a null requirement with
-  /// `ok`, and the sign step falls back to the unit's declared `code_id`.
+  /// `ok`, and the sign step uses the native executable name.
   /// `unreadable` refuses the whole run before anything public acts. Not
   /// knowing the baseline is not permission to ship a new one.
   Future<({bool ok, String? requirement})> _signingBaseline(
     ResolvedUnit unit,
+    ResolvedProject? project,
   ) async {
+    if (project == null) return (ok: true, requirement: null);
     final repository = git.originUrl;
     if (repository == null) return (ok: true, requirement: null);
 
@@ -1781,7 +1891,7 @@ class ReleaseCommand {
       workingDirectory: git.root,
     );
     final history = await published.priorReleaseTags(
-      tagPattern: unit.tagPattern,
+      tagPattern: unit.tagPattern!,
       before: unit.version,
     );
     if (!history.readable) {
@@ -1803,7 +1913,7 @@ class ReleaseCommand {
       final scratch = Directory.systemTemp.createTempSync('rk-identity-');
       final reading = await published.read(
         tag: tag,
-        executable: unit.binaryProject.executable!,
+        executable: project.executable!,
         into: '${scratch.path}/published-identity',
         expectedPublished: true,
       );
@@ -1816,14 +1926,15 @@ class ReleaseCommand {
         case IdentityAnswer.found:
           return (ok: true, requirement: reading.requirement);
         case IdentityAnswer.none:
-          // A public source-only release is not a signing baseline. Continue
-          // until the newest release that actually shipped a macOS binary.
+          // A release without this unit's macOS binary is not its signing
+          // baseline. Continue to the next older release.
           continue;
         case IdentityAnswer.unreadable:
           output.problem(
             Diagnostic(
               code: 'RK-SIGN-004',
-              message: 'the identity users already installed could not be read',
+              message: 'the identity users already installed could not be '
+                  'read',
               remedy: '${reading.why}\n'
                   'rk found a published signing candidate at $tag; until '
                   'that release can be read, a new signature cannot be '
@@ -1835,7 +1946,16 @@ class ReleaseCommand {
           return (ok: false, requirement: null);
       }
     }
-    return (ok: true, requirement: null); // first signed release
+    return (ok: true, requirement: null);
+  }
+
+  /// The unit's binary project when it ships a macOS build.
+  ResolvedProject? _macosProject(ResolvedUnit unit) {
+    final project = unit.binaryProject;
+    return project != null &&
+            project.binaryPlatforms.any((platform) => platform.startsWith('macos-'))
+        ? project
+        : null;
   }
 
   /// Every name this release takes for good, in one block.
@@ -1863,11 +1983,11 @@ class ReleaseCommand {
   /// version is typed.
   void _sayStageClaims(
     List<TargetClaim> claims,
-    String? firstCertificate,
-    String? codeId, {
+    _ProjectSigningContext? signing, {
     required bool settled,
   }) {
-    if (claims.isEmpty && firstCertificate == null) return;
+    final firstSigning = signing?.firstCertificate == null ? null : signing;
+    if (claims.isEmpty && firstSigning == null) return;
     output.blank();
     // Tense matters: at staging nothing public has happened yet, so saying
     // these *are* permanent would be false a moment before it is true.
@@ -1887,17 +2007,17 @@ class ReleaseCommand {
         noteTone: Tone.muted,
       );
     }
-    if (firstCertificate != null) {
+    if (firstSigning != null) {
       output.line(
         'macOS code identifier',
-        note: codeId,
+        note: firstSigning.codeId,
         depth: 2,
         labelWidth: 26,
         noteTone: Tone.muted,
       );
       output.line(
         'Apple team',
-        note: _shortCertificate(firstCertificate),
+        note: _shortCertificate(firstSigning.firstCertificate!),
         depth: 2,
         labelWidth: 26,
         noteTone: Tone.muted,
@@ -1907,20 +2027,20 @@ class ReleaseCommand {
 
   List<String> _sayClaims(
     List<TargetClaim> claims,
-    String? firstCertificate,
-    String? codeId,
+    _ProjectSigningContext? signing,
   ) {
+    final firstSigning = signing?.firstCertificate == null ? null : signing;
     final firstOf = <String>[
       for (final claim in claims)
         '${claim.registrar.padRight(17)}${claim.name}\n'
             '                 ${claim.consequence}',
-      if (firstCertificate != null)
-        'macOS identity   $codeId\n'
+      if (firstSigning != null)
+        '${'macOS identity'.padRight(17)}${firstSigning.codeId}\n'
             '                 permanent: sealed into the designated '
             'requirement, and into\n'
             '                 every Keychain item this program creates. '
             'Signed by\n'
-            '                 $firstCertificate',
+            '                 ${firstSigning.firstCertificate}',
     ];
     if (firstOf.isEmpty) return const [];
     output.blank();
@@ -1930,17 +2050,6 @@ class ReleaseCommand {
     }
     return ['this release claims, for the first time:', ...firstOf];
   }
-
-  /// What a producer is doing to the file it is making, while it does it.
-  static String _phaseOf(Step step) => switch (step.kind) {
-        StepKind.build => step.platform?.startsWith('macos-') == true
-            ? 'building and signing'
-            : 'building',
-        StepKind.notarize => 'notarizing',
-        StepKind.archive => 'archiving',
-        StepKind.checksums => 'checksumming',
-        _ => 'working',
-      };
 
   /// The settled stage, grouped by the target that will publish each file.
   ///
@@ -1991,54 +2100,6 @@ class ReleaseCommand {
   /// team it names.
   static String _shortCertificate(String certificate) =>
       certificate.replaceFirst('Developer ID Application: ', '');
-
-  /// A conventional identifier to *suggest*, never to use.
-  ///
-  /// `io.github.<owner>.<command>` is what a human usually picks for
-  /// GitHub-hosted software with no domain, and rk offers it in RK-SIGN-009's
-  /// remedy as text to read and edit. It is deliberately not a fallback: the
-  /// rule reproduces rk's own declared identifier exactly, and misses
-  /// keybay's — where the `.cli` suffix was chosen so one signed program in a
-  /// two-unit repository would not claim the bare product name. A rule that
-  /// reproduces the less considered choice and misses the more considered one
-  /// is a suggestion, not a derivation. Two real packages by one owner that
-  /// both declare `executables: cli` collide under it outright.
-  String _conventionalCodeId(ResolvedUnit unit) {
-    final executable = unit.binaryProject.executable ?? unit.name;
-    final owner = git.originUrl?.split('/').first.toLowerCase();
-    return owner == null || owner.isEmpty
-        ? executable
-        : 'io.github.$owner.$executable';
-  }
-
-  /// Whether the unit's declared `code_id` agrees with the published
-  /// requirement, recording the refusal when it does not.
-  ///
-  /// Derivation wins when nothing is declared; a declaration that
-  /// *contradicts* what users already installed is either a typo or an
-  /// identity migration, and both deserve a refusal naming the two values
-  /// rather than a signature mismatch after the tag is public.
-  bool _declarationAgrees(ResolvedUnit unit, String publishedRequirement) {
-    final declared = unit.codeId;
-    if (declared == null) return true;
-    final published = BinaryChain.identifierOf(publishedRequirement);
-    if (published == null || declared == published) return true;
-
-    output.problem(
-      Diagnostic(
-        code: 'RK-SIGN-005',
-        message: 'code_id disagrees with the release users already installed',
-        remedy: 'the identity is derived from the published binary; the '
-            'declaration only fills what no release states yet.\n'
-            'declared $declared, published $published\n'
-            'A deliberate identity change is a migration rk does not '
-            'automate, because it ships what macOS treats as a new program.',
-      ),
-      unit: unit.name,
-    );
-    output.halt(HaltKind.beforeActing);
-    return false;
-  }
 }
 
 enum _ReleaseAction {
@@ -2055,12 +2116,10 @@ enum _ReleaseAction {
 }
 
 class _PreparedStage {
-  const _PreparedStage({
+  _PreparedStage({
     required this.claims,
     required this.receiptSteps,
-    this.publishedRequirement,
-    this.firstCertificate,
-    this.codeId,
+    required this.signing,
   });
 
   final List<TargetClaim> claims;
@@ -2069,7 +2128,40 @@ class _PreparedStage {
   /// each producer proved — a certificate, Apple's verdict — instead of
   /// carrying prose composed while the work ran.
   final List<StageStep> receiptSteps;
+
+  /// The unit's signing identity, when it ships a macOS binary.
+  final _ProjectSigningContext? signing;
+}
+
+final class _ProjectSigningContext {
+  const _ProjectSigningContext({
+    required this.publishedRequirement,
+    required this.firstIdentity,
+    required this.certificateName,
+    required this.codeId,
+    this.identity,
+    this.certificateSha256,
+    this.designatedRequirement,
+  });
+
   final String? publishedRequirement;
-  final String? firstCertificate;
-  final String? codeId;
+  final bool firstIdentity;
+  final String certificateName;
+  final String codeId;
+
+  /// Present only while producing a new stage. A reusable stage needs the
+  /// recorded public baseline and disclosure fields, never live keychain state.
+  final SigningIdentity? identity;
+  final String? certificateSha256;
+  final String? designatedRequirement;
+
+  String? get firstCertificate => firstIdentity ? certificateName : null;
+
+  bool sameRecordedIdentity(_ProjectSigningContext other) =>
+      publishedRequirement == other.publishedRequirement &&
+      firstIdentity == other.firstIdentity &&
+      certificateName == other.certificateName &&
+      certificateSha256 == other.certificateSha256 &&
+      designatedRequirement == other.designatedRequirement &&
+      codeId == other.codeId;
 }

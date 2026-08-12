@@ -29,10 +29,10 @@ void main() {
   ResolvedProject project(SourceTree tree) {
     final diagnostics = Diagnostics();
     final config = ReleaseConfig.parse('''
-schema = 1
+schema = 2
 
 [release.tool]
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]
 ''', 'release.toml', diagnostics)!;
     final resolution = Resolution.resolve(config, tree, diagnostics);
     expect(diagnostics.found, isEmpty);
@@ -45,6 +45,8 @@ publish = ["pub.dev"]
     bool published = true,
     bool unavailable = false,
     bool tampered = false,
+    bool allowCurrentSourceFallback = true,
+    bool useExpectedSource = false,
   }) async {
     final tree = MemorySourceTree(source);
     final bytes = archiveOf(archive ?? files);
@@ -58,7 +60,11 @@ publish = ["pub.dev"]
       registry: registry,
       comparator: Comparator(tools: const SystemTools()),
       source: tree,
-    ).inspectProject(project(tree));
+      allowCurrentSourceFallback: allowCurrentSourceFallback,
+    ).inspectProject(
+      project(tree),
+      expectedSource: useExpectedSource ? tree : null,
+    );
   }
 
   test('a listed version is exact only after its archive byte-matches source',
@@ -92,6 +98,18 @@ publish = ["pub.dev"]
   test('a version that is not listed remains absent', () async {
     final result = await inspect(published: false);
     expect(result.verdict, Verdict.absent);
+  });
+
+  test('unbound comparison requires the current release stage', () async {
+    final laterStatus = await inspect(allowCurrentSourceFallback: false);
+    expect(laterStatus.verdict, Verdict.unknown);
+    expect(laterStatus.detail, contains('unbound release stage'));
+
+    final sameRelease = await inspect(
+      allowCurrentSourceFallback: false,
+      useExpectedSource: true,
+    );
+    expect(sameRelease.verdict, Verdict.exact);
   });
 }
 

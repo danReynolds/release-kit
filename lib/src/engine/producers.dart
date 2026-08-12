@@ -20,12 +20,21 @@ import 'stage_receipt.dart';
 
 /// The receipt producer name for one local checklist step.
 String receiptNameFor(Step step) => switch (step.kind) {
-      StepKind.build => 'build:${step.platform}',
-      StepKind.notarize => 'notarize:${step.platform}',
-      StepKind.archive => 'archive:${step.platform}',
-      StepKind.checksums => 'checksums',
+      StepKind.build => 'build:${step.project}:${step.platform}',
+      StepKind.notarize => 'notarize:${step.project}:${step.platform}',
+      StepKind.archive => 'archive:${step.project}:${step.platform}',
       _ => throw StateError('${step.kind.name} is not a local producer'),
     };
+
+bool isMacosBuildReceipt(String name) {
+  final parts = name.split(':');
+  return parts.length == 3 &&
+      parts.first == 'build' &&
+      parts.last.startsWith('macos-');
+}
+
+String archiveReceiptName(String project, String platform) =>
+    'archive:$project:$platform';
 
 /// The ordered receipt contracts for every local producer of [unit].
 List<StageStepContract> localProducerContracts(ResolvedUnit unit) => [
@@ -35,30 +44,28 @@ List<StageStepContract> localProducerContracts(ResolvedUnit unit) => [
 
 /// The receipt contract one local checklist step must satisfy.
 StageStepContract contractFor(ResolvedUnit unit, Step step) {
-  final project = unit.binaryProject;
-  final executable = project.executable!;
-  final version = project.version.canonical;
+  final project = unit.project(step.project!);
   final platform = step.platform;
-  final binary = '$platform/$executable';
+  final binary =
+      platform == null ? null : ReleaseAssets.binaryPath(project, platform);
 
   switch (step.kind) {
     case StepKind.build:
       return StageStepContract(
         receiptNameFor(step),
         inputs: const {'step:source-snapshot'},
-        outputs: {binary: 'executable'},
+        outputs: {binary!: 'executable'},
         validate: _buildEvidence,
       );
 
     case StepKind.notarize:
       return StageStepContract(
         receiptNameFor(step),
-        inputs: {binary},
+        inputs: {binary!},
         outputs: {
-          ReleaseAssets.notaryResultName(executable, version, platform!):
-              'notary',
-          ReleaseAssets.notaryLogName(executable, version, platform): 'notary',
-          '$platform/$executable.zip': 'notary-input',
+          ReleaseAssets.notaryResultPath(project, platform!): 'notary',
+          ReleaseAssets.notaryLogPath(project, platform): 'notary',
+          ReleaseAssets.notaryInputPath(project, platform): 'notary-input',
         },
         validate: _notaryEvidence,
       );
@@ -66,21 +73,10 @@ StageStepContract contractFor(ResolvedUnit unit, Step step) {
     case StepKind.archive:
       return StageStepContract(
         receiptNameFor(step),
-        inputs: {binary},
+        inputs: {binary!},
         outputs: {
-          ReleaseAssets.archiveName(executable, version, platform!): 'archive',
+          ReleaseAssets.archivePath(project, platform!): 'archive',
         },
-      );
-
-    case StepKind.checksums:
-      return StageStepContract(
-        receiptNameFor(step),
-        inputs: {
-          for (final each in [...project.binaryPlatforms]..sort())
-            ReleaseAssets.archiveName(executable, version, each),
-        },
-        outputs: {ReleaseAssets.checksums: 'checksums'},
-        validate: _checksumsEvidence,
       );
 
     default:
@@ -101,8 +97,7 @@ Iterable<StageIssue> _buildEvidence(
       !(status == 'not-executed' && reason is String && reason.isNotEmpty)) {
     issues.add(_structure('${step.name} has invalid smoke-test evidence'));
   }
-  if (step.name.startsWith('build:macos-') &&
-      step.evidence['signature'] == null) {
+  if (isMacosBuildReceipt(step.name) && step.evidence['signature'] == null) {
     issues.add(_structure('${step.name} has no signature evidence'));
   }
   return issues;
@@ -143,29 +138,6 @@ Iterable<StageIssue> _notaryEvidence(
   return const [];
 }
 
-/// The checksums evidence binds every archive input, and the file agrees.
-Iterable<StageIssue> _checksumsEvidence(
-  StageContractContext context,
-  StageStep step,
-) {
-  final checksums = step.evidence['checksums'];
-  final expected = {for (final input in step.inputs) input.name: input.sha256};
-  final output = step.outputs.firstOrNull;
-  if (checksums is! Map ||
-      !_sameMap(checksums, expected) ||
-      output == null ||
-      !_checksumFileMatches(context.stage, output.path, expected)) {
-    return [
-      const StageIssue(
-        StageIssueKind.invalidChecksums,
-        'checksums evidence does not exactly bind every archive input',
-        path: 'SHA256SUMS',
-      ),
-    ];
-  }
-  return const [];
-}
-
 /// Apple's log carries the submission under `id` or `jobId`; when it names
 /// one, it must be the submission the result named — a log for different
 /// bytes is not evidence about these.
@@ -198,30 +170,6 @@ bool _acceptedNotaryFile(
     return false;
   }
 }
-
-bool _checksumFileMatches(
-  StageDirectory stage,
-  String path,
-  Map<String, String> expected,
-) {
-  try {
-    final found = <String, String>{};
-    for (final line in File(stage.resolve(path)).readAsLinesSync()) {
-      if (line.isEmpty) continue;
-      final match =
-          RegExp(r'^([0-9a-f]{64})  ([^/\\\u0000]+)$').firstMatch(line);
-      if (match == null || found.containsKey(match.group(2))) return false;
-      found[match.group(2)!] = match.group(1)!;
-    }
-    return _sameMap(found, expected);
-  } on Object {
-    return false;
-  }
-}
-
-bool _sameMap(Map left, Map right) =>
-    left.length == right.length &&
-    left.entries.every((entry) => right[entry.key] == entry.value);
 
 StageIssue _structure(String message) => StageIssue(
       StageIssueKind.invalidStructure,

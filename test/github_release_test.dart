@@ -213,7 +213,7 @@ void main() {
       final downloads = {
         'a.tar.gz': utf8.encode('a'),
         'b.tar.gz': utf8.encode('b'),
-        'SHA256SUMS': utf8.encode('sums'),
+        'c.tar.gz': utf8.encode('c'),
       };
       final tools = _ConcurrentDownloadTools(
         response: jsonEncode({
@@ -394,7 +394,7 @@ void main() {
           unit: unit,
           version: version,
           tag: tag,
-          sourceCommit: (stage ?? identity).headCommit,
+          sourceCommit: (stage ?? identity).headCommit!,
           title: title,
           body: body,
           manifestSha256: manifestSha256 ?? Sha256.hex(bytes),
@@ -414,7 +414,7 @@ void main() {
           unit: unit,
           version: version,
           tag: tag,
-          sourceCommit: sourceCommit ?? identity.headCommit,
+          sourceCommit: sourceCommit ?? identity.headCommit!,
           title: title,
           manifestSha256: manifestSha256 ?? Sha256.hex(bytes),
         );
@@ -428,28 +428,6 @@ void main() {
           repository: 'example/tool',
           workingDirectory: '/repo',
         ).inspectManifest(expected);
-
-    Future<GithubManifestAssetRead> readManifestAsset(
-      Tools tools,
-      GithubManifestExpectation expected,
-      String name,
-    ) =>
-        GithubRelease(
-          tools: tools,
-          repository: 'example/tool',
-          workingDirectory: '/repo',
-        ).readManifestBoundAsset(expected, name);
-
-    Future<GithubManifestAssetRead> readHistoricalManifestAsset(
-      Tools tools,
-      GithubHistoricalManifestExpectation expected,
-      String name,
-    ) =>
-        GithubRelease(
-          tools: tools,
-          repository: 'example/tool',
-          workingDirectory: '/repo',
-        ).readHistoricalManifestBoundAsset(expected, name);
 
     _DownloadTools downloadable(
       List<int> manifest, {
@@ -491,105 +469,39 @@ void main() {
       expect(tools.downloadRequests, [manifestName, asset]);
     });
 
-    test('a named asset is returned by that same exact observation', () async {
-      final manifest = manifestBytes();
-      final tools = downloadable(manifest);
-      final read = await readManifestAsset(
-        tools,
-        expectation(manifest),
-        asset,
-      );
-
-      expect(read.inspection.verdict, Verdict.exact);
-      expect(read.bytes, assetBytes);
-      expect(tools.downloadRequests, [manifestName, asset]);
-      expect(
-        () => read.bytes![0] = 0,
-        throwsUnsupportedError,
-        reason: 'verified bytes must not be mutable after the check',
-      );
-    });
-
-    test('no bytes escape when a different declared artifact conflicts',
-        () async {
-      const other = 'z-formula.rb';
-      final otherBytes = utf8.encode('class Tool < Formula; end\n');
-      final manifest = manifestBytes(artifacts: [
-        ReleaseManifestArtifact(
-          name: asset,
-          type: 'archive',
-          size: assetBytes.length,
-          sha256: Sha256.hex(assetBytes),
-        ),
-        ReleaseManifestArtifact(
-          name: other,
-          type: 'formula',
-          size: otherBytes.length,
-          sha256: Sha256.hex(otherBytes),
-        ),
-      ]);
-      final tools = downloadable(
-        manifest,
-        response: view(assets: const [asset, other, manifestName]),
-        downloads: {
-          asset: assetBytes,
-          other: utf8.encode('tampered formula'),
-          manifestName: manifest,
-        },
-      );
-      final read = await readManifestAsset(
-        tools,
-        expectation(
-          manifest,
-          publicAssets: const {asset, other, manifestName},
-        ),
-        asset,
-      );
-
-      expect(read.inspection.verdict, Verdict.conflict);
-      expect(read.inspection.evidence, contains(other));
-      expect(read.bytes, isNull);
-      expect(
-        tools.downloadRequests,
-        unorderedEquals([manifestName, asset, other]),
-        reason: 'the requested bytes are not trusted until every digest is '
-            'checked',
-      );
-    });
-
-    test('unknown observations expose no downloaded bytes', () async {
-      final manifest = manifestBytes();
-      final read = await readManifestAsset(
-        downloadable(manifest, failure: 'operation timed out'),
-        expectation(manifest),
-        asset,
-      );
-
-      expect(read.inspection.verdict, Verdict.unknown);
-      expect(read.bytes, isNull);
-    });
-
-    test('verification metadata and unconfigured names are not readable',
+    test('current and historical reads expose only an authenticated manifest',
         () async {
       final manifest = manifestBytes();
-      final tools = downloadable(manifest);
-
-      final metadata = await readManifestAsset(
-        tools,
-        expectation(manifest),
-        manifestName,
-      );
-      final unconfigured = await readManifestAsset(
-        tools,
-        expectation(manifest),
-        'other.zip',
+      final currentTools = downloadable(manifest);
+      final release = GithubRelease(
+        tools: currentTools,
+        repository: 'example/tool',
+        workingDirectory: '/repo',
       );
 
-      expect(metadata.inspection.verdict, Verdict.unknown);
-      expect(metadata.bytes, isNull);
-      expect(unconfigured.inspection.verdict, Verdict.unknown);
-      expect(unconfigured.bytes, isNull);
-      expect(tools.downloadRequests, isEmpty);
+      final current = await release.readManifest(expectation(manifest));
+      expect(current.inspection.verdict, Verdict.exact);
+      expect(current.manifest?.unit, 'cli');
+      expect(current.manifest?.artifacts.single.name, asset);
+
+      final historicalTools = downloadable(manifest);
+      final historical = await GithubRelease(
+        tools: historicalTools,
+        repository: 'example/tool',
+        workingDirectory: '/repo',
+      ).readHistoricalManifest(historicalExpectation(manifest));
+      expect(historical.inspection.verdict, Verdict.exact);
+      expect(historical.manifest?.commit, identity.headCommit);
+
+      final conflicted = await GithubRelease(
+        tools: downloadable(manifest),
+        repository: 'example/tool',
+        workingDirectory: '/repo',
+      ).readManifest(
+        expectation(manifest, manifestSha256: zeroDigest),
+      );
+      expect(conflicted.inspection.verdict, Verdict.conflict);
+      expect(conflicted.manifest, isNull);
     });
 
     test('a release absent from a readable repository is absent', () async {
@@ -674,8 +586,8 @@ void main() {
     test('stateless verification anchors source, not today\'s stage identity',
         () async {
       final builtElsewhere = StageIdentity.forPlan(
-        headCommit: identity.headCommit,
-        headTree: identity.headTree,
+        headCommit: identity.headCommit!,
+        headTree: identity.headTree!,
         resolvedPlan: const {
           'unit': 'cli',
           'version': '1.0.0',
@@ -690,7 +602,7 @@ void main() {
           unit: 'cli',
           version: '1.0.0',
           tag: 'v1.0.0',
-          sourceCommit: identity.headCommit,
+          sourceCommit: identity.headCommit!,
           title: 'tool 1.0.0',
           body: 'release notes\n',
           manifestSha256: Sha256.hex(manifest),
@@ -764,243 +676,72 @@ void main() {
       expect(tools.downloadRequests, isEmpty);
     });
 
-    group('historical self-describing asset reads', () {
-      const formula = 'tool.rb';
-      final formulaBytes = utf8.encode('class Tool < Formula; end\n');
-
-      List<int> historicalManifest({
-        StageIdentity? stage,
-        List<ReleaseManifestArtifact>? artifacts,
-      }) =>
-          manifestBytes(
-            stage: stage,
-            artifacts: artifacts ??
-                [
-                  ReleaseManifestArtifact(
-                    name: asset,
-                    type: 'archive',
-                    size: assetBytes.length,
-                    sha256: Sha256.hex(assetBytes),
-                  ),
-                  ReleaseManifestArtifact(
-                    name: formula,
-                    type: 'formula',
-                    size: formulaBytes.length,
-                    sha256: Sha256.hex(formulaBytes),
-                  ),
-                ],
-          );
-
-      String historicalView({
-        List<String> assets = const [asset, formula, manifestName],
-        bool includeTitle = true,
-        String title = 'tool 1.0.0',
-      }) =>
-          jsonEncode({
+    group('historical self-describing manifests', () {
+      String historicalView() => jsonEncode({
             'tag_name': 'v1.0.0',
             'draft': false,
             'id': 41,
-            if (includeTitle) 'name': title,
-            // Deliberately no body: old changelog text is not an input to a
-            // historical Homebrew resume.
-            'assets': [
-              for (final name in assets) {'name': name},
+            'name': 'tool 1.0.0',
+            // Historical verification does not depend on old changelog text.
+            'assets': const [
+              {'name': asset},
+              {'name': manifestName},
             ],
           });
 
-      test('tag anchors recover an immutable formula without stage or body',
+      Future<GithubManifestRead> read(
+        Tools tools,
+        GithubHistoricalManifestExpectation expected,
+      ) =>
+          GithubRelease(
+            tools: tools,
+            repository: 'example/tool',
+            workingDirectory: '/repo',
+          ).readHistoricalManifest(expected);
+
+      test('tag anchors authenticate an older release without its body',
           () async {
-        final manifest = historicalManifest();
+        final manifest = manifestBytes();
         final tools = downloadable(
           manifest,
           response: historicalView(),
-          downloads: {
-            asset: assetBytes,
-            formula: formulaBytes,
-            manifestName: manifest,
-          },
         );
-
-        final read = await readHistoricalManifestAsset(
+        final result = await read(
           tools,
-          historicalExpectation(
-            manifest,
-            title: 'tool 1.0.0',
-          ),
-          formula,
+          historicalExpectation(manifest, title: 'tool 1.0.0'),
         );
 
-        expect(read.inspection.verdict, Verdict.exact);
-        expect(read.bytes, formulaBytes);
-        expect(
-          tools.downloadRequests,
-          unorderedEquals([manifestName, asset, formula]),
-        );
-        expect(() => read.bytes![0] = 0, throwsUnsupportedError);
+        expect(result.inspection.verdict, Verdict.exact);
+        expect(result.manifest?.unit, 'cli');
+        expect(tools.downloadRequests, [manifestName, asset]);
       });
 
       test('the manifest source must equal the peeled tag commit', () async {
-        final manifest = historicalManifest();
-        final read = await readHistoricalManifestAsset(
-          downloadable(
-            manifest,
-            response: historicalView(),
-            downloads: {
-              asset: assetBytes,
-              formula: formulaBytes,
-              manifestName: manifest,
-            },
-          ),
+        final manifest = manifestBytes();
+        final result = await read(
+          downloadable(manifest, response: historicalView()),
           historicalExpectation(
             manifest,
             sourceCommit: otherIdentity.headCommit,
           ),
-          formula,
         );
 
-        expect(read.inspection.verdict, Verdict.conflict);
-        expect(
-          read.inspection.evidence.keys,
-          containsAll(['source commit']),
-        );
-        expect(read.bytes, isNull);
+        expect(result.inspection.verdict, Verdict.conflict);
+        expect(result.inspection.evidence, contains('source commit'));
+        expect(result.manifest, isNull);
       });
 
-      test('release inventory must equal the bound manifest inventory',
-          () async {
-        final manifest = historicalManifest();
-        final tools = downloadable(
-          manifest,
-          response: historicalView(
-            assets: const [asset, formula, manifestName, 'surprise.txt'],
-          ),
-          downloads: {manifestName: manifest},
-        );
-
-        final read = await readHistoricalManifestAsset(
-          tools,
-          historicalExpectation(manifest),
-          formula,
-        );
-
-        expect(read.inspection.verdict, Verdict.conflict);
-        expect(read.inspection.evidence, contains('surprise.txt'));
-        expect(read.bytes, isNull);
-        expect(tools.downloadRequests, [manifestName]);
-      });
-
-      test('a later bad digest withholds already verified requested bytes',
-          () async {
-        const later = 'z-proof.txt';
-        final laterBytes = utf8.encode('expected proof');
-        final manifest = historicalManifest(artifacts: [
-          ReleaseManifestArtifact(
-            name: formula,
-            type: 'formula',
-            size: formulaBytes.length,
-            sha256: Sha256.hex(formulaBytes),
-          ),
-          ReleaseManifestArtifact(
-            name: later,
-            type: 'metadata',
-            size: laterBytes.length,
-            sha256: Sha256.hex(laterBytes),
-          ),
-        ]);
-        final tools = downloadable(
-          manifest,
-          response: historicalView(
-            assets: const [formula, later, manifestName],
-          ),
-          downloads: {
-            formula: formulaBytes,
-            later: utf8.encode('tampered proof'),
-            manifestName: manifest,
-          },
-        );
-
-        final read = await readHistoricalManifestAsset(
-          tools,
-          historicalExpectation(manifest),
-          formula,
-        );
-
-        expect(read.inspection.verdict, Verdict.conflict);
-        expect(read.inspection.evidence, contains(later));
-        expect(read.bytes, isNull);
-        expect(tools.downloadRequests.first, manifestName);
-        expect(
-          tools.downloadRequests.skip(1),
-          unorderedEquals([formula, later]),
-          reason: 'manifest-bound assets are checked in parallel',
-        );
-      });
-
-      test('an unsupported manifest schema is rejected by parse', () async {
-        final valid = utf8.decode(historicalManifest());
-        final manifest = utf8.encode(valid.replaceFirst(
-          '"schema":$releaseManifestSchemaVersion',
-          '"schema":99',
-        ));
-        final read = await readHistoricalManifestAsset(
-          downloadable(
-            manifest,
-            response: historicalView(),
-            downloads: {manifestName: manifest},
-          ),
-          historicalExpectation(manifest),
-          formula,
-        );
-
-        expect(read.inspection.verdict, Verdict.conflict);
-        expect(read.inspection.detail, contains('manifest is invalid'));
-        expect(read.bytes, isNull);
-      });
-
-      test('a malformed external source anchor is unknown without a query',
-          () async {
-        final manifest = historicalManifest();
+      test('a malformed source anchor is unknown without a query', () async {
+        final manifest = manifestBytes();
         final tools = downloadable(manifest);
-        final read = await readHistoricalManifestAsset(
+        final result = await read(
           tools,
           historicalExpectation(manifest, sourceCommit: 'short'),
-          formula,
         );
 
-        expect(read.inspection.verdict, Verdict.unknown);
-        expect(read.bytes, isNull);
+        expect(result.inspection.verdict, Verdict.unknown);
+        expect(result.manifest, isNull);
         expect(tools.downloadRequests, isEmpty);
-      });
-
-      test('the requested asset itself must be declared by the manifest',
-          () async {
-        final manifest = historicalManifest(artifacts: [
-          ReleaseManifestArtifact(
-            name: asset,
-            type: 'archive',
-            size: assetBytes.length,
-            sha256: Sha256.hex(assetBytes),
-          ),
-        ]);
-        final read = await readHistoricalManifestAsset(
-          downloadable(
-            manifest,
-            response: historicalView(
-              assets: const [asset, manifestName],
-            ),
-            downloads: {
-              asset: assetBytes,
-              manifestName: manifest,
-            },
-          ),
-          historicalExpectation(manifest),
-          formula,
-        );
-
-        expect(read.inspection.verdict, Verdict.conflict);
-        expect(
-            read.inspection.evidence[formula], 'missing from release manifest');
-        expect(read.bytes, isNull);
       });
     });
   });
@@ -1009,6 +750,9 @@ void main() {
     Future<({PublishOutcome outcome, RecordingTools tools})> publish({
       String slurp = '[[]]',
       bool duplicateAssetNames = false,
+      List<String> initialDraftNames = const [],
+      String draftTitle = 'tool 1.0.0',
+      String draftBody = 'notes',
       String? createFailure,
       bool unreadDraftsAfterCreate = false,
       String? uploadFailure,
@@ -1030,7 +774,7 @@ void main() {
       final paths = <String>[];
       for (final name in duplicateAssetNames
           ? const ['left/a.tar.gz', 'right/a.tar.gz']
-          : const ['a.tar.gz', 'SHA256SUMS']) {
+          : const ['a.tar.gz', 'b.tar.gz']) {
         final file = File('${scratch.path}/$name');
         file.parent.createSync(recursive: true);
         file.writeAsStringSync(name);
@@ -1040,7 +784,10 @@ void main() {
         for (final path in paths)
           path.split('/').last: File(path).readAsBytesSync(),
       };
-      final assets = <String, List<int>>{};
+      final assets = <String, List<int>>{
+        for (final name in initialDraftNames)
+          name: stagedBytes[name] ?? utf8.encode('unexpected:$name'),
+      };
       Map<String, Object?> draftAssetJson(String name, int index) {
         final bytes = draftAssetOverrides[name] ?? assets[name]!;
         return {
@@ -1114,15 +861,17 @@ void main() {
               key.startsWith('gh release download ')) {
             return ToolResult(exitCode: 0, stdout: '', stderr: '');
           }
-          if (key == 'gh api repos/example/tool/releases/7') {
+          if (RegExp(r'^gh api repos/example/tool/releases/\d+$')
+              .hasMatch(key)) {
+            final id = int.parse(key.split('/').last);
             return ToolResult(
               exitCode: 0,
               stdout: jsonEncode({
                 'tag_name': 'v1.0.0',
                 'draft': draft,
-                'id': 7,
-                'name': 'tool 1.0.0',
-                'body': 'notes',
+                'id': id,
+                'name': draftTitle,
+                'body': draftBody,
                 'assets': [
                   for (var index = 0; index < assets.length; index++)
                     draftAssetJson(assets.keys.elementAt(index), index),
@@ -1149,25 +898,21 @@ void main() {
         tag: 'v1.0.0',
         title: 'tool 1.0.0',
         notesPath: notes.path,
-        assetPaths: paths,
-        assetSha256: {
-          for (final entry in stagedBytes.entries)
-            entry.key: Sha256.hex(entry.value),
-        },
-        assetSizes: {
-          for (final entry in stagedBytes.entries)
-            entry.key: entry.value.length,
-        },
+        assets: [
+          for (final path in paths)
+            GithubReleaseAssetUpload(
+              publicName: path.split('/').last,
+              stagedPath: path,
+              size: File(path).lengthSync(),
+              sha256: Sha256.hex(File(path).readAsBytesSync()),
+            ),
+        ],
       );
       return (outcome: outcome, tools: tools);
     }
 
-    test('same-tag drafts are deleted by id, across pages; nothing else is',
+    test('multiple same-tag drafts refuse without deleting or creating',
         () async {
-      // Two drafts carry the tag on different pages — the porcelain delete
-      // addressed whichever it found first, and a single-page read capped
-      // at 100 missed the second entirely. A published release and another
-      // tag's draft must both survive the sweep.
       final run = await publish(
         slurp: jsonEncode([
           [
@@ -1180,24 +925,14 @@ void main() {
           ],
         ]),
       );
-      expect(run.outcome.ok, isTrue, reason: run.outcome.problem ?? '');
-
-      final deletes = run.tools.calls
-          .where((c) => c.startsWith('gh api -X DELETE'))
-          .toList();
-      expect(deletes, hasLength(2));
-      expect(deletes.any((c) => c.endsWith('/releases/11')), isTrue);
-      expect(deletes.any((c) => c.endsWith('/releases/12')), isTrue);
+      expect(run.outcome.ok, isFalse);
       expect(
-        deletes.any((c) => c.endsWith('/releases/13')),
-        isFalse,
-        reason: 'another tag\'s draft is not in the way',
-      );
+          run.outcome.problem, contains('will not choose, replace, or delete'));
+      expect(run.outcome.draftEffect, DraftEffect.none);
       expect(
-        deletes.any((c) => c.endsWith('/releases/99')),
-        isFalse,
-        reason: 'a published release is never swept',
-      );
+          run.tools.calls.any((call) => call.contains(' -X DELETE ')), isFalse);
+      expect(
+          run.tools.calls.any((call) => call.contains(' -X POST ')), isFalse);
     });
 
     test('a malformed draft sweep refuses before creating another draft',
@@ -1217,7 +952,7 @@ void main() {
       );
     });
 
-    test('a deleted same-tag draft is reported when later validation fails',
+    test('local request validation runs before any remote read or mutation',
         () async {
       final run = await publish(
         slurp: jsonEncode([
@@ -1229,15 +964,114 @@ void main() {
       );
 
       expect(run.outcome.ok, isFalse);
-      expect(run.outcome.mayHaveActed, isFalse,
-          reason: 'a private deletion is not a public release');
-      expect(run.outcome.draftEffect, DraftEffect.changed);
+      expect(run.outcome.mayHaveActed, isFalse);
+      expect(run.outcome.draftEffect, DraftEffect.none);
+      expect(run.tools.calls, isEmpty);
+    });
+
+    test('one exact draft subset is adopted and only its difference uploads',
+        () async {
+      final run = await publish(
+        slurp: jsonEncode([
+          [
+            {'tag_name': 'v1.0.0', 'draft': true, 'id': 11},
+          ],
+        ]),
+        initialDraftNames: const ['b.tar.gz'],
+      );
+
+      expect(run.outcome.ok, isTrue, reason: run.outcome.problem ?? '');
+      expect(
+        run.tools.calls.where((call) => call.contains('uploads.github.com')),
+        hasLength(1),
+      );
+      expect(
+        run.tools.calls
+            .singleWhere((call) => call.contains('uploads.github.com')),
+        contains('name=a.tar.gz'),
+      );
       expect(
         run.tools.calls.any(
-          (call) => call.contains('POST repos/example/tool/releases'),
+          (call) => call.contains('POST repos/example/tool/releases --input'),
         ),
         isFalse,
       );
+      expect(
+          run.tools.calls.any((call) => call.contains(' -X DELETE ')), isFalse);
+    });
+
+    test('a complete exact draft publishes without re-uploading assets',
+        () async {
+      final run = await publish(
+        slurp: jsonEncode([
+          [
+            {'tag_name': 'v1.0.0', 'draft': true, 'id': 11},
+          ],
+        ]),
+        initialDraftNames: const ['b.tar.gz', 'a.tar.gz'],
+      );
+
+      expect(run.outcome.ok, isTrue, reason: run.outcome.problem ?? '');
+      expect(
+        run.tools.calls.any((call) => call.contains('uploads.github.com')),
+        isFalse,
+      );
+      expect(
+        run.tools.calls.any((call) => call.contains(' -X PATCH ')),
+        isTrue,
+      );
+    });
+
+    test('an existing subset with different bytes refuses before upload',
+        () async {
+      final run = await publish(
+        slurp: jsonEncode([
+          [
+            {'tag_name': 'v1.0.0', 'draft': true, 'id': 11},
+          ],
+        ]),
+        initialDraftNames: const ['b.tar.gz'],
+        draftAssetOverrides: {
+          'b.tar.gz': utf8.encode('wrong archive bytes'),
+        },
+      );
+
+      expect(run.outcome.ok, isFalse);
+      expect(run.outcome.draftEffect, DraftEffect.none);
+      expect(run.outcome.problem, contains('staged release'));
+      expect(
+        run.tools.calls.any((call) =>
+            call.contains('uploads.github.com') ||
+            call.contains(' -X PATCH ')),
+        isFalse,
+      );
+    });
+
+    test('an extra asset or different metadata refuses without mutation',
+        () async {
+      for (final scenario in [
+        (names: const ['extra.zip'], title: 'tool 1.0.0'),
+        (names: const <String>[], title: 'Different'),
+      ]) {
+        final run = await publish(
+          slurp: jsonEncode([
+            [
+              {'tag_name': 'v1.0.0', 'draft': true, 'id': 11},
+            ],
+          ]),
+          initialDraftNames: scenario.names,
+          draftTitle: scenario.title,
+        );
+        expect(run.outcome.ok, isFalse, reason: '$scenario');
+        expect(run.outcome.draftEffect, DraftEffect.none);
+        expect(
+          run.tools.calls.any((call) =>
+              call.contains('uploads.github.com') ||
+              call.contains(' -X PATCH ') ||
+              call.contains(' -X DELETE ')),
+          isFalse,
+        );
+      }
     });
 
     test('a lost create response reports uncertain private state, not public',
@@ -1280,10 +1114,11 @@ void main() {
           (call) => call.contains('PATCH repos/example/tool/releases/7'));
       expect(create, greaterThanOrEqualTo(0));
       expect(uploads, hasLength(2));
-      expect(reads, hasLength(2));
-      expect(create, lessThan(uploads.first));
-      expect(uploads.last, lessThan(reads.first));
-      expect(reads.first, lessThan(patch));
+      expect(reads, hasLength(3));
+      expect(create, lessThan(reads.first));
+      expect(reads.first, lessThan(uploads.first));
+      expect(uploads.last, lessThan(reads[1]));
+      expect(reads[1], lessThan(patch));
       expect(patch, lessThan(reads.last));
       for (final index in uploads) {
         final call = run.tools.calls[index];
@@ -1336,11 +1171,12 @@ void main() {
         for (var i = 0; i < run.tools.calls.length; i++)
           if (run.tools.calls[i].contains('uploads.github.com')) i,
       ];
-      final firstDraftRead = run.tools.calls.indexWhere(
-        (call) => call == 'gh api repos/example/tool/releases/7',
-      );
-      expect(firstDraftRead, greaterThan(uploads.first));
-      expect(firstDraftRead, lessThan(uploads.last));
+      final draftReads = [
+        for (var i = 0; i < run.tools.calls.length; i++)
+          if (run.tools.calls[i] == 'gh api repos/example/tool/releases/7') i,
+      ];
+      expect(draftReads[1], greaterThan(uploads.first));
+      expect(draftReads[1], lessThan(uploads.last));
     });
 
     test('exact same-tag bytes cannot mask wrong bytes on the draft id',
@@ -1373,14 +1209,15 @@ void main() {
         uploadFailure: 'connection lost',
         failedUploadLands: true,
         draftAssetOverrides: {
-          'a.tar.gz': utf8.encode('a.tar'),
+          'b.tar.gz': utf8.encode('truncated'),
         },
       );
 
       expect(run.outcome.ok, isFalse);
       expect(run.outcome.mayHaveActed, isFalse);
       expect(run.outcome.draftEffect, DraftEffect.changed);
-      expect(run.outcome.problem, contains('could not be reconciled by bytes'));
+      expect(
+          run.outcome.problem, contains('does not contain the staged bytes'));
       expect(
         run.tools.calls.any((call) => call.contains(' -X PATCH ')),
         isFalse,

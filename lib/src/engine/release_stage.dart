@@ -1,5 +1,10 @@
 import 'dart:io';
+import 'dart:math';
 
+import '../transforms/digest.dart';
+import 'release_asset.dart';
+import 'assets.dart';
+import 'publish_target.dart';
 import 'release_manifest.dart';
 import 'resolve.dart';
 import 'source_tree.dart';
@@ -11,6 +16,14 @@ import 'stage_plan.dart';
 import 'stage_receipt.dart';
 import 'git.dart';
 
+String _newRunId() {
+  final random = Random.secure();
+  return List.generate(
+    4,
+    (_) => random.nextInt(0x40000000).toRadixString(16).padLeft(8, '0'),
+  ).join();
+}
+
 /// One shared, cached stage resolver for status and release composition.
 class ReleaseStages {
   ReleaseStages({
@@ -20,10 +33,13 @@ class ReleaseStages {
     String? repositoryRoot,
     DartCompilerIdentity Function()? compilerIdentity,
     RkImplementationIdentity Function()? rkIdentity,
+    Map<String, String> Function()? environment,
   })  : repositoryRoot = repositoryRoot ?? git.root,
         _compilerIdentity =
             compilerIdentity ?? DartCompilerIdentity.readAmbient,
-        _rkIdentity = rkIdentity ?? RkImplementationIdentity.readAmbient;
+        _rkIdentity = rkIdentity ?? RkImplementationIdentity.readAmbient,
+        _environment =
+            environment ?? (() => Map<String, String>.of(Platform.environment));
 
   final SourceTree source;
   final GitState git;
@@ -31,7 +47,9 @@ class ReleaseStages {
   final StageContractResolver stageContracts;
   final DartCompilerIdentity Function() _compilerIdentity;
   final RkImplementationIdentity Function() _rkIdentity;
+  final Map<String, String> Function() _environment;
   final Map<String, ReleaseStage> _stages = {};
+  final String _unboundRunId = _newRunId();
   DartCompilerIdentity? _compiler;
 
   ReleaseStage call(ResolvedUnit unit) => _stages.putIfAbsent(
@@ -63,16 +81,23 @@ class ReleaseStages {
     DartCompilerIdentity compiler,
     RkImplementationIdentity rk,
   ) {
-    final identity = StageIdentity.forPlan(
-      headCommit: currentGit.head,
-      headTree: currentGit.headTree,
-      resolvedPlan: stagePlanFor(
-        unit,
-        currentGit,
-        compiler: compiler,
-        rk: rk,
-      ),
+    final plan = stagePlanFor(
+      unit,
+      currentGit,
+      compiler: compiler,
+      rk: rk,
+      environment: _environment(),
     );
+    final identity = currentGit.isBound
+        ? StageIdentity.forPlan(
+            headCommit: currentGit.head,
+            headTree: currentGit.headTree,
+            resolvedPlan: plan,
+          )
+        : StageIdentity.forUnboundPlan(
+            runId: _unboundRunId,
+            resolvedPlan: plan,
+          );
     final directory = StageDirectory(
       repositoryRoot: repositoryRoot,
       identity: identity,
@@ -148,6 +173,35 @@ class ReleaseStage {
     final inspected = const StageInspector().inspect(directory);
     final receipt = inspected.receipt;
     final issues = [...inspected.issues];
+    if (receipt?.complete == true &&
+        !issues.any((issue) =>
+            issue.kind == StageIssueKind.invalidManifest ||
+            issue.path == 'release-manifest.json')) {
+      try {
+        final manifest = ReleaseManifest.parse(
+          File(directory.resolve('release-manifest.json')).readAsStringSync(),
+        );
+        final wantedFormula = _formulaBinding()?.identity;
+        final manifestFormula = manifest.formula?.identity;
+        if (manifest.unit != unit.name ||
+            manifest.version != unit.version.canonical ||
+            manifest.tag != unit.tag ||
+            manifestFormula != wantedFormula) {
+          issues.add(const StageIssue(
+            StageIssueKind.invalidManifest,
+            'release manifest names different release coordinates or '
+            'Homebrew formulas',
+            path: 'release-manifest.json',
+          ));
+        }
+      } on Object catch (error) {
+        issues.add(StageIssue(
+          StageIssueKind.invalidManifest,
+          'release manifest formulas could not be validated: $error',
+          path: 'release-manifest.json',
+        ));
+      }
+    }
     if (receipt != null && enforceUnitContract) {
       issues.addAll(StageReceiptContract.forUnit(
         unit: unit,
@@ -202,8 +256,9 @@ class ReleaseStage {
   List<StageArtifact> materializeSource() {
     final outputs = <StageArtifact>[];
     final gitSource = source is GitSourceTree ? source as GitSourceTree : null;
-    final gitEntries =
-        gitSource?.trackedEntriesAt(directory.identity.headCommit);
+    final gitEntries = gitSource?.trackedEntriesAt(
+      directory.identity.headCommit!,
+    );
     final byPath = gitEntries == null
         ? const <String, GitTreeEntry>{}
         : {for (final entry in gitEntries) entry.path: entry};
@@ -220,7 +275,7 @@ class ReleaseStage {
       }
       final bytes = gitSource == null
           ? source.readBytes(path)
-          : gitSource.readBytesAt(directory.identity.headCommit, path);
+          : gitSource.readBytesAt(directory.identity.headCommit!, path);
       if (bytes == null) {
         throw StateError('tracked source disappeared while staging: $path');
       }
@@ -236,6 +291,44 @@ class ReleaseStage {
       ));
     }
     return outputs;
+  }
+
+  /// Returns why mutable, unbound source no longer matches its captured
+  /// snapshot. Git-bound stages use their commit/tree identity instead.
+  String? unboundSourceProblem() {
+    if (directory.identity.isGitBound) return null;
+    final receipt = StageReceiptStore(directory).read();
+    if (receipt == null || receipt.steps.isEmpty) {
+      return 'the stage has no source snapshot receipt';
+    }
+    final step = receipt.steps.first;
+    if (step.name != 'source-snapshot') {
+      return 'the stage has no source snapshot step';
+    }
+    final expected = <String, StageArtifact>{
+      for (final artifact in step.outputs)
+        if (artifact.path.startsWith('source/'))
+          artifact.path.substring('source/'.length): artifact,
+    };
+    final current = source.trackedFiles().toSet();
+    final captured = expected.keys.toSet();
+    final added = current.difference(captured).toList()..sort();
+    final removed = captured.difference(current).toList()..sort();
+    if (added.isNotEmpty || removed.isNotEmpty) {
+      return [
+        if (added.isNotEmpty) 'added: ${added.join(', ')}',
+        if (removed.isNotEmpty) 'removed: ${removed.join(', ')}',
+      ].join('; ');
+    }
+    for (final path in current.toList()..sort()) {
+      final bytes = source.readBytes(path);
+      if (bytes == null) return '$path disappeared';
+      if (bytes.length != expected[path]!.size ||
+          Sha256.hex(bytes) != expected[path]!.sha256) {
+        return '$path changed';
+      }
+    }
+    return null;
   }
 
   /// Revalidates the immutable source snapshot and removes only untracked
@@ -299,14 +392,39 @@ class ReleaseStage {
 
   /// Finalizes the public manifest and the strict local receipt.
   ///
-  /// [publicArtifacts] are workspace-relative filenames that will be
-  /// published. The manifest deliberately does not list itself, avoiding a
-  /// self-digest cycle; the local receipt does capture it like every other
-  /// staged file.
+  /// The manifest deliberately does not list itself, avoiding a self-digest
+  /// cycle; the local receipt does capture it like every other staged file.
   StageReceipt finalize({
-    required Set<String> publicArtifacts,
+    required Iterable<ReleaseAssetSpec> releaseAssets,
     Map<String, Object?> evidence = const {},
   }) {
+    final bindings = [
+      for (final asset in validateReleaseAssetSpecs(releaseAssets))
+        _PublicArtifactBinding(
+          publicName: asset.publicName,
+          stagedPath: asset.stagedPath,
+        ),
+    ];
+    final publicNames = bindings.map((binding) => binding.publicName).toSet();
+    final stagedPaths = bindings.map((binding) => binding.stagedPath).toSet();
+    if (publicNames.length != bindings.length ||
+        stagedPaths.length != bindings.length) {
+      throw ArgumentError(
+          'release assets must name unique public files and blobs');
+    }
+    final formulaBinding = _formulaBinding();
+    final formulaStagedPaths = {
+      if (formulaBinding != null) formulaBinding.stagedPath,
+    };
+    final duplicatedFormulas = stagedPaths.intersection(
+      formulaStagedPaths,
+    );
+    if (duplicatedFormulas.isNotEmpty) {
+      throw ArgumentError(
+        'Homebrew formulas cannot also be release assets: '
+        '${duplicatedFormulas.join(', ')}',
+      );
+    }
     StageReceipt? progress;
     try {
       progress = StageReceiptStore(directory).read();
@@ -325,10 +443,13 @@ class ReleaseStage {
       );
       final existingPublic =
           existingManifest.artifacts.map((artifact) => artifact.name).toSet();
-      if (existingPublic.length != publicArtifacts.length ||
-          existingPublic.difference(publicArtifacts).isNotEmpty) {
+      final existingFormula = existingManifest.formula?.identity;
+      final wantedFormula = formulaBinding?.identity;
+      if (existingPublic.length != publicNames.length ||
+          existingPublic.difference(publicNames).isNotEmpty ||
+          existingFormula != wantedFormula) {
         throw StateError(
-          'the completed stage has a different public inventory',
+          'the completed stage has a different publication inventory',
         );
       }
       return progress!;
@@ -365,16 +486,17 @@ class ReleaseStage {
     final byPath = {
       for (final artifact in beforeManifest) artifact.path: artifact
     };
-    final missing = publicArtifacts.difference(byPath.keys.toSet());
+    final boundStagedPaths = {...stagedPaths, ...formulaStagedPaths};
+    final missing = boundStagedPaths.difference(byPath.keys.toSet());
     if (missing.isNotEmpty) {
       throw StateError(
-          'stage is missing public artifacts: ${missing.join(', ')}');
+          'stage is missing publication artifacts: ${missing.join(', ')}');
     }
 
     final allowed = <String>{
       for (final path in byPath.keys)
         if (path.startsWith('source/')) path,
-      ...publicArtifacts,
+      ...boundStagedPaths,
       ...progress.artifacts.map((artifact) => artifact.path),
     };
     final planted = byPath.keys.toSet().difference(allowed);
@@ -390,12 +512,13 @@ class ReleaseStage {
       tag: unit.tag,
       commit: directory.identity.headCommit,
       artifacts: [
-        for (final name in publicArtifacts)
+        for (final binding in bindings)
           ReleaseManifestArtifact.fromStage(
-            publicName: _publicName(name),
-            artifact: byPath[name]!,
+            publicName: _publicName(binding.publicName),
+            artifact: byPath[binding.stagedPath]!,
           ),
       ],
+      formula: formulaBinding?.bind(byPath[formulaBinding.stagedPath]!),
     );
     manifest.writeTo(directory);
 
@@ -414,7 +537,14 @@ class ReleaseStage {
       path: 'release-manifest.json',
       type: 'manifest',
     );
-    final public = publicArtifacts.toList()..sort();
+    final orderedBindings = [...bindings]
+      ..sort((left, right) => left.publicName.compareTo(right.publicName));
+    final completeInputs = <String, StageArtifact>{
+      for (final binding in orderedBindings)
+        binding.stagedPath: byPath[binding.stagedPath]!,
+      if (formulaBinding != null)
+        formulaBinding.stagedPath: byPath[formulaBinding.stagedPath]!,
+    };
     final receipt = StageReceipt(
       identity: directory.identity,
       steps: [
@@ -422,11 +552,17 @@ class ReleaseStage {
         StageStep(
           name: 'complete-stage',
           inputs: [
-            for (final path in public) StageInput.artifact(byPath[path]!),
+            for (final path in completeInputs.keys.toList()..sort())
+              StageInput.artifact(completeInputs[path]!),
           ],
           outputs: [manifestArtifact],
           evidence: {
             ...evidence,
+            'release_assets': {
+              for (final binding in orderedBindings)
+                binding.publicName: binding.stagedPath,
+            },
+            'formula_binding': formulaBinding?.toEvidence(),
             if (compiler != null) 'dart_compiler': compiler!.toJson(),
           },
         ),
@@ -448,6 +584,26 @@ class ReleaseStage {
       throw StateError('the release stage is not complete');
     }
     return inspected.receipt!;
+  }
+
+  /// Exact public-name to private-blob mapping frozen by complete-stage.
+  Map<String, StageArtifact> releaseAssets() {
+    final receipt = requireReceipt();
+    final complete = receipt.steps.last;
+    final encoded = complete.evidence['release_assets'];
+    final byPath = {
+      for (final artifact in receipt.artifacts) artifact.path: artifact,
+    };
+    if (encoded is! Map) {
+      throw StateError('complete stage has no release asset bindings');
+    }
+    return Map.unmodifiable({
+      for (final entry in encoded.entries)
+        if (entry.key is String &&
+            entry.value is String &&
+            byPath[entry.value] != null)
+          entry.key as String: byPath[entry.value]!,
+    });
   }
 
   /// Atomically records producer progress without making it reusable.
@@ -498,7 +654,6 @@ class ReleaseStage {
     if (path.startsWith('source/')) return 'source';
     if (path == 'release-manifest.json') return 'manifest';
     if (path == 'release-notes.md') return 'notes';
-    if (path == 'SHA256SUMS') return 'checksums';
     if (path.endsWith('.tar.gz')) return 'archive';
     if (path.endsWith('.rb')) return 'formula';
     if (path.endsWith('.notary-result.json') ||
@@ -508,6 +663,37 @@ class ReleaseStage {
     if (path.endsWith('.zip')) return 'notary-input';
     return 'executable';
   }
+
+  StagedFormulaBinding? _formulaBinding() {
+    final project = unit.projects
+        .where(
+          (project) => project.publish.contains(PublishTarget.homebrew),
+        )
+        .firstOrNull;
+    if (project == null) return null;
+    final sourceRepository = repository;
+    if (sourceRepository == null) {
+      throw StateError(
+        'Homebrew formula bindings need a source repository coordinate',
+      );
+    }
+    return StagedFormulaBinding(
+      project: project.name,
+      tap: unit.tapFor(sourceRepository),
+      path: 'Formula/${project.executable!}.rb',
+      stagedPath: ReleaseAssets.formulaPath(project),
+    );
+  }
+}
+
+final class _PublicArtifactBinding {
+  const _PublicArtifactBinding({
+    required this.publicName,
+    required this.stagedPath,
+  });
+
+  final String publicName;
+  final String stagedPath;
 }
 
 void _setGitFileMode(String path, GitTreeEntry entry) {

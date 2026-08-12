@@ -38,15 +38,17 @@ executables:
     });
 
 const keybayConfig = '''
-schema = 1
+schema = 2
 
 [release.core]
+tag = "keybay-v{version}"
 path = "packages/keybay"
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]
 
 [release.cli]
+tag = "keybay_cli-v{version}"
 path = "packages/keybay_cli"
-publish = ["pub.dev", "github-release", "homebrew"]
+publish = ["git-tag", "pub.dev", "github-release", "homebrew"]
 binary_platforms = ["linux-x64", "linux-arm64", "macos-arm64"]
 ''';
 
@@ -81,20 +83,42 @@ void main() {
     expect(cli.shipsBinaries, isTrue);
   });
 
-  test('derives per-package tags where the repository publishes several', () {
+  test('uses explicit stable tags where the repository publishes several', () {
     final resolution = resolved(keybayConfig, keybayTree());
     expect(resolution.unit('core')!.tagPattern, 'keybay-v{version}');
     expect(resolution.unit('cli')!.tagPattern, 'keybay_cli-v{version}');
     expect(resolution.unit('core')!.tag, 'keybay-v0.2.0');
   });
 
+  test('several tagged units cannot derive topology-dependent names', () {
+    final diagnostics = Diagnostics();
+    final config = ReleaseConfig.parse('''
+schema = 2
+
+[release.core]
+path = "packages/keybay"
+publish = ["git-tag", "pub.dev"]
+
+[release.cli]
+path = "packages/keybay_cli"
+publish = ["git-tag", "pub.dev"]
+''', 'release.toml', diagnostics)!;
+    final resolution = Resolution.resolve(config, keybayTree(), diagnostics);
+
+    expect(resolution, isNull);
+    expect(
+      diagnostics.found.where((item) => item.code == 'RK-RES-012'),
+      hasLength(2),
+    );
+  });
+
   test('derives a bare tag where the repository publishes one package', () {
     final resolution = resolved(
         '''
-schema = 1
+schema = 2
 
 [release.lib]
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]
 ''',
         MemorySourceTree({
           'pubspec.yaml': 'name: dart_retry_helper\nversion: 1.5.0\n',
@@ -105,12 +129,12 @@ publish = ["pub.dev"]
 
   test('a declared tag always wins over the convention', () {
     final resolution = resolved('''
-schema = 1
+schema = 2
 
 [release.core]
 tag = "release-{version}"
 path = "packages/keybay"
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]
 ''', keybayTree());
     expect(resolution.unit('core')!.tagPattern, 'release-{version}');
     expect(resolution.unit('core')!.tagWasDeclared, isTrue);
@@ -128,7 +152,7 @@ publish = ["pub.dev"]
     test('a project directory that does not exist', () {
       expect(
         refusedWith('''
-schema = 1
+schema = 2
 
 [release.core]
 path = "packages/missing"
@@ -141,7 +165,7 @@ publish = ["pub.dev"]
     test('a manifest with no version, such as a workspace root', () {
       expect(
         refusedWith('''
-schema = 1
+schema = 2
 
 [release.root]
 publish = ["pub.dev"]
@@ -156,7 +180,7 @@ publish = ["pub.dev"]
       expect(
         refusedWith(
             '''
-schema = 1
+schema = 2
 
 [release.cli]
 publish = ["pub.dev"]
@@ -169,14 +193,31 @@ publish = ["pub.dev"]
       );
     });
 
+    test('a custom native Dart registry is not mislabeled pub.dev', () {
+      expect(
+        refusedWith(
+            '''
+schema = 2
+
+[release.cli]
+publish = ["pub.dev"]
+''',
+            MemorySourceTree({
+              'pubspec.yaml': 'name: dune_cli\nversion: 0.0.1\n'
+                  'publish_to: https://packages.example.invalid\n',
+            })),
+        'RK-RES-014',
+      );
+    });
+
     test('binary channels for a package with no executable', () {
       expect(
         refusedWith('''
-schema = 1
+schema = 2
 
 [release.core]
 path = "packages/keybay"
-publish = ["github-release"]
+publish = ["git-tag", "github-release"]
 binary_platforms = ["macos-arm64"]
 ''', keybayTree()),
         'RK-RES-004',
@@ -187,10 +228,10 @@ binary_platforms = ["macos-arm64"]
       expect(
         refusedWith(
             '''
-schema = 1
+schema = 2
 
 [release.tools]
-publish = ["github-release"]
+publish = ["git-tag", "github-release"]
 binary_platforms = ["macos-arm64"]
 ''',
             MemorySourceTree({
@@ -209,7 +250,7 @@ executables:
     test('two projects at the same path', () {
       expect(
         refusedWith('''
-schema = 1
+schema = 2
 
 [release.a]
 path = "packages/keybay"
@@ -227,7 +268,7 @@ publish = ["pub.dev"]
       expect(
         refusedWith(
             '''
-schema = 1
+schema = 2
 
 [release.outer]
 path = "packages"
@@ -249,10 +290,11 @@ publish = ["pub.dev"]
       expect(
         refusedWith(
             '''
-schema = 1
+schema = 2
 
 [release.framework]
 tag = "fleury-v{version}"
+publish = ["git-tag"]
 
 [[release.framework.project]]
 path = "packages/a"
@@ -274,10 +316,11 @@ publish = ["pub.dev"]
   test('a multi-project unit resolves every member', () {
     final resolution = resolved(
         '''
-schema = 1
+schema = 2
 
 [release.framework]
 tag = "fleury-v{version}"
+publish = ["git-tag"]
 
 [[release.framework.project]]
 path = "packages/fleury"

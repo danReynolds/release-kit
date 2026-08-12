@@ -12,6 +12,7 @@ import 'package:release_kit/src/engine/git.dart';
 import 'package:release_kit/src/engine/inspect.dart';
 import 'package:release_kit/src/engine/release_stage.dart';
 import 'package:release_kit/src/engine/registry.dart';
+import 'package:release_kit/src/engine/release_manifest.dart';
 import 'package:release_kit/src/engine/resolve.dart';
 import 'package:release_kit/src/engine/source_tree.dart';
 import 'package:release_kit/src/engine/stage_inspection.dart';
@@ -35,12 +36,20 @@ const _otherHead = '4444444444444444444444444444444444444444';
 const _otherTree = '5555555555555555555555555555555555555555';
 
 const _config = '''
-schema = 1
+schema = 2
 
 [release.tool]
 path = "packages/tool"
-publish = ["pub.dev", "github-release", "homebrew"]
+publish = ["git-tag", "pub.dev", "github-release", "homebrew"]
 binary_platforms = ["linux-x64"]
+''';
+
+const _pubOnlyConfig = '''
+schema = 2
+
+[release.tool]
+path = "packages/tool"
+publish = ["pub.dev"]
 ''';
 
 const _pubspec = '''
@@ -67,6 +76,68 @@ void main() {
 
   setUp(() => harness = _Harness());
   tearDown(() => harness.close());
+
+  test('a non-Git one-shot release binds bytes but claims no revision',
+      () async {
+    final unbound = _Harness(unbound: true);
+    addTearDown(unbound.close);
+
+    final run = await unbound.run(
+      stageOnly: false,
+      confirm: (_) async => '1.2.3',
+    );
+
+    expect(run.code, ExitCodes.ok, reason: run.text);
+    expect(
+      run.publicMutations.map((call) => call.publicKind),
+      ['pub.dev'],
+    );
+    final receipt = unbound.stage.requireReceipt();
+    expect(receipt.identity.isGitBound, isFalse);
+    expect(receipt.identity.headCommit, isNull);
+    expect(
+      receipt.steps.first.evidence,
+      const {'source_binding': 'unbound'},
+    );
+    final manifest = ReleaseManifest.parse(
+      File(unbound.stage.directory.resolve(ReleaseAssets.manifest))
+          .readAsStringSync(),
+    );
+    expect(manifest.commit, isNull);
+  });
+
+  test('non-Git stage-only refuses the unusable handoff', () async {
+    final unbound = _Harness(unbound: true);
+    addTearDown(unbound.close);
+
+    final run = await unbound.run(
+      stageOnly: true,
+      confirm: (_) async => fail('the refusal needs no authorization'),
+    );
+
+    expect(run.code, ExitCodes.refused, reason: run.text);
+    expect(run.problemCodes, ['RK-SRC-002']);
+    expect(run.publicMutations, isEmpty);
+    expect(unbound.stage.inspect().receipt, isNull);
+  });
+
+  test('non-Git existing version is compared after staging, not blocked early',
+      () async {
+    final unbound = _Harness(unbound: true);
+    addTearDown(unbound.close);
+    unbound.registry.published['tool']!.add('1.2.3');
+    unbound.registry.archives['tool@1.2.3'] = _publishedPackage();
+
+    final run = await unbound.run(
+      stageOnly: false,
+      confirm: (_) async => fail('an exact release needs no authorization'),
+    );
+
+    expect(run.code, ExitCodes.ok, reason: run.text);
+    expect(run.publicMutations, isEmpty);
+    expect(run.text, contains('already released'));
+    expect(unbound.stage.inspect().reusable, isTrue);
+  });
 
   test(
       'stage-only seals a reusable receipt after package preflight and never '
@@ -174,8 +245,8 @@ void main() {
   });
 
   test(
-      'a failed pub session check stops before an unstaged release does private '
-      'or public work', () async {
+      'a failed pub session check keeps the exact stage but stops before '
+      'authorization or public work', () async {
     harness.tools.failPubLogin = true;
     var authorizationPrompts = 0;
 
@@ -191,16 +262,16 @@ void main() {
     expect(refused.problemCodes, ['RK-PUB-007']);
     expect((refused.report['halt'] as Map?)?['kind'], 'beforeActing');
     expect(refused.keys, contains('dart pub login'));
-    expect(refused.keys, isNot(contains('dart pub publish --dry-run')));
+    expect(refused.keys, contains('dart pub publish --dry-run'));
     expect(
       refused.keys.where((key) => key.startsWith('dart compile exe')),
-      isEmpty,
+      hasLength(1),
     );
     expect(refused.publicMutations, isEmpty);
     expect('not attempted'.allMatches(refused.text), hasLength(4));
     expect(authorizationPrompts, 0);
-    expect(harness.stage.inspect().receipt, isNull,
-        reason: 'the pub session is checked before a stage is materialized');
+    expect(harness.stage.inspect().reusable, isTrue,
+        reason: 'credentials are acquired only after the exact stage exists');
   });
 
   test('a second identical stage performs no producer work', () async {
@@ -234,6 +305,24 @@ void main() {
           'behind the same complete-stage short circuit',
     );
     expect(second.publicMutations, isEmpty);
+  });
+
+  test('the staged formula links the public archive name, not its stage path',
+      () async {
+    final staged = await harness.run(
+      stageOnly: true,
+      confirm: (_) async => fail('stage mode must not authorize'),
+    );
+    expect(staged.code, ExitCodes.ok, reason: staged.text);
+
+    final formula = File(harness.stage.directory.resolve(
+      ReleaseAssets.formulaPath(harness.unit.binaryProject!),
+    )).readAsStringSync();
+    expect(
+      formula,
+      contains('releases/download/v1.2.3/tool-1.2.3-linux-x64.tar.gz'),
+    );
+    expect(formula, isNot(contains('producers/tool/archives')));
   });
 
   test(
@@ -516,7 +605,7 @@ void main() {
     );
 
     expect(retry.code, ExitCodes.refused);
-    expect(retry.problemCodes, contains('RK-STAGE-005'));
+    expect(retry.problemCodes, contains('RK-STAGE-005'), reason: retry.text);
     expect((retry.report['halt'] as Map?)?['kind'], 'unfixableByRerun');
     expect(retry.report['rerun_helps'], isFalse);
     expect(retry.publicMutations, isEmpty);
@@ -565,7 +654,7 @@ void main() {
     );
 
     expect(retry.code, ExitCodes.refused, reason: retry.text);
-    expect(retry.problemCodes, contains('RK-STAGE-005'));
+    expect(retry.problemCodes, contains('RK-STAGE-005'), reason: retry.text);
     expect((retry.report['halt'] as Map?)?['kind'], 'unfixableByRerun');
     expect(retry.publicMutations, isEmpty);
     expect(
@@ -826,7 +915,8 @@ void main() {
     expect(staged.code, ExitCodes.ok, reason: staged.text);
 
     final archive = harness.stage.directory.resolve(
-      ReleaseAssets.archiveName('tool', '1.2.3', 'linux-x64'),
+      'producers/tool/archives/'
+      '${ReleaseAssets.archiveName('tool', '1.2.3', 'linux-x64')}',
     );
     final original = File(archive).readAsBytesSync();
     File(archive).writeAsStringSync('tampered after review');
@@ -943,16 +1033,49 @@ void main() {
     });
   }
 
+  test(
+      'a missing GitHub session refuses after staging and before authorization',
+      () async {
+    harness.tools.runFailure =
+        (call) => call.key == 'gh auth status --active --hostname github.com'
+            ? ToolResult(
+                exitCode: 1,
+                stdout: '',
+                stderr: 'expired credential details that must stay private',
+              )
+            : null;
+    var authorizationPrompts = 0;
+
+    final failed = await harness.run(
+      stageOnly: false,
+      confirm: (_) async {
+        authorizationPrompts++;
+        return '1.2.3';
+      },
+    );
+
+    expect(failed.code, ExitCodes.refused, reason: failed.text);
+    expect(failed.problemCodes, contains('RK-GITHUB-010'));
+    expect(
+      failed.keys,
+      contains('gh auth status --active --hostname github.com'),
+    );
+    expect(failed.keys, contains('dart pub publish --dry-run'));
+    expect(harness.stage.inspect().reusable, isTrue);
+    expect(authorizationPrompts, 0);
+    expect(failed.publicMutations, isEmpty);
+    expect(failed.text, isNot(contains('expired credential details')));
+  });
+
   for (final failure in [
     (name: 'release-note write', path: 'release-notes.md'),
     (
       name: 'archive write',
-      path: ReleaseAssets.archiveName('tool', '1.2.3', 'linux-x64'),
+      path: 'producers/tool/archives/tool-1.2.3-linux-x64.tar.gz',
     ),
-    (name: 'checksum write', path: ReleaseAssets.checksums),
     (
       name: 'formula write',
-      path: ReleaseAssets.formulaName('tool'),
+      path: 'producers/tool/homebrew/tool.rb',
     ),
     (name: 'manifest write', path: ReleaseAssets.manifest),
   ]) {
@@ -1001,10 +1124,9 @@ void main() {
     (step: 'source-snapshot', preflightDone: false, buildDone: false),
     (step: 'pub-preflight:tool', preflightDone: true, buildDone: false),
     (step: 'release-notes', preflightDone: true, buildDone: false),
-    (step: 'build:linux-x64', preflightDone: true, buildDone: true),
-    (step: 'archive:linux-x64', preflightDone: true, buildDone: true),
-    (step: 'checksums', preflightDone: true, buildDone: true),
-    (step: 'homebrew-formula', preflightDone: true, buildDone: true),
+    (step: 'build:tool:linux-x64', preflightDone: true, buildDone: true),
+    (step: 'archive:tool:linux-x64', preflightDone: true, buildDone: true),
+    (step: 'homebrew-formula:tool', preflightDone: true, buildDone: true),
   ]) {
     test('an interrupted ${boundary.step} prefix resumes from exact bytes',
         () async {
@@ -1057,8 +1179,8 @@ void main() {
       confirm: (_) async => fail('stage mode must not authorize'),
     );
     expect(first.code, ExitCodes.ok, reason: first.text);
-    _interruptAfter(harness.stage, 'build:linux-x64');
-    File(harness.stage.directory.resolve('linux-x64/tool'))
+    _interruptAfter(harness.stage, 'build:tool:linux-x64');
+    File(harness.stage.directory.resolve('producers/tool/linux-x64/tool'))
         .writeAsStringSync('planted binary');
     expect(harness.stage.inspect().validProgress, isFalse);
 
@@ -1105,7 +1227,7 @@ void main() {
     expect(staged.code, ExitCodes.ok, reason: staged.text);
     final receipt = harness.stage.requireReceipt();
     final build = receipt.steps.singleWhere(
-      (step) => step.name == 'build:linux-x64',
+      (step) => step.name == 'build:tool:linux-x64',
     );
     final renamed = StageStep(
       name: 'compiled-something',
@@ -1173,7 +1295,7 @@ void main() {
     expect(staged.code, ExitCodes.ok, reason: staged.text);
     final receipt = harness.stage.requireReceipt();
     final build = receipt.steps.singleWhere(
-      (step) => step.name == 'build:linux-x64',
+      (step) => step.name == 'build:tool:linux-x64',
     );
     final noSmoke = StageStep(
       name: build.name,
@@ -1454,10 +1576,11 @@ void _interruptAfter(ReleaseStage stage, String stepName) {
 }
 
 class _Harness {
-  _Harness() {
+  _Harness({bool unbound = false}) {
     root = Directory.systemTemp.createTempSync('rk-stage-command-');
+    final config = unbound ? _pubOnlyConfig : _config;
     source = MemorySourceTree({
-      'release.toml': _config,
+      'release.toml': config,
       'packages/tool/pubspec.yaml': _pubspec,
       'packages/tool/CHANGELOG.md': _changelog,
       'packages/tool/bin/tool.dart': _entrypoint,
@@ -1465,7 +1588,7 @@ class _Harness {
     }, description: '${root.path}/worktree');
 
     final diagnostics = Diagnostics();
-    final parsed = ReleaseConfig.parse(_config, 'release.toml', diagnostics);
+    final parsed = ReleaseConfig.parse(config, 'release.toml', diagnostics);
     if (parsed == null) {
       throw StateError('fixture configuration failed: ${diagnostics.found}');
     }
@@ -1475,7 +1598,7 @@ class _Harness {
     }
     resolution = resolved;
     unit = resolution.unit('tool')!;
-    git = gitAt();
+    git = unbound ? GitState.unbound(root.path) : gitAt();
     stages = ReleaseStages(
       source: source,
       git: git,
@@ -1554,10 +1677,11 @@ class _Harness {
         registry: runRegistry,
         comparator: Comparator(tools: const SystemTools()),
         source: source,
+        allowCurrentSourceFallback: git.isBound,
       ),
       git: git,
       tools: readTools ?? tools,
-      repository: 'example/tool',
+      repository: git.originUrl,
       stageFor: stages.call,
     );
     tools.onInvocation = onInvocation;
@@ -1571,7 +1695,7 @@ class _Harness {
       confirm: confirm,
       stageOnly: stageOnly,
       stageFor: stages.call,
-      refreshStage: refreshStage,
+      refreshStage: refreshStage ?? stages.refresh,
       refreshGit: refreshGit ?? () => git,
       wait: (_) => Future<void>.delayed(Duration.zero),
       capabilities: capabilities ??

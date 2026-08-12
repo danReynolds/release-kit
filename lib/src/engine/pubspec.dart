@@ -51,6 +51,16 @@ class Pubspec {
 
   bool get isWorkspaceRoot => workspace.isNotEmpty;
   bool get vetoesRegistry => publishTo == 'none';
+  bool get declaresPubDev =>
+      publishTo == null || isPubDevDestination(publishTo!);
+
+  /// The native publication endpoint after repository and ambient Dart
+  /// configuration are applied. Kept out of reports because URLs may carry
+  /// credentials; stage identity hashes it and release compares it opaquely.
+  String effectivePublishDestination(Map<String, String> environment) =>
+      canonicalPublishDestination(
+        publishTo ?? environment['PUB_HOSTED_URL'] ?? 'https://pub.dev',
+      );
 
   /// Repository-relative directory holding this manifest.
   String get directory {
@@ -137,6 +147,32 @@ class Pubspec {
     }
     return result;
   }
+}
+
+String canonicalPublishDestination(String value) {
+  final trimmed = value.trim();
+  final uri = Uri.tryParse(trimmed);
+  if (uri == null || !uri.hasScheme || uri.host.isEmpty) return trimmed;
+  final path = uri.path == '/' ? '' : uri.path.replaceFirst(RegExp(r'/+$'), '');
+  return uri
+      .replace(
+        scheme: uri.scheme.toLowerCase(),
+        host: uri.host.toLowerCase(),
+        path: path,
+      )
+      .toString();
+}
+
+bool isPubDevDestination(String value) {
+  final uri = Uri.tryParse(canonicalPublishDestination(value));
+  return uri != null &&
+      uri.scheme == 'https' &&
+      uri.host == 'pub.dev' &&
+      (uri.port == 0 || uri.port == 443) &&
+      uri.userInfo.isEmpty &&
+      uri.path.isEmpty &&
+      !uri.hasQuery &&
+      !uri.hasFragment;
 }
 
 enum DependencyKind { hosted, path, git }

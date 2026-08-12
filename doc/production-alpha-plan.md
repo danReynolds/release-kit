@@ -5,7 +5,7 @@ Status: local implementation complete; supervised live gate pending,
 probe, `--offline`, and the transient unsigned build are gone; macOS
 build and signing are one producer; the pipeline is declared once; the
 manifest carries only externally checkable facts; notary evidence is
-stage-local; and `--json` is the agent contract at schema 3 with
+stage-local; and `--json` is the agent contract at schema 5 with
 `release --confirm=<version>` as the noninteractive typed yes. This is
 the current forward plan.
 `doc/plan.md` remains the historical phase plan, review record, and evidence
@@ -78,7 +78,7 @@ worktree. The local acceptance evidence is:
 - a real local bare Git origin proves absent-to-exact annotated-tag creation,
   manifest binding, push read-back, and an idempotent retry;
 - producer and receipt fault matrices prove that failed local work cannot
-  reach a public act and that only an exact validated prefix resumes;
+  reach a public act and that only an exact validated draft subset resumes;
 - automated status cases cover the final-state matrix, parallel completion
   orders, pipe, JSON, `NO_COLOR`, and `TERM=dumb`; actual CLI review covers an
   ordinary online/unreachable report; and
@@ -220,7 +220,7 @@ rk release rk
 
 `--stage` performs every local and package preflight for real: source
 snapshot, package dry-run, build and sign as one step, smoke test where
-possible, notarization, archive, checksums, release notes, release
+possible, notarization, archives, release notes, release
 manifest, and formula rendering. It may read public targets, use signing and
 notary credentials, and contact Apple. It must not create or push a tag,
 publish a registry package, create a GitHub Release, push a tap, or run
@@ -387,8 +387,8 @@ a moved remote tag is detected; and no target is skipped on presence alone.
   before the receipt may reference it.
 - Record, per completed step, input digests and output path/type/mode/size/hash,
   smoke evidence, signature identity and certificate fingerprint,
-  notarization binding/result/log, archive inventory, checksum mapping, and
-  notes/formula digests.
+  notarization binding/result/log, archive inventory, and notes/formula
+  digests.
 - Produce a separate publishable `release-manifest.json` containing no local
   secrets or paths. Publish it with binary releases; pub.dev-only exactness is
   recovered from the tagged source and registry archive instead.
@@ -406,7 +406,7 @@ recovery-critical stage during partial publication must fail closed.
 
 ### Phase 3 — Make every producer stageable and reusable
 
-- Change build, sign, notarize, archive, checksum, notes, manifest, and formula
+- Change build, sign, notarize, archive, notes, manifest, and formula
   operations to return structured outcomes for the receipt writer.
 - Run package-manager dry-run and consumer-resolve evidence as stage inputs.
 - Derive every public filename through the one `ReleaseAssets` grammar.
@@ -418,7 +418,8 @@ recovery-critical stage during partial publication must fail closed.
   executed.
 
 **Done when:** a second identical stage performs no compile, sign, notary
-submission, archive, or checksum generation; cheap authority checks may rerun;
+submission, archive, notes, formula, or manifest generation; cheap authority
+checks may rerun;
 and a fully validated incomplete prefix resumes after its last recorded step.
 If any recorded dependency differs, rk discards and rebuilds the still-private
 stage instead of maintaining a second dependency-repair engine. A completed
@@ -434,7 +435,7 @@ stage that was reviewed is never replaced implicitly.
   inspect and preflight
     -> [normal interactive release with unfinished pub.dev: dart pub login]
     -> source snapshot
-    -> package/build+sign/notarize/archive/checksum/notes/formula
+    -> package/build+sign/notarize/archive/notes/formula
     -> complete stage
     -> tag
     -> dependency-ordered registry packages
@@ -477,7 +478,7 @@ closed with a specific restore instruction.
 
 **Done when:** call traces prove `--stage` has no tag/pub/GitHub/tap mutation;
 status immediately recognizes its exact artifacts; and the following release
-performs zero producer/sign/notary/archive/checksum work.
+performs zero producer/sign/notary/archive work.
 
 ### Phase 6 — Land the agreed status experience
 
@@ -597,7 +598,8 @@ a session, not package uploader permission.
    external transcript. From that directory, independently:
    - hash `release-manifest.json` with the exact command
      `shasum -a 256 release-manifest.json`;
-   - run `shasum -a 256 -c SHA256SUMS`;
+   - hash each archive with `shasum -a 256 <archive>` and confirm the digest
+     matches its `release-manifest.json` entry;
    - list each archive with the exact command `tar -tzf <archive>` and confirm
      its inventory is exactly `rk`, `LICENSE`, and `README.md`;
    - extract each runnable archive into a fresh temporary directory and require
@@ -640,10 +642,10 @@ a session, not package uploader permission.
       then run `"$alpha_pub_cache/bin/rk" --version` and
       `"$alpha_pub_cache/bin/rk" --help` by that exact path.
     - In another fresh directory, download the selected GitHub archive and the
-      published `SHA256SUMS`. Select that archive's checksum line, run
-      `shasum -a 256 -c` against it, extract the archive, and run the extracted
-      `./rk --version` and `./rk --help`. The checksum source URL and archive
-      URL must both be the public `v0.0.1` GitHub Release.
+      published `release-manifest.json`. Select that archive's digest, compare
+      it with `shasum -a 256 <archive>`, extract the archive, and run the
+      extracted `./rk --version` and `./rk --help`. The manifest URL and
+      archive URL must both be the public `v0.0.1` GitHub Release.
     - Then make each consumed binary do rk's actual work, which `--version`
       and `--help` do not: from `alpha_consumer_repo`, with that binary's
       directory first on `PATH`, run `rk status rk` **by bare name** —

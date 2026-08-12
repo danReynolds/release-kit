@@ -6,6 +6,7 @@ import 'package:release_kit/src/engine/config.dart';
 import 'package:release_kit/src/engine/diagnostic.dart';
 import 'package:release_kit/src/engine/git.dart';
 import 'package:release_kit/src/engine/inspect.dart';
+import 'package:release_kit/src/engine/publish_target.dart';
 import 'package:release_kit/src/engine/resolve.dart';
 import 'package:release_kit/src/engine/source_tree.dart';
 import 'package:release_kit/src/engine/targets.dart';
@@ -35,15 +36,17 @@ void main() {
   setUp(() {
     final diagnostics = Diagnostics();
     final config = ReleaseConfig.parse('''
-schema = 1
+schema = 2
 
 [release.core]
+tag = "example_core-v{version}"
 path = "packages/core"
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]
 
 [release.cli]
+tag = "example_cli-v{version}"
 path = "packages/cli"
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]
 ''', 'release.toml', diagnostics)!;
     resolution = Resolution.resolve(
       config,
@@ -129,10 +132,10 @@ dependencies:
     test('the forge, without tools or an origin', () async {
       final diagnostics = Diagnostics();
       final config = ReleaseConfig.parse('''
-schema = 1
+schema = 2
 
 [release.cli]
-publish = ["github-release"]
+publish = ["git-tag", "github-release"]
 binary_platforms = ["macos-arm64"]
 ''', 'release.toml', diagnostics)!;
       final binary = Resolution.resolve(
@@ -201,7 +204,6 @@ void classificationTables() {
         StepKind.build: false,
         StepKind.notarize: false,
         StepKind.archive: false,
-        StepKind.checksums: false,
         StepKind.completeStage: false,
       },
       reason: 'a prerequisite dropped from this set stops blocking a release '
@@ -213,6 +215,13 @@ void classificationTables() {
         id: 'u/x/y',
         unit: 'u',
         kind: kind,
+        target: switch (kind) {
+          StepKind.tag => PublishTarget.gitTag,
+          StepKind.publishRegistry => PublishTarget.pubDev,
+          StepKind.publishRelease => PublishTarget.githubRelease,
+          StepKind.publishFormula => PublishTarget.homebrew,
+          _ => null,
+        },
         summary: 'x',
         needs: const [],
       );
@@ -510,6 +519,7 @@ void classificationTables() {
           id: 'cli/tag',
           unit: 'cli',
           kind: StepKind.tag,
+          target: PublishTarget.gitTag,
           summary: 'tag the release',
           needs: const [],
         ),
@@ -559,9 +569,11 @@ void classificationTables() {
     );
     final state = await inspector.inspect(
       Step(
-        id: 'cli/homebrew/tool',
+        id: 'cli/homebrew/example_tool/example-tool',
         unit: 'cli',
+        project: 'example_tool',
         kind: StepKind.publishFormula,
+        target: PublishTarget.homebrew,
         summary: 'update the formula',
         needs: const [],
       ),
@@ -595,9 +607,11 @@ void classificationTables() {
       );
       return inspector.inspect(
         Step(
-          id: 'cli/homebrew/example-tool',
+          id: 'cli/homebrew/example_tool/example-tool',
           unit: 'cli',
+          project: 'example_tool',
           kind: StepKind.publishFormula,
+          target: PublishTarget.homebrew,
           summary: 'update the formula',
           needs: const [],
         ),
@@ -667,7 +681,7 @@ void classificationTables() {
       () async {
     // Both derivations read ReleaseAssets now, so comparing them to each
     // other would compare a thing to itself. The pin is the literal: this
-    // fixture's frozen five-name vector lives in the sibling test below, and
+    // fixture's frozen four-name vector lives in the sibling test below, and
     // a summary that says any other number has drifted from the grammar
     // whatever the grammar says.
     final resolution = await _binaryResolution();
@@ -677,7 +691,7 @@ void classificationTables() {
         steps.firstWhere((s) => s.kind == StepKind.publishRelease).summary;
     final counted = int.parse(
         RegExp(r'publish (\d+) assets').firstMatch(summary)!.group(1)!);
-    expect(counted, 5);
+    expect(counted, 3);
   });
 
   test('the expected asset set is derived, and derives everything', () async {
@@ -687,8 +701,6 @@ void classificationTables() {
       {
         'example-tool-1.0.0-linux-x64.tar.gz',
         'example-tool-1.0.0-macos-arm64.tar.gz',
-        'example-tool.rb',
-        'SHA256SUMS',
         'release-manifest.json',
       },
       reason: 'emptied, every release inspects exact and nothing notices. '
@@ -757,10 +769,10 @@ class _LatestInspector extends Inspector {
 Future<Resolution> _binaryResolution() async {
   final diagnostics = Diagnostics();
   final config = ReleaseConfig.parse('''
-schema = 1
+schema = 2
 
 [release.cli]
-publish = ["pub.dev", "github-release", "homebrew"]
+publish = ["git-tag", "pub.dev", "github-release", "homebrew"]
 binary_platforms = ["linux-x64", "macos-arm64"]
 ''', 'release.toml', diagnostics)!;
   return Resolution.resolve(
@@ -826,11 +838,11 @@ void tagRemoteLeg() {
   }) async {
     final diagnostics = Diagnostics();
     final config = ReleaseConfig.parse('''
-schema = 1
+schema = 2
 
 [release.core]
 path = "packages/keybay"
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]
 ''', 'release.toml', diagnostics)!;
     final resolution = Resolution.resolve(
       config,

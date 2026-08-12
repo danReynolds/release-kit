@@ -22,7 +22,26 @@ class GitState {
     this.tagTargets = const {},
     required this.signingConfigured,
     required this.originUrl,
+    this.isBound = true,
   }) : headTree = headTree ?? head;
+
+  GitState.unbound(String root)
+      : this(
+          root: root,
+          head: '',
+          headTree: '',
+          branch: null,
+          isClean: true,
+          uncommitted: const [],
+          headIsPushed: false,
+          hasRemote: false,
+          tags: const [],
+          signingConfigured: false,
+          originUrl: null,
+          isBound: false,
+        );
+
+  final bool isBound;
 
   final String root;
 
@@ -183,6 +202,7 @@ class GitState {
   /// named up to eight files, while release said "1 paths are uncommitted"
   /// and named none — one diagnostic code, two --json payloads.
   Diagnostic? uncommittedProblem() {
+    if (!isBound) return null;
     if (worktreeStatusError != null) {
       return Diagnostic(
         code: 'RK-GIT-008',
@@ -212,6 +232,7 @@ class GitState {
   /// how far ahead, or that there is nowhere to push to at all. Shared by
   /// status and release so the two verbs cannot describe it differently.
   Diagnostic? unpushedProblem() {
+    if (!isBound) return null;
     if (headIsPushed) return null;
     if (!hasRemote) {
       return Diagnostic(

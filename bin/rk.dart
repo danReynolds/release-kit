@@ -15,6 +15,7 @@ library;
 import 'dart:io';
 
 import 'package:release_kit/src/commands/init.dart';
+import 'package:release_kit/src/commands/init_selector.dart';
 import 'package:release_kit/src/commands/release.dart';
 import 'package:release_kit/src/commands/status.dart';
 import 'package:release_kit/src/destinations/pub_dev.dart';
@@ -24,11 +25,15 @@ import 'package:release_kit/src/output/diagnosis.dart';
 import 'package:release_kit/src/engine/diagnostic.dart';
 import 'package:release_kit/src/engine/git.dart';
 import 'package:release_kit/src/engine/inspect.dart';
+import 'package:release_kit/src/engine/init_plan.dart';
+import 'package:release_kit/src/engine/dart_workspace.dart';
+import 'package:release_kit/src/engine/publish_target.dart';
 import 'package:release_kit/src/output/output.dart';
 import 'package:release_kit/src/engine/registry.dart';
 import 'package:release_kit/src/engine/resolve.dart';
 import 'package:release_kit/src/engine/release_stage.dart';
 import 'package:release_kit/src/engine/source_tree.dart';
+import 'package:release_kit/src/engine/source_context.dart';
 import 'package:release_kit/src/engine/tools.dart';
 import 'package:release_kit/src/targets/catalog.dart';
 import 'package:release_kit/src/version.dart';
@@ -299,8 +304,9 @@ Future<void> main(List<String> args) async {
 void _recordDiagnosis(Output output, int code, {String? crash}) {
   if (code == ExitCodes.ok || code == ExitCodes.usage) return;
   if (!output.report.acted && crash == null) return;
-  final root = GitSourceTree.findRoot(Directory.current.path);
-  if (root == null) return;
+  final root = GitSourceTree.findRoot(Directory.current.path) ??
+      Directory.current.absolute.path;
+  if (!File('$root/release.toml').existsSync()) return;
 
   final at = Diagnosis.write(
     root,
@@ -321,26 +327,37 @@ Future<int> _init(
   required bool interactive,
   required bool write,
 }) async {
-  final root = GitSourceTree.findRoot(Directory.current.path);
-  if (root == null) {
-    output.problem(
-      Diagnostic(
-        code: 'RK-CLI-002',
-        message: 'this is not a git repository',
-        remedy: 'rk releases from a repository, and reads its tags and '
-            'history to know what is already out.',
-      ),
-    );
-    return ExitCodes.usage;
-  }
-  final tree = GitSourceTree(root);
-  final git = GitState.read(root);
+  final gitRoot = GitSourceTree.findRoot(Directory.current.path);
+  final root = gitRoot ?? Directory.current.absolute.path;
+  final tree = gitRoot == null
+      ? FileSystemSourceTree(root)
+      : GitSourceTree(gitRoot) as SourceTree;
+  final git = gitRoot == null ? GitState.unbound(root) : GitState.read(root);
+  final selectorEnabled = interactive && !write && _usableInitTerminal();
 
   return InitCommand(
     tree: tree,
     output: output,
     origin: git.originUrl,
-    write: (path, contents) => File('$root/$path').writeAsStringSync(contents),
+    gitBound: git.isBound,
+    hasRemote: git.hasRemote,
+    ambientPubHostedUrl: Platform.environment['PUB_HOSTED_URL'],
+    select: selectorEnabled ? _selectInitPlan : null,
+    review: selectorEnabled
+        ? (prompt) async {
+            output.prompt(prompt);
+            return InitCommand.reviewed(stdin.readLineSync());
+          }
+        : null,
+    updateGitignore: git.isBound ? () => _ensureRkIgnored(root) : null,
+    write: (path, contents) {
+      if (path == 'release.toml') {
+        final file = File('$root/$path')..createSync(exclusive: true);
+        file.writeAsStringSync(contents, flush: true);
+      } else {
+        File('$root/$path').writeAsStringSync(contents);
+      }
+    },
     // A prompt would be written straight to stdout, past the sink that --json
     // silences, so asking is not an option when a caller is parsing the
     // answer. init already refuses when nobody can confirm. The answer is
@@ -349,15 +366,91 @@ Future<int> _init(
     // `rk init < /dev/null`.
     // --write is the typed yes, carried as a flag: the door for scripts and
     // agents, named in the refusal a terminal-less run prints.
-    confirm: write
-        ? (_) async => true
-        : interactive && stdin.hasTerminal
-            ? (prompt) async {
-                output.prompt(prompt);
-                return InitCommand.consented(stdin.readLineSync());
-              }
-            : null,
+    confirm: write ? (_) async => true : null,
   ).run();
+}
+
+void _ensureRkIgnored(String root) {
+  final file = File('$root/.gitignore');
+  final handle = file.openSync(mode: FileMode.append);
+  try {
+    handle.lockSync(FileLock.exclusive);
+    final current = file.readAsStringSync();
+    if (current.split('\n').any((line) => line.trim() == '.rk/')) return;
+    handle.writeStringSync(
+        '${current.isEmpty || current.endsWith('\n') ? '' : '\n'}'
+        '.rk/\n');
+    handle.flushSync();
+  } finally {
+    try {
+      handle.unlockSync();
+    } on Object {
+      // Closing releases the lock too; do not hide the actual init outcome.
+    }
+    handle.closeSync();
+  }
+}
+
+bool _usableInitTerminal() {
+  if (!stdin.hasTerminal || !stdout.hasTerminal) return false;
+  if ((Platform.environment['TERM'] ?? '').toLowerCase() == 'dumb') {
+    return false;
+  }
+  try {
+    return stdout.terminalColumns >= 32;
+  } on Object {
+    return false;
+  }
+}
+
+Future<InitPlan?> _selectInitPlan(InitPlan plan) async {
+  var interrupted = false;
+  final signals = ProcessSignal.sigint.watch().listen((_) {
+    interrupted = true;
+  });
+  try {
+    return await runInitSelector(
+      plan,
+      const _StdioInitTerminal(),
+      interrupted: () => interrupted,
+    );
+  } finally {
+    await signals.cancel();
+  }
+}
+
+final class _StdioInitTerminal implements InitTerminal {
+  const _StdioInitTerminal();
+
+  @override
+  bool get lineMode => stdin.lineMode;
+  @override
+  set lineMode(bool value) => stdin.lineMode = value;
+
+  @override
+  bool get echoMode => stdin.echoMode;
+  @override
+  set echoMode(bool value) => stdin.echoMode = value;
+
+  @override
+  bool get echoNewlineMode => stdin.echoNewlineMode;
+  @override
+  set echoNewlineMode(bool value) => stdin.echoNewlineMode = value;
+
+  @override
+  int get width => stdout.terminalColumns;
+
+  @override
+  int get height => stdout.terminalLines;
+
+  @override
+  int readByte() => stdin.readByteSync();
+
+  @override
+  void write(String value) => stdout.write(value);
+
+  @override
+  Future<void> flush() => stdout.flush();
 }
 
 Future<int> _release(
@@ -370,9 +463,10 @@ Future<int> _release(
   final prepared = _prepare(output);
   if (!prepared.isReady) return prepared.code!;
   final resolution = prepared.resolution!;
-  final tree = prepared.tree!;
+  final context = prepared.context!;
+  final tree = context.tree;
+  final git = context.git;
   final registry = prepared.registry!;
-  final git = GitState.read(tree.root);
   final targets = TargetCatalog.builtIn();
   final stages = ReleaseStages(
     source: tree,
@@ -390,7 +484,9 @@ Future<int> _release(
         pubDev: PubDevTarget(
           registry: registry,
           comparator: Comparator(tools: targetTools),
-          source: GitCommitSourceTree(tree.root, git.head),
+          source:
+              git.isBound ? GitCommitSourceTree(context.root, git.head) : tree,
+          allowCurrentSourceFallback: git.isBound,
         ),
         git: git,
         tools: targetTools,
@@ -416,7 +512,9 @@ Future<int> _release(
       stageOnly: stageOnly,
       stageFor: stages.call,
       refreshStage: stages.refresh,
-      refreshGit: () => GitState.read(tree.root),
+      refreshGit: () => git.isBound
+          ? GitState.read(context.root)
+          : GitState.unbound(context.root),
     ).run(only: unit);
   } finally {
     registry.close();
@@ -441,14 +539,14 @@ Future<String?> _promptOnTerminal(String prompt) async {
 /// correct answer rather than a failure — an agent sweeping a fleet must not
 /// see a fault for every repository that simply does not use rk.
 class _Prepared {
-  _Prepared.ready(this.resolution, this.tree, this.registry) : code = null;
+  _Prepared.ready(this.resolution, this.context, this.registry) : code = null;
   _Prepared.stopped(this.code)
       : resolution = null,
-        tree = null,
+        context = null,
         registry = null;
 
   final Resolution? resolution;
-  final GitSourceTree? tree;
+  final SourceContext? context;
   final Registry? registry;
   final int? code;
 
@@ -456,20 +554,11 @@ class _Prepared {
 }
 
 _Prepared _prepare(Output output) {
-  final root = GitSourceTree.findRoot(Directory.current.path);
-  if (root == null) {
-    output.problem(
-      Diagnostic(
-        code: 'RK-CLI-002',
-        message: 'this is not a git repository',
-        remedy: 'rk releases from a repository, and reads its tags and '
-            'history to know what is already out.',
-      ),
-    );
-    return _Prepared.stopped(ExitCodes.usage);
-  }
-
-  final tree = GitSourceTree(root);
+  final gitRoot = GitSourceTree.findRoot(Directory.current.path);
+  final root = gitRoot ?? Directory.current.absolute.path;
+  SourceTree tree =
+      gitRoot == null ? FileSystemSourceTree(root) : GitSourceTree(gitRoot);
+  final git = gitRoot == null ? GitState.unbound(root) : GitState.read(root);
   final String? source;
   try {
     source = tree.read('release.toml');
@@ -495,17 +584,65 @@ _Prepared _prepare(Output output) {
 
   final diagnostics = Diagnostics();
   final config = ReleaseConfig.parse(source, 'release.toml', diagnostics);
-  final resolution =
+  var resolution =
       config == null ? null : Resolution.resolve(config, tree, diagnostics);
 
-  if (resolution == null) {
+  if (resolution != null && !git.isBound) {
+    tree = FileSystemSourceTree(
+      root,
+      roots: _filesystemSourceRoots(tree, resolution),
+    );
+    final narrowedDiagnostics = Diagnostics();
+    resolution = Resolution.resolve(config!, tree, narrowedDiagnostics);
+    for (final diagnostic in narrowedDiagnostics.found) {
+      diagnostics.report(diagnostic);
+    }
+  }
+
+  if (resolution != null && !git.isBound) {
+    for (final unit in resolution.units) {
+      final requiringGit = <PublishTarget>{
+        ...unit.publish.where((target) => target.requiresGit),
+        for (final project in unit.projects)
+          ...project.publish.where((target) => target.requiresGit),
+      };
+      if (requiringGit.isEmpty) continue;
+      final names = requiringGit.map((target) => target.configName).toList()
+        ..sort();
+      diagnostics.add(
+        'RK-SRC-001',
+        '${unit.name} selects targets that require Git',
+        remedy: 'initialize a Git repository, or remove '
+            '${names.join(', ')} from this unit',
+      );
+    }
+  }
+
+  if (resolution == null || diagnostics.isNotEmpty) {
     output.repository(name: root.split('/').last);
     output.blank();
     output.problems(diagnostics.found);
     return _Prepared.stopped(ExitCodes.refused);
   }
 
-  return _Prepared.ready(resolution, tree, Registry());
+  return _Prepared.ready(
+    resolution,
+    SourceContext(tree: tree, git: git),
+    Registry(),
+  );
+}
+
+Set<String> _filesystemSourceRoots(
+  SourceTree tree,
+  Resolution resolution,
+) {
+  final roots = <String>{
+    'release.toml',
+    ...DartWorkspaceDiscovery(tree).sourceRoots,
+    for (final unit in resolution.units)
+      for (final project in unit.projects) project.pubspec.directory,
+  };
+  return roots;
 }
 
 Future<int> _status(
@@ -515,10 +652,11 @@ Future<int> _status(
   final prepared = _prepare(output);
   if (!prepared.isReady) return prepared.code!;
   final resolution = prepared.resolution!;
-  final tree = prepared.tree!;
+  final context = prepared.context!;
+  final tree = context.tree;
+  final git = context.git;
   final registry = prepared.registry!;
   try {
-    final git = GitState.read(tree.root);
     final targets = TargetCatalog.builtIn();
     final stages = ReleaseStages(
       source: tree,
@@ -535,7 +673,9 @@ Future<int> _status(
         pubDev: PubDevTarget(
           registry: registry,
           comparator: Comparator(tools: targetTools),
-          source: GitCommitSourceTree(tree.root, git.head),
+          source:
+              git.isBound ? GitCommitSourceTree(context.root, git.head) : tree,
+          allowCurrentSourceFallback: git.isBound,
         ),
         git: git,
         tools: targetTools,

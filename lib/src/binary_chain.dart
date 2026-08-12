@@ -20,8 +20,8 @@ import 'transforms/macos.dart';
 ///
 /// It sits at the top of `lib/src` because it belongs to none of the
 /// directories below it. It is not a verb — no argument parsing, no exit
-/// codes; its API is buildStep, notarizeStep, archiveStep, and
-/// checksumsStep, each called by `commands/release.dart`. And it is not an
+/// codes; its API is buildStep, notarizeStep, and archiveStep, each called by
+/// `commands/release.dart`. And it is not an
 /// adapter by this codebase's own test, the one `destinations/git_tag.dart`
 /// states: it holds an [Output] at thirty-odd sites, where every file in
 /// `builds/`, `transforms/` and `destinations/` holds one at zero.
@@ -65,11 +65,19 @@ class BinaryChain {
   // These two are not public asset names: they name what lives under
   // `.rk/work/` between steps. The published grammar is ReleaseAssets.
 
-  static String binaryName(String platform, String executable) =>
-      '$platform/$executable';
+  static String binaryName(
+    String project,
+    String platform,
+    String executable,
+  ) =>
+      'producers/$project/$platform/$executable';
 
-  static String zipName(String platform, String executable) =>
-      '$platform/$executable.zip';
+  static String zipName(
+    String project,
+    String platform,
+    String executable,
+  ) =>
+      'producers/$project/$platform/$executable.zip';
 
   // ---- build ----
 
@@ -101,7 +109,7 @@ class BinaryChain {
       );
     }
 
-    final name = binaryName(platform, executable);
+    final name = ReleaseAssets.binaryPath(project, platform);
 
     File(workspace.pathOf(name)).parent.createSync(recursive: true);
     final built = await DartCliBuilder(
@@ -311,24 +319,15 @@ class BinaryChain {
     ResolvedProject project,
   ) async {
     final platform = step.platform!;
-    final executable = project.executable!;
-    final binary = binaryName(platform, executable);
+    final binary = ReleaseAssets.binaryPath(project, platform);
     if (!workspace.exists(binary)) {
       return _missingArtifact(step, binary, 'the build step produces it');
     }
 
-    final resultName = ReleaseAssets.notaryResultName(
-      executable,
-      project.version.canonical,
-      platform,
-    );
-    final logName = ReleaseAssets.notaryLogName(
-      executable,
-      project.version.canonical,
-      platform,
-    );
+    final resultName = ReleaseAssets.notaryResultPath(project, platform);
+    final logName = ReleaseAssets.notaryLogPath(project, platform);
 
-    final zip = zipName(platform, executable);
+    final zip = ReleaseAssets.notaryInputPath(project, platform);
     final zipped = await tools.run(
       'ditto',
       [
@@ -393,6 +392,12 @@ class BinaryChain {
       );
     }
     workspace.write(logName, utf8.encode(log.stdout));
+    output.step(
+      step,
+      verdict: Verdict.exact,
+      detail: 'notarized',
+      show: false,
+    );
     return _notaryOutcome(
       resultName: resultName,
       logName: logName,
@@ -408,11 +413,14 @@ class BinaryChain {
   ) async {
     final platform = step.platform!;
     final executable = project.executable!;
-    final binary = workspace.readBytes(binaryName(platform, executable));
+    final binary = workspace.readBytes(ReleaseAssets.binaryPath(
+      project,
+      platform,
+    ));
     if (binary == null) {
       return _missingArtifact(
         step,
-        binaryName(platform, executable),
+        ReleaseAssets.binaryPath(project, platform),
         'the build step produces it',
       );
     }
@@ -430,11 +438,7 @@ class BinaryChain {
       }
     }
 
-    final name = ReleaseAssets.archiveName(
-      executable,
-      project.version.canonical,
-      platform,
-    );
+    final name = ReleaseAssets.archivePath(project, platform);
     final bytes = ArchiveBuilder.gzip(ArchiveBuilder.tar(entries));
     workspace.write(name, bytes);
     output.step(
@@ -451,49 +455,6 @@ class BinaryChain {
         'inventory': StageArchiveInventory.evidence(
           StageArchiveInventory.parse(bytes),
         ),
-      },
-    );
-  }
-
-  // ---- checksums ----
-
-  Future<LocalProducerOutcome> checksumsStep(
-    Step step,
-    ResolvedProject project,
-  ) async {
-    final assets = <String, List<int>>{};
-    for (final platform in project.binaryPlatforms) {
-      final name = ReleaseAssets.archiveName(
-        project.executable!,
-        project.version.canonical,
-        platform,
-      );
-      final bytes = workspace.readBytes(name);
-      if (bytes == null) {
-        return _missingArtifact(step, name, 'the archive steps produce it');
-      }
-      assets[name] = bytes;
-    }
-
-    workspace.write(
-        ReleaseAssets.checksums, utf8.encode(Checksums.render(assets)));
-    output.step(
-      step,
-      show: false,
-      mark: Mark.done,
-      verdict: Verdict.exact,
-      detail: '${assets.length} archives',
-      note: '${assets.length} archives',
-    );
-    return LocalProducerOutcome.succeeded(
-      outputs: const [
-        LocalProducerOutput(ReleaseAssets.checksums, 'checksums'),
-      ],
-      evidence: {
-        'checksums': {
-          for (final entry in assets.entries)
-            entry.key: Sha256.hex(entry.value),
-        },
       },
     );
   }

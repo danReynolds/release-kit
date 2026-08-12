@@ -6,6 +6,7 @@ import 'package:release_kit/src/binary_chain.dart';
 import 'package:release_kit/src/engine/checklist.dart';
 import 'package:release_kit/src/engine/config.dart';
 import 'package:release_kit/src/engine/diagnostic.dart';
+import 'package:release_kit/src/engine/assets.dart';
 import 'package:release_kit/src/output/output.dart';
 import 'package:release_kit/src/engine/resolve.dart';
 import 'package:release_kit/src/engine/source_tree.dart';
@@ -39,11 +40,11 @@ void main() {
   final resolution = () {
     final diagnostics = Diagnostics();
     final config = ReleaseConfig.parse('''
-schema = 1
+schema = 2
 
 [release.cli]
 path = "packages/tool"
-publish = ["github-release", "homebrew"]
+publish = ["git-tag", "github-release", "homebrew"]
 binary_platforms = ["macos-arm64"]
 ''', 'release.toml', diagnostics)!;
     return Resolution.resolve(
@@ -126,13 +127,14 @@ executables:
           // The compiler and ditto write files; the script writes what they
           // would, where the workspace said to.
           if (key.startsWith('dart compile exe')) {
-            File(
-                workspace.pathOf(BinaryChain.binaryName('macos-arm64', 'tool')))
+            File(workspace
+                .pathOf(BinaryChain.binaryName('tool', 'macos-arm64', 'tool')))
               ..parent.createSync(recursive: true)
               ..writeAsBytesSync(utf8.encode('BINARY 1.0.0'));
           }
           if (key.startsWith('ditto')) {
-            File(workspace.pathOf(BinaryChain.zipName('macos-arm64', 'tool')))
+            File(workspace
+                .pathOf(BinaryChain.zipName('tool', 'macos-arm64', 'tool')))
               ..parent.createSync(recursive: true)
               ..writeAsBytesSync(utf8.encode('ZIP'));
           }
@@ -155,11 +157,11 @@ executables:
     expect(built.ok, isTrue, reason: built.problem ?? buffer.toString());
     expect(
       built.outputs.map((output) => (output.path, output.type)),
-      [('macos-arm64/tool', 'executable')],
+      [(ReleaseAssets.binaryPath(project, 'macos-arm64'), 'executable')],
     );
     expect(built.evidence['smoke'], {'status': 'passed'});
     expect(
-      workspace.exists('macos-arm64/tool'),
+      workspace.exists(ReleaseAssets.binaryPath(project, 'macos-arm64')),
       isTrue,
       reason: 'the build wrote the binary where the next step will look',
     );
@@ -181,9 +183,9 @@ executables:
     expect(
       notarized.outputs.map((output) => (output.path, output.type)),
       [
-        ('macos-arm64/tool.zip', 'notary-input'),
-        ('tool-1.0.0-macos-arm64.notary-result.json', 'notary'),
-        ('tool-1.0.0-macos-arm64.notary-log.json', 'notary'),
+        (ReleaseAssets.notaryInputPath(project, 'macos-arm64'), 'notary-input'),
+        (ReleaseAssets.notaryResultPath(project, 'macos-arm64'), 'notary'),
+        (ReleaseAssets.notaryLogPath(project, 'macos-arm64'), 'notary'),
       ],
     );
     final notary = notarized.evidence['notary']! as Map;
@@ -197,30 +199,14 @@ executables:
     expect(archived.ok, isTrue, reason: archived.problem);
     expect(
       archived.outputs.map((output) => (output.path, output.type)),
-      [('tool-1.0.0-macos-arm64.tar.gz', 'archive')],
+      [(ReleaseAssets.archivePath(project, 'macos-arm64'), 'archive')],
     );
     final inventory = archived.evidence['inventory']! as List;
     expect(inventory, hasLength(1));
     expect((inventory.single as Map)['name'], 'tool');
     expect((inventory.single as Map)['mode'], '0755');
-    expect(workspace.exists('tool-1.0.0-macos-arm64.tar.gz'), isTrue);
-
-    final checksummed =
-        await chain(tools).checksumsStep(step(StepKind.checksums), project);
-    expect(checksummed.ok, isTrue, reason: checksummed.problem);
-    expect(
-      checksummed.outputs.map((output) => (output.path, output.type)),
-      [('SHA256SUMS', 'checksums')],
-    );
-    expect(
-      (checksummed.evidence['checksums']! as Map).keys,
-      ['tool-1.0.0-macos-arm64.tar.gz'],
-    );
-    expect(workspace.exists('SHA256SUMS'), isTrue);
-    expect(
-      utf8.decode(workspace.readBytes('SHA256SUMS')!),
-      contains('tool-1.0.0-macos-arm64.tar.gz'),
-    );
+    expect(workspace.exists(ReleaseAssets.archivePath(project, 'macos-arm64')),
+        isTrue);
   });
 
   test('a later step with an empty workspace refuses, naming the producer',
@@ -342,7 +328,8 @@ executables:
       },
       onRun: (key) {
         if (key.startsWith('dart compile exe')) {
-          File(workspace.pathOf(BinaryChain.binaryName('macos-arm64', 'tool')))
+          File(workspace
+              .pathOf(BinaryChain.binaryName('tool', 'macos-arm64', 'tool')))
             ..parent.createSync(recursive: true)
             ..writeAsBytesSync(utf8.encode('BINARY 1.0.0'));
         }
@@ -409,7 +396,8 @@ executables:
       },
       onRun: (key) {
         if (key.startsWith('dart compile exe')) {
-          File(workspace.pathOf(BinaryChain.binaryName('macos-arm64', 'tool')))
+          File(workspace
+              .pathOf(BinaryChain.binaryName('tool', 'macos-arm64', 'tool')))
             ..parent.createSync(recursive: true)
             ..writeAsBytesSync(utf8.encode('BINARY 1.0.0'));
         }
@@ -514,13 +502,15 @@ executables:
       },
       onRun: (key) {
         if (key.startsWith('ditto')) {
-          File(workspace.pathOf(BinaryChain.zipName('macos-arm64', 'tool')))
+          File(workspace
+              .pathOf(BinaryChain.zipName('tool', 'macos-arm64', 'tool')))
             ..parent.createSync(recursive: true)
             ..writeAsBytesSync(utf8.encode('ZIP'));
         }
       },
     );
-    workspace.write('macos-arm64/tool', utf8.encode('BINARY'));
+    workspace.write(ReleaseAssets.binaryPath(project, 'macos-arm64'),
+        utf8.encode('BINARY'));
 
     final ok =
         await chain(tools).notarizeStep(step(StepKind.notarize), project);

@@ -43,12 +43,12 @@ class StageInput {
 
   factory StageInput.commit(StageIdentity identity) => StageInput(
         name: 'stage:commit',
-        sha256: Sha256.hex(utf8.encode(identity.headCommit)),
+        sha256: Sha256.hex(utf8.encode(identity.headCommit!)),
       );
 
   factory StageInput.tree(StageIdentity identity) => StageInput(
         name: 'stage:tree',
-        sha256: Sha256.hex(utf8.encode(identity.headTree)),
+        sha256: Sha256.hex(utf8.encode(identity.headTree!)),
       );
 
   Map<String, Object?> toJson() => {'name': name, 'sha256': sha256};
@@ -117,7 +117,7 @@ class StageArtifact {
 
   final String path;
 
-  /// Semantic type: for example `executable`, `archive`, or `checksums`.
+  /// Semantic type: for example `executable`, `archive`, or `formula`.
   final String type;
 
   /// POSIX permission and special bits, rendered as four octal digits.

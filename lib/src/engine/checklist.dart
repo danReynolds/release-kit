@@ -1,5 +1,6 @@
 import 'assets.dart';
 import 'diagnostic.dart';
+import 'publish_target.dart';
 import 'resolve.dart';
 import 'version.dart';
 
@@ -74,26 +75,28 @@ class Checklist {
     );
     steps.add(completeStage);
 
-    // The tag is the first public act. Even a unit without binary producers
-    // gets a stage barrier: registry package, notes and manifest preparation
-    // are finalized when the command executes that barrier.
-    final tag = Step(
-      id: '${unit.name}/tag/${unit.tag}',
-      kind: StepKind.tag,
-      unit: unit.name,
-      summary: 'tag ${unit.tag}',
-      needs: [completeStage.id],
-    );
-    steps.add(tag);
+    Step? tag;
+    if (unit.publish.contains(PublishTarget.gitTag)) {
+      tag = Step(
+        id: '${unit.name}/tag/${unit.tag!}',
+        kind: StepKind.tag,
+        target: PublishTarget.gitTag,
+        unit: unit.name,
+        summary: 'tag ${unit.tag!}',
+        needs: [completeStage.id],
+      );
+      steps.add(tag);
+    }
 
     // Publish steps are emitted first so a sibling's prerequisite can be a
     // lookup rather than a second place that reconstructs an id format.
     final published = <String, Step>{};
     for (final project in publicationOrder) {
-      if (!project.channels.contains('pub.dev')) continue;
+      if (!project.publish.contains(PublishTarget.pubDev)) continue;
       published[project.name] = Step(
         id: '${unit.name}/pub.dev/${project.name}@${project.version}',
         kind: StepKind.publishRegistry,
+        target: PublishTarget.pubDev,
         unit: unit.name,
         project: project.name,
         coordinate: '${project.name}@${project.version}',
@@ -105,7 +108,7 @@ class Checklist {
     for (final project in publicationOrder) {
       final step = published[project.name];
       if (step == null) continue;
-      final needs = <String>[tag.id];
+      final needs = <String>[tag?.id ?? completeStage.id];
 
       for (final name in project.pubspec.dependencies.keys) {
         final sibling = published[name];
@@ -116,17 +119,34 @@ class Checklist {
       steps.add(step.withNeeds(needs));
     }
 
-    // Binary channels belong to the single project that requested them.
-    for (final project in publicationOrder) {
-      if (!project.config.wantsBinaries) continue;
-      steps.addAll(
-        _binaryPublicationSteps(
-          unit,
-          project,
-          tag.id,
-          completeStage.id,
-        ),
+    if (unit.publish.contains(PublishTarget.githubRelease)) {
+      final release = Step(
+        id: '${unit.name}/github-release/${unit.tag!}',
+        kind: StepKind.publishRelease,
+        target: PublishTarget.githubRelease,
+        unit: unit.name,
+        summary: 'publish ${ReleaseAssets.expectedForUnit(unit).length} assets '
+            'to the ${unit.tag!} release',
+        needs: [tag!.id, completeStage.id],
       );
+      steps.add(release);
+
+      for (final formulaProject in publicationOrder.where(
+        (project) => project.publish.contains(PublishTarget.homebrew),
+      )) {
+        steps.add(
+          Step(
+            id: '${unit.name}/homebrew/${formulaProject.name}/'
+                '${formulaProject.executable}',
+            kind: StepKind.publishFormula,
+            target: PublishTarget.homebrew,
+            unit: unit.name,
+            project: formulaProject.name,
+            summary: 'update the ${formulaProject.executable} formula',
+            needs: [release.id],
+          ),
+        );
+      }
     }
 
     // A refused input — a dependency circle, say — legitimately has no order,
@@ -214,12 +234,8 @@ class Checklist {
   /// the pipeline's names, order, and dependency edges. The receipt contract
   /// and the coordinator both consume this list; nothing else respells it.
   static List<Step> localProducerSteps(ResolvedUnit unit) {
-    final steps = <Step>[];
-    for (final project in unit.projects) {
-      if (!project.config.wantsBinaries) continue;
-      steps.addAll(_localBinarySteps(unit, project));
-    }
-    return steps;
+    final project = unit.binaryProject;
+    return project == null ? const [] : _localBinarySteps(unit, project);
   }
 
   static List<Step> _localBinarySteps(
@@ -227,7 +243,6 @@ class Checklist {
     ResolvedProject project,
   ) {
     final steps = <Step>[];
-    final built = <String>[];
 
     // Sorted, so the checklist and the receipt agree on one sequence
     // without a second ordering rule anywhere.
@@ -237,7 +252,7 @@ class Checklist {
       // work worth its own receipt, and one step means the checklist, the
       // receipt, and the validators all speak the same producer names.
       final build = Step(
-        id: '${unit.name}/build/$platform',
+        id: '${unit.name}/build/${project.name}/$platform',
         kind: StepKind.build,
         unit: unit.name,
         project: project.name,
@@ -252,7 +267,7 @@ class Checklist {
       var last = build.id;
       if (macos) {
         final notarize = Step(
-          id: '${unit.name}/notarize/$platform',
+          id: '${unit.name}/notarize/${project.name}/$platform',
           kind: StepKind.notarize,
           unit: unit.name,
           project: project.name,
@@ -265,7 +280,7 @@ class Checklist {
       }
 
       final archive = Step(
-        id: '${unit.name}/archive/$platform',
+        id: '${unit.name}/archive/${project.name}/$platform',
         kind: StepKind.archive,
         unit: unit.name,
         project: project.name,
@@ -274,54 +289,6 @@ class Checklist {
         needs: [last],
       );
       steps.add(archive);
-      built.add(archive.id);
-    }
-
-    final checksums = Step(
-      id: '${unit.name}/checksums/SHA256SUMS',
-      kind: StepKind.checksums,
-      unit: unit.name,
-      project: project.name,
-      summary: 'checksums for ${built.length} archives',
-      needs: built,
-    );
-    steps.add(checksums);
-
-    return steps;
-  }
-
-  static List<Step> _binaryPublicationSteps(
-    ResolvedUnit unit,
-    ResolvedProject project,
-    String tagStepId,
-    String completeStageStepId,
-  ) {
-    final steps = <Step>[];
-
-    final publish = Step(
-      id: '${unit.name}/github-release/${unit.tag}',
-      kind: StepKind.publishRelease,
-      unit: unit.name,
-      project: project.name,
-      summary: 'publish ${ReleaseAssets.expectedFor(project).length} assets '
-          'to the ${unit.tag} release',
-      needs: [tagStepId, completeStageStepId],
-    );
-    steps.add(publish);
-
-    if (project.channels.contains('homebrew')) {
-      steps.add(
-        Step(
-          id: '${unit.name}/homebrew/${project.executable}',
-          kind: StepKind.publishFormula,
-          unit: unit.name,
-          project: project.name,
-          summary: 'update the ${project.executable} formula',
-          // The formula points at published assets, so it waits for the
-          // release to be public rather than merely staged.
-          needs: [publish.id],
-        ),
-      );
     }
 
     return steps;
@@ -338,7 +305,6 @@ enum StepKind {
   build,
   notarize,
   archive,
-  checksums,
 
   /// The locally validated release receipt exists and is complete.
   completeStage,
@@ -360,7 +326,6 @@ extension StepKindFacts on StepKind {
         StepKind.build ||
         StepKind.notarize ||
         StepKind.archive ||
-        StepKind.checksums ||
         StepKind.completeStage =>
           StepPhase.stage,
         StepKind.tag ||
@@ -371,24 +336,6 @@ extension StepKindFacts on StepKind {
       };
 
   bool get isPublic => phase == StepPhase.publish;
-
-  /// Stable report identity for a built-in public target.
-  ///
-  /// The checklist kind is the target identity. Keeping the wire spelling
-  /// here avoids a parallel enum that can drift from the release graph.
-  String? get targetName => switch (this) {
-        StepKind.tag => 'gitTag',
-        StepKind.publishRegistry => 'pubDev',
-        StepKind.publishRelease => 'githubRelease',
-        StepKind.publishFormula => 'homebrew',
-        StepKind.prerequisite ||
-        StepKind.build ||
-        StepKind.notarize ||
-        StepKind.archive ||
-        StepKind.checksums ||
-        StepKind.completeStage =>
-          null,
-      };
 
   bool get isPermanent => switch (this) {
         StepKind.publishRegistry => true,
@@ -409,7 +356,16 @@ class Step {
     this.project,
     this.platform,
     this.coordinate,
-  });
+    this.target,
+  }) {
+    if (kind.isPublic && target == null) {
+      throw ArgumentError.value(
+        target,
+        'target',
+        'a public step must name its concrete target',
+      );
+    }
+  }
 
   /// The same step, waiting on [needs]. Steps are built before their edges are
   /// known, so an edge is added by rebuilding rather than by mutation.
@@ -422,6 +378,7 @@ class Step {
         project: project,
         platform: platform,
         coordinate: coordinate,
+        target: target,
       );
 
   /// `<unit>/<adapter>/<coordinate>`, stable across runs.
@@ -435,6 +392,11 @@ class Step {
   /// What this step acts on, so an executor never has to take an id apart to
   /// recover it.
   final String? coordinate;
+
+  /// The concrete destination identity. [kind] describes lifecycle mechanics;
+  /// several registry providers can therefore share one step kind without
+  /// becoming the same target.
+  final PublishTarget? target;
 
   /// One line, in the user's terms.
   final String summary;
@@ -450,10 +412,10 @@ class Step {
   /// Whether this step's effect can never be taken back.
   ///
   /// Only a registry publication: pub.dev burns a version number forever, so a
-  /// mistake there costs a version rather than a retry. A release, its assets,
-  /// a formula and even a tag can all be removed — rk deletes and recreates a
-  /// wrong draft as a matter of course — and marking those permanent too would
-  /// spend the operator's attention on the steps that do not need it.
+  /// mistake there costs a version rather than a retry. Tags, releases, and
+  /// formulas are still guarded against destructive repair, but they are not
+  /// irrevocable provider acts, so marking them permanent would spend the
+  /// operator's attention on the wrong steps.
   bool get isPermanent => kind.isPermanent;
 
   @override
@@ -516,7 +478,7 @@ List<ExternalPrerequisite> externalPrerequisites(
       if (own.contains(name)) return; // ordered within the unit instead
       final sibling = firstParty[name];
       if (sibling == null) return; // an ordinary third-party dependency
-      if (!sibling.channels.contains('pub.dev')) return;
+      if (!sibling.publish.contains(PublishTarget.pubDev)) return;
 
       final satisfied = dependency.satisfiedBy(sibling.version);
       if (satisfied == false) {

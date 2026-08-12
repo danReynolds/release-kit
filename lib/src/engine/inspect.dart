@@ -4,6 +4,7 @@ import '../targets/target_module.dart';
 import 'checklist.dart';
 import 'diagnostic.dart';
 import 'git.dart';
+import 'publish_target.dart';
 import 'registry.dart';
 import 'resolve.dart';
 import 'release_stage.dart';
@@ -120,10 +121,7 @@ class Inspector {
       return _stageInspection(unit);
     }
     if (step.kind
-        case StepKind.build ||
-            StepKind.notarize ||
-            StepKind.archive ||
-            StepKind.checksums) {
+        case StepKind.build || StepKind.notarize || StepKind.archive) {
       return targetReads.reusableStage(unit) == null
           ? const Inspection.unknown('local work, decided when it runs')
           : const Inspection.exact(detail: 'validated in the release stage');
@@ -197,6 +195,10 @@ class Inspector {
   /// trusting status.
   Future<void> monotonicity(ResolvedUnit unit, Diagnostics problems) async {
     for (final module in targets.modules) {
+      if (module.stepKind == StepKind.tag &&
+          !unit.publish.contains(PublishTarget.gitTag)) {
+        continue;
+      }
       module
           .localReleaseDiagnostics(targetReads, unit)
           .forEach(problems.report);
@@ -221,10 +223,15 @@ class Inspector {
     bool refreshRegistry = false,
   }) async {
     final localTagProblems = Diagnostics();
-    for (final module in this.targets.modules) {
-      module
-          .localReleaseDiagnostics(targetReads, unit)
-          .forEach(localTagProblems.report);
+    if (unit.publish.contains(PublishTarget.gitTag)) {
+      for (final module in this
+          .targets
+          .modules
+          .where((item) => item.stepKind == StepKind.tag)) {
+        module
+            .localReleaseDiagnostics(targetReads, unit)
+            .forEach(localTagProblems.report);
+      }
     }
 
     final candidates = <TargetExpectation>[];
@@ -318,7 +325,12 @@ class Inspector {
     Checklist checklist,
     Map<String, Inspection> states,
   ) {
+    if (!unit.publish.contains(PublishTarget.gitTag)) return const [];
     if (!checklist.steps.any((s) => s.kind == StepKind.tag)) return const [];
+    final tag = unit.tag;
+    if (tag == null) {
+      throw StateError('a selected git-tag target has no resolved tag');
+    }
 
     final publishes = checklist.steps
         .where((step) => step.isPermanent)
@@ -331,18 +343,18 @@ class Inspector {
     // verdict now folds in the remote, and a local-but-unpushed tag reads
     // absent — which is work (push it), not the no-tag-at-all case the
     // retro-tag guard exists for, and not exempt from the placement check.
-    if (!git.hasTag(unit.tag) && publishes.every((s) => s.isExact)) {
+    if (!git.hasTag(tag) && publishes.every((s) => s.isExact)) {
       return [
         Diagnostic(
           code: 'RK-GIT-004',
           message: '${unit.version} is already published, and the tag '
-              '${unit.tag} does not exist',
+              '$tag does not exist',
           remedy: 'rk will not mint it after the fact — that would bind the '
               'published version to whatever HEAD is now, not to the commit '
               'that produced it. Tag it yourself, at that commit:\n'
-              '  git tag ${unit.tag} <the commit that released '
+              '  git tag $tag <the commit that released '
               '${unit.version}>\n'
-              '  git push origin ${unit.tag}\n'
+              '  git push origin $tag\n'
               'find it: git log --oneline -S "version: ${unit.version}" '
               '-- ${unit.projects.first.pubspec.directory}/pubspec.yaml — '
               'then check out the candidate and run rk status ${unit.name} '
@@ -351,7 +363,7 @@ class Inspector {
       ];
     }
 
-    final target = git.tagTarget(unit.tag);
+    final target = git.tagTarget(tag);
 
     // Unread is not agreement. `tagTargets`' own docstring says so — "callers
     // treat as placement unknown, never as agreement" — and both callers
@@ -365,13 +377,11 @@ class Inspector {
     // rule pass, and the release pushes the tag and publishes the version —
     // from a commit the tag does not name. A burned pub.dev version is the
     // one outcome re-running cannot fix.
-    if (git.hasTag(unit.tag) &&
-        target == null &&
-        publishes.any((s) => s.isAbsent)) {
+    if (git.hasTag(tag) && target == null && publishes.any((s) => s.isAbsent)) {
       return [
         Diagnostic(
           code: 'RK-GIT-007',
-          message: 'the tag ${unit.tag} exists, and rk could not read which '
+          message: 'the tag $tag exists, and rk could not read which '
               'commit it names',
           remedy: 'rk proves the tag names the commit it is about to publish '
               'from, and it cannot prove that here — so it will not publish. '
@@ -382,18 +392,18 @@ class Inspector {
       ];
     }
 
-    if (git.hasTag(unit.tag) &&
+    if (git.hasTag(tag) &&
         target != null &&
         target != git.head &&
         publishes.any((s) => s.isAbsent)) {
       return [
         Diagnostic(
           code: 'RK-GIT-005',
-          message: 'the tag ${unit.tag} points at ${_short(target)}, and this '
+          message: 'the tag $tag points at ${_short(target)}, and this '
               'release would publish from ${_short(git.head)}',
           remedy: 'what would be published is not what the tag names. Move '
               'the tag deliberately, or check out the tagged commit:\n'
-              '  git tag -sf ${unit.tag} && git push -f origin ${unit.tag}',
+              '  git tag -sf $tag && git push -f origin $tag',
         ),
       ];
     }

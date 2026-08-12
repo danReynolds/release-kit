@@ -3,6 +3,7 @@ import 'dart:io';
 
 import '../transforms/digest.dart';
 import 'release_manifest.dart';
+import 'producers.dart';
 import 'stage.dart';
 import 'stage_archive.dart';
 import 'stage_receipt.dart';
@@ -24,7 +25,6 @@ enum StageIssueKind {
   unreadable,
   invalidStructure,
   invalidManifest,
-  invalidChecksums,
   invalidArchive,
   invalidNotary,
 }
@@ -302,8 +302,10 @@ class StageInspector {
       _structure(issues, 'source-snapshot must be the first receipt step');
     } else {
       final expectedInputs = {
-        'stage:commit': Sha256.hex(utf8.encode(receipt.identity.headCommit)),
-        'stage:tree': Sha256.hex(utf8.encode(receipt.identity.headTree)),
+        if (receipt.identity.isGitBound)
+          'stage:commit': Sha256.hex(utf8.encode(receipt.identity.headCommit!)),
+        if (receipt.identity.isGitBound)
+          'stage:tree': Sha256.hex(utf8.encode(receipt.identity.headTree!)),
         'stage:plan': receipt.identity.planSha256,
       };
       final actualInputs = {
@@ -312,7 +314,9 @@ class StageInspector {
       if (!_sameMap(expectedInputs, actualInputs)) {
         _structure(
           issues,
-          'source-snapshot is not bound to commit, tree, and plan',
+          receipt.identity.isGitBound
+              ? 'source-snapshot is not bound to commit, tree, and plan'
+              : 'source-snapshot is not bound to its plan',
         );
       }
       if (source.outputs.isEmpty ||
@@ -325,8 +329,13 @@ class StageInspector {
           'source-snapshot must record its source files',
         );
       }
-      if (source.evidence['commit'] != receipt.identity.headCommit ||
-          source.evidence['tree'] != receipt.identity.headTree) {
+      final expectedEvidence = receipt.identity.isGitBound
+          ? <String, Object?>{
+              'commit': receipt.identity.headCommit,
+              'tree': receipt.identity.headTree,
+            }
+          : <String, Object?>{'source_binding': 'unbound'};
+      if (!_sameMap(expectedEvidence, source.evidence)) {
         _structure(
           issues,
           'source-snapshot evidence disagrees with the stage identity',
@@ -338,7 +347,7 @@ class StageInspector {
     // otherwise a crash after a bad archive was receipted would turn that
     // false claim into a trusted input on the next run.
     for (final step in receipt.steps) {
-      if (step.name.startsWith('build:macos-')) {
+      if (isMacosBuildReceipt(step.name)) {
         _inspectSignature(step, issues);
       }
       if (step.name.startsWith('archive:')) {
@@ -384,9 +393,13 @@ class StageInspector {
   ) {
     switch (name) {
       case 'stage:commit':
-        return Sha256.hex(utf8.encode(identity.headCommit));
+        return identity.headCommit == null
+            ? null
+            : Sha256.hex(utf8.encode(identity.headCommit!));
       case 'stage:tree':
-        return Sha256.hex(utf8.encode(identity.headTree));
+        return identity.headTree == null
+            ? null
+            : Sha256.hex(utf8.encode(identity.headTree!));
       case 'stage:plan':
         return identity.planSha256;
     }
@@ -435,22 +448,58 @@ class StageInspector {
     final completeInputs = {
       for (final input in complete.inputs) input.name: input.sha256,
     };
-    if (completeInputs.keys.toSet().difference(manifestNames).isNotEmpty ||
-        manifestNames.difference(completeInputs.keys.toSet()).isNotEmpty) {
+    final encodedBindings = complete.evidence['release_assets'];
+    final bindings = encodedBindings is Map
+        ? {
+            for (final entry in encodedBindings.entries)
+              if (entry.key is String && entry.value is String)
+                entry.key as String: entry.value as String,
+          }
+        : <String, String>{};
+    final StagedFormulaBinding? formulaBinding;
+    try {
+      final encoded = complete.evidence['formula_binding'];
+      formulaBinding =
+          encoded == null ? null : StagedFormulaBinding.fromEvidence(encoded);
+    } on Object catch (error) {
+      issues.add(StageIssue(
+        StageIssueKind.invalidManifest,
+        'complete-stage has malformed formula bindings: $error',
+        path: 'release-manifest.json',
+      ));
+      return;
+    }
+    final expectedCompleteInputs = {
+      ...bindings.values,
+      if (formulaBinding != null) formulaBinding.stagedPath,
+    };
+    if (encodedBindings is! Map ||
+        encodedBindings.length != bindings.length ||
+        bindings.length != manifestNames.length ||
+        bindings.keys.toSet().difference(manifestNames).isNotEmpty ||
+        manifestNames.difference(bindings.keys.toSet()).isNotEmpty ||
+        completeInputs.keys
+            .toSet()
+            .difference(expectedCompleteInputs)
+            .isNotEmpty ||
+        expectedCompleteInputs
+            .difference(completeInputs.keys.toSet())
+            .isNotEmpty) {
       issues.add(const StageIssue(
         StageIssueKind.invalidManifest,
-        'complete-stage inputs do not exactly name the public inventory',
+        'complete-stage inputs do not exactly bind the publication inventory',
         path: 'release-manifest.json',
       ));
     }
 
     for (final item in manifest.artifacts) {
-      final local = beforeComplete[item.name];
+      final stagedPath = bindings[item.name];
+      final local = stagedPath == null ? null : beforeComplete[stagedPath];
       if (local == null ||
           local.type != item.type ||
           local.size != item.size ||
           local.sha256 != item.sha256 ||
-          completeInputs[item.name] != item.sha256) {
+          completeInputs[stagedPath] != item.sha256) {
         issues.add(StageIssue(
           StageIssueKind.invalidManifest,
           'manifest metadata does not match the producer receipt',
@@ -459,7 +508,31 @@ class StageInspector {
         continue;
       }
     }
-    _inspectChecksums(stage, manifest, beforeComplete, issues);
+    final manifestFormula = manifest.formula;
+    if (formulaBinding?.identity != manifestFormula?.identity) {
+      issues.add(const StageIssue(
+        StageIssueKind.invalidManifest,
+        'complete-stage formula evidence does not match the manifest',
+        path: 'release-manifest.json',
+      ));
+    }
+    if (manifestFormula != null) {
+      final local = formulaBinding == null
+          ? null
+          : beforeComplete[formulaBinding.stagedPath];
+      if (formulaBinding == null ||
+          local == null ||
+          local.type != 'formula' ||
+          local.size != manifestFormula.size ||
+          local.sha256 != manifestFormula.sha256 ||
+          completeInputs[formulaBinding.stagedPath] != manifestFormula.sha256) {
+        issues.add(StageIssue(
+          StageIssueKind.invalidManifest,
+          'formula metadata does not match the producer receipt',
+          path: '${manifestFormula.tap}/${manifestFormula.path}',
+        ));
+      }
+    }
   }
 
   static void _inspectArchive(
@@ -542,64 +615,6 @@ class StageInspector {
         StageIssueKind.invalidStructure,
         problem,
         path: 'stage.json',
-      ));
-    }
-  }
-
-  static void _inspectChecksums(
-    StageDirectory stage,
-    ReleaseManifest manifest,
-    Map<String, StageArtifact> artifacts,
-    List<StageIssue> issues,
-  ) {
-    final checksumItems =
-        manifest.artifacts.where((item) => item.type == 'checksums').toList();
-    if (checksumItems.isEmpty) return;
-    if (checksumItems.length != 1 ||
-        checksumItems.single.name != 'SHA256SUMS') {
-      issues.add(const StageIssue(
-        StageIssueKind.invalidChecksums,
-        'the manifest must carry one SHA256SUMS checksums file',
-        path: 'SHA256SUMS',
-      ));
-      return;
-    }
-    try {
-      final lines = File(stage.resolve('SHA256SUMS')).readAsLinesSync();
-      final found = <String, String>{};
-      for (final line in lines) {
-        if (line.isEmpty) continue;
-        final match =
-            RegExp(r'^([0-9a-f]{64})  ([^/\\\u0000]+)$').firstMatch(line);
-        if (match == null ||
-            found.putIfAbsent(match.group(2)!, () => match.group(1)!) !=
-                match.group(1)) {
-          throw const FormatException('SHA256SUMS has a malformed line');
-        }
-      }
-      final archives = {
-        for (final item in manifest.artifacts.where(
-          (item) => item.type == 'archive',
-        ))
-          item.name: item.sha256,
-      };
-      if (!_sameMap(found, archives)) {
-        throw const FormatException(
-          'SHA256SUMS does not exactly cover the release archives',
-        );
-      }
-      for (final entry in found.entries) {
-        if (artifacts[entry.key]?.sha256 != entry.value) {
-          throw FormatException(
-            'SHA256SUMS digest disagrees for ${entry.key}',
-          );
-        }
-      }
-    } on Object catch (error) {
-      issues.add(StageIssue(
-        StageIssueKind.invalidChecksums,
-        'checksum evidence is invalid: $error',
-        path: 'SHA256SUMS',
       ));
     }
   }
@@ -688,7 +703,7 @@ void _structure(List<StageIssue> issues, String message) {
   ));
 }
 
-bool _sameMap(Map<String, String> left, Map<String, String> right) {
+bool _sameMap(Map<String, Object?> left, Map<String, Object?> right) {
   if (left.length != right.length) return false;
   for (final entry in left.entries) {
     if (right[entry.key] != entry.value) return false;

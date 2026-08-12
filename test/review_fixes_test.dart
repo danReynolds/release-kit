@@ -82,7 +82,7 @@ version: 0.1.0
     test('a range pin refuses instead of publishing unchecked', () {
       final resolution = _resolve(
           '''
-schema = 1
+schema = 2
 
 [release.framework]
 path = "packages/fleury"
@@ -125,10 +125,10 @@ dependencies:
   test('a project built from outside the repository is refused', () {
     final diagnostics = Diagnostics();
     final config = ReleaseConfig.parse('''
-schema = 1
+schema = 2
 
 [release.cli]
-publish = ["github-release"]
+publish = ["git-tag", "github-release"]
 binary_platforms = ["macos-arm64"]
 ''', 'release.toml', diagnostics)!;
 
@@ -158,22 +158,21 @@ dependencies:
     expect(problem.remedy, contains('stdio'));
   });
 
-  test('two binary projects in one unit are refused, not collided', () {
+  test('two binary projects must be declared as separate release units', () {
     final diagnostics = Diagnostics();
     final config = ReleaseConfig.parse('''
-schema = 1
+schema = 2
 
 [release.tools]
 tag = "tools-v{version}"
+publish = ["git-tag", "github-release"]
 
 [[release.tools.project]]
 path = "packages/one"
-publish = ["github-release"]
 binary_platforms = ["macos-arm64"]
 
 [[release.tools.project]]
 path = "packages/two"
-publish = ["github-release"]
 binary_platforms = ["macos-arm64"]
 ''', 'release.toml', diagnostics)!;
 
@@ -190,24 +189,25 @@ binary_platforms = ["macos-arm64"]
 
     expect(resolution, isNull);
     expect(diagnostics.found.single.code, 'RK-RES-009');
+    expect(diagnostics.found.single.remedy, contains('separate units'));
   });
 
-  test('no two units derive the same tag', () {
-    // One library on pub.dev and one binary-only CLI. Counting only registry
-    // packages made this repository look like it published one thing, so both
-    // units derived "v{version}" — and the CLI's GitHub release would have
-    // attached to the library's tag.
+  test('two tagged units keep explicit, distinct namespaces', () {
+    // Multi-unit repositories declare the namespace so adding or removing a
+    // sibling can never silently rename an existing unit's release history.
     final resolution = _resolve(
         '''
-schema = 1
+schema = 2
 
 [release.lib]
+tag = "mylib-v{version}"
 path = "packages/mylib"
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]
 
 [release.cli]
+tag = "mycli-v{version}"
 path = "packages/mycli"
-publish = ["github-release"]
+publish = ["git-tag", "github-release"]
 binary_platforms = ["macos-arm64"]
 ''',
         MemorySourceTree({
@@ -228,10 +228,10 @@ executables:
   test('a repository releasing one unit still gets the bare tag', () {
     final resolution = _resolve(
         '''
-schema = 1
+schema = 2
 
 [release.lib]
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]
 ''',
         MemorySourceTree({
           'pubspec.yaml': 'name: mylib\nversion: 1.5.0\n',
@@ -242,17 +242,17 @@ publish = ["pub.dev"]
   test('two units declaring one tag are refused', () {
     final diagnostics = Diagnostics();
     final config = ReleaseConfig.parse('''
-schema = 1
+schema = 2
 
 [release.a]
 tag = "v{version}"
 path = "packages/a"
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]
 
 [release.b]
 tag = "v{version}"
 path = "packages/b"
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]
 ''', 'release.toml', diagnostics)!;
     final resolution = Resolution.resolve(
       config,
@@ -270,8 +270,8 @@ publish = ["pub.dev"]
     String? refuse(String tag) {
       final diagnostics = Diagnostics();
       final config = ReleaseConfig.parse(
-        'schema = 1\n\n[release.a]\ntag = "$tag"\n'
-            'path = "packages/a"\npublish = ["pub.dev"]\n',
+        'schema = 2\n\n[release.a]\ntag = "$tag"\n'
+            'path = "packages/a"\npublish = ["git-tag", "pub.dev"]\n',
         'release.toml',
         diagnostics,
       );
@@ -307,10 +307,11 @@ publish = ["pub.dev"]
   test('a tag on a project row is refused, not ignored', () {
     final diagnostics = Diagnostics();
     final config = ReleaseConfig.parse('''
-schema = 1
+schema = 2
 
 [release.framework]
 tag = "fleury-v{version}"
+publish = ["git-tag"]
 
 [[release.framework.project]]
 path = "packages/a"
@@ -326,7 +327,7 @@ tag = "a-v{version}"
   test('a cross-unit prerequisite becomes a step rather than being lost', () {
     final resolution = _resolve(
         '''
-schema = 1
+schema = 2
 
 [release.core]
 path = "packages/keybay"
@@ -361,10 +362,11 @@ dependencies:
   test('a dependency circle is refused rather than silently ordered', () {
     final resolution = _resolve(
         '''
-schema = 1
+schema = 2
 
 [release.pair]
 tag = "pair-v{version}"
+publish = ["git-tag"]
 
 [[release.pair.project]]
 path = "packages/a"
@@ -392,11 +394,11 @@ publish = ["pub.dev"]
   test('every step waits only on steps that come before it', () {
     final resolution = _resolve(
         '''
-schema = 1
+schema = 2
 
 [release.cli]
 path = "packages/keybay_cli"
-publish = ["pub.dev", "github-release", "homebrew"]
+publish = ["git-tag", "pub.dev", "github-release", "homebrew"]
 binary_platforms = ["linux-x64", "macos-arm64"]
 ''',
         MemorySourceTree({
@@ -423,7 +425,7 @@ executables:
   test('a step names what it acts on without parsing its own id', () {
     final resolution = _resolve(
         '''
-schema = 1
+schema = 2
 
 [release.core]
 path = "packages/keybay"

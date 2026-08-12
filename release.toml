@@ -1,10 +1,5 @@
-schema = 1
+schema = 2
 
 [release.rk]                   # tag v{version}
-publish = ["pub.dev", "github-release"]
+publish = ["git-tag", "pub.dev", "github-release"]
 binary_platforms = ["macos-arm64", "linux-x64", "linux-arm64"]
-
-# The macOS program identity, for the one release that has no published
-# binary to derive it from. Every release after this reads it back off the
-# binary users installed, and refuses a declaration that disagrees.
-code_id = "io.github.danreynolds.rk"

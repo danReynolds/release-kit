@@ -7,7 +7,7 @@ import 'canonical_json.dart';
 import 'workspace.dart';
 
 /// Increment this only when the identity or receipt contract changes.
-const stageSchemaVersion = 4;
+const stageSchemaVersion = 7;
 
 /// The content address of one resolved release plan at one exact Git tree.
 class StageIdentity {
@@ -16,6 +16,7 @@ class StageIdentity {
     required this.headCommit,
     required this.headTree,
     required this.planSha256,
+    required this.runId,
   });
 
   /// Canonicalizes [resolvedPlan] before hashing it. The caller must include
@@ -31,6 +32,41 @@ class StageIdentity {
       headCommit: headCommit,
       headTree: headTree,
       planSha256: Sha256.hex(utf8.encode(plan)),
+    );
+  }
+
+  /// A one-invocation stage with no source revision claim.
+  factory StageIdentity.forUnboundPlan({
+    required String runId,
+    required Object? resolvedPlan,
+  }) {
+    final plan = CanonicalJson.encode(resolvedPlan);
+    return StageIdentity.fromUnboundDigests(
+      runId: runId,
+      planSha256: Sha256.hex(utf8.encode(plan)),
+    );
+  }
+
+  factory StageIdentity.fromUnboundDigests({
+    required String runId,
+    required String planSha256,
+  }) {
+    if (runId.trim().isEmpty || runId.contains(RegExp(r'[\u0000-\u001f]'))) {
+      throw ArgumentError('unbound stage run id is empty or invalid');
+    }
+    _requireSha256('resolved plan digest', planSha256);
+    final coordinates = <String, Object?>{
+      'plan_sha256': planSha256,
+      'run_id': runId,
+      'schema': stageSchemaVersion,
+      'source': 'unbound',
+    };
+    return StageIdentity._(
+      id: Sha256.hex(utf8.encode(CanonicalJson.encode(coordinates))),
+      headCommit: null,
+      headTree: null,
+      planSha256: planSha256,
+      runId: runId,
     );
   }
 
@@ -56,6 +92,7 @@ class StageIdentity {
       headCommit: headCommit,
       headTree: headTree,
       planSha256: planSha256,
+      runId: null,
     );
   }
 
@@ -67,13 +104,22 @@ class StageIdentity {
           'head_commit',
           'head_tree',
           'plan_sha256',
+          'run_id',
         },
         'stage identity');
-    final identity = StageIdentity.fromDigests(
-      headCommit: _string(map, 'head_commit'),
-      headTree: _string(map, 'head_tree'),
-      planSha256: _string(map, 'plan_sha256'),
-    );
+    final commit = map['head_commit'];
+    final tree = map['head_tree'];
+    final runId = map['run_id'];
+    final identity = commit == null && tree == null && runId is String
+        ? StageIdentity.fromUnboundDigests(
+            runId: runId,
+            planSha256: _string(map, 'plan_sha256'),
+          )
+        : StageIdentity.fromDigests(
+            headCommit: _string(map, 'head_commit'),
+            headTree: _string(map, 'head_tree'),
+            planSha256: _string(map, 'plan_sha256'),
+          );
     if (_string(map, 'id') != identity.id) {
       throw const FormatException('stage identity does not match its inputs');
     }
@@ -81,15 +127,19 @@ class StageIdentity {
   }
 
   final String id;
-  final String headCommit;
-  final String headTree;
+  final String? headCommit;
+  final String? headTree;
   final String planSha256;
+  final String? runId;
+
+  bool get isGitBound => headCommit != null;
 
   Map<String, Object?> toJson() => {
         'head_commit': headCommit,
         'head_tree': headTree,
         'id': id,
         'plan_sha256': planSha256,
+        'run_id': runId,
       };
 }
 

@@ -121,16 +121,3 @@ class Sha256 {
 
   static int _add(int a, int b) => (a + b) & 0xffffffff;
 }
-
-/// The `SHA256SUMS` file shipped beside a release's assets.
-class Checksums {
-  /// One line per asset, in the order given: digest, two spaces, name — the
-  /// format `shasum -c` reads.
-  static String render(Map<String, List<int>> assets) {
-    final out = StringBuffer();
-    for (final entry in assets.entries) {
-      out.writeln('${Sha256.hex(entry.value)}  ${entry.key}');
-    }
-    return out.toString();
-  }
-}

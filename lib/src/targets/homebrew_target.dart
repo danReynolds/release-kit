@@ -5,6 +5,8 @@ import '../destinations/homebrew.dart';
 import '../engine/assets.dart';
 import '../engine/checklist.dart';
 import '../engine/diagnostic.dart';
+import '../engine/publish_target.dart';
+import '../engine/producers.dart';
 import '../engine/resolve.dart';
 import '../engine/stage_contract.dart';
 import '../engine/stage_inspection.dart';
@@ -12,6 +14,7 @@ import '../engine/stage_receipt.dart';
 import '../engine/targets.dart';
 import '../engine/verdict.dart';
 import '../output/output.dart';
+import '../transforms/digest.dart';
 import 'published_release_evidence.dart';
 import 'target_module.dart';
 
@@ -19,12 +22,23 @@ final class HomebrewTargetModule extends TargetModule {
   const HomebrewTargetModule();
 
   @override
+  PublishTarget get target => PublishTarget.homebrew;
+
+  @override
   StepKind get stepKind => StepKind.publishFormula;
 
   @override
   Future<bool> preflight(
-    TargetPreflightContext context,
+    TargetReadinessContext context,
     ResolvedUnit unit,
+  ) async =>
+      true;
+
+  @override
+  Future<bool> acquireSession(
+    TargetReadinessContext context,
+    ResolvedUnit unit,
+    List<TargetExpectation> targets,
   ) async =>
       true;
 
@@ -34,10 +48,7 @@ final class HomebrewTargetModule extends TargetModule {
     required Step step,
     String? repository,
   }) {
-    final project = unit.projects.firstWhere(
-      (project) => project.name == step.project,
-      orElse: () => unit.binaryProject,
-    );
+    final project = unit.project(step.project!);
     final tap = repository == null ? unit.homebrewTap : unit.tapFor(repository);
     return TargetExpectation(
       label: tap == null ? 'Homebrew' : 'Homebrew · $tap',
@@ -49,11 +60,9 @@ final class HomebrewTargetModule extends TargetModule {
       targetVersion: project.version.canonical,
       step: step,
       project: project,
-      // The formula is a GitHub Release artifact too. Its bytes are listed
-      // once under the target that owns the artifact inventory.
-      artifacts: const [],
-      uses: '${ReleaseAssets.formulaName(project.executable!)} from '
-          'GitHub Release',
+      artifacts: [ReleaseAssets.formulaName(project.executable!)],
+      uses: '${ReleaseAssets.formulaName(project.executable!)} bound in the '
+          'release manifest',
       exactComparisonNeedsStage: true,
     );
   }
@@ -64,6 +73,7 @@ final class HomebrewTargetModule extends TargetModule {
     ResolvedUnit unit,
     TargetExpectation target,
   ) async {
+    final tag = requiredTargetTag(unit, PublishTarget.homebrew);
     final tools = context.tools;
     if (tools == null) {
       return const Inspection.unknown('no tools to read the tap with');
@@ -73,25 +83,31 @@ final class HomebrewTargetModule extends TargetModule {
       return const Inspection.unknown('no origin remote to ask');
     }
     final tap = unit.tapFor(repository);
-    final project = unit.binaryProject;
+    final project = target.project!;
     final executable = project.executable!;
     final stage = context.reusableStage(unit);
     final name = ReleaseAssets.formulaName(executable);
+    final stagedPath = ReleaseAssets.formulaPath(project);
     List<int>? expectedBytes;
+    String? expectedSha256;
     if (stage != null) {
-      final expected = File(stage.directory.resolve(name));
+      final expected = File(stage.directory.resolve(stagedPath));
       if (!expected.existsSync()) {
         return Inspection.conflict('the completed stage has no $name');
       }
       expectedBytes = expected.readAsBytesSync();
-    } else if (context.git.hasTag(unit.tag)) {
-      final current = await PublishedReleaseEvidence(context)
-          .currentManifestAsset(unit, name);
+    } else if (context.git.hasTag(tag)) {
+      final current = await PublishedReleaseEvidence(context).currentFormula(
+        unit,
+        project: project.name,
+        tap: tap,
+        path: 'Formula/$executable.rb',
+      );
       if (current.inspection.verdict == Verdict.conflict ||
           current.inspection.verdict == Verdict.unknown) {
         return current.inspection;
       }
-      expectedBytes = current.bytes;
+      expectedSha256 = current.formula!.sha256;
     }
 
     return HomebrewTarget(
@@ -101,16 +117,20 @@ final class HomebrewTargetModule extends TargetModule {
     ).inspect(
       formulaPath: 'Formula/$executable.rb',
       expectedBytes: expectedBytes,
+      expectedSha256: expectedSha256,
       inspectEarlierRelease: (bytes) =>
-          _inspectEarlierFormula(context, unit, bytes),
+          _inspectEarlierFormula(context, unit, target, tap, bytes),
     );
   }
 
   Future<Inspection> _inspectEarlierFormula(
     TargetReadContext context,
     ResolvedUnit unit,
+    TargetExpectation target,
+    String tap,
     List<int> publicBytes,
   ) async {
+    final pattern = requiredTargetTagPattern(unit, PublishTarget.homebrew);
     final version = HomebrewFormula.versionIn(publicBytes);
     if (version == null) {
       return const Inspection.conflict(
@@ -123,29 +143,27 @@ final class HomebrewTargetModule extends TargetModule {
         'release than ${unit.version}',
       );
     }
-    final name = ReleaseAssets.formulaName(unit.binaryProject.executable!);
-    final read = await PublishedReleaseEvidence(context)
-        .historicalManifestAsset(unit, version, name);
+    final project = target.project!;
+    final path = 'Formula/${project.executable!}.rb';
+    final read = await PublishedReleaseEvidence(context).historicalFormula(
+      unit,
+      version,
+      project: project,
+      tap: tap,
+      path: path,
+    );
     if (!read.inspection.isExact) return read.inspection;
-    if (!_sameBytes(read.bytes!, publicBytes)) {
-      final tag = unit.tagPattern.replaceAll('{version}', version.canonical);
+    if (read.formula!.sha256 != Sha256.hex(publicBytes)) {
+      final tag = pattern.replaceAll('{version}', version.canonical);
       return Inspection.conflict(
         'the tap formula differs from the formula bound to $tag',
       );
     }
-    final tag = unit.tagPattern.replaceAll('{version}', version.canonical);
+    final tag = pattern.replaceAll('{version}', version.canonical);
     return Inspection.exact(
       detail: 'matches the manifest-bound formula from $tag',
       evidence: {'version': version.canonical},
     );
-  }
-
-  static bool _sameBytes(List<int> left, List<int> right) {
-    if (left.length != right.length) return false;
-    for (var index = 0; index < left.length; index++) {
-      if (left[index] != right[index]) return false;
-    }
-    return true;
   }
 
   @override
@@ -186,10 +204,10 @@ final class HomebrewTargetModule extends TargetModule {
             'can inspect the tap before updating it',
       );
     }
-    final project = unit.binaryProject;
+    final project = target.project!;
     final executable = project.executable!;
     final formula =
-        context.workspace.readBytes(ReleaseAssets.formulaName(executable));
+        context.workspace.readBytes(ReleaseAssets.formulaPath(project));
     if (formula == null) {
       return TargetActOutcome(
         ok: false,
@@ -279,22 +297,19 @@ final class HomebrewTargetModule extends TargetModule {
     required ResolvedUnit unit,
     required TargetExpectation target,
   }) {
+    final tag = requiredTargetTag(unit, PublishTarget.homebrew);
     final project = target.project!;
     final executable = project.executable!;
     final archives = {
       for (final platform in project.binaryPlatforms)
-        ReleaseAssets.archiveName(
-          executable,
-          project.version.canonical,
-          platform,
-        ),
+        ReleaseAssets.archivePath(project, platform),
     };
     final contract = StageContributionContract(
       phase: StageContributionPhase.afterArtifacts,
       step: StageStepContract(
-        'homebrew-formula',
+        'homebrew-formula:${project.name}',
         inputs: archives,
-        outputs: {ReleaseAssets.formulaName(executable): 'formula'},
+        outputs: {ReleaseAssets.formulaPath(project): 'formula'},
         validate: (context, step) {
           final repository = context.repository;
           if (repository == null) {
@@ -307,12 +322,19 @@ final class HomebrewTargetModule extends TargetModule {
             ];
           }
           final publicArchives = {
-            for (final receiptStep in context.receipt.steps.where(
-              (item) => item.name.startsWith('archive:'),
-            ))
-              receiptStep.name.substring('archive:'.length): PlatformAsset(
-                name: receiptStep.outputs.single.path,
-                sha256: receiptStep.outputs.single.sha256,
+            for (final platform in project.binaryPlatforms)
+              platform: PlatformAsset(
+                name: ReleaseAssets.archiveName(
+                  executable,
+                  project.version.canonical,
+                  platform,
+                ),
+                sha256: context.receipt.steps
+                    .singleWhere((item) =>
+                        item.name == archiveReceiptName(project.name, platform))
+                    .outputs
+                    .single
+                    .sha256,
               ),
           };
           final expected = HomebrewFormula.render(
@@ -321,12 +343,12 @@ final class HomebrewTargetModule extends TargetModule {
             homepage: 'https://github.com/$repository',
             version: project.version.canonical,
             repository: repository,
-            tag: unit.tag,
+            tag: tag,
             executable: executable,
             assets: publicArchives,
           );
           final actual = File(
-            context.stage.resolve(ReleaseAssets.formulaName(executable)),
+            context.stage.resolve(ReleaseAssets.formulaPath(project)),
           );
           if (actual.existsSync() && actual.readAsStringSync() == expected) {
             return const [];
@@ -353,6 +375,7 @@ final class HomebrewTargetModule extends TargetModule {
     ResolvedUnit unit,
     TargetExpectation target,
   ) async {
+    final tag = requiredTargetTag(unit, PublishTarget.homebrew);
     final receiptName = context.contract.step.name;
     final repository = context.repository;
     if (repository == null) {
@@ -374,7 +397,8 @@ final class HomebrewTargetModule extends TargetModule {
     final archives = <String, StageArtifact>{};
     for (final platform in project.binaryPlatforms) {
       final record = context.progress
-          .where((step) => step.name == 'archive:$platform')
+          .where(
+              (step) => step.name == archiveReceiptName(project.name, platform))
           .firstOrNull;
       final artifact = record?.outputs
           .where((output) => output.type == 'archive')
@@ -400,18 +424,22 @@ final class HomebrewTargetModule extends TargetModule {
       homepage: 'https://github.com/$repository',
       version: project.version.canonical,
       repository: repository,
-      tag: unit.tag,
+      tag: tag,
       executable: executable,
       assets: {
         for (final MapEntry(key: platform, value: archive) in archives.entries)
           platform: PlatformAsset(
-            name: archive.path,
+            name: ReleaseAssets.archiveName(
+              executable,
+              project.version.canonical,
+              platform,
+            ),
             sha256: archive.sha256,
           ),
       },
     );
     context.workspace.write(
-      ReleaseAssets.formulaName(executable),
+      ReleaseAssets.formulaPath(project),
       utf8.encode(contents),
     );
     return StageStep(
@@ -422,7 +450,7 @@ final class HomebrewTargetModule extends TargetModule {
       outputs: [
         StageArtifact.capture(
           stage: context.stage.directory,
-          path: ReleaseAssets.formulaName(project.executable!),
+          path: ReleaseAssets.formulaPath(project),
           type: 'formula',
         ),
       ],

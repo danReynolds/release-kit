@@ -5,6 +5,7 @@ import '../engine/assets.dart';
 import '../engine/checklist.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
+import '../engine/publish_target.dart';
 import '../engine/resolve.dart';
 import '../engine/targets.dart';
 import '../engine/verdict.dart';
@@ -17,12 +18,23 @@ final class GitTagTargetModule extends TargetModule {
   const GitTagTargetModule();
 
   @override
+  PublishTarget get target => PublishTarget.gitTag;
+
+  @override
   StepKind get stepKind => StepKind.tag;
 
   @override
   Future<bool> preflight(
-    TargetPreflightContext context,
+    TargetReadinessContext context,
     ResolvedUnit unit,
+  ) async =>
+      true;
+
+  @override
+  Future<bool> acquireSession(
+    TargetReadinessContext context,
+    ResolvedUnit unit,
+    List<TargetExpectation> targets,
   ) async =>
       true;
 
@@ -31,23 +43,25 @@ final class GitTagTargetModule extends TargetModule {
     required ResolvedUnit unit,
     required Step step,
     String? repository,
-  }) =>
-      TargetExpectation(
-        label: 'Git tag',
-        kindLabel: 'Git tag',
-        identity: unit.tag,
-        coordinate: unit.tag,
-        targetVersion: unit.version.canonical,
-        step: step,
-        // The tag binds the manifest digest in its annotation; it does not
-        // host a file named release-manifest.json. Binary releases publish
-        // that file on GitHub. A pub-only release is recovered directly from
-        // its peeled source commit plus pub.dev's archive.
-        artifacts: const [],
-        uses: unit.shipsBinaries
-            ? '${ReleaseAssets.manifest} from GitHub Release'
-            : null,
-      );
+  }) {
+    final tag = requiredTargetTag(unit, PublishTarget.gitTag);
+    return TargetExpectation(
+      label: 'Git tag',
+      kindLabel: 'Git tag',
+      identity: tag,
+      coordinate: tag,
+      targetVersion: unit.version.canonical,
+      step: step,
+      // The tag binds the manifest digest in its annotation; it does not
+      // host a file named release-manifest.json. Binary releases publish
+      // that file on GitHub. A pub-only release is recovered directly from
+      // its peeled source commit plus pub.dev's archive.
+      artifacts: const [],
+      uses: unit.shipsBinaries
+          ? '${ReleaseAssets.manifest} from GitHub Release'
+          : null,
+    );
+  }
 
   @override
   Future<Inspection> inspectExact(
@@ -55,10 +69,11 @@ final class GitTagTargetModule extends TargetModule {
     ResolvedUnit unit,
     TargetExpectation target,
   ) async {
+    final tag = requiredTargetTag(unit, PublishTarget.gitTag);
     final tools = context.tools;
     if (tools == null) {
       return Inspection.unknown(
-        context.git.hasTag(unit.tag)
+        context.git.hasTag(tag)
             ? 'the tag exists locally; no tools to read origin with'
             : 'no tools to read origin with',
       );
@@ -80,20 +95,20 @@ final class GitTagTargetModule extends TargetModule {
     }
 
     final remote = await destination.inspectReleaseBinding(
-      tag: unit.tag,
+      tag: tag,
       expectedCommit: context.git.head,
       expectedManifestSha256: manifestSha256,
       requireSignature: context.git.signingConfigured,
     );
-    if (!remote.isAbsent || !context.git.hasTag(unit.tag)) return remote;
+    if (!remote.isAbsent || !context.git.hasTag(tag)) return remote;
 
-    final commit = context.git.tagTarget(unit.tag);
+    final commit = context.git.tagTarget(tag);
     if (commit == null) {
       return const Inspection.unknown(
         'could not read the expected local tag commit',
       );
     }
-    final object = context.git.tagObject(unit.tag);
+    final object = context.git.tagObject(tag);
     if (object == null) {
       return const Inspection.unknown(
         'could not read the expected local tag object',
@@ -108,7 +123,7 @@ final class GitTagTargetModule extends TargetModule {
       );
     }
     final local = await destination.inspectLocalReleaseBinding(
-      tag: unit.tag,
+      tag: tag,
       expectedObject: object,
       expectedCommit: commit,
       expectedManifestSha256: manifestSha256,
@@ -129,8 +144,9 @@ final class GitTagTargetModule extends TargetModule {
         const Inspection.unknown('no tools to read origin with'),
       );
     }
-    return GitTag(tools: tools, root: context.git.root)
-        .inspectLatestVersion(unit.tagPattern);
+    return GitTag(tools: tools, root: context.git.root).inspectLatestVersion(
+      requiredTargetTagPattern(unit, PublishTarget.gitTag),
+    );
   }
 
   @override
@@ -153,8 +169,9 @@ final class GitTagTargetModule extends TargetModule {
     TargetReadContext context,
     ResolvedUnit unit,
   ) sync* {
-    for (final tag in context.git.tagsMatching(unit.tagPattern)) {
-      final raw = GitState.versionIn(tag, unit.tagPattern);
+    final pattern = requiredTargetTagPattern(unit, PublishTarget.gitTag);
+    for (final tag in context.git.tagsMatching(pattern)) {
+      final raw = GitState.versionIn(tag, pattern);
       if (raw == null) continue;
       final existing = Version.tryParse(raw);
       if (existing == null || existing == unit.version) continue;
@@ -186,25 +203,26 @@ final class GitTagTargetModule extends TargetModule {
     Inspection inspected,
   ) async {
     final git = context.git;
+    final tag = requiredTargetTag(unit, PublishTarget.gitTag);
     final destination = GitTag(tools: context.tools, root: git.root);
     final signed = git.signingConfigured;
 
     // A prior interrupted run may have created the exact local tag without
     // getting it to origin. Push that validated object instead of recreating
     // or moving it.
-    if (git.hasTag(unit.tag)) {
+    if (git.hasTag(tag)) {
       context.output.say('the tag exists locally; pushing it', depth: 1);
       return _pushExisting(
         destination,
         unit,
-        object: git.tagObject(unit.tag),
+        object: git.tagObject(tag),
         signed: signed,
       );
     }
 
     final manifestSha256 = _manifestDigest(context, unit);
     final created = await destination.create(
-      unit.tag,
+      tag,
       signed: signed,
       message: '${unit.name} ${unit.version}\n\n'
           'release-manifest-sha256: $manifestSha256',
@@ -212,10 +230,10 @@ final class GitTagTargetModule extends TargetModule {
     if (!created.ok) {
       return TargetActOutcome(
         ok: false,
-        coordinate: unit.tag,
+        coordinate: tag,
         diagnostic: Diagnostic(
           code: 'RK-TAG-001',
-          message: 'the tag ${unit.tag} could not be created',
+          message: 'the tag $tag could not be created',
           remedy: created.summary,
         ),
         reconciledNote: 'tag creation response was lost · origin confirmed '
@@ -223,23 +241,23 @@ final class GitTagTargetModule extends TargetModule {
       );
     }
 
-    final resolved = await destination.localObject(unit.tag);
+    final resolved = await destination.localObject(tag);
     final object = resolved.object;
     if (object == null) {
       return TargetActOutcome(
         ok: false,
-        coordinate: unit.tag,
+        coordinate: tag,
         diagnostic: Diagnostic(
           code: 'RK-TAG-001',
-          message: 'the new tag ${unit.tag} could not be identified',
+          message: 'the new tag $tag could not be identified',
           remedy: resolved.problem ?? 'the annotated tag object was unreadable',
         ),
       );
     }
     Future<TargetCleanupResult> cleanup() =>
-        _deleteLocalTag(destination, unit.tag, object);
+        _deleteLocalTag(destination, tag, object);
     final local = await destination.inspectLocalReleaseBinding(
-      tag: unit.tag,
+      tag: tag,
       expectedObject: object,
       expectedCommit: git.head,
       expectedManifestSha256: manifestSha256,
@@ -248,11 +266,11 @@ final class GitTagTargetModule extends TargetModule {
     if (!local.isExact) {
       return TargetActOutcome(
         ok: false,
-        coordinate: unit.tag,
+        coordinate: tag,
         cleanupIfAbsent: cleanup,
         diagnostic: Diagnostic(
           code: 'RK-TAG-001',
-          message: 'the new tag ${unit.tag} did not validate',
+          message: 'the new tag $tag did not validate',
           remedy: [
             if (local.detail != null) local.detail!,
             ...local.evidence.entries
@@ -262,16 +280,16 @@ final class GitTagTargetModule extends TargetModule {
       );
     }
 
-    final pushed = await destination.pushExact(unit.tag, object);
+    final pushed = await destination.pushExact(tag, object);
     if (!pushed.ok) {
       return TargetActOutcome(
         ok: false,
-        coordinate: unit.tag,
+        coordinate: tag,
         mayHaveActed: true,
         cleanupIfAbsent: cleanup,
         diagnostic: Diagnostic(
           code: 'RK-TAG-002',
-          message: 'the tag ${unit.tag} could not be pushed',
+          message: 'the tag $tag could not be pushed',
           remedy: '${pushed.summary}\norigin will be read before this result '
               'is classified; a re-run inspects before pushing again',
         ),
@@ -280,7 +298,7 @@ final class GitTagTargetModule extends TargetModule {
     }
     return TargetActOutcome(
       ok: true,
-      coordinate: unit.tag,
+      coordinate: tag,
       mayHaveActed: true,
       successNote: [if (signed) 'signed' else 'unsigned', 'pushed'].join(', '),
     );
@@ -292,27 +310,28 @@ final class GitTagTargetModule extends TargetModule {
     required String? object,
     required bool signed,
   }) async {
+    final tag = requiredTargetTag(unit, PublishTarget.gitTag);
     if (object == null) {
       return TargetActOutcome(
         ok: false,
-        coordinate: unit.tag,
+        coordinate: tag,
         diagnostic: Diagnostic(
           code: 'RK-TAG-002',
-          message: 'the tag ${unit.tag} could not be pushed',
+          message: 'the tag $tag could not be pushed',
           remedy: 'the validated local tag object id is unavailable; '
               're-run so rk can inspect it again',
         ),
       );
     }
-    final pushed = await destination.pushExact(unit.tag, object);
+    final pushed = await destination.pushExact(tag, object);
     if (!pushed.ok) {
       return TargetActOutcome(
         ok: false,
-        coordinate: unit.tag,
+        coordinate: tag,
         mayHaveActed: true,
         diagnostic: Diagnostic(
           code: 'RK-TAG-002',
-          message: 'the tag ${unit.tag} could not be pushed',
+          message: 'the tag $tag could not be pushed',
           remedy: '${pushed.summary}\nthe tag pre-existed this run, so it '
               'was left in place — re-running pushes it again',
         ),
@@ -321,7 +340,7 @@ final class GitTagTargetModule extends TargetModule {
     }
     return TargetActOutcome(
       ok: true,
-      coordinate: unit.tag,
+      coordinate: tag,
       mayHaveActed: true,
       successNote: [
         if (signed) 'signed' else 'unsigned',

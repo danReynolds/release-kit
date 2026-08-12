@@ -1,7 +1,8 @@
-schema = 1
+schema = 2
 
 [release.framework]
 tag = "framework-v{version}"
+publish = ["git-tag"]
 
 [[release.framework.project]]
 path = "packages/top"

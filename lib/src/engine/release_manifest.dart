@@ -9,7 +9,7 @@ import 'stage_receipt.dart';
 /// (formula authentication, same-version re-inspection) parse only the
 /// current schema — so a post-release bump must teach the parser each
 /// retired schema it still needs to read.
-const releaseManifestSchemaVersion = 2;
+const releaseManifestSchemaVersion = 5;
 
 /// One public file, deliberately stripped of its local stage path and all
 /// producer evidence.
@@ -82,6 +82,159 @@ class ReleaseManifestArtifact {
       };
 }
 
+/// One private staged Homebrew formula and the tap path that will receive it.
+///
+/// This exact shape is frozen into the terminal receipt. The public manifest
+/// receives the same public identity, but never the private [stagedPath].
+final class StagedFormulaBinding {
+  StagedFormulaBinding({
+    required this.project,
+    required this.tap,
+    required this.path,
+    required String stagedPath,
+  }) : stagedPath = StagePath.require(stagedPath) {
+    _requirePublicText('formula project', project);
+    _requirePublicText('formula tap', tap);
+    _requireDestinationPath(path);
+  }
+
+  factory StagedFormulaBinding.fromEvidence(Object? value) {
+    final map = _strictMap(
+      value,
+      const {
+        'path',
+        'project',
+        'staged_path',
+        'tap',
+      },
+      'staged formula binding',
+    );
+    return StagedFormulaBinding(
+      project: _string(map, 'project'),
+      tap: _string(map, 'tap'),
+      path: _string(map, 'path'),
+      stagedPath: _string(map, 'staged_path'),
+    );
+  }
+
+  final String project;
+  final String tap;
+  final String path;
+  final String stagedPath;
+
+  String get identity => _formulaIdentity(project, tap, path);
+
+  Map<String, Object?> toEvidence() => {
+        'path': path,
+        'project': project,
+        'staged_path': stagedPath,
+        'tap': tap,
+      };
+
+  ReleaseManifestFormula bind(StageArtifact artifact) {
+    if (artifact.path != stagedPath) {
+      throw ArgumentError('formula binding captured a different output');
+    }
+    return ReleaseManifestFormula.fromStage(
+      project: project,
+      tap: tap,
+      path: path,
+      artifact: artifact,
+    );
+  }
+}
+
+/// One Homebrew formula and the exact public tap path that receives it.
+///
+/// Unlike [ReleaseManifestArtifact], this file is not necessarily a release
+/// asset: it belongs only in its tap. The manifest carries enough public
+/// evidence to authenticate those bytes later, while the private stage path
+/// remains solely in `stage.json`.
+class ReleaseManifestFormula {
+  ReleaseManifestFormula({
+    required this.project,
+    required this.tap,
+    required this.path,
+    required this.size,
+    required this.sha256,
+  }) {
+    _requirePublicText('formula project', project);
+    _requirePublicText('formula tap', tap);
+    _requireDestinationPath(path);
+    if (size < 0) {
+      throw ArgumentError('formula size cannot be negative');
+    }
+    if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(sha256)) {
+      throw ArgumentError('formula must carry a lowercase SHA-256 digest');
+    }
+  }
+
+  factory ReleaseManifestFormula.fromStage({
+    required String project,
+    required String tap,
+    required String path,
+    required StageArtifact artifact,
+  }) =>
+      ReleaseManifestFormula(
+        project: project,
+        tap: tap,
+        path: path,
+        size: artifact.size,
+        sha256: artifact.sha256,
+      );
+
+  factory ReleaseManifestFormula.fromJson(Object? value) {
+    final map = _strictMap(
+      value,
+      const {
+        'path',
+        'project',
+        'sha256',
+        'size',
+        'tap',
+      },
+      'formula binding',
+    );
+    final size = map['size'];
+    if (size is! int) {
+      throw const FormatException('formula size is not an integer');
+    }
+    return ReleaseManifestFormula(
+      project: _string(map, 'project'),
+      tap: _string(map, 'tap'),
+      path: _string(map, 'path'),
+      size: size,
+      sha256: _string(map, 'sha256'),
+    );
+  }
+
+  final String project;
+
+  /// Tap repository, such as `owner/homebrew-tap`.
+  final String tap;
+
+  /// Public path inside that coordinate, such as `Formula/tool.rb`.
+  final String path;
+  final int size;
+  final String sha256;
+
+  String get identity => _formulaIdentity(project, tap, path);
+  bool names({
+    required String project,
+    required String tap,
+    required String path,
+  }) =>
+      this.project == project && this.tap == tap && this.path == path;
+
+  Map<String, Object?> toJson() => {
+        'path': path,
+        'project': project,
+        'sha256': sha256,
+        'size': size,
+        'tap': tap,
+      };
+}
+
 /// The publishable release inventory.
 ///
 /// This model has no local path, command, environment, credential, log, or
@@ -94,14 +247,15 @@ class ReleaseManifest {
     required this.tag,
     required this.commit,
     required Iterable<ReleaseManifestArtifact> artifacts,
+    this.formula,
   }) : artifacts = List<ReleaseManifestArtifact>.unmodifiable(
           artifacts.toList()
             ..sort((left, right) => left.name.compareTo(right.name)),
         ) {
     _requirePublicText('unit', unit);
     _requirePublicText('version', version);
-    _requirePublicText('tag', tag);
-    if (!RegExp(r'^[0-9a-f]{40}$').hasMatch(commit)) {
+    if (tag != null) _requirePublicText('tag', tag!);
+    if (commit != null && !RegExp(r'^[0-9a-f]{40}$').hasMatch(commit!)) {
       throw ArgumentError('source commit must be a full lowercase SHA');
     }
     final names = <String>{};
@@ -116,7 +270,15 @@ class ReleaseManifest {
     final decoded = CanonicalJson.decodeDocument(document);
     final map = _strictMap(
       decoded,
-      const {'artifacts', 'schema', 'source', 'tag', 'unit', 'version'},
+      const {
+        'artifacts',
+        'formula',
+        'schema',
+        'source',
+        'tag',
+        'unit',
+        'version',
+      },
       'release manifest',
     );
     if (map['schema'] != releaseManifestSchemaVersion) {
@@ -135,26 +297,30 @@ class ReleaseManifest {
     return ReleaseManifest(
       unit: _string(map, 'unit'),
       version: _string(map, 'version'),
-      tag: _string(map, 'tag'),
-      commit: _string(source, 'commit'),
+      tag: map['tag'] == null ? null : _string(map, 'tag'),
+      commit: source['commit'] == null ? null : _string(source, 'commit'),
       artifacts: artifacts.map(ReleaseManifestArtifact.fromJson),
+      formula: map['formula'] == null
+          ? null
+          : ReleaseManifestFormula.fromJson(map['formula']),
     );
   }
 
   final String unit;
   final String version;
-  final String tag;
+  final String? tag;
 
-  /// The released source, as one externally checkable anchor: the commit the
-  /// tag peels to. A commit already binds its tree, and the stage plan is
-  /// local evidence an external reader could never verify — so neither
-  /// travels here.
-  final String commit;
+  /// The released source commit when Git supplies an externally checkable
+  /// anchor. An unbound source deliberately records null: its exact staged
+  /// bytes remain locally receipted, but rk does not invent a revision.
+  final String? commit;
 
   final List<ReleaseManifestArtifact> artifacts;
+  final ReleaseManifestFormula? formula;
 
   Map<String, Object?> toJson() => {
         'artifacts': artifacts.map((artifact) => artifact.toJson()).toList(),
+        'formula': formula?.toJson(),
         'schema': releaseManifestSchemaVersion,
         'source': {'commit': commit},
         'tag': tag,
@@ -204,5 +370,31 @@ String _string(Map<String, Object?> map, String key) {
 void _requirePublicText(String label, String value) {
   if (value.trim().isEmpty || value.contains(RegExp(r'[\u0000-\u001f]'))) {
     throw ArgumentError('$label is empty or contains control characters');
+  }
+}
+
+String _formulaIdentity(
+  String project,
+  String tap,
+  String path,
+) =>
+    '$project\u0000$tap\u0000$path';
+
+void _requireDestinationPath(String path) {
+  if (path.isEmpty ||
+      path.startsWith('/') ||
+      path.startsWith('\\') ||
+      path.contains('\\') ||
+      path.contains('\u0000') ||
+      RegExp(r'^[A-Za-z]:').hasMatch(path)) {
+    throw ArgumentError('destination path must be relative and safe: $path');
+  }
+  final segments = path.split('/');
+  if (segments
+      .any((segment) => segment.isEmpty || segment == '.' || segment == '..')) {
+    throw ArgumentError('destination path must be relative and safe: $path');
+  }
+  for (final segment in segments) {
+    _requirePublicText('destination path segment', segment);
   }
 }

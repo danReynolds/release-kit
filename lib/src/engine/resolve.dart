@@ -1,5 +1,6 @@
 import 'config.dart';
 import 'diagnostic.dart';
+import 'publish_target.dart';
 import 'pubspec.dart';
 import 'source_tree.dart';
 import 'version.dart';
@@ -48,23 +49,38 @@ class Resolution {
     _rejectOverlappingPaths(projects, diagnostics);
     _rejectDuplicateNames(projects, diagnostics);
 
-    // Every unit is tagged, so the count that decides the naming is of units,
-    // not of registry packages: counting the latter let a repository with one
-    // pub.dev package and one binary-only CLI derive "v{version}" for both,
-    // and two units cannot hold the same tag.
-    final releasesSeveral = config.units.length > 1;
+    final taggedUnits = config.units
+        .where((unit) => unit.publish.contains(PublishTarget.gitTag))
+        .toList();
+    final tagUnits = taggedUnits.length;
+    if (tagUnits > 1) {
+      final implicit = taggedUnits.where((unit) => unit.tagPattern == null);
+      for (final unit in implicit) {
+        diagnostics.add(
+          'RK-RES-012',
+          'unit "${unit.name}" needs an explicit tag pattern',
+          source: unit.location,
+          remedy: 'this repository tags several units; declaring '
+              'tag = "${unit.name}-v{version}" keeps this unit\'s public '
+              'tag namespace stable if the repository changes again',
+        );
+      }
+    }
 
     final units = <ResolvedUnit>[];
     for (final declared in config.units) {
       final resolved = byUnit[declared.name] ?? const [];
       if (resolved.length != declared.projects.length) continue;
+      final tags = declared.publish.contains(PublishTarget.gitTag);
       units.add(
         ResolvedUnit(
           name: declared.name,
-          tagPattern: declared.tagPattern ??
-              _derivedTagPattern(resolved.single, releasesSeveral),
+          publish: declared.publish,
+          tagPattern: tags
+              ? declared.tagPattern ??
+                  _derivedTagPattern(resolved.single, tagUnits > 1)
+              : null,
           tagWasDeclared: declared.tagPattern != null,
-          codeId: declared.codeId,
           homebrewTap: declared.homebrewTap,
           projects: resolved,
           location: declared.location,
@@ -74,7 +90,7 @@ class Resolution {
 
     for (final unit in units) {
       _checkUnitVersions(unit, diagnostics);
-      _checkOneBinaryProject(unit, diagnostics);
+      _checkSingleBinaryProject(unit, diagnostics);
     }
     _rejectSharedTags(units, diagnostics);
 
@@ -82,9 +98,10 @@ class Resolution {
     return Resolution(units: units, tree: tree);
   }
 
-  /// pub.dev documents `v{version}` for a repository releasing one thing, and a
-  /// per-package prefix where it releases several. Package names are unique
-  /// within a repository, so the prefixed form cannot collide.
+  /// A sole tagged unit gets the ordinary `v{version}` convention. The
+  /// prefixed fallback is used only while constructing a refused multi-unit
+  /// resolution so downstream validation remains total; multi-unit success
+  /// requires every tag pattern to be explicit above.
   static String _derivedTagPattern(
     ResolvedProject project,
     bool releasesSeveral,
@@ -104,15 +121,26 @@ class Resolution {
   ) {
     final seen = <String, ResolvedUnit>{};
     for (final unit in units) {
-      final first = seen[unit.tagPattern];
+      // Version disagreement is already RK-RES-008. Do not ask such a unit
+      // for the single version its tag would contain while accumulating the
+      // rest of the repository's diagnostics.
+      if (unit.projects.isEmpty ||
+          !unit.projects.every(
+            (project) => project.version == unit.projects.first.version,
+          )) {
+        continue;
+      }
+      final tag = unit.tag;
+      if (tag == null) continue;
+      final first = seen[tag];
       if (first == null) {
-        seen[unit.tagPattern] = unit;
+        seen[tag] = unit;
         continue;
       }
       diagnostics.add(
         'RK-RES-010',
         'the units "${first.name}" and "${unit.name}" would share the tag '
-            '"${unit.tagPattern}"',
+            '"$tag"',
         source: unit.location,
         remedy: 'give each unit a tag that names it, as in '
             'tag = "${unit.name}-v{version}"',
@@ -158,7 +186,8 @@ class Resolution {
       return null;
     }
 
-    if (pubspec.vetoesRegistry && declared.channels.contains('pub.dev')) {
+    if (pubspec.vetoesRegistry &&
+        declared.publish.contains(PublishTarget.pubDev)) {
       diagnostics.add(
         'RK-RES-003',
         '"${pubspec.name}" sets publish_to: none but is asked to publish to '
@@ -166,6 +195,19 @@ class Resolution {
         source: declared.location,
         remedy: 'the manifest\'s veto wins — drop "pub.dev" from publish, or '
             'remove publish_to from the manifest',
+      );
+      return null;
+    }
+    if (!pubspec.declaresPubDev &&
+        declared.publish.contains(PublishTarget.pubDev)) {
+      diagnostics.add(
+        'RK-RES-014',
+        '"${pubspec.name}" names a custom package registry but is asked to '
+            'publish to pub.dev',
+        source: declared.location,
+        remedy: 'this rk build has no custom Dart-registry target. Remove '
+            '"pub.dev" from publish; do not copy the custom URL into '
+            'release.toml',
       );
       return null;
     }
@@ -265,24 +307,25 @@ class Resolution {
     }
   }
 
-  /// One project per unit may ship binaries.
+  /// One release unit may ship one standalone program.
   ///
-  /// Several would share a release, a checksums file, and a formula, with no
-  /// way to tell whose asset is whose — and their steps would collide. A
-  /// second binary product belongs in a unit of its own.
-  static void _checkOneBinaryProject(
+  /// Several registry packages can still share a version and tag. Several
+  /// programs have independent signing identities and public lifecycles, so
+  /// they belong in separate units instead of growing a second aggregation
+  /// model inside a unit.
+  static void _checkSingleBinaryProject(
     ResolvedUnit unit,
     Diagnostics diagnostics,
   ) {
-    final shipping =
-        unit.projects.where((p) => p.config.wantsBinaries).toList();
-    if (shipping.length < 2) return;
+    final binary = unit.projects.where((p) => p.config.wantsBinaries).toList();
+    if (binary.length < 2) return;
     diagnostics.add(
       'RK-RES-009',
-      '${shipping.length} projects in "${unit.name}" ship binaries',
-      source: unit.location,
-      remedy: 'they would share one release and one set of asset names: '
-          '${shipping.map((p) => p.name).join(', ')}. Give each its own unit.',
+      'the unit "${unit.name}" ships binaries from ${binary.length} projects',
+      source: binary[1].config.location,
+      remedy: 'a release unit ships one standalone program; give '
+          '${binary.map((project) => project.name).join(', ')} separate '
+          'units',
     );
   }
 
@@ -315,24 +358,22 @@ class Resolution {
 class ResolvedUnit {
   ResolvedUnit({
     required this.name,
+    required this.publish,
     required this.tagPattern,
     required this.tagWasDeclared,
     required this.projects,
     required this.location,
-    this.codeId,
     this.homebrewTap,
   });
 
   final String name;
+  final Set<PublishTarget> publish;
 
   /// Declared, or derived from the publication target's convention.
-  final String tagPattern;
+  final String? tagPattern;
   final bool tagWasDeclared;
 
-  /// The macOS code identifier for a first signed release, and the tap when
-  /// it is not the conventional one — per unit, because a program identity
-  /// and a tap belong to what is being shipped, not to the repository.
-  final String? codeId;
+  /// The tap when it is not the conventional one.
   final String? homebrewTap;
 
   final List<ResolvedProject> projects;
@@ -352,19 +393,19 @@ class ResolvedUnit {
     return projects.first.version;
   }
 
-  String get tag => tagPattern.replaceAll('{version}', version.canonical);
+  String? get tag => tagPattern?.replaceAll('{version}', version.canonical);
 
-  bool get shipsBinaries => projects.any((p) => p.config.wantsBinaries);
+  /// The unit's standalone program, when it has one. Resolution refuses a
+  /// second binary-producing project (RK-RES-009).
+  ResolvedProject? get binaryProject =>
+      projects.where((project) => project.config.wantsBinaries).firstOrNull;
 
-  /// The one project whose binaries this unit ships.
-  ///
-  /// An invariant rather than a search: RK-RES-009 refuses a unit with two
-  /// binary projects, so this returns what the resolver already promised.
-  /// Derived in two files before, both by a `firstWhere` that throws
-  /// StateError — a crash at exit 3 — for a shape that cannot get past
-  /// resolution.
-  ResolvedProject get binaryProject =>
-      projects.firstWhere((p) => p.config.wantsBinaries);
+  bool get shipsBinaries => binaryProject != null;
+
+  /// A project carried by a typed checklist step. Project names are unique
+  /// across the resolution (RK-RES-007), so they are stable producer ids too.
+  ResolvedProject project(String name) =>
+      projects.firstWhere((project) => project.name == name);
 
   /// The tap this unit's formula goes to, declared or by Homebrew's
   /// convention. Derived twice before, and a drift there means rk inspects
@@ -386,7 +427,7 @@ class ResolvedProject {
 
   String get name => pubspec.name;
   Version get version => pubspec.version!;
-  Set<String> get channels => config.channels;
+  Set<PublishTarget> get publish => config.publish;
   List<String> get binaryPlatforms => config.binaryPlatforms;
 
   /// The single executable a binary channel ships, when there is one.

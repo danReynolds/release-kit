@@ -2,12 +2,14 @@ import 'dart:io';
 
 import '../engine/config.dart';
 import '../engine/diagnostic.dart';
+import '../engine/init_plan.dart';
 import '../output/output.dart';
-import '../engine/pubspec.dart';
 import '../engine/resolve.dart';
 import '../engine/source_tree.dart';
 
-/// Writes `release.toml`, and `.rk/` into `.gitignore`, and nothing else.
+enum InitReviewDecision { write, back, cancel }
+
+/// Writes `release.toml`, and in Git repositories ignores `.rk/`.
 ///
 /// No network, no settings, nothing irreversible. It proposes: the human
 /// prunes and commits. It never edits an existing config, because a config is
@@ -19,11 +21,30 @@ class InitCommand {
     required this.write,
     required this.confirm,
     this.origin,
+    this.gitBound = true,
+    this.hasRemote,
+    this.select,
+    this.review,
+    this.updateGitignore,
+    this.ambientPubHostedUrl,
   });
 
   final SourceTree tree;
   final Output output;
   final String? origin;
+  final bool gitBound;
+  final bool? hasRemote;
+
+  /// Optional TTY editor. Null preserves the conservative generated plan.
+  final Future<InitPlan?> Function(InitPlan plan)? select;
+
+  /// Optional final review prompt with a path back to [select].
+  final Future<InitReviewDecision> Function(String prompt)? review;
+
+  /// Merge-safe filesystem update used by the real command. Tests may omit
+  /// it and observe the complete proposed file through [write].
+  final void Function()? updateGitignore;
+  final String? ambientPubHostedUrl;
 
   /// Writes the file, so the command is testable without a filesystem.
   final void Function(String path, String contents) write;
@@ -36,7 +57,8 @@ class InitCommand {
   /// Null is EOF — nobody answered — and nobody answering is not consent:
   /// `rk init < /dev/null` used to write the file, because EOF collapsed to
   /// the empty string and empty means Yes at a real prompt (the [Y/n]
-  /// default). The two are different facts and this is the one mutating act
+  /// default, with Back available in TTY mode). The two are different facts
+  /// and this is the one mutating act
   /// rk has that ever read them as one.
   static bool consented(String? answer) {
     if (answer == null) return false;
@@ -44,12 +66,28 @@ class InitCommand {
     return normalized.isEmpty || normalized == 'y' || normalized == 'yes';
   }
 
+  static InitReviewDecision reviewed(String? answer) {
+    if (answer == null) return InitReviewDecision.cancel;
+    final normalized = answer.trim().toLowerCase();
+    if (normalized == 'b' || normalized == 'back') {
+      return InitReviewDecision.back;
+    }
+    return consented(answer)
+        ? InitReviewDecision.write
+        : InitReviewDecision.cancel;
+  }
+
   Future<int> run() async {
     // The three exit-0 states — already configured, nothing releasable, and
     // proposal-awaiting-a-human — used to produce byte-identical empty
     // documents under --json. Each is data now: a state is a problem entry
     // with exit 0, the same shape status uses for blocked-but-not-failed.
-    output.repository(name: _name(), remote: origin);
+    output.repository(
+      name: _name(),
+      remote: origin,
+      sourceBinding: gitBound ? 'gitCommit' : 'unbound',
+      sourceComparison: gitBound ? 'exact' : 'unavailable',
+    );
 
     // The same reading rules as every other verb: unreadable is not absent,
     // and neither is a repository that cannot be listed. Before this, both
@@ -81,9 +119,9 @@ class InitCommand {
       return ExitCodes.ok;
     }
 
-    final _Scan found;
+    InitPlan plan;
     try {
-      found = _scan();
+      plan = _discoverPlan();
     } on SourceUnreadable catch (error) {
       output.problem(
         Diagnostic(
@@ -94,243 +132,215 @@ class InitCommand {
       );
       return ExitCodes.refused;
     }
-    if (found.releasable.isEmpty) {
-      output.problem(
-        Diagnostic(
+    final gitignore = gitBound ? tree.read('.gitignore') : null;
+    final needsIgnore = gitBound &&
+        (gitignore == null ||
+            !gitignore.split('\n').any((l) => l.trim() == '.rk/'));
+    while (true) {
+      output.report.initPlan(plan.toJson());
+      final selector = select;
+      if (selector != null && plan.candidates.isNotEmpty) {
+        final selected = await selector(plan);
+        if (selected == null) {
+          output.say('nothing was written.');
+          return ExitCodes.ok;
+        }
+        plan = selected;
+        output.report.initPlan(plan.toJson());
+      }
+
+      final reasons = _reasons(plan);
+      if (plan.included.isEmpty) {
+        output.problem(Diagnostic(
           code: 'RK-INIT-003',
           message: 'nothing here can be released',
-          remedy: found.skipped.isEmpty
-              ? 'no git-tracked pubspec.yaml declares a releasable package'
-              : found.skipped.join('\n'),
-        ),
-      );
-      // Not a refusal: "nothing to release" is a correct answer.
-      return ExitCodes.ok;
-    }
+          remedy: reasons.isEmpty
+              ? 'no discovered pubspec.yaml declares a releasable package'
+              : reasons.join('\n'),
+        ));
+        return ExitCodes.ok;
+      }
 
-    output.blank();
-
-    output.line('${found.releasable.length} releasable '
-        '${found.releasable.length == 1 ? 'package' : 'packages'}');
-
-    for (final package in found.releasable) {
-      output.line(
-        package.name,
-        depth: 1,
-        labelWidth: 22,
-        note: '${package.version} · path ${package.directory}'
-            '${package.executables.isEmpty ? '' : ' · executable '
-                '${package.executables.first}'}',
-      );
-    }
-    for (final skipped in found.skipped) {
-      output.say(skipped, depth: 1);
-    }
-
-    final proposal = _propose(found.releasable);
-
-    // Eat the dogfood before serving it: the proposal must be a config rk
-    // itself accepts, resolved against this very tree. Unit names are
-    // sanitized package names, so two packages can collide onto one table —
-    // and a written release.toml that rk then refuses is worse than a
-    // refusal here, because the operator has to debug rk's own output.
-    final problems = Diagnostics();
-    final parsed = ReleaseConfig.parse(proposal, 'release.toml', problems);
-    if (parsed != null) Resolution.resolve(parsed, tree, problems);
-    if (problems.isNotEmpty) {
       output.blank();
-      output.problem(
-        Diagnostic(
+      output.line('${plan.included.length} selected '
+          '${plan.included.length == 1 ? 'unit' : 'units'}');
+      for (final candidate in plan.included) {
+        output.line(
+          candidate.unit,
+          depth: 1,
+          labelWidth: 22,
+          note: '${candidate.version} · path ${candidate.path}'
+              '${candidate.executables.isEmpty ? '' : ' · executable '
+                  '${candidate.executables.join(', ')}'}',
+        );
+      }
+      for (final reason in reasons) {
+        output.say(reason, depth: 1);
+      }
+
+      final proposal = plan.renderToml();
+      final problems = Diagnostics();
+      final parsed = ReleaseConfig.parse(proposal, 'release.toml', problems);
+      if (parsed != null) Resolution.resolve(parsed, tree, problems);
+      if (problems.isNotEmpty) {
+        output.blank();
+        output.problem(Diagnostic(
           code: 'RK-INIT-001',
           message: 'the config rk would propose is one rk itself refuses',
           remedy: 'write release.toml by hand — the refusals below say what '
               'the proposal got wrong',
-        ),
-      );
-      output.problems(problems.found);
-      // The refused proposal is the evidence the refusals point at, so it
-      // travels with them — its problems give it context, and re-running
-      // cannot change what the same manifests derive.
-      output.report.attach('release.toml.refused', proposal);
-      output.report.rerunHelps = false;
+        ));
+        output.problems(problems.found);
+        output.report.attach('release.toml.refused', proposal);
+        output.report.rerunHelps = false;
+        for (final line in proposal.split('\n')) {
+          output.say(line, depth: 1);
+        }
+        return ExitCodes.refused;
+      }
+
+      output.report.attach('release.toml', proposal);
+      output.blank();
       for (final line in proposal.split('\n')) {
         output.say(line, depth: 1);
       }
-      return ExitCodes.refused;
-    }
+      if (needsIgnore) {
+        output.say('and add .rk/ to .gitignore', depth: 1);
+      }
 
-    // The proposal reaches the machine surface too: an agent sweeping a
-    // fleet reads it from the document and a human writes it at a terminal.
-    output.report.attach('release.toml', proposal);
+      if (confirm == null && review == null) {
+        output.blank();
+        output.say('nothing was written — there is no terminal to confirm in.');
+        output.next('rk init --write');
+        return ExitCodes.ok;
+      }
 
-    output.blank();
-    for (final line in proposal.split('\n')) {
-      output.say(line, depth: 1);
-    }
+      final prompt = needsIgnore
+          ? 'write release.toml and add .rk/ to .gitignore? [Y/n/b] '
+          : 'write release.toml? [Y/n/b] ';
+      final decision = review == null
+          ? await confirm!(prompt)
+              ? InitReviewDecision.write
+              : InitReviewDecision.cancel
+          : await review!(prompt);
+      if (decision == InitReviewDecision.back && selector != null) continue;
+      if (decision != InitReviewDecision.write) {
+        output.say('nothing was written.');
+        output.next('rk init --write');
+        return ExitCodes.ok;
+      }
 
-    if (confirm == null) {
+      String? currentGitignore = gitignore;
+      if (needsIgnore) {
+        try {
+          currentGitignore = tree.read('.gitignore');
+        } on SourceUnreadable catch (error) {
+          output.problem(Diagnostic(
+            code: 'RK-INIT-005',
+            message: '.gitignore changed or became unreadable during init',
+            remedy: '${error.reason}\nnothing was written; review it and '
+                'run rk init again',
+          ));
+          return ExitCodes.refused;
+        }
+        if (currentGitignore != gitignore) {
+          output.problem(const Diagnostic(
+            code: 'RK-INIT-005',
+            message: '.gitignore changed while init was being reviewed',
+            remedy: 'nothing was written; review it and run rk init again',
+          ));
+          return ExitCodes.refused;
+        }
+      }
+
+      try {
+        write('release.toml', proposal);
+      } on Object catch (error) {
+        output.problem(Diagnostic(
+          code: 'RK-INIT-004',
+          message: 'release.toml appeared before rk could write it',
+          remedy: '$error\nrk will not overwrite it; review that file',
+        ));
+        return ExitCodes.refused;
+      }
+      output.report.acted = true;
+      if (needsIgnore) {
+        try {
+          final update = updateGitignore;
+          if (update != null) {
+            update();
+          } else {
+            final lead = currentGitignore == null
+                ? ''
+                : currentGitignore.endsWith('\n')
+                    ? currentGitignore
+                    : '$currentGitignore\n';
+            write('.gitignore', '$lead.rk/\n');
+          }
+        } on Object catch (error) {
+          output.problem(Diagnostic(
+            code: 'RK-INIT-006',
+            message: 'release.toml was written but .gitignore was not updated',
+            remedy: '$error\nadd .rk/ to .gitignore by hand',
+          ));
+          return ExitCodes.refused;
+        }
+      }
       output.blank();
-      output.say('nothing was written — there is no terminal to confirm in.');
-      output.next('rk init --write');
-      output.say(
-          'writes the proposal and adds .rk/ to .gitignore; or run '
-          'rk init at a terminal.',
-          depth: 1);
+      output.line('release.toml written', mark: Mark.done);
+      if (needsIgnore) {
+        output.line('.rk/ added to .gitignore', mark: Mark.done);
+      }
+      output.next('rk status');
       return ExitCodes.ok;
     }
-
-    // The prompt names everything the Yes will do. `.rk/` holds rk's own
-    // scratch and evidence; without the ignore line, a failed release
-    // dirties the tree and the next run refuses over rk's own debris.
-    final gitignore = tree.read('.gitignore');
-    final needsIgnore = gitignore == null ||
-        !gitignore.split('\n').any((l) => l.trim() == '.rk/');
-
-    output.blank();
-    if (needsIgnore) {
-      output.say('.rk/ holds rk\'s private work files — never public truth. '
-          'Keep it while a binary release is partial.');
-    }
-    final prompt = needsIgnore
-        ? 'write release.toml and add .rk/ to .gitignore? [Y/n] '
-        : 'write release.toml? [Y/n] ';
-    if (!await confirm!(prompt)) {
-      // A decline and an EOF land here alike, and both deserve the doors:
-      // the answer may have been "not like this", not "never".
-      output.say('nothing was written.');
-      output.next('rk init --write');
-      return ExitCodes.ok;
-    }
-
-    output.report.acted = true;
-    write('release.toml', proposal);
-    if (needsIgnore) {
-      final lead = gitignore == null
-          ? ''
-          : gitignore.endsWith('\n')
-              ? gitignore
-              : '$gitignore\n';
-      write('.gitignore', '$lead.rk/\n');
-    }
-    output.blank();
-    output.line('release.toml written', mark: Mark.done);
-    if (needsIgnore) {
-      output.line('.rk/ added to .gitignore', mark: Mark.done);
-    }
-    output.next('rk status');
-    return ExitCodes.ok;
   }
 
   String _name() => tree.description.split('/').last;
 
-  /// Every git-tracked manifest, classified.
-  ///
-  /// Tracked rather than present: a filesystem walk finds build output,
-  /// vendored copies, and stray worktrees, and proposing to release one of
-  /// those is worse than proposing nothing.
-  _Scan _scan() {
-    final releasable = <Pubspec>[];
-    final skipped = <String>[];
-
-    final manifests = tree
+  InitPlan _discoverPlan() {
+    final plan = InitPlan.discover(
+      tree: tree,
+      gitBound: gitBound,
+      hasRemote: hasRemote ?? origin != null,
+      githubRepository: origin,
+      ambientPubHostedUrl: ambientPubHostedUrl,
+    );
+    if (!gitBound) return plan;
+    final tracked = tree
         .trackedFiles()
-        .where((p) => p == 'pubspec.yaml' || p.endsWith('/pubspec.yaml'))
-        .toList()
-      ..sort();
-
-    // Tracked-only is the rule — a filesystem walk proposes build output —
-    // but a manifest git does not track is not a manifest that does not
-    // exist. It is named, with its next command, and never proposed from.
-    final untracked = _untrackedManifests(manifests.toSet());
-    if (untracked.isNotEmpty) {
-      skipped.add('${untracked.length} pubspec.yaml '
-          '${untracked.length == 1 ? 'is' : 'are'} not tracked by git — '
-          'git add ${untracked.join(' ')} to include '
-          '${untracked.length == 1 ? 'it' : 'them'}');
-    }
-
-    var vetoed = 0;
-    for (final path in manifests) {
-      final String? source;
-      try {
-        source = tree.read(path);
-      } on SourceUnreadable catch (error) {
-        skipped.add('$path is there and could not be read: ${error.reason}');
-        continue;
-      }
-      if (source == null) {
-        // Tracked and gone: git knows it, the disk does not. Skipping it
-        // silently made a deleted package vanish from the proposal with no
-        // word said.
-        skipped.add('$path is tracked but not on disk');
-        continue;
-      }
-
-      final parseProblems = Diagnostics();
-      final pubspec = Pubspec.parse(source, path, parseProblems);
-      if (pubspec == null) {
-        skipped.add('$path could not be parsed: '
-            '${parseProblems.found.map((d) => d.message).join('; ')}');
-        continue;
-      }
-      if (pubspec.isWorkspaceRoot) {
-        skipped.add('${pubspec.name} is a workspace root, not a package');
-        continue;
-      }
-      if (pubspec.version == null) {
-        skipped.add('${pubspec.name} declares no version');
-        continue;
-      }
-      if (pubspec.vetoesRegistry) {
-        vetoed++;
-        continue;
-      }
-      releasable.add(pubspec);
-    }
-
-    if (vetoed > 0) {
-      skipped.add('$vetoed excluded by publish_to: none');
-    }
-    return _Scan(releasable, skipped);
+        .where(
+            (path) => path == 'pubspec.yaml' || path.endsWith('/pubspec.yaml'))
+        .toSet();
+    final untracked = _untrackedManifests(tracked);
+    if (untracked.isEmpty) return plan;
+    return InitPlan(
+      candidates: plan.candidates,
+      notices: [
+        ...plan.notices,
+        '${untracked.length} pubspec.yaml '
+            '${untracked.length == 1 ? 'is' : 'are'} not tracked by git — '
+            'git add ${untracked.join(' ')} to include '
+            '${untracked.length == 1 ? 'it' : 'them'}',
+      ],
+      gitBound: plan.gitBound,
+      hasRemote: plan.hasRemote,
+      githubRepository: plan.githubRepository,
+    );
   }
 
-  /// The config rk would write.
-  ///
-  /// Only pub.dev is proposed. An `executables:` entry says
-  /// `dart pub global activate` works, not that the package wants a signed
-  /// tarball shipped for it, so binary channels are a decision the human
-  /// makes rather than one rk infers.
-  String _propose(List<Pubspec> packages) {
-    final buffer = StringBuffer('schema = 1\n');
-    final several = packages.length > 1;
+  List<String> _reasons(InitPlan plan) => {
+        ...plan.notices,
+        for (final candidate in plan.candidates)
+          if (!plan.included.contains(candidate))
+            '${candidate.name}: '
+                '${_excludedReason(candidate)}',
+      }.toList();
 
-    for (final package in packages) {
-      final unit = _unitName(package.name);
-      final header = '[release.$unit]';
-      final tag = '${several ? '${package.name}-' : ''}v{version}';
-      buffer.write('\n${header.padRight(30)} # tag $tag\n');
-      if (package.directory != '.') {
-        buffer.write('path = "${package.directory}"\n');
-      }
-      buffer.write('publish = ["pub.dev"]\n');
-    }
-
-    if (packages.any((p) => p.executables.isNotEmpty)) {
-      buffer.write(
-        '\n# A package here declares an executable. To ship signed binaries\n'
-        '# too, add "github-release" (and "homebrew") to its publish list,\n'
-        '# with binary_platforms from: '
-        '${ReleaseConfig.supportedPlatformsList.join(', ')}.\n',
-      );
-    }
-    return buffer.toString();
-  }
-
-  /// A unit name from a package name, since the unit is what policy and step
-  /// ids are written in terms of.
-  static String _unitName(String package) {
-    final cleaned = package.toLowerCase().replaceAll(RegExp('[^a-z0-9_-]'), '');
-    return cleaned.isEmpty ? 'main' : cleaned;
+  String _excludedReason(InitCandidate candidate) {
+    final registry = candidate.availability[InitOption.pubDev]!;
+    if (!registry.available) return registry.reason;
+    return 'not selected';
   }
 }
 
@@ -361,10 +371,4 @@ extension on InitCommand {
         .whereType<Directory>()
         .map((d) => 'packages/${d.path.split('/').last}/pubspec.yaml');
   }
-}
-
-class _Scan {
-  _Scan(this.releasable, this.skipped);
-  final List<Pubspec> releasable;
-  final List<String> skipped;
 }

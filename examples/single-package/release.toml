@@ -1,4 +1,4 @@
-schema = 1
+schema = 2
 
 [release.lib]
-publish = ["pub.dev"]
+publish = ["git-tag", "pub.dev"]

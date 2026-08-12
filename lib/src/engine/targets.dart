@@ -1,5 +1,6 @@
 import 'checklist.dart';
 import 'diagnostic.dart';
+import 'publish_target.dart';
 import 'resolve.dart';
 import 'verdict.dart';
 
@@ -22,8 +23,11 @@ class TargetExpectation {
     this.exactComparisonNeedsStage = false,
   }) : artifacts = List<String>.unmodifiable(artifacts);
 
-  /// Stable report spelling derived from the canonical checklist kind.
-  String get kind => step.kind.targetName!;
+  PublishTarget get target => step.target!;
+
+  /// Stable report spelling derived from the concrete destination, not its
+  /// shared lifecycle mechanics.
+  String get kind => target.wireName;
   final String label;
   final String coordinate;
   final String targetVersion;

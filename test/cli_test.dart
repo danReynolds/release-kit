@@ -202,7 +202,7 @@ void main() {
     // There is no second answer for "no units": resolution already refuses
     // with the table to add, which is more use than any usage line.
     final empty = Rk.repository(scratch, 'no-units', {
-      'release.toml': 'schema = 1\n',
+      'release.toml': 'schema = 2\n',
     });
 
     final run = empty(['release', '--json']);
@@ -226,11 +226,44 @@ void main() {
       expect(run.all, contains('release.toml'));
     });
 
-    test('outside a repository is a usage error', () {
+    test('non-Git directories are valid release roots', () {
       final loose = Directory('${scratch.path}/loose')..createSync();
-      File('${loose.path}/release.toml').writeAsStringSync('schema = 1\n');
+      File('${loose.path}/release.toml').writeAsStringSync('schema = 2\n');
       final run = Rk(loose.path)(['status']);
-      expect(run.code, 2, reason: run.all);
+      expect(run.code, 1, reason: run.all);
+      expect(run.all, contains('release.toml declares no release units'));
+      expect(run.all, isNot(contains('not a git repository')));
+    });
+
+    test('Git-backed targets are refused explicitly without Git', () {
+      final loose = Directory('${scratch.path}/loose-git-target')..createSync();
+      File('${loose.path}/release.toml').writeAsStringSync('''
+schema = 2
+
+[release.tool]
+publish = ["git-tag"]
+''');
+      File('${loose.path}/pubspec.yaml')
+          .writeAsStringSync('name: tool\nversion: 1.0.0\n');
+      File('${loose.path}/CHANGELOG.md')
+          .writeAsStringSync('## 1.0.0\n\n- First release.\n');
+
+      final run = Rk(loose.path)(['status', '--json']);
+      expect(run.code, 1, reason: run.all);
+      expect(run.problems.map((problem) => problem['code']), ['RK-SRC-001']);
+      expect(run.all, contains('initialize a Git repository'));
+    });
+
+    test('non-Git init writes no Git-only file', () {
+      final loose = Directory('${scratch.path}/loose-init')..createSync();
+      File('${loose.path}/pubspec.yaml')
+          .writeAsStringSync('name: tool\nversion: 1.0.0\n');
+
+      final run = Rk(loose.path)(['init', '--write']);
+      expect(run.code, 0, reason: run.all);
+      expect(File('${loose.path}/release.toml').readAsStringSync(),
+          contains('publish = ["pub.dev"]'));
+      expect(File('${loose.path}/.gitignore').existsSync(), isFalse);
     });
   });
 }

@@ -41,27 +41,4 @@ void main() {
 
     expect(Sha256.hex(bytes), expected);
   });
-
-  test('SHA256SUMS is the format shasum -c reads', () async {
-    final directory = await Directory.systemTemp.createTemp('rk_sums');
-    addTearDown(() => directory.delete(recursive: true));
-
-    final assets = {
-      'keybay-0.2.0-macos-arm64.tar.gz': utf8.encode('one'),
-      'keybay-0.2.0-linux-x64.tar.gz': utf8.encode('two'),
-    };
-    for (final entry in assets.entries) {
-      await File('${directory.path}/${entry.key}').writeAsBytes(entry.value);
-    }
-    await File('${directory.path}/SHA256SUMS')
-        .writeAsString(Checksums.render(assets));
-
-    final checked = await Process.run(
-      'shasum',
-      ['-c', 'SHA256SUMS'],
-      workingDirectory: directory.path,
-    );
-    expect(checked.exitCode, 0, reason: checked.stderr as String);
-    expect((checked.stdout as String), contains('OK'));
-  });
 }

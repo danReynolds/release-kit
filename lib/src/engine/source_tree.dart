@@ -209,6 +209,95 @@ class GitSourceTree implements SourceTree {
   }
 }
 
+/// A repository-shaped directory with no Git identity.
+///
+/// Configuration supplies the roots worth staging. Discovery is deliberately
+/// handled by Dart workspace membership in `rk init`; this class never
+/// guesses release units by recursively searching unrelated directories.
+class FileSystemSourceTree implements SourceTree {
+  FileSystemSourceTree(this.root, {Iterable<String> roots = const ['.']})
+      : roots = List.unmodifiable(roots);
+
+  final String root;
+  final List<String> roots;
+
+  @override
+  String get description => root;
+
+  String _resolve(String path) {
+    final parts =
+        path.split('/').where((part) => part.isNotEmpty && part != '.');
+    if (path.startsWith('/') ||
+        path.startsWith('\\') ||
+        path.contains('\\') ||
+        path.contains('\u0000') ||
+        RegExp(r'^[A-Za-z]:').hasMatch(path) ||
+        parts.contains('..')) {
+      throw ArgumentError('path escapes the source directory: $path');
+    }
+    return [root, ...parts].join('/');
+  }
+
+  @override
+  String? read(String path) {
+    final bytes = readBytes(path);
+    return bytes == null ? null : utf8.decode(bytes);
+  }
+
+  @override
+  List<int>? readBytes(String path) {
+    final file = File(_resolve(path));
+    final type = FileSystemEntity.typeSync(file.path, followLinks: false);
+    if (type == FileSystemEntityType.notFound) return null;
+    if (type != FileSystemEntityType.file) {
+      throw SourceUnreadable(path, 'the path is not a regular file');
+    }
+    try {
+      return file.readAsBytesSync();
+    } on FileSystemException catch (error) {
+      throw SourceUnreadable(path, error.osError?.message ?? '$error');
+    }
+  }
+
+  @override
+  bool exists(String path) {
+    final full = _resolve(path);
+    return File(full).existsSync() || Directory(full).existsSync();
+  }
+
+  @override
+  List<String> trackedFiles() {
+    final files = <String>{};
+    for (final declared in roots) {
+      final normalized = declared == '.' ? '' : declared;
+      final full = _resolve(normalized);
+      final type = FileSystemEntity.typeSync(full, followLinks: false);
+      if (type == FileSystemEntityType.file) {
+        files.add(normalized);
+        continue;
+      }
+      if (type != FileSystemEntityType.directory) continue;
+      for (final entity in Directory(full).listSync(
+        recursive: true,
+        followLinks: false,
+      )) {
+        if (entity is! File) continue;
+        final relative = entity.path
+            .substring(root.endsWith(Platform.pathSeparator)
+                ? root.length
+                : root.length + 1)
+            .split(Platform.pathSeparator)
+            .join('/');
+        if (relative == '.rk' || relative.startsWith('.rk/')) continue;
+        if (relative == '.git' || relative.startsWith('.git/')) continue;
+        files.add(relative);
+      }
+    }
+    final ordered = files.toList()..sort();
+    return ordered;
+  }
+}
+
 /// One immutable Git commit exposed through the synchronous [SourceTree]
 /// contract.
 ///
