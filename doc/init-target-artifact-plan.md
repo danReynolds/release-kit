@@ -173,13 +173,11 @@ is shown.
 ## Release assets
 
 The current Dart standalone producer declares private staged outputs and
-their deliberate public projections. A release asset records:
-
-- producer and project identity;
-- private stage path;
-- semantic type and media type;
-- optional platform; and
-- exact public filename.
+their deliberate public projections. A release-asset specification records
+only the private stage path and exact public filename. Producer identity,
+semantic type, media type, platform, size, and digest stay in the producer
+receipt or captured manifest metadata rather than becoming another public
+configuration or projection surface.
 
 Bundle assembly validates the complete specification before publication:
 
@@ -280,7 +278,7 @@ changes were:
 - make Git tagging explicit and conditional;
 - require explicit tag namespaces when several tagged units exist;
 - preserve concrete target identity alongside lifecycle kind;
-- qualify producer state by project;
+- keep producer state attached to the unit's one binary project;
 - separate public assets from Homebrew formula bytes;
 - support metadata-only GitHub Releases;
 - reject destructive GitHub draft recovery;
@@ -311,7 +309,7 @@ The automated contract covers:
 - generated TOML parsing and resolution;
 - selector dependencies and terminal cleanup;
 - target scope and tag collisions;
-- multi-project producer qualification and public-name collisions;
+- the one-binary-project-per-unit invariant and release-asset name validation;
 - metadata-only releases;
 - GitHub interruption and recovery points;
 - Homebrew manifest/tap binding;

@@ -27,12 +27,6 @@ enum InitSelectorKey { up, down, left, right, toggle, review, cancel, ignore }
 
 enum InitSelectorAction { changed, review, cancel, ignored }
 
-final class InitSelectorResult {
-  const InitSelectorResult(this.action, this.message);
-  final InitSelectorAction action;
-  final String message;
-}
-
 /// Pure state and rendering for the compact `rk init` matrix.
 final class InitSelector {
   InitSelector(this.plan)
@@ -48,12 +42,9 @@ final class InitSelector {
   InitOption get option => InitOption.values[column];
   InitCandidate get candidate => plan.candidates[row];
 
-  InitSelectorResult handle(InitSelectorKey key) {
+  InitSelectorAction handle(InitSelectorKey key) {
     if (plan.candidates.isEmpty) {
-      return const InitSelectorResult(
-        InitSelectorAction.cancel,
-        'nothing discovered',
-      );
+      return InitSelectorAction.cancel;
     }
     switch (key) {
       case InitSelectorKey.up:
@@ -72,16 +63,16 @@ final class InitSelector {
         final toggled = plan.toggle(row, option);
         plan = toggled.plan;
         message = toggled.message;
-        return InitSelectorResult(InitSelectorAction.changed, message);
+        return InitSelectorAction.changed;
       case InitSelectorKey.review:
-        return const InitSelectorResult(InitSelectorAction.review, '');
+        return InitSelectorAction.review;
       case InitSelectorKey.cancel:
-        return const InitSelectorResult(InitSelectorAction.cancel, '');
+        return InitSelectorAction.cancel;
       case InitSelectorKey.ignore:
-        return const InitSelectorResult(InitSelectorAction.ignored, '');
+        return InitSelectorAction.ignored;
     }
     message = '';
-    return const InitSelectorResult(InitSelectorAction.changed, '');
+    return InitSelectorAction.changed;
   }
 
   String render(int width, {int height = 24}) =>
@@ -179,9 +170,9 @@ Future<InitPlan?> runInitSelector(
         selector.render(terminal.width, height: terminal.height),
       );
       await terminal.flush();
-      final result = selector.handle(readInitSelectorKey(terminal.readByte));
-      if (result.action == InitSelectorAction.review) return selector.plan;
-      if (result.action == InitSelectorAction.cancel) return null;
+      final action = selector.handle(readInitSelectorKey(terminal.readByte));
+      if (action == InitSelectorAction.review) return selector.plan;
+      if (action == InitSelectorAction.cancel) return null;
     }
     return null;
   } finally {

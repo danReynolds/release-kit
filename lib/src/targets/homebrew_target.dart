@@ -324,12 +324,11 @@ final class HomebrewTargetModule extends TargetModule {
           final publicArchives = {
             for (final platform in project.binaryPlatforms)
               platform: PlatformAsset(
-                name: context.receipt.steps
-                    .singleWhere((item) =>
-                        item.name == archiveReceiptName(project.name, platform))
-                    .outputs
-                    .single
-                    .path,
+                name: ReleaseAssets.archiveName(
+                  executable,
+                  project.version.canonical,
+                  platform,
+                ),
                 sha256: context.receipt.steps
                     .singleWhere((item) =>
                         item.name == archiveReceiptName(project.name, platform))
@@ -430,7 +429,11 @@ final class HomebrewTargetModule extends TargetModule {
       assets: {
         for (final MapEntry(key: platform, value: archive) in archives.entries)
           platform: PlatformAsset(
-            name: archive.path,
+            name: ReleaseAssets.archiveName(
+              executable,
+              project.version.canonical,
+              platform,
+            ),
             sha256: archive.sha256,
           ),
       },

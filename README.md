@@ -33,8 +33,9 @@ rk release [unit]                      # plan, confirm, act
 rk release [unit] --confirm=<version>  # the typed yes as a flag, for agents
 ```
 
-With a capable terminal, `init` opens a compact per-project selector for Use,
-Binary, Git tag, pub.dev, GitHub, and Homebrew. It starts conservatively:
+With a capable terminal, `init` opens a compact per-project selector for
+Binary, Git tag, pub.dev, GitHub, and Homebrew. A project is included when at
+least one release output is selected. The selector starts conservatively:
 native package publication may be selected when unambiguous, executables only
 expose capability, and GitHub/Homebrew binaries remain opt-in. Selecting a
 dependent target enables its prerequisites; turning a prerequisite off removes

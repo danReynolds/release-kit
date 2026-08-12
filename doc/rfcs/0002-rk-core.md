@@ -909,7 +909,7 @@ built-ins follow the same boundary. Each stage-producing target also supplies
 one in-memory contribution contract; the coordinator executes it and the stage
 inspector validates the same descriptor, rather than maintaining a second
 provider grammar in `engine/stage_contract.dart`. `binary_chain.dart` therefore
-contains only local build, sign, notarize, archive, and checksum operations.
+contains only local build, sign, notarize, and archive operations.
 **`ecosystems/` is removed from this block
 rather than created on disk** — a directory hosting a taxonomy with one member
 and no second member in sight is complexity naming no failure.

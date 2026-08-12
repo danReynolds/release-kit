@@ -12,6 +12,5 @@ final class SourceContext {
   final SourceTree tree;
   final GitState git;
 
-  bool get isGitBound => git.isBound;
   String get root => git.root;
 }

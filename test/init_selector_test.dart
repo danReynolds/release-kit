@@ -48,7 +48,7 @@ void main() {
     expect(selector.option, InitOption.homebrew);
 
     final result = selector.handle(InitSelectorKey.toggle);
-    expect(result.action, InitSelectorAction.changed);
+    expect(result, InitSelectorAction.changed);
     expect(selector.plan.candidates.single.selected,
         containsAll({InitOption.homebrew, InitOption.binary}));
     expect(selector.render(60), contains('enabled'));

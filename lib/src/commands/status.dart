@@ -482,20 +482,15 @@ class StatusCommand {
     if (releaseBindings is Map && releaseBindings[name] is String) {
       stagedPath = releaseBindings[name] as String;
     }
-    final formulaBindings = complete.evidence['formula_bindings'];
-    if (formulaBindings is List && target.target == PublishTarget.homebrew) {
-      for (final value in formulaBindings) {
-        if (value is! Map ||
-            value['project'] != target.project?.name ||
-            value['staged_path'] is! String) {
-          continue;
-        }
-        final destinationPath = value['path'];
-        if (destinationPath == name ||
-            destinationPath is String && destinationPath.endsWith('/$name')) {
-          stagedPath = value['staged_path'] as String;
-          break;
-        }
+    final formulaBinding = complete.evidence['formula_binding'];
+    if (formulaBinding is Map &&
+        target.target == PublishTarget.homebrew &&
+        formulaBinding['project'] == target.project?.name &&
+        formulaBinding['staged_path'] is String) {
+      final destinationPath = formulaBinding['path'];
+      if (destinationPath == name ||
+          destinationPath is String && destinationPath.endsWith('/$name')) {
+        stagedPath = formulaBinding['staged_path'] as String;
       }
     }
 

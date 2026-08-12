@@ -40,7 +40,7 @@ binary_platforms = ["linux-x64", "linux-arm64", "macos-arm64"]
 
 void main() {
   group('schema 2 target contracts', () {
-    test('schema 1 is rejected with an actionable migration', () {
+    test('schema 1 is unsupported without a compatibility layer', () {
       final diagnostics = Diagnostics();
       final config = ReleaseConfig.parse('''
 schema = 1
@@ -51,12 +51,10 @@ publish = ["pub.dev"]
 
       expect(config, isNull);
       expect(diagnostics.found.single.code, 'RK-CONF-002');
-      final remedy = diagnostics.found.single.remedy!;
-      expect(remedy, contains('schema 2'));
-      expect(remedy, contains('git-tag'));
-      expect(remedy, contains('project rows'));
-      expect(remedy, contains('unit publish list'));
-      expect(remedy, contains('remove code_id'));
+      expect(
+        diagnostics.found.single.remedy,
+        'upgrade rk, or use schema 2',
+      );
     });
 
     test('a custom Homebrew tap is an owner/repository coordinate', () {

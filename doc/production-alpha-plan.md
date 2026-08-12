@@ -5,7 +5,7 @@ Status: local implementation complete; supervised live gate pending,
 probe, `--offline`, and the transient unsigned build are gone; macOS
 build and signing are one producer; the pipeline is declared once; the
 manifest carries only externally checkable facts; notary evidence is
-stage-local; and `--json` is the agent contract at schema 4 with
+stage-local; and `--json` is the agent contract at schema 5 with
 `release --confirm=<version>` as the noninteractive typed yes. This is
 the current forward plan.
 `doc/plan.md` remains the historical phase plan, review record, and evidence
@@ -387,8 +387,8 @@ a moved remote tag is detected; and no target is skipped on presence alone.
   before the receipt may reference it.
 - Record, per completed step, input digests and output path/type/mode/size/hash,
   smoke evidence, signature identity and certificate fingerprint,
-  notarization binding/result/log, archive inventory, checksum mapping, and
-  notes/formula digests.
+  notarization binding/result/log, archive inventory, and notes/formula
+  digests.
 - Produce a separate publishable `release-manifest.json` containing no local
   secrets or paths. Publish it with binary releases; pub.dev-only exactness is
   recovered from the tagged source and registry archive instead.
@@ -406,7 +406,7 @@ recovery-critical stage during partial publication must fail closed.
 
 ### Phase 3 — Make every producer stageable and reusable
 
-- Change build, sign, notarize, archive, checksum, notes, manifest, and formula
+- Change build, sign, notarize, archive, notes, manifest, and formula
   operations to return structured outcomes for the receipt writer.
 - Run package-manager dry-run and consumer-resolve evidence as stage inputs.
 - Derive every public filename through the one `ReleaseAssets` grammar.
@@ -418,7 +418,8 @@ recovery-critical stage during partial publication must fail closed.
   executed.
 
 **Done when:** a second identical stage performs no compile, sign, notary
-submission, archive, or checksum generation; cheap authority checks may rerun;
+submission, archive, notes, formula, or manifest generation; cheap authority
+checks may rerun;
 and a fully validated incomplete prefix resumes after its last recorded step.
 If any recorded dependency differs, rk discards and rebuilds the still-private
 stage instead of maintaining a second dependency-repair engine. A completed
@@ -434,7 +435,7 @@ stage that was reviewed is never replaced implicitly.
   inspect and preflight
     -> [normal interactive release with unfinished pub.dev: dart pub login]
     -> source snapshot
-    -> package/build+sign/notarize/archive/checksum/notes/formula
+    -> package/build+sign/notarize/archive/notes/formula
     -> complete stage
     -> tag
     -> dependency-ordered registry packages
@@ -477,7 +478,7 @@ closed with a specific restore instruction.
 
 **Done when:** call traces prove `--stage` has no tag/pub/GitHub/tap mutation;
 status immediately recognizes its exact artifacts; and the following release
-performs zero producer/sign/notary/archive/checksum work.
+performs zero producer/sign/notary/archive work.
 
 ### Phase 6 — Land the agreed status experience
 

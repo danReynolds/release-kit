@@ -204,29 +204,23 @@ PublishedFormulaRead _selectFormula(
   if (!inspection.isExact || manifest == null) {
     return PublishedFormulaRead(inspection, null);
   }
-  final matches = manifest.formulas
-      .where(
-        (formula) => formula.names(
-          project: project,
-          tap: tap,
-          path: path,
-        ),
-      )
-      .toList();
-  if (matches.length != 1) {
+  final formula = manifest.formula;
+  if (formula == null ||
+      !formula.names(project: project, tap: tap, path: path)) {
     return PublishedFormulaRead(
       Inspection.conflict(
-        'the published release manifest does not bind exactly one Homebrew '
-        'formula for $project',
+        'the published release manifest does not bind the Homebrew formula '
+        'for $project',
         evidence: {
-          '$tap/$path':
-              matches.isEmpty ? 'missing from manifest' : 'declared twice',
+          '$tap/$path': formula == null
+              ? 'missing from manifest'
+              : 'manifest binds ${formula.tap}/${formula.path}',
         },
       ),
       null,
     );
   }
-  return PublishedFormulaRead(inspection, matches.single);
+  return PublishedFormulaRead(inspection, formula);
 }
 
 Set<String> expectedReleaseAssets(ResolvedUnit unit) =>

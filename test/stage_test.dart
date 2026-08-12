@@ -500,14 +500,12 @@ void main() {
             artifact: archive,
           ),
         ],
-        formulas: [
-          ReleaseManifestFormula.fromStage(
-            project: 'rk',
-            tap: 'example/homebrew-tap',
-            path: 'Formula/rk.rb',
-            artifact: archive,
-          ),
-        ],
+        formula: ReleaseManifestFormula.fromStage(
+          project: 'rk',
+          tap: 'example/homebrew-tap',
+          path: 'Formula/rk.rb',
+          artifact: archive,
+        ),
       );
       manifest.writeTo(stage);
       final document =
@@ -516,8 +514,8 @@ void main() {
 
       expect(parsed.commit, stage.identity.headCommit);
       expect(parsed.artifacts.single.sha256, archive.sha256);
-      expect(parsed.formulas.single.sha256, archive.sha256);
-      expect(parsed.formulas.single.path, 'Formula/rk.rb');
+      expect(parsed.formula!.sha256, archive.sha256);
+      expect(parsed.formula!.path, 'Formula/rk.rb');
       expect(document, contains(_commit));
       expect(
         document,
@@ -627,7 +625,7 @@ StageReceipt _writeCompleteStage(StageDirectory stage) {
         outputs: [manifest],
         evidence: const {
           'release_assets': {'rk': 'rk'},
-          'formula_bindings': [],
+          'formula_binding': null,
         },
       ),
     ],

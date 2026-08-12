@@ -307,6 +307,24 @@ void main() {
     expect(second.publicMutations, isEmpty);
   });
 
+  test('the staged formula links the public archive name, not its stage path',
+      () async {
+    final staged = await harness.run(
+      stageOnly: true,
+      confirm: (_) async => fail('stage mode must not authorize'),
+    );
+    expect(staged.code, ExitCodes.ok, reason: staged.text);
+
+    final formula = File(harness.stage.directory.resolve(
+      ReleaseAssets.formulaPath(harness.unit.binaryProject!),
+    )).readAsStringSync();
+    expect(
+      formula,
+      contains('releases/download/v1.2.3/tool-1.2.3-linux-x64.tar.gz'),
+    );
+    expect(formula, isNot(contains('producers/tool/archives')));
+  });
+
   test(
       'a lost GitHub final-publish response reconciles from exact public bytes',
       () async {

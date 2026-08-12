@@ -9,7 +9,7 @@ import 'stage_receipt.dart';
 /// (formula authentication, same-version re-inspection) parse only the
 /// current schema — so a post-release bump must teach the parser each
 /// retired schema it still needs to read.
-const releaseManifestSchemaVersion = 4;
+const releaseManifestSchemaVersion = 5;
 
 /// One public file, deliberately stripped of its local stage path and all
 /// producer evidence.
@@ -117,16 +117,6 @@ final class StagedFormulaBinding {
     );
   }
 
-  static List<StagedFormulaBinding> listFromEvidence(Object? value) {
-    if (value == null) return const [];
-    if (value is! List) {
-      throw const FormatException(
-        'complete-stage formula bindings are not an array',
-      );
-    }
-    return List.unmodifiable(value.map(StagedFormulaBinding.fromEvidence));
-  }
-
   final String project;
   final String tap;
   final String path;
@@ -229,8 +219,6 @@ class ReleaseManifestFormula {
   final String sha256;
 
   String get identity => _formulaIdentity(project, tap, path);
-  String get publicIdentity => _publicFormulaIdentity(tap, path);
-
   bool names({
     required String project,
     required String tap,
@@ -259,13 +247,10 @@ class ReleaseManifest {
     required this.tag,
     required this.commit,
     required Iterable<ReleaseManifestArtifact> artifacts,
-    Iterable<ReleaseManifestFormula> formulas = const [],
-  })  : artifacts = List<ReleaseManifestArtifact>.unmodifiable(
+    this.formula,
+  }) : artifacts = List<ReleaseManifestArtifact>.unmodifiable(
           artifacts.toList()
             ..sort((left, right) => left.name.compareTo(right.name)),
-        ),
-        formulas = List<ReleaseManifestFormula>.unmodifiable(
-          formulas.toList()..sort(_compareFormulas),
         ) {
     _requirePublicText('unit', unit);
     _requirePublicText('version', version);
@@ -279,15 +264,6 @@ class ReleaseManifest {
         throw ArgumentError('duplicate public artifact: ${artifact.name}');
       }
     }
-    final formulaPaths = <String>{};
-    for (final formula in this.formulas) {
-      final key = formula.publicIdentity;
-      if (!formulaPaths.add(key)) {
-        throw ArgumentError(
-          'duplicate formula path: ${formula.tap}/${formula.path}',
-        );
-      }
-    }
   }
 
   factory ReleaseManifest.parse(String document) {
@@ -296,7 +272,7 @@ class ReleaseManifest {
       decoded,
       const {
         'artifacts',
-        'formulas',
+        'formula',
         'schema',
         'source',
         'tag',
@@ -318,17 +294,15 @@ class ReleaseManifest {
     if (artifacts is! List) {
       throw const FormatException('manifest artifacts is not an array');
     }
-    final formulas = map['formulas'];
-    if (formulas is! List) {
-      throw const FormatException('manifest formulas is not an array');
-    }
     return ReleaseManifest(
       unit: _string(map, 'unit'),
       version: _string(map, 'version'),
       tag: map['tag'] == null ? null : _string(map, 'tag'),
       commit: source['commit'] == null ? null : _string(source, 'commit'),
       artifacts: artifacts.map(ReleaseManifestArtifact.fromJson),
-      formulas: formulas.map(ReleaseManifestFormula.fromJson),
+      formula: map['formula'] == null
+          ? null
+          : ReleaseManifestFormula.fromJson(map['formula']),
     );
   }
 
@@ -342,11 +316,11 @@ class ReleaseManifest {
   final String? commit;
 
   final List<ReleaseManifestArtifact> artifacts;
-  final List<ReleaseManifestFormula> formulas;
+  final ReleaseManifestFormula? formula;
 
   Map<String, Object?> toJson() => {
         'artifacts': artifacts.map((artifact) => artifact.toJson()).toList(),
-        'formulas': formulas.map((formula) => formula.toJson()).toList(),
+        'formula': formula?.toJson(),
         'schema': releaseManifestSchemaVersion,
         'source': {'commit': commit},
         'tag': tag,
@@ -365,12 +339,6 @@ class ReleaseManifest {
     stage.writeBytesAtomically(path, utf8.encode(encode()));
   }
 }
-
-int _compareFormulas(
-  ReleaseManifestFormula left,
-  ReleaseManifestFormula right,
-) =>
-    left.identity.compareTo(right.identity);
 
 Map<String, Object?> _strictMap(
   Object? value,
@@ -411,12 +379,6 @@ String _formulaIdentity(
   String path,
 ) =>
     '$project\u0000$tap\u0000$path';
-
-String _publicFormulaIdentity(
-  String tap,
-  String path,
-) =>
-    '$tap\u0000$path';
 
 void _requireDestinationPath(String path) {
   if (path.isEmpty ||

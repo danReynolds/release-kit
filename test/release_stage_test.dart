@@ -331,7 +331,7 @@ void main() {
       File(homebrewStage.directory.resolve(ReleaseAssets.manifest))
           .readAsStringSync(),
     );
-    final formulaBinding = manifest.formulas.single;
+    final formulaBinding = manifest.formula!;
 
     expect(manifest.artifacts.map((artifact) => artifact.name), [_asset]);
     expect(formulaBinding.project, 'tool');

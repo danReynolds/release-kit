@@ -143,12 +143,7 @@ class _Reader {
         'this rk understands schema ${ReleaseConfig.supportedSchema}, '
             'and this file declares $value',
         source: _root.locationOf('schema'),
-        remedy: value == 1
-            ? 'schema 2 makes Git tagging explicit: add "git-tag" where '
-                'wanted, keep registry targets on project rows, move GitHub '
-                'Release to the unit publish list, remove code_id (the '
-                'producer derives it), and review the result'
-            : 'upgrade rk, or use schema ${ReleaseConfig.supportedSchema}',
+        remedy: 'upgrade rk, or use schema ${ReleaseConfig.supportedSchema}',
       );
       return false;
     }

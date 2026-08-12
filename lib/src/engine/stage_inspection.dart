@@ -456,11 +456,11 @@ class StageInspector {
                 entry.key as String: entry.value as String,
           }
         : <String, String>{};
-    final List<StagedFormulaBinding> formulaBindings;
+    final StagedFormulaBinding? formulaBinding;
     try {
-      formulaBindings = StagedFormulaBinding.listFromEvidence(
-        complete.evidence['formula_bindings'],
-      );
+      final encoded = complete.evidence['formula_binding'];
+      formulaBinding =
+          encoded == null ? null : StagedFormulaBinding.fromEvidence(encoded);
     } on Object catch (error) {
       issues.add(StageIssue(
         StageIssueKind.invalidManifest,
@@ -471,7 +471,7 @@ class StageInspector {
     }
     final expectedCompleteInputs = {
       ...bindings.values,
-      for (final binding in formulaBindings) binding.stagedPath,
+      if (formulaBinding != null) formulaBinding.stagedPath,
     };
     if (encodedBindings is! Map ||
         encodedBindings.length != bindings.length ||
@@ -508,46 +508,28 @@ class StageInspector {
         continue;
       }
     }
-    final receiptFormulas = <String, StagedFormulaBinding>{};
-    for (final binding in formulaBindings) {
-      if (receiptFormulas[binding.identity] != null) {
-        issues.add(const StageIssue(
-          StageIssueKind.invalidManifest,
-          'complete-stage repeats a formula binding',
-          path: 'release-manifest.json',
-        ));
-      }
-      receiptFormulas[binding.identity] = binding;
-    }
-    final manifestFormulaIdentities = {
-      for (final formula in manifest.formulas) formula.identity,
-    };
-    if (receiptFormulas.length != manifestFormulaIdentities.length ||
-        receiptFormulas.keys
-            .toSet()
-            .difference(manifestFormulaIdentities)
-            .isNotEmpty) {
+    final manifestFormula = manifest.formula;
+    if (formulaBinding?.identity != manifestFormula?.identity) {
       issues.add(const StageIssue(
         StageIssueKind.invalidManifest,
         'complete-stage formula evidence does not match the manifest',
         path: 'release-manifest.json',
       ));
     }
-    for (final item in manifest.formulas) {
-      final receiptBinding = receiptFormulas[item.identity];
-      final local = receiptBinding == null
+    if (manifestFormula != null) {
+      final local = formulaBinding == null
           ? null
-          : beforeComplete[receiptBinding.stagedPath];
-      if (receiptBinding == null ||
+          : beforeComplete[formulaBinding.stagedPath];
+      if (formulaBinding == null ||
           local == null ||
           local.type != 'formula' ||
-          local.size != item.size ||
-          local.sha256 != item.sha256 ||
-          completeInputs[receiptBinding.stagedPath] != item.sha256) {
+          local.size != manifestFormula.size ||
+          local.sha256 != manifestFormula.sha256 ||
+          completeInputs[formulaBinding.stagedPath] != manifestFormula.sha256) {
         issues.add(StageIssue(
           StageIssueKind.invalidManifest,
           'formula metadata does not match the producer receipt',
-          path: '${item.tap}/${item.path}',
+          path: '${manifestFormula.tap}/${manifestFormula.path}',
         ));
       }
     }

@@ -426,7 +426,6 @@ class ResolvedProject {
   final Pubspec pubspec;
 
   String get name => pubspec.name;
-  String get producerId => name;
   Version get version => pubspec.version!;
   Set<PublishTarget> get publish => config.publish;
   List<String> get binaryPlatforms => config.binaryPlatforms;
