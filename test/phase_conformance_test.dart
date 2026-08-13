@@ -114,8 +114,9 @@ void main() {
       expect(source, contains('externalPrerequisites'));
       expect(
         usedOutside('externalPrerequisites', 'checklist.dart'),
-        isFalse,
-        reason: 'callers get prerequisites as steps, not as a separate list',
+        isTrue,
+        reason: 'repository release ordering reuses the checklist\'s native '
+            'dependency facts rather than deriving a second graph',
       );
     });
 
@@ -717,7 +718,7 @@ publish = ["git-tag", "pub.dev"]
           ),
           tools: tools,
           output: output,
-          confirm: (_) async => '0.2.0',
+          confirm: (_) async => 'yes',
           wait: (_) async {},
           stageFor: stages.call,
           refreshStage: stages.refresh,
@@ -744,8 +745,8 @@ publish = ["git-tag", "pub.dev"]
           ArchiveEntry(name: 'CHANGELOG.md', bytes: '## 0.2.0\n'.codeUnits),
         ]));
 
-    test('type-the-version confirmation for a permanent act', () {
-      expect(sourceContains('type ${'\$'}{unit.version}'), isTrue);
+    test('default-No yes confirmation for a permanent act', () {
+      expect(sourceContains('[y/N]'), isTrue);
     });
 
     test('tag step with pre-act and post-act inspection', () {
@@ -1643,7 +1644,7 @@ executables:
         ),
         tools: tools,
         output: output,
-        confirm: (_) async => '1.0.0',
+        confirm: (_) async => 'yes',
         stageOnly: stageOnly,
         stageFor: stageFor,
         refreshStage: (unit, _) => stageFor(unit),
@@ -1865,7 +1866,7 @@ executables:
 
     test(
         'a platform nothing can run still ships — built, not executed, and '
-        'disclosed before the version is typed', () async {
+        'disclosed before the release is authorized', () async {
       // Optional evidence degrades honestly (CI-readiness constraint 6). A
       // missing container runtime used to refuse the whole release: a
       // daemon that is not running became a hard blocker on shipping,
@@ -1887,7 +1888,7 @@ executables:
         run.text,
         contains('built but never executed'),
         reason: 'the operator accepts the weaker assurance knowingly, at '
-            'the prompt, before the version is typed',
+            'the prompt, before the release is authorized',
       );
       expect(run.text, contains('linux-x64'));
       expect(
@@ -2178,7 +2179,7 @@ executables:
       test('a rehearsal shows the names the real run will claim', () async {
         // The names are exactly what a rehearsal is for reading before they
         // become unreclaimable, and they used to appear for the first time
-        // only at the real prompt, after the version was typed.
+        // only at the real prompt, after the release was authorized.
         final run = await binaryDrive(dryRun: true, label: '-dryclaim');
 
         expect(run.code, ExitCodes.ok, reason: run.text);

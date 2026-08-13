@@ -988,7 +988,7 @@ hid a double publish in the gate's own first draft):
 The one red gate is the forcing function: "DONE WHEN, live half" stays red
 until the real keybay publish is recorded here as the Phase 5 checkpoint.
 That act is the operator's — permanent, outward-facing, and requiring their
-terminal for the typed confirmation. The path to it, in order:
+terminal for the release confirmation. The path to it, in order:
 
 0. Both phase 5 reviews are addressed; the remaining red gate is this
    checkpoint. Operator cautions from the mutation review, still true:

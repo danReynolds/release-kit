@@ -46,15 +46,14 @@ Usage
   rk --version                    print this binary's version
   rk status [unit]                status all units or one
   rk init                         propose release.toml; write only on a yes
-  rk release [unit]               stage, confirm, then publish one unit
-  rk release [unit] --stage       prepare its exact stage; publish nothing
+  rk release [unit]               release all unfinished units, or one named unit
+  rk release [unit] --stage       prepare one exact stage; name it if ambiguous
 
 Flags
   --version   print this binary's version and exit
   --json      the machine surface (doc/json.md)
   --stage     release: build, sign, and notarize exact artifacts; publish nothing
-  --confirm=<version>
-              release: authorize exactly this version without a prompt
+  -y, --yes   release: answer yes without an interactive prompt
   --write     init: accept the proposal without a prompt
 
 Marks: ✓ done,  · already satisfied,  ✗ problem or conflict,  → your next move,
@@ -77,24 +76,11 @@ Future<void> main(List<String> args) async {
     '--help',
     '--stage',
     '--json',
-    '--confirm',
+    '-y',
+    '--yes',
     '--write',
   };
-  // --confirm carries the exact version as its value: the typed yes for
-  // scripts and agents, the same door init opens with --write. A bare
-  // --confirm authorizes nothing and is refused below.
-  final confirmVersions = <String>{};
-  final flags = <String>{};
-  for (final flag in args.where((a) => a.startsWith('-'))) {
-    if (flag.startsWith('--confirm=')) {
-      confirmVersions.add(flag.substring('--confirm='.length));
-      flags.add('--confirm');
-    } else {
-      flags.add(flag);
-    }
-  }
-  final confirmVersion =
-      confirmVersions.length == 1 ? confirmVersions.single : null;
+  final flags = args.where((argument) => argument.startsWith('-')).toSet();
   final positional = args.where((a) => !a.startsWith('-')).toList();
   final json = flags.contains('--json');
 
@@ -128,7 +114,7 @@ Future<void> main(List<String> args) async {
   // that promises to be read-only is worse than an error.
   const perVerb = {
     'status': {'-h', '--help', '--json'},
-    'release': {'-h', '--help', '--json', '--stage', '--confirm'},
+    'release': {'-h', '--help', '--json', '--stage', '-y', '--yes'},
     'init': {'-h', '--help', '--json', '--write'},
   };
   final inapplicable = flags.difference(perVerb[command] ?? known);
@@ -165,27 +151,7 @@ Future<void> main(List<String> args) async {
     return;
   }
 
-  if (flags.contains('--confirm') &&
-      (confirmVersion == null || confirmVersion.isEmpty) &&
-      !flags.contains('-h') &&
-      !flags.contains('--help')) {
-    // Bare, empty, or contradictory: none of these name one version, and
-    // two authorizations are refused the way two positionals are — not
-    // repaired by picking one.
-    output.problem(
-      Diagnostic(
-        code: 'RK-CLI-009',
-        message: '--confirm names the exact version it authorizes',
-        remedy: 'rk release <unit> --confirm=<version>, exactly once — the '
-            'flag is the typed yes, so it must say what it says yes to',
-      ),
-    );
-    exitCode = ExitCodes.usage;
-    if (json) stdout.write(output.report.encode(exit: ExitCodes.usage));
-    return;
-  }
-
-  if (flags.contains('--confirm') &&
+  if ((flags.contains('--yes') || flags.contains('-y')) &&
       flags.contains('--stage') &&
       !flags.contains('-h') &&
       !flags.contains('--help')) {
@@ -195,9 +161,9 @@ Future<void> main(List<String> args) async {
     output.problem(
       Diagnostic(
         code: 'RK-CLI-005',
-        message: 'rk release --stage does not have --confirm',
+        message: 'rk release --stage does not have --yes',
         remedy: 'staging publishes nothing, so it takes no authorization. '
-            'Stage first, then rk release <unit> --confirm=<version>',
+            'Stage first, then rk release <unit> --yes',
       ),
     );
     exitCode = ExitCodes.usage;
@@ -246,7 +212,7 @@ Future<void> main(List<String> args) async {
           target,
           stageOnly: flags.contains('--stage'),
           interactive: !json,
-          confirmVersion: confirmVersion,
+          yes: flags.contains('--yes') || flags.contains('-y'),
         ),
       'init' => await _init(
           output,
@@ -461,7 +427,7 @@ Future<int> _release(
   String? unit, {
   required bool stageOnly,
   required bool interactive,
-  String? confirmVersion,
+  required bool yes,
 }) async {
   final prepared = _prepare(output);
   if (!prepared.isReady) return prepared.code!;
@@ -503,15 +469,13 @@ Future<int> _release(
       // silences: asking would corrupt the document, and the consequences the
       // prompt exists to disclose would be suppressed while the question was
       // still asked. release already refuses when nobody can authorize.
-      // --confirm is the typed yes carried as a flag: it supplies exactly
-      // what the operator would type, authorizes only the version it names,
-      // and skips no inspection on the way there.
-      confirm: confirmVersion != null
-          ? (_) async => confirmVersion
+      // --yes answers only the ordinary authorization question. It skips no
+      // inspection, plan rendering, endpoint check, or read-back.
+      confirm: yes
+          ? (_) async => 'yes'
           : interactive && stdin.hasTerminal
               ? _promptOnTerminal
               : null,
-      preauthorized: confirmVersion,
       stageOnly: stageOnly,
       stageFor: stages.call,
       refreshStage: stages.refresh,

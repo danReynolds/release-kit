@@ -28,9 +28,9 @@ no `--force`.
 dart pub global activate release_kit    # the command is rk
 rk status                              # where things stand. Read-only.
 rk init                                # propose a release.toml
-rk release [unit] --stage              # exact reusable stage, nothing public
-rk release [unit]                      # make outputs; publish if configured
-rk release [unit] --confirm=<version>  # the typed yes as a flag, for agents
+rk release [unit] --stage              # exact stage; name it when several units exist
+rk release [unit]                      # release unfinished units, or one named unit
+rk release [unit] --yes                # the same plan without an interactive prompt
 ```
 
 With a capable terminal, `init` opens a compact per-project selector for
@@ -47,11 +47,10 @@ the selector, and field customization stays in TOML. Without a usable terminal,
 accepts it directly.
 
 Most releases are driven by agents: every verb speaks `--json`
-([doc/json.md](doc/json.md) is the contract and the drive loop), and
-`--confirm=<version>` authorizes exactly one version noninteractively —
-the same explicit-consent door `init --write` opens, and still
-no `--force`: no inspection is skipped, and any other version still
-refuses.
+([doc/json.md](doc/json.md) is the contract and the drive loop), and `--yes`
+answers the same ordinary question noninteractively. It skips no plan,
+inspection, or refusal. Name a unit for the narrowest automated scope. There
+is still no `--force`.
 
 For release-kit's own first release, invoke the clean checkout explicitly
 instead of an older globally installed `rk`:

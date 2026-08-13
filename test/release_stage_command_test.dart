@@ -602,6 +602,43 @@ void main() {
     });
   });
 
+  test('authorization growth after an earlier act is stopped partway',
+      () async {
+    final first = await harness.run(
+      stageOnly: false,
+      confirm: (_) async => '1.2.3',
+    );
+    expect(first.code, ExitCodes.ok, reason: first.text);
+
+    // Start a resumable release with tag and pub.dev absent, while GitHub and
+    // Homebrew are initially exact and therefore omitted from consent.
+    harness.tools.remoteTags.clear();
+    harness.registry.published['tool']!.remove('1.2.3');
+    harness.registry.forget('tool');
+
+    final rerun = await harness.run(
+      stageOnly: false,
+      confirm: (_) async => '1.2.3',
+      onInvocation: (call) {
+        if (call.publicKind == 'pub.dev') {
+          harness.tools.githubReleaseExists = false;
+        }
+      },
+    );
+
+    expect(rerun.code, ExitCodes.refused, reason: rerun.text);
+    expect(rerun.problemCodes, contains('RK-AUTH-003'));
+    expect((rerun.report['halt'] as Map)['kind'], 'stoppedPartway');
+    final github =
+        ((rerun.report['units'] as List).single as Map)['steps'] as List;
+    expect(
+      (github
+          .cast<Map>()
+          .singleWhere((step) => step['kind'] == 'publishRelease'))['action'],
+      'not_attempted',
+    );
+  });
+
   test('a partial binary release refuses to rebuild a lost exact stage',
       () async {
     final staged = await harness.run(
@@ -1729,7 +1766,16 @@ class _Harness {
       inspector: inspector,
       tools: tools,
       output: output,
-      confirm: confirm,
+      // Most of this long-lived safety suite predates ordinary yes/no and
+      // returns the fixture version after performing its prompt-time hook.
+      // Preserve those hooks while adapting the old fixture answer at this
+      // single boundary.
+      confirm: confirm == null
+          ? null
+          : (prompt) async {
+              final answer = await confirm(prompt);
+              return answer == '1.2.3' ? 'yes' : answer;
+            },
       stageOnly: stageOnly,
       stageFor: stages.call,
       refreshStage: refreshStage ?? stages.refresh,

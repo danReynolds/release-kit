@@ -47,7 +47,6 @@ class ReleaseCommand {
     required this.tools,
     required this.output,
     required this.confirm,
-    this.preauthorized,
     this.stageOnly = false,
     ReleaseStage Function(ResolvedUnit unit)? stageFor,
     ReleaseStage Function(ResolvedUnit unit, GitState git)? refreshStage,
@@ -99,8 +98,8 @@ class ReleaseCommand {
   final Tools tools;
   final Output output;
 
-  /// Asks the operator to type the version. Returns what they typed, or null
-  /// when there is nobody to ask.
+  /// Asks the operator an ordinary yes/no question. Returns what they typed,
+  /// or null when there is nobody to ask.
   final Future<String?> Function(String prompt)? confirm;
 
   /// What this host can produce — injectable so a drive can span platforms
@@ -119,14 +118,18 @@ class ReleaseCommand {
   final Map<String, String> Function() _refreshEnvironment;
   final Map<String, BinaryChain> _chains = {};
 
-  /// The exact version a noninteractive caller pre-authorized
-  /// (`--confirm=<version>`), or null when authorization happens at the
-  /// prompt. Checked before any native session or producer runs: a value
-  /// that cannot authorize this release must not spend credentials or
-  /// contact Apple on the way to refusing.
-  final String? preauthorized;
-
   Future<int> run({String? only}) async {
+    // One repository fact for the whole invocation, including ordering or
+    // scope refusals that happen before the first unit pipeline starts.
+    output.report.repository(
+      name: tree.description.split('/').last,
+      branch: git.branch,
+      uncommitted: git.uncommitted.length,
+      head: git.isBound ? git.head : null,
+      remote: git.originUrl,
+      sourceBinding: git.isBound ? 'gitCommit' : 'unbound',
+      sourceComparison: git.isBound ? 'exact' : 'unavailable',
+    );
     if (only != null) {
       final named = resolution.units.where((u) => u.name == only).toList();
       if (named.isEmpty) {
@@ -143,60 +146,121 @@ class ReleaseCommand {
       return _release(named.single);
     }
 
-    // A unit is what ships together — several packages under one tag and one
-    // version — so a repository that defines one has nothing to
-    // disambiguate, and naming it is ceremony `rk status` never asked for.
-    // Two units are two releases, each with its own tag, version, and typed
-    // authorization; rk will not perform both from one word.
-    if (resolution.units.length == 1) return _release(resolution.units.single);
+    if (stageOnly && resolution.units.length > 1) {
+      output.problem(
+        Diagnostic(
+          code: 'RK-CLI-004',
+          message: 'name the unit to stage',
+          remedy: 'a dependent package may need its sibling version to be '
+              'public before its native publish dry-run can pass. Stage one '
+              'unit explicitly: rk release <unit> --stage',
+        ),
+      );
+      return ExitCodes.usage;
+    }
 
-    // A repository with no unit at all never reaches here: resolution
-    // refuses it as RK-CONF-004, with an example of the table to add.
-    output.problem(
-      Diagnostic(
-        code: 'RK-CLI-004',
-        message: 'name the unit to release',
-        remedy: 'each unit is its own release, with its own tag and version. '
-            'rk release <unit> releases one of: '
-            '${resolution.units.map((u) => u.name).join(', ')}',
-      ),
-    );
-    return ExitCodes.usage;
+    final ordered = _releaseOrder();
+    if (ordered == null) return ExitCodes.refused;
+    for (final unit in ordered) {
+      // Register the full repository scope before the first unit can stop, so
+      // JSON retains the same ordered plan the human preamble shows.
+      output.report.unit(
+        name: unit.name,
+        version: unit.version.canonical,
+        tag: unit.tag,
+      );
+    }
+    if (!_validateRepositoryScope(ordered)) return ExitCodes.refused;
+    if (ordered.length > 1) {
+      output.heading(
+          'Release order: ${ordered.map((unit) => '${unit.name} ${unit.version}').join(' -> ')}');
+      output.blank();
+    }
+    for (final unit in ordered) {
+      final result = await _release(unit);
+      if (result != ExitCodes.ok) return result;
+      output.previousUnitActed = output.report.acted;
+    }
+    return ExitCodes.ok;
+  }
+
+  /// Dependencies first, otherwise `release.toml` order.
+  ///
+  /// This is deliberately a short ordering pass over facts the checklist
+  /// already owns, not a second repository release state machine.
+  List<ResolvedUnit>? _releaseOrder() {
+    final problems = Diagnostics();
+    final dependencies = <String, Set<String>>{};
+    for (final unit in resolution.units) {
+      dependencies[unit.name] = {
+        for (final prerequisite
+            in externalPrerequisites(unit, resolution, problems))
+          prerequisite.declaredBy,
+      };
+    }
+    if (problems.isNotEmpty) {
+      output.halt(HaltKind.beforeActing);
+      output.problems(problems.found);
+      return null;
+    }
+
+    final ordered = <ResolvedUnit>[];
+    final settled = <String>{};
+    while (ordered.length < resolution.units.length) {
+      final ready = resolution.units.where((unit) {
+        return !settled.contains(unit.name) &&
+            dependencies[unit.name]!.every(settled.contains);
+      }).firstOrNull;
+      if (ready == null) {
+        final blocked = resolution.units
+            .where((unit) => !settled.contains(unit.name))
+            .map((unit) => unit.name)
+            .join(', ');
+        output.halt(HaltKind.beforeActing);
+        output.problem(Diagnostic(
+          code: 'RK-DEP-004',
+          message: 'the release units depend on each other in a circle',
+          remedy: 'break the first-party dependency cycle involving: '
+              '$blocked',
+        ));
+        return null;
+      }
+      ordered.add(ready);
+      settled.add(ready.name);
+    }
+    return ordered;
+  }
+
+  /// Cheap, source-owned refusals for every unit before the first one acts.
+  /// Native publish validation remains in each exact unit stage because a
+  /// dependant may not resolve until its provider has become public.
+  bool _validateRepositoryScope(List<ResolvedUnit> units) {
+    final unique = <String, Diagnostic>{};
+    for (final unit in units) {
+      final problems = Diagnostics();
+      _validate(unit, problems);
+      Checklist.derive(unit, resolution, problems);
+      for (final problem in problems.found) {
+        final key = '${problem.code}\u0000${problem.message}\u0000'
+            '${problem.source ?? ''}';
+        unique.putIfAbsent(key, () => problem);
+      }
+    }
+    if (unique.isEmpty) return true;
+    output.halt(HaltKind.beforeActing);
+    output.problems(unique.values.toList());
+    return false;
   }
 
   Future<int> _release(ResolvedUnit unit) async {
     // The machine surface carries the same identity facts on every verb:
     // doc/json.md promises repository and the unit's version and tag, and
     // the production-alpha retry checkpoint reads both from this document.
-    output.report.repository(
-      name: tree.description.split('/').last,
-      branch: git.branch,
-      uncommitted: git.uncommitted.length,
-      head: git.isBound ? git.head : null,
-      remote: git.originUrl,
-      sourceBinding: git.isBound ? 'gitCommit' : 'unbound',
-      sourceComparison: git.isBound ? 'exact' : 'unavailable',
-    );
     output.report.unit(
       name: unit.name,
       version: unit.version.canonical,
       tag: unit.tag,
     );
-
-    if (preauthorized != null && preauthorized != unit.version.canonical) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-AUTH-002',
-          message: 'the authorization does not name this release',
-          remedy: '--confirm=$preauthorized cannot authorize '
-              '${unit.version}. Authorize exactly this release: '
-              '--confirm=${unit.version}',
-        ),
-        unit: unit.name,
-      );
-      output.halt(HaltKind.beforeActing);
-      return ExitCodes.refused;
-    }
 
     final problems = Diagnostics();
     _validate(unit, problems);
@@ -309,7 +373,8 @@ class ReleaseCommand {
             : _ReleaseAction.notAttempted,
     };
     if (publicSteps.isNotEmpty &&
-        publicSteps.every((step) => states[step.id]!.isExact)) {
+        publicSteps.every((step) => states[step.id]!.isExact) &&
+        (!unit.shipsBinaries || stageInspection.reusable)) {
       output.line(
         '${unit.name} ${unit.version}',
         mark: Mark.done,
@@ -605,6 +670,7 @@ class ReleaseCommand {
       _showReleaseActions(targets, publicActions);
       return ExitCodes.refused;
     }
+    final authorizedStepIds = {for (final step in remaining) step.id};
     if (!_releaseContextStillValid(
       stage,
       unit,
@@ -624,10 +690,39 @@ class ReleaseCommand {
       return ExitCodes.refused;
     }
 
+    // Consent may lose work when another actor completes it, but it may not
+    // gain work. Sweep every omitted target together before the first act so
+    // one that disappeared from public truth cannot hide behind an earlier
+    // authorized step in checklist order.
+    for (final step
+        in publicSteps.where((step) => !authorizedStepIds.contains(step.id))) {
+      final state = await inspector.inspect(step, unit);
+      if (!state.isExact) {
+        _haltForAuthorizationGrowth(
+          step,
+          state,
+          unit,
+          targets,
+          publicActions,
+        );
+        return ExitCodes.refused;
+      }
+    }
+
     output.blank();
     var completedPublicTarget = false;
     for (final step in publicSteps) {
       var state = await inspector.inspect(step, unit);
+      if (!authorizedStepIds.contains(step.id) && !state.isExact) {
+        _haltForAuthorizationGrowth(
+          step,
+          state,
+          unit,
+          targets,
+          publicActions,
+        );
+        return ExitCodes.refused;
+      }
       if (state.isExact) {
         publicActions[step.id] = _ReleaseAction.alreadyExact;
         output.step(
@@ -871,6 +966,39 @@ class ReleaseCommand {
           'contain credentials.',
     ));
     output.halt(HaltKind.beforeActing);
+    _showReleaseActions(targets, actions);
+  }
+
+  void _haltForAuthorizationGrowth(
+    Step step,
+    Inspection state,
+    ResolvedUnit unit,
+    List<TargetExpectation> targets,
+    Map<String, _ReleaseAction> actions,
+  ) {
+    actions[step.id] = _ReleaseAction.notAttempted;
+    output.step(
+      step,
+      verdict: state.verdict,
+      detail: state.detail,
+      evidence: state.evidence,
+      action: actions[step.id]!.wire,
+      show: false,
+    );
+    output.problem(
+      Diagnostic(
+        code: 'RK-AUTH-003',
+        message: 'the release plan grew after authorization',
+        remedy: '${step.summary} was not work when the plan was shown. RK '
+            'will not add it after the yes; inspect the changed destination '
+            'and authorize a fresh plan.',
+      ),
+      unit: unit.name,
+      target: step.id,
+    );
+    output.halt(
+      output.report.acted ? HaltKind.stoppedPartway : HaltKind.beforeActing,
+    );
     _showReleaseActions(targets, actions);
   }
 
@@ -1728,8 +1856,8 @@ class ReleaseCommand {
     );
   }
 
-  /// The operator's presence and typed confirmation are the authorization for
-  /// a local release. Where a tag already exists, its signature is.
+  /// The operator's ordinary yes is the authorization for a local release.
+  /// Where a tag already exists, its signature is.
   Future<bool> _authorize(
     ResolvedUnit unit,
     List<TargetExpectation> remaining, {
@@ -1742,6 +1870,15 @@ class ReleaseCommand {
 
     final disclosed = <String>[];
     output.blank();
+    output.line('Release', tone: Tone.header);
+    output.line(
+      '${unit.name} ${unit.version}',
+      depth: 1,
+      tone: Tone.header,
+    );
+    for (final target in remaining) {
+      output.line(target.step.summary, depth: 2);
+    }
     if (permanent.isEmpty) {
       output.say('nothing here is permanent.');
     } else {
@@ -1777,28 +1914,35 @@ class ReleaseCommand {
       disclosed.add('$warning\n${unprovable.join('\n')}');
     }
 
-    // What the prompt disclosed travels with the yes: a --json --confirm
-    // caller never sees the prose sink, so the document carries it.
+    // What the prompt disclosed travels with the yes. A --json --yes caller
+    // never sees the prose sink, so the document carries it.
     if (disclosed.isNotEmpty) {
-      output.report.attach('authorization-disclosures', disclosed.join('\n\n'));
+      output.report.attach(
+        'authorization-disclosures/${unit.name}',
+        disclosed.join('\n\n'),
+      );
     }
 
     if (!_requireAuthorizer(unit)) return false;
 
-    final typed = await confirm!(
-      'type ${unit.version} to release, or anything else to stop: ',
+    final answer = await confirm!(
+      'Release ${unit.name} ${unit.version}? [y/N] ',
     );
-    if (typed?.trim() != unit.version.canonical) {
+    final accepted = switch (answer?.trim().toLowerCase()) {
+      'y' || 'yes' => true,
+      _ => false,
+    };
+    if (!accepted) {
       output.blank();
-      output.say(typed == null
+      output.say(answer == null
           ? 'no terminal to answer on — stopped; nothing was published.'
           : 'stopped. nothing was published.');
       output.problem(
         Diagnostic(
           code: 'RK-AUTH-002',
-          message: 'the authorization does not name this release',
-          remedy: 'authorize exactly ${unit.version}: type it at the '
-              'prompt, or pass --confirm=${unit.version}',
+          message: 'the release was not authorized',
+          remedy: 'answer yes at the prompt, or pass --yes for an '
+              'unattended release',
         ),
         unit: unit.name,
       );
@@ -1814,9 +1958,8 @@ class ReleaseCommand {
       Diagnostic(
         code: 'RK-AUTH-001',
         message: 'nobody is here to authorize this release',
-        remedy: 'a release is authorized by the operator: type the version '
-            'at a terminal, or pass --confirm=<version> as the explicit '
-            'noninteractive yes. Without either, rk refuses.',
+        remedy: 'answer yes at a terminal, or pass --yes for an unattended '
+            'release. Without either, rk refuses.',
       ),
       unit: unit.name,
     );

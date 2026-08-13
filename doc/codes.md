@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-129 codes across 25 families.
+130 codes across 25 families.
 
 
 ## RK-AUTH — Authorization
@@ -21,7 +21,8 @@ fails, and the count below is checked against the rows.
 | code | says | declared in |
 |---|---|---|
 | `RK-AUTH-001` | nobody is here to authorize this release | `lib/src/commands/release.dart` |
-| `RK-AUTH-002` | the authorization does not name this release | `lib/src/commands/release.dart` |
+| `RK-AUTH-002` | the release was not authorized | `lib/src/commands/release.dart` |
+| `RK-AUTH-003` | the release plan grew after authorization | `lib/src/commands/release.dart` |
 
 ## RK-BREW — The Homebrew tap
 
@@ -52,11 +53,10 @@ fails, and the count below is checked against the rows.
 |---|---|---|
 | `RK-CLI-001` | rk does not have ${unknown.join( | `bin/rk.dart` |
 | `RK-CLI-003` | no unit named "$only" | `lib/src/commands/release.dart`, `lib/src/commands/status.dart` |
-| `RK-CLI-004` | name the unit to release | `lib/src/commands/release.dart` |
+| `RK-CLI-004` | name the unit to stage | `lib/src/commands/release.dart` |
 | `RK-CLI-005` | rk $command does not have ${inapplicable.join( | `bin/rk.dart` |
 | `RK-CLI-007` | — | `bin/rk.dart` |
 | `RK-CLI-008` | rk has no command named "$command" | `bin/rk.dart` |
-| `RK-CLI-009` | --confirm names the exact version it authorizes | `bin/rk.dart` |
 
 ## RK-CONF — release.toml, structurally
 
@@ -117,6 +117,7 @@ fails, and the count below is checked against the rows.
 | `RK-DEP-001` | "${project.name}" requires $name ${dependency.constraint}, and  this repository releases… | `lib/src/engine/checklist.dart` |
 | `RK-DEP-002` | rk cannot tell whether "${project.name}" accepts $name  ${sibling.version}: it requires … | `lib/src/engine/checklist.dart` |
 | `RK-DEP-003` | the packages in "${unit.name}" depend on each other in a circle,  so there is no order t… | `lib/src/engine/checklist.dart` |
+| `RK-DEP-004` | the release units depend on each other in a circle | `lib/src/commands/release.dart` |
 
 ## RK-GIT — The repository
 

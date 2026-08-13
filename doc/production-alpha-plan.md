@@ -6,7 +6,7 @@ probe, `--offline`, and the transient unsigned build are gone; macOS
 build and signing are one producer; the pipeline is declared once; the
 manifest carries only externally checkable facts; notary evidence is
 stage-local; and `--json` is the agent contract at schema 5 with
-`release --confirm=<version>` as the noninteractive typed yes. This is
+`release --yes` as the noninteractive answer. This is
 the current forward plan.
 `doc/plan.md` remains the historical phase plan, review record, and evidence
 ledger. Where its forward-looking design differs from this document, this

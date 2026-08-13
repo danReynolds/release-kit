@@ -307,9 +307,11 @@ own proof of success.
 
 A local release is authorized by the operator's presence: publishing
 requires their credentials, and rk prompts with the full consequences.
-Where the act is permanent, the confirmation is **typing the version**, not
-a keystroke — "wrong version" is the highest-ranked failure and this is the
-only defence that targets it. Without a human present, rk refuses.
+The prompt shows the unit, exact version, remaining targets, and first-time
+claims, then asks an ordinary default-No yes/no question. `--yes` answers that
+same question for an unattended invocation and skips no inspection. Naming a
+unit is the narrow automation boundary. Without either a human or `--yes`, rk
+refuses.
 
 ### Tagging
 
@@ -319,7 +321,7 @@ was an error worth naming: an executor that mints its own authorization is
 a confused deputy, but a record written after the human has authorized is
 not authorization.
 
-- **Interactive release.** The operator's presence and typed confirmation
+- **Interactive release.** The operator's presence and affirmative answer
   are the authorization, so rk tags on their behalf: an annotated tag at
   the released commit, named by the unit's derived pattern, signed when git
   signing is configured and unsigned otherwise, and it says which. The tag
@@ -327,10 +329,9 @@ not authorization.
   is an ordinary checklist step — inspect the remote ref, create and push,
   then inspect the remote ref again — and it runs only after the complete
   stage has been revalidated.
-- **Non-interactive release.** Consent must still be explicit and exact:
-  `--confirm=<version>` carries the operator's typed yes as a flag, authorizes
-  only the version it names, and skips no inspection — the same door
-  `init --write` opens. For consentless CI with no operator anywhere in the
+- **Non-interactive release.** Consent must still be explicit: `--yes` carries
+  the operator's answer as a flag and skips no inspection. For consentless CI
+  with no operator anywhere in the
   loop, the tag *is* the intended authorization: it must already exist, rk
   verifies its signature against the expected signer, and rk never creates
   it — creating it there would be minting the permission it acts on. That
@@ -772,12 +773,12 @@ What makes the CLI sufficient is already required for other reasons:
 
 **Consent is explicit, or the release refuses.** An agent may run status
 freely and prepare a private stage through the same explicitly invoked
-command. Publication requires the exact version as consent: typed at a
-terminal, or carried as `--confirm=<version>` — a per-run, version-pinned
-yes, not a standing `--force`, and never guessed. Consentless publication
-(no operator anywhere in the loop) stays refused; signed-tag authorization
-remains the intended CI path, its signer policy and non-interactive
-execution ledgered rather than implied by the current implementation.
+command. Publication requires yes at a terminal or `--yes` for that invocation,
+not a standing `--force`, and is never guessed. Naming a unit provides the
+narrowest unattended scope. Consentless publication stays refused; signed-tag
+authorization remains the intended future CI path, its signer policy and
+non-interactive execution ledgered rather than implied by the current
+implementation.
 The late native `dart pub login` session acquisition does not change this boundary and
 is not a CI credential design; trusted publishing remains part of the deferred
 remote-CI work below.

@@ -10,17 +10,16 @@ supports, end to end:
 
 ```
 rk status <unit> --json                 where things stand; read-only
-rk release [unit] --stage --json        produce and validate the exact stage
+rk release [unit] --stage --json        exact stage; name it with several units
 rk status <unit> --json                 confirm: staged, good to release
-rk release [unit] --confirm=<v> --json  authorize exactly v, publish, read back
-rk release [unit] --confirm=<v> --json  idempotent: already-exact, no second act
+rk release [unit] --yes --json          publish and read back without prompting
+rk release [unit] --yes --json          idempotent: already-exact, no second act
 ```
 
-`--confirm=<version>` is the typed yes carried as a flag — the same door
-`init --write` opens. It supplies exactly what an operator would type at
-the prompt, authorizes only the version it names, and skips no inspection
-on the way there. A bare `--confirm` is refused (RK-CLI-009): the flag
-must say what it says yes to.
+`--yes` answers only the ordinary release question. The unit versions and
+remaining targets are still reported, and every inspection and refusal still
+runs. A bare release may cover several independently versioned units; name a
+unit when an automation caller needs the narrowest scope.
 
 ## Top level
 
