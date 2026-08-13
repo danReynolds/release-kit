@@ -618,7 +618,7 @@ a session, not package uploader permission.
 6. Run status again. It must show every artifact staged and raise no issue.
 7. Run `dart run bin/rk.dart release rk`. Require exactly one attached native
    `dart pub login` before the private-stage boundary, review the final
-   consequences, and type the version. If login fails, preserve `RK-PUB-007`,
+   consequences, and answer yes. If login fails, preserve `RK-PUB-007`,
    run `dart pub login` from a terminal as instructed, and rerun the unit
    release; do not treat a successful login as proof of uploader permission.
 8. Require the actual pub publish and post-act exact inspection for every

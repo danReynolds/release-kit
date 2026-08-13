@@ -244,20 +244,22 @@ which in practice belong to example apps with unrelated identities. The
 code identifier for a bare CLI comes from the native executable declaration.
 Every release after the first reads the identifier off the binary users
 installed. The prompt names both halves of what becomes permanent, the
-certificate and the identifier, before the version is typed. A tag signer, where
-earlier tags are unsigned or absent, is the key about to sign, confirmed
-once. Keybay needs none of this: its 0.1.0 release supplies every baseline.
+certificate and the identifier, before the release is authorized. A tag
+signer, where earlier tags are unsigned or absent, is the key about to sign,
+confirmed once. Keybay needs none of this: its 0.1.0 release supplies every
+baseline.
 
 ## The three verbs
 
 `rk init` · `rk status` · `rk release`. Bare `rk` runs `status`.
 
-`status` takes an optional unit. `release` takes an optional unit — a
-repository that defines exactly one has nothing to disambiguate, while two
-units are two releases and rk names them rather than choosing — and optionally
-`--stage`. `init` takes no positional. Bare invocation works in a single-unit
-repository and, in a multi-unit one, lists the units and stops. Release unit
-selection remains explicit; initialization has its own per-candidate selector.
+`status` takes an optional unit. `release` takes an optional unit: naming one
+keeps the operation narrow, while a bare release coordinates all unfinished
+units in native dependency order. `--stage` prepares one unit and therefore
+requires its name when several are configured. `init` takes no positional.
+Bare `rk` remains status across the configured units; naming a release unit
+is the explicit way to narrow scope. Initialization has its own per-candidate
+selector.
 
 - **`rk init`** — propose `release.toml`. Reads the repository and, on a
   capable terminal, presents a compact per-project matrix of release choices.
@@ -708,7 +710,7 @@ act(expected, stage)
   disclosure, because the thing a first publish really takes is the *name*,
   permanently: the consent block states each name claimed for the first
   time — the pub.dev package and, when it applies, the macOS code
-  identifier — with its consequence, before the version is typed.
+  identifier — with its consequence, before the release is authorized.
 
   A normal release invokes one native `dart pub login` after the private stage
   is complete when at least one configured pub.dev target is unfinished.

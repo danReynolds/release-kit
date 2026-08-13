@@ -1008,7 +1008,7 @@ terminal for the release confirmation. The path to it, in order:
    longer solves, and the preflight refuses with pub's solver message. One
    commit, both files, no trap.
 4. `rk status` — expect core ready with `→ rk release core`.
-5. `rk release core`, type the version at the prompt.
+5. `rk release core`, review the plan and answer yes at the prompt.
 6. Paste the transcript here as "## Phase 5 checkpoint", which turns the
    gate green.
 7. Then the cli, for the phase 7b checkpoint: bump packages/keybay_cli

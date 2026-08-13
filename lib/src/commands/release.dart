@@ -1901,7 +1901,7 @@ class ReleaseCommand {
 
     // Weaker assurance is accepted knowingly or not at all: a platform
     // nothing here can run ships with its smoke test missing, and that is
-    // said before the version is typed, not discovered afterwards.
+    // said before the release is authorized, not discovered afterwards.
     final unprovable = _unprovable(unit);
     if (unprovable.isNotEmpty) {
       output.blank();
@@ -2128,7 +2128,7 @@ class ReleaseCommand {
   /// A rehearsal exists to be read before these become permanent, so the
   /// facts belong here — but what "permanent" costs is an argument for the
   /// moment of consent, and [_sayClaims] makes it there, once, before the
-  /// version is typed.
+  /// release is authorized.
   void _sayStageClaims(
     List<TargetClaim> claims,
     _ProjectSigningContext? signing, {
