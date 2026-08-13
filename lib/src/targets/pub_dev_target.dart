@@ -15,6 +15,7 @@ import '../engine/verdict.dart';
 import '../engine/yaml.dart';
 import '../engine/version.dart';
 import '../output/output.dart';
+import '../output/progress.dart';
 import 'target_module.dart';
 
 final class PubDevTargetModule extends TargetModule {
@@ -25,6 +26,15 @@ final class PubDevTargetModule extends TargetModule {
 
   @override
   StepKind get stepKind => StepKind.publishRegistry;
+
+  @override
+  ProgressActivity get actActivity => ProgressActivity(
+        running: 'publishing',
+        failed: 'publish failed',
+      );
+
+  @override
+  TargetSessionProvider get sessionProvider => const _PubDevSession();
 
   @override
   TargetExpectation expectation({
@@ -184,7 +194,7 @@ final class PubDevTargetModule extends TargetModule {
       'then stage the new release';
 
   @override
-  Future<bool> preflight(
+  Future<TargetReadinessOutcome> preflight(
     TargetReadinessContext context,
     ResolvedUnit unit,
   ) async {
@@ -193,8 +203,8 @@ final class PubDevTargetModule extends TargetModule {
         .any((project) => !isPubDevDestination(
               project.pubspec.effectivePublishDestination(context.environment),
             ));
-    if (!redirected) return true;
-    context.output.problem(
+    if (!redirected) return const TargetReady();
+    return TargetNotReady(
       Diagnostic(
         code: 'RK-PUB-009',
         message: 'the native Dart configuration redirects pub.dev publication',
@@ -205,8 +215,6 @@ final class PubDevTargetModule extends TargetModule {
       ),
       unit: unit.name,
     );
-    context.output.halt(HaltKind.beforeActing);
-    return false;
   }
 
   @override
@@ -224,38 +232,6 @@ final class PubDevTargetModule extends TargetModule {
   }
 
   @override
-  Future<bool> acquireSession(
-    TargetReadinessContext context,
-    ResolvedUnit unit,
-    List<TargetExpectation> targets,
-  ) async {
-    int code;
-    try {
-      code = await context.tools.runInteractive(
-        'dart',
-        const ['pub', 'login'],
-        workingDirectory: context.git.root,
-      );
-    } on ProcessException {
-      code = -1;
-    }
-    if (code == 0) return true;
-
-    context.output.problem(
-      Diagnostic(
-        code: 'RK-PUB-007',
-        message: 'dart pub login did not complete',
-        remedy: 'Run dart pub login from a terminal, then re-run rk release '
-            '${unit.name}. A successful login confirms a current session, '
-            'not permission to publish every package.',
-      ),
-      unit: unit.name,
-    );
-    context.output.halt(HaltKind.beforeActing);
-    return false;
-  }
-
-  @override
   Future<TargetActOutcome> act(
     TargetReleaseContext context,
     ResolvedUnit unit,
@@ -267,7 +243,7 @@ final class PubDevTargetModule extends TargetModule {
     final directory = project.pubspec.directory == '.'
         ? sourceRoot
         : '$sourceRoot/${project.pubspec.directory}';
-    final code = await context.tools.runInteractive(
+    final code = await context.runInteractive(
       'dart',
       const ['pub', 'publish', '--force'],
       workingDirectory: directory,
@@ -411,26 +387,40 @@ final class PubDevTargetModule extends TargetModule {
     return TargetStage(
       target: target,
       contract: contract,
+      progress: [
+        TargetStageProgress.row(
+          id: 'source',
+          label: 'package source',
+        ),
+      ],
       prepare: (context) => _prepareStage(context, target.project!),
     );
   }
 
-  Future<StageStep?> _prepareStage(
+  Future<TargetStageOutcome> _prepareStage(
     TargetStageContext context,
     ResolvedProject project,
   ) async {
     final receiptName = context.contract.step.name;
-    if (!await _publishPreflight(context, project)) {
-      return null;
+    context.progress('source').begin(CommonProgressActivities.validating);
+    final validation = await _publishPreflight(context, project);
+    if (validation.diagnostic case final diagnostic?) {
+      return TargetStageFailure(
+        diagnostic,
+        unit: project.unitName,
+      );
     }
-    return StageStep(
-      name: receiptName,
-      inputs: [StageInput.step(context.sourceStep)],
-      evidence: const {'publish_dry_run': 'passed'},
+    return TargetStageSuccess(
+      StageStep(
+        name: receiptName,
+        inputs: [StageInput.step(context.sourceStep)],
+        evidence: const {'publish_dry_run': 'passed'},
+      ),
+      notices: validation.notices,
     );
   }
 
-  Future<bool> _publishPreflight(
+  Future<({Diagnostic? diagnostic, List<String> notices})> _publishPreflight(
     TargetStageContext context,
     ResolvedProject project,
   ) async {
@@ -448,8 +438,8 @@ final class PubDevTargetModule extends TargetModule {
     // consumer was not.
     final masking = _maskedResolution(sourceRoot, directory);
     if (masking != null) {
-      context.output.problem(
-        Diagnostic(
+      return (
+        diagnostic: Diagnostic(
           code: 'RK-PUB-008',
           message: '${project.name}: tracked dependency overrides '
               'mask consumer resolution',
@@ -457,10 +447,8 @@ final class PubDevTargetModule extends TargetModule {
               'published archive, so validation here would not see what '
               'consumers see. Remove it and re-stage.',
         ),
-        unit: project.unitName,
+        notices: const <String>[],
       );
-      context.output.halt(HaltKind.beforeActing);
-      return false;
     }
 
     final dry = await context.tools.run(
@@ -469,7 +457,7 @@ final class PubDevTargetModule extends TargetModule {
       workingDirectory: directory,
     );
     final validation = '${dry.stdout}\n${dry.stderr}'.trim();
-    context.output.report.attach(
+    context.attach(
       'pub-dry-run-${project.name}.txt',
       validation,
     );
@@ -483,29 +471,27 @@ final class PubDevTargetModule extends TargetModule {
           !summary.toLowerCase().contains('error') &&
           summary.toLowerCase().contains('warning');
       if (!warningsOnly) {
-        context.output.problem(
-          Diagnostic(
+        return (
+          diagnostic: Diagnostic(
             code: 'RK-PUB-001',
             message: 'pub refuses to publish ${project.name}',
             remedy: validation.isEmpty ? dry.summary : validation,
           ),
-          unit: project.unitName,
+          notices: const <String>[],
         );
-        context.output.halt(HaltKind.beforeActing);
-        return false;
       }
-      context.output.say(
+      final notices = <String>[
         'pub warns, and --force will publish past these:',
-        depth: 1,
-      );
+      ];
       for (final line in validation.split('\n')) {
         if (line.trimLeft().startsWith('*')) {
-          context.output.say(line.trim(), depth: 2);
+          notices.add(line.trim());
         }
       }
+      return (diagnostic: null, notices: notices);
     }
 
-    return true;
+    return (diagnostic: null, notices: const <String>[]);
   }
 
   /// What masks resolution for the staged package, or null when nothing
@@ -584,6 +570,45 @@ final class PubDevTargetModule extends TargetModule {
   String permanenceNotice(TargetExpectation target) =>
       'pub.dev never deletes a version. a version can be retracted, which '
       'hides it and removes nothing.';
+}
+
+final class _PubDevSession extends TargetSessionProvider {
+  const _PubDevSession();
+
+  @override
+  String get id => 'dart-pub';
+
+  @override
+  ProgressActivity get activity => CommonProgressActivities.checkingSignIn;
+
+  @override
+  Future<TargetReadinessOutcome> acquire(
+    TargetReadinessContext context,
+    ResolvedUnit unit,
+    List<TargetExpectation> targets,
+  ) async {
+    int code;
+    try {
+      code = await context.runInteractive!(
+        'dart',
+        const ['pub', 'login'],
+        workingDirectory: context.git.root,
+      );
+    } on ProcessException {
+      code = -1;
+    }
+    if (code == 0) return const TargetReady(note: 'signed in');
+    return TargetNotReady(
+      Diagnostic(
+        code: 'RK-PUB-007',
+        message: 'dart pub login did not complete',
+        remedy: 'Run dart pub login from a terminal, then re-run rk release '
+            '${unit.name}. A successful login confirms a current session, '
+            'not permission to publish every package.',
+      ),
+      unit: unit.name,
+    );
+  }
 }
 
 String? _repositoryIdentity(String? value) {

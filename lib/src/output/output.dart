@@ -3,6 +3,7 @@ import 'dart:io';
 
 import '../engine/checklist.dart';
 import '../engine/diagnostic.dart';
+import 'progress.dart';
 import 'report.dart';
 import '../engine/verdict.dart';
 
@@ -86,10 +87,13 @@ class Output {
     required this.sink,
     required this.isTerminal,
     this.useColor = true,
-    this.terminalWidth,
+    int? terminalWidth,
+    int? Function()? terminalWidthReader,
     Report? report,
     Elapsed Function()? clock,
-  })  : report = report ?? Report('rk'),
+  })  : _terminalWidth = terminalWidth,
+        _terminalWidthReader = terminalWidthReader,
+        report = report ?? Report('rk'),
         _clock = clock ?? _wallClock;
 
   /// Writes to stdout, detecting a terminal and honouring `NO_COLOR`.
@@ -101,14 +105,13 @@ class Output {
   factory Output.stdio({bool json = false, required String command}) {
     final attached = stdout.hasTerminal && !json;
     final noColor = Platform.environment.containsKey('NO_COLOR');
-    final terminal = attached &&
-        !noColor &&
-        Platform.environment['TERM']?.toLowerCase() != 'dumb';
+    final terminal =
+        attached && Platform.environment['TERM']?.toLowerCase() != 'dumb';
     return Output(
       sink: json ? _discard : stdout.write,
       isTerminal: terminal,
-      useColor: terminal,
-      terminalWidth: attached ? _stdoutWidth() : null,
+      useColor: terminal && !noColor,
+      terminalWidthReader: attached ? _stdoutWidth : null,
       report: Report(command),
     );
   }
@@ -142,7 +145,10 @@ class Output {
   /// erasure depends on that. Settled rows are instead wrapped without losing
   /// words, with their continuation indented so narrow output remains readable.
   /// A pipe has no width and remains byte-for-byte append-only.
-  final int? terminalWidth;
+  final int? _terminalWidth;
+  final int? Function()? _terminalWidthReader;
+
+  int? get terminalWidth => _terminalWidthReader?.call() ?? _terminalWidth;
 
   /// What a caller is told, recorded by the same calls that print.
   final Report report;
@@ -155,7 +161,30 @@ class Output {
   final Elapsed Function() _clock;
 
   var _transient = false;
-  TargetChecks? _targetChecks;
+  LiveProgress? _progressBoard;
+
+  /// A fixed-height, target-agnostic progress surface.
+  ///
+  /// Targets receive only row handles; the coordinator retains the returned
+  /// controllers and therefore remains the sole authority that can declare a
+  /// public row complete, failed, or not attempted.
+  LiveProgress progressBoard(
+    String title, {
+    Duration delay = const Duration(milliseconds: 80),
+    bool emitSlowToNonTerminal = false,
+    bool showElapsed = true,
+  }) {
+    _clearTransient();
+    final board = LiveProgress._(
+      this,
+      title,
+      delay,
+      emitSlowToNonTerminal: emitSlowToNonTerminal,
+      showElapsed: showElapsed,
+    );
+    _progressBoard = board;
+    return board;
+  }
 
   /// A fixed multi-line region for concurrent public-target reads.
   ///
@@ -164,11 +193,7 @@ class Output {
   /// erases it completely before the deterministic report is rendered.
   TargetChecks targetChecks(
       {Duration delay = const Duration(milliseconds: 80)}) {
-    _clearTransient();
-    _targetChecks?.close();
-    final checks = TargetChecks._(this, delay);
-    _targetChecks = checks;
-    return checks;
+    return TargetChecks._(this, delay);
   }
 
   /// A heading. Callers space their own sections; this adds nothing.
@@ -287,25 +312,6 @@ class Output {
     }
   }
 
-  /// Begins a step whose work takes long enough that silence would read as a
-  /// hang. Finish it with [Activity.done] or [Activity.failed].
-  ///
-  /// [typically] is how long this normally takes, which is the difference
-  /// between patience and a cancelled release when the wait is somebody else's.
-  Activity begin(
-    Step step, {
-    Duration? typically,
-    int depth = 1,
-  }) {
-    // rk works one step at a time, so a live activity here is one whose caller
-    // never finished it. Cancelling it is what keeps a forgotten step from
-    // holding the isolate open forever.
-    _live?.abandon();
-    return _live = Activity._(this, step, typically, depth, _clock());
-  }
-
-  Activity? _live;
-
   /// Ends the run's rendering.
   ///
   /// A repeating timer keeps a Dart isolate alive, so an activity abandoned by
@@ -313,8 +319,6 @@ class Output {
   /// which in CI is worse than a crash because nothing reports it. Calling this
   /// on the way out is what makes that impossible rather than unlikely.
   void close() {
-    _live?.abandon();
-    _live = null;
     _clearTransient();
   }
 
@@ -526,7 +530,7 @@ class Output {
   }
 
   void _clearTransient() {
-    _targetChecks?.close();
+    _progressBoard?.discard();
     if (!_transient) return;
     // Return to the start of the line and clear it.
     sink('\r\x1b[2K');
@@ -574,6 +578,7 @@ class Output {
     String? target,
     int depth = 0,
   }) {
+    _progressBoard?.failActiveAndSettle();
     report.problem(diagnostic, unit: unit, target: target);
     final where = diagnostic.source == null ? '' : '${diagnostic.source}  ';
     line(
@@ -638,97 +643,355 @@ class Output {
   }
 }
 
-/// The transient fixed-height list used while status reads targets in
-/// parallel.
-class TargetChecks {
-  TargetChecks._(this._output, Duration delay) {
-    if (!_output.isTerminal) return;
-    _delay = Timer(delay, () {
-      if (_closed || _rows.isEmpty) return;
-      _draw();
-      _ticker = Timer.periodic(
-        const Duration(milliseconds: 120),
-        (_) => _draw(),
-      );
-    });
+/// One live fixed-height progress surface.
+///
+/// Its model is terminal-agnostic; this class owns delayed display, redraw,
+/// suspension around inherited-stdio tools, and the one settled snapshot that
+/// survives. A caller must choose [discard] for a purely transient board or
+/// [settle] for a board whose final state belongs in the transcript.
+final class LiveProgress {
+  LiveProgress._(
+    this._output,
+    String title,
+    this._delayDuration, {
+    required this.emitSlowToNonTerminal,
+    required this.showElapsed,
+  }) {
+    model = ProgressModel(
+      title: title,
+      clock: _output._clock,
+      changed: _changed,
+    );
+    if (_output.isTerminal) {
+      _delay = Timer(_delayDuration, _showTerminal);
+    }
   }
 
   final Output _output;
-  final List<_TargetCheckRow> _rows = [];
+  final Duration _delayDuration;
+  final bool emitSlowToNonTerminal;
+  final bool showElapsed;
+  late final ProgressModel model;
+  final Map<String, ProgressRowController> _controllers = {};
+  final Map<String, Timer> _nonTerminalDelays = {};
+  final Map<String, ProgressActivity> _nonTerminalPrinted = {};
+  final Map<String, ProgressActivity> _nonTerminalScheduled = {};
   Timer? _delay;
   Timer? _ticker;
   var _drawnLines = 0;
   var _spin = 0;
   var _closed = false;
+  var _suspended = false;
+  var _visible = false;
+  var _delayElapsed = false;
 
   static const _frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
-  void add(String id, String label) {
-    if (_closed || !_output.isTerminal) return;
-    if (_rows.any((row) => row.id == id)) return;
-    _rows.add(_TargetCheckRow(id, label));
-    if (_drawnLines > 0) _draw();
+  ProgressRowController addRow({
+    required String id,
+    required String label,
+    String? coordinate,
+    String? group,
+  }) {
+    final controller = model.addRow(
+      id: id,
+      label: label,
+      coordinate: coordinate,
+      group: group,
+    );
+    _controllers[id] = controller;
+    return controller;
   }
 
-  void finish(String id, Verdict verdict) {
-    if (_closed || !_output.isTerminal) return;
-    for (final row in _rows) {
-      if (row.id == id) {
-        row.verdict = verdict;
-        break;
+  void _changed(ProgressRow row) {
+    if (_closed) return;
+    if (_output.isTerminal) {
+      if (_visible && !_suspended) {
+        _draw();
+      } else if (_delayElapsed && !_suspended && model.rows.isNotEmpty) {
+        _showTerminal();
       }
+      return;
     }
-    if (_drawnLines > 0) _draw();
+    if (!emitSlowToNonTerminal) return;
+    if (row.state != ProgressRowState.active) {
+      _nonTerminalDelays.remove(row.id)?.cancel();
+      _nonTerminalScheduled.remove(row.id);
+      return;
+    }
+    if (row.state != ProgressRowState.active || row.activity == null) return;
+    final activity = row.activity!;
+    if (_nonTerminalPrinted[row.id] == activity) {
+      return;
+    }
+    if ((_nonTerminalDelays[row.id]?.isActive ?? false) &&
+        _nonTerminalScheduled[row.id] == activity) {
+      return;
+    }
+    _nonTerminalDelays.remove(row.id)?.cancel();
+    _nonTerminalScheduled[row.id] = activity;
+    _nonTerminalDelays[row.id] = Timer(_delayDuration, () {
+      if (_closed ||
+          row.state != ProgressRowState.active ||
+          row.activity != activity) {
+        return;
+      }
+      _nonTerminalScheduled.remove(row.id);
+      _nonTerminalPrinted[row.id] = activity;
+      final attached = identical(_output._progressBoard, this);
+      if (attached) _output._progressBoard = null;
+      _writeDurableRow(row, active: true);
+      if (attached && !_closed) _output._progressBoard = this;
+    });
   }
 
-  void _draw() {
-    if (_closed || _rows.isEmpty) return;
-    _erase();
-    final widestLabel = _rows.fold<int>(
-        0, (width, row) => row.label.length > width ? row.label.length : width);
-    const widestStatus = 8; // checking
-    const rowOverhead = 6; // two spaces, mark, space, and two-column gap
-    final available = _output.terminalWidth;
-    final labelWidth = available == null
-        ? widestLabel
-        : _lesser(
-            widestLabel, _atLeastZero(available - rowOverhead - widestStatus));
-    final statusWidth = available == null
-        ? widestStatus
-        : _lesser(widestStatus, _atLeastZero(available - 4));
-    final lines = <String>[
-      _fit('Release targets', available),
-    ];
-    for (final row in _rows) {
-      final verdict = row.verdict;
-      final (mark, word, tone) = switch (verdict) {
-        null => (_frames[_spin % _frames.length], 'checking', Tone.attention),
-        Verdict.exact => (Mark.done.glyph, 'checked', Tone.muted),
-        Verdict.absent => (Mark.none.glyph, 'checked', Tone.plain),
-        Verdict.conflict => (Mark.blocked.glyph, 'differs', Tone.bad),
-        Verdict.unknown => (Mark.none.glyph, 'unread', Tone.attention),
-      };
-      final label = _fit(row.label, labelWidth).padRight(labelWidth);
-      final status = _fit(word, statusWidth);
-      final gap = labelWidth > 0 && status.isNotEmpty ? '  ' : '';
-      lines.add(
-        '  $mark $label$gap${_output._tint(status, tone)}',
-      );
+  void _showTerminal() {
+    _delayElapsed = true;
+    if (_closed || _suspended || model.rows.isEmpty) return;
+    _ticker?.cancel();
+    _visible = true;
+    if (!_draw()) return;
+    _ticker = Timer.periodic(
+      const Duration(milliseconds: 120),
+      (_) => _draw(),
+    );
+  }
+
+  bool _draw() {
+    if (_closed || _suspended || !_visible || model.rows.isEmpty) return false;
+    final width = _output.terminalWidth;
+    if (width == null || width < 12) {
+      _ticker?.cancel();
+      _erase();
+      _visible = false;
+      return false;
     }
+    _erase();
+    final lines = _transientLines(width);
     _output.sink('${lines.join('\n')}\n');
     _drawnLines = lines.length;
     _spin++;
+    return true;
   }
 
-  static int _atLeastZero(int value) => value < 0 ? 0 : value;
+  List<String> _transientLines(int available) {
+    final lines = <String>[_fit(model.title, available)];
+    final grouped = model.groups.isNotEmpty;
+    for (final group in model.groups) {
+      lines.add(_fit('  $group', available));
+      for (final row in model.rows.where((row) => row.group == group)) {
+        lines.add(_transientRow(row, available, depth: 2));
+      }
+    }
+    for (final row in model.rows.where((row) => row.group == null)) {
+      lines.add(_transientRow(row, available, depth: grouped ? 1 : 1));
+    }
+    return lines;
+  }
 
-  static int _lesser(int left, int right) => left < right ? left : right;
+  String _transientRow(ProgressRow row, int? available, {required int depth}) {
+    final (glyph, status, tone) = _rowPresentation(row, active: true);
+    final indent = '  ' * depth;
+    final left =
+        [row.label, if (row.coordinate != null) row.coordinate!].join('  ');
+    final overhead = _displayWidth(indent) + _displayWidth(glyph) + 3;
+    const minimumSubjectWidth = 6;
+    final room = available == null ? null : _atLeastZero(available - overhead);
+    final wantedStatus = _displayWidth(status);
+    final statusBudget = room == null
+        ? wantedStatus
+        : _lesser(wantedStatus, _atLeastZero(room - minimumSubjectWidth - 2));
+    final leftWidth = available == null
+        ? _displayWidth(left)
+        : _atLeastZero(available - overhead - statusBudget - 2);
+    final fitted = _fit(left, leftWidth);
+    final fittedLeft =
+        '$fitted${' ' * _atLeastZero(leftWidth - _displayWidth(fitted))}';
+    final remaining = available == null
+        ? null
+        : _atLeastZero(available - overhead - _displayWidth(fittedLeft) - 2);
+    final fittedStatus = _fit(status, remaining);
+    final gap = fittedLeft.isEmpty || fittedStatus.isEmpty ? '' : '  ';
+    return '$indent$glyph $fittedLeft$gap${_output._tint(fittedStatus, tone)}';
+  }
 
-  static String _fit(String text, int? width) {
-    if (width == null || text.length <= width) return text;
-    if (width <= 0) return '';
-    if (width == 1) return '…';
-    return '${text.substring(0, width - 1)}…';
+  (String, String, Tone) _rowPresentation(
+    ProgressRow row, {
+    required bool active,
+  }) {
+    return switch (row.state) {
+      ProgressRowState.pending => ('…', 'queued', Tone.muted),
+      ProgressRowState.active => (
+          active ? _frames[_spin % _frames.length] : '…',
+          [
+            row.activity!.running,
+            if (row.detail != null) row.detail!,
+            if (active && showElapsed) formatDuration(row.elapsed),
+          ].join(' · '),
+          Tone.attention,
+        ),
+      ProgressRowState.complete => (
+          switch (row.mark) {
+            ProgressRowMark.done => Mark.done.glyph,
+            ProgressRowMark.satisfied => Mark.satisfied.glyph,
+            ProgressRowMark.none => Mark.none.glyph,
+          },
+          row.note!,
+          switch (row.emphasis) {
+            ProgressRowEmphasis.plain => Tone.plain,
+            ProgressRowEmphasis.muted => Tone.muted,
+            ProgressRowEmphasis.attention => Tone.attention,
+          },
+        ),
+      ProgressRowState.failed => (
+          Mark.blocked.glyph,
+          row.note!,
+          Tone.bad,
+        ),
+      ProgressRowState.notAttempted => ('—', row.note!, Tone.muted),
+    };
+  }
+
+  /// Temporarily yields the terminal to a native inherited-stdio command.
+  ///
+  /// The durable active line remains above the native output. [resume] starts
+  /// a fresh board below it; it never erases what the native tool printed.
+  void suspend() {
+    if (_closed || _suspended) return;
+    if (!_output.isTerminal) return;
+    _suspended = true;
+    _delay?.cancel();
+    _ticker?.cancel();
+    _erase();
+    _visible = false;
+    final attached = identical(_output._progressBoard, this);
+    if (attached) _output._progressBoard = null;
+    for (final row in model.rows.where(
+      (row) => row.state == ProgressRowState.active,
+    )) {
+      _writeDurableRow(row, active: true);
+    }
+    if (attached) _output._progressBoard = this;
+  }
+
+  void resume({bool afterNativeOutput = false}) {
+    if (_closed || !_suspended) return;
+    _suspended = false;
+    if (_output.isTerminal) {
+      if (afterNativeOutput) _output.sink('\n');
+      _showTerminal();
+    }
+  }
+
+  /// Erases the transient surface without leaving a snapshot.
+  void discard() {
+    if (_closed) return;
+    final printedRows = !_output.isTerminal && emitSlowToNonTerminal
+        ? model.rows
+            .where((row) =>
+                _nonTerminalPrinted.containsKey(row.id) &&
+                row.state != ProgressRowState.pending &&
+                row.state != ProgressRowState.active)
+            .toList()
+        : const <ProgressRow>[];
+    _closeTimers();
+    _erase();
+    _closed = true;
+    if (identical(_output._progressBoard, this)) {
+      _output._progressBoard = null;
+    }
+    for (final row in printedRows) {
+      _writeDurableRow(row);
+    }
+  }
+
+  /// Replaces the transient board with one append-only final snapshot.
+  void settle({String? title}) {
+    if (_closed) return;
+    final unfinished = model.rows.where(
+      (row) =>
+          row.state == ProgressRowState.pending ||
+          row.state == ProgressRowState.active,
+    );
+    if (unfinished.isNotEmpty) {
+      throw StateError(
+        'cannot settle progress with unfinished rows: '
+        '${unfinished.map((row) => row.id).join(', ')}',
+      );
+    }
+    _closeTimers();
+    _erase();
+    _closed = true;
+    if (identical(_output._progressBoard, this)) {
+      _output._progressBoard = null;
+    }
+    _output.heading(title ?? model.title);
+    for (final group in model.groups) {
+      _output.line(group, depth: 1);
+      for (final row in model.rows.where((row) => row.group == group)) {
+        _writeDurableRow(row, depth: 2);
+      }
+    }
+    for (final row in model.rows.where((row) => row.group == null)) {
+      _writeDurableRow(row, depth: 1);
+    }
+  }
+
+  /// Preserves the active operation as the failure point before diagnostics.
+  ///
+  /// Targets can still use the ordinary diagnostic surface: the renderer
+  /// turns whichever row they were describing into the durable failed row
+  /// and makes every untouched downstream row explicit.
+  void failActiveAndSettle() {
+    if (_closed) return;
+    final active = model.rows
+        .where((row) => row.state == ProgressRowState.active)
+        .toList();
+    if (active.isEmpty) return;
+    for (final row in active) {
+      _controllers[row.id]!.fail();
+    }
+    for (final row in model.rows.where(
+      (row) => row.state == ProgressRowState.pending,
+    )) {
+      _controllers[row.id]!.notAttempted();
+    }
+    settle();
+  }
+
+  void _writeDurableRow(
+    ProgressRow row, {
+    int depth = 1,
+    bool active = false,
+  }) {
+    final (glyph, status, tone) = _rowPresentation(row, active: active);
+    final mark = switch (glyph) {
+      '✓' => Mark.done,
+      '·' => Mark.satisfied,
+      '✗' => Mark.blocked,
+      _ => Mark.none,
+    };
+    final subject =
+        [row.label, if (row.coordinate != null) row.coordinate!].join(' · ');
+    final label = glyph == '—' || glyph == '…' ? '$glyph $subject' : subject;
+    _output.line(
+      label,
+      mark: mark,
+      note: status,
+      depth: depth,
+      labelWidth: 48,
+      noteTone: tone,
+    );
+  }
+
+  void _closeTimers() {
+    _delay?.cancel();
+    _ticker?.cancel();
+    for (final timer in _nonTerminalDelays.values) {
+      timer.cancel();
+    }
+    _nonTerminalDelays.clear();
+    _nonTerminalScheduled.clear();
   }
 
   void _erase() {
@@ -738,24 +1001,102 @@ class TargetChecks {
     _drawnLines = 0;
   }
 
-  void close() {
-    if (_closed) return;
-    _closed = true;
-    _delay?.cancel();
-    _ticker?.cancel();
-    _erase();
-    if (identical(_output._targetChecks, this)) {
-      _output._targetChecks = null;
+  static int _atLeastZero(int value) => value < 0 ? 0 : value;
+
+  static int _lesser(int left, int right) => left < right ? left : right;
+
+  static String _fit(String text, int? width) {
+    if (width == null || _displayWidth(text) <= width) return text;
+    if (width <= 0) return '';
+    if (width == 1) return '…';
+    final out = StringBuffer();
+    var used = 0;
+    for (final rune in text.runes) {
+      final next = _runeWidth(rune);
+      if (used + next > width - 1) break;
+      out.writeCharCode(rune);
+      used += next;
     }
+    return '${out.toString()}…';
+  }
+
+  static int _displayWidth(String text) =>
+      text.runes.fold(0, (width, rune) => width + _runeWidth(rune));
+
+  static int _runeWidth(int rune) {
+    if ((rune >= 0x0300 && rune <= 0x036f) ||
+        (rune >= 0x1ab0 && rune <= 0x1aff) ||
+        (rune >= 0x1dc0 && rune <= 0x1dff) ||
+        (rune >= 0xfe20 && rune <= 0xfe2f)) {
+      return 0;
+    }
+    if (rune >= 0x1100 &&
+        (rune <= 0x115f ||
+            rune == 0x2329 ||
+            rune == 0x232a ||
+            (rune >= 0x2e80 && rune <= 0xa4cf && rune != 0x303f) ||
+            (rune >= 0xac00 && rune <= 0xd7a3) ||
+            (rune >= 0xf900 && rune <= 0xfaff) ||
+            (rune >= 0xfe10 && rune <= 0xfe19) ||
+            (rune >= 0xfe30 && rune <= 0xfe6f) ||
+            (rune >= 0xff00 && rune <= 0xff60) ||
+            (rune >= 0xffe0 && rune <= 0xffe6) ||
+            (rune >= 0x1f300 && rune <= 0x1faff) ||
+            (rune >= 0x20000 && rune <= 0x3fffd))) {
+      return 2;
+    }
+    return 1;
   }
 }
 
-class _TargetCheckRow {
-  _TargetCheckRow(this.id, this.label);
+/// Compatibility adapter for status's parallel public-target reads.
+///
+/// It now uses the same renderer that staging and release use, while retaining
+/// status's existing add/finish API and fully transient behavior.
+final class TargetChecks {
+  TargetChecks._(Output output, Duration delay)
+      : _board = output.progressBoard(
+          'Release targets',
+          delay: delay,
+          showElapsed: false,
+        );
 
-  final String id;
-  final String label;
-  Verdict? verdict;
+  final LiveProgress _board;
+  final Map<String, ProgressRowController> _rows = {};
+  var _closed = false;
+
+  void add(String id, String label) {
+    if (_closed || _rows.containsKey(id)) return;
+    final row = _board.addRow(id: id, label: label);
+    _rows[id] = row;
+    row.handle.begin(CommonProgressActivities.checking);
+  }
+
+  void finish(String id, Verdict verdict) {
+    if (_closed) return;
+    final row = _rows[id];
+    if (row == null) return;
+    switch (verdict) {
+      case Verdict.exact:
+        row.complete(note: 'checked');
+      case Verdict.absent:
+        row.complete(note: 'checked', mark: ProgressRowMark.none);
+      case Verdict.conflict:
+        row.fail(note: 'differs');
+      case Verdict.unknown:
+        row.complete(
+          note: 'unread',
+          mark: ProgressRowMark.none,
+          emphasis: ProgressRowEmphasis.attention,
+        );
+    }
+  }
+
+  void close() {
+    if (_closed) return;
+    _closed = true;
+    _board.discard();
+  }
 }
 
 /// Which of the two questions an operator has a halt is answering.
@@ -809,127 +1150,6 @@ class ExitCodes {
 /// waiting: the wall clock is one implementation of it, and a test's counter is
 /// another.
 typedef Elapsed = Duration Function();
-
-/// A step being worked on, so that waiting reads as work rather than as a hang.
-///
-/// The RFC's rule, and the reason this exists at all: a release takes minutes
-/// and some steps are opaque — notarization waits on Apple — and silence during
-/// that is not austerity, it is anxiety. An operator who cannot tell a wait from
-/// a hang cancels the release, which is the expensive outcome.
-///
-/// Nothing here happens off a terminal. A pipe, a log, and an agent get one
-/// line per step, on completion, in the same words the terminal ends up
-/// showing: no spinner, no elapsed counter, no rewriting.
-class Activity {
-  Activity._(
-    this._output,
-    this._step,
-    this._typically,
-    this._depth,
-    this._elapsed,
-  ) {
-    if (_output.isTerminal) {
-      _draw();
-      // The counter has to advance on its own. A step that blocks — a
-      // subprocess, a poll that has not come back — would otherwise show a
-      // frozen spinner, which is indistinguishable from the hang this exists
-      // to rule out.
-      _timer =
-          Timer.periodic(const Duration(milliseconds: 120), (_) => _draw());
-    }
-  }
-
-  final Output _output;
-  final Step _step;
-  final Duration? _typically;
-  final int _depth;
-  final Elapsed _elapsed;
-
-  Timer? _timer;
-  String? _doing;
-  var _spin = 0;
-  var _finished = false;
-
-  static const _frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-
-  /// A duration worth printing on a finished step. Below this it is noise: the
-  /// reader learns nothing from being told a step took a moment.
-  static const notable = Duration(seconds: 5);
-
-  /// What the step is doing now. Shown while it runs and gone once it has.
-  void update(String doing) {
-    _doing = doing;
-    if (_output.isTerminal) _draw();
-  }
-
-  /// Finished, with [result] as the one line that survives.
-  ///
-  /// [verdict] is what a caller keys on, and it is the [Verdict] type rather
-  /// than a string so the four-word vocabulary is enforced by the compiler:
-  /// prose in this field — "Apple rejected the submission" where a caller
-  /// expects one of four words — is now unrepresentable, not merely wrong.
-  void done(
-    String result, {
-    Mark mark = Mark.done,
-    Verdict verdict = Verdict.exact,
-  }) =>
-      _finish(mark, result, verdict);
-
-  /// Failed. The line stays, and so does whatever the caller prints after it,
-  /// because that detail is the diagnosis.
-  ///
-  /// The verdict is `unknown` rather than anything definite: rk tried and did
-  /// not get an answer, which is not the same as having learned that nothing
-  /// is there.
-  void failed(String result, {Verdict verdict = Verdict.unknown}) =>
-      _finish(Mark.blocked, result, verdict);
-
-  /// Stops rendering without recording an outcome, for a step whose caller
-  /// went away. Nothing is printed: there is no result to report.
-  void abandon() {
-    _finished = true;
-    _timer?.cancel();
-  }
-
-  void _finish(Mark mark, String result, Verdict verdict) {
-    if (_finished) return;
-    _finished = true;
-    _timer?.cancel();
-    final took = _elapsed();
-    _output.step(
-      _step,
-      mark: mark,
-      note: took >= notable ? '$result · ${formatDuration(took)}' : result,
-      verdict: verdict,
-      detail: result,
-      took: took,
-      depth: _depth,
-    );
-  }
-
-  /// The line a terminal shows while this runs.
-  ///
-  /// Pure, so what an operator sees during a five-minute wait is asserted in a
-  /// test that takes no time at all.
-  String frame() {
-    final took = _elapsed();
-    final parts = [
-      _step.summary,
-      if (_doing != null) _doing!,
-      formatDuration(took),
-      if (_typically != null && took > _typically)
-        'longer than the usual ${formatDuration(_typically)}'
-      else if (_typically != null)
-        'typically ${formatDuration(_typically)}',
-    ];
-    return '${_frames[_spin % _frames.length]} ${parts.join(' · ')}';
-  }
-
-  void _draw() {
-    _output.progress('${'  ' * _depth}${frame()}');
-    _spin++;
-  }
-}
 
 /// A duration in the coarsest terms that still say something: seconds under a
 /// minute, then minutes, then hours. Nobody waiting on a release needs

@@ -863,7 +863,9 @@ void main() {
   test('stage prepares every local input and nothing public', () async {
     final ran = await release(dryRun: true);
     expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
-    expect(ran.text, contains('0.2.0 staged'));
+    expect(ran.text, contains('core 0.2.0 · staged'));
+    expect(ran.text, contains('package source'));
+    expect(ran.text, contains('staged · dry run passed'));
     expect(
       ran.calls.where((c) => c.startsWith('git tag')),
       isEmpty,

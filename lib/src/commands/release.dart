@@ -7,6 +7,7 @@ import '../engine/assets.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
 import '../output/output.dart';
+import '../output/progress.dart';
 import '../engine/inspect.dart';
 import '../engine/producers.dart';
 import '../engine/publish_target.dart';
@@ -316,7 +317,12 @@ class ReleaseCommand {
     final targetByStep = {
       for (final target in targets) target.step.id: target,
     };
-    final endpointBaselines = <PublishTarget, String>{};
+    final endpointBaselines = <String, String>{};
+    final initialProgress = _TargetProgress(
+      output,
+      title: '${unit.name} ${unit.version} · preparing release',
+      targets: targets,
+    );
 
     final ReleaseStage stage;
     try {
@@ -334,12 +340,20 @@ class ReleaseCommand {
     var stageInspection = stage.inspect();
     final states = <String, Inspection>{};
     for (final step in checklist.steps) {
+      final target = targetByStep[step.id];
+      if (target != null) {
+        initialProgress.begin(
+          target,
+          inspector.targets.moduleForTarget(target).inspectActivity,
+        );
+      }
       states[step.id] = await _observeForRelease(
         step,
         unit,
         stageInspection,
       );
       final state = states[step.id]!;
+      if (target != null) initialProgress.observe(target, state);
       output.step(
         step,
         verdict: state.verdict,
@@ -356,6 +370,7 @@ class ReleaseCommand {
 
     await inspector.releaseMonotonicity(unit, targets, problems);
     inspector.tagGuards(unit, checklist, states).forEach(problems.report);
+    initialProgress.discard();
     if (problems.isNotEmpty) {
       output.halt(HaltKind.beforeActing);
       output.problems(problems.found);
@@ -457,9 +472,13 @@ class ReleaseCommand {
     // Safe ambient readiness applies to stage-only too: it may not acquire a
     // credential, but it should not spend substantial producer work on bytes
     // the current native endpoint can never publish as configured.
+    final preflightProgress = _TargetProgress(
+      output,
+      title: '${unit.name} ${unit.version} · preparing release',
+      targets: targets,
+    );
     final preflight = TargetReadinessContext(
       tools: tools,
-      output: output,
       git: git,
       environment: _refreshEnvironment(),
     );
@@ -469,26 +488,66 @@ class ReleaseCommand {
       final grouped =
           outstanding.where((item) => item.target == targetKind).toList();
       final module = inspector.targets.moduleForTarget(grouped.first);
-      if (!await module.preflight(preflight, unit)) {
+      for (final target in grouped) {
+        preflightProgress.begin(target, module.preflightActivity);
+      }
+      final readiness = await module.preflight(
+        TargetReadinessContext(
+          tools: tools,
+          git: git,
+          environment: _refreshEnvironment(),
+          progress: preflightProgress.combined(grouped),
+        ),
+        unit,
+      );
+      if (readiness case TargetNotReady(:final diagnostic, :final unit)) {
+        preflightProgress
+          ..failAll(grouped, activity: module.preflightActivity)
+          ..notAttemptedPending()
+          ..settle();
+        output.problem(diagnostic, unit: unit);
+        output.halt(HaltKind.beforeActing);
         if (!stageOnly) _showReleaseActions(targets, publicActions);
         return ExitCodes.refused;
       }
-      endpointBaselines[targetKind] =
-          module.effectiveEndpoint(preflight, unit, grouped);
+      final note = (readiness as TargetReady).note;
+      for (final target in grouped) {
+        preflightProgress.complete(target, note: note);
+      }
+      for (final target in grouped) {
+        endpointBaselines[target.step.id] =
+            module.effectiveEndpoint(preflight, unit, [target]);
+      }
     }
 
-    // `›` is version movement. The groups below already say where these
-    // are going, and the arrow had started meaning two things.
-    output.heading('${unit.name} ${unit.version} · '
-        '${stageOnly || localOnly ? 'staging' : 'releasing'}');
-    output.blank();
+    final targetStages = inspector.targets.stages(
+      unit: unit,
+      targets: targets,
+    );
+    final stageInputs = await _prepareStageInputs(
+      unit,
+      targets,
+      stageInspection,
+    );
+    if (stageInputs == null) {
+      if (!stageOnly) _showReleaseActions(targets, publicActions);
+      return ExitCodes.refused;
+    }
+    final stageProgress = _StageProgress(
+      output,
+      title: '${unit.name} ${unit.version} · staging',
+      board: StageBoard.forUnit(unit, targets, targetStages),
+    );
 
     final prepared = await _prepareStage(
       unit,
       checklist,
       targets,
+      targetStages,
       stage,
       stageInspection,
+      stageProgress,
+      stageInputs,
     );
     if (prepared == null) {
       if (!stageOnly) _showReleaseActions(targets, publicActions);
@@ -519,12 +578,6 @@ class ReleaseCommand {
       return ExitCodes.refused;
     }
 
-    output.line('${unit.name} ${unit.version} staged', mark: Mark.done);
-    _renderBoard(
-      StageBoard.forUnit(unit, targets),
-      progressOf: prepared.receiptSteps,
-    );
-
     if (stageOnly || localOnly) {
       output.blank();
       output.line(
@@ -547,6 +600,16 @@ class ReleaseCommand {
 
     // Public reality is refreshed after staging. Unknown and conflict never
     // grant permission; exact work is skipped; only absent work may act.
+    final releaseInputs = output.progressBoard(
+      '${unit.name} ${unit.version} · preparing release',
+      emitSlowToNonTerminal: true,
+    );
+    final releaseInputsRow = releaseInputs.addRow(
+      id: '${unit.name}/release-inputs',
+      label: 'Release inputs',
+      coordinate: 'targets · signing · staged bytes',
+    );
+    releaseInputsRow.handle.begin(CommonProgressActivities.checking);
     final gate = PublicReleaseGate(inspector);
     var remaining = await _refreshPublicGate(
       gate: gate,
@@ -558,6 +621,8 @@ class ReleaseCommand {
     );
     if (remaining == null) return ExitCodes.refused;
     if (remaining.isEmpty) {
+      releaseInputsRow.complete(note: 'checked');
+      releaseInputs.discard();
       output.blank();
       output.line(
         '${unit.name} ${unit.version}',
@@ -568,6 +633,12 @@ class ReleaseCommand {
     }
 
     final macosProject = _macosProject(unit);
+    if (macosProject != null) {
+      releaseInputsRow.handle.begin(ProgressActivity(
+        running: 'checking signing',
+        failed: 'signing check failed',
+      ));
+    }
     final refreshedBaseline = await _signingBaseline(unit, macosProject);
     if (!refreshedBaseline.ok) {
       _showReleaseActions(targets, publicActions);
@@ -616,6 +687,7 @@ class ReleaseCommand {
     // after every potentially slow signing/context check. The per-target loop
     // still reads again after consent; this snapshot exists so the operator
     // never authorizes a stale remaining set.
+    releaseInputsRow.handle.begin(CommonProgressActivities.checking);
     remaining = await _refreshPublicGate(
       gate: gate,
       unit: unit,
@@ -626,6 +698,8 @@ class ReleaseCommand {
     );
     if (remaining == null) return ExitCodes.refused;
     if (remaining.isEmpty) {
+      releaseInputsRow.complete(note: 'checked');
+      releaseInputs.discard();
       output.blank();
       output.line(
         '${unit.name} ${unit.version}',
@@ -644,40 +718,119 @@ class ReleaseCommand {
     final remainingTargets = [
       for (final step in remaining) targetByStep[step.id]!,
     ];
-    for (final targetKind
-        in remainingTargets.map((item) => item.target).toSet()) {
-      final grouped =
-          remainingTargets.where((item) => item.target == targetKind).toList();
-      final module = inspector.targets.moduleForTarget(grouped.first);
+    releaseInputsRow.complete(note: 'checked');
+    releaseInputs.discard();
+    final sessionProgress = _TargetProgress(
+      output,
+      title: '${unit.name} ${unit.version} · preparing release',
+      targets: targets,
+    );
+    for (final target in targets.where(
+      (target) => !remainingTargets.contains(target),
+    )) {
+      sessionProgress.complete(
+        target,
+        note: 'already published',
+        satisfied: true,
+        restore: true,
+      );
+    }
+    final sessionRequirements = <String, TargetSessionRequirement>{};
+    for (final target in remainingTargets) {
+      final module = inspector.targets.moduleForTarget(target);
+      final provider = module.sessionProvider;
+      if (provider == null) continue;
       final before = TargetReadinessContext(
         tools: tools,
-        output: output,
         git: _refreshGit(),
         environment: _refreshEnvironment(),
       );
-      final baseline = endpointBaselines[targetKind];
-      final beforeEndpoint = module.effectiveEndpoint(before, unit, grouped);
-      if (baseline == null || beforeEndpoint != baseline) {
-        _destinationChanged(targetKind, targets, publicActions);
+      final endpoint = module.effectiveEndpoint(before, unit, [target]);
+      final key = '${provider.id}\u0000$endpoint';
+      final existing = sessionRequirements[key];
+      sessionRequirements[key] = TargetSessionRequirement(
+        key: key,
+        provider: provider,
+        targets: [...?existing?.targets, target],
+      );
+    }
+    final sessionTargetIds = {
+      for (final requirement in sessionRequirements.values)
+        for (final target in requirement.targets) target.step.id,
+    };
+    for (final target in remainingTargets.where(
+      (target) => !sessionTargetIds.contains(target.step.id),
+    )) {
+      sessionProgress.begin(
+        target,
+        inspector.targets.moduleForTarget(target).preflightActivity,
+      );
+      sessionProgress.complete(target, note: 'checked');
+    }
+    for (final requirement in sessionRequirements.values) {
+      final grouped = requirement.targets;
+      for (final target in grouped) {
+        sessionProgress.begin(target, requirement.provider.activity);
+      }
+      final before = TargetReadinessContext(
+        tools: tools,
+        git: _refreshGit(),
+        environment: _refreshEnvironment(),
+        progress: sessionProgress.combined(grouped),
+        runInteractive: sessionProgress.interactive(tools),
+      );
+      final beforeMatches = grouped.every((target) {
+        final module = inspector.targets.moduleForTarget(target);
+        final baseline = endpointBaselines[target.step.id];
+        return baseline != null &&
+            module.effectiveEndpoint(before, unit, [target]) == baseline;
+      });
+      if (!beforeMatches) {
+        sessionProgress
+          ..failAll(grouped, activity: requirement.provider.activity)
+          ..notAttemptedPending()
+          ..settle();
+        _destinationChanged(grouped.first.target, targets, publicActions);
         return ExitCodes.refused;
       }
-      if (!await module.acquireSession(before, unit, grouped)) {
+      final acquired =
+          await requirement.provider.acquire(before, unit, grouped);
+      if (acquired case TargetNotReady(:final diagnostic, :final unit)) {
+        sessionProgress
+          ..failAll(grouped, activity: requirement.provider.activity)
+          ..notAttemptedPending()
+          ..settle();
+        output.problem(diagnostic, unit: unit);
+        output.halt(HaltKind.beforeActing);
         _showReleaseActions(targets, publicActions);
         return ExitCodes.refused;
       }
       final after = TargetReadinessContext(
         tools: tools,
-        output: output,
         git: _refreshGit(),
         environment: _refreshEnvironment(),
       );
-      final effective = module.effectiveEndpoint(after, unit, grouped);
-      if (effective != baseline) {
-        _destinationChanged(targetKind, targets, publicActions);
+      final afterMatches = grouped.every((target) {
+        final module = inspector.targets.moduleForTarget(target);
+        final baseline = endpointBaselines[target.step.id];
+        return baseline != null &&
+            module.effectiveEndpoint(after, unit, [target]) == baseline;
+      });
+      if (!afterMatches) {
+        sessionProgress
+          ..failAll(grouped, activity: requirement.provider.activity)
+          ..notAttemptedPending()
+          ..settle();
+        _destinationChanged(grouped.first.target, targets, publicActions);
         return ExitCodes.refused;
+      }
+      final note = (acquired as TargetReady).note;
+      for (final target in grouped) {
+        sessionProgress.complete(target, note: note);
       }
     }
 
+    sessionProgress.discard();
     if (!await _authorize(
       unit,
       [for (final step in remaining) targetByStep[step.id]!],
@@ -726,11 +879,32 @@ class ReleaseCommand {
       }
     }
 
-    output.blank();
+    final releaseProgress = _TargetProgress(
+      output,
+      title: '${unit.name} ${unit.version} · releasing',
+      targets: targets,
+    );
+    for (final target in targets.where(
+      (target) => !authorizedStepIds.contains(target.step.id),
+    )) {
+      releaseProgress.complete(
+        target,
+        note: 'already published',
+        satisfied: true,
+        restore: true,
+      );
+    }
     var completedPublicTarget = false;
     for (final step in publicSteps) {
+      final target = targetByStep[step.id]!;
+      final module = inspector.targets.moduleForTarget(target);
+      releaseProgress.begin(target, module.inspectActivity);
       var state = await inspector.inspect(step, unit);
       if (!authorizedStepIds.contains(step.id) && !state.isExact) {
+        releaseProgress
+          ..fail(target, activity: module.inspectActivity)
+          ..notAttemptedPending()
+          ..settle();
         _haltForAuthorizationGrowth(
           step,
           state,
@@ -742,25 +916,29 @@ class ReleaseCommand {
       }
       if (state.isExact) {
         publicActions[step.id] = _ReleaseAction.alreadyExact;
+        releaseProgress.complete(
+          targetByStep[step.id]!,
+          note: 'already published',
+          satisfied: true,
+        );
         output.step(
           step,
           mark: Mark.satisfied,
           verdict: state.verdict,
           note: state.detail ?? 'already done',
           action: publicActions[step.id]!.wire,
+          show: false,
         );
         continue;
       }
       if (!state.isAbsent) {
+        releaseProgress
+          ..fail(target, activity: module.inspectActivity)
+          ..notAttemptedPending()
+          ..settle();
         _haltForState(step, state);
-        _showReleaseActions(targets, publicActions);
         return ExitCodes.refused;
       }
-
-      final target = targets.singleWhere(
-        (target) => target.step.id == step.id,
-      );
-      final module = inspector.targets.moduleForTarget(target);
       final currentVersion = Diagnostics();
       final readIndependentHistory = await inspector.releaseMonotonicity(
         unit,
@@ -769,11 +947,14 @@ class ReleaseCommand {
         refreshRegistry: true,
       );
       if (currentVersion.isNotEmpty) {
+        releaseProgress
+          ..fail(target, activity: module.inspectActivity)
+          ..notAttemptedPending()
+          ..settle();
         output.halt(
           output.report.acted ? HaltKind.stoppedPartway : HaltKind.beforeActing,
         );
         output.problems(currentVersion.found);
-        _showReleaseActions(targets, publicActions);
         return ExitCodes.refused;
       }
 
@@ -792,18 +973,27 @@ class ReleaseCommand {
         );
         if (state.isExact) {
           publicActions[step.id] = _ReleaseAction.alreadyExact;
+          releaseProgress.complete(
+            target,
+            note: 'already published',
+            satisfied: true,
+          );
           output.step(
             step,
             mark: Mark.satisfied,
             verdict: state.verdict,
             note: state.detail ?? 'already done',
             action: publicActions[step.id]!.wire,
+            show: false,
           );
           continue;
         }
         if (!state.isAbsent) {
+          releaseProgress
+            ..fail(target, activity: module.inspectActivity)
+            ..notAttemptedPending()
+            ..settle();
           _haltForState(step, state);
-          _showReleaseActions(targets, publicActions);
           return ExitCodes.refused;
         }
       }
@@ -816,7 +1006,6 @@ class ReleaseCommand {
             ? HaltKind.stoppedPartway
             : HaltKind.beforeActing,
       )) {
-        _showReleaseActions(targets, publicActions);
         return ExitCodes.refused;
       }
       if (!_releaseContextStillValid(
@@ -827,7 +1016,6 @@ class ReleaseCommand {
             ? HaltKind.stoppedPartway
             : HaltKind.beforeActing,
       )) {
-        _showReleaseActions(targets, publicActions);
         return ExitCodes.refused;
       }
 
@@ -845,18 +1033,27 @@ class ReleaseCommand {
       );
       if (state.isExact) {
         publicActions[step.id] = _ReleaseAction.alreadyExact;
+        releaseProgress.complete(
+          target,
+          note: 'already published',
+          satisfied: true,
+        );
         output.step(
           step,
           mark: Mark.satisfied,
           verdict: state.verdict,
           note: state.detail ?? 'already done',
           action: publicActions[step.id]!.wire,
+          show: false,
         );
         continue;
       }
       if (!state.isAbsent) {
+        releaseProgress
+          ..fail(target, activity: module.inspectActivity)
+          ..notAttemptedPending()
+          ..settle();
         _haltForState(step, state);
-        _showReleaseActions(targets, publicActions);
         return ExitCodes.refused;
       }
       final actedBefore = output.report.acted;
@@ -873,19 +1070,40 @@ class ReleaseCommand {
       final releaseContext = TargetReleaseContext(
         reads: inspector.targetReads,
         tools: tools,
-        output: output,
         stage: stage,
+        progress: releaseProgress.handle(target),
+        runInteractive: releaseProgress.interactive(tools),
         wait: _wait,
         confirmDeadline: confirmDeadline,
         confirmInterval: confirmInterval,
       );
-      final act = await module.act(releaseContext, unit, target, state);
+      final mutationActivity = module.actActivity;
+      releaseProgress.begin(target, mutationActivity);
+      late final TargetActOutcome act;
+      try {
+        act = await module.act(releaseContext, unit, target, state);
+      } on Object catch (error) {
+        act = TargetActOutcome(
+          ok: false,
+          mayHaveActed: true,
+          problem: '${target.kindLabel} operation threw: $error',
+        );
+      }
+      final lastMutationActivity =
+          releaseContext.progress.activity ?? mutationActivity;
       // An act's process result is not public truth. A registry can accept an
       // upload before the client loses its response; Git can finish a push
       // before the connection drops; GitHub can apply the final draft PATCH
       // before `gh` exits non-zero. Always run the same destination inspection
       // status uses before deciding what the command result means.
-      state = await module.settleAfterAct(releaseContext, unit, target);
+      releaseProgress.begin(target, module.verifyActivity);
+      try {
+        state = await module.settleAfterAct(releaseContext, unit, target);
+      } on Object catch (error) {
+        state = Inspection.unknown(
+          '${target.kindLabel} verification threw: $error',
+        );
+      }
       publicActions[step.id] =
           state.isExact ? _ReleaseAction.completed : _ReleaseAction.failed;
       output.step(
@@ -898,6 +1116,11 @@ class ReleaseCommand {
       );
       if (!act.ok) {
         if (state.isExact && !output.report.halted) {
+          releaseProgress.complete(
+            target,
+            note: act.reconciledNote ??
+                'command response was lost · public target confirmed exact',
+          );
           output.step(
             step,
             mark: Mark.done,
@@ -906,29 +1129,18 @@ class ReleaseCommand {
             note: act.reconciledNote ??
                 'command response was lost · public target confirmed exact',
             action: publicActions[step.id]!.wire,
+            show: false,
           );
           completedPublicTarget = true;
           continue;
         }
-        if (!act.failureAlreadyReported) {
-          final failure = await module.classifyFailure(
-            releaseContext,
-            unit,
-            target,
-            state,
-            act,
-            actedBefore: actedBefore,
-          );
-          _reportTargetFailure(step, failure);
-        } else if (!output.report.halted) {
-          output.halt(
-            actedBefore ? HaltKind.stoppedPartway : HaltKind.beforeActing,
-          );
-        }
-        _showReleaseActions(targets, publicActions);
-        return ExitCodes.refused;
-      }
-      if (!state.isExact) {
+        releaseProgress.fail(
+          target,
+          activity:
+              state.isAbsent ? lastMutationActivity : module.verifyActivity,
+        );
+        releaseProgress.notAttemptedPending();
+        releaseProgress.settle();
         final failure = await module.classifyFailure(
           releaseContext,
           unit,
@@ -938,13 +1150,31 @@ class ReleaseCommand {
           actedBefore: actedBefore,
         );
         _reportTargetFailure(step, failure);
-        _showReleaseActions(targets, publicActions);
         return ExitCodes.refused;
       }
+      if (!state.isExact) {
+        releaseProgress.fail(target, activity: module.verifyActivity);
+        releaseProgress.notAttemptedPending();
+        releaseProgress.settle();
+        final failure = await module.classifyFailure(
+          releaseContext,
+          unit,
+          target,
+          state,
+          act,
+          actedBefore: actedBefore,
+        );
+        _reportTargetFailure(step, failure);
+        return ExitCodes.refused;
+      }
+      final inspected = act.includeInspectionDetail && state.detail != null
+          ? ' · ${state.detail}'
+          : '';
+      releaseProgress.complete(
+        target,
+        note: '${act.successNote ?? 'published'}$inspected',
+      );
       if (act.successNote != null) {
-        final inspected = act.includeInspectionDetail && state.detail != null
-            ? ' · ${state.detail}'
-            : '';
         output.step(
           step,
           mark: Mark.done,
@@ -952,13 +1182,13 @@ class ReleaseCommand {
           detail: state.detail,
           note: '${act.successNote}$inspected',
           action: publicActions[step.id]!.wire,
+          show: false,
         );
       }
       completedPublicTarget = true;
     }
 
-    output.blank();
-    output.line('${unit.name} ${unit.version} released', mark: Mark.done);
+    releaseProgress.settle(released: true);
     for (final target in targets) {
       final module = inspector.targets.moduleForTarget(target);
       for (final line in module.completionLines(unit, target)) {
@@ -1078,8 +1308,8 @@ class ReleaseCommand {
       return null;
     }
     if (snapshot.monotonicityProblems.isNotEmpty) {
-      output.halt(HaltKind.beforeActing);
       output.problems(snapshot.monotonicityProblems);
+      output.halt(HaltKind.beforeActing);
       _showReleaseActions(targets, actions);
       return null;
     }
@@ -1094,13 +1324,6 @@ class ReleaseCommand {
   }
 
   void _haltForState(Step step, Inspection state, {bool afterAct = false}) {
-    output.halt(
-      state.verdict == Verdict.conflict
-          ? (afterAct ? HaltKind.actedAndUnfixable : HaltKind.unfixableByRerun)
-          : afterAct
-              ? HaltKind.lostTrack
-              : HaltKind.beforeActing,
-    );
     output.problem(Diagnostic(
       code: afterAct ? 'RK-REL-003' : 'RK-REL-001',
       message: '${step.summary}: ${state.detail ?? state.verdict.name}',
@@ -1112,6 +1335,13 @@ class ReleaseCommand {
               .map((entry) => '${entry.key}: ${entry.value}')
               .join('\n'),
     ));
+    output.halt(
+      state.verdict == Verdict.conflict
+          ? (afterAct ? HaltKind.actedAndUnfixable : HaltKind.unfixableByRerun)
+          : afterAct
+              ? HaltKind.lostTrack
+              : HaltKind.beforeActing,
+    );
   }
 
   void _showReleaseActions(
@@ -1240,15 +1470,88 @@ class ReleaseCommand {
     return false;
   }
 
+  /// Resolves slow, shared release inputs before artifact rows begin moving.
+  ///
+  /// Claims and signing identity are unit-scoped facts, not artifacts and not
+  /// publication targets. Giving them one honest row avoids both duplicating
+  /// them under every target and leaving the operator staring at queued output
+  /// rows while a public-history or keychain read is still in flight.
+  Future<_StageInputs?> _prepareStageInputs(
+    ResolvedUnit unit,
+    List<TargetExpectation> targets,
+    StageInspection inspected,
+  ) async {
+    final live = output.progressBoard(
+      '${unit.name} ${unit.version} · preparing stage',
+      emitSlowToNonTerminal: true,
+    );
+    final row = live.addRow(
+      id: '${unit.name}/release-inputs',
+      label: 'Release inputs',
+      coordinate: 'claims · signing identity',
+    );
+    row.handle.begin(CommonProgressActivities.checking);
+    final claims = await _firstClaims(unit, targets);
+
+    _ProjectSigningContext? signing;
+    if (!inspected.reusable) {
+      final macosProject = _macosProject(unit);
+      if (macosProject != null) {
+        row.handle.begin(ProgressActivity(
+          running: 'checking signing',
+          failed: 'signing check failed',
+        ));
+      }
+      final baseline = await _signingBaseline(unit, macosProject);
+      if (!baseline.ok) return null;
+      if (macosProject != null) {
+        final publishedRequirement = baseline.requirement;
+        final keychain = await _signingCertificate(unit, publishedRequirement);
+        if (!keychain.ok) return null;
+        final codeId = publishedRequirement == null
+            ? macosProject.executable
+            : BinaryChain.identifierOf(publishedRequirement);
+        if (codeId == null || codeId.isEmpty) {
+          output.problem(Diagnostic(
+            code: 'RK-SIGN-009',
+            message: 'no release states what this program is called',
+            remedy: 'declare one executable in the native project manifest',
+          ));
+          output.halt(HaltKind.beforeActing);
+          return null;
+        }
+        signing = _ProjectSigningContext(
+          publishedRequirement: publishedRequirement,
+          firstIdentity: publishedRequirement == null,
+          certificateName: keychain.identity!.name,
+          codeId: codeId,
+          identity: keychain.identity,
+          certificateSha256: keychain.certificateSha256,
+        );
+      }
+    }
+
+    row.complete(note: 'checked');
+    live.discard();
+    return _StageInputs(claims: claims, signing: signing);
+  }
+
   Future<_PreparedStage?> _prepareStage(
     ResolvedUnit unit,
     Checklist checklist,
     List<TargetExpectation> targets,
+    List<TargetStage> targetStages,
     ReleaseStage stage,
     StageInspection inspected,
+    _StageProgress stageProgress,
+    _StageInputs inputs,
   ) async {
-    final claims = await _firstClaims(unit, targets);
+    final claims = inputs.claims;
+    final notices = <String>[];
     if (inspected.reusable) {
+      stageProgress
+        ..restore(inspected.receipt!.steps)
+        ..settle(title: '${unit.name} ${unit.version} · staged');
       _ProjectSigningContext? signing;
       for (final step in inspected.receipt!.steps.where(
         (step) => isMacosBuildReceipt(step.name),
@@ -1331,10 +1634,6 @@ class ReleaseCommand {
         return null;
       }
     }
-    final targetStages = inspector.targets.stages(
-      unit: unit,
-      targets: targets,
-    );
     Future<bool> prepareTargets(StageContributionPhase phase) async {
       for (final targetStage in targetStages.where(
         (item) => item.contract.phase == phase,
@@ -1344,29 +1643,39 @@ class ReleaseCommand {
         if (progress.any((record) => record.name == receiptName)) {
           continue;
         }
-        final StageStep? result;
+        final TargetStageOutcome result;
         try {
           result = await targetStage.prepare(
             TargetStageContext(
               contract: targetStage.contract,
               tools: tools,
               git: git,
-              output: output,
+              attach: output.report.attach,
               stage: stage,
               sourceStep: sourceStep,
-              progress: progress,
+              priorSteps: progress,
+              progress: stageProgress.handlesFor(targetStage),
             ),
           );
         } on Object catch (error) {
           _stageOperationFailed('${target.label} stage preparation', error);
           return false;
         }
-        if (result == null) {
+        notices.addAll(result.notices);
+        if (result case TargetStageFailure(:final diagnostic, :final unit)) {
+          stageProgress.failAndSettle();
+          for (final notice in notices) {
+            output.say(notice, depth: 1);
+          }
+          output.problem(diagnostic, unit: unit);
+          output.halt(HaltKind.beforeActing);
           return false;
         }
-        progress.add(result);
+        final step = (result as TargetStageSuccess).step;
+        progress.add(step);
         try {
           _persistStageProgress(stage, sourceArtifacts, progress);
+          stageProgress.record(step);
         } on Object catch (error) {
           _stageProgressFailed(error);
           return false;
@@ -1379,41 +1688,14 @@ class ReleaseCommand {
       return null;
     }
 
-    _ProjectSigningContext? signing;
-    final macosProject = _macosProject(unit);
-    final baseline = await _signingBaseline(unit, macosProject);
-    if (!baseline.ok) return null;
-    if (macosProject != null) {
-      final publishedRequirement = baseline.requirement;
-      final keychain = await _signingCertificate(unit, publishedRequirement);
-      if (!keychain.ok) return null;
-      final codeId = publishedRequirement == null
-          ? macosProject.executable
-          : BinaryChain.identifierOf(publishedRequirement);
-      if (codeId == null || codeId.isEmpty) {
-        output.problem(Diagnostic(
-          code: 'RK-SIGN-009',
-          message: 'no release states what this program is called',
-          remedy: 'declare one executable in the native project manifest',
-        ));
-        output.halt(HaltKind.beforeActing);
-        return null;
-      }
-      signing = _ProjectSigningContext(
-        publishedRequirement: publishedRequirement,
-        firstIdentity: publishedRequirement == null,
-        certificateName: keychain.identity!.name,
-        codeId: codeId,
-        identity: keychain.identity,
-        certificateSha256: keychain.certificateSha256,
-      );
-    }
+    final signing = inputs.signing;
 
     final producerSteps = checklist.steps.where((step) {
       return !step.isPublic &&
           step.kind != StepKind.prerequisite &&
           step.kind != StepKind.completeStage;
     }).toList();
+    stageProgress.restore(progress);
     for (final step in producerSteps) {
       if (_producerRecorded(progress, step)) {
         output.step(
@@ -1425,31 +1707,30 @@ class ReleaseCommand {
         continue;
       }
       output.report.acted = true;
-      final activity = output.begin(step, depth: 0);
+      final receiptName = receiptNameFor(step);
+      stageProgress.begin(receiptName, _producerActivity(step));
       final LocalProducerOutcome act;
       try {
         act = await _actProducer(
           step,
           unit,
           signing,
+          progress: stageProgress.handleFor(receiptName),
         );
       } on Object catch (error) {
-        activity.abandon();
         return _stageOperationFailed(step.summary, error);
       }
       if (!act.ok) {
-        activity.abandon();
+        stageProgress.failAndSettle();
         if (!output.report.halted) output.halt(HaltKind.stoppedPartway);
         return null;
       }
-      // Clears the spinner without writing a step: Report.step replaces by
-      // id, so recording here overwrote the evidence the producer had just
-      // put there.
-      activity.abandon();
       try {
-        progress.add(
-            _captureProducerStep(stage, unit, step, sourceStep, progress, act));
+        final recorded =
+            _captureProducerStep(stage, unit, step, sourceStep, progress, act);
+        progress.add(recorded);
         _persistStageProgress(stage, sourceArtifacts, progress);
+        stageProgress.record(recorded);
       } on Object catch (error) {
         return _stageProgressFailed(error);
       }
@@ -1459,6 +1740,10 @@ class ReleaseCommand {
       return null;
     }
 
+    stageProgress.begin(
+      'complete-stage',
+      ProgressActivity(running: 'assembling', failed: 'assembly failed'),
+    );
     try {
       stage.finalize(
         releaseAssets: ReleaseAssets.bundleFor(unit),
@@ -1489,9 +1774,16 @@ class ReleaseCommand {
       detail: 'staged and validated',
       show: false,
     );
+    final completed = stage.inspect().receipt!.steps;
+    stageProgress
+      ..restore(completed)
+      ..settle(title: '${unit.name} ${unit.version} · staged');
+    for (final notice in notices) {
+      output.say(notice, depth: 1);
+    }
     return _PreparedStage(
       claims: claims,
-      receiptSteps: List<StageStep>.unmodifiable(progress),
+      receiptSteps: completed,
       signing: signing,
     );
   }
@@ -1989,14 +2281,16 @@ class ReleaseCommand {
   Future<LocalProducerOutcome> _actProducer(
     Step step,
     ResolvedUnit unit,
-    _ProjectSigningContext? signing,
-  ) async {
+    _ProjectSigningContext? signing, {
+    ProgressHandle? progress,
+  }) async {
     final project = unit.project(step.project!);
     switch (step.kind) {
       case StepKind.build:
         return _chain(unit).buildStep(
           step,
           project,
+          progress: progress,
           signing: step.platform!.startsWith('macos-')
               ? MacSigning(
                   publishedRequirement: signing!.publishedRequirement,
@@ -2028,6 +2322,22 @@ class ReleaseCommand {
           compilerExecutable: stage.compiler?.executable ?? 'dart',
         );
       });
+
+  ProgressActivity _producerActivity(Step step) => switch (step.kind) {
+        StepKind.build => ProgressActivity(
+            running: 'building',
+            failed: 'build failed',
+          ),
+        StepKind.notarize => ProgressActivity(
+            running: 'notarizing',
+            failed: 'notarization failed',
+          ),
+        StepKind.archive => ProgressActivity(
+            running: 'packaging',
+            failed: 'packaging failed',
+          ),
+        _ => throw StateError('${step.kind.name} is not a stage producer'),
+      };
 
   /// The designated requirement of the newest already-published release,
   /// which is what this release's signature must reproduce.
@@ -2218,55 +2528,244 @@ class ReleaseCommand {
     return ['this release claims, for the first time:', ...firstOf];
   }
 
-  /// The settled stage, grouped by the target that will publish each file.
-  ///
-  /// The notes are read back out of the receipt rather than remembered from
-  /// the run: what a signature or a notarization proved is recorded there,
-  /// and a second copy composed at print time could disagree with it.
-  void _renderBoard(StageBoard board, {required List<StageStep> progressOf}) {
-    // Four producers can report against one file — a macOS archive is
-    // built, signed, notarized and packed — so what they proved
-    // accumulates. Assigning the note per step let the last one silently
-    // erase the identity the first one established.
-    final marks = <StageBoardRow, List<String>>{};
-    for (final step in progressOf) {
-      final row = board.rowFor(step.name);
-      if (row == null) continue;
-      final signature = step.evidence['signature'];
-      final notary = step.evidence['notary'];
-      final found = marks.putIfAbsent(row, () => <String>[]);
-      if (signature is Map && signature['certificate'] is String) {
-        found.add('signed');
-      }
-      if (notary is Map && notary['status'] == 'Accepted') {
-        found.add('notarized');
-      }
-      if (step.evidence['publish_dry_run'] == 'passed') {
-        found.add('pub dry run passed');
-      }
-    }
-    marks.forEach((row, found) {
-      if (found.isNotEmpty) row.note = found.join(' · ');
-    });
+  /// Every Developer ID certificate begins the same way; what varies is the
+  /// team it names.
+  static String _shortCertificate(String certificate) =>
+      certificate.replaceFirst('Developer ID Application: ', '');
+}
 
+final class _TargetProgress {
+  _TargetProgress(
+    Output output, {
+    required String title,
+    required Iterable<TargetExpectation> targets,
+  })  : _output = output,
+        live = output.progressBoard(
+          title,
+          emitSlowToNonTerminal: true,
+        ) {
+    for (final target in targets) {
+      _controllers[target.step.id] = live.addRow(
+        id: target.step.id,
+        label: target.kindLabel,
+        coordinate: target.coordinate,
+      );
+    }
+  }
+
+  final Output _output;
+  final LiveProgress live;
+  final Map<String, ProgressRowController> _controllers = {};
+
+  ProgressRowController _row(TargetExpectation target) =>
+      _controllers[target.step.id]!;
+
+  ProgressHandle handle(TargetExpectation target) => _row(target).handle;
+
+  ProgressHandle combined(Iterable<TargetExpectation> targets) =>
+      ProgressHandle.combine(targets.map(handle));
+
+  void begin(TargetExpectation target, ProgressActivity activity,
+      {String? detail}) {
+    final row = _row(target);
+    if (row.state == ProgressRowState.complete) return;
+    row.handle.begin(activity, detail: detail);
+  }
+
+  void complete(
+    TargetExpectation target, {
+    required String note,
+    bool satisfied = false,
+    bool restore = false,
+  }) {
+    final row = _row(target);
+    if (row.state == ProgressRowState.complete) return;
+    final mark = satisfied ? ProgressRowMark.satisfied : ProgressRowMark.done;
+    if (restore || row.state == ProgressRowState.pending) {
+      row.restoreComplete(note: note, mark: mark);
+    } else {
+      row.complete(note: note, mark: mark);
+    }
+  }
+
+  void observe(TargetExpectation target, Inspection inspection) {
+    final row = _row(target);
+    if (row.state != ProgressRowState.active) return;
+    if (inspection.isExact) {
+      row.complete(
+        note: 'already published',
+        mark: ProgressRowMark.satisfied,
+      );
+    } else if (inspection.isAbsent) {
+      row.complete(
+        note: 'not published',
+        mark: ProgressRowMark.none,
+      );
+    } else {
+      row.complete(
+        note:
+            inspection.verdict == Verdict.conflict ? 'conflict' : 'unreadable',
+        mark: ProgressRowMark.none,
+        emphasis: ProgressRowEmphasis.attention,
+      );
+    }
+  }
+
+  void fail(
+    TargetExpectation target, {
+    ProgressActivity? activity,
+    String? note,
+  }) {
+    final row = _row(target);
+    if (row.state == ProgressRowState.active) {
+      row.fail(activity: activity, note: note);
+    }
+  }
+
+  void failAll(
+    Iterable<TargetExpectation> targets, {
+    required ProgressActivity activity,
+  }) {
+    for (final target in targets) {
+      fail(target, activity: activity);
+    }
+  }
+
+  void notAttemptedPending() {
+    for (final row in _controllers.values.where(
+      (row) => row.state == ProgressRowState.pending,
+    )) {
+      row.notAttempted();
+    }
+  }
+
+  ProgressInteractiveRunner interactive(Tools tools) {
+    return (
+      String executable,
+      List<String> arguments, {
+      String? workingDirectory,
+    }) async {
+      live.suspend();
+      try {
+        return await tools.runInteractive(
+          executable,
+          arguments,
+          workingDirectory: workingDirectory,
+        );
+      } finally {
+        live.resume(afterNativeOutput: _output.isTerminal);
+      }
+    };
+  }
+
+  void discard() => live.discard();
+
+  void settle({bool released = false}) => live.settle(
+        title: released
+            ? live.model.title.replaceFirst(' · releasing', ' · released')
+            : null,
+      );
+}
+
+/// Receipt-backed stage rows rendered through the one shared progress model.
+final class _StageProgress {
+  _StageProgress(
+    Output output, {
+    required String title,
+    required this.board,
+  }) : live = output.progressBoard(
+          title,
+          emitSlowToNonTerminal: true,
+        ) {
     for (final group in board.groups) {
-      output.line(group.label, depth: 1);
       for (final row in group.rows) {
-        output.line(
-          row.name,
-          note: row.note,
-          depth: 2,
-          labelWidth: 44,
-          noteTone: Tone.muted,
+        _controllers[row] = live.addRow(
+          id: row.id,
+          label: row.name,
+          group: group.label,
         );
       }
     }
   }
 
-  /// Every Developer ID certificate begins the same way; what varies is the
-  /// team it names.
-  static String _shortCertificate(String certificate) =>
-      certificate.replaceFirst('Developer ID Application: ', '');
+  final StageBoard board;
+  final LiveProgress live;
+  final Map<StageBoardRow, ProgressRowController> _controllers = {};
+  final Map<String, StageStep> _recorded = {};
+
+  ProgressHandle? handleFor(String producer) {
+    final rows = board.rowsFor(producer);
+    if (rows.isEmpty) return null;
+    return ProgressHandle.combine(
+      rows.map((row) => _controllers[row]!.handle),
+    );
+  }
+
+  Map<String, ProgressHandle> handlesFor(TargetStage stage) => {
+        for (final view in stage.progress)
+          view.id: _controllers[
+                  board.progressRow(stage.contract.step.name, view.id)!]!
+              .handle,
+      };
+
+  void begin(String producer, ProgressActivity activity) {
+    for (final row in board.rowsFor(producer)) {
+      final controller = _controllers[row]!;
+      if (controller.state == ProgressRowState.complete) continue;
+      controller.handle.begin(activity);
+    }
+  }
+
+  void record(StageStep step) => restore([step]);
+
+  void restore(Iterable<StageStep> steps) {
+    for (final step in steps) {
+      _recorded[step.name] = step;
+    }
+    for (final group in board.groups) {
+      for (final row in group.rows) {
+        final expected = board.producersFor(row);
+        if (expected.isEmpty || !expected.every(_recorded.containsKey)) {
+          continue;
+        }
+        final controller = _controllers[row]!;
+        final note = _noteFor(expected);
+        switch (controller.state) {
+          case ProgressRowState.pending:
+            controller.restoreComplete(note: note);
+          case ProgressRowState.active:
+            controller.complete(note: note);
+          case ProgressRowState.complete:
+          case ProgressRowState.failed:
+          case ProgressRowState.notAttempted:
+            break;
+        }
+      }
+    }
+  }
+
+  String _noteFor(Set<String> producers) {
+    final facts = <String>['staged'];
+    for (final producer in producers) {
+      final step = _recorded[producer]!;
+      final signature = step.evidence['signature'];
+      final notary = step.evidence['notary'];
+      if (signature is Map && signature['certificate'] is String) {
+        facts.add('signed');
+      }
+      if (notary is Map && notary['status'] == 'Accepted') {
+        facts.add('notarized');
+      }
+      if (step.evidence['publish_dry_run'] == 'passed') {
+        facts.add('dry run passed');
+      }
+    }
+    return facts.toSet().join(' · ');
+  }
+
+  void failAndSettle() => live.failActiveAndSettle();
+
+  void settle({String? title}) => live.settle(title: title);
 }
 
 enum _ReleaseAction {
@@ -2280,6 +2779,13 @@ enum _ReleaseAction {
 
   final String wire;
   final String human;
+}
+
+class _StageInputs {
+  const _StageInputs({required this.claims, required this.signing});
+
+  final List<TargetClaim> claims;
+  final _ProjectSigningContext? signing;
 }
 
 class _PreparedStage {

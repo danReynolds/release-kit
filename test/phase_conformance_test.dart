@@ -966,7 +966,8 @@ publish = ["git-tag", "pub.dev"]
           }
         },
       );
-      expect(first.died, isNotNull, reason: 'the run died mid-flight');
+      expect(first.died, isNull, reason: first.text);
+      expect(first.code, ExitCodes.ok, reason: first.text);
 
       final second =
           await drive(published: published, archives: archives, tags: tags);
@@ -1837,7 +1838,7 @@ executables:
           reason: '$public is public and staging never touches it',
         );
       }
-      expect(run.text, contains('1.0.0 staged'));
+      expect(run.text, contains('1.0.0 · staged'));
       expect(run.calls, isNot(contains('dart pub login')));
     });
 
@@ -1866,7 +1867,7 @@ executables:
           reason: '$public is public and staging never touches it',
         );
       }
-      expect(run.text, contains('1.0.0 staged'));
+      expect(run.text, contains('1.0.0 · staged'));
     });
 
     test(

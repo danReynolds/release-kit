@@ -13,6 +13,7 @@ import '../engine/verdict.dart';
 import '../engine/version.dart';
 import '../engine/workspace.dart';
 import '../output/output.dart';
+import '../output/progress.dart';
 
 /// The tag coordinate guaranteed by a selected tag-backed target.
 ///
@@ -125,12 +126,17 @@ abstract base class TargetModule {
     TargetExpectation target,
   );
 
+  ProgressActivity get inspectActivity => CommonProgressActivities.checking;
+  ProgressActivity get preflightActivity => CommonProgressActivities.checking;
+  ProgressActivity get actActivity;
+  ProgressActivity get verifyActivity => CommonProgressActivities.verifying;
+
   /// Performs this target's ambient, fail-before-staging readiness check.
   ///
   /// Every target must choose this explicitly. A silent inherited success
   /// would let a new publisher omit credential checks and fail only after an
   /// earlier target had acted.
-  Future<bool> preflight(
+  Future<TargetReadinessOutcome> preflight(
     TargetReadinessContext context,
     ResolvedUnit unit,
   );
@@ -141,11 +147,7 @@ abstract base class TargetModule {
   /// Returning false means the module already reported a refusal. Every
   /// module chooses explicitly, including destinations whose native tool has
   /// no separate session-acquisition command.
-  Future<bool> acquireSession(
-    TargetReadinessContext context,
-    ResolvedUnit unit,
-    List<TargetExpectation> targets,
-  );
+  TargetSessionProvider? get sessionProvider => null;
 
   /// The effective destination bound before staging and checked after native
   /// credential acquisition. It is never serialized: an origin URL can carry
@@ -242,41 +244,127 @@ final class TargetStageContext {
     required this.contract,
     required this.tools,
     required this.git,
-    required this.output,
+    required void Function(String name, String contents) attach,
     required this.stage,
     required this.sourceStep,
-    required Iterable<StageStep> progress,
-  }) : progress = List<StageStep>.unmodifiable(progress);
+    required Iterable<StageStep> priorSteps,
+    required Map<String, ProgressHandle> progress,
+  })  : priorSteps = List<StageStep>.unmodifiable(priorSteps),
+        _attach = attach,
+        _progress = Map.unmodifiable(progress);
 
   final StageContributionContract contract;
   final Tools tools;
   final GitState git;
   String? get repository => git.originUrl;
-  final Output output;
+  final void Function(String name, String contents) _attach;
+  void attach(String name, String contents) => _attach(name, contents);
   final ReleaseStage stage;
   Workspace get workspace => stage.directory.workspace;
   final StageStep sourceStep;
-  final List<StageStep> progress;
+  final List<StageStep> priorSteps;
+  final Map<String, ProgressHandle> _progress;
+
+  ProgressHandle progress(String id) =>
+      _progress[id] ?? (throw StateError('undeclared progress row "$id"'));
 }
 
-typedef TargetStageProducer = Future<StageStep?> Function(
+typedef TargetStageProducer = Future<TargetStageOutcome> Function(
   TargetStageContext context,
 );
+
+sealed class TargetStageOutcome {
+  const TargetStageOutcome();
+
+  List<String> get notices;
+}
+
+final class TargetStageSuccess extends TargetStageOutcome {
+  const TargetStageSuccess(this.step, {this.notices = const []});
+
+  final StageStep step;
+  @override
+  final List<String> notices;
+}
+
+final class TargetStageFailure extends TargetStageOutcome {
+  const TargetStageFailure(
+    this.diagnostic, {
+    this.unit,
+    this.notices = const [],
+  });
+
+  final Diagnostic diagnostic;
+  final String? unit;
+  @override
+  final List<String> notices;
+}
 
 /// One optional, target-owned contribution to the reusable local stage.
 ///
 /// Declaration, validation contract, and producer stay together so they
 /// cannot drift across two lifecycle hooks.
 final class TargetStage {
-  const TargetStage({
+  TargetStage({
     required this.target,
     required this.contract,
+    Iterable<TargetStageProgress> progress = const [],
     required this.prepare,
-  });
+  }) : progress = List.unmodifiable(progress) {
+    final ids = <String>{};
+    final outputs = <String>{};
+    for (final view in this.progress) {
+      if (!ids.add(view.id)) {
+        throw ArgumentError('duplicate target stage progress id ${view.id}');
+      }
+      final output = view.output;
+      if (output != null && !contract.step.outputs.containsKey(output)) {
+        throw ArgumentError(
+          '${contract.step.name} progress binds undeclared output $output',
+        );
+      }
+      if (output != null && !outputs.add(output)) {
+        throw ArgumentError(
+          '${contract.step.name} progress binds output $output twice',
+        );
+      }
+    }
+  }
 
   final TargetExpectation target;
   final StageContributionContract contract;
+  final List<TargetStageProgress> progress;
   final TargetStageProducer prepare;
+}
+
+/// How one target-owned stage contribution appears in the shared board.
+///
+/// [artifact] binds a declared producer output to a public artifact row already
+/// declared by the target expectation. A validation-only contribution supplies
+/// [label] instead. Unbound outputs remain receipt-validated but do not invent
+/// rows for private intermediates.
+final class TargetStageProgress {
+  const TargetStageProgress.row({
+    required this.id,
+    required this.label,
+  })  : artifact = null,
+        output = null,
+        assert(id != ''),
+        assert(label != '');
+
+  const TargetStageProgress.output({
+    required this.id,
+    required this.output,
+    required this.artifact,
+  })  : label = null,
+        assert(id != ''),
+        assert(output != ''),
+        assert(artifact != '');
+
+  final String id;
+  final String? label;
+  final String? artifact;
+  final String? output;
 }
 
 final class TargetClaim {
@@ -299,8 +387,9 @@ final class TargetReleaseContext {
   const TargetReleaseContext({
     required this.reads,
     required this.tools,
-    required this.output,
     required this.stage,
+    required this.progress,
+    required this.runInteractive,
     required this.wait,
     required this.confirmDeadline,
     required this.confirmInterval,
@@ -310,8 +399,9 @@ final class TargetReleaseContext {
   final Tools tools;
   GitState get git => reads.git;
   String? get repository => reads.repository;
-  final Output output;
   final ReleaseStage stage;
+  final ProgressHandle progress;
+  final ProgressInteractiveRunner runInteractive;
   Workspace get workspace => stage.directory.workspace;
   final Future<void> Function(Duration duration) wait;
   final Duration confirmDeadline;
@@ -322,15 +412,65 @@ final class TargetReleaseContext {
 final class TargetReadinessContext {
   TargetReadinessContext({
     required this.tools,
-    required this.output,
     required this.git,
     required Map<String, String> environment,
+    this.progress,
+    this.runInteractive,
   }) : environment = Map.unmodifiable(environment);
 
   final Tools tools;
-  final Output output;
   final GitState git;
   final Map<String, String> environment;
+  final ProgressHandle? progress;
+  final ProgressInteractiveRunner? runInteractive;
+}
+
+sealed class TargetReadinessOutcome {
+  const TargetReadinessOutcome();
+}
+
+final class TargetReady extends TargetReadinessOutcome {
+  const TargetReady({this.note = 'checked'});
+
+  final String note;
+}
+
+final class TargetNotReady extends TargetReadinessOutcome {
+  const TargetNotReady(this.diagnostic, {this.unit});
+
+  final Diagnostic diagnostic;
+  final String? unit;
+}
+
+typedef ProgressInteractiveRunner = Future<int> Function(
+  String executable,
+  List<String> arguments, {
+  String? workingDirectory,
+});
+
+abstract base class TargetSessionProvider {
+  const TargetSessionProvider();
+
+  String get id;
+  ProgressActivity get activity;
+
+  Future<TargetReadinessOutcome> acquire(
+    TargetReadinessContext context,
+    ResolvedUnit unit,
+    List<TargetExpectation> targets,
+  );
+}
+
+final class TargetSessionRequirement {
+  const TargetSessionRequirement({
+    required this.key,
+    required this.provider,
+    required this.targets,
+  });
+
+  final String key;
+  final TargetSessionProvider provider;
+  final List<TargetExpectation> targets;
 }
 
 /// Provider-neutral facts returned by one target act.
@@ -341,7 +481,6 @@ final class TargetActOutcome {
     this.mayHaveActed = false,
     this.privateEffect = TargetPrivateEffect.none,
     this.permanent,
-    this.failureAlreadyReported = false,
     this.diagnostic,
     this.coordinate,
     this.cleanupIfAbsent,
@@ -350,15 +489,11 @@ final class TargetActOutcome {
     this.reconciledNote,
   });
 
-  const TargetActOutcome.reportedFailure()
-      : this(ok: false, failureAlreadyReported: true);
-
   final bool ok;
   final String? problem;
   final bool mayHaveActed;
   final TargetPrivateEffect privateEffect;
   final String? permanent;
-  final bool failureAlreadyReported;
   final Diagnostic? diagnostic;
   final String? coordinate;
   final TargetCleanup? cleanupIfAbsent;

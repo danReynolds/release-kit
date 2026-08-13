@@ -18,6 +18,7 @@ import '../engine/targets.dart';
 import '../engine/tools.dart';
 import '../engine/verdict.dart';
 import '../output/output.dart';
+import '../output/progress.dart';
 import 'published_release_evidence.dart';
 import 'target_module.dart';
 
@@ -31,42 +32,20 @@ final class GithubReleaseTargetModule extends TargetModule {
   StepKind get stepKind => StepKind.publishRelease;
 
   @override
-  Future<bool> preflight(
+  ProgressActivity get actActivity => ProgressActivity(
+        running: 'drafting',
+        failed: 'draft failed',
+      );
+
+  @override
+  TargetSessionProvider get sessionProvider => const _GithubSession();
+
+  @override
+  Future<TargetReadinessOutcome> preflight(
     TargetReadinessContext context,
     ResolvedUnit unit,
   ) async =>
-      true;
-
-  @override
-  Future<bool> acquireSession(
-    TargetReadinessContext context,
-    ResolvedUnit unit,
-    List<TargetExpectation> targets,
-  ) async {
-    ToolResult status;
-    try {
-      status = await context.tools.run(
-        'gh',
-        const ['auth', 'status', '--active', '--hostname', 'github.com'],
-        workingDirectory: context.git.root,
-      );
-    } on ProcessException {
-      status = ToolResult(exitCode: -1, stdout: '', stderr: '');
-    }
-    if (status.ok) return true;
-    context.output.problem(
-      Diagnostic(
-        code: 'RK-GITHUB-010',
-        message: 'the GitHub CLI has no usable session',
-        remedy: 'Run gh auth login from a terminal, then re-run rk release '
-            '${unit.name}. Authentication does not prove write permission; '
-            'the exact publish and read-back remain authoritative.',
-      ),
-      unit: unit.name,
-    );
-    context.output.halt(HaltKind.beforeActing);
-    return false;
-  }
+      const TargetReady();
 
   @override
   TargetExpectation expectation({
@@ -264,21 +243,22 @@ final class GithubReleaseTargetModule extends TargetModule {
         ),
       );
     }
-    final assets = _StagedReleaseAssets(
-      output: context.output,
-    ).gather(context.stage, unit);
-    if (assets == null) return const TargetActOutcome.reportedFailure();
+    final gathered = const _StagedReleaseAssets().gather(context.stage, unit);
+    final assets = gathered.assets;
+    if (assets == null) {
+      return TargetActOutcome(ok: false, diagnostic: gathered.diagnostic);
+    }
     final notesPath = context.workspace.pathOf('release-notes.md');
     if (!File(notesPath).existsSync()) {
-      context.output.problem(
-        const Diagnostic(
+      return const TargetActOutcome(
+        ok: false,
+        diagnostic: Diagnostic(
           code: 'RK-CHG-003',
           message: 'the release body was not prepared',
           remedy: 'this is a bug in rk: the preflight prepares it whenever '
               'a github-release step remains',
         ),
       );
-      return const TargetActOutcome.reportedFailure();
     }
 
     final release = GithubRelease(
@@ -286,12 +266,32 @@ final class GithubReleaseTargetModule extends TargetModule {
       repository: repository,
       workingDirectory: context.git.root,
     );
-    context.output.progress('publishing ${assets.length} assets');
     final outcome = await release.publish(
       tag: tag,
       title: '${unit.name} ${unit.version}',
       notesPath: notesPath,
       assets: assets,
+      onProgress: (event, current, total) {
+        switch (event) {
+          case GithubPublishEvent.drafting:
+            context.progress.begin(actActivity);
+          case GithubPublishEvent.uploading:
+            context.progress.begin(
+              ProgressActivity(
+                running: 'uploading',
+                failed: 'upload failed',
+              ),
+              detail: '$current/$total',
+            );
+          case GithubPublishEvent.publishing:
+            context.progress.begin(
+              ProgressActivity(
+                running: 'publishing',
+                failed: 'publish failed',
+              ),
+            );
+        }
+      },
     );
     return TargetActOutcome(
       ok: outcome.ok,
@@ -392,7 +392,7 @@ final class GithubReleaseTargetModule extends TargetModule {
     );
   }
 
-  Future<StageStep?> _prepareStage(
+  Future<TargetStageOutcome> _prepareStage(
     TargetStageContext context,
     TargetExpectation target,
   ) async {
@@ -400,7 +400,7 @@ final class GithubReleaseTargetModule extends TargetModule {
     final source = SnapshotSourceTree(context.stage.sourceRoot);
     final notes = _releaseNotes(context.stage.unit, source);
     if (notes == null) {
-      context.output.problem(
+      return TargetStageFailure(
         Diagnostic(
           code: 'RK-CHG-003',
           message: 'the changelog entries for ${context.stage.unit.version} '
@@ -410,11 +410,9 @@ final class GithubReleaseTargetModule extends TargetModule {
               'or this is a bug in rk',
         ),
       );
-      context.output.halt(HaltKind.beforeActing);
-      return null;
     }
     if (notes.isEmpty) {
-      context.output.problem(
+      return TargetStageFailure(
         Diagnostic(
           code: 'RK-CHG-004',
           message: 'the changelog entries for ${context.stage.unit.version} '
@@ -424,22 +422,21 @@ final class GithubReleaseTargetModule extends TargetModule {
               'under each ${context.stage.unit.version} heading',
         ),
       );
-      context.output.halt(HaltKind.beforeActing);
-      return null;
     }
 
-    context.output.report.acted = true;
     context.workspace.write('release-notes.md', utf8.encode(notes));
-    return StageStep(
-      name: receiptName,
-      inputs: [StageInput.step(context.sourceStep)],
-      outputs: [
-        StageArtifact.capture(
-          stage: context.stage.directory,
-          path: 'release-notes.md',
-          type: 'notes',
-        ),
-      ],
+    return TargetStageSuccess(
+      StageStep(
+        name: receiptName,
+        inputs: [StageInput.step(context.sourceStep)],
+        outputs: [
+          StageArtifact.capture(
+            stage: context.stage.directory,
+            path: 'release-notes.md',
+            type: 'notes',
+          ),
+        ],
+      ),
     );
   }
 }
@@ -461,13 +458,11 @@ String? _releaseNotes(ResolvedUnit unit, SourceTree source) {
 
 /// Reads the exact asset inventory the GitHub Release will publish.
 final class _StagedReleaseAssets {
-  const _StagedReleaseAssets({required this.output});
-
-  final Output output;
+  const _StagedReleaseAssets();
 
   /// Joins the static public-name/private-path bundle to the exact captured
   /// artifacts frozen by complete-stage.
-  List<GithubReleaseAssetUpload>? gather(
+  ({List<GithubReleaseAssetUpload>? assets, Diagnostic? diagnostic}) gather(
     ReleaseStage stage,
     ResolvedUnit unit,
   ) {
@@ -486,15 +481,14 @@ final class _StagedReleaseAssets {
       final artifact =
           entry.key == ReleaseAssets.manifest ? manifest : frozen[entry.key];
       if (artifact == null || artifact.path != entry.value) {
-        output.problem(
-          Diagnostic(
+        return (
+          assets: null,
+          diagnostic: Diagnostic(
             code: 'RK-WORK-001',
             message: 'the completed stage has no exact ${entry.key} binding',
             remedy: '${_producerOf(entry.key)} — re-running runs it',
           ),
-          unit: unit.name,
         );
-        return null;
       }
       assets.add(GithubReleaseAssetUpload(
         publicName: entry.key,
@@ -503,7 +497,7 @@ final class _StagedReleaseAssets {
         sha256: artifact.sha256,
       ));
     }
-    return assets;
+    return (assets: assets, diagnostic: null);
   }
 
   static String _producerOf(String name) {
@@ -511,5 +505,44 @@ final class _StagedReleaseAssets {
       return 'the complete-stage step produces it';
     }
     return 'the archive steps produce it';
+  }
+}
+
+final class _GithubSession extends TargetSessionProvider {
+  const _GithubSession();
+
+  @override
+  String get id => 'github-cli';
+
+  @override
+  ProgressActivity get activity => CommonProgressActivities.checkingSignIn;
+
+  @override
+  Future<TargetReadinessOutcome> acquire(
+    TargetReadinessContext context,
+    ResolvedUnit unit,
+    List<TargetExpectation> targets,
+  ) async {
+    ToolResult status;
+    try {
+      status = await context.tools.run(
+        'gh',
+        const ['auth', 'status', '--active', '--hostname', 'github.com'],
+        workingDirectory: context.git.root,
+      );
+    } on ProcessException {
+      status = ToolResult(exitCode: -1, stdout: '', stderr: '');
+    }
+    if (status.ok) return const TargetReady(note: 'signed in');
+    return TargetNotReady(
+      Diagnostic(
+        code: 'RK-GITHUB-010',
+        message: 'the GitHub CLI has no usable session',
+        remedy: 'Run gh auth login from a terminal, then re-run rk release '
+            '${unit.name}. Authentication does not prove write permission; '
+            'the exact publish and read-back remain authoritative.',
+      ),
+      unit: unit.name,
+    );
   }
 }

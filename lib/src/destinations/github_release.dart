@@ -679,6 +679,7 @@ class GithubRelease {
     required String title,
     required String notesPath,
     required List<GithubReleaseAssetUpload> assets,
+    void Function(GithubPublishEvent event, int current, int total)? onProgress,
   }) async {
     var draftEffect = DraftEffect.none;
     PublishOutcome failed(String problem) => PublishOutcome.failed(
@@ -706,6 +707,7 @@ class GithubRelease {
 
     // Local shape and bytes are validated before this first remote read. A
     // malformed request can therefore never delete, create, or fill a draft.
+    onProgress?.call(GithubPublishEvent.drafting, 0, ordered.length);
     final existing = await _drafts(tag);
     if (existing == null) return failed('GitHub could not be read');
     if (existing.length > 1) {
@@ -808,7 +810,12 @@ class GithubRelease {
         missing = reconciliation.missing;
       }
 
-      for (final asset in missing) {
+      for (final (index, asset) in missing.indexed) {
+        onProgress?.call(
+          GithubPublishEvent.uploading,
+          index + 1,
+          missing.length,
+        );
         final name = asset.publicName;
         draftEffect = DraftEffect.uncertain;
         final uploaded = await tools.run(
@@ -921,6 +928,8 @@ class GithubRelease {
         );
       }
 
+      onProgress?.call(
+          GithubPublishEvent.publishing, ordered.length, ordered.length);
       final publishInput = File('${scratch.path}/publish.json');
       await publishInput.writeAsString(jsonEncode({'draft': false}));
       final published = await tools.run(
@@ -1341,6 +1350,8 @@ class GithubRelease {
     return tag.substring(prefix.length, end);
   }
 }
+
+enum GithubPublishEvent { drafting, uploading, publishing }
 
 bool _isPublicAssetName(String name) =>
     name.isNotEmpty &&

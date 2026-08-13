@@ -357,10 +357,11 @@ truth is recovered directly from the peeled source commit and the registry
 archive's exact contents. A signed tag authenticates its binding; an unsigned
 tag proves consistency but not signer authenticity.
 
-There is no `--yes` and no `--force`. Every classic use has a real path: a
-permanent registry conflict cannot be forced because the permanence is
-server-side, `unknown` needs a retry which is free, and a wedged draft is
-unblocked by a command rk prints for the human to run.
+`--yes` skips only the human confirmation; it prints the same exact plan and
+keeps every safety check. There is no `--force`: a permanent registry conflict
+cannot be forced because the permanence is server-side, `unknown` needs a retry
+which is free, and a wedged draft is unblocked by a command rk prints for the
+human to run.
 
 ## Output
 
@@ -453,29 +454,32 @@ Exit codes: `0` clean, complete, or blocked; `1` refusal;
 
 ### Liveness
 
-A release takes minutes and some steps are opaque — notarization waits on a
-third party. Silence during that is not austerity, it is anxiety, so rk
-shows what is happening while it happens and collapses it once it has:
+A release takes minutes and some operations are opaque — notarization waits on
+a third party. Silence during that is not austerity, it is anxiety. Staging and
+publication therefore share one fixed-height board:
 
-- **A running step expands**, with a spinner, the sub-activity it is on,
-  and elapsed time. Its children are visible while they matter — three
-  platform builds are three lines during the build.
-- **A completed step collapses** to one line with its result, and a
-  duration only when the duration is notable. The children that agreed
-  fold into their shared fact. Scrollback is therefore the terse transcript,
-  not a log of everything that scrolled past.
-- **A failed step stays expanded**, because that detail is the diagnosis.
-- **Steps that wait on someone else declare how long that normally takes.**
-  "waiting on Apple · typically 3–5 min" is the difference between patience
-  and a cancelled release, and a step running far past its expectation is
-  itself worth surfacing.
+- **The row names the output or public target.** Its status names only the
+  meaningful operation: `building`, `testing`, `signing`, `notarizing`,
+  `checking sign-in`, `uploading 2/4`, `publishing`, or `verifying`.
+- **A TTY shows a spinner and elapsed time** for active work. Target modules own
+  their concise activity labels; core owns row lifecycle, layout, and final
+  success, failure, and not-attempted states.
+- **`rk release --stage` stops at local and package outputs.** A full release
+  clears preparation before authorization, then starts a persistent public
+  target board only after the operator says yes.
+- **A failed row stays in the transcript**, downstream rows become `not
+  attempted`, and the normal issue immediately below supplies the explanation
+  and fix. Ambiguous command failures are read back before RK chooses mutation
+  failure versus verification failure.
+- **Native prompts remain native.** RK leaves one durable handoff line, yields
+  the terminal to login or publish, then restores the board below that output.
 - **On completion, the public result is printed** — the URLs and install
-  command a person actually wants next — not a count of steps.
+  command a person actually wants next — not a count of internal checks.
 
-None of this applies when stdout is not a TTY. There, each line is printed
-once, on completion, in the same words: no spinners, no cursor movement, no
-rewriting. A log, a pipe, and an agent see a clean append-only transcript
-whose content is identical to what the terminal ended up showing.
+A non-TTY receives no cursor movement or spinner frames. An operation that
+outlives the display delay emits its activity once; the final board remains a
+clean append-only transcript. `NO_COLOR` removes colour without removing live
+progress, and an unknown or unsafe terminal width disables fixed-height redraw.
 
 This is not the narration terseness forbids. rk still does not report on
 its own internals — reading files, resolving config, counting checks. It
