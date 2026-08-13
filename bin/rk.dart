@@ -3,8 +3,9 @@
 /// Everything a run needs is built here and nowhere else: this file finds the
 /// git root, reads and parses `release.toml`, resolves it against the
 /// repository, and constructs the `Registry`, `SystemTools`, and `Output` the
-/// verbs are handed. It then dispatches to one of the three verbs
-/// and, on a run that failed after acting, writes the diagnosis.
+/// operational verbs are handed. It also dispatches the repository-independent
+/// target reference and, on a run that failed after acting, writes the
+/// diagnosis.
 ///
 /// So the answer to "where does rk read release.toml?" is `_prepare` below,
 /// not a file under `lib/`. Reading files and deciding exit codes is
@@ -18,6 +19,7 @@ import 'package:release_kit/src/commands/init.dart';
 import 'package:release_kit/src/commands/init_selector.dart';
 import 'package:release_kit/src/commands/release.dart';
 import 'package:release_kit/src/commands/status.dart';
+import 'package:release_kit/src/commands/target.dart';
 import 'package:release_kit/src/destinations/pub_dev.dart';
 import 'package:release_kit/src/engine/compare.dart';
 import 'package:release_kit/src/engine/config.dart';
@@ -46,6 +48,8 @@ Usage
   rk --version                    print this binary's version
   rk status [unit]                status all units or one
   rk init                         propose release.toml; write only on a yes
+  rk target list                  list every release choice this rk supports
+  rk target <name>                explain one choice and its configuration
   rk release [unit]               release all unfinished units, or one named unit
   rk release [unit] --stage       prepare one exact stage; name it if ambiguous
 
@@ -84,7 +88,7 @@ Future<void> main(List<String> args) async {
   final positional = args.where((a) => !a.startsWith('-')).toList();
   final json = flags.contains('--json');
 
-  const verbs = {'status', 'release', 'init'};
+  const verbs = {'status', 'release', 'init', 'target'};
   final first = positional.isEmpty ? null : positional.first;
   final command = first ?? 'status';
   final target = positional.length > 1 ? positional[1] : null;
@@ -116,6 +120,7 @@ Future<void> main(List<String> args) async {
     'status': {'-h', '--help', '--json'},
     'release': {'-h', '--help', '--json', '--stage', '-y', '--yes'},
     'init': {'-h', '--help', '--json', '--write'},
+    'target': {'-h', '--help', '--json'},
   };
   final inapplicable = flags.difference(perVerb[command] ?? known);
   final unknown = flags.difference(known);
@@ -181,8 +186,11 @@ Future<void> main(List<String> args) async {
         message: command == 'init' && positional.length <= 2
             ? 'rk init takes no unit — it proposes for the whole '
                 'repository, and got "$target"'
-            : 'rk takes a verb and a unit, and got '
-                '"${positional.join(' ')}"',
+            : command == 'target'
+                ? 'rk target takes "list" or one release choice name, and '
+                    'got "${positional.skip(1).join(' ')}"'
+                : 'rk takes a verb and a unit, and got '
+                    '"${positional.join(' ')}"',
         remedy: _usage.trim(),
       ),
     );
@@ -192,13 +200,14 @@ Future<void> main(List<String> args) async {
   }
 
   if (flags.contains('-h') || flags.contains('--help')) {
+    final usage = command == 'target' ? TargetCommand.usage : _usage;
     // Under --json stdout carries the document and nothing else, so the usage
     // travels inside it rather than beside it.
     if (json) {
-      output.report.next(_usage.trim());
+      output.report.next(usage.trim());
       stdout.write(output.report.encode(exit: ExitCodes.ok));
     } else {
-      stdout.write(_usage);
+      stdout.write(usage);
     }
     return;
   }
@@ -219,6 +228,7 @@ Future<void> main(List<String> args) async {
           interactive: !json,
           write: flags.contains('--write'),
         ),
+      'target' => TargetCommand(output: output).run(target),
       _ => await _status(output, target),
     };
   } on Object catch (error, stack) {

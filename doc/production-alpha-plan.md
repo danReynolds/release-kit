@@ -347,7 +347,8 @@ earlier gate.
 - Update `doc/plan.md` only where its current forward contract would otherwise
   contradict the three-verb alpha; preserve its historical evidence.
 
-**Done when:** the default suite is entirely green, help exposes three verbs,
+**Done when:** the default suite is entirely green, help exposes three
+operational verbs plus the static target reference,
 no `verify`/`--at` product surface remains, and post-publish pub comparison is
 still exercised through release-target tests.
 

@@ -3,6 +3,7 @@ import 'dart:io';
 import '../engine/config.dart';
 import '../engine/diagnostic.dart';
 import '../engine/init_plan.dart';
+import '../engine/release_choice.dart';
 import '../output/output.dart';
 import '../engine/resolve.dart';
 import '../engine/source_tree.dart';
@@ -292,6 +293,8 @@ class InitCommand {
         output.line('.rk/ added to .gitignore', mark: Mark.done);
       }
       output.next('rk status');
+      output.say('Learn about release choices and customization: '
+          'rk target list');
       return ExitCodes.ok;
     }
   }
@@ -338,7 +341,7 @@ class InitCommand {
       }.toList();
 
   String _excludedReason(InitCandidate candidate) {
-    final registry = candidate.availability[InitOption.pubDev]!;
+    final registry = candidate.availability[ReleaseChoice.pubDev]!;
     if (!registry.available) return registry.reason;
     return 'not selected';
   }

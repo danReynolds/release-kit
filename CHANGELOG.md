@@ -4,8 +4,9 @@
 
 Initial release of rk, an austere release tool for Dart repositories.
 
-- Three verbs: `status`, `init`, and `release`, with public reality as the
-  release record and re-running as the resume.
+- Three operational verbs: `status`, `init`, and `release`, plus the static
+  `target` reference; public reality is the release record and re-running is
+  the resume.
 - Releases to pub.dev, GitHub Releases and a Homebrew tap, with signed and
   notarized macOS binaries, cross-compiled Linux binaries, notarization
   evidence published beside the archives, and checksums.

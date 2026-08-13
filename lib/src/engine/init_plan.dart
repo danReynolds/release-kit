@@ -1,27 +1,8 @@
 import 'config.dart';
 import 'dart_workspace.dart';
 import 'pubspec.dart';
+import 'release_choice.dart';
 import 'source_tree.dart';
-
-enum InitOption { binary, gitTag, pubDev, githubRelease, homebrew }
-
-extension InitOptionLabel on InitOption {
-  String get label => switch (this) {
-        InitOption.binary => 'Binary',
-        InitOption.gitTag => 'Git tag',
-        InitOption.pubDev => 'pub.dev',
-        InitOption.githubRelease => 'GitHub',
-        InitOption.homebrew => 'Homebrew',
-      };
-
-  String get wireName => switch (this) {
-        InitOption.binary => 'binary',
-        InitOption.gitTag => 'git-tag',
-        InitOption.pubDev => 'pub.dev',
-        InitOption.githubRelease => 'github-release',
-        InitOption.homebrew => 'homebrew',
-      };
-}
 
 final class InitAvailability {
   const InitAvailability.available(this.reason) : available = true;
@@ -50,12 +31,12 @@ final class InitCandidate {
   final String path;
   final String? version;
   final List<String> executables;
-  final Map<InitOption, InitAvailability> availability;
-  final Set<InitOption> selected;
+  final Map<ReleaseChoice, InitAvailability> availability;
+  final Set<ReleaseChoice> selected;
 
   String get unit => InitPlan.unitName(name);
 
-  InitCandidate copyWith({Set<InitOption>? selected}) => InitCandidate(
+  InitCandidate copyWith({Set<ReleaseChoice>? selected}) => InitCandidate(
         name: name,
         path: path,
         version: version,
@@ -71,13 +52,11 @@ final class InitCandidate {
         'version': version,
         'executables': executables,
         'options': {
-          for (final option in InitOption.values)
-            option.wireName: {
+          for (final option in ReleaseChoice.values)
+            option.id: {
               ...availability[option]!.toJson(),
               'selected': selected.contains(option),
-              'effects': InitPlan.effectsFor(option)
-                  .map((effect) => effect.wireName)
-                  .toList(),
+              'effects': option.requires.map((effect) => effect.id).toList(),
             },
         },
       };
@@ -115,7 +94,6 @@ final class InitPlan {
     final projects = native.projects
         .where((project) => !project.isExampleOrFixture)
         .toList();
-    final omitted = native.projects.length - projects.length;
     bool registryAvailableFor(DartProjectDiscovery project) =>
         !project.isGroupingRoot &&
         project.version != null &&
@@ -142,13 +120,13 @@ final class InitPlan {
       final oneExecutable = project.executables.length == 1;
       final binaryAvailable = packageUsable && oneExecutable;
       final homebrewAvailable = binaryAvailable && githubAvailable;
-      final selected = <InitOption>{
-        if (registryAvailable) InitOption.pubDev,
+      final selected = <ReleaseChoice>{
+        if (registryAvailable) ReleaseChoice.pubDev,
         if (registryAvailable && tagAvailable && releasable == 1)
-          InitOption.gitTag,
+          ReleaseChoice.gitTag,
       };
-      final availability = <InitOption, InitAvailability>{
-        InitOption.pubDev: registryAvailable
+      final availability = <ReleaseChoice, InitAvailability>{
+        ReleaseChoice.pubDev: registryAvailable
             ? const InitAvailability.available(
                 'native Dart package coordinate',
               )
@@ -163,8 +141,8 @@ final class InitPlan {
                             : !ambientPubDev
                                 ? 'PUB_HOSTED_URL redirects the default registry; declare publish_to in the pubspec first'
                                 : 'a package version is required'),
-        InitOption.gitTag: tagAvailable
-            ? InitAvailability.available(selected.contains(InitOption.gitTag)
+        ReleaseChoice.gitTag: tagAvailable
+            ? InitAvailability.available(selected.contains(ReleaseChoice.gitTag)
                 ? 'usable Git remote; selected conservatively'
                 : 'available; selecting writes an explicit package tag')
             : InitAvailability.unavailable(!gitBound
@@ -172,7 +150,7 @@ final class InitPlan {
                 : !hasRemote
                     ? 'add a Git remote first'
                     : 'a package version is required'),
-        InitOption.githubRelease: githubAvailable
+        ReleaseChoice.githubRelease: githubAvailable
             ? const InitAvailability.available(
                 'changelog and manifest, plus selected binaries',
               )
@@ -181,7 +159,7 @@ final class InitPlan {
                 : githubRepository == null
                     ? 'origin is not a recognized GitHub repository'
                     : 'a package version is required'),
-        InitOption.binary: binaryAvailable
+        ReleaseChoice.binary: binaryAvailable
             ? InitAvailability.available(
                 'standalone ${project.executables.single} archives',
               )
@@ -190,7 +168,7 @@ final class InitPlan {
                     ? 'no executable is declared'
                     : 'several executables need a hand-authored decision'
                 : 'a package version is required'),
-        InitOption.homebrew: homebrewAvailable
+        ReleaseChoice.homebrew: homebrewAvailable
             ? const InitAvailability.available(
                 'formula in the conventional or configured tap',
               )
@@ -206,12 +184,6 @@ final class InitPlan {
         availability: Map.unmodifiable(availability),
         selected: Set.unmodifiable(selected),
       ));
-    }
-    if (omitted > 0) {
-      notices.add(
-        '$omitted ${omitted == 1 ? 'package' : 'packages'} under '
-        'example, fixture, or test paths omitted',
-      );
     }
     if (vetoed > 0) notices.add('$vetoed excluded by publish_to: none');
     return InitPlan(
@@ -232,16 +204,16 @@ final class InitPlan {
   List<InitCandidate> get included =>
       candidates.where((candidate) => candidate.selected.isNotEmpty).toList();
 
-  InitToggleResult toggle(int index, InitOption option) {
+  InitToggleResult toggle(int index, ReleaseChoice option) {
     final candidate = candidates[index];
     final availability = candidate.availability[option]!;
     if (!availability.available) {
       return InitToggleResult(this, availability.reason);
     }
     final selected = {...candidate.selected};
-    final changed = <InitOption>[];
+    final changed = <ReleaseChoice>[];
     if (!selected.contains(option)) {
-      for (final required in {...effectsFor(option), option}) {
+      for (final required in {...option.requires, option}) {
         if (!candidate.availability[required]!.available) {
           return InitToggleResult(
             this,
@@ -251,12 +223,12 @@ final class InitPlan {
         if (selected.add(required)) changed.add(required);
       }
     } else {
-      final remove = <InitOption>{option};
+      final remove = <ReleaseChoice>{option};
       var grew = true;
       while (grew) {
         grew = false;
         for (final active in selected) {
-          if (effectsFor(active).any(remove.contains) && remove.add(active)) {
+          if (active.requires.any(remove.contains) && remove.add(active)) {
             grew = true;
           }
         }
@@ -270,7 +242,7 @@ final class InitPlan {
       index,
       candidate.copyWith(selected: Set.unmodifiable(selected)),
     );
-    final names = changed.map((item) => item.label).join(', ');
+    final names = changed.map((item) => item.selectorLabel).join(', ');
     return InitToggleResult(
       plan,
       selected.contains(option)
@@ -282,35 +254,36 @@ final class InitPlan {
   String renderToml() {
     final buffer = StringBuffer('schema = 2\n');
     final tagged = included
-        .where((candidate) => candidate.selected.contains(InitOption.gitTag))
+        .where((candidate) => candidate.selected.contains(ReleaseChoice.gitTag))
         .toList();
     for (final candidate in included) {
       buffer.write('\n[release.${candidate.unit}]\n');
       if (candidate.path != '.') {
         buffer.write('path = "${candidate.path}"\n');
       }
-      if (candidate.selected.contains(InitOption.gitTag) && tagged.length > 1) {
+      if (candidate.selected.contains(ReleaseChoice.gitTag) &&
+          tagged.length > 1) {
         buffer.write('tag = "${candidate.name}-v{version}"\n');
       }
       final publish = <String>[
-        if (candidate.selected.contains(InitOption.gitTag)) 'git-tag',
-        if (candidate.selected.contains(InitOption.pubDev)) 'pub.dev',
-        if (candidate.selected.contains(InitOption.githubRelease))
+        if (candidate.selected.contains(ReleaseChoice.gitTag)) 'git-tag',
+        if (candidate.selected.contains(ReleaseChoice.pubDev)) 'pub.dev',
+        if (candidate.selected.contains(ReleaseChoice.githubRelease))
           'github-release',
-        if (candidate.selected.contains(InitOption.homebrew)) 'homebrew',
+        if (candidate.selected.contains(ReleaseChoice.homebrew)) 'homebrew',
       ];
       if (publish.isNotEmpty) {
         buffer.write(
             'publish = [${publish.map((item) => '"$item"').join(', ')}]\n');
       }
-      if (candidate.selected.contains(InitOption.binary)) {
+      if (candidate.selected.contains(ReleaseChoice.binary)) {
         buffer.write('binary_platforms = '
             '[${ReleaseConfig.supportedPlatformsList.map((item) => '"$item"').join(', ')}]\n');
       }
     }
     if (candidates.any((candidate) => candidate.executables.isNotEmpty) &&
         !included.any(
-          (candidate) => candidate.selected.contains(InitOption.binary),
+          (candidate) => candidate.selected.contains(ReleaseChoice.binary),
         )) {
       buffer.write(
         '\n# A package here declares an executable, but standalone '
@@ -341,17 +314,6 @@ final class InitPlan {
         hasRemote: hasRemote,
         githubRepository: githubRepository,
       );
-
-  static Set<InitOption> effectsFor(InitOption option) => switch (option) {
-        InitOption.binary => const {},
-        InitOption.githubRelease => const {InitOption.gitTag},
-        InitOption.homebrew => const {
-            InitOption.binary,
-            InitOption.githubRelease,
-            InitOption.gitTag,
-          },
-        _ => const {},
-      };
 
   static String unitName(String package) {
     final cleaned = package.toLowerCase().replaceAll(RegExp('[^a-z0-9_-]'), '');

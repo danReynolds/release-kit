@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import '../engine/init_plan.dart';
+import '../engine/release_choice.dart';
 
 /// The small terminal surface used by the init selector.
 ///
@@ -40,7 +41,7 @@ final class InitSelector {
   int column;
   String message;
 
-  InitOption get option => InitOption.values[column];
+  ReleaseChoice get option => ReleaseChoice.values[column];
   InitCandidate get candidate => plan.candidates[row];
 
   InitSelectorAction handle(InitSelectorKey key) {
@@ -55,10 +56,10 @@ final class InitSelector {
         row = (row + 1) % plan.candidates.length;
         break;
       case InitSelectorKey.left:
-        column = (column - 1) % InitOption.values.length;
+        column = (column - 1) % ReleaseChoice.values.length;
         break;
       case InitSelectorKey.right:
-        column = (column + 1) % InitOption.values.length;
+        column = (column + 1) % ReleaseChoice.values.length;
         break;
       case InitSelectorKey.toggle:
         final toggled = plan.toggle(row, option);
@@ -102,7 +103,7 @@ final class InitSelector {
       final item = plan.candidates[index];
       final cursor = index == row ? '›' : ' ';
       buffer.write('$cursor ${_fit(item.unit, nameWidth).padRight(nameWidth)}');
-      for (final option in InitOption.values) {
+      for (final option in ReleaseChoice.values) {
         final marker = _cell(item, option);
         final focused = index == row && option == this.option;
         buffer
@@ -120,13 +121,13 @@ final class InitSelector {
       ..writeln('Select release outputs')
       ..writeln()
       ..writeln('› ${item.unit}');
-    for (var index = 0; index < InitOption.values.length; index++) {
-      final current = InitOption.values[index];
+    for (var index = 0; index < ReleaseChoice.values.length; index++) {
+      final current = ReleaseChoice.values[index];
       final marker = _cell(item, current);
       buffer.writeln(
         '${index == column ? '›' : ' '} '
         '${index == column ? _focused(marker, useColor) : marker}'
-        '${' ' * max(0, 4 - marker.length)} ${current.label}',
+        '${' ' * max(0, 4 - marker.length)} ${current.selectorLabel}',
       );
     }
     return _finish(buffer);
@@ -136,7 +137,7 @@ final class InitSelector {
     final availability = candidate.availability[option]!;
     buffer
       ..writeln()
-      ..writeln('${option.label} — ${availability.reason}'
+      ..writeln('${option.selectorLabel} — ${availability.reason}'
           '${candidate.selected.contains(option) ? ' · selected' : ''}')
       ..writeln()
       ..writeln('↑↓ unit   ←→ option   space toggle   enter review   q cancel');
@@ -145,7 +146,7 @@ final class InitSelector {
   }
 }
 
-String _cell(InitCandidate candidate, InitOption option) {
+String _cell(InitCandidate candidate, ReleaseChoice option) {
   final availability = candidate.availability[option]!;
   if (!availability.available) return '—';
   return candidate.selected.contains(option) ? '[x]' : '[ ]';
@@ -154,12 +155,12 @@ String _cell(InitCandidate candidate, InitOption option) {
 String _focused(String value, bool useColor) =>
     useColor ? '\x1b[1;36m$value\x1b[0m' : value;
 
-int _cellWidth(InitOption option) => switch (option) {
-      InitOption.binary => 9,
-      InitOption.gitTag => 10,
-      InitOption.pubDev => 10,
-      InitOption.githubRelease => 9,
-      InitOption.homebrew => 0,
+int _cellWidth(ReleaseChoice option) => switch (option) {
+      ReleaseChoice.binary => 9,
+      ReleaseChoice.gitTag => 10,
+      ReleaseChoice.pubDev => 10,
+      ReleaseChoice.githubRelease => 9,
+      ReleaseChoice.homebrew => 0,
     };
 
 /// Runs one selector session and always restores the terminal modes it found.

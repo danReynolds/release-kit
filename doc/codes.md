@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-130 codes across 25 families.
+131 codes across 25 families.
 
 
 ## RK-AUTH — Authorization
@@ -57,6 +57,7 @@ fails, and the count below is checked against the rows.
 | `RK-CLI-005` | rk $command does not have ${inapplicable.join( | `bin/rk.dart` |
 | `RK-CLI-007` | — | `bin/rk.dart` |
 | `RK-CLI-008` | rk has no command named "$command" | `bin/rk.dart` |
+| `RK-CLI-009` | rk does not support a release choice named "$name" | `lib/src/commands/target.dart` |
 
 ## RK-CONF — release.toml, structurally
 
