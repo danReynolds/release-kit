@@ -34,6 +34,7 @@ import 'package:release_kit/src/output/output.dart';
 import 'package:release_kit/src/engine/registry.dart';
 import 'package:release_kit/src/engine/resolve.dart';
 import 'package:release_kit/src/engine/release_stage.dart';
+import 'package:release_kit/src/engine/release_source.dart';
 import 'package:release_kit/src/engine/source_tree.dart';
 import 'package:release_kit/src/engine/source_context.dart';
 import 'package:release_kit/src/engine/tools.dart';
@@ -60,8 +61,8 @@ Flags
   -y, --yes   release: answer yes without an interactive prompt
   --write     init: accept the proposal without a prompt
 
-Marks: ✓ done,  · already satisfied,  ✗ problem or conflict,  → your next move,
-       unmarked pending
+Marks: ✓ done,  · already satisfied,  ✗ problem or conflict,  ! warning,
+       → your next move,  unmarked pending
 Exit:  0 successful report or completed command, 1 refused or failed,
        2 usage, 3 rk itself crashed — --json mirrors it in "exit"
 ''';
@@ -441,11 +442,16 @@ Future<int> _release(
 }) async {
   final prepared = _prepare(output);
   if (!prepared.isReady) return prepared.code!;
-  final resolution = prepared.resolution!;
   final context = prepared.context!;
-  final tree = context.tree;
-  final git = context.git;
   final registry = prepared.registry!;
+  final source = _selectReleaseSource(prepared, unit, output);
+  if (source == null) {
+    registry.close();
+    return ExitCodes.refused;
+  }
+  final resolution = source.resolution;
+  final tree = source.tree;
+  final git = source.binding;
   final targets = TargetCatalog.builtIn();
   final stages = ReleaseStages(
     source: tree,
@@ -458,6 +464,8 @@ Future<int> _release(
       resolution: resolution,
       tree: tree,
       git: git,
+      repositoryGit: source.repository,
+      sourceWarning: source.warning,
       inspector: Inspector(
         registry: registry,
         pubDev: PubDevTarget(
@@ -622,17 +630,52 @@ Set<String> _filesystemSourceRoots(
   return roots;
 }
 
+ReleaseSource? _selectReleaseSource(
+  _Prepared prepared,
+  String? unit,
+  Output output,
+) {
+  final context = prepared.context!;
+  final diagnostics = Diagnostics();
+  final source = ReleaseSource.select(
+    tree: context.tree,
+    git: context.git,
+    resolution: prepared.resolution!,
+    only: unit,
+    diagnostics: diagnostics,
+  );
+  if (source != null) return source;
+
+  final git = context.git;
+  output.repository(
+    name: context.root.split('/').last,
+    branch: git.branch,
+    commit: git.isBound ? git.shortHead : null,
+    uncommitted: git.uncommitted.length,
+    head: git.isBound ? git.head : null,
+    remote: git.originUrl,
+  );
+  output.blank();
+  output.problems(diagnostics.found);
+  return null;
+}
+
 Future<int> _status(
   Output output,
   String? unit,
 ) async {
   final prepared = _prepare(output);
   if (!prepared.isReady) return prepared.code!;
-  final resolution = prepared.resolution!;
   final context = prepared.context!;
-  final tree = context.tree;
-  final git = context.git;
   final registry = prepared.registry!;
+  final source = _selectReleaseSource(prepared, unit, output);
+  if (source == null) {
+    registry.close();
+    return ExitCodes.refused;
+  }
+  final resolution = source.resolution;
+  final tree = source.tree;
+  final git = source.binding;
   try {
     final targets = TargetCatalog.builtIn();
     final stages = ReleaseStages(
@@ -645,6 +688,8 @@ Future<int> _status(
       resolution: resolution,
       tree: tree,
       git: git,
+      repositoryGit: source.repository,
+      sourceWarning: source.warning,
       inspector: Inspector(
         registry: registry,
         pubDev: PubDevTarget(

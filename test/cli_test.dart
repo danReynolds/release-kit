@@ -169,6 +169,77 @@ void main() {
     expect(Directory('${loose.path}/.rk').existsSync(), isFalse);
   });
 
+  group('dirty source follows the selected targets', () {
+    test('a local output snapshots the worktree and warns', () {
+      final platform = Platform.isMacOS ? 'macos-arm64' : 'linux-x64';
+      final repo = Rk.repository(scratch, 'dirty-local-output', {
+        'release.toml': '''
+schema = 2
+
+[release.tool]
+binary_platforms = ["$platform"]
+''',
+        'pubspec.yaml': '''
+name: dirty_local_output
+version: 1.0.0
+publish_to: none
+executables:
+  tool: tool
+''',
+        'bin/tool.dart': 'void main() {}\n',
+        'CHANGELOG.md': '## 1.0.0\n\nFirst release.\n',
+        'README.md': 'committed\n',
+      })
+        ..commit();
+      File('${repo.root}/README.md').writeAsStringSync('working tree\n');
+
+      final run = repo(['status', '--json']);
+
+      expect(run.code, 0, reason: run.all);
+      expect(run.warnings.map((warning) => warning['code']), ['RK-GIT-001']);
+      expect(
+        run.problems.map((problem) => problem['code']),
+        isNot(contains('RK-GIT-001')),
+      );
+      expect((run.json['repository'] as Map)['source_binding'], 'unbound');
+    });
+
+    test('a Git target still refuses, without showing its code to a person',
+        () {
+      final repo = Rk.repository(scratch, 'dirty-git-target', {
+        'release.toml': '''
+schema = 2
+
+[release.tool]
+publish = ["git-tag"]
+''',
+        'pubspec.yaml': '''
+name: dirty_git_target
+version: 1.0.0
+publish_to: none
+''',
+        'CHANGELOG.md': '## 1.0.0\n\nFirst release.\n',
+        'README.md': 'committed\n',
+      })
+        ..commit();
+      File('${repo.root}/README.md').writeAsStringSync('working tree\n');
+
+      final machine = repo(['status', '--json']);
+      final human = repo(['status']);
+
+      expect(machine.code, 0, reason: machine.all);
+      expect(
+        machine.problems.map((problem) => problem['code']),
+        contains('RK-GIT-001'),
+      );
+      expect(machine.warnings, isEmpty);
+      expect(
+          (machine.json['repository'] as Map)['source_binding'], 'gitCommit');
+      expect(human.all, contains('1 path is uncommitted'));
+      expect(human.all, isNot(contains('RK-GIT-001')));
+    });
+  });
+
   test('a release.toml rk cannot read reports itself', () {
     // Resolving "the only unit" means reading the config, so a config that
     // cannot be read is what a bare `rk release` now reports. That is the

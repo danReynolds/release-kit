@@ -138,4 +138,7 @@ class Run {
 
   List<Map<String, Object?>> get problems =>
       ((json['problems'] as List?) ?? const []).cast<Map<String, Object?>>();
+
+  List<Map<String, Object?>> get warnings =>
+      ((json['warnings'] as List?) ?? const []).cast<Map<String, Object?>>();
 }

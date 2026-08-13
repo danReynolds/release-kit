@@ -19,7 +19,7 @@ class Report {
   final String command;
 
   /// Wire format version, bumped only when a key changes meaning.
-  static const schema = 5;
+  static const schema = 6;
 
   /// Units by name, in the order they were first mentioned.
   ///
@@ -29,6 +29,7 @@ class Report {
   /// (CI readiness, seam 1).
   final Map<String, Map<String, Object?>> _units = {};
   final List<Map<String, Object?>> _problems = [];
+  final List<Map<String, Object?>> _warnings = [];
   final List<String> _next = [];
   Map<String, Object?>? _repository;
   Map<String, Object?>? _init;
@@ -184,15 +185,26 @@ class Report {
   }
 
   void problem(Diagnostic diagnostic, {String? unit, String? target}) {
-    _problems.add({
-      if (unit != null) 'unit': unit,
-      if (target != null) 'target': target,
-      'code': diagnostic.code,
-      'message': diagnostic.message,
-      if (diagnostic.source != null) 'source': diagnostic.source.toString(),
-      if (diagnostic.remedy != null) 'remedy': diagnostic.remedy,
-    });
+    _problems.add(_diagnostic(diagnostic, unit: unit, target: target));
   }
+
+  void warning(Diagnostic diagnostic, {String? unit, String? target}) {
+    _warnings.add(_diagnostic(diagnostic, unit: unit, target: target));
+  }
+
+  static Map<String, Object?> _diagnostic(
+    Diagnostic diagnostic, {
+    String? unit,
+    String? target,
+  }) =>
+      {
+        if (unit != null) 'unit': unit,
+        if (target != null) 'target': target,
+        'code': diagnostic.code,
+        'message': diagnostic.message,
+        if (diagnostic.source != null) 'source': diagnostic.source.toString(),
+        if (diagnostic.remedy != null) 'remedy': diagnostic.remedy,
+      };
 
   /// The command that would advance things, as data rather than as formatting a
   /// caller would have to parse back out of prose.
@@ -252,6 +264,7 @@ class Report {
             if (_releaseChoices != null) 'release_choices': _releaseChoices,
             'units': _units.values.toList(),
             'problems': _problems,
+            'warnings': _warnings,
             'next': _next,
             if (attachments.isNotEmpty) 'attachments': attachments,
             if (diagnosis != null) 'diagnosis': diagnosis,

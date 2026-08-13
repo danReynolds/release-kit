@@ -121,8 +121,8 @@ final class PubDevTargetModule extends TargetModule {
     final project = target.project!;
     return Diagnostic(
       code: 'RK-MONO-002',
-      message: '${project.name} $publicVersion is already published, and this '
-          'would publish ${project.version}',
+      message: '${project.name} ${project.version} is behind published version '
+          '$publicVersion',
       source: SourceLocation(
         project.pubspec.path,
         project.pubspec.versionLine,

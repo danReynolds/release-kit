@@ -402,6 +402,8 @@ Future<String> statusOf({
 Future<({String text, Map<String, Object?> report})> statusRun({
   required MemorySourceTree source,
   required GitState state,
+  GitState? repositoryState,
+  Diagnostic? sourceWarning,
   required RegistryReader registry,
   String withConfig = config,
   Tools? tools,
@@ -442,6 +444,8 @@ Future<({String text, Map<String, Object?> report})> statusRun({
     resolution: resolution!,
     tree: source,
     git: state,
+    repositoryGit: repositoryState,
+    sourceWarning: sourceWarning,
     // Origin agrees with local unless a test says otherwise; without a
     // repository the forge still reports as unread, which is what rk says
     // when it has not been given a way to look.
@@ -1230,7 +1234,13 @@ executables:
     );
     expect(run.text, isNot(contains('0.3.0 › 0.2.0')));
     expect(run.text, contains('ahead of the target 0.2.0'));
-    expect(run.text, contains('RK-MONO-003'));
+    expect(run.text, isNot(contains('RK-MONO-003')));
+    expect(
+      (run.report['problems'] as List)
+          .cast<Map>()
+          .map((problem) => problem['code']),
+      contains('RK-MONO-003'),
+    );
     expect(
         run.text, contains('Fix: a release moves forward — bump past 0.3.0'));
     expect(run.text, isNot(contains('rk release core --stage')));
@@ -1248,6 +1258,34 @@ executables:
           ),
       isTrue,
     );
+  });
+
+  test('a dirty unbound snapshot is a warning, not a release issue', () async {
+    final repository = git(clean: false);
+    final run = await statusRun(
+      source: tree(),
+      state: GitState.unbound(repository.root),
+      repositoryState: repository,
+      sourceWarning: repository.uncommittedSnapshotWarning(),
+      withConfig: '''
+schema = 2
+
+[release.core]
+path = "packages/keybay"
+publish = ["pub.dev"]
+''',
+      registry: FakeRegistry({
+        'keybay': ['0.1.0']
+      }),
+    );
+
+    expect(run.text, contains('Warnings'));
+    expect(run.text, contains('will be captured in the source snapshot'));
+    expect(run.text, isNot(contains('issue prevents release')));
+    expect(run.report['problems'], isEmpty);
+    expect((run.report['warnings'] as List).single['code'], 'RK-GIT-001');
+    expect((run.report['repository'] as Map)['source_binding'], 'unbound');
+    expect(run.report['next'], ['rk release core']);
   });
 
   for (final code in const ['RK-GIT-004', 'RK-GIT-005', 'RK-GIT-007']) {
@@ -1513,7 +1551,13 @@ executables:
     expect(run.text, contains('Issues'));
     expect(run.text, contains('Fix:'));
     expect(run.text, contains('1 issue prevents release'));
-    expect('RK-STAGE-002'.allMatches(run.text), hasLength(1));
+    expect(run.text, isNot(contains('RK-STAGE-002')));
+    expect(
+      (run.report['problems'] as List)
+          .cast<Map>()
+          .where((problem) => problem['code'] == 'RK-STAGE-002'),
+      hasLength(1),
+    );
   });
 
   test('a global completed-stage problem invalidates every artifact row',
@@ -1570,7 +1614,13 @@ executables:
     );
     expect(run.text, isNot(matches(RegExp(r'^\s+Staged$', multiLine: true))));
     expect(run.text, contains('does not record its Dart compiler'));
-    expect(run.text, contains('RK-STAGE-002'));
+    expect(run.text, isNot(contains('RK-STAGE-002')));
+    expect(
+      (run.report['problems'] as List)
+          .cast<Map>()
+          .map((problem) => problem['code']),
+      contains('RK-STAGE-002'),
+    );
   });
 
   test('a partial binary release without its exact stage is an issue',
@@ -1600,7 +1650,7 @@ executables:
       run.text,
       contains('the partial binary release needs its exact stage'),
     );
-    expect(run.text, contains('RK-STAGE-005'));
+    expect(run.text, isNot(contains('RK-STAGE-005')));
     expect(
       run.text,
       contains('Signed or notarized bytes cannot be recreated'),
@@ -1824,7 +1874,7 @@ void _reviewFixes() {
         'keybay': ['0.1.0', '0.5.0']
       }),
     );
-    expect(run.text, contains('0.5.0 is already published'));
+    expect(run.text, contains('0.2.0 is behind published version 0.5.0'));
     expect(run.text, isNot(contains('rk release')));
 
     final targets =

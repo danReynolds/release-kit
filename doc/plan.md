@@ -172,10 +172,10 @@ nothing else prevents.**
   alpha later renamed that exact private-preparation contract to `--stage`,
   which is the only spelling the current CLI accepts.
 - `-v` / `--verbose` was a second, worse rendering of the default view: it
-  carried *less* verdict information than the lanes it replaced, and the
-  diagnostic codes it used to gate now ride every problem line in every
-  mode. `--json` is the surface for everything-at-once. Cut, along with the
-  renderer behind it.
+  carried *less* verdict information than the lanes it replaced. `--json` is
+  the surface for everything-at-once, including stable diagnostic codes; the
+  human view keeps the problem and remedy without code noise. Cut, along with
+  the renderer behind it.
 - `--offline` survives, and the test says why: nothing else gives a
   network-free answer. It stopped being a mode the verb branches on,
   though — it is now wiring (a null registry and null tools, exactly like
@@ -720,7 +720,8 @@ package maintainer, a release engineer, a first-time user) reviewed real
 transcripts of all four verbs, three rounds, fixes between each. Round 1
 landed the convergent findings: init's refusal was the only one in the
 tool without a door (--write is the flag-shaped yes now); diagnostic codes
-ride every ✗ line in every mode; offline --json silently dropped
+were made visible on every ✗ line at that checkpoint and now live only in
+the machine report; offline --json silently dropped
 repository problems (a real parity bug, found from the outside);
 'permanent' stopped parsing as 'permanently not published'; roadmap-speak
 and forge/tap jargon left the output; -h grew flags, exit codes, a mark

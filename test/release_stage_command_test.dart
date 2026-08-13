@@ -114,6 +114,30 @@ void main() {
     expect(manifest.commit, isNull);
   });
 
+  test('a dirty registry-only snapshot warns and still releases', () async {
+    final unbound = _Harness(unbound: true);
+    addTearDown(unbound.close);
+    final repository = unbound.gitAt(
+      isClean: false,
+      uncommitted: const ['packages/tool/pubspec.yaml'],
+    );
+
+    final run = await unbound.run(
+      stageOnly: false,
+      confirm: (_) async => 'yes',
+      repositoryGit: repository,
+      sourceWarning: repository.uncommittedSnapshotWarning(),
+    );
+
+    expect(run.code, ExitCodes.ok, reason: run.text);
+    expect(run.publicMutations.map((call) => call.publicKind), ['pub.dev']);
+    expect(run.problemCodes, isEmpty);
+    expect(run.warningCodes, ['RK-GIT-001']);
+    expect(run.text, contains('will be captured in the source snapshot'));
+    expect(run.text, isNot(contains('RK-GIT-001')));
+    expect(unbound.stage.requireReceipt().identity.isGitBound, isFalse);
+  });
+
   test('non-Git stage-only refuses the unusable handoff', () async {
     final unbound = _Harness(unbound: true);
     addTearDown(unbound.close);
@@ -1071,13 +1095,14 @@ void main() {
 
       expect(failed.code, ExitCodes.refused, reason: failed.text);
       expect(failed.problemCodes, contains(failure.code));
+      expect(failed.text, isNot(contains(failure.code)));
       expect(
         failed.text,
-        contains(failure.code),
-        reason: 'a producer that fails says so on the surface a person '
-            'reads, not only in the document — a live region that erased '
-            'the diagnostics above it left the operator with a halt '
-            'sentence and no cause',
+        contains(failure.name == 'package preflight'
+            ? 'pub refuses to publish tool'
+            : 'did not produce a working binary'),
+        reason: 'the human surface keeps the cause while the machine surface '
+            'owns its stable code',
       );
       expect(prompts, 0, reason: 'authorization follows complete staging');
       expect(failed.publicMutations, isEmpty);
@@ -1703,6 +1728,7 @@ class _Harness {
     String head = _head,
     String headTree = _headTree,
     bool isClean = true,
+    List<String> uncommitted = const [],
     bool headIsPushed = true,
     bool signingConfigured = false,
     String? originUrl = 'example/tool',
@@ -1716,7 +1742,7 @@ class _Harness {
         headTree: headTree,
         branch: 'main',
         isClean: isClean,
-        uncommitted: const [],
+        uncommitted: uncommitted,
         headIsPushed: headIsPushed,
         tags: tags,
         tagObjects: tagObjects,
@@ -1734,6 +1760,8 @@ class _Harness {
     void Function(_Invocation call)? onInvocation,
     void Function()? onRegistryRead,
     Tools? readTools,
+    GitState? repositoryGit,
+    Diagnostic? sourceWarning,
   }) async {
     final start = tools.invocations.length;
     final buffer = StringBuffer();
@@ -1763,6 +1791,8 @@ class _Harness {
       resolution: resolution,
       tree: source,
       git: git,
+      repositoryGit: repositoryGit,
+      sourceWarning: sourceWarning,
       inspector: inspector,
       tools: tools,
       output: output,
@@ -1853,6 +1883,11 @@ class _Run {
   List<String> get problemCodes => [
         for (final problem in (report['problems'] as List? ?? const []))
           '${(problem as Map)['code']}',
+      ];
+
+  List<String> get warningCodes => [
+        for (final warning in (report['warnings'] as List? ?? const []))
+          '${(warning as Map)['code']}',
       ];
 }
 

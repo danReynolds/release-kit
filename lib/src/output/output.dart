@@ -8,7 +8,7 @@ import '../engine/verdict.dart';
 
 /// How a line reads at a glance.
 ///
-/// Four marks rather than one per state: anything finer is carried by the
+/// A small mark vocabulary rather than one per state: anything finer is carried by the
 /// words on the line, which the reader has to read anyway.
 enum Mark {
   /// Done or proven.
@@ -22,6 +22,9 @@ enum Mark {
 
   /// Your next move.
   next('→'),
+
+  /// Nonblocking, but worth seeing before acting.
+  warning('!'),
 
   /// Neither: a plain line.
   none(' ');
@@ -45,7 +48,7 @@ enum Mark {
 
 /// The colour a word earns from what it says.
 ///
-/// The gutter's four marks stay the vocabulary; tones repeat the same
+/// The gutter's marks stay the vocabulary; tones repeat the same
 /// judgment on the words for a reader scanning colour — never carrying
 /// anything the words do not, so `NO_COLOR` loses nothing.
 enum Tone {
@@ -561,11 +564,10 @@ class Output {
     blank();
   }
 
-  /// A problem, with its remedy and — only under `-v` — its code.
+  /// A problem and its remedy.
   ///
-  /// The code is always in the report: a person searching for it wants it out
-  /// of the way until they need it, while a caller keying on it needs it every
-  /// time.
+  /// Stable codes stay in `--json`; the default human surface carries only
+  /// the sentence and action they identify.
   void problem(
     Diagnostic diagnostic, {
     String? unit,
@@ -574,12 +576,11 @@ class Output {
   }) {
     report.problem(diagnostic, unit: unit, target: target);
     final where = diagnostic.source == null ? '' : '${diagnostic.source}  ';
-    // The code rides the line it names, every mode: an alert grepping a CI
-    // log must not depend on someone having passed -v.
     line(
-      '$where${diagnostic.message} · ${diagnostic.code}',
+      '$where${diagnostic.message}',
       mark: Mark.blocked,
       depth: depth,
+      tone: Tone.bad,
     );
     if (diagnostic.remedy != null) {
       say(diagnostic.remedy!, depth: depth + 1);
@@ -590,6 +591,26 @@ class Output {
   void problems(List<Diagnostic> found) {
     for (final diagnostic in found) {
       problem(diagnostic);
+    }
+  }
+
+  /// A nonblocking diagnostic. Its stable code remains machine-readable.
+  void warning(
+    Diagnostic diagnostic, {
+    String? unit,
+    String? target,
+    int depth = 0,
+  }) {
+    report.warning(diagnostic, unit: unit, target: target);
+    final where = diagnostic.source == null ? '' : '${diagnostic.source}  ';
+    line(
+      '$where${diagnostic.message}',
+      mark: Mark.warning,
+      depth: depth,
+      tone: Tone.attention,
+    );
+    if (diagnostic.remedy != null) {
+      say(diagnostic.remedy!, depth: depth + 1);
     }
   }
 
@@ -610,6 +631,7 @@ class Output {
       Mark.blocked => '31', // red
       Mark.satisfied => '90', // grey
       Mark.next => '36', // cyan
+      Mark.warning => '33', // yellow
       Mark.none => null,
     };
     return code == null ? mark.glyph : '\x1b[${code}m${mark.glyph}\x1b[0m';

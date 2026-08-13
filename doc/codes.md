@@ -1,9 +1,9 @@
 # Diagnostic codes
 
-Every refusal rk makes carries a code. They are a published interface: they
-ride in the `--json` document under `problems[]`, they are what an operator
-greps when rk stops, and `engine/diagnostic.dart` commits to never reusing
-one for a different meaning.
+Every structured finding rk makes carries a code. They are a published
+interface: they ride in the `--json` document under `problems[]` or
+`warnings[]`, they are what an operator or agent keys on when rk stops, and
+`engine/diagnostic.dart` commits to never reusing one for a different meaning.
 
 They are declared where they fire, not in a central table — each producer
 names its own, and all are reported in one pass. This index exists because
@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-131 codes across 25 families.
+132 codes across 25 families.
 
 
 ## RK-AUTH — Authorization
@@ -167,7 +167,7 @@ fails, and the count below is checked against the rows.
 | code | says | declared in |
 |---|---|---|
 | `RK-MONO-001` | the tag $tag is ahead of ${unit.version}, which this release  would publish | `lib/src/targets/git_tag_target.dart` |
-| `RK-MONO-002` | ${project.name} ${latest.version} is already published, and this  would publish ${projec… | `lib/src/targets/pub_dev_target.dart` |
+| `RK-MONO-002` | ${project.name} ${project.version} is behind published version  $publicVersion | `lib/src/targets/pub_dev_target.dart` |
 | `RK-MONO-003` | a public target is ahead of the version this release would publish | `lib/src/targets/target_module.dart` |
 
 ## RK-NOTARY — Notarization
@@ -247,6 +247,7 @@ meanings and are not reused.
 |---|---|---|
 | `RK-SRC-001` | a unit selects targets that require Git from unbound source | `bin/rk.dart` |
 | `RK-SRC-002` | an unbound stage cannot be authorized by a later run | `lib/src/commands/release.dart` |
+| `RK-SRC-003` | the source snapshot could not be frozen | `lib/src/engine/release_source.dart` |
 
 ## RK-STAGE — The private release stage
 

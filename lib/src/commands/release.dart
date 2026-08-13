@@ -43,6 +43,8 @@ class ReleaseCommand {
     required this.resolution,
     required this.tree,
     required this.git,
+    GitState? repositoryGit,
+    this.sourceWarning,
     required this.inspector,
     required this.tools,
     required this.output,
@@ -54,7 +56,8 @@ class ReleaseCommand {
     Map<String, String> Function()? refreshEnvironment,
     Future<void> Function(Duration)? wait,
     HostCapabilities? capabilities,
-  })  : _wait = wait ?? _sleep,
+  })  : repositoryGit = repositoryGit ?? git,
+        _wait = wait ?? _sleep,
         _stageFor = stageFor ??
             ReleaseStages(
               source: tree,
@@ -79,7 +82,13 @@ class ReleaseCommand {
 
   final Resolution resolution;
   final SourceTree tree;
+
+  /// The source identity used for staging and public comparison.
   final GitState git;
+
+  /// The surrounding repository, retained when dirty bytes are unbound.
+  final GitState repositoryGit;
+  final Diagnostic? sourceWarning;
 
   /// Reads reality for a step. The same one `status` uses, so the two verbs
   /// cannot answer the same question differently — release grew its own copy
@@ -117,16 +126,17 @@ class ReleaseCommand {
   final GitState Function() _refreshGit;
   final Map<String, String> Function() _refreshEnvironment;
   final Map<String, BinaryChain> _chains = {};
+  var _sourceWarningShown = false;
 
   Future<int> run({String? only}) async {
     // One repository fact for the whole invocation, including ordering or
     // scope refusals that happen before the first unit pipeline starts.
     output.report.repository(
       name: tree.description.split('/').last,
-      branch: git.branch,
-      uncommitted: git.uncommitted.length,
+      branch: repositoryGit.branch,
+      uncommitted: repositoryGit.uncommitted.length,
       head: git.isBound ? git.head : null,
-      remote: git.originUrl,
+      remote: repositoryGit.originUrl,
       sourceBinding: git.isBound ? 'gitCommit' : 'unbound',
       sourceComparison: git.isBound ? 'exact' : 'unavailable',
     );
@@ -261,6 +271,13 @@ class ReleaseCommand {
       version: unit.version.canonical,
       tag: unit.tag,
     );
+
+    if (sourceWarning != null && !_sourceWarningShown) {
+      _sourceWarningShown = true;
+      output.heading('Warnings');
+      output.warning(sourceWarning!, depth: 1);
+      output.blank();
+    }
 
     final problems = Diagnostics();
     _validate(unit, problems);
@@ -1700,10 +1717,12 @@ class ReleaseCommand {
   }
 
   void _validate(ResolvedUnit unit, Diagnostics problems) {
-    final uncommitted = git.uncommittedProblem();
-    if (uncommitted != null) problems.report(uncommitted);
+    if (sourceWarning == null) {
+      final uncommitted = repositoryGit.uncommittedProblem();
+      if (uncommitted != null) problems.report(uncommitted);
+    }
     if (unit.publish.contains(PublishTarget.gitTag)) {
-      final unpushed = git.unpushedProblem();
+      final unpushed = repositoryGit.unpushedProblem();
       if (unpushed != null) problems.report(unpushed);
     }
     for (final project in unit.projects) {
