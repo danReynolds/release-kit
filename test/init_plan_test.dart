@@ -1,4 +1,5 @@
 import 'package:release_kit/src/engine/init_plan.dart';
+import 'package:release_kit/src/engine/release_choice.dart';
 import 'package:release_kit/src/engine/source_tree.dart';
 import 'package:test/test.dart';
 
@@ -27,10 +28,10 @@ executables:
     });
     final tool = plan.candidates.single;
 
-    expect(tool.selected, {InitOption.gitTag, InitOption.pubDev});
-    expect(tool.availability[InitOption.binary]!.available, isTrue);
-    expect(tool.availability[InitOption.githubRelease]!.available, isTrue);
-    expect(tool.availability[InitOption.homebrew]!.available, isTrue);
+    expect(tool.selected, {ReleaseChoice.gitTag, ReleaseChoice.pubDev});
+    expect(tool.availability[ReleaseChoice.binary]!.available, isTrue);
+    expect(tool.availability[ReleaseChoice.githubRelease]!.available, isTrue);
+    expect(tool.availability[ReleaseChoice.homebrew]!.available, isTrue);
     expect(plan.renderToml(), contains('publish = ["git-tag", "pub.dev"]'));
     expect(plan.renderToml(), isNot(contains('binary_platforms')));
   });
@@ -44,27 +45,27 @@ executables:
   tool: tool
 ''',
     });
-    final enabled = plan.toggle(0, InitOption.homebrew);
+    final enabled = plan.toggle(0, ReleaseChoice.homebrew);
     plan = enabled.plan;
 
     expect(
       plan.candidates.single.selected,
       containsAll({
-        InitOption.pubDev,
-        InitOption.gitTag,
-        InitOption.githubRelease,
-        InitOption.binary,
-        InitOption.homebrew,
+        ReleaseChoice.pubDev,
+        ReleaseChoice.gitTag,
+        ReleaseChoice.githubRelease,
+        ReleaseChoice.binary,
+        ReleaseChoice.homebrew,
       }),
     );
     expect(enabled.message, contains('Homebrew'));
     expect(plan.renderToml(), contains('"github-release", "homebrew"'));
     expect(plan.renderToml(), contains('binary_platforms = ['));
 
-    final disabled = plan.toggle(0, InitOption.gitTag);
+    final disabled = plan.toggle(0, ReleaseChoice.gitTag);
     expect(
       disabled.plan.candidates.single.selected,
-      {InitOption.pubDev, InitOption.binary},
+      {ReleaseChoice.pubDev, ReleaseChoice.binary},
       reason: 'removing public destinations keeps a valid local output',
     );
     expect(disabled.message, contains('disabled'));
@@ -80,11 +81,11 @@ executables:
 ''',
     });
 
-    plan = plan.toggle(0, InitOption.githubRelease).plan;
+    plan = plan.toggle(0, ReleaseChoice.githubRelease).plan;
 
     expect(
       plan.candidates.single.selected,
-      {InitOption.gitTag, InitOption.pubDev, InitOption.githubRelease},
+      {ReleaseChoice.gitTag, ReleaseChoice.pubDev, ReleaseChoice.githubRelease},
     );
     expect(plan.renderToml(), isNot(contains('binary_platforms')));
   });
@@ -92,12 +93,12 @@ executables:
   test('a unit is included exactly when it has a selected release output', () {
     var plan = discover({'pubspec.yaml': 'name: a\nversion: 1.0.0\n'});
 
-    plan = plan.toggle(0, InitOption.gitTag).plan;
-    plan = plan.toggle(0, InitOption.pubDev).plan;
+    plan = plan.toggle(0, ReleaseChoice.gitTag).plan;
+    plan = plan.toggle(0, ReleaseChoice.pubDev).plan;
     expect(plan.candidates.single.selected, isEmpty);
     expect(plan.included, isEmpty);
 
-    plan = plan.toggle(0, InitOption.gitTag).plan;
+    plan = plan.toggle(0, ReleaseChoice.gitTag).plan;
     expect(plan.included.single.name, 'a');
   });
 
@@ -119,16 +120,16 @@ executables:
 
     final candidate = plan.candidates.single;
     expect(candidate.selected, isEmpty);
-    expect(candidate.availability[InitOption.binary]!.available, isTrue);
-    expect(
-        candidate.availability[InitOption.githubRelease]!.available, isFalse);
+    expect(candidate.availability[ReleaseChoice.binary]!.available, isTrue);
+    expect(candidate.availability[ReleaseChoice.githubRelease]!.available,
+        isFalse);
 
-    plan = plan.toggle(0, InitOption.binary).plan;
-    expect(plan.candidates.single.selected, {InitOption.binary});
+    plan = plan.toggle(0, ReleaseChoice.binary).plan;
+    expect(plan.candidates.single.selected, {ReleaseChoice.binary});
     expect(plan.included.single.name, 'tool');
     expect(plan.renderToml(), contains('binary_platforms = ['));
     expect(plan.renderToml(), isNot(contains('publish =')));
-    expect(InitPlan.effectsFor(InitOption.binary), isEmpty);
+    expect(ReleaseChoice.binary.requires, isEmpty);
   });
 
   test('several units expose tags but do not invent their grouping', () {
@@ -138,13 +139,13 @@ executables:
     });
     expect(
       plan.candidates.every(
-        (candidate) => !candidate.selected.contains(InitOption.gitTag),
+        (candidate) => !candidate.selected.contains(ReleaseChoice.gitTag),
       ),
       isTrue,
     );
 
-    plan = plan.toggle(0, InitOption.gitTag).plan;
-    plan = plan.toggle(1, InitOption.gitTag).plan;
+    plan = plan.toggle(0, ReleaseChoice.gitTag).plan;
+    plan = plan.toggle(1, ReleaseChoice.gitTag).plan;
     final toml = plan.renderToml();
     expect(toml, contains('tag = "a-v{version}"'));
     expect(toml, contains('tag = "b-v{version}"'));
@@ -169,9 +170,9 @@ workspace:
     expect(plan.candidates.map((candidate) => candidate.name),
         unorderedEquals(['root', 'a']));
     final a = plan.candidates.singleWhere((candidate) => candidate.name == 'a');
-    expect(a.selected, {InitOption.pubDev});
-    expect(a.availability[InitOption.gitTag]!.available, isFalse);
-    expect(a.availability[InitOption.githubRelease]!.available, isFalse);
+    expect(a.selected, {ReleaseChoice.pubDev});
+    expect(a.availability[ReleaseChoice.gitTag]!.available, isFalse);
+    expect(a.availability[ReleaseChoice.githubRelease]!.available, isFalse);
     expect(plan.toJson()['source'], {
       'binding': 'unbound',
       'git_remote': false,
@@ -185,11 +186,11 @@ workspace:
     });
     final internal = plan.candidates.single;
     expect(internal.selected, isEmpty);
-    expect(
-        internal.availability[InitOption.pubDev]!.reason, contains('vetoes'));
+    expect(internal.availability[ReleaseChoice.pubDev]!.reason,
+        contains('vetoes'));
 
-    plan = plan.toggle(0, InitOption.gitTag).plan;
-    expect(plan.candidates.single.selected, {InitOption.gitTag});
+    plan = plan.toggle(0, ReleaseChoice.gitTag).plan;
+    expect(plan.candidates.single.selected, {ReleaseChoice.gitTag});
   });
 
   test('one public package does not silently tag neighboring private ones', () {
@@ -201,7 +202,7 @@ workspace:
 
     expect(
       plan.candidates.singleWhere((item) => item.name == 'public').selected,
-      {InitOption.pubDev, InitOption.gitTag},
+      {ReleaseChoice.pubDev, ReleaseChoice.gitTag},
     );
     final internal =
         plan.candidates.singleWhere((item) => item.name == 'internal');
@@ -218,7 +219,8 @@ publish_to: https://token@packages.example.invalid
 ''',
     });
     expect(declared.candidates.single.selected, isEmpty);
-    expect(declared.candidates.single.availability[InitOption.pubDev]!.reason,
+    expect(
+        declared.candidates.single.availability[ReleaseChoice.pubDev]!.reason,
         contains('custom registry'));
 
     final mixed = discover({
@@ -228,7 +230,7 @@ publish_to: https://token@packages.example.invalid
     });
     expect(
       mixed.candidates.singleWhere((item) => item.name == 'public').selected,
-      {InitOption.pubDev, InitOption.gitTag},
+      {ReleaseChoice.pubDev, ReleaseChoice.gitTag},
     );
 
     final ambient = InitPlan.discover(
@@ -259,12 +261,9 @@ executables:
     });
 
     final root = plan.candidates.singleWhere((item) => item.name == 'rk');
-    expect(root.selected, {InitOption.pubDev, InitOption.gitTag});
+    expect(root.selected, {ReleaseChoice.pubDev, ReleaseChoice.gitTag});
     expect(plan.candidates, hasLength(1));
-    expect(
-      plan.notices,
-      contains('2 packages under example, fixture, or test paths omitted'),
-    );
+    expect(plan.notices, isEmpty);
     expect(plan.renderToml(), isNot(contains('release.example_tool')));
   });
 }

@@ -19,8 +19,8 @@ A private stage is disposable before publication begins and after every target
 is exact; during a partial binary release, retain it so the remaining targets
 receive the exact signed and notarized bytes already bound by the public ones.
 
-Three verbs: `rk init`, `rk status`, `rk release`. No hooks, no templates,
-no `--force`.
+Three operational verbs: `rk init`, `rk status`, `rk release`, plus the static
+`rk target` reference. No hooks, no templates, no `--force`.
 
 ## Using it
 
@@ -28,6 +28,8 @@ no `--force`.
 dart pub global activate release_kit    # the command is rk
 rk status                              # where things stand. Read-only.
 rk init                                # propose a release.toml
+rk target list                         # everything this rk can create or publish
+rk target homebrew                     # one choice's requirements and configuration
 rk release [unit] --stage              # exact stage; name it when several units exist
 rk release [unit]                      # release unfinished units, or one named unit
 rk release [unit] --yes                # the same plan without an interactive prompt
@@ -46,7 +48,13 @@ the selector, and field customization stays in TOML. Without a usable terminal,
 `init` prints the same conservative proposal and writes nothing; `init --write`
 accepts it directly.
 
-Most releases are driven by agents: every verb speaks `--json`
+`rk target list` is the offline reference for every release choice supported
+by the installed binary; it does not inspect the current repository. Use
+`rk target <name>` for requirements, inferred native values, RK-specific
+settings, and a minimal `release.toml` example. `rk status` remains the answer
+to what is configured here.
+
+Most releases are driven by agents: every command speaks `--json`
 ([doc/json.md](doc/json.md) is the contract and the drive loop), and `--yes`
 answers the same ordinary question noninteractively. It skips no plan,
 inspection, or refusal. Name a unit for the narrowest automated scope. There

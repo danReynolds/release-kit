@@ -14,6 +14,7 @@ rk release [unit] --stage --json        exact stage; name it with several units
 rk status <unit> --json                 confirm: staged, good to release
 rk release [unit] --yes --json          publish and read back without prompting
 rk release [unit] --yes --json          idempotent: already-exact, no second act
+rk target list --json                    installed rk's static release choices
 ```
 
 `--yes` answers only the ordinary release question. The unit versions and
@@ -33,6 +34,7 @@ unit when an automation caller needs the narrowest scope.
 | `rerun_helps` | whether re-running would move things forward — false on conflicts, where a human has to decide. Re-running is always *safe*: the same inspection precedes every act |
 | `repository` | `{name, branch?, head?, remote, uncommitted?, source_binding?, source_comparison?}`. `head` is the full 40-char SHA and is absent for unbound source. `remote` is always present and null when no origin exists. Status and release report `source_binding` as `gitCommit` or `unbound`, independently from `source_comparison` (`exact` or `unavailable`) |
 | `init` | present on `init`: `{source: {binding, git_remote, github_repository}, notices[], candidates[]}`. `github_repository` is always present and null when unavailable. Each candidate reports its unit, native project/path/version/executables and every option's `available`, redacted `reason`, `selected`, and deterministic `effects[]`. A candidate is included when at least one release output is selected |
+| `release_choices` | present on `target`: the static choices understood by this installed rk. This command reads no repository and these entries never contain `selected` or `available` |
 | `units[]` | per-unit: `{name, version, tag, steps[], targets[]?}`. `tag` is null when Git tagging is not selected |
 | `problems[]` | `{code, message, remedy?, source?, unit?, target?}` — every refusal and blockage, with its `RK-*` code. `target`, when present, is the affected target id and makes that target's human row `✗` |
 | `next[]` | the commands that would advance things, as data. The human report does not print them; this is where they live |
@@ -45,6 +47,17 @@ unit when an automation caller needs the narrowest scope.
 target changed; late native session acquisition may still have refreshed local
 credential state. The accompanying sentence states what changed and whether
 re-running can advance the work.
+
+## Target reference
+
+`rk target list --json` returns all entries in `release_choices[]`;
+`rk target <name> --json` returns the same array shape filtered to one entry. Each entry
+contains `id`, `label`, `category`, `summary`, `description`, `requires[]`, a
+`select[]` guide, `configure[]`, `native_configuration[]`, an optional
+`supported_binary_platforms[]`, and a minimal `example`. `category` is
+`localOutput` for Binary and `releaseTarget` for the
+public target catalog. The reference describes the installed binary only: use
+`status` for configured repository state.
 
 ## One fact, one place
 

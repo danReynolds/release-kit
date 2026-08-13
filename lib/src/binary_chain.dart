@@ -27,7 +27,7 @@ import 'transforms/macos.dart';
 /// `builds/`, `transforms/` and `destinations/` holds one at zero.
 ///
 /// It lived in `commands/` until `ls` there exposed a non-command alongside
-/// the three verbs promised by the README and RFC.
+/// the operational verbs promised by the README and RFC.
 ///
 /// This used to be one `produce()` that ran the whole chain inside the first
 /// build step and handed a `_produced` list to the steps after it — which

@@ -258,7 +258,8 @@ class _Reader {
           'RK-CONF-038',
           '"${target.configName}" belongs to a project in "$name"',
           source: value.locationOf('publish'),
-          remedy: 'move it to the relevant [[release.$name.project]] row',
+          remedy: 'move it to the relevant [[release.$name.project]] row\n'
+              'Run rk target ${target.configName} for a complete example.',
         );
       } else {
         inlinePublish.add(target);
@@ -282,7 +283,8 @@ class _Reader {
           '${target.configName} needs ${prerequisite.configName}',
           source: value.locationOf('publish'),
           remedy: 'add "${prerequisite.configName}", or drop '
-              '"${target.configName}"',
+              '"${target.configName}"\n'
+              'Run rk target ${target.configName} for its requirements.',
         );
       }
     }
@@ -369,7 +371,8 @@ class _Reader {
           'homebrew needs ${prerequisite.configName}',
           source: homebrewProjects.first.location,
           remedy: 'add "${prerequisite.configName}" and its prerequisites '
-              'to the unit publish list, or drop "homebrew"',
+              'to the unit publish list, or drop "homebrew"\n'
+              'Run rk target homebrew for a complete example.',
         );
       }
       for (final project in homebrewProjects) {
@@ -378,7 +381,8 @@ class _Reader {
             'RK-CONF-025',
             'a Homebrew project in "$name" names no binary platforms',
             source: project.location,
-            remedy: 'add binary_platforms, or drop "homebrew"',
+            remedy: 'add binary_platforms, or drop "homebrew"\n'
+                'Run rk target homebrew for supported values and an example.',
           );
         }
       }
@@ -403,7 +407,8 @@ class _Reader {
         'homebrew_tap must be a GitHub owner/repository',
         source: value.locationOf('homebrew_tap'),
         remedy: 'use a coordinate such as "some-org/homebrew-tools"; '
-            'omit it for the conventional owner/homebrew-tap',
+            'omit it for the conventional owner/homebrew-tap\n'
+            'Run rk target homebrew for the inferred default and example.',
       );
     }
 
@@ -596,7 +601,8 @@ class _Reader {
           'RK-CONF-022',
           'unknown target "$name"',
           source: table.locationOf('publish'),
-          remedy: 'rk publishes to ${ReleaseConfig.targetNames.join(', ')}',
+          remedy: 'rk publishes to ${ReleaseConfig.targetNames.join(', ')}\n'
+              'Run rk target list to see what each choice does.',
         );
         return null;
       }

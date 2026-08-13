@@ -32,6 +32,7 @@ class Report {
   final List<String> _next = [];
   Map<String, Object?>? _repository;
   Map<String, Object?>? _init;
+  List<Map<String, Object?>>? _releaseChoices;
   Map<String, Object?>? _halt;
 
   /// Whether re-running would move the release forward.
@@ -211,6 +212,14 @@ class Report {
 
   void initPlan(Map<String, Object?> plan) => _init = plan;
 
+  /// Static reference entries reported by `rk target`.
+  ///
+  /// They deliberately carry no selected or available state: this command
+  /// describes the installed binary and does not inspect a repository.
+  void releaseChoices(Iterable<Map<String, Object?>> choices) {
+    _releaseChoices = List.unmodifiable(choices);
+  }
+
   /// Whether a halt sentence has been recorded, so a generic late halt can
   /// yield to a specific one already diagnosed.
   bool get halted => _halt != null;
@@ -240,6 +249,7 @@ class Report {
             'rerun_helps': rerunHelps,
             if (_repository != null) 'repository': _repository,
             if (_init != null) 'init': _init,
+            if (_releaseChoices != null) 'release_choices': _releaseChoices,
             'units': _units.values.toList(),
             'problems': _problems,
             'next': _next,

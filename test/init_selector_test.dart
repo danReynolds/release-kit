@@ -1,5 +1,6 @@
 import 'package:release_kit/src/commands/init_selector.dart';
 import 'package:release_kit/src/engine/init_plan.dart';
+import 'package:release_kit/src/engine/release_choice.dart';
 import 'package:release_kit/src/engine/source_tree.dart';
 import 'package:test/test.dart';
 
@@ -58,12 +59,12 @@ void main() {
       ..handle(InitSelectorKey.right)
       ..handle(InitSelectorKey.right)
       ..handle(InitSelectorKey.right);
-    expect(selector.option, InitOption.homebrew);
+    expect(selector.option, ReleaseChoice.homebrew);
 
     final result = selector.handle(InitSelectorKey.toggle);
     expect(result, InitSelectorAction.changed);
     expect(selector.plan.candidates.single.selected,
-        containsAll({InitOption.homebrew, InitOption.binary}));
+        containsAll({ReleaseChoice.homebrew, ReleaseChoice.binary}));
     expect(selector.render(60), contains('enabled'));
   });
 

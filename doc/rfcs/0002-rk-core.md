@@ -249,7 +249,12 @@ signer, where earlier tags are unsigned or absent, is the key about to sign,
 confirmed once. Keybay needs none of this: its 0.1.0 release supplies every
 baseline.
 
-## The three verbs
+## The three operational verbs
+
+`rk target` is a fourth, static reference command. It reads no repository,
+network, or credentials: `target list` describes every release choice in the
+installed binary, and `target <name>` explains one choice's requirements,
+native sources, RK settings, and minimal configuration.
 
 `rk init` · `rk status` · `rk release`. Bare `rk` runs `status`.
 
@@ -889,7 +894,7 @@ release-kit/
   bin/rk.dart            # the entry point, and the composition root
   lib/src/
     binary_chain.dart    # the local production chain: neither verb nor adapter
-    commands/            # the three verbs: init, status, release
+    commands/            # init, status, release, and the static target reference
     targets/             # the closed target catalog and lifecycle modules
     destinations/        # lower-level provider protocol clients
     builds/              # capability, dart_cli
