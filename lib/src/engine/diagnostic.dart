@@ -1,6 +1,6 @@
-/// A blocking problem, carrying a stable code so it stays greppable as its
-/// prose improves — every one of them indexed in `doc/codes.md`, which
-/// `tool/validate.dart` keeps current.
+/// A structured finding, carrying a stable code as its prose improves — every
+/// one of them indexed in `doc/codes.md`, which `tool/validate.dart` keeps
+/// current. Its destination decides severity: problems block, warnings do not.
 ///
 /// Codes are `RK-<AREA>-<NNN>`, additive, and never reused for a different
 /// meaning. The code is secondary in output: a reader wants the sentence and

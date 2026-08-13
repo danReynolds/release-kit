@@ -110,6 +110,18 @@ void main() {
     expect(problem['remedy'], 'align the constraint');
   });
 
+  test('warnings are separate, coded, and nonblocking', () {
+    final report = Report('status')
+      ..warning(const Diagnostic(
+        code: 'RK-GIT-001',
+        message: '1 uncommitted path will be included',
+      ));
+    final json = decode(report);
+    expect(json['problems'], isEmpty);
+    expect((json['warnings'] as List).single['code'], 'RK-GIT-001');
+    expect(json['exit'], 0);
+  });
+
   test('the next command is data a caller can chain on', () {
     final report = Report('status')..next('rk release cli');
     expect(decode(report)['next'], ['rk release cli']);

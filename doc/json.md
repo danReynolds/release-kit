@@ -26,7 +26,7 @@ unit when an automation caller needs the narrowest scope.
 
 | key | meaning |
 |---|---|
-| `rk` | schema version (currently `5`) |
+| `rk` | schema version (currently `6`) |
 | `command` | the verb that ran |
 | `mode` | present only where the run has one: `{stage}` on `release` |
 | `observed_at` | UTC ISO 8601 — when rk read the world |
@@ -37,6 +37,7 @@ unit when an automation caller needs the narrowest scope.
 | `release_choices` | present on `target`: the static choices understood by this installed rk. This command reads no repository and these entries never contain `selected` or `available` |
 | `units[]` | per-unit: `{name, version, tag, steps[], targets[]?}`. `tag` is null when Git tagging is not selected |
 | `problems[]` | `{code, message, remedy?, source?, unit?, target?}` — every refusal and blockage, with its `RK-*` code. `target`, when present, is the affected target id and makes that target's human row `✗` |
+| `warnings[]` | nonblocking findings with the same shape as `problems[]`. Human output marks these with `!`; stable `RK-*` codes appear only in JSON |
 | `next[]` | the commands that would advance things, as data. The human report does not print them; this is where they live |
 | `halt` | `{kind, sentence}` when the run halted |
 | `attachments` | documents that travel with the run (a proposed release.toml, pub's validation text) |
@@ -47,6 +48,10 @@ unit when an automation caller needs the narrowest scope.
 target changed; late native session acquisition may still have refreshed local
 credential state. The accompanying sentence states what changed and whether
 re-running can advance the work.
+
+An empty `problems[]` remains the release gate. `warnings[]` never changes the
+exit code or authorizes work by itself; it discloses facts such as a
+registry-only release capturing dirty working-tree state.
 
 ## Target reference
 

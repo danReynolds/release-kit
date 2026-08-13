@@ -52,6 +52,11 @@ void main() {
 
   bool fileExists(String path) => File(path).existsSync();
 
+  Iterable<Object?> problemCodes(Map<String, Object?> report) =>
+      (report['problems'] as List)
+          .cast<Map>()
+          .map((problem) => problem['code']);
+
   /// Whether [pattern] appears in a file other than [definedIn].
   ///
   /// A definition is not a use: matching the declaration of the very thing
@@ -2096,7 +2101,7 @@ executables:
       );
 
       expect(run.code, ExitCodes.refused, reason: run.text);
-      expect(run.text, contains('RK-SIGN-013'));
+      expect(problemCodes(run.json), contains('RK-SIGN-013'));
       expect(
         run.calls.where((call) => call.startsWith('git push origin')),
         isEmpty,
@@ -2130,7 +2135,7 @@ executables:
         );
 
         expect(run.code, ExitCodes.refused, reason: run.text);
-        expect(run.text, contains('RK-SIGN-006'));
+        expect(problemCodes(run.json), contains('RK-SIGN-006'));
         expect(
           run.text,
           isNot(contains('no Developer ID Application certificate')),
@@ -2153,7 +2158,7 @@ executables:
         );
 
         expect(run.code, ExitCodes.refused, reason: run.text);
-        expect(run.text, contains('RK-SIGN-007'));
+        expect(problemCodes(run.json), contains('RK-SIGN-007'));
         expect((run.json['halt']! as Map)['kind'], 'beforeActing');
         expect(run.calls.any((c) => c.startsWith('git push origin')), isFalse);
       });
@@ -2171,7 +2176,7 @@ executables:
         );
 
         expect(run.code, ExitCodes.refused, reason: run.text);
-        expect(run.text, contains('RK-SIGN-001'));
+        expect(problemCodes(run.json), contains('RK-SIGN-001'));
         expect((run.json['halt']! as Map)['kind'], 'beforeActing');
         expect(run.calls.any((c) => c.startsWith('git push origin')), isFalse);
       });
@@ -2222,7 +2227,7 @@ executables:
         );
 
         expect(run.code, ExitCodes.refused, reason: run.text);
-        expect(run.text, contains('RK-SIGN-010'));
+        expect(problemCodes(run.json), contains('RK-SIGN-010'));
         expect(run.text, contains('TEAM123456'),
             reason: 'the team users installed');
         expect(run.text, contains('TEAMZZZZZZ'), reason: 'and the one here');
@@ -2239,7 +2244,7 @@ executables:
         );
 
         expect(run.code, ExitCodes.refused, reason: run.text);
-        expect(run.text, contains('RK-SIGN-011'));
+        expect(problemCodes(run.json), contains('RK-SIGN-011'));
         expect((run.json['halt']! as Map)['kind'], 'beforeActing');
         expect(run.calls.any((c) => c.startsWith('git push origin')), isFalse);
       });
@@ -2252,7 +2257,7 @@ executables:
         );
 
         expect(run.code, ExitCodes.refused, reason: run.text);
-        expect(run.text, contains('RK-SIGN-008'));
+        expect(problemCodes(run.json), contains('RK-SIGN-008'));
         expect(run.text, contains('TEAM123456'));
         expect(run.text, contains('TEAM123457'));
         expect((run.json['halt']! as Map)['kind'], 'beforeActing');

@@ -25,3 +25,7 @@ Initial release of rk, an austere release tool for Dart repositories.
   the proof of package authority and completion.
 - Compiled binaries report their embedded package version with `rk --version`
   so staging and downstream package managers can reject stale artifacts.
+- Human status keeps diagnostic codes in JSON, distinguishes nonblocking
+  warnings, and reports a local version succinctly as `behind` public reality.
+- Dirty Git working trees may release registry-only or local outputs through
+  an exact unbound snapshot; Git-identified targets still require clean source.

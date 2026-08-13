@@ -60,6 +60,12 @@ answers the same ordinary question noninteractively. It skips no plan,
 inspection, or refusal. Name a unit for the narrowest automated scope. There
 is still no `--force`.
 
+In a Git repository, targets whose public identity depends on Git (`git-tag`,
+GitHub Release, and Homebrew) require a clean working tree. A registry-only or
+local-output release may include uncommitted and untracked, non-ignored files:
+rk calls that out as a warning, captures the resulting working-tree state in
+an unbound one-invocation stage, and rechecks that snapshot before publishing.
+
 For release-kit's own first release, invoke the clean checkout explicitly
 instead of an older globally installed `rk`:
 
@@ -83,7 +89,7 @@ suite. Run them explicitly with
 `dart test test/live_release_checkpoints.dart` when performing the supervised
 releases.
 
-`rk -h` lists every flag, the four marks, and the exit codes.
+`rk -h` lists every flag, the marks, and the exit codes.
 [doc/json.md](doc/json.md) is the `--json` contract: the schema, the frozen
 verdict enum, and the blessed CI gate rule.
 

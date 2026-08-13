@@ -213,6 +213,18 @@ class GitState {
       );
     }
     if (isClean) return null;
+    return _uncommittedDiagnostic(snapshot: false);
+  }
+
+  /// The nonblocking form used when no selected target needs Git identity.
+  Diagnostic? uncommittedSnapshotWarning() {
+    if (!isBound || uncommitted.isEmpty || worktreeStatusError != null) {
+      return null;
+    }
+    return _uncommittedDiagnostic(snapshot: true);
+  }
+
+  Diagnostic _uncommittedDiagnostic({required bool snapshot}) {
     // Named, not counted: the ellipsis costs more characters than the path
     // it hides until the list is genuinely long.
     final paths = uncommitted.length <= 8
@@ -221,10 +233,14 @@ class GitState {
             '…and ${uncommitted.length - 8} more';
     return Diagnostic(
       code: 'RK-GIT-001',
-      message: uncommitted.length == 1
-          ? '1 path is uncommitted'
-          : '${uncommitted.length} paths are uncommitted',
-      remedy: 'a release is of a commit, and these are not in one: $paths',
+      message: snapshot
+          ? 'working-tree changes will be captured in the source snapshot'
+          : uncommitted.length == 1
+              ? '1 path is uncommitted'
+              : '${uncommitted.length} paths are uncommitted',
+      remedy: snapshot
+          ? 'Commit them to bind this release to Git: $paths'
+          : 'a release is of a commit, and these are not in one: $paths',
     );
   }
 

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:release_kit/src/engine/diagnostic.dart';
 import 'package:release_kit/src/engine/verdict.dart';
 import 'package:release_kit/src/engine/checklist.dart';
@@ -84,7 +86,12 @@ void main() {
     activity.failed('the build failed');
     output.close();
 
-    expect(buffer.toString(), contains('RK-BUILD-001'));
+    expect(buffer.toString(), isNot(contains('RK-BUILD-001')));
+    expect(
+      (jsonDecode(output.report.encode(exit: 1))['problems'] as List)
+          .single['code'],
+      'RK-BUILD-001',
+    );
     expect(buffer.toString(), contains('did not produce a working binary'));
     expect(buffer.toString(), contains('see the compiler output'));
   });
@@ -303,19 +310,12 @@ void main() {
       expect(captured.text, contains('add publish'));
     });
 
-    test('carry the code on the ✗ line, in every mode', () {
-      // Reversed by the persona review: an alert grepping a CI log must not
-      // depend on someone having passed -v, so the code rides the message
-      // it names rather than hiding behind a flag.
+    test('hide the code from prose and preserve it in JSON', () {
       final (out, captured) = make();
       out.problem(diagnostic);
-      expect(
-        captured.lines.firstWhere((l) => l.contains('✗')),
-        contains('· RK-CONF-019'),
-      );
-
-      // The code rides every ✗ in every mode — an alert grepping a CI log
-      // must not depend on a verbosity flag that no longer exists.
+      expect(captured.text, isNot(contains('RK-CONF-019')));
+      final json = jsonDecode(out.report.encode(exit: 1)) as Map;
+      expect(((json['problems'] as List).single as Map)['code'], 'RK-CONF-019');
     });
 
     test('are reported in one pass', () {
@@ -326,6 +326,19 @@ void main() {
       ]);
       expect(captured.lines.where((l) => l.contains('✗')), hasLength(2));
     });
+  });
+
+  test('warnings use a distinct nonblocking mark and machine collection', () {
+    final (out, captured) = make();
+    out.warning(const Diagnostic(
+      code: 'RK-GIT-001',
+      message: '1 uncommitted path will be included',
+    ));
+    expect(captured.lines.single, '! 1 uncommitted path will be included');
+    expect(captured.text, isNot(contains('RK-GIT-001')));
+    final json = jsonDecode(out.report.encode(exit: 0)) as Map;
+    expect(((json['warnings'] as List).single as Map)['code'], 'RK-GIT-001');
+    expect(json['problems'], isEmpty);
   });
 
   test('the next command is marked as the reader\'s move', () {

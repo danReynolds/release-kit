@@ -25,15 +25,24 @@ class StatusCommand {
     required this.resolution,
     required this.tree,
     required this.git,
+    GitState? repositoryGit,
+    this.sourceWarning,
     required this.inspector,
     required this.output,
     this.stageFor,
     HostCapabilities? capabilities,
-  }) : capabilities = capabilities ?? HostCapabilities.inspect();
+  })  : repositoryGit = repositoryGit ?? git,
+        capabilities = capabilities ?? HostCapabilities.inspect();
 
   final Resolution resolution;
   final SourceTree tree;
+
+  /// The source identity used for staging and comparison.
   final GitState git;
+
+  /// The surrounding repository, even when dirty bytes use an unbound stage.
+  final GitState repositoryGit;
+  final Diagnostic? sourceWarning;
   final Inspector inspector;
   final Output output;
   final HostCapabilities capabilities;
@@ -75,11 +84,11 @@ class StatusCommand {
 
     output.repository(
       name: tree.description.split('/').last,
-      branch: git.branch,
-      commit: git.isBound ? git.shortHead : null,
-      uncommitted: git.uncommitted.length,
+      branch: repositoryGit.branch,
+      commit: repositoryGit.isBound ? repositoryGit.shortHead : null,
+      uncommitted: repositoryGit.uncommitted.length,
       head: git.isBound ? git.head : null,
-      remote: git.originUrl,
+      remote: repositoryGit.originUrl,
       sourceBinding: git.isBound ? 'gitCommit' : 'unbound',
       sourceComparison: git.isBound ? 'exact' : 'unavailable',
     );
@@ -105,6 +114,11 @@ class StatusCommand {
           StatusIssue(diagnostic: diagnostic),
     ];
     final uniqueIssues = _deduplicate(issues);
+    if (workRemains && sourceWarning != null) {
+      output.blank();
+      output.heading('Warnings');
+      output.warning(sourceWarning!, depth: 1);
+    }
     if (uniqueIssues.isNotEmpty) _renderIssues(uniqueIssues);
 
     // Only a refusal concludes. rk does not congratulate itself: success is
@@ -129,9 +143,11 @@ class StatusCommand {
       output.report.next(
         _isLocalOnlyOutput(snapshot)
             ? 'rk release ${snapshot.unit.name}'
-            : snapshot.stage?.reusable == true
+            : !git.isBound
                 ? 'rk release ${snapshot.unit.name}'
-                : 'rk release ${snapshot.unit.name} --stage',
+                : snapshot.stage?.reusable == true
+                    ? 'rk release ${snapshot.unit.name}'
+                    : 'rk release ${snapshot.unit.name} --stage',
       );
     }
 
@@ -727,14 +743,7 @@ class StatusCommand {
     // naming a place and then the state of that place made two headers
     // argue about one fact.
     final movement = agreedCurrent != null && agreedCurrent != version
-        ? Version.tryParse(agreedCurrent) != null &&
-                Version.tryParse(version) != null &&
-                Version.tryParse(agreedCurrent)! > Version.tryParse(version)!
-            // Not movement: the world is ahead of this release, which the
-            // monotonicity check refuses. An arrow here would claim rk
-            // turns the newer version into the older one.
-            ? '$version · behind $agreedCurrent'
-            : '$agreedCurrent › $version'
+        ? _versionMovement(agreedCurrent, version)
         : version;
     final resolvedTag = snapshot.unit.tag;
     final displayedTag =
@@ -813,7 +822,10 @@ class StatusCommand {
               target.currentKnown &&
               target.currentVersion != null &&
               target.currentVersion != target.expectation.targetVersion)
-            '${target.currentVersion} › ${target.expectation.targetVersion}',
+            _versionMovement(
+              target.currentVersion!,
+              target.expectation.targetVersion,
+            ),
           if (agreed == null || speaks || linked) _condition(state),
         ].join(' · '),
         depth: 2,
@@ -995,7 +1007,7 @@ class StatusCommand {
       final where = diagnostic.source == null ? '' : '${diagnostic.source}  ';
       final unit = severalUnits && issue.unit != null ? '${issue.unit} · ' : '';
       output.line(
-        '$unit$where${diagnostic.message} · ${diagnostic.code}',
+        '$unit$where${diagnostic.message}',
         mark: Mark.blocked,
         depth: 1,
         tone: Tone.bad,
@@ -1064,13 +1076,26 @@ class StatusCommand {
     Diagnostics problems,
     Iterable<ResolvedUnit> units,
   ) {
-    final uncommitted = git.uncommittedProblem();
-    if (uncommitted != null) problems.report(uncommitted);
+    if (sourceWarning == null) {
+      final uncommitted = repositoryGit.uncommittedProblem();
+      if (uncommitted != null) problems.report(uncommitted);
+    }
     if (units.any((unit) => unit.publish.contains(PublishTarget.gitTag))) {
-      final unpushed = git.unpushedProblem();
+      final unpushed = repositoryGit.unpushedProblem();
       if (unpushed != null) problems.report(unpushed);
     }
   }
+}
+
+String _versionMovement(String current, String target) {
+  final parsedCurrent = Version.tryParse(current);
+  final parsedTarget = Version.tryParse(target);
+  if (parsedCurrent != null &&
+      parsedTarget != null &&
+      parsedCurrent > parsedTarget) {
+    return '$target · behind $current';
+  }
+  return '$current › $target';
 }
 
 class _UnitSnapshot {

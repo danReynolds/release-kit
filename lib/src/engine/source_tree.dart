@@ -298,6 +298,135 @@ class FileSystemSourceTree implements SourceTree {
   }
 }
 
+/// The current, non-ignored files in a Git working tree.
+///
+/// Used only when a dirty repository releases targets whose identity does not
+/// depend on Git. Tracked edits and untracked files are included; ignored
+/// build output and `.git` metadata are not. The resulting release is bound to
+/// the stage's byte snapshot, never to HEAD.
+class GitWorktreeSourceTree extends FileSystemSourceTree {
+  GitWorktreeSourceTree(super.root);
+
+  @override
+  List<String> trackedFiles() {
+    final result = Process.runSync(
+      'git',
+      const [
+        'ls-files',
+        '--cached',
+        '--others',
+        '--exclude-standard',
+        '-z',
+      ],
+      workingDirectory: root,
+    );
+    if (result.exitCode != 0) {
+      throw SourceUnreadable(
+        'the Git working-tree file list',
+        (result.stderr as String).trim(),
+      );
+    }
+    final files = <String>[];
+    for (final path in (result.stdout as String)
+        .split('\u0000')
+        .where((path) => path.isNotEmpty)
+        .where((path) => path != '.rk' && !path.startsWith('.rk/'))) {
+      final type = FileSystemEntity.typeSync('$root/$path', followLinks: false);
+      // A deleted tracked path remains in the index but is intentionally
+      // absent from this working-tree snapshot.
+      if (type == FileSystemEntityType.notFound) continue;
+      if (type != FileSystemEntityType.file) {
+        throw SourceUnreadable(
+          path,
+          'the worktree entry is not a regular file',
+        );
+      }
+      files.add(path);
+    }
+    files.sort();
+    return List.unmodifiable(files);
+  }
+}
+
+/// An immutable, internally consistent copy of a [SourceTree].
+///
+/// Dirty releases resolve and stage from this same copy. Capturing reads the
+/// inventory and every byte twice, refusing a source that moves while it is
+/// being frozen; a reviewed package coordinate can therefore never publish
+/// later working-tree bytes.
+final class FrozenSourceTree implements SourceTree {
+  FrozenSourceTree._(this._files, this.description);
+
+  factory FrozenSourceTree.capture(SourceTree source) {
+    final before = source.trackedFiles().toSet();
+    final captured = <String, List<int>>{};
+    for (final path in before.toList()..sort()) {
+      final bytes = source.readBytes(path);
+      if (bytes == null) {
+        throw SourceUnreadable(path, 'the file disappeared while freezing');
+      }
+      captured[path] = List<int>.unmodifiable(bytes);
+    }
+
+    final after = source.trackedFiles().toSet();
+    if (!before.containsAll(after) || !after.containsAll(before)) {
+      throw SourceUnreadable(
+        'the working-tree file list',
+        'files changed while the source snapshot was being frozen',
+      );
+    }
+    for (final path in after.toList()..sort()) {
+      final bytes = source.readBytes(path);
+      if (bytes == null || !_sameBytes(captured[path]!, bytes)) {
+        throw SourceUnreadable(
+          path,
+          'the file changed while the source snapshot was being frozen',
+        );
+      }
+    }
+    return FrozenSourceTree._(
+      Map<String, List<int>>.unmodifiable(captured),
+      source.description,
+    );
+  }
+
+  final Map<String, List<int>> _files;
+
+  @override
+  final String description;
+
+  @override
+  String? read(String path) {
+    final bytes = readBytes(path);
+    return bytes == null ? null : utf8.decode(bytes);
+  }
+
+  @override
+  List<int>? readBytes(String path) => _files[_normalizeSourcePath(path)];
+
+  @override
+  bool exists(String path) {
+    final target = _normalizeSourcePath(path);
+    if (_files.containsKey(target)) return true;
+    final prefix = '$target/';
+    return _files.keys.any((candidate) => candidate.startsWith(prefix));
+  }
+
+  @override
+  List<String> trackedFiles() => List<String>.unmodifiable(_files.keys);
+}
+
+bool _sameBytes(List<int> left, List<int> right) {
+  if (left.length != right.length) return false;
+  for (var index = 0; index < left.length; index++) {
+    if (left[index] != right[index]) return false;
+  }
+  return true;
+}
+
+String _normalizeSourcePath(String path) =>
+    path.split('/').where((part) => part.isNotEmpty && part != '.').join('/');
+
 /// One immutable Git commit exposed through the synchronous [SourceTree]
 /// contract.
 ///
@@ -429,7 +558,7 @@ class MemorySourceTree implements SourceTree {
   final String description;
 
   @override
-  String? read(String path) => files[_normalize(path)];
+  String? read(String path) => files[_normalizeSourcePath(path)];
 
   @override
   List<int>? readBytes(String path) {
@@ -439,7 +568,7 @@ class MemorySourceTree implements SourceTree {
 
   @override
   bool exists(String path) {
-    final target = _normalize(path);
+    final target = _normalizeSourcePath(path);
     if (files.containsKey(target)) return true;
     final prefix = '$target/';
     return files.keys.any((p) => p.startsWith(prefix));
@@ -447,9 +576,6 @@ class MemorySourceTree implements SourceTree {
 
   @override
   List<String> trackedFiles() => files.keys.toList();
-
-  static String _normalize(String path) =>
-      path.split('/').where((p) => p.isNotEmpty && p != '.').join('/');
 }
 
 /// A file that is there and that rk could not read.

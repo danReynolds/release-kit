@@ -5,7 +5,7 @@ Status: local implementation complete; supervised live gate pending,
 probe, `--offline`, and the transient unsigned build are gone; macOS
 build and signing are one producer; the pipeline is declared once; the
 manifest carries only externally checkable facts; notary evidence is
-stage-local; and `--json` is the agent contract at schema 5 with
+stage-local; and `--json` is the agent contract at schema 6 with
 `release --yes` as the noninteractive answer. This is
 the current forward plan.
 `doc/plan.md` remains the historical phase plan, review record, and evidence
@@ -157,7 +157,8 @@ erased and replaced once with a deterministic final report. There is no
 partially assembled report in scrollback.
 
 The final report has one section per configured release target. Each target
-shows `current -> target`, its public condition in plain words, and the exact
+shows `current › target` when moving forward or `target · behind current` when
+public reality is ahead, its public condition in plain words, and the exact
 artifact filenames it consumes. Any concrete issue linked to a target marks
 that target's row `✗` and appears once in `Issues`, without changing the
 target's public-state verdict. Global, prerequisite, and stage issues remain in
@@ -167,6 +168,9 @@ Artifact marks have one meaning:
 - `✓`: this exact artifact is present and validated in the matching stage;
 - no mark: it has not been produced yet and no production problem is known;
 - `✗`: rk already knows the artifact cannot be produced or validated.
+
+Global warnings use `!`, live in a separate `warnings[]` machine collection,
+and do not block release. Stable diagnostic codes are JSON-only.
 
 The text also says `staged`, `not staged`, or the problem, so marks and colour
 are never the only signal.

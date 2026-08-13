@@ -137,7 +137,12 @@ Rules:
 - Git is a capability, not a prerequisite for rk itself. Registry-only
   projects may release from an unbound filesystem source. `git-tag`, GitHub
   Release, and Homebrew require Git and are refused explicitly when the
-  source is unbound. rk records no invented directory revision in that mode.
+  source is unbound. They also require a clean working tree because their
+  public identity names a commit. Without those targets, a dirty Git working
+  tree is captured as an unbound, one-invocation source snapshot and disclosed
+  as a warning; the resulting tracked state and untracked, non-ignored files
+  are included.
+  rk records no invented directory revision in that mode.
 - Project paths are canonicalized; duplicates and nesting fail. No
   recursive discovery: a project releases only if listed.
 - `publish` is an unordered set of closed target names; duplicates fail.
@@ -368,9 +373,10 @@ version are one line, not three.
 successful run is noise.
 
 **Attention.** The verdict leads the line, in a gutter, and the vocabulary
-is four marks rather than a symbol per state: `✓` done or proven · `·`
-already satisfied, nothing to do · `✗` blocked, conflicting, or failed · `→`
-your next move. A running step shows a spinner in the same column. Anything
+is a small set of marks rather than a symbol per state: `✓` done or proven ·
+`·` already satisfied, nothing to do · `✗` blocked, conflicting, or failed ·
+`!` nonblocking warning · `→` your next move. A running step shows a spinner
+in the same column. Anything
 finer — unknown versus conflict, expected-absent versus missing — is carried
 by the words on the line, which the reader has to read anyway. Glyphs never
 appear without a word; `NO_COLOR` and non-TTY are honoured. Any concrete issue
@@ -388,12 +394,16 @@ the entire transient region is erased and replaced once with the deterministic
 final report. A pipe or JSON caller receives no spinner or cursor movement.
 
 The final report has one section per configured target — Git tag, pub.dev,
-GitHub Release, Homebrew, or a later adapter — and shows `current -> target`,
-the public condition in words, and the exact filenames that target consumes.
+GitHub Release, Homebrew, or a later adapter — and shows `current › target`
+when a release moves forward or `target · behind current` when public reality
+is already ahead, plus the public condition and exact filenames consumed.
 The machine report also records `source_binding` (`gitCommit` or `unbound`)
 and `source_comparison` (`exact` or `unavailable`) independently from the
 target verdict. The human report calls out the exceptional unbound case once
 rather than repeating it under every target.
+Stable diagnostic codes remain in JSON and are omitted from the ordinary
+human report. Blocking findings use `problems[]` and `✗`; warnings use the
+separate `warnings[]` collection and `!` and never change the exit code.
 For artifacts, `✓` means the exact artifact is validated in the matching
 stage, no mark means it has not been produced and no production problem is
 known, and `✗` means rk already knows it cannot be produced or validated. The

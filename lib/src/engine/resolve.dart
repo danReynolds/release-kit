@@ -402,6 +402,12 @@ class ResolvedUnit {
 
   bool get shipsBinaries => binaryProject != null;
 
+  /// Whether any selected destination binds this unit to Git history.
+  bool get requiresGit => <PublishTarget>{
+        ...publish,
+        for (final project in projects) ...project.publish,
+      }.any((target) => target.requiresGit);
+
   /// A project carried by a typed checklist step. Project names are unique
   /// across the resolution (RK-RES-007), so they are stable producer ids too.
   ResolvedProject project(String name) =>
