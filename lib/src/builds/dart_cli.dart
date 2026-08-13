@@ -25,6 +25,7 @@ class DartCliBuilder {
     required String output,
     required String workingDirectory,
     required String expectedVersion,
+    void Function(DartBuildEvent event)? onProgress,
   }) async {
     // The caller refuses an unproducible platform with a diagnostic before
     // reaching here, so this asks only *how* to produce it.
@@ -58,6 +59,7 @@ class DartCliBuilder {
       );
     }
 
+    onProgress?.call(DartBuildEvent.testing);
     final smoke = await _smokeTest(
       platform: platform,
       binary: output,
@@ -128,6 +130,8 @@ class DartCliBuilder {
     return cut < 0 ? path : path.substring(cut + 1);
   }
 }
+
+enum DartBuildEvent { testing }
 
 class BuildOutcome {
   const BuildOutcome._(this.path, this.problem, {this.unproven});

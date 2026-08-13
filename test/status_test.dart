@@ -434,7 +434,7 @@ Future<({String text, Map<String, Object?> report})> statusRun({
     sink: buffer.write,
     isTerminal: isTerminal,
     useColor: useColor,
-    terminalWidth: terminalWidth,
+    terminalWidth: terminalWidth ?? (isTerminal ? 500 : null),
   );
   final selectedInspector = inspectorBuilder?.call(state, resolution!) ??
       Inspector(

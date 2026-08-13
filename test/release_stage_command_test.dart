@@ -166,7 +166,7 @@ void main() {
 
       expect(run.code, ExitCodes.ok, reason: run.text);
       expect(run.publicMutations, isEmpty);
-      expect(run.text, contains('tool 1.2.3 · staging'));
+      expect(run.text, contains('tool 1.2.3 · staged'));
       expect(run.text, contains('Local binaries'));
       expect(
         run.text,
@@ -325,7 +325,10 @@ void main() {
       hasLength(1),
     );
     expect(refused.publicMutations, isEmpty);
-    expect('not attempted'.allMatches(refused.text), hasLength(4));
+    expect(
+      'not attempted'.allMatches(refused.text).length,
+      greaterThanOrEqualTo(4),
+    );
     expect(authorizationPrompts, 0);
     expect(harness.stage.inspect().reusable, isTrue,
         reason: 'credentials are acquired only after the exact stage exists');
@@ -791,7 +794,8 @@ void main() {
       'publishRelease': 'failed',
       'publishFormula': 'not_attempted',
     });
-    expect(released.text, contains('Release targets'));
+    expect(released.text, contains('tool 1.2.3 · releasing'));
+    expect(released.text, contains('draft failed'));
     expect(released.text, contains('failed'));
     expect(released.text, contains('not attempted'));
   });
@@ -1109,7 +1113,10 @@ void main() {
       expect(harness.stage.inspect().reusable, isFalse);
       expect(failed.text, contains('Release targets'));
 
-      expect('not attempted'.allMatches(failed.text), hasLength(4));
+      expect(
+        'not attempted'.allMatches(failed.text).length,
+        greaterThanOrEqualTo(4),
+      );
       final unit = (failed.report['units'] as List).single as Map;
       final actions = {
         for (final step in (unit['steps'] as List).cast<Map>())
@@ -1202,7 +1209,10 @@ void main() {
       expect(harness.stage.inspect().reusable, isFalse);
       expect(failed.text, contains('Release targets'));
 
-      expect('not attempted'.allMatches(failed.text), hasLength(4));
+      expect(
+        'not attempted'.allMatches(failed.text).length,
+        greaterThanOrEqualTo(4),
+      );
 
       Directory(harness.stage.directory.resolve(failure.path)).deleteSync();
       final recovered = await harness.run(

@@ -7,6 +7,7 @@ import 'engine/assets.dart';
 import 'engine/checklist.dart';
 import 'engine/diagnostic.dart';
 import 'output/output.dart';
+import 'output/progress.dart';
 import 'engine/resolve.dart';
 import 'engine/stage_archive.dart';
 import 'engine/tools.dart';
@@ -91,6 +92,7 @@ class BinaryChain {
     Step step,
     ResolvedProject project, {
     MacSigning? signing,
+    ProgressHandle? progress,
   }) async {
     final platform = step.platform!;
     final executable = project.executable!;
@@ -122,6 +124,13 @@ class BinaryChain {
       output: workspace.pathOf(name),
       workingDirectory: project.directoryIn(repositoryRoot),
       expectedVersion: project.version.canonical,
+      onProgress: (event) {
+        if (event == DartBuildEvent.testing) {
+          progress?.begin(
+            ProgressActivity(running: 'testing', failed: 'test failed'),
+          );
+        }
+      },
     );
     if (!built.ok) {
       output.problem(
@@ -160,6 +169,9 @@ class BinaryChain {
       );
     }
 
+    progress?.begin(
+      ProgressActivity(running: 'signing', failed: 'signing failed'),
+    );
     return _sign(step, name, smoke, signing);
   }
 

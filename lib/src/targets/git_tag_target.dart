@@ -11,6 +11,7 @@ import '../engine/targets.dart';
 import '../engine/verdict.dart';
 import '../engine/version.dart';
 import '../output/output.dart';
+import '../output/progress.dart';
 import '../transforms/digest.dart';
 import 'target_module.dart';
 
@@ -24,19 +25,17 @@ final class GitTagTargetModule extends TargetModule {
   StepKind get stepKind => StepKind.tag;
 
   @override
-  Future<bool> preflight(
+  Future<TargetReadinessOutcome> preflight(
     TargetReadinessContext context,
     ResolvedUnit unit,
   ) async =>
-      true;
+      const TargetReady();
 
   @override
-  Future<bool> acquireSession(
-    TargetReadinessContext context,
-    ResolvedUnit unit,
-    List<TargetExpectation> targets,
-  ) async =>
-      true;
+  ProgressActivity get actActivity => ProgressActivity(
+        running: 'creating',
+        failed: 'tag creation failed',
+      );
 
   @override
   TargetExpectation expectation({
@@ -211,7 +210,9 @@ final class GitTagTargetModule extends TargetModule {
     // getting it to origin. Push that validated object instead of recreating
     // or moving it.
     if (git.hasTag(tag)) {
-      context.output.say('the tag exists locally; pushing it', depth: 1);
+      context.progress.begin(
+        ProgressActivity(running: 'pushing', failed: 'push failed'),
+      );
       return _pushExisting(
         destination,
         unit,
@@ -240,6 +241,10 @@ final class GitTagTargetModule extends TargetModule {
             'the exact release tag',
       );
     }
+
+    context.progress.begin(
+      ProgressActivity(running: 'pushing', failed: 'push failed'),
+    );
 
     final resolved = await destination.localObject(tag);
     final object = resolved.object;

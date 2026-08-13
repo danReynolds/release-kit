@@ -5,6 +5,7 @@ import 'package:rk/src/engine/verdict.dart';
 import 'package:rk/src/engine/checklist.dart';
 import 'package:rk/src/engine/publish_target.dart';
 import 'package:rk/src/output/output.dart';
+import 'package:rk/src/output/progress.dart';
 import 'package:test/test.dart';
 
 /// Captures what rk would print, so the contract can be asserted rather than
@@ -25,7 +26,7 @@ class Captured {
     sink: captured.buffer.write,
     isTerminal: isTerminal,
     useColor: false,
-    terminalWidth: terminalWidth,
+    terminalWidth: terminalWidth ?? (isTerminal ? 80 : null),
   );
   return (output, captured);
 }
@@ -66,15 +67,16 @@ void main() {
       terminalWidth: 80,
     );
 
-    final activity = output.begin(
-      Step(
-        id: 'cli/build/macos-arm64',
-        kind: StepKind.build,
-        unit: 'cli',
-        summary: 'build tool for macos-arm64',
-        needs: const [],
-      ),
+    final progress = output.progressBoard('cli · staging');
+    final row = progress.addRow(
+      id: 'cli/build/macos-arm64',
+      label: 'Local binary',
+      coordinate: 'macos-arm64',
     );
+    row.handle.begin(ProgressActivity(
+      running: 'building',
+      failed: 'build failed',
+    ));
     output.problem(
       Diagnostic(
         code: 'RK-BUILD-001',
@@ -83,7 +85,6 @@ void main() {
       ),
       unit: 'cli',
     );
-    activity.failed('the build failed');
     output.close();
 
     expect(buffer.toString(), isNot(contains('RK-BUILD-001')));

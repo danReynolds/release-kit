@@ -14,6 +14,7 @@ import '../engine/stage_receipt.dart';
 import '../engine/targets.dart';
 import '../engine/verdict.dart';
 import '../output/output.dart';
+import '../output/progress.dart';
 import '../transforms/digest.dart';
 import 'published_release_evidence.dart';
 import 'target_module.dart';
@@ -28,19 +29,17 @@ final class HomebrewTargetModule extends TargetModule {
   StepKind get stepKind => StepKind.publishFormula;
 
   @override
-  Future<bool> preflight(
+  Future<TargetReadinessOutcome> preflight(
     TargetReadinessContext context,
     ResolvedUnit unit,
   ) async =>
-      true;
+      const TargetReady();
 
   @override
-  Future<bool> acquireSession(
-    TargetReadinessContext context,
-    ResolvedUnit unit,
-    List<TargetExpectation> targets,
-  ) async =>
-      true;
+  ProgressActivity get actActivity => ProgressActivity(
+        running: 'updating',
+        failed: 'update failed',
+      );
 
   @override
   TargetExpectation expectation({
@@ -366,11 +365,18 @@ final class HomebrewTargetModule extends TargetModule {
     return TargetStage(
       target: target,
       contract: contract,
+      progress: [
+        TargetStageProgress.output(
+          id: 'formula',
+          output: ReleaseAssets.formulaPath(target.project!),
+          artifact: ReleaseAssets.formulaName(target.project!.executable!),
+        ),
+      ],
       prepare: (context) => _prepareStage(context, unit, target),
     );
   }
 
-  Future<StageStep?> _prepareStage(
+  Future<TargetStageOutcome> _prepareStage(
     TargetStageContext context,
     ResolvedUnit unit,
     TargetExpectation target,
@@ -379,7 +385,7 @@ final class HomebrewTargetModule extends TargetModule {
     final receiptName = context.contract.step.name;
     final repository = context.repository;
     if (repository == null) {
-      context.output.problem(
+      return TargetStageFailure(
         Diagnostic(
           code: 'RK-GIT-002',
           message: 'homebrew needs an origin remote, and this repository '
@@ -389,14 +395,12 @@ final class HomebrewTargetModule extends TargetModule {
               'origin ${context.git.branch ?? 'main'}',
         ),
       );
-      context.output.halt(HaltKind.beforeActing);
-      return null;
     }
 
     final project = target.project!;
     final archives = <String, StageArtifact>{};
     for (final platform in project.binaryPlatforms) {
-      final record = context.progress
+      final record = context.priorSteps
           .where(
               (step) => step.name == archiveReceiptName(project.name, platform))
           .firstOrNull;
@@ -404,7 +408,7 @@ final class HomebrewTargetModule extends TargetModule {
           .where((output) => output.type == 'archive')
           .firstOrNull;
       if (artifact == null) {
-        context.output.problem(
+        return TargetStageFailure(
           Diagnostic(
             code: 'RK-WORK-001',
             message: 'the workspace has no archive for $platform',
@@ -412,12 +416,16 @@ final class HomebrewTargetModule extends TargetModule {
           ),
           unit: unit.name,
         );
-        return null;
       }
       archives[platform] = artifact;
     }
-    context.output.report.acted = true;
     final executable = project.executable!;
+    context.progress('formula').begin(
+          ProgressActivity(
+            running: 'rendering',
+            failed: 'rendering failed',
+          ),
+        );
     final contents = HomebrewFormula.render(
       className: HomebrewFormula.classNameFor(executable),
       description: 'Released by rk',
@@ -442,18 +450,20 @@ final class HomebrewTargetModule extends TargetModule {
       ReleaseAssets.formulaPath(project),
       utf8.encode(contents),
     );
-    return StageStep(
-      name: receiptName,
-      inputs: [
-        for (final archive in archives.values) StageInput.artifact(archive),
-      ],
-      outputs: [
-        StageArtifact.capture(
-          stage: context.stage.directory,
-          path: ReleaseAssets.formulaPath(project),
-          type: 'formula',
-        ),
-      ],
+    return TargetStageSuccess(
+      StageStep(
+        name: receiptName,
+        inputs: [
+          for (final archive in archives.values) StageInput.artifact(archive),
+        ],
+        outputs: [
+          StageArtifact.capture(
+            stage: context.stage.directory,
+            path: ReleaseAssets.formulaPath(project),
+            type: 'formula',
+          ),
+        ],
+      ),
     );
   }
 }

@@ -1,9 +1,9 @@
 import 'assets.dart';
 import 'checklist.dart';
 import 'producers.dart';
-import 'publish_target.dart';
 import 'resolve.dart';
 import 'targets.dart';
+import '../targets/target_module.dart';
 
 /// What a stage is making, grouped by its destination or local output.
 ///
@@ -14,7 +14,12 @@ import 'targets.dart';
 /// own production: it says which producer is working on it now, and when the
 /// stage settles it says what that producer proved.
 class StageBoard {
-  StageBoard._(this.groups, this._rowOf);
+  StageBoard._(
+    this.groups,
+    this._rowsOf,
+    this._progressRows,
+    this._producersOf,
+  );
 
   /// The rows one unit's stage will fill, in release order.
   ///
@@ -25,27 +30,62 @@ class StageBoard {
   /// but it does validate the staged source, and that check is the most
   /// common reason a release stops later than it should have.
   factory StageBoard.forUnit(
-      ResolvedUnit unit, List<TargetExpectation> targets) {
+    ResolvedUnit unit,
+    List<TargetExpectation> targets,
+    List<TargetStage> targetStages,
+  ) {
     final groups = <StageBoardGroup>[];
-    final rowOf = <String, StageBoardRow>{};
+    final rowsOf = <String, List<StageBoardRow>>{};
+    final progressRows = <String, StageBoardRow>{};
+    final producersOf = <StageBoardRow, Set<String>>{};
+
+    void bind(String producer, StageBoardRow row) {
+      rowsOf.putIfAbsent(producer, () => <StageBoardRow>[]).add(row);
+      producersOf.putIfAbsent(row, () => <String>{}).add(producer);
+    }
 
     for (final target in targets) {
       final rows = <StageBoardRow>[];
-      if (target.kind == 'pubDev') {
-        final row = StageBoardRow('package source');
-        rows.add(row);
-        rowOf['pub-preflight:${target.project!.name}'] = row;
-      }
       for (final artifact in target.artifacts) {
-        final row = StageBoardRow(artifact);
+        final row = StageBoardRow('${target.step.id}/$artifact', artifact);
         rows.add(row);
         if (artifact == ReleaseAssets.manifest) {
-          rowOf['complete-stage'] = row;
-        } else if (artifact.endsWith('.rb')) {
-          // Without this the formula row never completed, and `○` — added
-          // because blank read as skipped — was left on the one file that
-          // had in fact been produced.
-          rowOf['homebrew-formula:${target.project!.name}'] = row;
+          bind('complete-stage', row);
+        }
+      }
+      for (final stage in targetStages.where(
+        (stage) => stage.target.step.id == target.step.id,
+      )) {
+        final outputBindings = <String>{};
+        for (final view in stage.progress) {
+          final output = view.output;
+          if (output != null &&
+              !stage.contract.step.outputs.containsKey(output)) {
+            throw StateError(
+              '${stage.contract.step.name} progress binds undeclared output '
+              '$output',
+            );
+          }
+          if (output != null && !outputBindings.add(output)) {
+            throw StateError(
+              '${stage.contract.step.name} binds output $output twice',
+            );
+          }
+          final row = view.artifact == null
+              ? StageBoardRow(
+                  '${target.step.id}/${stage.contract.step.name}/${view.id}',
+                  view.label!,
+                )
+              : rows.singleWhere(
+                  (row) => row.name == view.artifact,
+                  orElse: () => throw StateError(
+                    '${stage.contract.step.name} binds undeclared artifact '
+                    '${view.artifact}',
+                  ),
+                );
+          if (!rows.contains(row)) rows.add(row);
+          bind(stage.contract.step.name, row);
+          progressRows['${stage.contract.step.name}/${view.id}'] = row;
         }
       }
       if (rows.isNotEmpty) {
@@ -59,15 +99,27 @@ class StageBoard {
     }
 
     final binaryProject = unit.binaryProject;
-    final publishesBinaryArchives =
-        unit.publish.contains(PublishTarget.githubRelease);
-    if (binaryProject != null && !publishesBinaryArchives) {
-      groups.add(
-        StageBoardGroup('Local binaries', [
-          for (final platform in [...binaryProject.binaryPlatforms]..sort())
-            StageBoardRow(ReleaseAssets.archivePath(binaryProject, platform)),
-        ]),
-      );
+    final publishedArtifacts = {
+      for (final target in targets) ...target.artifacts,
+    };
+    if (binaryProject != null) {
+      final localRows = <StageBoardRow>[];
+      for (final platform in [...binaryProject.binaryPlatforms]..sort()) {
+        final publicName = ReleaseAssets.archiveName(
+          binaryProject.executable!,
+          binaryProject.version.canonical,
+          platform,
+        );
+        if (!publishedArtifacts.contains(publicName)) {
+          localRows.add(StageBoardRow(
+            'local/${binaryProject.name}/$platform',
+            ReleaseAssets.archivePath(binaryProject, platform),
+          ));
+        }
+      }
+      if (localRows.isNotEmpty) {
+        groups.add(StageBoardGroup('Local binaries', localRows));
+      }
     }
 
     // Every producer of one platform's binary reports against that
@@ -77,36 +129,56 @@ class StageBoard {
       final projectName = step.project;
       if (platform == null || projectName == null) continue;
       final project = unit.project(projectName);
-      final archive = publishesBinaryArchives
-          ? ReleaseAssets.archiveName(
-              project.executable!,
-              project.version.canonical,
-              platform,
-            )
-          : ReleaseAssets.archivePath(project, platform);
+      final publicArchive = ReleaseAssets.archiveName(
+        project.executable!,
+        project.version.canonical,
+        platform,
+      );
+      final localArchive = ReleaseAssets.archivePath(project, platform);
       for (final group in groups) {
         for (final row in group.rows) {
-          if (row.name == archive) rowOf[receiptNameFor(step)] = row;
+          if (row.name == publicArchive || row.name == localArchive) {
+            bind(receiptNameFor(step), row);
+          }
         }
       }
     }
 
-    return StageBoard._(List.unmodifiable(groups), rowOf);
+    return StageBoard._(
+      List.unmodifiable(groups),
+      Map.unmodifiable({
+        for (final entry in rowsOf.entries)
+          entry.key: List<StageBoardRow>.unmodifiable(entry.value),
+      }),
+      Map.unmodifiable(progressRows),
+      Map.unmodifiable({
+        for (final entry in producersOf.entries)
+          entry.key: Set<String>.unmodifiable(entry.value),
+      }),
+    );
   }
 
   static int _rank(String name) {
     if (name == ReleaseAssets.manifest) return 3;
-    if (name.endsWith('.rb')) return 1;
     return 0;
   }
 
   final List<StageBoardGroup> groups;
-  final Map<String, StageBoardRow> _rowOf;
+  final Map<String, List<StageBoardRow>> _rowsOf;
+  final Map<String, StageBoardRow> _progressRows;
+  final Map<StageBoardRow, Set<String>> _producersOf;
 
   /// The row a receipt producer reports against, when it has one. A
   /// producer whose output never reaches a target — release notes — has
   /// none, and says nothing.
-  StageBoardRow? rowFor(String producer) => _rowOf[producer];
+  List<StageBoardRow> rowsFor(String producer) =>
+      _rowsOf[producer] ?? const <StageBoardRow>[];
+
+  StageBoardRow? progressRow(String producer, String id) =>
+      _progressRows['$producer/$id'];
+
+  Set<String> producersFor(StageBoardRow row) =>
+      _producersOf[row] ?? const <String>{};
 
   bool get isEmpty => groups.isEmpty;
 }
@@ -120,34 +192,8 @@ class StageBoardGroup {
 }
 
 class StageBoardRow {
-  StageBoardRow(this.name);
+  StageBoardRow(this.id, this.name);
 
+  final String id;
   final String name;
-
-  /// What is being done to it now, while it is being done.
-  String? phase;
-
-  /// What its producers proved, once they have.
-  String? note;
-
-  StageBoardRowState state = StageBoardRowState.pending;
-
-  void begin(String doing) {
-    phase = doing;
-    state = StageBoardRowState.active;
-  }
-
-  void finish({String? note}) {
-    phase = null;
-    state = StageBoardRowState.done;
-    if (note != null) this.note = note;
-  }
-
-  void fail(String reason) {
-    phase = null;
-    note = reason;
-    state = StageBoardRowState.failed;
-  }
 }
-
-enum StageBoardRowState { pending, active, done, failed }
