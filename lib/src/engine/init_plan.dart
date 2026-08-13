@@ -112,20 +112,23 @@ final class InitPlan {
       trackedManifests: gitBound,
     );
     final notices = [...native.notices];
+    final projects = native.projects
+        .where((project) => !project.isExampleOrFixture)
+        .toList();
+    final omitted = native.projects.length - projects.length;
     bool registryAvailableFor(DartProjectDiscovery project) =>
         !project.isGroupingRoot &&
         project.version != null &&
         !project.vetoesRegistry &&
-        !project.isExampleOrFixture &&
         (project.publishTo == null ||
             isPubDevDestination(project.publishTo!)) &&
         (project.publishTo != null ||
             ambientPubHostedUrl == null ||
             isPubDevDestination(ambientPubHostedUrl));
-    final releasable = native.projects.where(registryAvailableFor).length;
+    final releasable = projects.where(registryAvailableFor).length;
     final candidates = <InitCandidate>[];
     var vetoed = 0;
-    for (final project in native.projects) {
+    for (final project in projects) {
       if (project.vetoesRegistry) vetoed++;
       final packageUsable = !project.isGroupingRoot && project.version != null;
       final repositoryPubDev =
@@ -137,7 +140,8 @@ final class InitPlan {
       final tagAvailable = packageUsable && gitBound && hasRemote;
       final githubAvailable = tagAvailable && githubRepository != null;
       final oneExecutable = project.executables.length == 1;
-      final binaryAvailable = packageUsable && oneExecutable && githubAvailable;
+      final binaryAvailable = packageUsable && oneExecutable;
+      final homebrewAvailable = binaryAvailable && githubAvailable;
       final selected = <InitOption>{
         if (registryAvailable) InitOption.pubDev,
         if (registryAvailable && tagAvailable && releasable == 1)
@@ -148,25 +152,17 @@ final class InitPlan {
             ? const InitAvailability.available(
                 'native Dart package coordinate',
               )
-            : project.isExampleOrFixture &&
-                    packageUsable &&
-                    !project.vetoesRegistry &&
-                    repositoryPubDev &&
-                    ambientPubDev
-                ? const InitAvailability.available(
-                    'native coordinate; example and fixture paths start unselected',
-                  )
-                : InitAvailability.unavailable(project.isGroupingRoot
-                    ? 'workspace root — select its packages instead'
-                    : project.version == null
-                        ? 'the native manifest declares no version'
-                        : project.vetoesRegistry
-                            ? 'publish_to: none vetoes registry publication'
-                            : !repositoryPubDev
-                                ? 'publish_to names a custom registry; this build has no matching target'
-                                : !ambientPubDev
-                                    ? 'PUB_HOSTED_URL redirects the default registry; declare publish_to in the pubspec first'
-                                    : 'a package version is required'),
+            : InitAvailability.unavailable(project.isGroupingRoot
+                ? 'workspace root — select its packages instead'
+                : project.version == null
+                    ? 'the native manifest declares no version'
+                    : project.vetoesRegistry
+                        ? 'publish_to: none vetoes registry publication'
+                        : !repositoryPubDev
+                            ? 'publish_to names a custom registry; this build has no matching target'
+                            : !ambientPubDev
+                                ? 'PUB_HOSTED_URL redirects the default registry; declare publish_to in the pubspec first'
+                                : 'a package version is required'),
         InitOption.gitTag: tagAvailable
             ? InitAvailability.available(selected.contains(InitOption.gitTag)
                 ? 'usable Git remote; selected conservatively'
@@ -193,10 +189,8 @@ final class InitPlan {
                 ? project.executables.isEmpty
                     ? 'no executable is declared'
                     : 'several executables need a hand-authored decision'
-                : !githubAvailable
-                    ? 'standalone binaries require GitHub Release'
-                    : 'a package version is required'),
-        InitOption.homebrew: binaryAvailable
+                : 'a package version is required'),
+        InitOption.homebrew: homebrewAvailable
             ? const InitAvailability.available(
                 'formula in the conventional or configured tap',
               )
@@ -212,6 +206,12 @@ final class InitPlan {
         availability: Map.unmodifiable(availability),
         selected: Set.unmodifiable(selected),
       ));
+    }
+    if (omitted > 0) {
+      notices.add(
+        '$omitted ${omitted == 1 ? 'package' : 'packages'} under '
+        'example, fixture, or test paths omitted',
+      );
     }
     if (vetoed > 0) notices.add('$vetoed excluded by publish_to: none');
     return InitPlan(
@@ -230,7 +230,7 @@ final class InitPlan {
   final String? githubRepository;
 
   List<InitCandidate> get included =>
-      candidates.where((candidate) => _targets(candidate).isNotEmpty).toList();
+      candidates.where((candidate) => candidate.selected.isNotEmpty).toList();
 
   InitToggleResult toggle(int index, InitOption option) {
     final candidate = candidates[index];
@@ -265,7 +265,7 @@ final class InitPlan {
         if (selected.remove(item)) changed.add(item);
       }
     }
-    final included = selected.any(_isTarget);
+    final included = selected.isNotEmpty;
     final plan = _replace(
       index,
       candidate.copyWith(selected: Set.unmodifiable(selected)),
@@ -299,8 +299,10 @@ final class InitPlan {
           'github-release',
         if (candidate.selected.contains(InitOption.homebrew)) 'homebrew',
       ];
-      buffer.write(
-          'publish = [${publish.map((item) => '"$item"').join(', ')}]\n');
+      if (publish.isNotEmpty) {
+        buffer.write(
+            'publish = [${publish.map((item) => '"$item"').join(', ')}]\n');
+      }
       if (candidate.selected.contains(InitOption.binary)) {
         buffer.write('binary_platforms = '
             '[${ReleaseConfig.supportedPlatformsList.map((item) => '"$item"').join(', ')}]\n');
@@ -341,10 +343,7 @@ final class InitPlan {
       );
 
   static Set<InitOption> effectsFor(InitOption option) => switch (option) {
-        InitOption.binary => const {
-            InitOption.githubRelease,
-            InitOption.gitTag,
-          },
+        InitOption.binary => const {},
         InitOption.githubRelease => const {InitOption.gitTag},
         InitOption.homebrew => const {
             InitOption.binary,
@@ -359,15 +358,3 @@ final class InitPlan {
     return cleaned.isEmpty ? 'main' : cleaned;
   }
 }
-
-Set<InitOption> _targets(InitCandidate candidate) =>
-    candidate.selected.where(_isTarget).toSet();
-
-bool _isTarget(InitOption option) => switch (option) {
-      InitOption.gitTag ||
-      InitOption.pubDev ||
-      InitOption.githubRelease ||
-      InitOption.homebrew =>
-        true,
-      _ => false,
-    };

@@ -91,36 +91,28 @@ void main() {
       expect(run.all, contains('rk release [unit] --stage'));
     });
 
-    test('a bare --confirm authorizes nothing and is refused', () {
-      final run = repo(['release', 'lib', '--confirm', '--json']);
+    test('the removed --confirm flag is refused', () {
+      final run = repo(['release', 'lib', '--confirm=1.4.0', '--json']);
       expect(run.code, 2, reason: run.all);
-      expect(run.problems.map((p) => p['code']), contains('RK-CLI-009'));
-    });
-
-    test('two contradictory --confirm values refuse, not last-wins', () {
-      final run = repo(
-          ['release', 'lib', '--confirm=1.0.0', '--confirm=2.0.0', '--json']);
-      expect(run.code, 2, reason: run.all);
-      expect(run.problems.map((p) => p['code']), contains('RK-CLI-009'));
+      expect(run.problems.map((p) => p['code']), contains('RK-CLI-001'));
     });
 
     test('--stage does not take an authorization', () {
-      final run =
-          repo(['release', 'lib', '--stage', '--confirm=1.4.0', '--json']);
+      final run = repo(['release', 'lib', '--stage', '--yes', '--json']);
       expect(run.code, 2, reason: run.all);
       expect(run.problems.map((p) => p['code']), contains('RK-CLI-005'));
       expect(run.all, contains('staging publishes nothing'));
     });
 
-    test('--confirm carries its version through the parser', () {
+    test('--yes and -y apply only to release', () {
       // --help short-circuits before the verb runs, so this proves only the
-      // surface: the flag parses, applies to release, and is refused
-      // elsewhere. Its authorization semantics are the typed-version path,
-      // proved in release_test.
-      final accepted = repo(['release', '--confirm=1.4.0', '--help']);
+      // surface: both spellings parse for release and are refused elsewhere.
+      final accepted = repo(['release', '--yes', '--help']);
       expect(accepted.code, 0, reason: accepted.all);
+      final alias = repo(['release', '-y', '--help']);
+      expect(alias.code, 0, reason: alias.all);
 
-      final elsewhere = repo(['status', '--confirm=1.4.0', '--json']);
+      final elsewhere = repo(['status', '--yes', '--json']);
       expect(elsewhere.code, 2, reason: elsewhere.all);
       expect(elsewhere.problems.map((p) => p['code']), contains('RK-CLI-005'));
     });

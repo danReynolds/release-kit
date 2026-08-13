@@ -52,6 +52,14 @@ path = "packages/tool"
 publish = ["pub.dev"]
 ''';
 
+const _localBinaryConfig = '''
+schema = 2
+
+[release.tool]
+path = "packages/tool"
+binary_platforms = ["linux-x64"]
+''';
+
 const _pubspec = '''
 name: tool
 version: 1.2.3
@@ -119,6 +127,31 @@ void main() {
     expect(run.problemCodes, ['RK-SRC-002']);
     expect(run.publicMutations, isEmpty);
     expect(unbound.stage.inspect().receipt, isNull);
+  });
+
+  test('a binary-only release writes local archives without authorization',
+      () async {
+    for (final unbound in [false, true]) {
+      final local = _Harness(localBinaryOnly: true, unbound: unbound);
+      addTearDown(local.close);
+
+      final run = await local.run(
+        stageOnly: false,
+        confirm: (_) async => fail('local output needs no authorization'),
+      );
+
+      expect(run.code, ExitCodes.ok, reason: run.text);
+      expect(run.publicMutations, isEmpty);
+      expect(run.text, contains('tool 1.2.3 · staging'));
+      expect(run.text, contains('Local binaries'));
+      expect(
+        run.text,
+        contains('producers/tool/archives/tool-1.2.3-linux-x64.tar.gz'),
+      );
+      expect(run.text, contains('Written to'));
+      expect(run.report['next'], isEmpty);
+      expect(local.stage.inspect().reusable, isTrue);
+    }
   });
 
   test('non-Git existing version is compared after staging, not blocked early',
@@ -567,6 +600,43 @@ void main() {
       'publishRelease': 'already_exact',
       'publishFormula': 'already_exact',
     });
+  });
+
+  test('authorization growth after an earlier act is stopped partway',
+      () async {
+    final first = await harness.run(
+      stageOnly: false,
+      confirm: (_) async => '1.2.3',
+    );
+    expect(first.code, ExitCodes.ok, reason: first.text);
+
+    // Start a resumable release with tag and pub.dev absent, while GitHub and
+    // Homebrew are initially exact and therefore omitted from consent.
+    harness.tools.remoteTags.clear();
+    harness.registry.published['tool']!.remove('1.2.3');
+    harness.registry.forget('tool');
+
+    final rerun = await harness.run(
+      stageOnly: false,
+      confirm: (_) async => '1.2.3',
+      onInvocation: (call) {
+        if (call.publicKind == 'pub.dev') {
+          harness.tools.githubReleaseExists = false;
+        }
+      },
+    );
+
+    expect(rerun.code, ExitCodes.refused, reason: rerun.text);
+    expect(rerun.problemCodes, contains('RK-AUTH-003'));
+    expect((rerun.report['halt'] as Map)['kind'], 'stoppedPartway');
+    final github =
+        ((rerun.report['units'] as List).single as Map)['steps'] as List;
+    expect(
+      (github
+          .cast<Map>()
+          .singleWhere((step) => step['kind'] == 'publishRelease'))['action'],
+      'not_attempted',
+    );
   });
 
   test('a partial binary release refuses to rebuild a lost exact stage',
@@ -1576,9 +1646,13 @@ void _interruptAfter(ReleaseStage stage, String stepName) {
 }
 
 class _Harness {
-  _Harness({bool unbound = false}) {
+  _Harness({bool unbound = false, bool localBinaryOnly = false}) {
     root = Directory.systemTemp.createTempSync('rk-stage-command-');
-    final config = unbound ? _pubOnlyConfig : _config;
+    final config = localBinaryOnly
+        ? _localBinaryConfig
+        : unbound
+            ? _pubOnlyConfig
+            : _config;
     source = MemorySourceTree({
       'release.toml': config,
       'packages/tool/pubspec.yaml': _pubspec,
@@ -1692,7 +1766,16 @@ class _Harness {
       inspector: inspector,
       tools: tools,
       output: output,
-      confirm: confirm,
+      // Most of this long-lived safety suite predates ordinary yes/no and
+      // returns the fixture version after performing its prompt-time hook.
+      // Preserve those hooks while adapting the old fixture answer at this
+      // single boundary.
+      confirm: confirm == null
+          ? null
+          : (prompt) async {
+              final answer = await confirm(prompt);
+              return answer == '1.2.3' ? 'yes' : answer;
+            },
       stageOnly: stageOnly,
       stageFor: stages.call,
       refreshStage: refreshStage ?? stages.refresh,

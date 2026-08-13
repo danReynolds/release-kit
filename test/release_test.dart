@@ -117,11 +117,11 @@ Future<Ran> release({
   GitState? state,
   Map<String, String> Function()? refreshEnvironment,
   RegistryReader? registry,
-  String? typed = '0.2.0',
-  String? preauthorized,
+  String? typed = 'yes',
   bool dryRun = false,
   Map<String, ToolResult> results = const {},
   void Function(String key)? onRun,
+  void Function()? onConfirm,
   ToolResult? Function(String key)? answers,
   Iterable<String> onRemote = const [],
   String config = _config,
@@ -298,8 +298,12 @@ Future<Ran> release({
     // instead of failing, because even the framework's timeout timer starved.
     wait: (_) => Future<void>.delayed(Duration.zero),
     output: Output(sink: buffer.write, isTerminal: false, useColor: false),
-    confirm: typed == null ? null : (_) async => typed,
-    preauthorized: preauthorized,
+    confirm: typed == null
+        ? null
+        : (_) async {
+            onConfirm?.call();
+            return typed;
+          },
     stageOnly: dryRun,
     stageFor: stageFor,
     refreshStage: (unit, _) => stageFor(unit),
@@ -376,9 +380,11 @@ publish = ["pub.dev"]
     );
   });
 
-  test('two units are two releases, and rk will not pick one', () async {
+  test('a bare release visits independent units in declaration order',
+      () async {
     final ran = await release(
       only: null,
+      typed: 'no',
       config: '''
 schema = 2
 
@@ -400,14 +406,225 @@ publish = ["git-tag", "pub.dev"]
       }, description: '/repo/keybay'),
     );
 
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(ran.text, contains('Release order: core 0.2.0 -> other 0.2.0'));
+    expect(
+      (ran.report['units'] as List).cast<Map>().map((unit) => unit['name']),
+      ['core', 'other'],
+      reason: 'an early stop retains the complete ordered repository scope',
+    );
+    expect(
+      ran.calls.where((call) => call.contains('publish --force')),
+      isEmpty,
+      reason: 'declining the first unit must publish neither unit',
+    );
+  });
+
+  test('a bare release orders a provider before its declared dependant',
+      () async {
+    final ran = await release(
+      only: null,
+      typed: 'no',
+      config: '''
+schema = 2
+
+[release.cli]
+path = "packages/cli"
+publish = ["pub.dev"]
+
+[release.core]
+path = "packages/core"
+publish = ["pub.dev"]
+''',
+      source: MemorySourceTree({
+        'packages/cli/pubspec.yaml': '''
+name: cli
+version: 3.0.0
+dependencies:
+  core: ^2.0.0
+''',
+        'packages/cli/CHANGELOG.md': '## 3.0.0\n',
+        'packages/core/pubspec.yaml': 'name: core\nversion: 2.0.0\n',
+        'packages/core/CHANGELOG.md': '## 2.0.0\n',
+      }, description: '/repo/stack'),
+      registry: FakeRegistry({
+        'cli': ['2.0.0'],
+        'core': ['1.0.0'],
+      }),
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(ran.text, contains('Release order: core 2.0.0 -> cli 3.0.0'));
+    expect(ran.text, contains('    core 2.0.0'),
+        reason: 'the provider is the first unit prepared for authorization');
+  });
+
+  test('a cross-unit dependency cycle refuses before preparing either unit',
+      () async {
+    final ran = await release(
+      only: null,
+      config: '''
+schema = 2
+
+[release.a]
+path = "packages/a"
+publish = ["pub.dev"]
+
+[release.b]
+path = "packages/b"
+publish = ["pub.dev"]
+''',
+      source: MemorySourceTree({
+        'packages/a/pubspec.yaml': '''
+name: a
+version: 1.0.0
+dependencies:
+  b: ^1.0.0
+''',
+        'packages/a/CHANGELOG.md': '## 1.0.0\n',
+        'packages/b/pubspec.yaml': '''
+name: b
+version: 1.0.0
+dependencies:
+  a: ^1.0.0
+''',
+        'packages/b/CHANGELOG.md': '## 1.0.0\n',
+      }, description: '/repo/cycle'),
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(ran.problems.map((problem) => problem['code']), ['RK-DEP-004']);
+    expect(ran.calls, isEmpty);
+  });
+
+  test(
+      'a provider settles before its dependant stages, and a later refusal '
+      'is repository-partial', () async {
+    final registry = FakeRegistry({
+      'core': ['1.0.0'],
+      'cli': ['2.0.0'],
+    });
+    var providerPublished = false;
+    final ran = await release(
+      only: null,
+      config: '''
+schema = 2
+
+[release.cli]
+path = "packages/cli"
+publish = ["pub.dev"]
+
+[release.core]
+path = "packages/core"
+publish = ["pub.dev"]
+''',
+      source: MemorySourceTree({
+        'packages/cli/pubspec.yaml': '''
+name: cli
+version: 3.0.0
+dependencies:
+  core: ^2.0.0
+''',
+        'packages/cli/CHANGELOG.md': '## 3.0.0\n',
+        'packages/core/pubspec.yaml': 'name: core\nversion: 2.0.0\n',
+        'packages/core/CHANGELOG.md': '## 2.0.0\n',
+      }, description: '/repo/stack'),
+      registry: registry,
+      onRun: (key) {
+        if (key == 'dart pub publish --force' && !providerPublished) {
+          providerPublished = true;
+          registry.published['core']!.add('2.0.0');
+          registry.archives['core@2.0.0'] =
+              ArchiveBuilder.gzip(ArchiveBuilder.tar([
+            ArchiveEntry(
+              name: 'pubspec.yaml',
+              bytes: 'name: core\nversion: 2.0.0\n'.codeUnits,
+            ),
+            ArchiveEntry(name: 'CHANGELOG.md', bytes: '## 2.0.0\n'.codeUnits),
+          ]));
+          registry.forget('core');
+        }
+      },
+      answers: (key) {
+        if (key == 'dart pub publish --dry-run' && providerPublished) {
+          return ToolResult(
+            exitCode: 1,
+            stdout: '',
+            stderr: 'dependent validation failed',
+          );
+        }
+        return null;
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(providerPublished, isTrue);
+    final publish = ran.calls.indexOf('dart pub publish --force');
+    final dependantDryRun = ran.calls.lastIndexOf('dart pub publish --dry-run');
+    expect(dependantDryRun, greaterThan(publish));
+    expect((ran.report['halt'] as Map)['kind'], 'stoppedPartway');
+    expect(
+        ran.problems.map((problem) => problem['code']), contains('RK-PUB-001'));
+  });
+
+  test('a later unit source refusal is found before the first unit acts',
+      () async {
+    final ran = await release(
+      only: null,
+      config: '''
+schema = 2
+
+[release.first]
+path = "packages/first"
+publish = ["pub.dev"]
+
+[release.later]
+path = "packages/later"
+publish = ["pub.dev"]
+''',
+      source: MemorySourceTree({
+        'packages/first/pubspec.yaml': 'name: first\nversion: 1.0.0\n',
+        'packages/first/CHANGELOG.md': '## 1.0.0\n',
+        'packages/later/pubspec.yaml': 'name: later\nversion: 1.0.0\n',
+      }, description: '/repo/two'),
+      registry: FakeRegistry({
+        'first': ['0.9.0'],
+        'later': ['0.9.0'],
+      }),
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(
+        ran.problems.map((problem) => problem['code']), contains('RK-CHG-001'));
+    expect(ran.calls, isEmpty);
+  });
+
+  test('repository-wide stage asks for an exact unit', () async {
+    final ran = await release(
+      only: null,
+      dryRun: true,
+      config: '''
+schema = 2
+
+[release.a]
+path = "packages/a"
+publish = ["pub.dev"]
+
+[release.b]
+path = "packages/b"
+publish = ["pub.dev"]
+''',
+      source: MemorySourceTree({
+        'packages/a/pubspec.yaml': 'name: a\nversion: 1.0.0\n',
+        'packages/a/CHANGELOG.md': '## 1.0.0\n',
+        'packages/b/pubspec.yaml': 'name: b\nversion: 1.0.0\n',
+        'packages/b/CHANGELOG.md': '## 1.0.0\n',
+      }, description: '/repo/two'),
+    );
+
     expect(ran.exitCode, ExitCodes.usage);
     expect(ran.problems.map((problem) => problem['code']), ['RK-CLI-004']);
-    expect(ran.text, contains('core, other'));
-    expect(
-      ran.calls,
-      isEmpty,
-      reason: 'an ambiguous release must not start work',
-    );
+    expect(ran.calls, isEmpty);
   });
 }
 
@@ -468,7 +685,7 @@ executables:
       source: binaryTree(),
       state: _git(tags: ['v0.8.0', 'v0.9.0']),
       registry: FakeRegistry({}),
-      typed: '1.0.0',
+      typed: 'yes',
       only: 'cli',
       answers: (key) {
         // The baseline release (v0.9.0) is there and lists its archive; the
@@ -727,9 +944,8 @@ void main() {
     );
   });
 
-  test('an unconfirmed release publishes nothing, and says so as data',
-      () async {
-    final ran = await release(typed: 'yes');
+  test('a declined release publishes nothing, and says so as data', () async {
+    final ran = await release(typed: 'no');
     expect(ran.exitCode, ExitCodes.refused);
     expect(ran.text, contains('nothing was published'));
     expect(
@@ -747,21 +963,7 @@ void main() {
     );
   });
 
-  test('a wrong --confirm refuses before any credential is touched', () async {
-    final ran = await release(typed: '9.9.9', preauthorized: '9.9.9');
-    expect(ran.exitCode, ExitCodes.refused);
-    expect(ran.problems.map((p) => p['code']), ['RK-AUTH-002']);
-    expect(
-      ran.calls,
-      isNot(contains('dart pub login')),
-      reason: 'a value that cannot authorize this release must not acquire '
-          'a publishing session or spend signing and notary work',
-    );
-    expect(ran.calls, isNot(contains('dart pub publish --dry-run')));
-    expect((ran.report['halt'] as Map?)?['kind'], 'beforeActing');
-  });
-
-  test('typing the version tags and publishes, in that order', () async {
+  test('answering yes tags and publishes, in that order', () async {
     // The registry reports the version live once publish has run, which is
     // what the post-publish verification reads.
     final registry = _MutableRegistry(<String>['0.1.0']);
@@ -778,7 +980,7 @@ void main() {
           registry.archives['keybay@0.2.0'] = publishedBytes();
         }
       },
-      typed: '0.2.0',
+      typed: 'yes',
     );
 
     expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
@@ -792,10 +994,10 @@ void main() {
     expect(unitDocument['version'], '0.2.0');
     expect(unitDocument['tag'], 'v0.2.0');
     expect(
-      (ran.report['attachments'] as Map?)?['authorization-disclosures'],
+      (ran.report['attachments'] as Map?)?['authorization-disclosures/core'],
       contains('pub.dev never deletes a version'),
-      reason: 'what the prompt disclosed travels with the yes, so a --json '
-          '--confirm caller reads it on the surface that carries the yes',
+      reason: 'what the prompt disclosed travels with the yes on the '
+          'machine surface',
     );
     expect(
       ran.calls.where((call) => call == 'dart pub login'),
@@ -838,11 +1040,61 @@ void main() {
     );
   });
 
+  test('work omitted as exact cannot become authorized after the yes',
+      () async {
+    final registry = FakeRegistry({
+      'keybay': ['0.1.0', '0.2.0'],
+      'other': ['0.1.0'],
+    }, archives: {
+      'keybay@0.2.0': publishedBytes(),
+    });
+    final ran = await release(
+      config: '''
+schema = 2
+
+[release.core]
+
+[[release.core.project]]
+path = "packages/keybay"
+publish = ["pub.dev"]
+
+[[release.core.project]]
+path = "packages/other"
+publish = ["pub.dev"]
+''',
+      source: MemorySourceTree({
+        'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
+        'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
+        'packages/other/pubspec.yaml': 'name: other\nversion: 0.2.0\n',
+        'packages/other/CHANGELOG.md': '## 0.2.0\n',
+      }, description: '/repo/keybay'),
+      registry: registry,
+      onConfirm: () {
+        registry.published['keybay']!.remove('0.2.0');
+        registry.forget('keybay');
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(
+      ran.problems.map((problem) => problem['code']),
+      contains('RK-AUTH-003'),
+      reason: ran.text,
+    );
+    expect(
+      ran.calls.where((call) =>
+          call.startsWith('git tag ') || call.contains('publish --force')),
+      isEmpty,
+      reason: 'all omitted targets are rechecked together before the first '
+          'authorized act',
+    );
+  });
+
   test('a destination redirected during login refuses without disclosing it',
       () async {
     var redirected = false;
     final ran = await release(
-      typed: '0.2.0',
+      typed: 'yes',
       refreshEnvironment: () => {
         'PUB_HOSTED_URL': redirected
             ? 'https://token:secret@packages.example.invalid/private'

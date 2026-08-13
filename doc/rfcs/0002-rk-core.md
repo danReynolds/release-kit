@@ -148,7 +148,8 @@ Rules:
   At most one project in a unit may declare it. Several registry packages may
   still release together, but separate standalone programs are separate units
   with independent signing identities and public lifecycles.
-  GitHub Release may carry only metadata when no producer contributes assets;
+  It may stand alone as a local release output. GitHub Release publishes the
+  archives only when both are selected, and may otherwise carry only metadata;
   Homebrew requires binaries. Its vocabulary is closed and enumerable;
   identifiers match
   the public asset names (`linux-x64`, not `linux-gnu-x64`), since Dart
@@ -243,20 +244,22 @@ which in practice belong to example apps with unrelated identities. The
 code identifier for a bare CLI comes from the native executable declaration.
 Every release after the first reads the identifier off the binary users
 installed. The prompt names both halves of what becomes permanent, the
-certificate and the identifier, before the version is typed. A tag signer, where
-earlier tags are unsigned or absent, is the key about to sign, confirmed
-once. Keybay needs none of this: its 0.1.0 release supplies every baseline.
+certificate and the identifier, before the release is authorized. A tag
+signer, where earlier tags are unsigned or absent, is the key about to sign,
+confirmed once. Keybay needs none of this: its 0.1.0 release supplies every
+baseline.
 
 ## The three verbs
 
 `rk init` · `rk status` · `rk release`. Bare `rk` runs `status`.
 
-`status` takes an optional unit. `release` takes an optional unit — a
-repository that defines exactly one has nothing to disambiguate, while two
-units are two releases and rk names them rather than choosing — and optionally
-`--stage`. `init` takes no positional. Bare invocation works in a single-unit
-repository and, in a multi-unit one, lists the units and stops. Release unit
-selection remains explicit; initialization has its own per-candidate selector.
+`status` takes an optional unit. `release` takes an optional unit: naming one
+keeps the operation narrow, while a bare release coordinates all unfinished
+units in native dependency order. `--stage` prepares one unit and therefore
+requires its name when several are configured. `init` takes no positional.
+Bare `rk` remains status across the configured units; naming a release unit
+is the explicit way to narrow scope. Initialization has its own per-candidate
+selector.
 
 - **`rk init`** — propose `release.toml`. Reads the repository and, on a
   capable terminal, presents a compact per-project matrix of release choices.
@@ -268,7 +271,7 @@ selection remains explicit; initialization has its own per-candidate selector.
   that proposal. No network and nothing irreversible before confirmation. It
   never edits an existing config,
   never adds a project silently, scans **git-tracked manifests only**, does
-  not prefill `binary_platforms` without a platform-bearing channel, and
+  not prefill `binary_platforms`, and
   never infers a binary channel from an `executables:` block — declaring an
   executable means `dart pub global activate` works, not "ship a signed
   tarball." A repository with nothing releasable exits 0.
@@ -282,8 +285,9 @@ selection remains explicit; initialization has its own per-candidate selector.
   for real and write a complete immutable stage, but make no public mutation
   and never run a registry login.
 - **`rk release [unit]`** — revalidate and reuse an exact stage, or create the
-  same stage internally, then authorize and publish. It inspects each target
-  before acting and with the same operation afterward. `exact` skips,
+  same stage internally. A unit with only local binary output stops there and
+  reports the archive paths; otherwise it authorizes and publishes. It inspects
+  each target before acting and with the same operation afterward. `exact` skips,
   `absent` acts, and `conflict` or `unknown` stops. In an interactive run with
   unfinished targets, it acquires native publication sessions only after the
   complete private stage is validated and before authorization. Re-running is
@@ -305,9 +309,11 @@ own proof of success.
 
 A local release is authorized by the operator's presence: publishing
 requires their credentials, and rk prompts with the full consequences.
-Where the act is permanent, the confirmation is **typing the version**, not
-a keystroke — "wrong version" is the highest-ranked failure and this is the
-only defence that targets it. Without a human present, rk refuses.
+The prompt shows the unit, exact version, remaining targets, and first-time
+claims, then asks an ordinary default-No yes/no question. `--yes` answers that
+same question for an unattended invocation and skips no inspection. Naming a
+unit is the narrow automation boundary. Without either a human or `--yes`, rk
+refuses.
 
 ### Tagging
 
@@ -317,7 +323,7 @@ was an error worth naming: an executor that mints its own authorization is
 a confused deputy, but a record written after the human has authorized is
 not authorization.
 
-- **Interactive release.** The operator's presence and typed confirmation
+- **Interactive release.** The operator's presence and affirmative answer
   are the authorization, so rk tags on their behalf: an annotated tag at
   the released commit, named by the unit's derived pattern, signed when git
   signing is configured and unsigned otherwise, and it says which. The tag
@@ -325,19 +331,18 @@ not authorization.
   is an ordinary checklist step — inspect the remote ref, create and push,
   then inspect the remote ref again — and it runs only after the complete
   stage has been revalidated.
-- **Non-interactive release.** Consent must still be explicit and exact:
-  `--confirm=<version>` carries the operator's typed yes as a flag, authorizes
-  only the version it names, and skips no inspection — the same door
-  `init --write` opens. For consentless CI with no operator anywhere in the
+- **Non-interactive release.** Consent must still be explicit: `--yes` carries
+  the operator's answer as a flag and skips no inspection. For consentless CI
+  with no operator anywhere in the
   loop, the tag *is* the intended authorization: it must already exist, rk
   verifies its signature against the expected signer, and rk never creates
   it — creating it there would be minting the permission it acts on. That
   signed-tag path remains ledgered, not built.
 
 Every tag binds the digest of its complete stage manifest to the source
-commit. Binary releases also publish the manifest itself with their GitHub
-assets, so their inventory remains recoverable after the local stage is
-deleted. A pub.dev-only release has no separate public artifact to name: its
+commit. A binary release that selects GitHub also publishes the manifest with
+its GitHub assets, so its inventory remains recoverable after the local stage
+is deleted. A pub.dev-only release has no separate public artifact to name: its
 truth is recovered directly from the peeled source commit and the registry
 archive's exact contents. A signed tag authenticates its binding; an unsigned
 tag proves consistency but not signer authenticity.
@@ -705,7 +710,7 @@ act(expected, stage)
   disclosure, because the thing a first publish really takes is the *name*,
   permanently: the consent block states each name claimed for the first
   time — the pub.dev package and, when it applies, the macOS code
-  identifier — with its consequence, before the version is typed.
+  identifier — with its consequence, before the release is authorized.
 
   A normal release invokes one native `dart pub login` after the private stage
   is complete when at least one configured pub.dev target is unfinished.
@@ -770,12 +775,12 @@ What makes the CLI sufficient is already required for other reasons:
 
 **Consent is explicit, or the release refuses.** An agent may run status
 freely and prepare a private stage through the same explicitly invoked
-command. Publication requires the exact version as consent: typed at a
-terminal, or carried as `--confirm=<version>` — a per-run, version-pinned
-yes, not a standing `--force`, and never guessed. Consentless publication
-(no operator anywhere in the loop) stays refused; signed-tag authorization
-remains the intended CI path, its signer policy and non-interactive
-execution ledgered rather than implied by the current implementation.
+command. Publication requires yes at a terminal or `--yes` for that invocation,
+not a standing `--force`, and is never guessed. Naming a unit provides the
+narrowest unattended scope. Consentless publication stays refused; signed-tag
+authorization remains the intended future CI path, its signer policy and
+non-interactive execution ledgered rather than implied by the current
+implementation.
 The late native `dart pub login` session acquisition does not change this boundary and
 is not a CI credential design; trusted publishing remains part of the deferred
 remote-CI work below.

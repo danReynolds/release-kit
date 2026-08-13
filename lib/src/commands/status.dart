@@ -97,10 +97,7 @@ class StatusCommand {
       _renderUnit(snapshot);
     }
 
-    final workRemains = snapshots.any(
-      (snapshot) =>
-          snapshot.targets.any((target) => !target.inspection.isExact),
-    );
+    final workRemains = snapshots.any(_workRemains);
     final issues = <StatusIssue>[
       for (final snapshot in snapshots) ...snapshot.issues,
       if (workRemains)
@@ -126,17 +123,15 @@ class StatusCommand {
       );
     }
 
-    final unfinished = snapshots
-        .where((snapshot) => snapshot.targets.any(
-              (target) => !target.inspection.isExact,
-            ))
-        .toList();
+    final unfinished = snapshots.where(_workRemains).toList();
     if (uniqueIssues.isEmpty && unfinished.length == 1) {
       final snapshot = unfinished.single;
       output.report.next(
-        snapshot.stage?.reusable == true
+        _isLocalOnlyOutput(snapshot)
             ? 'rk release ${snapshot.unit.name}'
-            : 'rk release ${snapshot.unit.name} --stage',
+            : snapshot.stage?.reusable == true
+                ? 'rk release ${snapshot.unit.name}'
+                : 'rk release ${snapshot.unit.name} --stage',
       );
     }
 
@@ -259,6 +254,8 @@ class StatusCommand {
           ),
       ];
     }
+    final localOutputPending =
+        unit.shipsBinaries && stageResult.inspection?.reusable != true;
     final issues = <StatusIssue>[
       for (final diagnostic in diagnostics.found)
         StatusIssue(
@@ -283,7 +280,8 @@ class StatusCommand {
           _prerequisiteIssue(unit, step, states[step.id]!),
       if (stageResult.issue != null &&
           !partialBinaryWithoutStage &&
-          targets.any((target) => !target.inspection.isExact))
+          (targets.any((target) => !target.inspection.isExact) ||
+              localOutputPending))
         stageResult.issue!,
       if (partialBinaryWithoutStage)
         StatusIssue(
@@ -302,7 +300,8 @@ class StatusCommand {
       if (artifactProblems.isNotEmpty &&
           !partialBinaryWithoutStage &&
           stageResult.inspection?.reusable != true &&
-          targets.any((target) => !target.inspection.isExact))
+          (targets.any((target) => !target.inspection.isExact) ||
+              localOutputPending))
         _hostIssue(unit),
     ];
 
@@ -827,10 +826,26 @@ class StatusCommand {
 
   /// What this repository has ready to publish.
   ///
-  /// Absent once every target is public: those files are out there, and
-  /// what is on this disk stopped being something anyone can act on.
+  /// Public-target rows disappear once their destinations are exact. Binary
+  /// stays visible as a selected local output until its exact stage exists.
   void _renderStage(_UnitSnapshot snapshot) {
     final staged = snapshot.stage?.reusable == true;
+    final localProject =
+        _hasLocalBinaries(snapshot) ? snapshot.unit.binaryProject : null;
+    final localBlocked = {
+      if (localProject != null)
+        for (final platform in localProject.binaryPlatforms)
+          if (!capabilities.resolve(platform).canProduce)
+            platform: capabilities.resolve(platform).reason ??
+                'this host cannot produce $platform',
+    };
+    final localStatus = localProject == null
+        ? null
+        : staged
+            ? ArtifactStatus.staged
+            : localBlocked.isEmpty
+                ? ArtifactStatus.notStaged
+                : ArtifactStatus.invalid;
     final rows = <(TargetObservation, String, ArtifactStatus)>[
       for (final target in snapshot.targets)
         if (!target.inspection.isExact)
@@ -849,9 +864,12 @@ class StatusCommand {
                   .reduce((a, b) => a == b ? a : ArtifactStatus.invalid)
             ),
     ];
-    if (rows.isEmpty) return;
+    if (rows.isEmpty && localStatus == null) return;
 
-    final statuses = {for (final row in rows) row.$3};
+    final statuses = {
+      if (localStatus != null) localStatus,
+      for (final row in rows) row.$3,
+    };
     final agreed = statuses.length == 1 ? statuses.single : null;
 
     output.blank();
@@ -865,6 +883,33 @@ class StatusCommand {
       depth: 1,
       tone: Tone.header,
     );
+
+    if (localProject != null) {
+      output.line(
+        'Local binaries',
+        mark: agreed != null ? Mark.none : _artifactMark(localStatus!),
+        note: agreed != null ? null : _artifactNote(localStatus!),
+        depth: 2,
+        tone: Tone.plain,
+        noteTone: Tone.muted,
+      );
+      for (final platform in [...localProject.binaryPlatforms]..sort()) {
+        final problem = localBlocked[platform];
+        output.line(
+          ReleaseAssets.archivePath(localProject, platform),
+          mark: staged
+              ? Mark.done
+              : problem == null
+                  ? Mark.none
+                  : Mark.blocked,
+          note: staged ? 'staged' : problem,
+          depth: 3,
+          labelWidth: 44,
+          tone: problem == null ? Tone.plain : Tone.bad,
+          noteTone: problem == null ? Tone.muted : Tone.bad,
+        );
+      }
+    }
 
     for (final (target, summary, status) in rows) {
       final invalid = target.artifacts
@@ -1047,6 +1092,15 @@ class _UnitSnapshot {
   final StageInspection? stage;
   final List<StatusIssue> issues;
 }
+
+bool _isLocalOnlyOutput(_UnitSnapshot snapshot) =>
+    snapshot.targets.isEmpty && snapshot.unit.shipsBinaries;
+
+bool _hasLocalBinaries(_UnitSnapshot snapshot) => snapshot.unit.shipsBinaries;
+
+bool _workRemains(_UnitSnapshot snapshot) =>
+    snapshot.targets.any((target) => !target.inspection.isExact) ||
+    (_hasLocalBinaries(snapshot) && snapshot.stage?.reusable != true);
 
 class _StageResult {
   const _StageResult({

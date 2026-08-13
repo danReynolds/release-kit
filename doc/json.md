@@ -10,17 +10,16 @@ supports, end to end:
 
 ```
 rk status <unit> --json                 where things stand; read-only
-rk release [unit] --stage --json        produce and validate the exact stage
+rk release [unit] --stage --json        exact stage; name it with several units
 rk status <unit> --json                 confirm: staged, good to release
-rk release [unit] --confirm=<v> --json  authorize exactly v, publish, read back
-rk release [unit] --confirm=<v> --json  idempotent: already-exact, no second act
+rk release [unit] --yes --json          publish and read back without prompting
+rk release [unit] --yes --json          idempotent: already-exact, no second act
 ```
 
-`--confirm=<version>` is the typed yes carried as a flag — the same door
-`init --write` opens. It supplies exactly what an operator would type at
-the prompt, authorizes only the version it names, and skips no inspection
-on the way there. A bare `--confirm` is refused (RK-CLI-009): the flag
-must say what it says yes to.
+`--yes` answers only the ordinary release question. The unit versions and
+remaining targets are still reported, and every inspection and refusal still
+runs. A bare release may cover several independently versioned units; name a
+unit when an automation caller needs the narrowest scope.
 
 ## Top level
 
@@ -33,7 +32,7 @@ must say what it says yes to.
 | `exit` | mirrors the process exit code |
 | `rerun_helps` | whether re-running would move things forward — false on conflicts, where a human has to decide. Re-running is always *safe*: the same inspection precedes every act |
 | `repository` | `{name, branch?, head?, remote, uncommitted?, source_binding?, source_comparison?}`. `head` is the full 40-char SHA and is absent for unbound source. `remote` is always present and null when no origin exists. Status and release report `source_binding` as `gitCommit` or `unbound`, independently from `source_comparison` (`exact` or `unavailable`) |
-| `init` | present on `init`: `{source: {binding, git_remote, github_repository}, notices[], candidates[]}`. `github_repository` is always present and null when unavailable. Each candidate reports its unit, native project/path/version/executables and every option's `available`, redacted `reason`, `selected`, and deterministic `effects[]`. A candidate is included when at least one publication target is selected |
+| `init` | present on `init`: `{source: {binding, git_remote, github_repository}, notices[], candidates[]}`. `github_repository` is always present and null when unavailable. Each candidate reports its unit, native project/path/version/executables and every option's `available`, redacted `reason`, `selected`, and deterministic `effects[]`. A candidate is included when at least one release output is selected |
 | `units[]` | per-unit: `{name, version, tag, steps[], targets[]?}`. `tag` is null when Git tagging is not selected |
 | `problems[]` | `{code, message, remedy?, source?, unit?, target?}` — every refusal and blockage, with its `RK-*` code. `target`, when present, is the affected target id and makes that target's human row `✗` |
 | `next[]` | the commands that would advance things, as data. The human report does not print them; this is where they live |

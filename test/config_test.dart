@@ -152,6 +152,21 @@ publish = ["pub.dev"]
       );
     });
 
+    test('standalone binaries are a complete local release output', () {
+      final config = accepted('''
+schema = 2
+
+[release.cli]
+path = "packages/cli"
+binary_platforms = ["linux-x64"]
+''');
+
+      final unit = config.units.single;
+      expect(unit.publish, isEmpty);
+      expect(unit.projects.single.publish, isEmpty);
+      expect(unit.projects.single.binaryPlatforms, ['linux-x64']);
+    });
+
     test('tag and GitHub declarations require git-tag', () {
       final tagDiagnostics = Diagnostics();
       ReleaseConfig.parse('''
@@ -278,6 +293,15 @@ homebrew_tap = "danReynolds/homebrew-tools"
     );
   });
 
+  test('platforms may accompany a registry without GitHub Release', () {
+    final config = accepted(
+      'schema = 2\n[release.core]\npublish = ["pub.dev"]\n'
+      'binary_platforms = ["macos-arm64"]',
+    );
+    expect(
+        config.units.single.projects.single.binaryPlatforms, ['macos-arm64']);
+  });
+
   group('refuses', () {
     test('a missing schema', () {
       expect(
@@ -391,14 +415,6 @@ homebrew_tap = "danReynolds/homebrew-tools"
         refusedWith('schema = 2\n[release.cli]\n'
             'publish = ["git-tag", "github-release", "homebrew"]'),
         'RK-CONF-025',
-      );
-    });
-
-    test('platforms named with no binary channel', () {
-      expect(
-        refusedWith('schema = 2\n[release.core]\npublish = ["pub.dev"]\n'
-            'binary_platforms = ["macos-arm64"]'),
-        'RK-CONF-026',
       );
     });
 

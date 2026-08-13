@@ -6,7 +6,7 @@ probe, `--offline`, and the transient unsigned build are gone; macOS
 build and signing are one producer; the pipeline is declared once; the
 manifest carries only externally checkable facts; notary evidence is
 stage-local; and `--json` is the agent contract at schema 5 with
-`release --confirm=<version>` as the noninteractive typed yes. This is
+`release --yes` as the noninteractive answer. This is
 the current forward plan.
 `doc/plan.md` remains the historical phase plan, review record, and evidence
 ledger. Where its forward-looking design differs from this document, this
@@ -291,11 +291,11 @@ are absent, and that exact stage is gone. The operator must restore the stage
 from the staging machine. Durable remote staging would remove this operational
 constraint, but remains deliberately outside the local production alpha.
 
-For a binary release, the public GitHub Release carries the manifest with the
-artifact inventory, digests, source commit, and plan identity needed after
-`.rk/work` is deleted. Its digest is also bound into the annotated release
-tag. A pub.dev-only release has no honest standalone artifact filename to
-invent: its public truth is recovered directly from the tag's peeled source
+When a binary release selects GitHub, the public release carries the manifest
+with the artifact inventory, digests, source commit, and plan identity needed
+after `.rk/work` is deleted. Its digest is also bound into the annotated
+release tag. A pub.dev-only release has no honest standalone artifact filename
+to invent: its public truth is recovered directly from the tag's peeled source
 commit and the registry archive's exact contents. Its stage manifest remains
 local evidence; the tag retains its digest, but that digest alone is not
 presented as a downloadable public manifest. A signed tag authenticates its
@@ -618,7 +618,7 @@ a session, not package uploader permission.
 6. Run status again. It must show every artifact staged and raise no issue.
 7. Run `dart run bin/rk.dart release rk`. Require exactly one attached native
    `dart pub login` before the private-stage boundary, review the final
-   consequences, and type the version. If login fails, preserve `RK-PUB-007`,
+   consequences, and answer yes. If login fails, preserve `RK-PUB-007`,
    run `dart pub login` from a terminal as instructed, and rerun the unit
    release; do not treat a successful login as proof of uploader permission.
 8. Require the actual pub publish and post-act exact inspection for every

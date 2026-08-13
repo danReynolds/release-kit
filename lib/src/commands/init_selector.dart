@@ -18,6 +18,7 @@ abstract interface class InitTerminal {
 
   int get width;
   int get height;
+  bool get useColor;
   int readByte();
   void write(String value);
   Future<void> flush();
@@ -75,10 +76,14 @@ final class InitSelector {
     return InitSelectorAction.changed;
   }
 
-  String render(int width, {int height = 24}) =>
-      width >= 88 ? _matrix(height) : _card();
+  String render(
+    int width, {
+    int height = 24,
+    bool useColor = false,
+  }) =>
+      width >= 88 ? _matrix(height, useColor) : _card(useColor);
 
-  String _matrix(int height) {
+  String _matrix(int height, bool useColor) {
     const nameWidth = 24;
     final visibleRows = min(plan.candidates.length, max(3, height - 10));
     final start = min(
@@ -98,14 +103,18 @@ final class InitSelector {
       final cursor = index == row ? '›' : ' ';
       buffer.write('$cursor ${_fit(item.unit, nameWidth).padRight(nameWidth)}');
       for (final option in InitOption.values) {
-        buffer.write(_cell(item, option).padRight(_cellWidth(option)));
+        final marker = _cell(item, option);
+        final focused = index == row && option == this.option;
+        buffer
+          ..write(focused ? _focused(marker, useColor) : marker)
+          ..write(' ' * max(0, _cellWidth(option) - marker.length));
       }
       buffer.writeln();
     }
     return _finish(buffer);
   }
 
-  String _card() {
+  String _card(bool useColor) {
     final item = candidate;
     final buffer = StringBuffer()
       ..writeln('Select release outputs')
@@ -113,9 +122,11 @@ final class InitSelector {
       ..writeln('› ${item.unit}');
     for (var index = 0; index < InitOption.values.length; index++) {
       final current = InitOption.values[index];
+      final marker = _cell(item, current);
       buffer.writeln(
-        '${index == column ? '›' : ' '} ${_cell(item, current).padRight(4)} '
-        '${current.label}',
+        '${index == column ? '›' : ' '} '
+        '${index == column ? _focused(marker, useColor) : marker}'
+        '${' ' * max(0, 4 - marker.length)} ${current.label}',
       );
     }
     return _finish(buffer);
@@ -139,6 +150,9 @@ String _cell(InitCandidate candidate, InitOption option) {
   if (!availability.available) return '—';
   return candidate.selected.contains(option) ? '[x]' : '[ ]';
 }
+
+String _focused(String value, bool useColor) =>
+    useColor ? '\x1b[1;36m$value\x1b[0m' : value;
 
 int _cellWidth(InitOption option) => switch (option) {
       InitOption.binary => 9,
@@ -167,7 +181,11 @@ Future<InitPlan?> runInitSelector(
     while (!(interrupted?.call() ?? false)) {
       terminal.write('\x1b[2J\x1b[H');
       terminal.write(
-        selector.render(terminal.width, height: terminal.height),
+        selector.render(
+          terminal.width,
+          height: terminal.height,
+          useColor: terminal.useColor,
+        ),
       );
       await terminal.flush();
       final action = selector.handle(readInitSelectorKey(terminal.readByte));

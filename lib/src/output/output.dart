@@ -144,6 +144,11 @@ class Output {
   /// What a caller is told, recorded by the same calls that print.
   final Report report;
 
+  /// Whether an earlier unit in this repository command changed public
+  /// truth. Set by the release command at unit boundaries so a later local
+  /// refusal cannot claim the whole invocation changed nothing.
+  bool previousUnitActed = false;
+
   final Elapsed Function() _clock;
 
   var _transient = false;
@@ -527,6 +532,12 @@ class Output {
 
   /// The plain sentence that opens every halt, before any verdict noun.
   void halt(HaltKind kind) {
+    // A later unit can fail before its own first act after an earlier unit in
+    // the same repository command already published. The report is for the
+    // whole invocation, so "nothing changed" would be false.
+    if (kind == HaltKind.beforeActing && previousUnitActed) {
+      kind = HaltKind.stoppedPartway;
+    }
     final sentence = switch (kind) {
       HaltKind.beforeActing =>
         'rk stopped. no public target changed. safe to re-run.',
@@ -555,8 +566,13 @@ class Output {
   /// The code is always in the report: a person searching for it wants it out
   /// of the way until they need it, while a caller keying on it needs it every
   /// time.
-  void problem(Diagnostic diagnostic, {String? unit, int depth = 0}) {
-    report.problem(diagnostic, unit: unit);
+  void problem(
+    Diagnostic diagnostic, {
+    String? unit,
+    String? target,
+    int depth = 0,
+  }) {
+    report.problem(diagnostic, unit: unit, target: target);
     final where = diagnostic.source == null ? '' : '${diagnostic.source}  ';
     // The code rides the line it names, every mode: an alert grepping a CI
     // log must not depend on someone having passed -v.

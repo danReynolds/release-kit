@@ -988,7 +988,7 @@ hid a double publish in the gate's own first draft):
 The one red gate is the forcing function: "DONE WHEN, live half" stays red
 until the real keybay publish is recorded here as the Phase 5 checkpoint.
 That act is the operator's — permanent, outward-facing, and requiring their
-terminal for the typed confirmation. The path to it, in order:
+terminal for the release confirmation. The path to it, in order:
 
 0. Both phase 5 reviews are addressed; the remaining red gate is this
    checkpoint. Operator cautions from the mutation review, still true:
@@ -1008,7 +1008,7 @@ terminal for the typed confirmation. The path to it, in order:
    longer solves, and the preflight refuses with pub's solver message. One
    commit, both files, no trap.
 4. `rk status` — expect core ready with `→ rk release core`.
-5. `rk release core`, type the version at the prompt.
+5. `rk release core`, review the plan and answer yes at the prompt.
 6. Paste the transcript here as "## Phase 5 checkpoint", which turns the
    gate green.
 7. Then the cli, for the phase 7b checkpoint: bump packages/keybay_cli
