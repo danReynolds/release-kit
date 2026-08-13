@@ -1,18 +1,18 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:release_kit/src/engine/checklist.dart';
-import 'package:release_kit/src/engine/config.dart';
-import 'package:release_kit/src/engine/diagnostic.dart';
-import 'package:release_kit/src/engine/git.dart';
-import 'package:release_kit/src/engine/inspect.dart';
-import 'package:release_kit/src/engine/publish_target.dart';
-import 'package:release_kit/src/engine/resolve.dart';
-import 'package:release_kit/src/engine/source_tree.dart';
-import 'package:release_kit/src/engine/targets.dart';
-import 'package:release_kit/src/engine/tools.dart';
-import 'package:release_kit/src/engine/verdict.dart';
-import 'package:release_kit/src/targets/catalog.dart';
+import 'package:rk/src/engine/checklist.dart';
+import 'package:rk/src/engine/config.dart';
+import 'package:rk/src/engine/diagnostic.dart';
+import 'package:rk/src/engine/git.dart';
+import 'package:rk/src/engine/inspect.dart';
+import 'package:rk/src/engine/publish_target.dart';
+import 'package:rk/src/engine/resolve.dart';
+import 'package:rk/src/engine/source_tree.dart';
+import 'package:rk/src/engine/targets.dart';
+import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/engine/verdict.dart';
+import 'package:rk/src/targets/catalog.dart';
 import 'package:test/test.dart';
 
 import 'scripted_tools.dart';
@@ -465,6 +465,37 @@ void classificationTables() {
             .singleWhere((problem) => problem.code == 'RK-REL-001')
             .message,
         allOf(contains('GitHub Release'), contains('timed out')),
+      );
+    });
+
+    test('a foreign pub.dev repository keeps its provider-specific remedy',
+        () async {
+      final fixture = await releaseTargets();
+      final inspector = _LatestInspector(answers: {
+        'pubDev': const Inspection.conflict(
+          'example_cli points to another repository on pub.dev',
+          evidence: {
+            'published repository': 'https://github.com/another/example_cli',
+            'this repository': 'https://github.com/example/tool',
+          },
+        ),
+      });
+      final problems = Diagnostics();
+
+      await inspector.releaseMonotonicity(
+        fixture.unit,
+        fixture.targets,
+        problems,
+      );
+
+      final diagnostic = problems.found.singleWhere(
+        (problem) => problem.code == 'RK-PUB-010',
+      );
+      expect(diagnostic.message, contains('another/example_cli'));
+      expect(diagnostic.remedy, contains('choose an unclaimed package name'));
+      expect(
+        problems.found.where((problem) => problem.code == 'RK-REL-001'),
+        isEmpty,
       );
     });
 

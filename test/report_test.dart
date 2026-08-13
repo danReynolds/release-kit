@@ -1,10 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:release_kit/src/output/diagnosis.dart';
-import 'package:release_kit/src/engine/diagnostic.dart';
-import 'package:release_kit/src/output/output.dart';
-import 'package:release_kit/src/output/report.dart';
+import 'package:rk/src/output/diagnosis.dart';
+import 'package:rk/src/engine/diagnostic.dart';
+import 'package:rk/src/output/output.dart';
+import 'package:rk/src/output/report.dart';
 import 'package:test/test.dart';
 
 Map<String, Object?> decode(Report report, {int exit = 0}) =>

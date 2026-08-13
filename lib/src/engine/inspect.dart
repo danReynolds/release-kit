@@ -271,6 +271,13 @@ class Inspector {
       readIndependentHistory = true;
       if (inspection.isAbsent) continue;
       if (!inspection.isExact) {
+        final module = this.targets.moduleForTarget(target);
+        final diagnostic =
+            module.diagnosticForInspection(unit, target, inspection);
+        if (diagnostic != null) {
+          problems.report(diagnostic);
+          continue;
+        }
         problems.add(
           'RK-REL-001',
           '${target.label}: ${inspection.detail ?? 'the latest public '

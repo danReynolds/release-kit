@@ -1,9 +1,9 @@
 import 'dart:io';
 
-import 'package:release_kit/src/engine/registry.dart';
-import 'package:release_kit/src/transforms/digest.dart';
-import 'package:release_kit/src/engine/verdict.dart';
-import 'package:release_kit/src/engine/version.dart';
+import 'package:rk/src/engine/registry.dart';
+import 'package:rk/src/transforms/digest.dart';
+import 'package:rk/src/engine/verdict.dart';
+import 'package:rk/src/engine/version.dart';
 import 'package:test/test.dart';
 
 /// The pub.dev client, against a real server rather than a fake.
@@ -213,6 +213,16 @@ void main() {
       final package = await registry.lookup('keybay');
       expect(package!.versions.single.archiveUrl, 'https://x/a.tar.gz');
       expect(package.versions.single.archiveSha256, 'AB12cd');
+    });
+
+    test('the repository is read from each published pubspec', () async {
+      body = '{"versions": [{"version": "1.0.0", "pubspec": {'
+          '"repository": "https://github.com/example/keybay"}}]}';
+      final package = await registry.lookup('keybay');
+      expect(
+        package!.versions.single.repository,
+        'https://github.com/example/keybay',
+      );
     });
 
     test('a number where a string belongs does not throw', () async {

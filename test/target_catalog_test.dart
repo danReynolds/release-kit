@@ -1,15 +1,15 @@
 import 'dart:io';
 
-import 'package:release_kit/src/engine/assets.dart';
-import 'package:release_kit/src/engine/checklist.dart';
-import 'package:release_kit/src/engine/config.dart';
-import 'package:release_kit/src/engine/diagnostic.dart';
-import 'package:release_kit/src/engine/publish_target.dart';
-import 'package:release_kit/src/engine/resolve.dart';
-import 'package:release_kit/src/engine/source_tree.dart';
-import 'package:release_kit/src/targets/catalog.dart';
-import 'package:release_kit/src/engine/producers.dart';
-import 'package:release_kit/src/engine/stage_contract.dart';
+import 'package:rk/src/engine/assets.dart';
+import 'package:rk/src/engine/checklist.dart';
+import 'package:rk/src/engine/config.dart';
+import 'package:rk/src/engine/diagnostic.dart';
+import 'package:rk/src/engine/publish_target.dart';
+import 'package:rk/src/engine/resolve.dart';
+import 'package:rk/src/engine/source_tree.dart';
+import 'package:rk/src/targets/catalog.dart';
+import 'package:rk/src/engine/producers.dart';
+import 'package:rk/src/engine/stage_contract.dart';
 import 'package:test/test.dart';
 
 void main() {

@@ -2,29 +2,29 @@ import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
 
-import 'package:release_kit/src/builds/capability.dart';
-import 'package:release_kit/src/commands/status.dart';
-import 'package:release_kit/src/engine/assets.dart';
-import 'package:release_kit/src/engine/checklist.dart';
-import 'package:release_kit/src/engine/config.dart';
-import 'package:release_kit/src/engine/diagnostic.dart';
-import 'package:release_kit/src/engine/git.dart';
-import 'package:release_kit/src/engine/inspect.dart';
-import 'package:release_kit/src/engine/registry.dart';
-import 'package:release_kit/src/engine/release_asset.dart';
-import 'package:release_kit/src/engine/release_stage.dart';
-import 'package:release_kit/src/engine/resolve.dart';
-import 'package:release_kit/src/engine/source_tree.dart';
-import 'package:release_kit/src/engine/stage.dart';
-import 'package:release_kit/src/engine/stage_archive.dart';
-import 'package:release_kit/src/engine/stage_plan.dart';
-import 'package:release_kit/src/engine/stage_receipt.dart';
-import 'package:release_kit/src/engine/targets.dart';
-import 'package:release_kit/src/engine/tools.dart';
-import 'package:release_kit/src/engine/verdict.dart';
-import 'package:release_kit/src/engine/version.dart';
-import 'package:release_kit/src/output/output.dart';
-import 'package:release_kit/src/transforms/archive.dart';
+import 'package:rk/src/builds/capability.dart';
+import 'package:rk/src/commands/status.dart';
+import 'package:rk/src/engine/assets.dart';
+import 'package:rk/src/engine/checklist.dart';
+import 'package:rk/src/engine/config.dart';
+import 'package:rk/src/engine/diagnostic.dart';
+import 'package:rk/src/engine/git.dart';
+import 'package:rk/src/engine/inspect.dart';
+import 'package:rk/src/engine/registry.dart';
+import 'package:rk/src/engine/release_asset.dart';
+import 'package:rk/src/engine/release_stage.dart';
+import 'package:rk/src/engine/resolve.dart';
+import 'package:rk/src/engine/source_tree.dart';
+import 'package:rk/src/engine/stage.dart';
+import 'package:rk/src/engine/stage_archive.dart';
+import 'package:rk/src/engine/stage_plan.dart';
+import 'package:rk/src/engine/stage_receipt.dart';
+import 'package:rk/src/engine/targets.dart';
+import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/engine/verdict.dart';
+import 'package:rk/src/engine/version.dart';
+import 'package:rk/src/output/output.dart';
+import 'package:rk/src/transforms/archive.dart';
 import 'package:test/test.dart';
 
 /// An origin that lists exactly the tags git holds locally.
@@ -116,6 +116,7 @@ class FakeRegistry implements RegistryReader, PublicationInspector {
     this.published, {
     this.unreachable = false,
     this.conflicting = const {},
+    this.repositories = const {},
     Map<String, List<int>>? archives,
   }) : archives = archives ?? {};
 
@@ -130,6 +131,9 @@ class FakeRegistry implements RegistryReader, PublicationInspector {
 
   /// Packages whose published content differs from this source.
   final Set<String> conflicting;
+
+  /// Package name to the repository declared by its published pubspec.
+  final Map<String, String> repositories;
 
   /// Archive bytes by "name@version", for the verify paths.
   final Map<String, List<int>> archives;
@@ -197,6 +201,7 @@ class FakeRegistry implements RegistryReader, PublicationInspector {
                   ? 'fake://$name/$v.tar.gz'
                   : null,
               archiveSha256: null,
+              repository: repositories[name],
             ),
           )
           .toList(),
@@ -380,7 +385,9 @@ MemorySourceTree tree({
   String changelog = '## 0.2.0\n',
 }) =>
     MemorySourceTree({
-      'packages/keybay/pubspec.yaml': 'name: keybay\nversion: $coreVersion\n',
+      'packages/keybay/pubspec.yaml': 'name: keybay\n'
+          'version: $coreVersion\n'
+          'repository: https://github.com/danReynolds/keybay\n',
       'packages/keybay/CHANGELOG.md': changelog,
     }, description: '/repo/keybay');
 
@@ -1890,6 +1897,34 @@ void _reviewFixes() {
       _targetLine(run.text, 'pub.dev ').trimLeft(),
       startsWith('✗'),
     );
+  });
+
+  test('a package name owned by another repository is named plainly', () async {
+    final run = await statusRun(
+      source: tree(coreVersion: '0.2.0'),
+      state: git(tags: ['v0.2.0']),
+      registry: FakeRegistry(
+        {
+          'keybay': ['0.5.0'],
+        },
+        repositories: const {
+          'keybay': 'https://github.com/another/keybay',
+        },
+      ),
+    );
+
+    expect(
+      run.text,
+      contains(
+        'keybay on pub.dev points to https://github.com/another/keybay, '
+        'not https://github.com/danReynolds/keybay',
+      ),
+    );
+    expect(run.text, isNot(contains('behind published version')));
+    final problem = (run.report['problems'] as List)
+        .cast<Map>()
+        .singleWhere((item) => item['code'] == 'RK-PUB-010');
+    expect(problem['target'], isNotNull);
   });
 }
 

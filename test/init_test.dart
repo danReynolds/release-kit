@@ -1,13 +1,13 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:release_kit/src/commands/init.dart';
-import 'package:release_kit/src/output/report.dart';
-import 'package:release_kit/src/engine/config.dart';
-import 'package:release_kit/src/engine/diagnostic.dart';
-import 'package:release_kit/src/engine/resolve.dart';
-import 'package:release_kit/src/output/output.dart';
-import 'package:release_kit/src/engine/source_tree.dart';
+import 'package:rk/src/commands/init.dart';
+import 'package:rk/src/output/report.dart';
+import 'package:rk/src/engine/config.dart';
+import 'package:rk/src/engine/diagnostic.dart';
+import 'package:rk/src/engine/resolve.dart';
+import 'package:rk/src/output/output.dart';
+import 'package:rk/src/engine/source_tree.dart';
 import 'package:test/test.dart';
 
 import 'rk_process.dart';

@@ -13,6 +13,7 @@ class Pubspec {
     required this.name,
     required this.version,
     required this.publishTo,
+    required this.repository,
     required this.sdkConstraint,
     required this.executables,
     required this.dependencies,
@@ -32,6 +33,9 @@ class Pubspec {
 
   /// The `publish_to` value, where `none` vetoes registry publication.
   final String? publishTo;
+
+  /// The package's native project identity, when its pubspec declares one.
+  final String? repository;
 
   final String? sdkConstraint;
 
@@ -105,6 +109,7 @@ class Pubspec {
       name: name,
       version: version,
       publishTo: doc.string('publish_to'),
+      repository: doc.string('repository'),
       sdkConstraint: doc.map('environment')?.string('sdk'),
       executables: doc.map('executables')?.keys.toList() ?? const [],
       dependencies: _dependencies(doc.map('dependencies')),

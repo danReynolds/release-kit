@@ -1,10 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:release_kit/src/destinations/homebrew.dart';
-import 'package:release_kit/src/engine/tools.dart';
-import 'package:release_kit/src/engine/verdict.dart';
-import 'package:release_kit/src/transforms/digest.dart';
+import 'package:rk/src/destinations/homebrew.dart';
+import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/engine/verdict.dart';
+import 'package:rk/src/transforms/digest.dart';
 import 'package:test/test.dart';
 
 const _assets = {

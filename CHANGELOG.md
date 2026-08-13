@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.0.1
+## 0.1.0
 
 Initial release of rk, an austere release tool for Dart repositories.
 
@@ -9,9 +9,9 @@ Initial release of rk, an austere release tool for Dart repositories.
   the resume.
 - Releases to pub.dev, GitHub Releases and a Homebrew tap, with signed and
   notarized macOS binaries, cross-compiled Linux binaries, notarization
-  evidence published beside the archives, and checksums.
+  evidence published beside the archives, and a manifest binding every asset.
 - `release --stage` runs every private step for real — package preflight,
-  build, sign, notarize, archive, checksums, notes, manifest, and formula —
+  build, sign, notarize, archive, notes, manifest, and formula —
   and records exact reusable artifacts without publishing them.
 - `status` and `release` share exact target inspection for Git tags, pub.dev,
   GitHub Releases, and Homebrew; every public act is inspected before and
@@ -27,5 +27,7 @@ Initial release of rk, an austere release tool for Dart repositories.
   so staging and downstream package managers can reject stale artifacts.
 - Human status keeps diagnostic codes in JSON, distinguishes nonblocking
   warnings, and reports a local version succinctly as `behind` public reality.
+- pub.dev package history is checked against the repository declared by the
+  local pubspec, so a name owned by another project is reported directly.
 - Dirty Git working trees may release registry-only or local outputs through
   an exact unbound snapshot; Git-identified targets still require clean source.

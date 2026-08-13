@@ -1,19 +1,19 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:release_kit/src/engine/config.dart';
-import 'package:release_kit/src/engine/diagnostic.dart';
-import 'package:release_kit/src/engine/git.dart';
-import 'package:release_kit/src/engine/assets.dart';
-import 'package:release_kit/src/engine/release_stage.dart';
-import 'package:release_kit/src/engine/resolve.dart';
-import 'package:release_kit/src/engine/source_tree.dart';
-import 'package:release_kit/src/engine/stage.dart';
-import 'package:release_kit/src/engine/stage_archive.dart';
-import 'package:release_kit/src/engine/stage_plan.dart';
-import 'package:release_kit/src/engine/stage_receipt.dart';
-import 'package:release_kit/src/transforms/archive.dart';
-import 'package:release_kit/src/targets/catalog.dart';
+import 'package:rk/src/engine/config.dart';
+import 'package:rk/src/engine/diagnostic.dart';
+import 'package:rk/src/engine/git.dart';
+import 'package:rk/src/engine/assets.dart';
+import 'package:rk/src/engine/release_stage.dart';
+import 'package:rk/src/engine/resolve.dart';
+import 'package:rk/src/engine/source_tree.dart';
+import 'package:rk/src/engine/stage.dart';
+import 'package:rk/src/engine/stage_archive.dart';
+import 'package:rk/src/engine/stage_plan.dart';
+import 'package:rk/src/engine/stage_receipt.dart';
+import 'package:rk/src/transforms/archive.dart';
+import 'package:rk/src/targets/catalog.dart';
 import 'package:test/test.dart';
 
 const _head = '1111111111111111111111111111111111111111';

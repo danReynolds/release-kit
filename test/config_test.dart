@@ -1,6 +1,6 @@
-import 'package:release_kit/src/engine/config.dart';
-import 'package:release_kit/src/engine/diagnostic.dart';
-import 'package:release_kit/src/engine/publish_target.dart';
+import 'package:rk/src/engine/config.dart';
+import 'package:rk/src/engine/diagnostic.dart';
+import 'package:rk/src/engine/publish_target.dart';
 import 'package:test/test.dart';
 
 ReleaseConfig accepted(String source) {

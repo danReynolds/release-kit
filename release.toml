@@ -1,5 +1,5 @@
 schema = 2
 
-[release.rk]                   # tag v{version}
-publish = ["git-tag", "pub.dev", "github-release"]
-binary_platforms = ["macos-arm64", "linux-x64", "linux-arm64"]
+[release.rk]
+publish = ["git-tag", "pub.dev", "github-release", "homebrew"]
+binary_platforms = ["linux-x64", "linux-arm64", "macos-arm64"]

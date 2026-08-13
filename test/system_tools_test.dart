@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:release_kit/src/engine/tools.dart';
+import 'package:rk/src/engine/tools.dart';
 import 'package:test/test.dart';
 
 void main() {

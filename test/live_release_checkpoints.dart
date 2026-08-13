@@ -32,7 +32,7 @@ void main() {
       'pub.dev',
       'GitHub Release',
       'https://github.com/danReynolds/release-kit',
-      'https://pub.dev/packages/release_kit/versions/$version',
+      'https://pub.dev/packages/rk/versions/$version',
     });
     final staged = _expectTranscript(release, 'Staged artifact inspection', {
       'rk-$version-macos-arm64.tar.gz',
@@ -133,7 +133,7 @@ void main() {
     final published = _expectTranscript(release, 'Release transcript', {
       'dart run bin/rk.dart release rk',
       'dart pub login',
-      'release_kit $version',
+      'rk $version',
       'rk $version released',
     });
     expect(
@@ -143,7 +143,7 @@ void main() {
     );
     expect(
       published.indexOf('dart pub login'),
-      lessThan(published.indexOf('release_kit $version')),
+      lessThan(published.indexOf('rk $version')),
       reason: 'native login must precede rk private-stage inspection',
     );
     _expectTranscript(release, 'Fresh-process status read-back', {
@@ -193,8 +193,8 @@ void main() {
       sourceCommit: sourceCommit,
     );
     final pubConsumer = _expectTranscript(retry, 'pub.dev consumer', {
-      'dart pub global activate release_kit $version',
-      'https://pub.dev/packages/release_kit/versions/$version',
+      'dart pub global activate rk $version',
+      'https://pub.dev/packages/rk/versions/$version',
       'alpha_pub_cache',
       'PUB_CACHE="\$alpha_pub_cache"',
       '"\$alpha_pub_cache/bin/rk" --version',

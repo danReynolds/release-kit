@@ -1,5 +1,5 @@
-import 'package:release_kit/src/engine/tools.dart';
-import 'package:release_kit/src/transforms/macos.dart';
+import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/transforms/macos.dart';
 import 'package:test/test.dart';
 
 const _name = 'Developer ID Application: Dan (TEAM123456)';

@@ -25,7 +25,7 @@ Three operational verbs: `rk init`, `rk status`, `rk release`, plus the static
 ## Using it
 
 ```
-dart pub global activate release_kit    # the command is rk
+dart pub global activate rk    # the command is rk
 rk status                              # where things stand. Read-only.
 rk init                                # propose a release.toml
 rk target list                         # everything this rk can create or publish

@@ -1,11 +1,11 @@
 import 'dart:io';
 
-import 'package:release_kit/src/destinations/git_tag.dart';
-import 'package:release_kit/src/engine/git.dart';
-import 'package:release_kit/src/engine/source_tree.dart';
-import 'package:release_kit/src/engine/tools.dart';
-import 'package:release_kit/src/engine/verdict.dart';
-import 'package:release_kit/src/transforms/digest.dart';
+import 'package:rk/src/destinations/git_tag.dart';
+import 'package:rk/src/engine/git.dart';
+import 'package:rk/src/engine/source_tree.dart';
+import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/engine/verdict.dart';
+import 'package:rk/src/transforms/digest.dart';
 import 'package:test/test.dart';
 
 /// `GitState.read` against real repositories.

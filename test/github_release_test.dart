@@ -1,13 +1,13 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:release_kit/src/destinations/github_release.dart';
-import 'package:release_kit/src/engine/assets.dart';
-import 'package:release_kit/src/engine/release_manifest.dart';
-import 'package:release_kit/src/engine/stage.dart';
-import 'package:release_kit/src/engine/tools.dart';
-import 'package:release_kit/src/engine/verdict.dart';
-import 'package:release_kit/src/transforms/digest.dart';
+import 'package:rk/src/destinations/github_release.dart';
+import 'package:rk/src/engine/assets.dart';
+import 'package:rk/src/engine/release_manifest.dart';
+import 'package:rk/src/engine/stage.dart';
+import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/engine/verdict.dart';
+import 'package:rk/src/transforms/digest.dart';
 import 'package:test/test.dart';
 
 import 'scripted_tools.dart';
@@ -1041,8 +1041,7 @@ void main() {
       expect(run.outcome.problem, contains('staged release'));
       expect(
         run.tools.calls.any((call) =>
-            call.contains('uploads.github.com') ||
-            call.contains(' -X PATCH ')),
+            call.contains('uploads.github.com') || call.contains(' -X PATCH ')),
         isFalse,
       );
     });

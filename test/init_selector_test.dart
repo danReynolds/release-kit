@@ -1,7 +1,7 @@
-import 'package:release_kit/src/commands/init_selector.dart';
-import 'package:release_kit/src/engine/init_plan.dart';
-import 'package:release_kit/src/engine/release_choice.dart';
-import 'package:release_kit/src/engine/source_tree.dart';
+import 'package:rk/src/commands/init_selector.dart';
+import 'package:rk/src/engine/init_plan.dart';
+import 'package:rk/src/engine/release_choice.dart';
+import 'package:rk/src/engine/source_tree.dart';
 import 'package:test/test.dart';
 
 InitPlan plan() => InitPlan.discover(

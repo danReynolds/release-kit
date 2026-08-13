@@ -1,6 +1,6 @@
-import 'package:release_kit/src/engine/identity.dart';
-import 'package:release_kit/src/engine/tools.dart';
-import 'package:release_kit/src/engine/version.dart';
+import 'package:rk/src/engine/identity.dart';
+import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/engine/version.dart';
 import 'package:test/test.dart';
 
 import 'scripted_tools.dart';

@@ -1,4 +1,4 @@
-import 'package:release_kit/src/engine/tools.dart';
+import 'package:rk/src/engine/tools.dart';
 
 /// Tools that answer from a script keyed by executable, recording every call.
 class ScriptedTools implements Tools {

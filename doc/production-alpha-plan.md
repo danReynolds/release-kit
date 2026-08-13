@@ -608,7 +608,7 @@ a session, not package uploader permission.
    - list each archive with the exact command `tar -tzf <archive>` and confirm
      its inventory is exactly `rk`, `LICENSE`, and `README.md`;
    - extract each runnable archive into a fresh temporary directory and require
-     its `--version` output to equal `0.0.1`;
+     its `--version` output to equal `0.1.0`;
    - extract the macOS archive into a fresh `alpha_macos_dir`, run its exact
      `rk --version`, and bind every native check to
      `"$alpha_macos_dir/rk"`: run
@@ -639,18 +639,18 @@ a session, not package uploader permission.
 11. Consume each configured public destination without using the checkout or
     the stale global installation. First clone what was published into
     `alpha_consumer_repo`, a fresh directory outside the release checkout:
-    `git clone --depth 1 --branch v0.0.1
+    `git clone --depth 1 --branch v0.1.0
     https://github.com/danReynolds/release-kit.git "$alpha_consumer_repo"`.
     Each consumed binary is then exercised against it.
     - Set `alpha_pub_cache` to a fresh temporary directory. Activate with
-      `PUB_CACHE="$alpha_pub_cache" dart pub global activate release_kit 0.0.1`,
+      `PUB_CACHE="$alpha_pub_cache" dart pub global activate rk 0.1.0`,
       then run `"$alpha_pub_cache/bin/rk" --version` and
       `"$alpha_pub_cache/bin/rk" --help` by that exact path.
     - In another fresh directory, download the selected GitHub archive and the
       published `release-manifest.json`. Select that archive's digest, compare
       it with `shasum -a 256 <archive>`, extract the archive, and run the
       extracted `./rk --version` and `./rk --help`. The manifest URL and
-      archive URL must both be the public `v0.0.1` GitHub Release.
+      archive URL must both be the public `v0.1.0` GitHub Release.
     - Then make each consumed binary do rk's actual work, which `--version`
       and `--help` do not: from `alpha_consumer_repo`, with that binary's
       directory first on `PATH`, run `rk status rk` **by bare name** —

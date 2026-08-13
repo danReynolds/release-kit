@@ -93,7 +93,7 @@ uploader authority>
 
 ```text
 <set `alpha_pub_cache` to a fresh temporary directory>
-<`PUB_CACHE="$alpha_pub_cache" dart pub global activate release_kit <version>`>
+<`PUB_CACHE="$alpha_pub_cache" dart pub global activate rk <version>`>
 <the public version URL>
 <`"$alpha_pub_cache/bin/rk" --version` and output `rk <version>`>
 <`"$alpha_pub_cache/bin/rk" --help` and its three-verb output>

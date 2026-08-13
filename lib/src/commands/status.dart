@@ -434,9 +434,14 @@ class StatusCommand {
               const _CurrentVersion.unknown(),
           };
 
+    // A definitive conflict in the target's public history is also a
+    // conflict for this candidate. Keep an unavailable history read separate:
+    // the exact candidate inspection remains useful evidence in that case.
+    final effectiveInspection =
+        latest?.verdict == Verdict.conflict ? latest! : inspection;
     return TargetObservation(
       expectation: expectation,
-      inspection: inspection,
+      inspection: effectiveInspection,
       currentVersion: current.value,
       currentKnown: current.known,
       currentDetail: currentInspection.detail,
@@ -624,17 +629,21 @@ class StatusCommand {
   ) {
     final state = target.inspection;
     final label = target.expectation.label;
+    final module = inspector.targets.moduleForTarget(target.expectation);
+    final diagnostic =
+        module.diagnosticForInspection(unit, target.expectation, state) ??
+            Diagnostic(
+              code: 'RK-REL-001',
+              message: '$label: ${_condition(state)}',
+              remedy: state.verdict == Verdict.unknown
+                  ? 'restore read access to $label, then run '
+                      'rk status ${unit.name} again'
+                  : _targetConflictRemedy(unit, target),
+            );
     return StatusIssue(
       unit: unit.name,
       target: target.expectation.step.id,
-      diagnostic: Diagnostic(
-        code: 'RK-REL-001',
-        message: '$label: ${_condition(state)}',
-        remedy: state.verdict == Verdict.unknown
-            ? 'restore read access to $label, then run '
-                'rk status ${unit.name} again'
-            : _targetConflictRemedy(unit, target),
-      ),
+      diagnostic: diagnostic,
       evidence: state.evidence,
     );
   }

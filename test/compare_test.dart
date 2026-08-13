@@ -1,10 +1,10 @@
 import 'dart:io';
 
-import 'package:release_kit/src/engine/compare.dart';
-import 'package:release_kit/src/engine/source_tree.dart';
-import 'package:release_kit/src/engine/tools.dart';
-import 'package:release_kit/src/engine/verdict.dart';
-import 'package:release_kit/src/transforms/archive.dart';
+import 'package:rk/src/engine/compare.dart';
+import 'package:rk/src/engine/source_tree.dart';
+import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/engine/verdict.dart';
+import 'package:rk/src/transforms/archive.dart';
 import 'package:test/test.dart';
 
 /// The comparator, against archives built by rk's own deterministic builder
