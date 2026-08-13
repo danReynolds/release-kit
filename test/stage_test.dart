@@ -1,12 +1,12 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:release_kit/src/engine/atomic_file.dart';
-import 'package:release_kit/src/engine/canonical_json.dart';
-import 'package:release_kit/src/engine/release_manifest.dart';
-import 'package:release_kit/src/engine/stage.dart';
-import 'package:release_kit/src/engine/stage_inspection.dart';
-import 'package:release_kit/src/engine/stage_receipt.dart';
+import 'package:rk/src/engine/atomic_file.dart';
+import 'package:rk/src/engine/canonical_json.dart';
+import 'package:rk/src/engine/release_manifest.dart';
+import 'package:rk/src/engine/stage.dart';
+import 'package:rk/src/engine/stage_inspection.dart';
+import 'package:rk/src/engine/stage_receipt.dart';
 import 'package:test/test.dart';
 
 const _commit = '1111111111111111111111111111111111111111';

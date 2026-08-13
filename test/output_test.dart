@@ -1,10 +1,10 @@
 import 'dart:convert';
 
-import 'package:release_kit/src/engine/diagnostic.dart';
-import 'package:release_kit/src/engine/verdict.dart';
-import 'package:release_kit/src/engine/checklist.dart';
-import 'package:release_kit/src/engine/publish_target.dart';
-import 'package:release_kit/src/output/output.dart';
+import 'package:rk/src/engine/diagnostic.dart';
+import 'package:rk/src/engine/verdict.dart';
+import 'package:rk/src/engine/checklist.dart';
+import 'package:rk/src/engine/publish_target.dart';
+import 'package:rk/src/output/output.dart';
 import 'package:test/test.dart';
 
 /// Captures what rk would print, so the contract can be asserted rather than
@@ -182,7 +182,7 @@ void main() {
         final checks = out.targetChecks(delay: Duration.zero);
         checks
           ..add('tag', 'Git tag')
-          ..add('pub', 'pub.dev · release_kit')
+          ..add('pub', 'pub.dev · rk')
           ..add(
             'github',
             'GitHub Release · danReynolds/release-kit',

@@ -1,17 +1,17 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:release_kit/src/builds/capability.dart';
-import 'package:release_kit/src/binary_chain.dart';
-import 'package:release_kit/src/engine/checklist.dart';
-import 'package:release_kit/src/engine/config.dart';
-import 'package:release_kit/src/engine/diagnostic.dart';
-import 'package:release_kit/src/engine/assets.dart';
-import 'package:release_kit/src/output/output.dart';
-import 'package:release_kit/src/engine/resolve.dart';
-import 'package:release_kit/src/engine/source_tree.dart';
-import 'package:release_kit/src/engine/tools.dart';
-import 'package:release_kit/src/engine/workspace.dart';
+import 'package:rk/src/builds/capability.dart';
+import 'package:rk/src/binary_chain.dart';
+import 'package:rk/src/engine/checklist.dart';
+import 'package:rk/src/engine/config.dart';
+import 'package:rk/src/engine/diagnostic.dart';
+import 'package:rk/src/engine/assets.dart';
+import 'package:rk/src/output/output.dart';
+import 'package:rk/src/engine/resolve.dart';
+import 'package:rk/src/engine/source_tree.dart';
+import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/engine/workspace.dart';
 import 'package:test/test.dart';
 
 final _certificateSha1 = 'a' * 40;

@@ -94,6 +94,17 @@ abstract base class TargetModule {
         remedy: 'a release moves forward — bump past $publicVersion',
       );
 
+  /// A provider-specific refusal carried by a public inspection.
+  ///
+  /// The coordinator owns when an inspection blocks. The adapter owns what a
+  /// provider-specific conflict means and how the operator can resolve it.
+  Diagnostic? diagnosticForInspection(
+    ResolvedUnit unit,
+    TargetExpectation target,
+    Inspection inspection,
+  ) =>
+      null;
+
   /// Whether a cross-step diagnostic belongs on this target's status row.
   bool ownsDiagnostic(
     Diagnostic diagnostic,

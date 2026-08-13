@@ -1,7 +1,7 @@
-import 'package:release_kit/src/engine/changelog.dart';
-import 'package:release_kit/src/engine/diagnostic.dart';
-import 'package:release_kit/src/engine/source_tree.dart';
-import 'package:release_kit/src/engine/version.dart';
+import 'package:rk/src/engine/changelog.dart';
+import 'package:rk/src/engine/diagnostic.dart';
+import 'package:rk/src/engine/source_tree.dart';
+import 'package:rk/src/engine/version.dart';
 import 'package:test/test.dart';
 
 Version v(String text) => Version.tryParse(text)!;

@@ -15,31 +15,31 @@ library;
 
 import 'dart:io';
 
-import 'package:release_kit/src/commands/init.dart';
-import 'package:release_kit/src/commands/init_selector.dart';
-import 'package:release_kit/src/commands/release.dart';
-import 'package:release_kit/src/commands/status.dart';
-import 'package:release_kit/src/commands/target.dart';
-import 'package:release_kit/src/destinations/pub_dev.dart';
-import 'package:release_kit/src/engine/compare.dart';
-import 'package:release_kit/src/engine/config.dart';
-import 'package:release_kit/src/output/diagnosis.dart';
-import 'package:release_kit/src/engine/diagnostic.dart';
-import 'package:release_kit/src/engine/git.dart';
-import 'package:release_kit/src/engine/inspect.dart';
-import 'package:release_kit/src/engine/init_plan.dart';
-import 'package:release_kit/src/engine/dart_workspace.dart';
-import 'package:release_kit/src/engine/publish_target.dart';
-import 'package:release_kit/src/output/output.dart';
-import 'package:release_kit/src/engine/registry.dart';
-import 'package:release_kit/src/engine/resolve.dart';
-import 'package:release_kit/src/engine/release_stage.dart';
-import 'package:release_kit/src/engine/release_source.dart';
-import 'package:release_kit/src/engine/source_tree.dart';
-import 'package:release_kit/src/engine/source_context.dart';
-import 'package:release_kit/src/engine/tools.dart';
-import 'package:release_kit/src/targets/catalog.dart';
-import 'package:release_kit/src/version.dart';
+import 'package:rk/src/commands/init.dart';
+import 'package:rk/src/commands/init_selector.dart';
+import 'package:rk/src/commands/release.dart';
+import 'package:rk/src/commands/status.dart';
+import 'package:rk/src/commands/target.dart';
+import 'package:rk/src/destinations/pub_dev.dart';
+import 'package:rk/src/engine/compare.dart';
+import 'package:rk/src/engine/config.dart';
+import 'package:rk/src/output/diagnosis.dart';
+import 'package:rk/src/engine/diagnostic.dart';
+import 'package:rk/src/engine/git.dart';
+import 'package:rk/src/engine/inspect.dart';
+import 'package:rk/src/engine/init_plan.dart';
+import 'package:rk/src/engine/dart_workspace.dart';
+import 'package:rk/src/engine/publish_target.dart';
+import 'package:rk/src/output/output.dart';
+import 'package:rk/src/engine/registry.dart';
+import 'package:rk/src/engine/resolve.dart';
+import 'package:rk/src/engine/release_stage.dart';
+import 'package:rk/src/engine/release_source.dart';
+import 'package:rk/src/engine/source_tree.dart';
+import 'package:rk/src/engine/source_context.dart';
+import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/targets/catalog.dart';
+import 'package:rk/src/version.dart';
 
 const _usage = '''
 rk — an austere release tool

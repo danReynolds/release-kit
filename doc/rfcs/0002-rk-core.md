@@ -8,7 +8,7 @@
   own machine**, to pub.dev, GitHub Releases, and Homebrew
 - CI: designed for, deferred from the MVP. See "CI readiness" — its
   constraints are binding on the MVP.
-- First production-alpha canary: release-kit 0.0.1
+- First production-alpha canary: rk 0.1.0
 
 The staging and status amendments in this revision are the forward contract
 being implemented. [The production-alpha plan](../production-alpha-plan.md)
@@ -863,7 +863,7 @@ concrete failure it prevents.
 
 ## Production-alpha canary and compatibility drives
 
-1. **Self-host release-kit.** Stage and release `release_kit` 0.0.1 to pub.dev
+1. **Self-host release-kit.** Stage and release `rk` 0.1.0 to pub.dev
    and GitHub Releases from the clean release-kit checkout, including its
    signed/notarized macOS and cross-built Linux artifacts. Prove fresh public
    read-back, an idempotent zero-act rerun, and clean pub.dev/GitHub consumers.

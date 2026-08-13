@@ -1,4 +1,4 @@
-import 'package:release_kit/src/engine/pub_ignore.dart';
+import 'package:rk/src/engine/pub_ignore.dart';
 import 'package:test/test.dart';
 
 /// Frozen vectors, like the version grammar's.

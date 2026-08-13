@@ -1,10 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:release_kit/src/engine/config.dart';
-import 'package:release_kit/src/engine/diagnostic.dart';
-import 'package:release_kit/src/engine/publish_target.dart';
-import 'package:release_kit/src/engine/release_choice.dart';
+import 'package:rk/src/engine/config.dart';
+import 'package:rk/src/engine/diagnostic.dart';
+import 'package:rk/src/engine/publish_target.dart';
+import 'package:rk/src/engine/release_choice.dart';
 import 'package:test/test.dart';
 
 import 'rk_process.dart';
@@ -24,7 +24,7 @@ void main() {
     final run = rk(['target', 'list']);
 
     expect(run.code, 0, reason: run.all);
-    expect(run.stdout, contains('Release choices supported by rk 0.0.1'));
+    expect(run.stdout, contains('Release choices supported by rk 0.1.0'));
     expect(run.stdout, contains('does not read the current folder'));
     expect(run.stdout, contains('Local output'));
     expect(run.stdout, contains('binary'));

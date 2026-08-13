@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:release_kit/src/engine/workspace.dart';
+import 'package:rk/src/engine/workspace.dart';
 import 'package:test/test.dart';
 
 void main() {

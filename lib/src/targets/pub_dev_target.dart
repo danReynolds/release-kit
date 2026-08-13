@@ -94,12 +94,28 @@ final class PubDevTargetModule extends TargetModule {
     try {
       final package = await reader.lookup(target.coordinate);
       final latest = package?.latest;
-      return latest == null
-          ? const Inspection.absent(detail: 'no published package version')
-          : Inspection.exact(
-              detail: 'latest published package is ${latest.version}',
-              evidence: {'version': latest.version.canonical},
-            );
+      if (latest == null) {
+        return const Inspection.absent(detail: 'no published package version');
+      }
+      final publishedRepository = latest.repository;
+      final localRepository = target.project!.pubspec.repository;
+      final publishedIdentity = _repositoryIdentity(publishedRepository);
+      final localIdentity = _repositoryIdentity(localRepository);
+      if (publishedIdentity != null &&
+          localIdentity != null &&
+          publishedIdentity != localIdentity) {
+        return Inspection.conflict(
+          '${target.coordinate} points to another repository on pub.dev',
+          evidence: {
+            'published repository': publishedRepository!,
+            'this repository': localRepository!,
+          },
+        );
+      }
+      return Inspection.exact(
+        detail: 'latest published package is ${latest.version}',
+        evidence: {'version': latest.version.canonical},
+      );
     } on Object catch (error) {
       return Inspection.unknown(
         'the latest pub.dev version could not be read: $error',
@@ -132,11 +148,31 @@ final class PubDevTargetModule extends TargetModule {
   }
 
   @override
+  Diagnostic? diagnosticForInspection(
+    ResolvedUnit unit,
+    TargetExpectation target,
+    Inspection inspection,
+  ) {
+    if (inspection.verdict != Verdict.conflict) return null;
+    final published = inspection.evidence['published repository'];
+    final local = inspection.evidence['this repository'];
+    if (published == null || local == null) return null;
+    final project = target.project!;
+    return Diagnostic(
+      code: 'RK-PUB-010',
+      message: '${project.name} on pub.dev points to $published, not $local',
+      source: SourceLocation(project.pubspec.path, project.pubspec.nameLine),
+      remedy: 'choose an unclaimed package name in pubspec.yaml; pub.dev '
+          'package names cannot be reclaimed by publishing a newer version',
+    );
+  }
+
+  @override
   bool ownsDiagnostic(
     Diagnostic diagnostic,
     TargetExpectation target,
   ) =>
-      diagnostic.code == 'RK-MONO-002' &&
+      (diagnostic.code == 'RK-MONO-002' || diagnostic.code == 'RK-PUB-010') &&
       diagnostic.source?.path == target.project?.pubspec.path;
 
   @override
@@ -548,4 +584,19 @@ final class PubDevTargetModule extends TargetModule {
   String permanenceNotice(TargetExpectation target) =>
       'pub.dev never deletes a version. a version can be retracted, which '
       'hides it and removes nothing.';
+}
+
+String? _repositoryIdentity(String? value) {
+  if (value == null) return null;
+  var text = value.trim();
+  if (text.isEmpty) return null;
+  final scp = RegExp(r'^[^@\s]+@([^:\s]+):(.+)$').firstMatch(text);
+  if (scp != null) text = 'ssh://${scp.group(1)}/${scp.group(2)}';
+  final uri = Uri.tryParse(text);
+  if (uri == null || !uri.hasScheme || uri.host.isEmpty) return null;
+  var path = uri.path.replaceFirst(RegExp(r'^/+'), '');
+  path = path.replaceFirst(RegExp(r'\.git$'), '');
+  path = path.replaceFirst(RegExp(r'/+$'), '');
+  if (path.isEmpty) return null;
+  return '${uri.host.toLowerCase()}/${path.toLowerCase()}';
 }

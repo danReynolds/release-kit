@@ -1,8 +1,8 @@
-name: release_kit
+name: rk
 description: >-
   An austere, fail-closed release tool. Manages the release steps; defers
   auth to native tooling.
-version: 0.0.1
+version: 0.1.0
 repository: https://github.com/danReynolds/release-kit
 
 environment:

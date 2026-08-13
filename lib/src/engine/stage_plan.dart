@@ -425,7 +425,7 @@ Directory? _releaseKitSourceRoot(File script) {
     );
     if (manifest.existsSync() &&
         library.existsSync() &&
-        RegExp(r'^name:\s*release_kit\s*$', multiLine: true)
+        RegExp(r'^name:\s*rk\s*$', multiLine: true)
             .hasMatch(manifest.readAsStringSync())) {
       return directory;
     }

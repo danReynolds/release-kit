@@ -51,12 +51,16 @@ class PublishedVersion {
     required this.published,
     required this.archiveUrl,
     required this.archiveSha256,
+    this.repository,
   });
 
   final Version version;
   final DateTime? published;
   final String? archiveUrl;
   final String? archiveSha256;
+
+  /// The project repository declared by this published version's pubspec.
+  final String? repository;
 }
 
 /// Reads a package registry. Read-only: nothing here publishes. The target
@@ -186,6 +190,9 @@ class Registry implements RegistryReader {
             published: DateTime.tryParse(_text(entry['published']) ?? ''),
             archiveUrl: _text(entry['archive_url']),
             archiveSha256: _text(entry['archive_sha256']),
+            repository: entry['pubspec'] is Map
+                ? _text((entry['pubspec'] as Map)['repository'])
+                : null,
           ),
         );
       }

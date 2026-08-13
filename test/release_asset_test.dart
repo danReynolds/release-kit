@@ -1,4 +1,4 @@
-import 'package:release_kit/src/engine/release_asset.dart';
+import 'package:rk/src/engine/release_asset.dart';
 import 'package:test/test.dart';
 
 void main() {

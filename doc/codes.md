@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-132 codes across 25 families.
+133 codes across 25 families.
 
 
 ## RK-AUTH — Authorization
@@ -196,6 +196,7 @@ fails, and the count below is checked against the rows.
 | `RK-PUB-007` | dart pub login did not complete | `lib/src/targets/pub_dev_target.dart` |
 | `RK-PUB-008` | ${project.name}: tracked dependency overrides mask consumer resolution | `lib/src/targets/pub_dev_target.dart` |
 | `RK-PUB-009` | the native Dart configuration redirects pub.dev publication | `lib/src/targets/pub_dev_target.dart` |
+| `RK-PUB-010` | a pub.dev package points to another repository | `lib/src/targets/pub_dev_target.dart` |
 
 RK-PUB-002 (the consumer-resolve probe) and RK-PUB-004 are retired historical
 meanings and are not reused.
