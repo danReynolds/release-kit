@@ -1037,6 +1037,8 @@ class StatusCommand {
 
   static String _condition(Inspection state) => switch (state.verdict) {
         Verdict.exact => state.detail ?? 'published exactly',
+        Verdict.absent when state.evidence.containsKey('version') =>
+          'needs update${_detailSuffix(state.detail)}',
         Verdict.absent => 'not published${_detailSuffix(state.detail)}',
         Verdict.conflict => 'does not match${_detailSuffix(state.detail)}',
         Verdict.unknown => 'could not be read${_detailSuffix(state.detail)}',

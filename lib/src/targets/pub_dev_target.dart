@@ -1,14 +1,14 @@
 import 'dart:io';
 
+import '../engine/assets.dart';
 import '../engine/checklist.dart';
 import '../engine/diagnostic.dart';
 import '../engine/publish_target.dart';
 import '../engine/pubspec.dart';
 import '../engine/registry.dart';
+import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
-import '../engine/source_tree.dart';
 import '../engine/stage_contract.dart';
-import '../engine/stage_inspection.dart';
 import '../engine/stage_receipt.dart';
 import '../engine/targets.dart';
 import '../engine/verdict.dart';
@@ -56,10 +56,6 @@ final class PubDevTargetModule extends TargetModule {
       // pub publishes the staged source directory. There is no honest public
       // archive filename to invent for this row.
       artifacts: const [],
-      // Git-bound status can compare the immutable commit immediately.
-      // Unbound status deliberately returns unknown until this invocation has
-      // captured the exact source snapshot, so release may stage then decide.
-      exactComparisonNeedsStage: true,
     );
   }
 
@@ -84,10 +80,21 @@ final class PubDevTargetModule extends TargetModule {
       );
     }
     final stage = context.reusableStage(unit);
+    String? expectedArchiveSha256;
+    if (stage != null) {
+      try {
+        expectedArchiveSha256 = _pubArchive(stage, target.project!).sha256;
+      } on Object catch (error) {
+        return Future.value(
+          Inspection.unknown(
+            'the staged pub archive could not be read: $error',
+          ),
+        );
+      }
+    }
     return exact.inspectProject(
       target.project!,
-      expectedSource:
-          stage == null ? null : SnapshotSourceTree(stage.sourceRoot),
+      expectedArchiveSha256: expectedArchiveSha256,
     );
   }
 
@@ -239,17 +246,38 @@ final class PubDevTargetModule extends TargetModule {
     Inspection inspected,
   ) async {
     final project = target.project!;
+    final archive = _pubArchive(context.stage, project);
     final sourceRoot = context.stage.sourceRoot;
     final directory = project.pubspec.directory == '.'
         ? sourceRoot
         : '$sourceRoot/${project.pubspec.directory}';
     final code = await context.runInteractive(
       'dart',
-      const ['pub', 'publish', '--force'],
+      [
+        'pub',
+        'publish',
+        '--from-archive',
+        context.workspace.pathOf(archive.path),
+        '--force',
+      ],
       workingDirectory: directory,
     );
     context.reads.registry!.forget(project.name);
     if (code != 0) {
+      if (code == 64) {
+        return TargetActOutcome(
+          ok: false,
+          coordinate: '${project.name} ${project.version}',
+          mayHaveActed: false,
+          diagnostic: const Diagnostic(
+            code: 'RK-PUB-011',
+            message: 'this Dart SDK cannot publish the staged Pub archive',
+            remedy: 'upgrade Dart to an SDK whose pub publish command '
+                'supports native archive publication, then re-run. rk will '
+                'not repackage the staged release at publication time.',
+          ),
+        );
+      }
       return TargetActOutcome(
         ok: false,
         coordinate: '${project.name} ${project.version}',
@@ -262,8 +290,8 @@ final class PubDevTargetModule extends TargetModule {
               'package; if the upload may have landed, re-running inspects '
               'public truth before acting',
         ),
-        reconciledNote:
-            'publish response was lost · public archive confirmed exact',
+        includeInspectionDetail: true,
+        reconciledNote: 'publish response was lost',
       );
     }
     return TargetActOutcome(
@@ -360,28 +388,13 @@ final class PubDevTargetModule extends TargetModule {
     required ResolvedUnit unit,
     required TargetExpectation target,
   }) {
+    final archivePath = ReleaseAssets.pubArchivePath(target.project!);
     final contract = StageContributionContract(
       phase: StageContributionPhase.beforeArtifacts,
       step: StageStepContract(
-        'pub-preflight:${target.project!.name}',
+        'pub-archive:${target.project!.name}',
         inputs: const {'step:source-snapshot'},
-        validate: (_, step) {
-          const expected = {'publish_dry_run': 'passed'};
-          final evidence = step.evidence;
-          final exact = evidence.length == expected.length &&
-              expected.entries.every(
-                (entry) => evidence[entry.key] == entry.value,
-              );
-          return exact
-              ? const []
-              : [
-                  StageIssue(
-                    StageIssueKind.invalidStructure,
-                    '${step.name} does not prove the publish dry run',
-                    path: 'stage.json',
-                  ),
-                ];
-        },
+        outputs: {archivePath: 'pub-archive'},
       ),
     );
     return TargetStage(
@@ -390,7 +403,7 @@ final class PubDevTargetModule extends TargetModule {
       progress: [
         TargetStageProgress.row(
           id: 'source',
-          label: 'package source',
+          label: 'package archive',
         ),
       ],
       prepare: (context) => _prepareStage(context, target.project!),
@@ -403,7 +416,7 @@ final class PubDevTargetModule extends TargetModule {
   ) async {
     final receiptName = context.contract.step.name;
     context.progress('source').begin(CommonProgressActivities.validating);
-    final validation = await _publishPreflight(context, project);
+    final validation = await _packageArchive(context, project);
     if (validation.diagnostic case final diagnostic?) {
       return TargetStageFailure(
         diagnostic,
@@ -414,13 +427,20 @@ final class PubDevTargetModule extends TargetModule {
       StageStep(
         name: receiptName,
         inputs: [StageInput.step(context.sourceStep)],
-        evidence: const {'publish_dry_run': 'passed'},
+        outputs: [
+          StageArtifact.capture(
+            stage: context.stage.directory,
+            path: ReleaseAssets.pubArchivePath(project),
+            type: 'pub-archive',
+          ),
+        ],
+        evidence: const {'package_archive': 'staged'},
       ),
       notices: validation.notices,
     );
   }
 
-  Future<({Diagnostic? diagnostic, List<String> notices})> _publishPreflight(
+  Future<({Diagnostic? diagnostic, List<String> notices})> _packageArchive(
     TargetStageContext context,
     ResolvedProject project,
   ) async {
@@ -433,7 +453,7 @@ final class PubDevTargetModule extends TargetModule {
     // and the dependency_overrides: section of pubspec.yaml — at the
     // resolution root, and strips both from the published archive. A
     // tracked override therefore makes every local validation pass against
-    // a dependency graph consumers never get; the dry run even exits 0
+    // a dependency graph consumers never get; native validation even exits 0
     // with only a hint. Refusing is the honest check; simulating a
     // consumer was not.
     final masking = _maskedResolution(sourceRoot, directory);
@@ -451,18 +471,38 @@ final class PubDevTargetModule extends TargetModule {
       );
     }
 
-    final dry = await context.tools.run(
+    final archivePath = ReleaseAssets.pubArchivePath(project);
+    final archive = File(context.workspace.pathOf(archivePath));
+    archive.parent.createSync(recursive: true);
+    final packaged = await context.tools.run(
       'dart',
-      const ['pub', 'publish', '--dry-run'],
+      ['pub', 'publish', '--to-archive', archive.path],
       workingDirectory: directory,
     );
-    final validation = '${dry.stdout}\n${dry.stderr}'.trim();
+    final validation = '${packaged.stdout}\n${packaged.stderr}'.trim();
     context.attach(
-      'pub-dry-run-${project.name}.txt',
+      'pub-package-${project.name}.txt',
       validation,
     );
 
-    if (!dry.ok) {
+    if (!packaged.ok) {
+      final lower = validation.toLowerCase();
+      if (lower.contains('to-archive') &&
+          (lower.contains('could not find') ||
+              lower.contains('unknown option') ||
+              lower.contains('unrecognized option'))) {
+        return (
+          diagnostic: Diagnostic(
+            code: 'RK-PUB-011',
+            message: 'this Dart SDK cannot stage the native Pub archive',
+            remedy: 'upgrade Dart to an SDK whose pub publish command '
+                'supports native archive staging, then re-run. rk does not '
+                'reimplement Pub packaging or publish different bytes from '
+                'the ones it staged.',
+          ),
+          notices: const <String>[],
+        );
+      }
       final summary = RegExp(r'Package has[^\n]*')
           .allMatches(validation)
           .map((match) => match.group(0)!)
@@ -470,12 +510,12 @@ final class PubDevTargetModule extends TargetModule {
       final warningsOnly = summary != null &&
           !summary.toLowerCase().contains('error') &&
           summary.toLowerCase().contains('warning');
-      if (!warningsOnly) {
+      if (!warningsOnly || !archive.existsSync()) {
         return (
           diagnostic: Diagnostic(
             code: 'RK-PUB-001',
             message: 'pub refuses to publish ${project.name}',
-            remedy: validation.isEmpty ? dry.summary : validation,
+            remedy: validation.isEmpty ? packaged.summary : validation,
           ),
           notices: const <String>[],
         );
@@ -489,6 +529,18 @@ final class PubDevTargetModule extends TargetModule {
         }
       }
       return (diagnostic: null, notices: notices);
+    }
+
+    if (!archive.existsSync()) {
+      return (
+        diagnostic: Diagnostic(
+          code: 'RK-PUB-011',
+          message: 'Pub reported success without producing $archivePath',
+          remedy: 'upgrade or repair the Dart SDK and re-run; rk publishes '
+              'only the exact native archive recorded in its stage',
+        ),
+        notices: const <String>[],
+      );
     }
 
     return (diagnostic: null, notices: const <String>[]);
@@ -609,6 +661,19 @@ final class _PubDevSession extends TargetSessionProvider {
       unit: unit.name,
     );
   }
+}
+
+StageArtifact _pubArchive(ReleaseStage stage, ResolvedProject project) {
+  final path = ReleaseAssets.pubArchivePath(project);
+  final matches = stage
+      .requireReceipt()
+      .artifacts
+      .where((artifact) => artifact.path == path)
+      .toList();
+  if (matches.length != 1 || matches.single.type != 'pub-archive') {
+    throw StateError('the stage does not contain one native Pub archive');
+  }
+  return matches.single;
 }
 
 String? _repositoryIdentity(String? value) {

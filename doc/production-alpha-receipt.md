@@ -84,7 +84,7 @@ Asset SHA-256: <64-character lowercase SHA-256>
 
 ```text
 <complete `dart run bin/rk.dart release rk --json` command and output, showing
-every configured public step with `verdict: exact` and `action: already_exact`,
+every configured public step with `verdict: exact` and `action: already_published`,
 and no second login or public act; login is not itself a public act or proof of
 uploader authority>
 ```

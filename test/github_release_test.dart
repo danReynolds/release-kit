@@ -2,9 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:rk/src/destinations/github_release.dart';
-import 'package:rk/src/engine/assets.dart';
-import 'package:rk/src/engine/release_manifest.dart';
-import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/verdict.dart';
 import 'package:rk/src/transforms/digest.dart';
@@ -225,7 +222,7 @@ void main() {
       final state = await inspectExact(view());
       expect(state.verdict, Verdict.exact);
       expect(state.detail, contains('asset bytes match'));
-      expect(state.evidence[asset], 'sha256 ${Sha256.hex(bytes)}');
+      expect(state.evidence[asset], 'sha256:${Sha256.hex(bytes)}');
     });
 
     test('independent asset downloads run concurrently', () async {
@@ -362,414 +359,62 @@ void main() {
     });
   });
 
-  group('manifest-bound exact release identity', () {
+  group('public asset digests for direct consumers', () {
     const asset = 'tool-1.0.0-macos-arm64.tar.gz';
-    const manifestName = ReleaseAssets.manifest;
-    final assetBytes = utf8.encode('the published archive bytes');
-    final zeroDigest = List.filled(64, '0').join();
-    final aDigest = List.filled(64, 'a').join();
-    final identity = StageIdentity.forPlan(
-      headCommit: '1111111111111111111111111111111111111111',
-      headTree: '2222222222222222222222222222222222222222',
-      resolvedPlan: const {'unit': 'cli', 'version': '1.0.0'},
-    );
-    final otherIdentity = StageIdentity.forPlan(
-      headCommit: '3333333333333333333333333333333333333333',
-      headTree: '4444444444444444444444444444444444444444',
-      resolvedPlan: const {'unit': 'other', 'version': '9.0.0'},
-    );
+    final bytes = utf8.encode('public archive');
 
-    List<int> manifestBytes({
-      String unit = 'cli',
-      String version = '1.0.0',
-      String tag = 'v1.0.0',
-      StageIdentity? stage,
-      List<ReleaseManifestArtifact>? artifacts,
-    }) =>
-        utf8.encode(ReleaseManifest(
-          unit: unit,
-          version: version,
-          tag: tag,
-          commit: (stage ?? identity).headCommit,
-          artifacts: artifacts ??
-              [
-                ReleaseManifestArtifact(
-                  name: asset,
-                  type: 'archive',
-                  size: assetBytes.length,
-                  sha256: Sha256.hex(assetBytes),
-                ),
-              ],
-        ).encode());
-
-    GithubManifestExpectation expectation(
-      List<int> bytes, {
-      String unit = 'cli',
-      String version = '1.0.0',
-      String tag = 'v1.0.0',
-      StageIdentity? stage,
-      String title = 'tool 1.0.0',
-      String body = 'release notes\n',
-      String? manifestSha256,
-      Set<String>? publicAssets,
-    }) =>
-        GithubManifestExpectation(
-          unit: unit,
-          version: version,
-          tag: tag,
-          sourceCommit: (stage ?? identity).headCommit!,
-          title: title,
-          body: body,
-          prerelease: false,
-          manifestSha256: manifestSha256 ?? Sha256.hex(bytes),
-          publicAssets: publicAssets ?? {asset, manifestName},
-        );
-
-    GithubHistoricalManifestExpectation historicalExpectation(
-      List<int> bytes, {
-      String unit = 'cli',
-      String version = '1.0.0',
-      String tag = 'v1.0.0',
-      String? sourceCommit,
-      String? title,
-      String? manifestSha256,
-    }) =>
-        GithubHistoricalManifestExpectation(
-          unit: unit,
-          version: version,
-          tag: tag,
-          sourceCommit: sourceCommit ?? identity.headCommit!,
-          title: title,
-          prerelease: false,
-          manifestSha256: manifestSha256 ?? Sha256.hex(bytes),
-        );
-
-    Future<Inspection> inspectManifest(
-      Tools tools,
-      GithubManifestExpectation expected,
-    ) =>
-        GithubRelease(
-          tools: tools,
-          repository: 'example/tool',
-          workingDirectory: '/repo',
-        ).inspectManifest(expected);
-
-    _DownloadTools downloadable(
-      List<int> manifest, {
-      String? response,
-      Map<String, List<int>>? downloads,
-      String? failure,
-    }) =>
-        _DownloadTools(
-          response: response ??
-              view(assets: const [
-                asset,
-                manifestName,
-              ]),
-          downloads: downloads ??
-              {
-                asset: assetBytes,
-                manifestName: manifest,
-              },
-          downloadFailure: failure,
-        );
-
-    test('one manifest download binds metadata, inventory, and every digest',
-        () async {
-      final manifest = manifestBytes();
-      final tools = downloadable(manifest);
-      final state = await inspectManifest(tools, expectation(manifest));
-
-      expect(state.verdict, Verdict.exact);
-      expect(state.evidence[asset], 'sha256 ${Sha256.hex(assetBytes)}');
-      expect(
-        state.evidence[manifestName],
-        'sha256 ${Sha256.hex(manifest)}',
+    test('prefers the provider digest without downloading', () async {
+      final tools = _DownloadTools(
+        response: jsonEncode({
+          'tag_name': 'v1.0.0',
+          'draft': false,
+          'prerelease': false,
+          'id': 41,
+          'name': 'tool 1.0.0',
+          'body': 'notes',
+          'assets': [
+            {'name': asset, 'digest': 'sha256:${Sha256.hex(bytes)}'},
+          ],
+        }),
+        downloads: {asset: bytes},
       );
-      expect(
-        tools.downloadRequests.where((name) => name == manifestName),
-        hasLength(1),
-        reason: 'the parsed manifest bytes are reused for digest validation',
-      );
-      expect(tools.downloadRequests, [manifestName, asset]);
-    });
 
-    test('current and historical reads expose only an authenticated manifest',
-        () async {
-      final manifest = manifestBytes();
-      final currentTools = downloadable(manifest);
-      final release = GithubRelease(
-        tools: currentTools,
+      final read = await GithubRelease(
+        tools: tools,
         repository: 'example/tool',
         workingDirectory: '/repo',
+      ).readAssetDigests(
+        tag: 'v1.0.0',
+        expectedAssets: const {asset},
+        requestedAssets: const {asset},
+        prerelease: false,
       );
 
-      final current = await release.readManifest(expectation(manifest));
-      expect(current.inspection.verdict, Verdict.exact);
-      expect(current.manifest?.unit, 'cli');
-      expect(current.manifest?.artifacts.single.name, asset);
-
-      final historicalTools = downloadable(manifest);
-      final historical = await GithubRelease(
-        tools: historicalTools,
-        repository: 'example/tool',
-        workingDirectory: '/repo',
-      ).readHistoricalManifest(historicalExpectation(manifest));
-      expect(historical.inspection.verdict, Verdict.exact);
-      expect(historical.manifest?.commit, identity.headCommit);
-
-      final conflicted = await GithubRelease(
-        tools: downloadable(manifest),
-        repository: 'example/tool',
-        workingDirectory: '/repo',
-      ).readManifest(
-        expectation(manifest, manifestSha256: zeroDigest),
-      );
-      expect(conflicted.inspection.verdict, Verdict.conflict);
-      expect(conflicted.manifest, isNull);
-    });
-
-    test('a release absent from a readable repository is absent', () async {
-      final manifest = manifestBytes();
-      final state = await inspectManifest(
-        SequencedTools([
-          failed('gh: Not Found (HTTP 404)'),
-          ok('{"name":"tool"}'),
-        ]),
-        expectation(manifest),
-      );
-      expect(state.verdict, Verdict.absent);
-    });
-
-    test('the release inventory must include the manifest', () async {
-      final manifest = manifestBytes();
-      final tools = downloadable(
-        manifest,
-        response: view(assets: const [asset]),
-      );
-      final state = await inspectManifest(tools, expectation(manifest));
-      expect(state.verdict, Verdict.conflict);
-      expect(state.evidence[manifestName], 'missing');
+      expect(read.inspection.verdict, Verdict.exact);
+      expect(read.digests[asset], Sha256.hex(bytes));
       expect(tools.downloadRequests, isEmpty);
     });
 
-    test('title and body are checked before trusting the manifest', () async {
-      final manifest = manifestBytes();
-      final tools = downloadable(
-        manifest,
-        response:
-            view(title: 'Surprise', body: 'different notes', assets: const [
-          asset,
-          manifestName,
-        ]),
+    test('downloads and hashes when GitHub omits the digest', () async {
+      final tools = _DownloadTools(
+        response: view(),
+        downloads: {asset: bytes},
       );
-      final state = await inspectManifest(tools, expectation(manifest));
-      expect(state.verdict, Verdict.conflict);
-      expect(state.evidence.keys, containsAll(['title', 'body']));
-      expect(tools.downloadRequests, isEmpty);
-    });
 
-    test('the tag-bound manifest digest is checked before parsing', () async {
-      final manifest = manifestBytes();
-      final state = await inspectManifest(
-        downloadable(manifest),
-        expectation(manifest, manifestSha256: zeroDigest),
+      final read = await GithubRelease(
+        tools: tools,
+        repository: 'example/tool',
+        workingDirectory: '/repo',
+      ).readAssetDigests(
+        tag: 'v1.0.0',
+        expectedAssets: const {asset},
+        requestedAssets: const {asset},
+        prerelease: false,
       );
-      expect(state.verdict, Verdict.conflict);
-      expect(state.evidence[manifestName], contains(Sha256.hex(manifest)));
-      expect(state.evidence[manifestName], contains(zeroDigest));
-    });
 
-    test('tag-bound but malformed manifest bytes are a conflict', () async {
-      final manifest = utf8.encode('not canonical JSON\n');
-      final state = await inspectManifest(
-        downloadable(manifest),
-        expectation(manifest),
-      );
-      expect(state.verdict, Verdict.conflict);
-      expect(state.detail, contains('manifest is invalid'));
-    });
-
-    test('unit, version, tag, and source commit must all match', () async {
-      final manifest = manifestBytes(
-        unit: 'other',
-        version: '9.0.0',
-        tag: 'v9.0.0',
-        stage: otherIdentity,
-      );
-      final state = await inspectManifest(
-        downloadable(manifest),
-        expectation(manifest),
-      );
-      expect(state.verdict, Verdict.conflict);
-      expect(
-        state.evidence.keys,
-        containsAll(['unit', 'version', 'manifest tag', 'source commit']),
-      );
-    });
-
-    test('stateless verification anchors source, not today\'s stage identity',
-        () async {
-      final builtElsewhere = StageIdentity.forPlan(
-        headCommit: identity.headCommit!,
-        headTree: identity.headTree!,
-        resolvedPlan: const {
-          'unit': 'cli',
-          'version': '1.0.0',
-          'toolchain': 'a different host and Dart SDK',
-        },
-      );
-      expect(builtElsewhere.id, isNot(identity.id));
-      final manifest = manifestBytes(stage: builtElsewhere);
-      final state = await inspectManifest(
-        downloadable(manifest),
-        GithubManifestExpectation(
-          unit: 'cli',
-          version: '1.0.0',
-          tag: 'v1.0.0',
-          sourceCommit: identity.headCommit!,
-          title: 'tool 1.0.0',
-          body: 'release notes\n',
-          prerelease: false,
-          manifestSha256: Sha256.hex(manifest),
-          publicAssets: const {asset, manifestName},
-        ),
-      );
-      expect(state.verdict, Verdict.exact, reason: state.evidence.toString());
-    });
-
-    test('manifest artifact names equal configured assets minus itself',
-        () async {
-      final manifest = manifestBytes(artifacts: [
-        ReleaseManifestArtifact(
-          name: 'unexpected.txt',
-          type: 'metadata',
-          size: 1,
-          sha256: aDigest,
-        ),
-      ]);
-      final state = await inspectManifest(
-        downloadable(manifest),
-        expectation(manifest),
-      );
-      expect(state.verdict, Verdict.conflict);
-      expect(state.evidence[asset], 'missing from release manifest');
-      expect(
-        state.evidence['unexpected.txt'],
-        'not a configured public asset',
-      );
-    });
-
-    test('asset bytes must match the digest declared by the manifest',
-        () async {
-      final manifest = manifestBytes();
-      final state = await inspectManifest(
-        downloadable(
-          manifest,
-          downloads: {
-            asset: utf8.encode('tampered archive'),
-            manifestName: manifest,
-          },
-        ),
-        expectation(manifest),
-      );
-      expect(state.verdict, Verdict.conflict);
-      expect(state.evidence[asset], contains(Sha256.hex(assetBytes)));
-      expect(
-        state.evidence[asset],
-        contains(Sha256.hex(utf8.encode('tampered archive'))),
-      );
-    });
-
-    test('an unreadable manifest is unknown, never absent', () async {
-      final manifest = manifestBytes();
-      final state = await inspectManifest(
-        downloadable(manifest, failure: 'operation timed out'),
-        expectation(manifest),
-      );
-      expect(state.verdict, Verdict.unknown);
-      expect(state.detail, contains('timed out'));
-    });
-
-    test('configuration without the mandatory manifest is unknown', () async {
-      final manifest = manifestBytes();
-      final tools = downloadable(manifest);
-      final state = await inspectManifest(
-        tools,
-        expectation(manifest, publicAssets: const {asset}),
-      );
-      expect(state.verdict, Verdict.unknown);
-      expect(tools.downloadRequests, isEmpty);
-    });
-
-    group('historical self-describing manifests', () {
-      String historicalView() => jsonEncode({
-            'tag_name': 'v1.0.0',
-            'draft': false,
-            'prerelease': false,
-            'id': 41,
-            'name': 'tool 1.0.0',
-            // Historical verification does not depend on old changelog text.
-            'assets': const [
-              {'name': asset},
-              {'name': manifestName},
-            ],
-          });
-
-      Future<GithubManifestRead> read(
-        Tools tools,
-        GithubHistoricalManifestExpectation expected,
-      ) =>
-          GithubRelease(
-            tools: tools,
-            repository: 'example/tool',
-            workingDirectory: '/repo',
-          ).readHistoricalManifest(expected);
-
-      test('tag anchors authenticate an older release without its body',
-          () async {
-        final manifest = manifestBytes();
-        final tools = downloadable(
-          manifest,
-          response: historicalView(),
-        );
-        final result = await read(
-          tools,
-          historicalExpectation(manifest, title: 'tool 1.0.0'),
-        );
-
-        expect(result.inspection.verdict, Verdict.exact);
-        expect(result.manifest?.unit, 'cli');
-        expect(tools.downloadRequests, [manifestName, asset]);
-      });
-
-      test('the manifest source must equal the peeled tag commit', () async {
-        final manifest = manifestBytes();
-        final result = await read(
-          downloadable(manifest, response: historicalView()),
-          historicalExpectation(
-            manifest,
-            sourceCommit: otherIdentity.headCommit,
-          ),
-        );
-
-        expect(result.inspection.verdict, Verdict.conflict);
-        expect(result.inspection.evidence, contains('source commit'));
-        expect(result.manifest, isNull);
-      });
-
-      test('a malformed source anchor is unknown without a query', () async {
-        final manifest = manifestBytes();
-        final tools = downloadable(manifest);
-        final result = await read(
-          tools,
-          historicalExpectation(manifest, sourceCommit: 'short'),
-        );
-
-        expect(result.inspection.verdict, Verdict.unknown);
-        expect(result.manifest, isNull);
-        expect(tools.downloadRequests, isEmpty);
-      });
+      expect(read.inspection.verdict, Verdict.exact);
+      expect(read.digests[asset], Sha256.hex(bytes));
+      expect(tools.downloadRequests, [asset]);
     });
   });
 

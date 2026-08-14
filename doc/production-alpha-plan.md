@@ -5,9 +5,12 @@ Status: local implementation complete; supervised live gate pending,
 probe, `--offline`, and the transient unsigned build are gone; macOS
 build and signing are one producer; the pipeline is declared once; the
 manifest carries only externally checkable facts; notary evidence is
-stage-local; and `--json` is the agent contract at schema 7 with
+stage-local; and `--json` is the agent contract at schema 8 with
 `release --yes` as the noninteractive answer. This is
-the current forward plan.
+the current forward plan. The append-only reconciliation amendment landed
+2026-08-14: Pub now stages and uploads one native archive, immutable occupied
+coordinates skip without historical reconstruction, and a Homebrew-only
+remainder can recover from the authenticated public GitHub asset set.
 `doc/plan.md` remains the historical phase plan, review record, and evidence
 ledger. Where its forward-looking design differs from this document, this
 document is the decision to implement and RFC 0002 must be reconciled before
@@ -223,7 +226,7 @@ rk release rk
 ```
 
 `--stage` performs every local and package preflight for real: source
-snapshot, package dry-run, build and sign as one step, smoke test where
+snapshot, native package archive validation, build and sign as one step, smoke test where
 possible, notarization, archives, release notes, release
 manifest, and cask rendering. It may read public targets, use signing and
 notary credentials, and contact Apple. It must not create or push a tag,
@@ -235,10 +238,13 @@ creates the same stage internally before authorization. When at least one
 configured pub.dev target is unfinished, a normal interactive release runs
 exactly one native `dart pub login` before that private-stage boundary. Login
 success proves only a current session, not uploader authority for every
-package, and does not make a target green or exact. The publish attempt and
-exact public read-back remain final; a retry skips a pub.dev target only after
-that target is proved exact. An explicitly created stage is never silently
-replaced with different bytes at publication time.
+package, and does not make a target green or exact. Pub stages the native
+archive it will upload. The publish attempt and public coordinate read-back
+remain final; while that stage exists, the registry digest must match it. After
+the historical stage has been deleted, an occupied immutable package/version
+skips as already published without claiming byte provenance. An explicitly
+created stage is never silently replaced with different bytes at publication
+time.
 
 ### Public target truth
 
@@ -248,7 +254,7 @@ and `release` call that operation:
 
 ```text
 inspect before acting
-  exact    -> skip
+  exact    -> skip (evidence says verified equal or already published)
   absent   -> act
   conflict -> stop with the difference and remedy
   unknown  -> stop rather than act blindly
@@ -257,6 +263,16 @@ inspect after acting
   exact    -> the step completed
   otherwise -> the release did not complete
 ```
+
+Accepted reconciliation amendment, 2026-08-14: **versioned artifacts are
+append-only; channels may only advance.** RK never replaces, deletes, retracts,
+yanks, or force-updates an already-public artifact at the same release
+coordinate, even when its provider permits that mutation. Comparable native
+identity or digest evidence is checked when it is cheap and available: a match
+skips and a known mismatch blocks. If an immutable coordinate exists after its
+historical stage has been lost, it skips as already published rather than
+triggering a custom historical rebuild or comparison. Unreadable state still
+blocks. A correction uses a new version, not an overwrite flag.
 
 The external command's exit status never establishes success by itself.
 Re-running is safe because public reality, not a remembered process result,
@@ -268,39 +284,44 @@ the newest version in every configured immutable public lane concurrently. An
 unreadable history refuses; a lane ahead of the intended version requires a
 version bump. This protects a shallow checkout whose local tags omit newer
 origin history. Homebrew needs no second version-only listing: its authenticated
-cask inspection permits an update only from bytes proved to be an earlier
-release, and refuses an equal, newer, or unauthenticated cask.
+cask inspection permits an update only from a recognizable rk-generated older
+value and refuses a same-version difference, newer value, unrecognized content,
+or concurrent change.
 
-For the alpha, exact means:
+For the alpha, target completion means:
 
 - **Git tag:** the remote ref peels to the expected full commit; signing and
   the staged manifest binding are checked when configured.
-- **pub.dev:** the expected package version exists and the registry archive's
-  contents match the immutable staged package source. Registry failure is not
-  absence.
+- **pub.dev:** the expected package version exists. While the exact native
+  archive remains staged, its provider digest must match; after the stage is
+  gone, existence means already published rather than proven byte-equivalent.
+  Registry failure is not absence.
 - **GitHub Release:** the exact expected asset inventory exists and every
-  artifact digest agrees with the release manifest; names alone are not
-  sufficient.
-- **Homebrew:** the public cask bytes, version, URLs, and hashes equal the
-  cask derived from the released artifacts; a matching version substring
-  is not sufficient.
+  artifact digest agrees with the retained stage. Without that stage, the
+  required structural inventory must still be complete, but rk does not rebuild
+  history to reproduce its digests. A published release is never patched.
+- **Homebrew:** the public cask is a moving channel. Exact intended bytes skip;
+  a recognizable older version may advance with compare-and-swap; the same
+  version with different bytes, a newer version, unrecognized content, or a
+  race blocks. The cask SHA must bind the actual GitHub asset it downloads.
 
 The local stage is not rk's database. It is disposable before the first public
-act and after all configured targets are exact. During a partial binary
-release it is recovery-critical: signing timestamps and notarization results
-cannot be recreated byte-for-byte, while an already-public tag binds the
-original manifest digest. `status` reports `RK-STAGE-005`, and `release`
-refuses to rebuild, if some public binary-release targets are exact, others
-are absent, and that exact stage is gone. The operator must restore the stage
-from the staging machine. Durable remote staging would remove this operational
-constraint, but remains deliberately outside the local production alpha.
+act and after all configured targets are complete. During a partial binary
+release it is recovery-critical whenever unfinished targets still require its
+signed or notarized bytes: those artifacts cannot be recreated byte-for-byte.
+`status` reports `RK-STAGE-005`, and `release` refuses to rebuild them. If the
+GitHub assets are already public and only Homebrew remains, however, the cask
+must bind those actual public assets and may obtain their digest from GitHub
+without reconstructing the stage. Durable remote staging would remove the
+remaining operational constraint, but stays outside the local production
+alpha.
 
 When a binary release selects GitHub, the public release carries the manifest
 with the artifact inventory, digests, source commit, and plan identity needed
 after `.rk/work` is deleted. Its digest is also bound into the annotated
 release tag. A pub.dev-only release has no honest standalone artifact filename
-to invent: its public truth is recovered directly from the tag's peeled source
-commit and the registry archive's exact contents. Its stage manifest remains
+to invent: its package/version is the immutable public coordinate, with native
+digest proof while the staged archive remains. Its stage manifest remains
 local evidence; the tag retains its digest, but that digest alone is not
 presented as a downloadable public manifest. A signed tag authenticates its
 binding; an unsigned tag proves consistency but not signer authenticity,
@@ -311,16 +332,20 @@ which remains an explicit alpha limitation.
 These are phase gates, not aspirations:
 
 1. No tag, registry package, GitHub Release, or cask mutation occurs until
-   a complete stage has been revalidated.
+   every input required by the unfinished target has been immutably validated.
+   This is normally the complete local stage; a Homebrew-only remainder may
+   instead consume the already-public GitHub assets and their digests.
 2. Every public target uses the same inspection in status, pre-act release,
    and post-act release.
-3. Presence is never exactness where bytes or identity matter.
-4. A retry never repeats a public act already proved exact, never acts on
+3. Presence alone never proves bytes or identity. It may still establish that
+   an immutable coordinate is occupied and therefore must not be written.
+4. A retry never repeats a public act already published, never acts on
    conflict, and never guesses through an unread target.
-5. Deleting `.rk/work` before publication or after every target is exact may
+5. Deleting `.rk/work` before publication or after every target is complete may
    cost time but cannot lose public-release truth. During a partial binary
-   release, a missing exact stage is reported and publication refuses rather
-   than rebuilding different bytes or appearing safe.
+   release, a missing exact stage is reported and publication refuses whenever
+   unfinished targets still need those local bytes. A Homebrew-only remainder
+   consumes the already-public GitHub assets instead of rebuilding them.
 6. Human and JSON output are recorded from the same observations; there is no
    parallel readiness state machine.
 7. The default local validation lane is green without a real publish. Live
@@ -344,17 +369,16 @@ earlier gate.
   JSON contract, and conformance tests.
 - Delete `VerifyCommand`, its command tests, `--at`, historical verification
   reporting, and historical-ref source machinery that has no remaining user.
-- Retain only code with a current release call site. The pub archive comparator,
-  `.pubignore` handling, and registry archive download remain because the
-  pub.dev target inspection needs them; move or rename them so they belong to
-  that adapter rather than to a hidden verifier.
+- Retain only code with a current release call site. Delete the custom pub
+  archive comparator and `.pubignore` emulation; the native tool owns package
+  selection, produces the staged archive, and uploads those exact bytes.
 - Update `doc/plan.md` only where its current forward contract would otherwise
   contradict the three-verb alpha; preserve its historical evidence.
 
 **Done when:** the default suite is entirely green, help exposes three
 operational verbs plus the static target reference,
-no `verify`/`--at` product surface remains, and post-publish pub comparison is
-still exercised through release-target tests.
+no `verify`/`--at` product surface remains, and pub's staged-digest and
+already-published retry paths are exercised through release-target tests.
 
 ### Phase 1 — Give every release target one exact inspection
 
@@ -364,8 +388,8 @@ still exercised through release-target tests.
 - Make the existing inspector delegate to destination adapters rather than
   carry shallow, command-specific answers.
 - Deepen Git-tag inspection to compare the remote peeled commit.
-- Move pub.dev lookup, polling, archive download, and source comparison behind
-  one pub.dev target adapter.
+- Move pub.dev lookup, polling, native archive staging/upload, and digest
+  comparison behind one pub.dev target adapter.
 - Deepen GitHub inspection from asset names to exact inventory and digests.
 - Deepen Homebrew inspection from a version pointer to exact cask bytes.
 - Give every provider bounded timeouts. Timeouts and malformed responses are
@@ -373,9 +397,10 @@ still exercised through release-target tests.
 - Freeze each target contract with vectors for absent, exact, conflict, and
   unavailable worlds.
 
-**Done when:** status and release cannot disagree about a target; a wrong byte
-under the right name is detected; a same-version edited cask is detected;
-a moved remote tag is detected; and no target is skipped on presence alone.
+**Done when:** status and release cannot disagree about a target; a known wrong
+byte under the right name is detected; a same-version edited cask is detected;
+a moved remote tag is detected; and provider presence never authorizes a
+second write to an occupied immutable coordinate.
 
 ### Phase 2 — Build the immutable stage and receipt
 
@@ -395,8 +420,9 @@ a moved remote tag is detected; and no target is skipped on presence alone.
   notarization binding/result/log, archive inventory, and notes/cask
   digests.
 - Produce a separate publishable `release-manifest.json` containing no local
-  secrets or paths. Publish it with binary releases; pub.dev-only exactness is
-  recovered from the tagged source and registry archive instead.
+  secrets or paths and publish it with binary releases. A pub.dev-only release
+  keeps its manifest local; its retained native archive supplies current digest
+  proof, while an occupied historical coordinate skips without reconstruction.
 - Add a read-only stage inspector. It may hash files, parse archives, and run
   signature/notarization checks; it may not execute candidate binaries,
   contact Apple, or modify the stage.
@@ -413,7 +439,7 @@ recovery-critical stage during partial publication must fail closed.
 
 - Change build, sign, notarize, archive, notes, manifest, and cask
   operations to return structured outcomes for the receipt writer.
-- Run package-manager dry-run and consumer-resolve evidence as stage inputs.
+- Run native package archive validation and consumer-resolve evidence as stage inputs.
 - Derive every public filename through the one `ReleaseAssets` grammar.
 - Reuse only after stage inspection proves the exact artifact and all of its
   dependencies.
@@ -448,7 +474,9 @@ stage that was reviewed is never replaced implicitly.
     -> Homebrew
   ```
 
-- Require every public step to depend transitively on the complete stage.
+- Require every public step to depend transitively on immutable inputs: the
+  complete stage in the normal path, or the actual public GitHub assets for a
+  Homebrew-only recovery.
 - Recompute HEAD, tree, plan, signing baseline, stage receipt, and public
   observations immediately before authorization.
 - For each public target, inspect immediately before acting and again after
@@ -465,8 +493,9 @@ stage that was reviewed is never replaced implicitly.
 **Done when:** fault injection proves every local act precedes the first public
 mutation, all destination changes between preflight and act are observed, and
 every interruption can be resumed without repeating an exact public act while
-the recovery-critical stage is retained; deleting that stage must instead fail
-closed with a specific restore instruction.
+the recovery-critical stage is retained. Deleting it fails closed with a
+specific restore instruction unless every unfinished target can consume the
+already-public immutable inputs directly.
 
 ### Phase 5 — Expose `--stage` and remove `--dry-run`
 
@@ -553,7 +582,9 @@ remotes plus fake registry/forge/tap worlds for public transitions.
    refuses conflict or unknown.
 9. No kill point can make a receipt bless different bytes.
 10. A missing stage during a partial binary release refuses before rebuilding
-    or acting and names the exact recovery requirement.
+    or acting when an unfinished target still requires its bytes, and names the
+    exact recovery requirement. A Homebrew-only remainder is covered by its
+    public-GitHub-input recovery tests instead.
 11. Manual TTY review confirms the transient target list and representative
     final reports are clean at narrow and ordinary terminal widths; automated
     snapshots cover the complete status-state matrix.
@@ -635,7 +666,7 @@ a session, not package uploader permission.
 10. Run `dart run bin/rk.dart release rk --json` again. With every target now
     exact, it must run no second login and perform no public act. Preserve the
     report proving every configured public step is `exact` with action
-    `already_exact`.
+    `already_published`.
 11. Consume each configured public destination without using the checkout or
     the stale global installation. First clone what was published into
     `alpha_consumer_repo`, a fresh directory outside the release checkout:
@@ -692,9 +723,9 @@ canary.
 - Reproducible-build claims, DSSE/Sigstore-style attestations, and a threat
   model that protects against a malicious same-UID local user modifying both
   receipt and artifacts.
-- pub.dev archive mode comparison. Alpha exactness proves regular entry type,
-  inventory, and every file byte in both directions; `SourceTree` does not
-  expose modes.
+- Deep historical package reconstruction or logical source-tree comparison.
+  Native staged artifacts and provider digests cover the current release;
+  occupied historical coordinates are never rewritten.
 - Hooks, plugins, version bumping, changelog generation, and generalized task
   running.
 

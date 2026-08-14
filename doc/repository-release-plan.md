@@ -32,21 +32,21 @@ invalid first-party constraint refuses before any unit acts.
 
 Every ordered unit then uses the existing unit pipeline. Exact targets skip;
 absent targets are work; unknown or conflicting targets refuse. A unit whose
-public targets are already exact is skipped unless a configured local output
+public targets are already published is skipped unless a configured local output
 still needs a reusable stage. Consequently Binary remains an independent
 output rather than becoming conditional on a publisher.
 
 Bare `--stage` is intentionally not a repository coordinator. In a repository
-with several units it asks for a unit name. A dependent's honest native publish
-dry-run can require the provider version to be public, so claiming to stage the
-whole repository before publication would be false.
+with several units it asks for a unit name. A dependent's native Pub archive
+validation can require the provider version to be public, so claiming to stage
+the whole repository before publication would be false.
 
 ## Why release is sequential
 
 Repository release is not atomic: registries and Git cannot roll back public
-acts. More importantly, `dart pub publish --dry-run` resolves dependencies. A
-package pinned to a newly bumped sibling may not complete its exact stage until
-that sibling is live on pub.dev.
+acts. More importantly, native Pub archive staging resolves dependencies. A
+package pinned to a newly bumped sibling may not complete its exact stage
+until that sibling is live on pub.dev.
 
 For `core 2.0.0 -> cli 3.0.0`, RK therefore does this:
 

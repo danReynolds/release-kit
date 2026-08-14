@@ -1,8 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import '../engine/assets.dart';
-import '../engine/release_manifest.dart';
+import '../engine/reconciliation.dart';
 import '../engine/tools.dart';
 import '../engine/verdict.dart';
 import '../engine/version.dart';
@@ -141,224 +140,68 @@ class GithubRelease {
         expectedPrerelease: expected.prerelease,
       );
 
-  /// Inspects an immutable release using its public manifest as the source of
-  /// artifact digests, without consulting a local stage.
+  /// Reads the digests of public assets consumed by another target.
   ///
-  /// The manifest's own digest must come from outside the manifest — rk binds
-  /// it into the Git tag message — so altered manifest bytes cannot redefine
-  /// what counts as exact. The parsed manifest then binds every other public
-  /// asset to the expected unit, version, tag, and stage identity.
-  Future<Inspection> inspectManifest(
-    GithubManifestExpectation expected,
-  ) async =>
-      (await _observeManifest(expected)).inspection;
-
-  /// Returns the parsed manifest only after the same externally anchored,
-  /// exact release verification used by [inspectManifest].
-  ///
-  /// Destination targets use this to authenticate manifest records that are
-  /// deliberately not GitHub assets. A parsed document is never exposed from
-  /// an unknown or conflicting observation.
-  Future<GithubManifestRead> readManifest(
-    GithubManifestExpectation expected,
-  ) async {
-    final observed = await _observeManifest(expected);
-    return GithubManifestRead._(observed.inspection, observed.manifest);
-  }
-
-  /// Historical counterpart to [readManifest]. The peeled tag commit and the
-  /// tag-bound manifest digest are the external anchors; today's configuration
-  /// is not used to reconstruct the older release inventory.
-  Future<GithubManifestRead> readHistoricalManifest(
-    GithubHistoricalManifestExpectation expected,
-  ) async {
-    final observed = await _observeManifestRelease(
-      unit: expected.unit,
-      version: expected.version,
-      tag: expected.tag,
-      manifestSha256: expected.manifestSha256,
-      sourceCommit: expected.sourceCommit,
-      title: expected.title,
-      prerelease: expected.prerelease,
-    );
-    return GithubManifestRead._(observed.inspection, observed.manifest);
-  }
-
-  Future<_ManifestObservation> _observeManifest(
-    GithubManifestExpectation expected,
-  ) =>
-      _observeManifestRelease(
-        unit: expected.unit,
-        version: expected.version,
-        tag: expected.tag,
-        manifestSha256: expected.manifestSha256,
-        sourceCommit: expected.sourceCommit,
-        title: expected.title,
-        body: expected.body,
-        publicAssets: expected.publicAssets,
-        prerelease: expected.prerelease,
-      );
-
-  Future<_ManifestObservation> _observeManifestRelease({
-    required String unit,
-    required String version,
+  /// This proves only the direct dependency: the named release exists with
+  /// its complete expected inventory, and these are the bytes its consumers
+  /// download. It deliberately does not reconstruct historical source or a
+  /// local stage. GitHub's digest is preferred; older responses fall back to
+  /// downloading and hashing the exact public asset.
+  Future<GithubAssetDigestRead> readAssetDigests({
     required String tag,
-    required String manifestSha256,
-    required String sourceCommit,
-    String? title,
-    String? body,
-    Set<String>? publicAssets,
+    required Set<String> expectedAssets,
+    required Set<String> requestedAssets,
     required bool prerelease,
   }) async {
-    if (!_isSha256(manifestSha256)) {
-      return const _ManifestObservation.failed(
-        Inspection.unknown(
-          'the expected release manifest digest is not SHA-256',
+    if (!expectedAssets.containsAll(requestedAssets)) {
+      return GithubAssetDigestRead._(
+        const Inspection.unknown(
+          'a requested consumer asset is not in the expected release',
         ),
+        {},
       );
     }
-    if (!_isObjectId(sourceCommit)) {
-      return const _ManifestObservation.failed(
-        Inspection.unknown(
-          'the tag-bound source commit is not a full Git object ID',
-        ),
-      );
+    final observed = await _readRelease(tag);
+    if (!observed.inspection.isExact) {
+      return GithubAssetDigestRead._(observed.inspection, const {});
     }
-    if (publicAssets != null &&
-        !publicAssets.contains(ReleaseAssets.manifest)) {
-      return const _ManifestObservation.failed(
-        Inspection.unknown(
-          'the configured public assets omit release-manifest.json',
-        ),
-      );
-    }
-
-    final lookup = await _readRelease(tag);
-    if (!lookup.inspection.isExact) {
-      return _ManifestObservation.failed(lookup.inspection);
-    }
-    final release = lookup.release!;
+    final release = observed.release!;
     final surface = _compareRelease(
       release,
       tag: tag,
-      expectedAssets: publicAssets,
-      expectedTitle: title,
-      expectedBody: body,
+      expectedAssets: expectedAssets,
       expectedPrerelease: prerelease,
     );
-    if (!surface.isExact) return _ManifestObservation.failed(surface);
-    if (!release.assets!.contains(ReleaseAssets.manifest)) {
-      return const _ManifestObservation.failed(
-        Inspection.conflict(
-          'the published release has no release manifest',
-          evidence: {ReleaseAssets.manifest: 'missing'},
-        ),
-      );
-    }
+    if (!surface.isExact) return GithubAssetDigestRead._(surface, const {});
 
-    final downloaded = await _downloadAssetBytes(
-      tag,
-      ReleaseAssets.manifest,
+    final digests = <String, String>{};
+    for (final name in requestedAssets.toList()..sort()) {
+      final providerDigest = _publishedDigest(release, name);
+      if (providerDigest != null) {
+        digests[name] = providerDigest;
+        continue;
+      }
+      final downloaded = await _downloadAssetBytes(tag, name);
+      if (downloaded.bytes == null) {
+        return GithubAssetDigestRead._(
+          Inspection.unknown(
+            downloaded.problem ?? '$name produced no readable bytes',
+          ),
+          const {},
+        );
+      }
+      digests[name] = Sha256.hex(downloaded.bytes!);
+    }
+    return GithubAssetDigestRead._(
+      Inspection.exact(
+        detail: 'published asset digests read',
+        evidence: {
+          for (final entry in digests.entries)
+            entry.key: 'sha256 ${entry.value}',
+        },
+      ),
+      digests,
     );
-    if (downloaded.problem != null) {
-      return _ManifestObservation.failed(
-        Inspection.unknown(downloaded.problem!),
-      );
-    }
-    final manifestBytes = downloaded.bytes!;
-    final actualManifestSha = Sha256.hex(manifestBytes);
-    final expectedManifestSha = manifestSha256.toLowerCase();
-    if (actualManifestSha != expectedManifestSha) {
-      return _ManifestObservation.failed(
-        Inspection.conflict(
-          'the published release manifest differs from the tag-bound manifest',
-          evidence: {
-            ReleaseAssets.manifest:
-                'sha256 $actualManifestSha, expected $expectedManifestSha',
-          },
-        ),
-      );
-    }
-
-    final ReleaseManifest manifest;
-    try {
-      manifest = ReleaseManifest.parse(utf8.decode(manifestBytes));
-    } on Object catch (error) {
-      return _ManifestObservation.failed(
-        Inspection.conflict(
-          'the published release manifest is invalid',
-          evidence: {ReleaseAssets.manifest: '$error'},
-        ),
-      );
-    }
-
-    final differences = <String, String>{};
-    if (manifest.unit != unit) {
-      differences['unit'] = 'published ${manifest.unit}, expected $unit';
-    }
-    if (manifest.version != version) {
-      differences['version'] =
-          'published ${manifest.version}, expected $version';
-    }
-    if (manifest.tag != tag) {
-      differences['manifest tag'] = 'published ${manifest.tag}, expected $tag';
-    }
-    if (manifest.commit == null ||
-        manifest.commit!.toLowerCase() != sourceCommit.toLowerCase()) {
-      differences['source commit'] = 'published ${manifest.commit}, expected '
-          '${sourceCommit.toLowerCase()}';
-    }
-
-    final manifestArtifacts = manifest.artifacts.map((a) => a.name).toSet();
-    final manifestPublicAssets = {
-      ...manifestArtifacts,
-      ReleaseAssets.manifest,
-    };
-    if (publicAssets != null) {
-      final configuredArtifacts = publicAssets.difference(
-        const {ReleaseAssets.manifest},
-      );
-      final missing = configuredArtifacts.difference(manifestArtifacts);
-      final extra = manifestArtifacts.difference(configuredArtifacts);
-      differences.addAll({
-        for (final name in missing) name: 'missing from release manifest',
-        for (final name in extra) name: 'not a configured public asset',
-      });
-    }
-    if (differences.isNotEmpty) {
-      return _ManifestObservation.failed(
-        Inspection.conflict(
-          'the published release manifest describes a different release',
-          evidence: differences,
-        ),
-      );
-    }
-
-    final manifestSurface = _compareRelease(
-      release,
-      tag: tag,
-      expectedAssets: manifestPublicAssets,
-      expectedTitle: title,
-      expectedBody: body,
-      expectedPrerelease: prerelease,
-    );
-    if (!manifestSurface.isExact) {
-      return _ManifestObservation.failed(manifestSurface);
-    }
-
-    final assets = await _inspectAssetBytes(
-      tag,
-      {
-        for (final artifact in manifest.artifacts)
-          artifact.name: artifact.sha256,
-        ReleaseAssets.manifest: expectedManifestSha,
-      },
-      knownBytes: {ReleaseAssets.manifest: manifestBytes},
-      expectedBy: 'release manifest',
-    );
-    return assets.isExact
-        ? _ManifestObservation.exact(assets, manifest)
-        : _ManifestObservation.failed(assets);
   }
 
   Future<Inspection> _inspect({
@@ -391,7 +234,11 @@ class GithubRelease {
     );
     if (!surface.isExact) return surface;
     if (expectedDigests != null) {
-      return _inspectAssetBytes(tag, expectedDigests);
+      return _inspectAssetBytes(
+        tag,
+        expectedDigests,
+        release: observed.release,
+      );
     }
     return surface;
   }
@@ -439,11 +286,6 @@ class GithubRelease {
       );
     }
 
-    final assets = release.assets!;
-    final missing = expectedAssets?.difference(assets) ?? const <String>{};
-    final extra = expectedAssets == null
-        ? const <String>{}
-        : assets.difference(expectedAssets);
     final differences = <String, String>{};
     if (release.tag != tag) {
       differences['tag'] = 'published ${release.tag}, expected $tag';
@@ -461,28 +303,21 @@ class GithubRelease {
           : 'published as prerelease, expected stable';
     }
 
-    // Exact means equal, not subset. A release carrying assets this
-    // configuration would not produce is not "what this release would put
-    // there" any more than one missing assets is — and reading a superset as
-    // exact would later bless a release whose notary log or cask went
-    // missing, because nothing counted the extras.
-    differences.addAll({
-      for (final name in missing) name: 'missing',
-      for (final name in extra) name: 'not produced by this configuration',
-    });
     if (differences.isNotEmpty) {
       return Inspection.conflict(
-        expectedAssets != null && missing.isEmpty && extra.isNotEmpty
-            ? 'carries ${extra.length} assets this configuration would not '
-                'produce (found ${assets.length}, expected '
-                '${expectedAssets.length})'
-            : expectedAssets != null && missing.isNotEmpty
-                ? 'differs from what this configuration produces '
-                    '(found ${assets.length}, expected '
-                    '${expectedAssets.length}, ${missing.length} missing)'
-                : 'release metadata differs from what this configuration '
-                    'produces',
+        'release metadata differs from what this configuration produces',
         evidence: differences,
+      );
+    }
+    if (expectedAssets != null) {
+      // A public release is an append-only coordinate in rk even though the
+      // provider offers edit/delete APIs. The same inventory rule used by
+      // registries therefore owns missing and extra members here too.
+      return PublicReconciliation.appendOnly(
+        label: 'the GitHub Release asset inventory',
+        expected: expectedAssets,
+        published: release.assets!,
+        occupiedDetail: 'published',
       );
     }
     return const Inspection.exact(detail: 'published');
@@ -493,6 +328,7 @@ class GithubRelease {
     Map<String, String> expectedDigests, {
     Map<String, List<int>> knownBytes = const {},
     String expectedBy = 'staged release',
+    _Release? release,
   }) async {
     try {
       final names = expectedDigests.keys.toList()..sort();
@@ -503,7 +339,8 @@ class GithubRelease {
       // precedence remain deterministic.
       final reads = <String, Future<({List<int>? bytes, String? problem})>>{
         for (final name in names)
-          if (!knownBytes.containsKey(name))
+          if (!knownBytes.containsKey(name) &&
+              _publishedDigest(release, name) == null)
             name: _downloadAssetBytes(tag, name),
       };
       final completed = await Future.wait([
@@ -514,45 +351,60 @@ class GithubRelease {
         for (final item in completed) item.name: item.value,
       };
 
-      final mismatches = <String, String>{};
+      final publishedDigests = <String, String>{};
       final unreadable = <String, String>{};
       for (final name in names) {
         final bytes = knownBytes[name] ?? downloaded[name]?.bytes;
+        final providerDigest = _publishedDigest(release, name);
         final problem = downloaded[name]?.problem;
-        if (bytes == null) {
+        if (bytes == null && providerDigest == null) {
           unreadable[name] = problem ?? '$name produced no readable bytes';
           continue;
         }
-        final actual = Sha256.hex(bytes);
-        final expected = expectedDigests[name]!.toLowerCase();
-        if (actual != expected) {
-          mismatches[name] = 'sha256 $actual, expected $expected';
-          continue;
-        }
+        final actual = providerDigest ?? Sha256.hex(bytes!);
+        publishedDigests[name] = actual;
       }
       // A proven immutable mismatch outranks an unreadable sibling. Unknown
       // means rk lacks a fact; it cannot erase a conflict already established.
-      if (mismatches.isNotEmpty) {
+      final compared = PublicReconciliation.appendOnly(
+        label: 'the GitHub Release assets',
+        expected: names.toSet(),
+        published: names.toSet(),
+        expectedProofs: {
+          for (final entry in expectedDigests.entries)
+            entry.key: 'sha256:${entry.value.toLowerCase()}',
+        },
+        publishedProofs: {
+          for (final entry in publishedDigests.entries)
+            entry.key: 'sha256:${entry.value.toLowerCase()}',
+        },
+        verifiedDetail: 'published metadata and asset bytes match',
+      );
+      if (compared.verdict == Verdict.conflict) {
         return Inspection.conflict(
           'published asset bytes differ from the $expectedBy',
-          evidence: mismatches,
+          evidence: compared.evidence,
         );
       }
       if (unreadable.isNotEmpty) {
         return Inspection.unknown(unreadable.entries.first.value);
       }
-      return Inspection.exact(
-        detail: 'published metadata and asset bytes match',
-        evidence: {
-          for (final name in names)
-            name: 'sha256 ${expectedDigests[name]!.toLowerCase()}',
-        },
-      );
+      return compared;
     } on Object catch (error) {
       return Inspection.unknown(
         'published asset bytes could not be read: $error',
       );
     }
+  }
+
+  static String? _publishedDigest(_Release? release, String name) {
+    final raw = release?.assetMetadata?[name]?.digest;
+    return raw == null
+        ? null
+        : RegExp(r'^sha256:([0-9a-fA-F]{64})$')
+            .firstMatch(raw)
+            ?.group(1)
+            ?.toLowerCase();
   }
 
   /// Proves the bytes on one exact private release response.
@@ -1479,92 +1331,16 @@ class GithubReleaseExpectation {
   final Map<String, String> assetSha256;
 }
 
+/// Public GitHub asset digests exposed only after release inventory checks.
+class GithubAssetDigestRead {
+  GithubAssetDigestRead._(this.inspection, Map<String, String> digests)
+      : digests = Map.unmodifiable(digests);
+
+  final Inspection inspection;
+  final Map<String, String> digests;
+}
+
 /// The public facts needed to verify a release after its local stage is gone.
-class GithubManifestExpectation {
-  GithubManifestExpectation({
-    required this.unit,
-    required this.version,
-    required this.tag,
-    required this.sourceCommit,
-    required this.title,
-    required this.body,
-    required this.prerelease,
-    required this.manifestSha256,
-    required Set<String> publicAssets,
-  }) : publicAssets = Set.unmodifiable(publicAssets);
-
-  final String unit;
-  final String version;
-  final String tag;
-
-  /// The independently authenticated source anchor: the remote tag's peeled
-  /// commit. The manifest carries the same fact, and a commit already binds
-  /// its tree, so one anchor is the whole comparison.
-  final String sourceCommit;
-  final String title;
-  final String body;
-  final bool prerelease;
-
-  /// SHA-256 read from the tag's authenticated manifest binding.
-  final String manifestSha256;
-
-  /// Exact release inventory, including `release-manifest.json`.
-  final Set<String> publicAssets;
-}
-
-/// Stable public facts for recovering one asset from a historical release.
-///
-/// [sourceCommit] is the peeled commit proven by the authenticated Git tag;
-/// [manifestSha256] is the digest bound into that tag. Together they prevent a
-/// valid-looking manifest from redefining either the release source or its
-/// artifacts. The manifest supplies the old release's inventory, which is
-/// intentionally not reconstructed from today's configuration.
-class GithubHistoricalManifestExpectation {
-  const GithubHistoricalManifestExpectation({
-    required this.unit,
-    required this.version,
-    required this.tag,
-    required this.sourceCommit,
-    required this.manifestSha256,
-    required this.prerelease,
-    this.title,
-  });
-
-  final String unit;
-  final String version;
-  final String tag;
-  final String sourceCommit;
-  final String manifestSha256;
-  final bool prerelease;
-
-  /// Optional stable title. Historical changelog bodies are not required.
-  final String? title;
-}
-
-/// An authenticated release manifest, withheld unless the whole observation
-/// is exact.
-class GithubManifestRead {
-  const GithubManifestRead._(this.inspection, this.manifest);
-
-  final Inspection inspection;
-  final ReleaseManifest? manifest;
-}
-
-class _ManifestObservation {
-  const _ManifestObservation._(this.inspection, this.manifest);
-
-  const _ManifestObservation.failed(Inspection inspection)
-      : this._(inspection, null);
-
-  _ManifestObservation.exact(
-    Inspection inspection,
-    ReleaseManifest manifest,
-  ) : this._(inspection, manifest);
-
-  final Inspection inspection;
-  final ReleaseManifest? manifest;
-}
-
 class _ReleaseObservation {
   const _ReleaseObservation._(this.inspection, this.release);
 
@@ -1579,9 +1355,6 @@ class _ReleaseObservation {
 }
 
 bool _isSha256(String value) => RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(value);
-
-bool _isObjectId(String value) =>
-    RegExp(r'^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$').hasMatch(value);
 
 String _shown(String? value) => value == null ? '<none>' : '"$value"';
 

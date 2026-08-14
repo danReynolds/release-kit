@@ -1,11 +1,8 @@
 import 'dart:async';
-import 'dart:typed_data';
 import 'dart:convert';
 import 'dart:io';
 
-import '../transforms/digest.dart';
 import 'resolve.dart';
-import 'source_tree.dart';
 import 'verdict.dart';
 import 'version.dart';
 
@@ -16,7 +13,7 @@ import 'version.dart';
 abstract interface class PublicationInspector {
   Future<Inspection> inspectProject(
     ResolvedProject project, {
-    SourceTree? expectedSource,
+    String? expectedArchiveSha256,
   });
 }
 
@@ -49,14 +46,12 @@ class PublishedVersion {
   PublishedVersion({
     required this.version,
     required this.published,
-    required this.archiveUrl,
     required this.archiveSha256,
     this.repository,
   });
 
   final Version version;
   final DateTime? published;
-  final String? archiveUrl;
   final String? archiveSha256;
 
   /// The project repository declared by this published version's pubspec.
@@ -73,9 +68,6 @@ abstract class RegistryReader {
   /// The package, or null when it has never existed.
   Future<RegistryPackage?> lookup(String name);
 
-  /// How the coordinate this release would publish to stands.
-  Future<Inspection> inspect(String name, Version version);
-
   /// Discards what is known about [name].
   ///
   /// Called after rk itself acts on the package. Successful lookups are
@@ -84,15 +76,6 @@ abstract class RegistryReader {
   /// and a post-act verification that reads the memo the pre-act inspection
   /// wrote is a verification that cannot fire.
   void forget(String name);
-
-  /// The bytes of [version]'s published archive, proven against the digest
-  /// the registry states for it.
-  ///
-  /// Throws [RegistryUnavailable] when rk could not fetch them, and
-  /// [ArchiveTampered] when it could and they do not match the stated digest
-  /// — different failures, opposite instructions: one says try again, the
-  /// other says stop and look.
-  Future<List<int>> archive(PublishedVersion version);
 }
 
 /// Reads pub.dev. Read-only: nothing here publishes. The pub.dev target module
@@ -107,8 +90,6 @@ class Registry implements RegistryReader {
     this.secure = true,
     this.connectTimeout = const Duration(seconds: 20),
     this.responseTimeout = const Duration(seconds: 20),
-    this.archiveResponseTimeout = const Duration(seconds: 60),
-    this.archiveBodyTimeout = const Duration(seconds: 120),
   }) : _client = client ?? HttpClient();
 
   final HttpClient _client;
@@ -121,8 +102,6 @@ class Registry implements RegistryReader {
   /// waiting forever before it even has a request to close.
   final Duration connectTimeout;
   final Duration responseTimeout;
-  final Duration archiveResponseTimeout;
-  final Duration archiveBodyTimeout;
 
   /// Whether to speak TLS. Always true in production; false lets a test point
   /// rk at a local server and prove the promise this class makes — that a
@@ -188,7 +167,6 @@ class Registry implements RegistryReader {
           PublishedVersion(
             version: parsed,
             published: DateTime.tryParse(_text(entry['published']) ?? ''),
-            archiveUrl: _text(entry['archive_url']),
             archiveSha256: _text(entry['archive_sha256']),
             repository: entry['pubspec'] is Map
                 ? _text((entry['pubspec'] as Map)['repository'])
@@ -209,107 +187,10 @@ class Registry implements RegistryReader {
   /// expected does not throw.
   static String? _text(Object? value) => value is String ? value : null;
 
-  /// Classifies the coordinate this release would publish to.
-  @override
-  Future<Inspection> inspect(String name, Version version) async {
-    final RegistryPackage? package;
-    try {
-      package = await lookup(name);
-    } on RegistryUnavailable catch (error) {
-      return Inspection.unknown(error.message);
-    }
-
-    if (package == null) {
-      // Absent, and the detail says which kind: the package itself is not
-      // there, so releasing claims the name as well as the version.
-      return const Inspection.absent(detail: 'the package does not exist yet');
-    }
-
-    final published = package.at(version);
-    if (published == null) {
-      return const Inspection.absent();
-    }
-    return Inspection.exact(
-      detail: published.published == null
-          ? 'already published'
-          : 'published ${_ago(published.published!)}',
-    );
-  }
-
   @override
   void forget(String name) => _cache.remove(name);
 
-  @override
-  Future<List<int>> archive(PublishedVersion version) async {
-    final url = version.archiveUrl;
-    if (url == null) {
-      throw RegistryUnavailable(
-        '$host lists no archive for ${version.version}',
-      );
-    }
-
-    final List<int> bytes;
-    try {
-      final request =
-          await _client.getUrl(Uri.parse(url)).timeout(connectTimeout);
-      request.headers.set(
-        HttpHeaders.acceptHeader,
-        'application/octet-stream',
-      );
-      request.headers.set(HttpHeaders.userAgentHeader, _userAgent);
-      final response = await request.close().timeout(archiveResponseTimeout);
-      if (response.statusCode != 200) {
-        throw RegistryUnavailable(
-          'the archive answered ${response.statusCode}',
-        );
-      }
-      bytes = await response
-          .fold<BytesBuilder>(BytesBuilder(), (b, chunk) => b..add(chunk))
-          .then((b) => b.takeBytes())
-          .timeout(archiveBodyTimeout);
-    } on RegistryUnavailable {
-      rethrow;
-    } on Object catch (error) {
-      throw RegistryUnavailable('the archive could not be fetched: $error');
-    }
-
-    final stated = version.archiveSha256;
-    if (stated != null && Sha256.hex(bytes) != stated.toLowerCase()) {
-      // Not unavailability: the registry served bytes that do not match its
-      // own stated digest. Retrying will not help and proceeding would verify
-      // source against content nobody vouches for.
-      throw ArchiveTampered(
-        stated: stated,
-        actual: Sha256.hex(bytes),
-      );
-    }
-    return bytes;
-  }
-
   void close() => _client.close(force: true);
-
-  static String _ago(DateTime when) {
-    final days = DateTime.now().toUtc().difference(when.toUtc()).inDays;
-    if (days < 1) return 'today';
-    if (days == 1) return 'yesterday';
-    if (days < 60) return '$days days ago';
-    final months = days ~/ 30;
-    if (months < 24) return '$months months ago';
-    return '${days ~/ 365} years ago';
-  }
-}
-
-/// The registry served an archive that does not match its own stated digest.
-class ArchiveTampered implements Exception {
-  ArchiveTampered({required this.stated, required this.actual});
-
-  final String stated;
-  final String actual;
-
-  @override
-  String toString() =>
-      'the archive does not match the digest the registry states for it '
-      '(stated $stated, got $actual)';
 }
 
 /// rk could not find out, which is not the same as finding nothing.

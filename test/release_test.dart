@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:rk/src/commands/release.dart';
 import 'package:rk/src/destinations/pub_dev.dart';
-import 'package:rk/src/engine/compare.dart';
 import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/transforms/archive.dart';
 import 'package:rk/src/engine/config.dart';
@@ -47,6 +46,45 @@ List<int> publishedBytes({String version = '0.2.0'}) =>
       ),
       ArchiveEntry(name: 'CHANGELOG.md', bytes: '## $version\n'.codeUnits),
     ]));
+
+String _normalizedPubKey(String key) {
+  if (key.contains('pub publish --to-archive ')) {
+    return 'dart pub publish --to-archive <archive>';
+  }
+  if (key.contains('pub publish --from-archive ')) {
+    return 'dart pub publish --from-archive <archive> --force';
+  }
+  return key;
+}
+
+void _materializeNativePubArchive(
+  String key,
+  Resolution resolution,
+  SourceTree source,
+) {
+  const marker = 'pub publish --to-archive ';
+  final offset = key.indexOf(marker);
+  if (offset < 0) return;
+  final path = key.substring(offset + marker.length);
+  final project = resolution.units.expand((unit) => unit.projects).firstWhere(
+        (project) => path.endsWith(ReleaseAssets.pubArchivePath(project)),
+      );
+  final root =
+      project.pubspec.directory == '.' ? '' : '${project.pubspec.directory}/';
+  final entries = <ArchiveEntry>[];
+  for (final sourcePath in source.trackedFiles()) {
+    if (!sourcePath.startsWith(root)) continue;
+    final relative = sourcePath.substring(root.length);
+    if (relative.isEmpty) continue;
+    entries.add(ArchiveEntry(
+      name: relative,
+      bytes: source.readBytes(sourcePath)!,
+    ));
+  }
+  File(path)
+    ..parent.createSync(recursive: true)
+    ..writeAsBytesSync(ArchiveBuilder.gzip(ArchiveBuilder.tar(entries)));
+}
 
 GitState _git({
   bool clean = true,
@@ -169,41 +207,9 @@ Future<Ran> release({
       tag: effectiveGit.tagObject(tag) ?? _tagObject,
   };
   final recorder = RecordingTools(
-    results: results,
-    onRun: (key) {
-      if (key.startsWith('git tag -s ') || key.startsWith('git tag -a ')) {
-        final scripted = results[key];
-        if (scripted == null || scripted.exitCode == 0) {
-          final tag = key.split(' ')[3];
-          localTags.add(tag);
-          tagObjects[tag] = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-        }
-      }
-      if (key.startsWith('git update-ref -d refs/tags/')) {
-        final parts = key.split(' ');
-        final tag = parts[3].substring('refs/tags/'.length);
-        final object = parts[4];
-        final scripted = results[key];
-        if ((scripted == null || scripted.exitCode == 0) &&
-            tagObjects[tag] == object) {
-          localTags.remove(tag);
-          tagObjects.remove(tag);
-        }
-      }
-      const push = 'git push origin ';
-      if (key.startsWith(push)) {
-        final scripted = results[key];
-        if (scripted == null || scripted.exitCode == 0) {
-          final refspec = key.substring(push.length);
-          const marker = ':refs/tags/';
-          if (refspec.contains(marker)) {
-            remoteTags.add(refspec.split(marker).last);
-          }
-        }
-      }
-      onRun?.call(key);
-    },
     answers: (key) {
+      final scripted = results[_normalizedPubKey(key)];
+      if (scripted != null) return scripted;
       const objectPrefix = 'git rev-parse --verify refs/tags/';
       if (key.startsWith(objectPrefix) && key.endsWith('^{tag}')) {
         final tag =
@@ -245,9 +251,6 @@ Future<Ran> release({
           final manifest = File(
             stageFor(unit).directory.resolve(ReleaseAssets.manifest),
           );
-          // Before release has rebuilt a missing stage, only structural
-          // binding is knowable. Once the stage exists, model the interrupted
-          // tag as binding those deterministic bytes.
           final digest = manifest.existsSync()
               ? Sha256.hex(manifest.readAsBytesSync())
               : 'b' * 64;
@@ -263,9 +266,41 @@ Future<Ran> release({
           );
         }
       }
-      // The test's own world model, after the harness's: a binary unit's
-      // forge and identity reads live here.
-      return answers?.call(key);
+      return answers?.call(_normalizedPubKey(key));
+    },
+    onRun: (key) {
+      _materializeNativePubArchive(key, resolution, tree);
+      if (key.startsWith('git tag -s ') || key.startsWith('git tag -a ')) {
+        final scripted = results[key];
+        if (scripted == null || scripted.exitCode == 0) {
+          final tag = key.split(' ')[3];
+          localTags.add(tag);
+          tagObjects[tag] = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+        }
+      }
+      if (key.startsWith('git update-ref -d refs/tags/')) {
+        final parts = key.split(' ');
+        final tag = parts[3].substring('refs/tags/'.length);
+        final object = parts[4];
+        final scripted = results[key];
+        if ((scripted == null || scripted.exitCode == 0) &&
+            tagObjects[tag] == object) {
+          localTags.remove(tag);
+          tagObjects.remove(tag);
+        }
+      }
+      const push = 'git push origin ';
+      if (key.startsWith(push)) {
+        final scripted = results[key];
+        if (scripted == null || scripted.exitCode == 0) {
+          final refspec = key.substring(push.length);
+          const marker = ':refs/tags/';
+          if (refspec.contains(marker)) {
+            remoteTags.add(refspec.split(marker).last);
+          }
+        }
+      }
+      onRun?.call(_normalizedPubKey(key));
     },
   );
 
@@ -285,8 +320,6 @@ Future<Ran> release({
       git: effectiveGit,
       pubDev: PubDevTarget(
         registry: effectiveRegistry,
-        comparator: Comparator(tools: const SystemTools()),
-        source: tree,
       ),
       tools: recorder,
       repository: 'example/keybay',
@@ -315,7 +348,7 @@ Future<Ran> release({
   return Ran(
     code,
     buffer.toString(),
-    recorder.calls,
+    recorder.calls.map(_normalizedPubKey).toList(),
     jsonDecode(command.output.report.encode(exit: code))
         as Map<String, Object?>,
   );
@@ -331,7 +364,7 @@ void releaseCommandContract() {
       only: null,
       registry: registry,
       onRun: (key) {
-        if (key == 'dart pub publish --force') {
+        if (key == 'dart pub publish --from-archive <archive> --force') {
           registry.goLive('0.2.0');
           registry.archives['keybay@0.2.0'] = publishedBytes();
         }
@@ -339,7 +372,8 @@ void releaseCommandContract() {
     );
 
     expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
-    expect(ran.calls, contains('dart pub publish --force'));
+    expect(ran.calls,
+        contains('dart pub publish --from-archive <archive> --force'));
   });
 
   test('pub-only release neither requires nor creates a Git tag', () async {
@@ -355,7 +389,7 @@ publish = ["pub.dev"]
       state: _git(pushed: false),
       registry: registry,
       onRun: (key) {
-        if (key == 'dart pub publish --force') {
+        if (key == 'dart pub publish --from-archive <archive> --force') {
           registry.goLive('0.2.0');
           registry.archives['keybay@0.2.0'] = publishedBytes();
         }
@@ -364,7 +398,8 @@ publish = ["pub.dev"]
 
     expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
     expect((ran.report['units'] as List).cast<Map>().single['tag'], isNull);
-    expect(ran.calls, contains('dart pub publish --force'));
+    expect(ran.calls,
+        contains('dart pub publish --from-archive <archive> --force'));
     expect(
       ran.calls.where((call) =>
           call.startsWith('git tag') ||
@@ -531,7 +566,8 @@ dependencies:
       }, description: '/repo/stack'),
       registry: registry,
       onRun: (key) {
-        if (key == 'dart pub publish --force' && !providerPublished) {
+        if (key == 'dart pub publish --from-archive <archive> --force' &&
+            !providerPublished) {
           providerPublished = true;
           registry.published['core']!.add('2.0.0');
           registry.archives['core@2.0.0'] =
@@ -546,7 +582,8 @@ dependencies:
         }
       },
       answers: (key) {
-        if (key == 'dart pub publish --dry-run' && providerPublished) {
+        if (key == 'dart pub publish --to-archive <archive>' &&
+            providerPublished) {
           return ToolResult(
             exitCode: 1,
             stdout: '',
@@ -559,8 +596,10 @@ dependencies:
 
     expect(ran.exitCode, ExitCodes.refused);
     expect(providerPublished, isTrue);
-    final publish = ran.calls.indexOf('dart pub publish --force');
-    final dependantDryRun = ran.calls.lastIndexOf('dart pub publish --dry-run');
+    final publish =
+        ran.calls.indexOf('dart pub publish --from-archive <archive> --force');
+    final dependantDryRun =
+        ran.calls.lastIndexOf('dart pub publish --to-archive <archive>');
     expect(dependantDryRun, greaterThan(publish));
     expect((ran.report['halt'] as Map)['kind'], 'stoppedPartway');
     expect(
@@ -864,8 +903,8 @@ void main() {
     final ran = await release(dryRun: true);
     expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
     expect(ran.text, contains('core 0.2.0 · staged'));
-    expect(ran.text, contains('package source'));
-    expect(ran.text, contains('staged · dry run passed'));
+    expect(ran.text, contains('package archive'));
+    expect(ran.text, contains('staged'));
     expect(
       ran.calls.where((c) => c.startsWith('git tag')),
       isEmpty,
@@ -880,7 +919,7 @@ void main() {
     );
     expect(
       ran.calls,
-      contains('dart pub publish --dry-run'),
+      contains('dart pub publish --to-archive <archive>'),
       reason: 'the rehearsal rehearses: the first real run once discovered '
           'a validation refusal only after the signed tag was public',
     );
@@ -907,9 +946,10 @@ void main() {
     expect(ran.text, contains('dart pub login did not complete'));
     expect(ran.text, contains('no public target changed'));
     expect(ran.calls, contains('dart pub login'));
-    expect(ran.calls, contains('dart pub publish --dry-run'));
+    expect(ran.calls, contains('dart pub publish --to-archive <archive>'));
     expect(ran.calls.where((call) => call.startsWith('git tag ')), isEmpty);
-    expect(ran.calls, isNot(contains('dart pub publish --force')));
+    expect(ran.calls,
+        isNot(contains('dart pub publish --from-archive <archive> --force')));
     expect('not attempted'.allMatches(ran.text), hasLength(2));
   });
 
@@ -931,7 +971,7 @@ void main() {
     expect(ran.problems.map((problem) => problem['code']), ['RK-PUB-007']);
     expect(ran.problems.map((problem) => problem['code']),
         isNot(contains('RK-INT-001')));
-    expect(ran.calls, contains('dart pub publish --dry-run'));
+    expect(ran.calls, contains('dart pub publish --to-archive <archive>'));
     expect(ran.calls.where((call) => call.startsWith('git tag ')), isEmpty);
   });
 
@@ -977,7 +1017,7 @@ void main() {
     final ran = await release(
       registry: registry,
       onRun: (key) {
-        if (key == 'dart pub publish --force') {
+        if (key == 'dart pub publish --from-archive <archive> --force') {
           registry.goLive('0.2.0');
           registry.archives['keybay@0.2.0'] = publishedBytes();
         }
@@ -1007,12 +1047,14 @@ void main() {
       reason: 'the unit acquires its native pub session once',
     );
     final pubLogin = ran.calls.indexOf('dart pub login');
-    final pubValidation = ran.calls.indexOf('dart pub publish --dry-run');
+    final pubValidation =
+        ran.calls.indexOf('dart pub publish --to-archive <archive>');
     final tag = ran.calls.indexWhere(
       (call) => call.startsWith('git tag -s v0.2.0 -m core 0.2.0'),
     );
     final push = ran.calls.indexOf(_tagPush);
-    final publish = ran.calls.indexOf('dart pub publish --force');
+    final publish =
+        ran.calls.indexOf('dart pub publish --from-archive <archive> --force');
     final orderedCalls = [
       pubValidation,
       pubLogin,
@@ -1037,7 +1079,7 @@ void main() {
     expect(ran.text, contains('released'));
     expect(
       ran.text,
-      contains('byte-identical'),
+      contains('archive matches the staged package'),
       reason: 'the version existing is not the right bytes existing',
     );
   });
@@ -1110,10 +1152,11 @@ publish = ["pub.dev"]
     expect(ran.exitCode, ExitCodes.refused);
     expect(ran.problems.map((problem) => problem['code']),
         contains('RK-DEST-001'));
-    expect(ran.calls, contains('dart pub publish --dry-run'));
+    expect(ran.calls, contains('dart pub publish --to-archive <archive>'));
     expect(ran.calls, contains('dart pub login'));
     expect(ran.calls.where((call) => call.startsWith('git tag ')), isEmpty);
-    expect(ran.calls, isNot(contains('dart pub publish --force')));
+    expect(ran.calls,
+        isNot(contains('dart pub publish --from-archive <archive> --force')));
     expect(ran.text, isNot(contains('token')));
     expect(ran.text, isNot(contains('secret')));
     expect(ran.text, isNot(contains('packages.example.invalid')));
@@ -1128,7 +1171,8 @@ publish = ["pub.dev"]
 
     expect(ran.exitCode, ExitCodes.refused);
     expect(ran.problems.map((problem) => problem['code']), ['RK-PUB-009']);
-    expect(ran.calls, isNot(contains('dart pub publish --dry-run')));
+    expect(
+        ran.calls, isNot(contains('dart pub publish --to-archive <archive>')));
     expect(ran.calls, isNot(contains('dart pub login')));
     expect(ran.calls.where((call) => call.startsWith('git tag ')), isEmpty);
     expect(ran.text, isNot(contains('token')));
@@ -1146,7 +1190,8 @@ publish = ["pub.dev"]
 
     expect(ran.exitCode, ExitCodes.refused);
     expect(ran.problems.map((problem) => problem['code']), ['RK-PUB-009']);
-    expect(ran.calls, isNot(contains('dart pub publish --dry-run')));
+    expect(
+        ran.calls, isNot(contains('dart pub publish --to-archive <archive>')));
     expect(ran.calls, isNot(contains('dart pub login')));
   });
 
@@ -1161,7 +1206,7 @@ publish = ["pub.dev"]
     final ran = await release(
       registry: registry,
       results: {
-        'dart pub publish --dry-run': ToolResult(
+        'dart pub publish --to-archive <archive>': ToolResult(
           exitCode: 65,
           stdout: 'Package validation found the following potential issue:\n'
               '* Your dependency on keybay is pinned to an exact version.\n'
@@ -1171,7 +1216,7 @@ publish = ["pub.dev"]
         ),
       },
       onRun: (key) {
-        if (key == 'dart pub publish --force') {
+        if (key == 'dart pub publish --from-archive <archive> --force') {
           registry.goLive('0.2.0');
           registry.archives['keybay@0.2.0'] = publishedBytes();
         }
@@ -1185,13 +1230,14 @@ publish = ["pub.dev"]
       reason: 'the operator confirms the permanent act having seen the '
           'warnings pub would have shown',
     );
-    expect(ran.calls, contains('dart pub publish --force'));
+    expect(ran.calls,
+        contains('dart pub publish --from-archive <archive> --force'));
   });
 
   test('validation errors block before anything public exists', () async {
     final ran = await release(
       results: {
-        'dart pub publish --dry-run': ToolResult(
+        'dart pub publish --to-archive <archive>': ToolResult(
           exitCode: 65,
           stdout: 'Package has 1 warning and 1 error.',
           stderr: '',
@@ -1214,7 +1260,7 @@ publish = ["pub.dev"]
       () async {
     final ran = await release(
       results: {
-        'dart pub publish --dry-run':
+        'dart pub publish --to-archive <archive>':
             ToolResult(exitCode: 65, stdout: 'something novel', stderr: ''),
       },
     );
@@ -1320,9 +1366,9 @@ publish = ["pub.dev"]
     );
   });
 
-  test('a failed dry run stops before anything public', () async {
+  test('failed native archive staging stops before anything public', () async {
     final ran = await release(results: {
-      'dart pub publish --dry-run': ToolResult(
+      'dart pub publish --to-archive <archive>': ToolResult(
         exitCode: 1,
         stdout: '',
         stderr: 'Package validation found the following error:\n'
@@ -1331,7 +1377,8 @@ publish = ["pub.dev"]
     });
     expect(ran.exitCode, ExitCodes.refused);
     expect(ran.text, contains('not in the package'));
-    expect(ran.calls, isNot(contains('dart pub publish --force')));
+    expect(ran.calls,
+        isNot(contains('dart pub publish --from-archive <archive> --force')));
     expect(ran.calls.where((c) => c.startsWith('git tag')), isEmpty);
   });
 
@@ -1402,7 +1449,8 @@ publish = ["pub.dev"]
       isEmpty,
     );
     expect(ran.calls, isNot(contains('dart pub login')));
-    expect(ran.calls, isNot(contains('dart pub publish --dry-run')),
+    expect(
+        ran.calls, isNot(contains('dart pub publish --to-archive <archive>')),
         reason: 'normal release refuses before acquiring credentials or '
             'preparing a stage when no operator can authorize it');
   });
@@ -1519,7 +1567,7 @@ dependencies:
     final ran = await release(
       registry: registry,
       onRun: (key) {
-        if (key == 'dart pub publish --force') {
+        if (key == 'dart pub publish --from-archive <archive> --force') {
           registry.goLive('0.2.0');
           registry.archives['keybay@0.2.0'] = publishedBytes();
         }
@@ -1528,7 +1576,8 @@ dependencies:
 
     expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
     expect(
-      ran.calls.any((c) => c == 'dart pub publish --force'),
+      ran.calls
+          .any((c) => c == 'dart pub publish --from-archive <archive> --force'),
       isTrue,
       reason: 'the release rk was asked for is the release it performs',
     );
@@ -1582,7 +1631,7 @@ dependencies:
     expect(ran.text, allOf(contains('Git tag'), contains('0.5.0')));
     expect(
       ran.calls,
-      isNot(contains('dart pub publish --dry-run')),
+      isNot(contains('dart pub publish --to-archive <archive>')),
       reason: 'the public-history gate runs before private production',
     );
     expect(ran.calls.where((call) => call.startsWith('git tag ')), isEmpty);
@@ -1605,7 +1654,8 @@ dependencies:
       contains('RK-REL-001'),
     );
     expect(ran.text, contains('origin tags could not be read'));
-    expect(ran.calls, isNot(contains('dart pub publish --dry-run')));
+    expect(
+        ran.calls, isNot(contains('dart pub publish --to-archive <archive>')));
     expect(ran.calls.where((call) => call.startsWith('git tag ')), isEmpty);
   });
 
@@ -1633,7 +1683,7 @@ dependencies:
         contains('RK-MONO-003'));
     expect(
       ran.calls,
-      contains('dart pub publish --dry-run'),
+      contains('dart pub publish --to-archive <archive>'),
       reason: 'the newer tag appeared only after the private stage was made',
     );
     expect(ran.calls.where((call) => call.startsWith('git tag ')), isEmpty,
@@ -1667,7 +1717,7 @@ dependencies:
     expect(ran.calls.where((call) => call.startsWith('git tag ')), isEmpty);
     expect(
       ran.calls,
-      isNot(contains('dart pub publish --force')),
+      isNot(contains('dart pub publish --from-archive <archive> --force')),
       reason: 'no later public step can run after the first lane advances',
     );
   });
@@ -1798,7 +1848,7 @@ void mutationCloseout() {
       state: _git(tags: const ['v0.2.0']), // local tag, no onRemote
       registry: registry,
       onRun: (key) {
-        if (key == 'dart pub publish --force') {
+        if (key == 'dart pub publish --from-archive <archive> --force') {
           registry.goLive('0.2.0');
           registry.archives['keybay@0.2.0'] = publishedBytes();
         }
@@ -1838,12 +1888,13 @@ void mutationCloseout() {
     expect(ran.text, contains('an effect may exist'));
   });
 
-  test('an unreadable archive after a real publish is lostTrack', () async {
+  test('a published coordinate with no digest is skipped without provenance',
+      () async {
     final registry = _MutableRegistry(<String>['0.1.0']);
     final ran = await release(
       registry: registry,
       onRun: (key) {
-        if (key == 'dart pub publish --force') {
+        if (key == 'dart pub publish --from-archive <archive> --force') {
           registry.goLive('0.2.0');
           // No archive is ever served: the confirming read finds the
           // version listed and the bytes unreadable.
@@ -1851,14 +1902,9 @@ void mutationCloseout() {
       },
     );
 
-    expect(ran.exitCode, ExitCodes.refused);
-    expect(ran.problems.map((p) => p['code']), contains('RK-PUB-005'));
-    expect(ran.text, contains('an effect may exist'));
-    expect(
-      (ran.report['next'] as List),
-      contains('rk status core'),
-      reason: 'status and release use the same exact read',
-    );
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    expect(ran.problems, isEmpty);
+    expect(ran.text, contains('comparison unavailable'));
   });
 
   test('a non-zero publish reconciles when the exact archive landed', () async {
@@ -1866,14 +1912,14 @@ void mutationCloseout() {
     final ran = await release(
       registry: registry,
       results: {
-        'dart pub publish --force': ToolResult(
+        'dart pub publish --from-archive <archive> --force': ToolResult(
           exitCode: 1,
           stdout: '',
           stderr: 'connection closed before the response',
         ),
       },
       onRun: (key) {
-        if (key == 'dart pub publish --force') {
+        if (key == 'dart pub publish --from-archive <archive> --force') {
           // The server committed the act before the client observed its lost
           // response. The shared exact inspector, not exit 1, decides this.
           registry.goLive('0.2.0');
@@ -1883,7 +1929,7 @@ void mutationCloseout() {
     );
 
     expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
-    expect(ran.text, contains('public archive confirmed exact'));
+    expect(ran.text, contains('archive matches the staged package'));
     expect(ran.problems, isEmpty);
   });
 
@@ -1892,10 +1938,9 @@ void mutationCloseout() {
     final ran = await release(
       registry: registry,
       onRun: (key) {
-        if (key == 'dart pub publish --force') {
+        if (key == 'dart pub publish --from-archive <archive> --force') {
           registry.goLive('0.2.0');
-          registry.archives['keybay@0.2.0'] = publishedBytes();
-          registry.tampered.add('keybay@0.2.0');
+          registry.archives['keybay@0.2.0'] = [9, 9, 9];
         }
       },
     );
@@ -1921,7 +1966,7 @@ void mutationCloseout() {
     final ran = await release(
       registry: registry,
       onRun: (key) {
-        if (key == 'dart pub publish --force') {
+        if (key == 'dart pub publish --from-archive <archive> --force') {
           registry.goLive('0.2.0');
           registry.archives['keybay@0.2.0'] = publishedBytes();
         }
@@ -1950,8 +1995,11 @@ void mutationCloseout() {
       reason: 'claiming a name permanently is exactly what wants a human — '
           'and with nobody there, that is the honest reason to refuse',
     );
-    // `--force` is the act; `--dry-run` is the validation leg, which runs
+    // `--from-archive` is the act; `--to-archive` is validation and staging,
     // before authorization by design.
-    expect(ran.calls.any((c) => c == 'dart pub publish --force'), isFalse);
+    expect(
+        ran.calls.any(
+            (c) => c == 'dart pub publish --from-archive <archive> --force'),
+        isFalse);
   });
 }

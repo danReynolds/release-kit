@@ -163,7 +163,7 @@ class ReleaseCommand {
           code: 'RK-CLI-004',
           message: 'name the unit to stage',
           remedy: 'a dependent package may need its sibling version to be '
-              'public before its native publish dry-run can pass. Stage one '
+              'public before its native package staging can pass. Stage one '
               'unit explicitly: rk release <unit> --stage',
         ),
       );
@@ -361,7 +361,7 @@ class ReleaseCommand {
         evidence: state.evidence,
         action: step.isPublic
             ? (state.isExact
-                ? _ReleaseAction.alreadyExact.wire
+                ? _ReleaseAction.alreadyPublished.wire
                 : _ReleaseAction.notAttempted.wire)
             : null,
         show: false,
@@ -377,21 +377,20 @@ class ReleaseCommand {
       return ExitCodes.refused;
     }
 
-    // A forge or tap that already exists cannot be compared byte-for-byte
-    // until this source has an exact stage. Defer only that specific unknown;
-    // every other unread public target still blocks before local work.
+    // Unknown public state never grants permission to perform local work.
+    // The sole deferral is target-independent: once a binary publication is
+    // exact and its stage is gone, the recovery check below owns the clearer
+    // RK-STAGE-005 refusal for every remaining target.
+    final partialBinaryStageLoss = unit.shipsBinaries &&
+        !stageInspection.reusable &&
+        publicSteps.any((step) => states[step.id]!.isExact);
     final initialBlock = checklist.steps.where((step) {
       if (step.kind == StepKind.completeStage) return false;
       final state = states[step.id]!;
-      if (!Inspector.blocks(step, state)) return false;
-      final target = targetByStep[step.id];
-      final mayNeedUnboundStage =
-          target?.step.target != PublishTarget.pubDev || !git.isBound;
-      return !(stageInspection.reusable == false &&
-          state.verdict == Verdict.unknown &&
-          target != null &&
-          target.exactComparisonNeedsStage &&
-          mayNeedUnboundStage);
+      if (partialBinaryStageLoss && state.verdict == Verdict.unknown) {
+        return false;
+      }
+      return Inspector.blocks(step, state);
     }).firstOrNull;
     if (initialBlock != null) {
       _haltForState(initialBlock, states[initialBlock.id]!);
@@ -401,12 +400,11 @@ class ReleaseCommand {
     final publicActions = {
       for (final step in publicSteps)
         step.id: states[step.id]!.isExact
-            ? _ReleaseAction.alreadyExact
+            ? _ReleaseAction.alreadyPublished
             : _ReleaseAction.notAttempted,
     };
     if (publicSteps.isNotEmpty &&
-        publicSteps.every((step) => states[step.id]!.isExact) &&
-        (!unit.shipsBinaries || stageInspection.reusable)) {
+        publicSteps.every((step) => states[step.id]!.isExact)) {
       output.line(
         '${unit.name} ${unit.version}',
         mark: Mark.done,
@@ -415,12 +413,33 @@ class ReleaseCommand {
       return ExitCodes.ok;
     }
 
+    // A moving channel may be able to finish from authenticated public
+    // inputs even after the local stage is lost. This is intentionally an
+    // all-remaining-targets check: one versioned publication that still needs
+    // bytes keeps the original stage recovery-critical for the whole run.
+    final unfinishedTargets = [
+      for (final step in publicSteps)
+        if (!states[step.id]!.isExact) targetByStep[step.id]!,
+    ];
+    final recoversWithoutStage = !stageOnly &&
+        !localOnly &&
+        !stageInspection.reusable &&
+        unfinishedTargets.isNotEmpty &&
+        unfinishedTargets.every((target) {
+          final state = states[target.step.id]!;
+          return state.isAbsent &&
+              inspector.targets
+                  .moduleForTarget(target)
+                  .canActWithoutReusableStage(state);
+        });
+
     // Once any binary target is exact, the original signed/notarized stage is
     // recovery-critical until every other target is also proved exact. An
     // unread forge or tap cannot be treated as permission to rebuild: it may
     // already contain the bytes bound by the public tag.
     final partialBinaryRelease = unit.shipsBinaries &&
         !stageInspection.reusable &&
+        !recoversWithoutStage &&
         publicSteps.any((step) => states[step.id]!.isExact) &&
         publicSteps.any((step) {
           final state = states[step.id]!;
@@ -438,7 +457,7 @@ class ReleaseCommand {
       if (!stageOnly) _showReleaseActions(targets, publicActions);
       return ExitCodes.refused;
     }
-    if (!stageInspection.reusable) {
+    if (!stageInspection.reusable && !recoversWithoutStage) {
       final refusal = _refuseIfUnfinishable(unit);
       if (refusal != null) {
         output.halt(HaltKind.beforeActing);
@@ -452,11 +471,13 @@ class ReleaseCommand {
       // Stage-only mode keeps its explicit ability to replace
       // reviewed-but-invalid bytes. A real release refuses that ambiguity
       // before any local preparation.
-      final stageProblem = _stagePreparationProblem(
-        unit,
-        stageInspection,
-        mayReplaceReviewed: false,
-      );
+      final stageProblem = recoversWithoutStage
+          ? null
+          : _stagePreparationProblem(
+              unit,
+              stageInspection,
+              mayReplaceReviewed: false,
+            );
       if (stageProblem != null) {
         output.problem(stageProblem, unit: unit.name);
         output.halt(HaltKind.beforeActing);
@@ -520,49 +541,59 @@ class ReleaseCommand {
       }
     }
 
-    final targetStages = inspector.targets.stages(
-      unit: unit,
-      targets: targets,
-    );
-    final stageInputs = await _prepareStageInputs(
-      unit,
-      targets,
-      stageInspection,
-    );
-    if (stageInputs == null) {
-      if (!stageOnly) _showReleaseActions(targets, publicActions);
-      return ExitCodes.refused;
-    }
-    final stageProgress = _StageProgress(
-      output,
-      title: '${unit.name} ${unit.version} · staging',
-      board: StageBoard.forUnit(unit, targets, targetStages),
-    );
+    final _PreparedStage prepared;
+    if (recoversWithoutStage) {
+      prepared = _PreparedStage(
+        claims: const [],
+        receiptSteps: const [],
+        signing: null,
+      );
+    } else {
+      final targetStages = inspector.targets.stages(
+        unit: unit,
+        targets: targets,
+      );
+      final stageInputs = await _prepareStageInputs(
+        unit,
+        targets,
+        stageInspection,
+      );
+      if (stageInputs == null) {
+        if (!stageOnly) _showReleaseActions(targets, publicActions);
+        return ExitCodes.refused;
+      }
+      final stageProgress = _StageProgress(
+        output,
+        title: '${unit.name} ${unit.version} · staging',
+        board: StageBoard.forUnit(unit, targets, targetStages),
+      );
 
-    final prepared = await _prepareStage(
-      unit,
-      checklist,
-      targets,
-      targetStages,
-      stage,
-      stageInspection,
-      stageProgress,
-      stageInputs,
-    );
-    if (prepared == null) {
-      if (!stageOnly) _showReleaseActions(targets, publicActions);
-      return ExitCodes.refused;
-    }
-    stageInspection = stage.inspect();
-    if (!stageInspection.reusable) {
-      output.problem(Diagnostic(
-        code: 'RK-STAGE-003',
-        message: 'the release stage did not remain valid',
-        remedy: stageInspection.issues.join('\n'),
-      ));
-      output.halt(HaltKind.beforeActing);
-      if (!stageOnly) _showReleaseActions(targets, publicActions);
-      return ExitCodes.refused;
+      final result = await _prepareStage(
+        unit,
+        checklist,
+        targets,
+        targetStages,
+        stage,
+        stageInspection,
+        stageProgress,
+        stageInputs,
+      );
+      if (result == null) {
+        if (!stageOnly) _showReleaseActions(targets, publicActions);
+        return ExitCodes.refused;
+      }
+      prepared = result;
+      stageInspection = stage.inspect();
+      if (!stageInspection.reusable) {
+        output.problem(Diagnostic(
+          code: 'RK-STAGE-003',
+          message: 'the release stage did not remain valid',
+          remedy: stageInspection.issues.join('\n'),
+        ));
+        output.halt(HaltKind.beforeActing);
+        if (!stageOnly) _showReleaseActions(targets, publicActions);
+        return ExitCodes.refused;
+      }
     }
 
     // Re-resolve the complete identity, not only HEAD. The stage plan also
@@ -632,7 +663,7 @@ class ReleaseCommand {
       return ExitCodes.ok;
     }
 
-    final macosProject = _macosProject(unit);
+    final macosProject = recoversWithoutStage ? null : _macosProject(unit);
     if (macosProject != null) {
       releaseInputsRow.handle.begin(ProgressActivity(
         running: 'checking signing',
@@ -673,12 +704,13 @@ class ReleaseCommand {
     // Public reads can take long enough for a local process or operator to
     // alter the private stage. Consent must bind the bytes inspected now,
     // not the ones that were valid before those reads began.
-    if (!_stageStillValid(
-      stage,
-      unit,
-      changed: 'before authorization',
-      halt: HaltKind.beforeActing,
-    )) {
+    if (!recoversWithoutStage &&
+        !_stageStillValid(
+          stage,
+          unit,
+          changed: 'before authorization',
+          halt: HaltKind.beforeActing,
+        )) {
       _showReleaseActions(targets, publicActions);
       return ExitCodes.refused;
     }
@@ -718,6 +750,28 @@ class ReleaseCommand {
     final remainingTargets = [
       for (final step in remaining) targetByStep[step.id]!,
     ];
+    final recoveryBindings = <String, String>{};
+    if (recoversWithoutStage) {
+      for (final target in remainingTargets) {
+        final module = inspector.targets.moduleForTarget(target);
+        final binding = module.recoveryBinding(states[target.step.id]!);
+        if (binding == null) {
+          output.problem(Diagnostic(
+            code: 'RK-STAGE-005',
+            message: '${target.step.summary} can no longer recover without '
+                'its stage',
+            remedy: 'public inputs changed before authorization. Re-run so '
+                'rk can inspect the release again; restore '
+                '${stage.directory.path} if the target still needs the '
+                'original bytes.',
+          ));
+          output.halt(HaltKind.beforeActing);
+          _showReleaseActions(targets, publicActions);
+          return ExitCodes.refused;
+        }
+        recoveryBindings[target.step.id] = binding;
+      }
+    }
     releaseInputsRow.complete(note: 'checked');
     releaseInputs.discard();
     final sessionProgress = _TargetProgress(
@@ -850,12 +904,13 @@ class ReleaseCommand {
       _showReleaseActions(targets, publicActions);
       return ExitCodes.refused;
     }
-    if (!_stageStillValid(
-      stage,
-      unit,
-      changed: 'during authorization',
-      halt: HaltKind.beforeActing,
-    )) {
+    if (!recoversWithoutStage &&
+        !_stageStillValid(
+          stage,
+          unit,
+          changed: 'during authorization',
+          halt: HaltKind.beforeActing,
+        )) {
       _showReleaseActions(targets, publicActions);
       return ExitCodes.refused;
     }
@@ -915,7 +970,7 @@ class ReleaseCommand {
         return ExitCodes.refused;
       }
       if (state.isExact) {
-        publicActions[step.id] = _ReleaseAction.alreadyExact;
+        publicActions[step.id] = _ReleaseAction.alreadyPublished;
         releaseProgress.complete(
           targetByStep[step.id]!,
           note: 'already published',
@@ -972,7 +1027,7 @@ class ReleaseCommand {
           show: false,
         );
         if (state.isExact) {
-          publicActions[step.id] = _ReleaseAction.alreadyExact;
+          publicActions[step.id] = _ReleaseAction.alreadyPublished;
           releaseProgress.complete(
             target,
             note: 'already published',
@@ -998,14 +1053,15 @@ class ReleaseCommand {
         }
       }
 
-      if (!_stageStillValid(
-        stage,
-        unit,
-        changed: 'before ${step.summary}',
-        halt: completedPublicTarget
-            ? HaltKind.stoppedPartway
-            : HaltKind.beforeActing,
-      )) {
+      if (!recoversWithoutStage &&
+          !_stageStillValid(
+            stage,
+            unit,
+            changed: 'before ${step.summary}',
+            halt: completedPublicTarget
+                ? HaltKind.stoppedPartway
+                : HaltKind.beforeActing,
+          )) {
         return ExitCodes.refused;
       }
       if (!_releaseContextStillValid(
@@ -1032,7 +1088,7 @@ class ReleaseCommand {
         show: false,
       );
       if (state.isExact) {
-        publicActions[step.id] = _ReleaseAction.alreadyExact;
+        publicActions[step.id] = _ReleaseAction.alreadyPublished;
         releaseProgress.complete(
           target,
           note: 'already published',
@@ -1054,6 +1110,26 @@ class ReleaseCommand {
           ..notAttemptedPending()
           ..settle();
         _haltForState(step, state);
+        return ExitCodes.refused;
+      }
+      if (recoversWithoutStage &&
+          module.recoveryBinding(state) != recoveryBindings[step.id]) {
+        releaseProgress
+          ..fail(target, activity: module.inspectActivity)
+          ..notAttemptedPending()
+          ..settle();
+        output.problem(Diagnostic(
+          code: 'RK-STAGE-005',
+          message: '${step.summary} can no longer recover without its stage',
+          remedy: 'public inputs changed after authorization. Re-run so rk '
+              'can inspect the release again; restore ${stage.directory.path} '
+              'if the target still needs the original bytes.',
+        ));
+        output.halt(
+          completedPublicTarget
+              ? HaltKind.stoppedPartway
+              : HaltKind.beforeActing,
+        );
         return ExitCodes.refused;
       }
       final actedBefore = output.report.acted;
@@ -1116,18 +1192,21 @@ class ReleaseCommand {
       );
       if (!act.ok) {
         if (state.isExact && !output.report.halted) {
+          final inspected = act.includeInspectionDetail && state.detail != null
+              ? ' · ${state.detail}'
+              : '';
+          final note =
+              '${act.reconciledNote ?? 'command response was lost · public target confirmed exact'}$inspected';
           releaseProgress.complete(
             target,
-            note: act.reconciledNote ??
-                'command response was lost · public target confirmed exact',
+            note: note,
           );
           output.step(
             step,
             mark: Mark.done,
             verdict: state.verdict,
             detail: state.detail,
-            note: act.reconciledNote ??
-                'command response was lost · public target confirmed exact',
+            note: note,
             action: publicActions[step.id]!.wire,
             show: false,
           );
@@ -1270,7 +1349,7 @@ class ReleaseCommand {
   /// Applies one engine-owned public snapshot to the command report.
   ///
   /// Returning null means the gate refused. An empty list means every target
-  /// is already exact. Keeping that distinction here lets both temporal
+  /// was already published. Keeping that distinction here lets both temporal
   /// checkpoints share one presentation without hiding when they occur.
   Future<List<Step>?> _refreshPublicGate({
     required PublicReleaseGate gate,
@@ -1289,7 +1368,7 @@ class ReleaseCommand {
       final state = snapshot.states[step.id]!;
       states[step.id] = state;
       actions[step.id] = state.isExact
-          ? _ReleaseAction.alreadyExact
+          ? _ReleaseAction.alreadyPublished
           : _ReleaseAction.notAttempted;
       output.step(
         step,
@@ -1354,7 +1433,7 @@ class ReleaseCommand {
       final action = actions[target.step.id] ?? _ReleaseAction.notAttempted;
       final mark = switch (action) {
         _ReleaseAction.completed => Mark.done,
-        _ReleaseAction.alreadyExact => Mark.satisfied,
+        _ReleaseAction.alreadyPublished => Mark.satisfied,
         _ReleaseAction.failed => Mark.blocked,
         _ReleaseAction.notAttempted || _ReleaseAction.attempted => Mark.none,
       };
@@ -2756,9 +2835,6 @@ final class _StageProgress {
       if (notary is Map && notary['status'] == 'Accepted') {
         facts.add('notarized');
       }
-      if (step.evidence['publish_dry_run'] == 'passed') {
-        facts.add('dry run passed');
-      }
     }
     return facts.toSet().join(' · ');
   }
@@ -2771,7 +2847,7 @@ final class _StageProgress {
 enum _ReleaseAction {
   notAttempted('not_attempted', 'not attempted'),
   attempted('attempted', 'attempted; result unknown'),
-  alreadyExact('already_exact', 'already exact'),
+  alreadyPublished('already_published', 'already published'),
   completed('completed', 'completed'),
   failed('failed', 'failed');
 

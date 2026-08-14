@@ -12,8 +12,8 @@ release completes and validates its private stage before it asks native tools
 for publication sessions (`dart pub login`, `gh auth status`). `status` and
 `release --stage` never acquire them. A session proves only that credentials
 are usable, not that they may change the intended destination. The attempted
-publish and exact public read-back remain the authority, and a retry records
-an already-exact target without publishing it again. rk stores no secrets and
+publish and public read-back remain the authority, and a retry records an
+already-published target without publishing it again. rk stores no secrets and
 keeps no authoritative release ledger: public targets are truth.
 A private stage is disposable before publication begins and after every target
 is exact; during a partial binary release, retain it so the remaining targets

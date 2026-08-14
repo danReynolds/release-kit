@@ -1,9 +1,12 @@
 import 'dart:io';
 
+import 'package:rk/src/destinations/pub_dev.dart';
+import 'package:rk/src/engine/config.dart';
+import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/registry.dart';
-import 'package:rk/src/transforms/digest.dart';
+import 'package:rk/src/engine/resolve.dart';
+import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/verdict.dart';
-import 'package:rk/src/engine/version.dart';
 import 'package:test/test.dart';
 
 /// The pub.dev client, against a real server rather than a fake.
@@ -21,21 +24,19 @@ import 'package:test/test.dart';
 void main() {
   late HttpServer server;
   late Registry registry;
+  late ResolvedProject project;
 
   /// What the next request gets.
   late int status;
   late String body;
   late Duration delay;
 
-  /// Served for any path ending `.tar.gz`, so an archive URL can point here.
-  List<int>? archiveBytes;
   late List<HttpHeaders> requestHeaders;
 
   setUp(() async {
     status = 200;
     body = '{"versions": []}';
     delay = Duration.zero;
-    archiveBytes = null;
     requestHeaders = [];
 
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -43,11 +44,7 @@ void main() {
       requestHeaders.add(request.headers);
       if (delay > Duration.zero) await Future<void>.delayed(delay);
       request.response.statusCode = status;
-      if (archiveBytes != null && request.uri.path.endsWith('.tar.gz')) {
-        request.response.add(archiveBytes!);
-      } else {
-        request.response.write(body);
-      }
+      request.response.write(body);
       await request.response.close();
     });
 
@@ -55,6 +52,23 @@ void main() {
       host: '${server.address.host}:${server.port}',
       secure: false,
     );
+    final diagnostics = Diagnostics();
+    final config = ReleaseConfig.parse('''
+schema = 2
+
+[release.keybay]
+publish = ["pub.dev"]
+''', 'release.toml', diagnostics)!;
+    final resolution = Resolution.resolve(
+      config,
+      MemorySourceTree({
+        'pubspec.yaml': 'name: keybay\nversion: 1.0.0\n',
+        'CHANGELOG.md': '## 1.0.0\n',
+      }),
+      diagnostics,
+    );
+    expect(diagnostics.found, isEmpty);
+    project = resolution!.units.single.projects.single;
   });
 
   tearDown(() async {
@@ -62,8 +76,8 @@ void main() {
     await server.close(force: true);
   });
 
-  Future<Inspection> inspect([String version = '1.0.0']) =>
-      registry.inspect('keybay', Version.tryParse(version)!);
+  Future<Inspection> inspect() =>
+      PubDevTarget(registry: registry).inspectProject(project);
 
   group('only an authenticated negative means absent', () {
     test('a 404 does', () async {
@@ -203,16 +217,14 @@ void main() {
       expect(package!.versions.map((v) => v.version.canonical), ['1.0.0']);
     });
 
-    test('the archive url and digest are read from the wire', () async {
+    test('the archive digest is read from the wire', () async {
       // The digest proof is only as real as the field that feeds it: with
       // archive_sha256 never parsed, the proof never runs and nothing else
       // notices — a mutation demonstrated exactly that.
       body = '{"versions": [{"version": "1.0.0", '
-          '"archive_url": "https://x/a.tar.gz", '
           '"archive_sha256": "AB12cd"}]}';
       final package = await registry.lookup('keybay');
-      expect(package!.versions.single.archiveUrl, 'https://x/a.tar.gz');
-      expect(package.versions.single.archiveSha256, 'AB12cd');
+      expect(package!.versions.single.archiveSha256, 'AB12cd');
     });
 
     test('the repository is read from each published pubspec', () async {
@@ -226,9 +238,9 @@ void main() {
     });
 
     test('a number where a string belongs does not throw', () async {
-      body = '{"versions": [{"version": "1.0.0", "archive_url": 7}]}';
+      body = '{"versions": [{"version": "1.0.0", "archive_sha256": 7}]}';
       final package = await registry.lookup('keybay');
-      expect(package!.versions.single.archiveUrl, isNull);
+      expect(package!.versions.single.archiveSha256, isNull);
     });
 
     test('the newest version is by precedence, not by position', () async {
@@ -257,65 +269,6 @@ void main() {
             'its own hand — a post-act verification that reads the memo the '
             'pre-act inspection wrote is a verification that cannot fire',
       );
-    });
-
-    group('the archive fetch', () {
-      PublishedVersion published({String? sha}) => PublishedVersion(
-            version: Version.tryParse('1.0.0')!,
-            published: null,
-            archiveUrl: 'http://${server.address.host}:${server.port}/a.tar.gz',
-            archiveSha256: sha,
-          );
-
-      test('returns the bytes when they match the stated digest', () async {
-        archiveBytes = [1, 2, 3, 4];
-        final bytes = await registry.archive(published(
-          sha: Sha256.hex([1, 2, 3, 4]),
-        ));
-        expect(bytes, [1, 2, 3, 4]);
-        expect(
-          requestHeaders.single.value(HttpHeaders.acceptHeader),
-          'application/octet-stream',
-        );
-        expect(
-          requestHeaders.single.value(HttpHeaders.userAgentHeader),
-          contains('release-kit'),
-        );
-      });
-
-      test(
-          'bytes that do not match the stated digest are tampering, not '
-          'unavailability', () async {
-        archiveBytes = [9, 9, 9];
-        await expectLater(
-          registry.archive(published(sha: Sha256.hex([1, 2, 3, 4]))),
-          throwsA(isA<ArchiveTampered>()),
-          reason: 'retrying will not change what the registry serves, and '
-              'proceeding would verify source against content nobody '
-              'vouches for',
-        );
-      });
-
-      test('a non-200 answer is unavailability', () async {
-        status = 503;
-        archiveBytes = [1];
-        await expectLater(
-          registry.archive(published()),
-          throwsA(isA<RegistryUnavailable>()),
-        );
-      });
-
-      test('a version with no archive URL cannot be fetched', () async {
-        await expectLater(
-          registry.archive(PublishedVersion(
-            version: Version.tryParse('1.0.0')!,
-            published: null,
-            archiveUrl: null,
-            archiveSha256: null,
-          )),
-          throwsA(isA<RegistryUnavailable>()),
-        );
-      });
     });
 
     test('an unreadable answer is not cached as a fact', () async {

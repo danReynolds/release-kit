@@ -167,9 +167,9 @@ executables:
       [
         (
           StageContributionPhase.beforeArtifacts,
-          'pub-preflight:example_tool',
+          'pub-archive:example_tool',
           'step:source-snapshot',
-          '',
+          'producers/example_tool/pub/example_tool-1.2.3.tar.gz:pub-archive',
         ),
         (
           StageContributionPhase.beforeArtifacts,

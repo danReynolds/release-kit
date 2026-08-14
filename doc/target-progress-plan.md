@@ -539,7 +539,7 @@ coordinates sharing a session acquire once, while different endpoints do not.
 ### Phase 4: hardening and dogfood
 
 - Add shared target-module contract tests using fake activities and tools.
-- Snapshot TTY, narrow-TTY, non-TTY, failure, resume, already-exact, reusable
+- Snapshot TTY, narrow-TTY, non-TTY, failure, resume, already-published, reusable
   and partial stage, interactive interruption, and multi-unit output.
 - Update CLI/RFC documentation with the final stage and release examples.
 - Dogfood a declined release, `--stage`, a resumed partial release, and RK's

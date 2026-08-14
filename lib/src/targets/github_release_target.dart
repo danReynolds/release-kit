@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
 
-import '../destinations/git_tag.dart';
 import '../destinations/github_release.dart';
 import '../engine/assets.dart';
 import '../engine/checklist.dart';
@@ -19,7 +18,6 @@ import '../engine/tools.dart';
 import '../engine/verdict.dart';
 import '../output/output.dart';
 import '../output/progress.dart';
-import 'published_release_evidence.dart';
 import 'target_module.dart';
 
 final class GithubReleaseTargetModule extends TargetModule {
@@ -67,7 +65,6 @@ final class GithubReleaseTargetModule extends TargetModule {
       targetVersion: unit.version.canonical,
       step: step,
       artifacts: artifacts,
-      exactComparisonNeedsStage: true,
     );
   }
 
@@ -94,61 +91,11 @@ final class GithubReleaseTargetModule extends TargetModule {
     );
     final stage = context.reusableStage(unit);
     if (stage == null) {
-      final inventory = await destination.inspect(
+      return destination.inspect(
         tag,
         expected,
         prerelease: unit.version.isPrerelease,
       );
-      if (!inventory.isExact) return inventory;
-
-      final object = context.git.tagObject(tag);
-      final commit = context.git.tagTarget(tag);
-      if (object == null || commit == null) {
-        return const Inspection.unknown(
-          'the release exists, but this checkout has no readable annotated '
-          'tag object to authenticate its manifest',
-        );
-      }
-      final binding = await GitTag(
-        tools: tools,
-        root: context.git.root,
-      ).manifestBinding(
-        tag: tag,
-        expectedObject: object,
-        expectedCommit: commit,
-      );
-      switch (binding) {
-        case TagManifestBound(:final digest):
-          try {
-            final expectation =
-                PublishedReleaseEvidence(context).manifestExpectation(
-              unit,
-              digest,
-              publicAssets: expected,
-            );
-            return destination.inspectManifest(expectation);
-          } on Object catch (error) {
-            return Inspection.unknown(
-              'the expected release manifest could not be derived: $error',
-            );
-          }
-        case TagManifestAbsent(:final why):
-          return Inspection.conflict(
-            'the GitHub Release exists without its release tag',
-            evidence: {'tag': why},
-          );
-        case TagManifestConflict(:final why, :final evidence):
-          return Inspection.conflict(why, evidence: evidence);
-        case TagManifestMissing(:final why) ||
-              TagManifestMalformed(:final why) ||
-              TagManifestUnbound(:final why):
-          return Inspection.conflict(
-            'the release tag does not bind its public manifest',
-            evidence: {'tag': why},
-          );
-        case TagManifestUnreadable(:final why):
-          return Inspection.unknown(why);
-      }
     }
 
     final receipt = stage.requireReceipt();

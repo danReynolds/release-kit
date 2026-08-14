@@ -16,14 +16,14 @@ Initial release of rk, an austere release tool for Dart repositories.
   and records exact reusable artifacts without publishing them.
 - `status` and `release` share exact target inspection for Git tags, pub.dev,
   GitHub Releases, and Homebrew; every public act is inspected before and
-  after, and a retry skips targets already proved exact.
+  after, and a retry skips targets already published.
 - Target rows show `✗` for any concrete issue linked to that target. Status has
   no synthetic authentication verdict: unsupported safe checks stay silent
   until release preflight.
-- A normal interactive release runs one native `dart pub login` before private
-  staging when an unfinished pub.dev target exists; `release --stage` never
-  logs in. Login proves a session, while publish plus exact read-back remains
-  the proof of package authority and completion.
+- A normal interactive release runs one native `dart pub login` after private
+  staging and before authorization when an unfinished pub.dev target exists;
+  `release --stage` never logs in. Login proves a session, while publish plus
+  public read-back remains the proof of package authority and completion.
 - Compiled binaries report their embedded package version with `rk --version`
   so staging and downstream package managers can reject stale artifacts.
 - Human status keeps diagnostic codes in JSON, distinguishes nonblocking
@@ -32,3 +32,8 @@ Initial release of rk, an austere release tool for Dart repositories.
   local pubspec, so a name owned by another project is reported directly.
 - Dirty Git working trees may release registry-only or local outputs through
   an exact unbound snapshot; Git-identified targets still require clean source.
+- Versioned publications are append-only: Pub stages and uploads one native
+  archive, retained native digests catch known divergence, and occupied
+  historical coordinates are never rebuilt or overwritten. Homebrew remains
+  a forward-only channel updated by compare-and-swap and can recover from the
+  authenticated public GitHub asset set when its local stage is gone.
