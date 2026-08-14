@@ -1,7 +1,7 @@
 # RFC 0002: rk core
 
 - Status: Approved for implementation
-- Revision: 4 (2026-08-08) — production-alpha staging and three-verb surface
+- Revision: 5 (2026-08-14) — append-only publication reconciliation
 - Supersedes: RFC 0001 as build authority; 0001 remains the threat catalog
   and assurance ladder
 - MVP scope: Dart packages and Dart CLIs, released **from the operator's
@@ -94,9 +94,10 @@ addressed here beyond fail-closed defaults.
   and deliberately claims no revision. Both bind the canonical plan,
   toolchain, exact source snapshot, artifact digests, signature, and
   notarization evidence. A stage is reusable acceleration, not a
-  database of public truth. It is recovery-critical only between the first
-  and last public acts of a binary release: signing and notarization are not
-  byte-reproducible, so an interrupted release must retain those exact bytes.
+  database of public truth. It is recovery-critical only while an unfinished
+  target still needs its local signed or notarized bytes. If GitHub is already
+  public and only Homebrew remains, the public assets and their digests are the
+  channel's immutable inputs instead.
 - **Draft** — the private GitHub release assembled and validated immediately
   before it is made public. It is transactional protection for that target,
   not cross-target storage or rk's recovery ledger.
@@ -299,23 +300,81 @@ selector.
 - **`rk release [unit]`** — revalidate and reuse an exact stage, or create the
   same stage internally. A unit with only local binary output stops there and
   reports the archive paths; otherwise it authorizes and publishes. It inspects
-  each target before acting and with the same operation afterward. `exact` skips,
-  `absent` acts, and `conflict` or `unknown` stops. In an interactive run with
-  unfinished targets, it acquires native publication sessions only after the
-  complete private stage is validated and before authorization. Re-running is
-  resume.
+  each target before acting and with the same operation afterward. `exact`
+  skips, `absent` acts, and `conflict` or `unknown` stops. An occupied
+  append-only coordinate also skips when its historical stage is unavailable;
+  rk reports it as already published rather than claiming byte provenance. In
+  an interactive run with unfinished targets, it acquires native publication
+  sessions only after the complete private stage is validated and before
+  authorization. Re-running is resume.
 
 Session acquisition is not a target verdict or public act. Success proves only
 that a native tool has a usable session; it cannot prove write authority for
 the intended package or repository. The effective destination is frozen and
 rechecked around acquisition. Only the publish attempt followed by exact
 public read-back completes a target, and an idempotent rerun records that
-already-exact result without publishing again.
+already-published result without publishing again.
 
 There is no historical verification verb. Published truth is established by
 the exact inspection owned by each configured target and shared by `status`
 and `release`; the process that performed a publish is never accepted as its
 own proof of success.
+
+### Public reconciliation and mutation
+
+**Versioned artifacts are append-only; channels may only advance.** This is
+rk's rule even when a provider exposes edit, delete, yank, retract, or force
+APIs.
+
+For a versioned public coordinate:
+
+- absent means create it;
+- present with cheap comparable evidence means compare the provider's native
+  identity or digest: a match skips and a known mismatch blocks;
+- present after the comparable stage has been lost means skip it as already
+  published, without claiming historical provenance; and
+- unreadable or ambiguous means block.
+
+RK never replaces, deletes, retracts, yanks, or force-updates a public artifact
+at the same release coordinate. It exposes no overwrite flag. A bad release is
+corrected with a new version. Missing evidence is intentionally asymmetric: it
+can remove permission to write, but it can never create permission to rewrite.
+
+Verification stays native and cheap. RK compares a provider-reported digest or
+directly hashes a public artifact when it has a trusted current stage to compare
+against. It does not rebuild historical artifacts, emulate an ecosystem's file
+selection rules, or reconstruct universal cross-target provenance merely to
+decide whether to retry.
+
+The target-specific applications are:
+
+- **Git tag:** always compare the remote tag object and peeled commit, because
+  that identity remains directly knowable without a stage. Never force-move or
+  reuse a published tag.
+- **Package registry:** treat the native package coordinate as occupied once
+  published. With the retained staged package, compare the registry's native
+  digest when available; without it, existence skips. A known mismatch blocks.
+- **GitHub Release:** treat a public release and each occupied asset coordinate
+  as frozen. A private draft may resume only from a verified subset of the
+  retained stage. Once public, missing or different required assets block; rk
+  never patches, replaces, or deletes them. Without the stage, a structurally
+  complete release is already published.
+- **Homebrew and other channels:** the tap formula is a moving pointer rather
+  than a versioned artifact. Set it when absent, skip it when it already names
+  the intended version and payload, and advance a recognizable older value with
+  compare-and-swap. Same-version differences, newer values, unrecognized
+  content, and races block; an ordinary release never rolls a channel back.
+
+Only real consumption edges require cross-target integrity. A Homebrew formula,
+for example, must carry the digest of the actual GitHub asset its URL downloads.
+If the local stage is gone, rk obtains that digest from GitHub or downloads and
+hashes that asset; it does not rebuild a local binary and infer equivalence.
+This proves the consumer binding, not that every publisher received identical
+bytes.
+
+This policy remains behind the existing target inspection seam. It adds no
+public reconciliation mode, target class, configuration, repair command, or
+generic overwrite mechanism.
 
 ### Authorization
 
@@ -355,9 +414,11 @@ Every tag binds the digest of its complete stage manifest to the source
 commit. A binary release that selects GitHub also publishes the manifest with
 its GitHub assets, so its inventory remains recoverable after the local stage
 is deleted. A pub.dev-only release has no separate public artifact to name: its
-truth is recovered directly from the peeled source commit and the registry
-archive's exact contents. A signed tag authenticates its binding; an unsigned
-tag proves consistency but not signer authenticity.
+published coordinate is immutable and its retained stage supplies a digest
+comparison while available. If that stage has been deleted, rk reports an
+existing package version as already published rather than reconstructing its
+historical contents. A signed tag authenticates its binding; an unsigned tag
+proves consistency but not signer authenticity.
 
 `--yes` skips only the human confirmation; it prints the same exact plan and
 keeps every safety check. There is no `--force`: a permanent registry conflict
@@ -511,7 +572,10 @@ only from exact pins misses the ordinary caret pin most packages use.
 
 - `absent` — proceed. Concluded only from a definitive provider negative,
   never from a timeout.
-- `exact` — verified equal; skip.
+- `exact` — complete under the target's reconciliation policy; skip. Evidence
+  distinguishes payload equality from an occupied append-only coordinate whose
+  historical comparison is unavailable, so human output says either `exact` or
+  `already published` without adding a second action state.
 - `conflict` — halt; a human decides, with the evidence.
 - `unknown` — rk could not determine state. Never collapsed into `absent`.
   Two shapes needing different guidance: **pre-act**, where rk never wrote
@@ -524,8 +588,10 @@ before concluding anything — destination APIs lag their own writes.
 
 ### Staging and reuse
 
-Every release completes and atomically receipts its stage before the first
-public act. A Git-bound stage id binds its schema, full commit and tree
+Every act that creates a versioned publication consumes a complete, atomically
+receipted stage. A moving-channel-only recovery may instead consume the
+authenticated public artifact set it points to, without rebuilding it. A
+Git-bound stage id binds its schema, full commit and tree
 identity, and canonical release plan. An unbound stage id instead includes a
 one-invocation nonce: it may proceed through a one-shot registry release, but
 cannot be handed to a later authorization run. Both plans include the exact producer implementation and the
@@ -554,9 +620,10 @@ whole of its job in this revision.
 It is deliberately **not** memory. The local stage holds every artifact
 locally, so a draft contains nothing that cannot be re-uploaded from the
 retained exact stage. Before publication begins an invalid private stage may
-be rebuilt; after any public target is exact, signed or notarized bytes are
-not assumed reproducible and the recovery-critical stage must be retained.
-This reduces the draft rule to three cases:
+be rebuilt. Once signed or notarized bytes are public, the stage remains
+recovery-critical only while an unfinished target still needs those local
+bytes. A Homebrew-only remainder instead consumes the already-public GitHub
+assets and their digests. This reduces the draft rule to three cases:
 
 - **no draft** — create it and upload the full inventory;
 - **a draft containing a verified subset of this release** — upload the
@@ -582,6 +649,10 @@ The post-create inspection downloads or hashes the public assets and compares
 their complete inventory and digests with the public release manifest. Asset
 names alone are not exactness.
 
+If the retained stage no longer exists, rk still requires the public release's
+structural inventory but does not reconstruct the old build merely to reproduce
+its digests. The occupied public release is skipped, never repaired in place.
+
 **After publishing, verification failure is terminal.** Immutable releases
 cannot be edited and deleting one permanently burns the tag name. rk
 retries verification to a bounded deadline, then states the only honest
@@ -596,30 +667,33 @@ their complexity. Deferring them costs nothing today.
 ### Mutable pointers
 
 The Homebrew cask updates compare-and-swap: inspect (absent / exact /
-older-clean-base / conflict), apply only if the inspected blob is still
-current, then re-read the public tap as the post-act check. "Older clean base"
-is derived from reality — the tap cask must byte-equal the manifest-bound cask
-bytes of the release it names — so a hand-edited cask correctly yields
-`conflict`.
+recognizable-older / conflict), apply only if the inspected blob is still
+current, then re-read the public tap as the post-act check. A same-version
+difference, a newer version, or content rk cannot recognize as its generated
+cask yields `conflict`; retry never reconstructs every historical release just
+to authorize a forward move.
 A clean consumer install from the public tap remains a supervised live-canary
 gate rather than part of the mutation.
 
-The inspection compares the public cask bytes, version, URLs, and hashes
-with the cask derived from the release manifest. The swap applies against
-a fresh `--depth 1` clone, first requiring its cask to match the exact base
-authorized by inspection; a rejected push then catches movement after that
-check. The authoritative pre-act and post-act public reads use the GitHub
-contents API — REST, not a CDN path; the API serves blob content, not cached
-pages.
+The inspection compares the public cask bytes, version, URLs, and hashes with
+the intended channel value. That value comes from the retained stage when it
+exists, or from the actual public GitHub assets and their digests when Homebrew
+is the only unfinished target. The swap applies against a fresh `--depth 1`
+clone, first requiring its cask to match the exact blob authorized by
+inspection; a rejected push then catches movement after that check. The
+authoritative pre-act and post-act public reads use the GitHub contents API —
+REST, not a CDN path; the API serves blob content, not cached pages.
 
 ### Cleanup
 
 Published assets are the product and are never cleaned up. Git-bound local
 stages become disposable acceleration after release because public truth is
 recoverable from target inspection. An unbound stage is the only retained
-expected payload unless the provider durably binds its digest; deleting it
-therefore downgrades later comparison to `unknown`, never to permission to
-publish again. A failed step or non-clean verdict keeps its evidence for diagnosis.
+expected payload unless the provider durably binds its digest. Deleting it
+blocks creation when the immutable coordinate is still absent; when that
+coordinate already exists, it skips as already published and never becomes
+permission to publish again. A failed step or non-clean verdict keeps its
+evidence for diagnosis.
 Residue from an abandoned release is surfaced by `status` and deleted only by
 a human.
 
@@ -663,14 +737,15 @@ act(expected, stage)
 
 - **`dart`** (ecosystem): parses pubspec, workspace, lockfile, and any
   `pubspec_overrides.yaml`; validates version↔tag agreement, changelog
-  entry, and a publish dry-run; derives ordering and prerequisites. Two
+  entry, and native package archive validation; derives ordering and
+  prerequisites. Two
   rules learned from real repositories: lockfile enforcement applies to
   **compiled-binary units only**, because Dart's own guidance tells library
   authors not to commit one and requiring it would refuse the most common
   package shape; and a **consumer resolve** — resolution with development
   overrides disabled — is mandatory before publishing, because pub excludes
   `pubspec_overrides.yaml` from the archive but honours it locally, so a
-  dry-run can pass while the published package is unresolvable for everyone
+  validation can pass while the published package is unresolvable for everyone
   else.
 - **`dart-cli`** (build): `dart compile exe` per platform, then smoke-runs
   what it produced. Capability is resolved per platform and reported:
@@ -712,12 +787,11 @@ act(expected, stage)
   SHA-256. Determinism is a requirement, not polish: without
   byte-reproducibility, "is this the artifact I would have made" is
   undecidable and reuse degenerates into acceptability.
-- **`pub-dev`** (destination): inspection via the pub.dev API; publish via
-  `dart pub publish` against the operator's session; post-publish
-  re-download and logical content compare, since pub rewraps archives —
-  name, regular entry type, inventory, size, and content in both directions,
-  ignoring archive timestamps. File modes are an explicit alpha boundary
-  because `SourceTree` does not expose them. A package
+- **`pub-dev`** (destination): native packaging produces the exact private
+  archive that publication uploads. While that stage remains, the registry's
+  archive digest is compared directly; after it is gone, an existing
+  package/version is already published and skips without a historical rebuild
+  or logical source-tree comparison. A known digest mismatch blocks. A package
   that has never existed yields `first-publish`, which prints the ordered
   interactive bootstrap commands and refuses to act, because pub.dev
   accepts a first version only from an interactive publish.
@@ -738,8 +812,12 @@ act(expected, stage)
   is complete when at least one configured pub.dev target is unfinished.
   Stage-only runs never log in. A successful login creates no auth-specific
   target state and proves no package-level uploader permission; the actual
-  publish and exact archive read-back decide completion, while an idempotent
-  retry reports the target already exact and performs no second publish.
+  publish and public coordinate read-back decide completion, while an
+  idempotent retry reports the target already published and performs no second
+  publish. When the staged archive is still retained, its native digest also
+  proves the public bytes. The adapter capability-detects the Dart SDK's native
+  archive staging/upload support before work begins; an SDK without that support
+  fails clearly rather than falling back to custom ignore or packaging logic.
 - **`github-release`** (destination): draft creation, upload, public flip, and
   exact public asset inspection as above.
 - **`homebrew-tap`** (destination): stable releases only; Cask from a closed

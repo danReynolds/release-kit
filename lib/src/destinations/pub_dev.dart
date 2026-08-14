@@ -1,26 +1,17 @@
-import '../engine/compare.dart';
+import '../engine/reconciliation.dart';
 import '../engine/registry.dart';
 import '../engine/resolve.dart';
-import '../engine/source_tree.dart';
 import '../engine/verdict.dart';
 
 class PubDevTarget implements PublicationInspector {
-  PubDevTarget({
-    required this.registry,
-    required this.comparator,
-    required this.source,
-    this.allowCurrentSourceFallback = true,
-  });
+  PubDevTarget({required this.registry});
 
   final RegistryReader registry;
-  final Comparator comparator;
-  final SourceTree source;
-  final bool allowCurrentSourceFallback;
 
   @override
   Future<Inspection> inspectProject(
     ResolvedProject project, {
-    SourceTree? expectedSource,
+    String? expectedArchiveSha256,
   }) async {
     final RegistryPackage? package;
     try {
@@ -36,44 +27,22 @@ class PubDevTarget implements PublicationInspector {
     final published = package.at(project.version);
     if (published == null) return const Inspection.absent();
 
-    if (expectedSource == null && !allowCurrentSourceFallback) {
-      return const Inspection.unknown(
-        'the package exists, but source comparison is unavailable without '
-        'the current unbound release stage',
-      );
-    }
-
-    final List<int> archive;
-    try {
-      archive = await registry.archive(published);
-    } on ArchiveTampered catch (error) {
-      return Inspection.conflict(
-        'the registry archive does not match its stated digest',
-        evidence: {
-          'stated sha256': error.stated,
-          'served sha256': error.actual,
-        },
-      );
-    } on RegistryUnavailable catch (error) {
-      return Inspection.unknown(error.message);
-    }
-
-    final compared = await comparator.compare(
-      archive: archive,
-      tree: expectedSource ?? source,
-      packageDirectory: project.pubspec.directory,
-    );
-    if (!compared.isExact) return compared;
-
     final when = published.published;
-    return Inspection.exact(
-      detail: when == null
-          ? compared.detail
-          : 'published ${_ago(when)} · ${compared.detail}',
-      evidence: {
-        if (published.archiveSha256 != null)
-          'archive sha256': published.archiveSha256!,
+    final age = when == null ? 'already published' : 'published ${_ago(when)}';
+    return PublicReconciliation.appendOnly(
+      label: 'the pub.dev archive',
+      expected: const {'archive'},
+      published: const {'archive'},
+      expectedProofs: {
+        if (expectedArchiveSha256 != null)
+          'archive': 'sha256:${expectedArchiveSha256.toLowerCase()}',
       },
+      publishedProofs: {
+        if (published.archiveSha256 != null)
+          'archive': 'sha256:${published.archiveSha256!.toLowerCase()}',
+      },
+      occupiedDetail: '$age · comparison unavailable',
+      verifiedDetail: '$age · archive matches the staged package',
     );
   }
 

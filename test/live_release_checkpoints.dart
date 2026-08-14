@@ -398,7 +398,7 @@ void _expectExactRetry(
   );
   for (final step in publicSteps) {
     expect(step['verdict'], 'exact', reason: '${step['kind']} was not exact');
-    expect(step['action'], 'already_exact',
+    expect(step['action'], 'already_published',
         reason: '${step['kind']} performed work on the retry');
   }
 }

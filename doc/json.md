@@ -13,7 +13,7 @@ rk status <unit> --json                 where things stand; read-only
 rk release [unit] --stage --json        exact stage; name it with several units
 rk status <unit> --json                 confirm: staged, good to release
 rk release [unit] --yes --json          publish and read back without prompting
-rk release [unit] --yes --json          idempotent: already-exact, no second act
+rk release [unit] --yes --json          idempotent: already-published, no second act
 rk target list --json                    installed rk's static release choices
 ```
 
@@ -26,7 +26,7 @@ unit when an automation caller needs the narrowest scope.
 
 | key | meaning |
 |---|---|
-| `rk` | schema version (currently `7`) |
+| `rk` | schema version (currently `8`) |
 | `command` | the verb that ran |
 | `mode` | present only where the run has one: `{stage}` on `release` |
 | `observed_at` | UTC ISO 8601 — when rk read the world |
@@ -83,16 +83,18 @@ optional `action` during `release`.
 for public steps (for example `pubDev` or `githubRelease`). More than one
 registry can therefore share `publishRegistry` without becoming ambiguous.
 `action` records what this release invocation did with a public target:
-`not_attempted`, `attempted`, `already_exact`, `completed`, or `failed`.
+`not_attempted`, `attempted`, `already_published`, `completed`, or `failed`.
 It is an execution result, not another target-state vocabulary; `verdict`
 remains the shared status/release observation. Native login is not a target
 action. A pub.dev action is `completed` only after publish and exact public
-read-back; an idempotent retry records `already_exact`.
+read-back; an idempotent retry records `already_published`.
 
 `verdict` is one of, frozen:
 
-- `absent` — not there, from an authenticated negative. Work to do.
-- `exact` — there, and it is what this configuration produces.
+- `absent` — the intended state is not there. For a moving channel, a
+  recognized older value may be present. Work to do.
+- `exact` — complete under the target's reconciliation policy. Evidence says
+  whether bytes were compared or historical comparison was unavailable.
 - `conflict` — there, and it differs. Re-running will not fix it.
 - `unknown` — rk could not tell. **Never** collapsed into `absent`; read
   the entry's `detail` for why.

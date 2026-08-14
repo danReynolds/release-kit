@@ -207,6 +207,19 @@ abstract base class TargetModule {
       const [];
 
   String? permanenceNotice(TargetExpectation target) => null;
+
+  /// Whether this absent target can act from authenticated public inputs when
+  /// the original local stage is unavailable. Versioned publishers default to
+  /// false; a moving channel may opt in with target-owned recovery authority.
+  bool canActWithoutReusableStage(Inspection inspected) =>
+      recoveryBinding(inspected) != null;
+
+  /// Stable, non-secret identity of the public inputs authorizing recovery.
+  ///
+  /// Core freezes this before consent and compares it with the final
+  /// observation immediately before the act. The adapter retains the actual
+  /// authority and payload; orchestration needs only equality.
+  String? recoveryBinding(Inspection inspected) => null;
 }
 
 /// Read-only dependencies shared by the four built-in target modules.

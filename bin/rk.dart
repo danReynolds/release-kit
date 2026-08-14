@@ -21,7 +21,6 @@ import 'package:rk/src/commands/release.dart';
 import 'package:rk/src/commands/status.dart';
 import 'package:rk/src/commands/target.dart';
 import 'package:rk/src/destinations/pub_dev.dart';
-import 'package:rk/src/engine/compare.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/output/diagnosis.dart';
 import 'package:rk/src/engine/diagnostic.dart';
@@ -468,13 +467,7 @@ Future<int> _release(
       sourceWarning: source.warning,
       inspector: Inspector(
         registry: registry,
-        pubDev: PubDevTarget(
-          registry: registry,
-          comparator: Comparator(tools: targetTools),
-          source:
-              git.isBound ? GitCommitSourceTree(context.root, git.head) : tree,
-          allowCurrentSourceFallback: git.isBound,
-        ),
+        pubDev: PubDevTarget(registry: registry),
         git: git,
         tools: targetTools,
         repository: git.originUrl,
@@ -666,7 +659,6 @@ Future<int> _status(
 ) async {
   final prepared = _prepare(output);
   if (!prepared.isReady) return prepared.code!;
-  final context = prepared.context!;
   final registry = prepared.registry!;
   final source = _selectReleaseSource(prepared, unit, output);
   if (source == null) {
@@ -692,13 +684,7 @@ Future<int> _status(
       sourceWarning: source.warning,
       inspector: Inspector(
         registry: registry,
-        pubDev: PubDevTarget(
-          registry: registry,
-          comparator: Comparator(tools: targetTools),
-          source:
-              git.isBound ? GitCommitSourceTree(context.root, git.head) : tree,
-          allowCurrentSourceFallback: git.isBound,
-        ),
+        pubDev: PubDevTarget(registry: registry),
         git: git,
         tools: targetTools,
         repository: git.originUrl,

@@ -3,10 +3,15 @@
 /// `unknown` is never collapsed into `absent`: concluding "not there" from a
 /// timeout is how a tool publishes something twice.
 enum Verdict {
-  /// Nothing is there. Concluded only from a definitive provider negative.
+  /// The intended public state is not there. For a mutable channel, a
+  /// recognized older value may be present and carry compare-and-swap
+  /// authority for one forward update.
   absent,
 
-  /// What is there is what this release would put there.
+  /// The target is complete under its reconciliation policy.
+  ///
+  /// Evidence distinguishes verified equality from an occupied append-only
+  /// coordinate whose historical comparison is unavailable.
   exact,
 
   /// Something else is there.
@@ -65,7 +70,7 @@ class Inspection {
   /// One line saying what rk saw.
   final String? detail;
 
-  /// Provider evidence supporting an exact answer, or the fields a conflict
+  /// Provider evidence supporting a complete answer, or the fields a conflict
   /// differs on, so callers receive the proof rather than only the verdict.
   final Map<String, String> evidence;
 

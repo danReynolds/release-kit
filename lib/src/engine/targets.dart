@@ -20,7 +20,6 @@ class TargetExpectation {
     required Iterable<String> artifacts,
     this.project,
     this.uses,
-    this.exactComparisonNeedsStage = false,
   }) : artifacts = List<String>.unmodifiable(artifacts);
 
   PublishTarget get target => step.target!;
@@ -44,9 +43,6 @@ class TargetExpectation {
 
   /// A concise reference to an artifact inventoried by another target.
   final String? uses;
-
-  /// Whether exact public bytes need a staged local counterpart.
-  final bool exactComparisonNeedsStage;
 }
 
 enum ArtifactStatus {

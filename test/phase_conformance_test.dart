@@ -6,7 +6,6 @@ import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/commands/release.dart';
 import 'package:rk/src/destinations/pub_dev.dart';
 import 'package:rk/src/engine/assets.dart';
-import 'package:rk/src/engine/compare.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
@@ -528,38 +527,20 @@ void main() {
     });
   });
 
-  group('phase 4 — published pub package comparison', () {
-    test('the pub.dev target owns the one archive comparator', () {
-      final target =
-          File('lib/src/destinations/pub_dev.dart').readAsStringSync();
-      expect(
-        target,
-        contains('comparator.compare('),
-        reason: 'a second comparison implementation is the two-inspectors '
-            'drift over again',
-      );
-      // Both directions exist in the engine itself — asserting them via the
-      // test file's contents was the displaced-string anti-pattern the
-      // doctrine's first rule bans, found by review in the first phase gated
-      // after the rule was written.
-      final comparator = File('lib/src/engine/compare.dart').readAsStringSync();
-      expect(comparator, contains('in the archive, not in the source'));
-      expect(comparator, contains('in the source, missing from the archive'));
-      expect(
-        target,
-        contains('registry.archive('),
-        reason: 'a successful publish process is not proof of published bytes',
-      );
-      expect(fileExists('test/pub_dev_test.dart'), isTrue);
-    });
-  });
-
   group('phase 5 — rk release for pub.dev', () {
     // Executed at the command layer with an evolving world: the acts change
     // the same fake registry and tag set the next inspection reads, which is
     // what lets a re-run be the resume. Real pub.dev cannot be published to
     // from a test, so the live half of the DONE WHEN is kept in the explicit
     // `test/live_release_checkpoints.dart` lane.
+    List<int> archiveOfTree() => ArchiveBuilder.gzip(ArchiveBuilder.tar([
+          ArchiveEntry(
+            name: 'pubspec.yaml',
+            bytes: 'name: keybay\nversion: 0.2.0\n'.codeUnits,
+          ),
+          ArchiveEntry(name: 'CHANGELOG.md', bytes: '## 0.2.0\n'.codeUnits),
+        ]));
+
     Future<
         ({
           int code,
@@ -617,9 +598,29 @@ publish = ["git-tag", "pub.dev"]
         originUrl: 'example/keybay',
       );
       late ReleaseStages stages;
+      String normalizedPubKey(String key) {
+        if (key.contains('pub publish --to-archive ')) {
+          return 'dart pub publish --to-archive <archive>';
+        }
+        if (key.contains('pub publish --from-archive ')) {
+          return 'dart pub publish --from-archive <archive> --force';
+        }
+        return key;
+      }
+
+      void materializePubArchive(String key) {
+        const marker = 'pub publish --to-archive ';
+        final offset = key.indexOf(marker);
+        if (offset < 0) return;
+        final path = key.substring(offset + marker.length);
+        File(path)
+          ..parent.createSync(recursive: true)
+          ..writeAsBytesSync(archiveOfTree());
+      }
+
       final tools = RecordingTools(
-        results: results,
         onRun: (key) {
+          materializePubArchive(key);
           // A successful push is what puts a tag on origin — the same set
           // feeds the next run's local tags and the remote's answer, which
           // is exactly the world after a push: everyone can see it.
@@ -627,12 +628,14 @@ publish = ["git-tag", "pub.dev"]
               (results[key]?.exitCode ?? 0) == 0) {
             tags.add('v0.2.0');
           }
-          onRun?.call(key);
+          onRun?.call(normalizedPubKey(key));
         },
         // Origin answers from the world: a tag the world holds is listed,
         // one it does not is not — the remote leg reads reality, and this is
         // the reality the drive maintains.
         answers: (key) {
+          final scripted = results[normalizedPubKey(key)];
+          if (scripted != null) return scripted;
           if (key == 'git rev-parse --verify refs/tags/v0.2.0^{tag}') {
             return ToolResult(
               exitCode: 0,
@@ -713,8 +716,6 @@ publish = ["git-tag", "pub.dev"]
             registry: registry,
             pubDev: PubDevTarget(
               registry: registry,
-              comparator: Comparator(tools: const SystemTools()),
-              source: tree,
             ),
             git: git,
             tools: tools,
@@ -735,20 +736,12 @@ publish = ["git-tag", "pub.dev"]
       return (
         code: code,
         text: buffer.toString(),
-        calls: tools.calls,
+        calls: tools.calls.map(normalizedPubKey).toList(),
         report: jsonDecode(output.report.encode(exit: code))
             as Map<String, Object?>,
         died: died,
       );
     }
-
-    List<int> archiveOfTree() => ArchiveBuilder.gzip(ArchiveBuilder.tar([
-          ArchiveEntry(
-            name: 'pubspec.yaml',
-            bytes: 'name: keybay\nversion: 0.2.0\n'.codeUnits,
-          ),
-          ArchiveEntry(name: 'CHANGELOG.md', bytes: '## 0.2.0\n'.codeUnits),
-        ]));
 
     test('default-No yes confirmation for a permanent act', () {
       expect(sourceContains('[y/N]'), isTrue);
@@ -776,9 +769,10 @@ publish = ["git-tag", "pub.dev"]
       expect(run.text, contains('mask consumer resolution'));
       expect(
         run.calls,
-        isNot(contains('dart pub publish --dry-run')),
+        isNot(contains('dart pub publish --to-archive <archive>')),
         reason: 'pub excludes pubspec_overrides.yaml from the archive but '
-            'honours it locally — a dry run against an overridden graph '
+            'honours it locally — native validation against an overridden '
+            'graph '
             'validates a package consumers never get, so the refusal '
             'precedes it',
       );
@@ -791,7 +785,7 @@ publish = ["git-tag", "pub.dev"]
     test('a dependency_overrides section masks the same way, and refuses',
         () async {
       // The section form: tracked by necessity (it lives in the manifest),
-      // honoured by the dry run's resolution, stripped from the archive.
+      // honoured by native resolution, then stripped from the archive.
       // Pub exits 0 with only a hint, so only rk can refuse it.
       final run = await drive(
         published: {
@@ -811,7 +805,8 @@ publish = ["git-tag", "pub.dev"]
       expect(run.code, ExitCodes.refused);
       expect(run.text, contains('mask consumer resolution'));
       expect(run.text, contains('dependency_overrides section'));
-      expect(run.calls, isNot(contains('dart pub publish --dry-run')));
+      expect(run.calls,
+          isNot(contains('dart pub publish --to-archive <archive>')));
     });
 
     test('a workspace member is masked from its nested workspace root',
@@ -851,10 +846,11 @@ publish = ["git-tag", "pub.dev"]
       expect(run.code, ExitCodes.refused);
       expect(run.text, contains('mask consumer resolution'));
       expect(run.text, contains('dart/pubspec_overrides.yaml'));
-      expect(run.calls, isNot(contains('dart pub publish --dry-run')));
+      expect(run.calls,
+          isNot(contains('dart pub publish --to-archive <archive>')));
     });
 
-    test('post-publish re-download and compare, and a mismatch is terminal',
+    test('post-publish native digest comparison makes a mismatch terminal',
         () async {
       final published = {
         'keybay': ['0.1.0']
@@ -865,7 +861,7 @@ publish = ["git-tag", "pub.dev"]
         archives: archives,
         tags: {},
         onRun: (key) {
-          if (key == 'dart pub publish --force') {
+          if (key == 'dart pub publish --from-archive <archive> --force') {
             published['keybay']!.add('0.2.0');
             // The registry serves bytes this tree cannot account for.
             archives['keybay@0.2.0'] = ArchiveBuilder.gzip(ArchiveBuilder.tar([
@@ -887,7 +883,7 @@ publish = ["git-tag", "pub.dev"]
         (run.report['problems'] as List).map((p) => (p as Map)['code']),
         contains('RK-PUB-006'),
       );
-      expect(run.text, contains('lib/injected.dart'));
+      expect(run.text, contains('archive: sha256'));
       expect(
         run.report['rerun_helps'],
         false,
@@ -910,7 +906,7 @@ publish = ["git-tag", "pub.dev"]
         archives: archives,
         tags: tags,
         results: {
-          'dart pub publish --force':
+          'dart pub publish --from-archive <archive> --force':
               ToolResult(exitCode: 137, stdout: '', stderr: 'Killed: 9'),
         },
         onRun: (key) {
@@ -925,7 +921,7 @@ publish = ["git-tag", "pub.dev"]
         archives: archives,
         tags: tags,
         onRun: (key) {
-          if (key == 'dart pub publish --force') {
+          if (key == 'dart pub publish --from-archive <archive> --force') {
             published['keybay']!.add('0.2.0');
             archives['keybay@0.2.0'] = archiveOfTree();
           }
@@ -939,10 +935,12 @@ publish = ["git-tag", "pub.dev"]
         reason: 're-running is the resume: reality says the tag exists',
       );
       expect(
-        second.calls.where((c) => c.contains('publish --force')),
+        second.calls.where(
+          (c) => c == 'dart pub publish --from-archive <archive> --force',
+        ),
         hasLength(1),
       );
-      expect(second.text, contains('byte-identical'));
+      expect(second.text, contains('archive matches the staged package'));
     });
 
     test(
@@ -959,7 +957,7 @@ publish = ["git-tag", "pub.dev"]
         archives: archives,
         tags: tags,
         onRun: (key) {
-          if (key == 'dart pub publish --force') {
+          if (key == 'dart pub publish --from-archive <archive> --force') {
             published['keybay']!.add('0.2.0');
             archives['keybay@0.2.0'] = archiveOfTree();
             throw StateError('killed between the act and the confirmation');
@@ -1647,8 +1645,6 @@ executables:
           registry: registry,
           pubDev: PubDevTarget(
             registry: registry,
-            comparator: Comparator(tools: const SystemTools()),
-            source: tree,
           ),
           git: git,
           tools: tools,

@@ -659,13 +659,12 @@ void classificationTables() {
           ? ok(contentsOf('class T < Cask\n  version "1.0.0"\nend\n'))
           : null);
       expect(state.verdict, Verdict.conflict);
-      expect(state.detail, contains('not an exact release cask'));
+      expect(state.detail, contains('not a recognizable rk-generated'));
     });
 
     test('an older-looking cask is not trusted without exact bytes', () async {
-      // Exactness is the version pointer: weakened to "any readable
-      // cask", a tap stuck on the previous release would read satisfied
-      // and a release would complete without ever moving it.
+      // A version substring in arbitrary Ruby is not authority to overwrite
+      // the file. Only RK's generated channel format may advance.
       final state = await cask((key) => key.contains('/contents/')
           ? ok(contentsOf('class T < Cask\n  version "0.9.0"\nend\n'))
           : null);

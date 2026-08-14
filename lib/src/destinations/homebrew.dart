@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import '../engine/reconciliation.dart';
 import '../engine/tools.dart';
 import '../engine/verdict.dart';
 import '../engine/version.dart';
@@ -14,6 +15,29 @@ import '../transforms/digest.dart';
 /// a mutable pointer, so it moves forward under compare-and-swap rather than
 /// being overwritten.
 class HomebrewCask {
+  /// Renders rk's complete cask for one GitHub-hosted release.
+  ///
+  /// Target adapters supply only release facts. Provider presentation stays
+  /// here so staging, validation, and lost-stage recovery cannot drift.
+  static String renderRelease({
+    required String token,
+    required String version,
+    required String repository,
+    required String tag,
+    required Map<String, PlatformAsset> assets,
+    required String executable,
+  }) =>
+      render(
+        token: token,
+        description: 'Released by rk',
+        homepage: 'https://github.com/$repository',
+        version: version,
+        repository: repository,
+        tag: tag,
+        assets: assets,
+        executable: executable,
+      );
+
   /// Builds the cask text.
   ///
   /// Every value is either derived from the manifest or a digest of an asset
@@ -123,10 +147,6 @@ class HomebrewCask {
   }
 
   /// The canonical version claimed by bytes produced by this renderer.
-  ///
-  /// This is only a coordinate locator. Callers still prove the complete
-  /// bytes against the manifest bound into that version's tag before trusting
-  /// it as an earlier release.
   static Version? versionIn(List<int> bytes) {
     final String source;
     try {
@@ -173,12 +193,25 @@ class PlatformAsset {
 /// Existing bytes are represented by their digest so the authority is small
 /// while still binding every byte observed by [HomebrewTarget.inspect].
 class HomebrewUpdateAuthority {
-  const HomebrewUpdateAuthority.absent() : sha256 = null;
+  const HomebrewUpdateAuthority.absent({this.replacement}) : sha256 = null;
 
-  HomebrewUpdateAuthority.existing(List<int> bytes)
-      : sha256 = Sha256.hex(bytes);
+  HomebrewUpdateAuthority.existing(
+    List<int> bytes, {
+    this.replacement,
+  }) : sha256 = Sha256.hex(bytes);
 
   final String? sha256;
+
+  /// Intended bytes recovered from an authenticated public release when the
+  /// local stage is gone. Null for ordinary stage-backed updates.
+  final List<int>? replacement;
+
+  /// Binds both the public compare-and-swap base and recovered replacement.
+  String? get recoveryBinding {
+    final bytes = replacement;
+    if (bytes == null) return null;
+    return '${sha256 ?? 'absent'}:${Sha256.hex(bytes)}';
+  }
 
   bool accepts(List<int>? bytes) {
     final expected = sha256;
@@ -195,10 +228,9 @@ class HomebrewUpdateAuthority {
 
 /// Reads the cask exactly as Homebrew users receive it.
 ///
-/// A version substring is not proof: URLs or hashes can be hand-edited while
-/// the version remains unchanged. An older cask is ordinary work only when
-/// [inspectEarlierRelease] proves its full bytes came from an immutable older
-/// release; every other difference is a conflict.
+/// A cask is a mutable channel, not an immutable release artifact. RK advances
+/// only a recognizable older generated cask and binds that act to the exact
+/// bytes read here through [HomebrewUpdateAuthority].
 class HomebrewTarget {
   HomebrewTarget({
     required this.tools,
@@ -212,9 +244,9 @@ class HomebrewTarget {
 
   Future<Inspection> inspect({
     required String caskPath,
+    required Version intendedVersion,
     required List<int>? expectedBytes,
     String? expectedSha256,
-    Future<Inspection> Function(List<int> bytes)? inspectEarlierRelease,
   }) async {
     if (expectedBytes != null && expectedSha256 != null) {
       throw ArgumentError(
@@ -238,10 +270,12 @@ class HomebrewTarget {
           workingDirectory: workingDirectory,
         );
         return readable.ok
-            ? const Inspection.absent(
+            ? Inspection.absent(
                 detail: 'no cask in the tap yet',
-                evidence: {'public cask': 'absent'},
-                authority: HomebrewUpdateAuthority.absent(),
+                evidence: const {'public cask': 'absent'},
+                authority: HomebrewUpdateAuthority.absent(
+                  replacement: expectedBytes,
+                ),
               )
             : Inspection.unknown(
                 'the tap $tap could not be read, so rk cannot tell what '
@@ -267,46 +301,21 @@ class HomebrewTarget {
     }
 
     final publicSha256 = Sha256.hex(publicBytes);
-    if ((expectedBytes != null && _sameBytes(publicBytes, expectedBytes)) ||
-        (expectedSha256 != null && publicSha256 == expectedSha256)) {
-      final version = HomebrewCask.versionIn(publicBytes);
-      return Inspection.exact(
-        detail: 'cask bytes match the release',
-        evidence: {
-          'sha256': publicSha256,
-          if (version != null) 'version': version.canonical,
-        },
-      );
-    }
-
-    if (inspectEarlierRelease != null) {
-      final earlier = await inspectEarlierRelease(publicBytes);
-      if (earlier.isExact) {
-        final version = HomebrewCask.versionIn(publicBytes);
-        final authority = HomebrewUpdateAuthority.existing(publicBytes);
-        return Inspection.absent(
-          detail: 'the tap points at an earlier exact release',
-          evidence: {
-            if (version != null) 'version': version.canonical,
-            'public sha256': authority.sha256!,
-          },
-          authority: authority,
-        );
-      }
-      if (earlier.verdict == Verdict.unknown) {
-        return Inspection.unknown(
-          earlier.detail ?? 'the public cask could not be authenticated',
-        );
-      }
-    }
-
-    return Inspection.conflict(
-      'the public cask is not an exact release cask',
-      evidence: {
-        if (expectedBytes != null) 'expected sha256': Sha256.hex(expectedBytes),
-        if (expectedSha256 != null) 'expected sha256': expectedSha256,
-        'public sha256': publicSha256,
-      },
+    final version = HomebrewCask.versionIn(publicBytes);
+    return PublicReconciliation.movingChannel(
+      label: 'the Homebrew cask',
+      intendedVersion: intendedVersion,
+      publishedVersion: version,
+      payloadMatches:
+          (expectedBytes != null && _sameBytes(publicBytes, expectedBytes)) ||
+              (expectedSha256 != null && publicSha256 == expectedSha256),
+      publishedIdentity: 'sha256:$publicSha256',
+      unrecognizedDetail:
+          'the Homebrew cask is not a recognizable rk-generated cask',
+      advanceAuthority: HomebrewUpdateAuthority.existing(
+        publicBytes,
+        replacement: expectedBytes,
+      ),
     );
   }
 

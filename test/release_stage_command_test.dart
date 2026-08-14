@@ -5,7 +5,6 @@ import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/commands/release.dart';
 import 'package:rk/src/destinations/pub_dev.dart';
 import 'package:rk/src/engine/assets.dart';
-import 'package:rk/src/engine/compare.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
@@ -19,8 +18,6 @@ import 'package:rk/src/engine/stage_inspection.dart';
 import 'package:rk/src/engine/stage_plan.dart';
 import 'package:rk/src/engine/stage_receipt.dart';
 import 'package:rk/src/engine/tools.dart';
-import 'package:rk/src/engine/verdict.dart';
-import 'package:rk/src/engine/version.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/targets/catalog.dart';
 import 'package:rk/src/transforms/archive.dart';
@@ -178,7 +175,7 @@ void main() {
     }
   });
 
-  test('non-Git existing version is compared after staging, not blocked early',
+  test('non-Git existing version skips without rebuilding historical bytes',
       () async {
     final unbound = _Harness(unbound: true);
     addTearDown(unbound.close);
@@ -193,7 +190,9 @@ void main() {
     expect(run.code, ExitCodes.ok, reason: run.text);
     expect(run.publicMutations, isEmpty);
     expect(run.text, contains('already released'));
-    expect(unbound.stage.inspect().reusable, isTrue);
+    expect(unbound.stage.inspect().reusable, isFalse);
+    expect(
+        run.keys, isNot(contains('dart pub publish --to-archive <archive>')));
   });
 
   test(
@@ -214,9 +213,23 @@ void main() {
     expect(inspected.receipt!.complete, isTrue);
     expect(
       inspected.receipt!.steps.map((step) => step.name),
-      contains('pub-preflight:tool'),
+      contains('pub-archive:tool'),
     );
-    expect(run.keys, contains('dart pub publish --dry-run'));
+    expect(run.keys, contains('dart pub publish --to-archive <archive>'));
+    final packaged = run.invocations.singleWhere(
+      (call) => call.arguments.contains('--to-archive'),
+    );
+    expect(
+      packaged.arguments,
+      [
+        'pub',
+        'publish',
+        '--to-archive',
+        harness.stage.directory.workspace.pathOf(
+          ReleaseAssets.pubArchivePath(harness.unit.projects.single),
+        ),
+      ],
+    );
     expect(run.keys, isNot(contains('dart pub login')));
     expect(authorizationPrompts, 0);
     expect(
@@ -252,10 +265,23 @@ void main() {
       isEmpty,
       reason: 'the completed stage already proves the binary producer',
     );
-    expect(released.keys, isNot(contains('dart pub publish --dry-run')));
+    expect(released.keys,
+        isNot(contains('dart pub publish --to-archive <archive>')));
 
     final publish = released.invocations.singleWhere(
-      (call) => call.key == 'dart pub publish --force',
+      (call) => call.arguments.contains('--from-archive'),
+    );
+    expect(
+      publish.arguments,
+      [
+        'pub',
+        'publish',
+        '--from-archive',
+        harness.stage.directory.workspace.pathOf(
+          ReleaseAssets.pubArchivePath(harness.unit.projects.single),
+        ),
+        '--force',
+      ],
     );
     expect(
       publish.workingDirectory,
@@ -319,7 +345,7 @@ void main() {
     expect(refused.problemCodes, ['RK-PUB-007']);
     expect((refused.report['halt'] as Map?)?['kind'], 'beforeActing');
     expect(refused.keys, contains('dart pub login'));
-    expect(refused.keys, contains('dart pub publish --dry-run'));
+    expect(refused.keys, contains('dart pub publish --to-archive <archive>'));
     expect(
       refused.keys.where((key) => key.startsWith('dart compile exe')),
       hasLength(1),
@@ -357,7 +383,8 @@ void main() {
           key.startsWith('ditto ')),
       isEmpty,
     );
-    expect(second.keys, isNot(contains('dart pub publish --dry-run')));
+    expect(second.keys,
+        isNot(contains('dart pub publish --to-archive <archive>')));
     expect(
       File(harness.stage.directory.resolve('stage.json')).readAsBytesSync(),
       receipt,
@@ -469,7 +496,7 @@ void main() {
 
     expect(released.code, ExitCodes.ok, reason: released.text);
     expect(released.problemCodes, isEmpty);
-    expect(released.text, contains('public archive confirmed exact'));
+    expect(released.text, contains('archive matches the staged package'));
     expect(harness.registry.hideCandidateLookups, 0);
   });
 
@@ -593,7 +620,7 @@ void main() {
     });
   }
 
-  test('rerunning skips every public lane already proved exact', () async {
+  test('rerunning skips every public lane already published', () async {
     final staged = await harness.run(
       stageOnly: true,
       confirm: (_) async => fail('stage mode must not authorize'),
@@ -624,11 +651,26 @@ void main() {
         if (step['public'] == true) step['kind']: step['action'],
     };
     expect(actions, {
-      'tag': 'already_exact',
-      'publishRegistry': 'already_exact',
-      'publishRelease': 'already_exact',
-      'publishCask': 'already_exact',
+      'tag': 'already_published',
+      'publishRegistry': 'already_published',
+      'publishRelease': 'already_published',
+      'publishCask': 'already_published',
     });
+
+    harness.stage.reset();
+    final stateless = await harness.run(
+      stageOnly: false,
+      confirm: (_) async => fail('published coordinates need no authorization'),
+    );
+    expect(stateless.code, ExitCodes.ok, reason: stateless.text);
+    expect(stateless.publicMutations, isEmpty);
+    expect(stateless.text, contains('already released'));
+    expect(
+      harness.stage.inspect().reusable,
+      isFalse,
+      reason: 'recognizing completed public coordinates must not rebuild '
+          'historical artifacts',
+    );
   });
 
   test('authorization growth after an earlier act is stopped partway',
@@ -835,7 +877,7 @@ void main() {
     expect(
       released.publicMutations,
       isEmpty,
-      reason: 'the tag and package were already exact, and the failed GitHub '
+      reason: 'the tag and package were already published, and failed GitHub '
           'transaction changed only private draft state',
     );
   });
@@ -881,11 +923,109 @@ void main() {
       isNot(contains(anyOf('tag', 'pub.dev'))),
     );
     expect(resumed.keys, isNot(contains('dart pub login')),
-        reason: 'pub.dev is already exact, so only later targets resume');
+        reason: 'pub.dev is already published, so only later targets resume');
     expect(
       resumed.keys.where((key) => key.startsWith('dart compile exe')),
       isEmpty,
       reason: 'the exact retained stage is reused during public recovery',
+    );
+  });
+
+  test(
+      'a lost stage can finish only the Homebrew channel from the public '
+      'release', () async {
+    final staged = await harness.run(
+      stageOnly: true,
+      confirm: (_) async => fail('stage mode must not authorize'),
+    );
+    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    harness.tools.rejectHomebrewPush = true;
+
+    final partial = await harness.run(
+      stageOnly: false,
+      confirm: (_) async => '1.2.3',
+    );
+    expect(partial.code, ExitCodes.refused, reason: partial.text);
+    expect(harness.tools.githubReleaseExists, isTrue);
+    expect(harness.tools.publicCask, isNull);
+
+    harness.stage.reset();
+    final staleCask = utf8.encode('stale local cask');
+    harness.stage.directory.workspace.write(
+      ReleaseAssets.caskPath(harness.unit.projects.single),
+      staleCask,
+    );
+    harness.git = harness.gitAt(
+      tags: const ['v1.2.3'],
+      tagObjects: const {'v1.2.3': _tagObject},
+      tagTargets: const {'v1.2.3': _head},
+    );
+    harness.tools.rejectHomebrewPush = false;
+
+    final resumed = await harness.run(
+      stageOnly: false,
+      confirm: (_) async => '1.2.3',
+    );
+
+    expect(resumed.code, ExitCodes.ok, reason: resumed.text);
+    expect(
+      resumed.publicMutations.map((call) => call.publicKind),
+      ['homebrew'],
+    );
+    expect(harness.tools.publicCask, isNotNull);
+    expect(
+      harness.tools.publicCask,
+      isNot(staleCask),
+      reason: 'authenticated public asset digests outrank leftovers in a '
+          'non-reusable stage',
+    );
+    expect(
+      resumed.keys.where((key) => key.startsWith('dart compile exe')),
+      isEmpty,
+      reason: 'the channel is rendered from authenticated public archive '
+          'digests, not rebuilt binaries',
+    );
+    expect(resumed.keys,
+        isNot(contains('dart pub publish --to-archive <archive>')));
+    expect(harness.stage.inspect().reusable, isFalse);
+  });
+
+  test('lost-stage recovery freezes public asset digests before consent',
+      () async {
+    final staged = await harness.run(
+      stageOnly: true,
+      confirm: (_) async => fail('stage mode must not authorize'),
+    );
+    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    harness.tools.rejectHomebrewPush = true;
+
+    final partial = await harness.run(
+      stageOnly: false,
+      confirm: (_) async => '1.2.3',
+    );
+    expect(partial.code, ExitCodes.refused, reason: partial.text);
+    harness.stage.reset();
+    harness.git = harness.gitAt(
+      tags: const ['v1.2.3'],
+      tagObjects: const {'v1.2.3': _tagObject},
+      tagTargets: const {'v1.2.3': _head},
+    );
+    harness.tools.rejectHomebrewPush = false;
+    final archive = ReleaseAssets.archiveName('tool', '1.2.3', 'linux-x64');
+
+    final resumed = await harness.run(
+      stageOnly: false,
+      confirm: (_) async {
+        harness.tools.uploadedAssets[archive] = utf8.encode('changed archive');
+        return '1.2.3';
+      },
+    );
+
+    expect(resumed.code, ExitCodes.refused, reason: resumed.text);
+    expect(resumed.problemCodes, contains('RK-STAGE-005'));
+    expect(
+      resumed.publicMutations.map((call) => call.publicKind),
+      isNot(contains('homebrew')),
     );
   });
 
@@ -998,7 +1138,8 @@ void main() {
       released.keys.where((key) => key.startsWith('dart compile exe')),
       isEmpty,
     );
-    expect(released.keys, isNot(contains('dart pub publish --dry-run')));
+    expect(released.keys,
+        isNot(contains('dart pub publish --to-archive <archive>')));
     expect(
       released.publicMutations.map((call) => call.publicKind),
       containsAllInOrder(['tag', 'pub.dev', 'github-release', 'homebrew']),
@@ -1045,7 +1186,7 @@ void main() {
       confirm: (_) async => fail('stage mode must not authorize'),
     );
     expect(rebuilt.code, ExitCodes.ok, reason: rebuilt.text);
-    expect(rebuilt.keys, contains('dart pub publish --dry-run'));
+    expect(rebuilt.keys, contains('dart pub publish --to-archive <archive>'));
     expect(
       rebuilt.keys.where((key) => key.startsWith('dart compile exe')),
       hasLength(1),
@@ -1062,7 +1203,7 @@ void main() {
   })>[
     (
       name: 'package preflight',
-      matches: (call) => call.key == 'dart pub publish --dry-run',
+      matches: (call) => call.key == 'dart pub publish --to-archive <archive>',
       code: 'RK-PUB-001',
     ),
     (
@@ -1164,11 +1305,62 @@ void main() {
       failed.keys,
       contains('gh auth status --active --hostname github.com'),
     );
-    expect(failed.keys, contains('dart pub publish --dry-run'));
+    expect(failed.keys, contains('dart pub publish --to-archive <archive>'));
     expect(harness.stage.inspect().reusable, isTrue);
     expect(authorizationPrompts, 0);
     expect(failed.publicMutations, isEmpty);
     expect(failed.text, isNot(contains('expired credential details')));
+  });
+
+  test('an SDK without native Pub archive staging refuses clearly', () async {
+    harness.tools.runFailure = (call) => call.arguments.contains('--to-archive')
+        ? ToolResult(
+            exitCode: 64,
+            stdout: '',
+            stderr: 'Could not find an option named "to-archive".',
+          )
+        : null;
+
+    final run = await harness.run(
+      stageOnly: true,
+      confirm: (_) async => fail('stage mode must not authorize'),
+    );
+
+    expect(run.code, ExitCodes.refused, reason: run.text);
+    expect(run.problemCodes, contains('RK-PUB-011'));
+    expect(run.publicMutations, isEmpty);
+  });
+
+  test('Pub success without its promised archive refuses clearly', () async {
+    harness.tools.runFailure =
+        (call) => call.arguments.contains('--to-archive') ? _ok() : null;
+
+    final run = await harness.run(
+      stageOnly: true,
+      confirm: (_) async => fail('stage mode must not authorize'),
+    );
+
+    expect(run.code, ExitCodes.refused, reason: run.text);
+    expect(run.problemCodes, contains('RK-PUB-011'));
+    expect(run.publicMutations, isEmpty);
+  });
+
+  test('an SDK without native Pub archive publication refuses clearly',
+      () async {
+    harness.tools.failPubArchiveCapability = true;
+    final staged = await harness.run(
+      stageOnly: true,
+      confirm: (_) async => fail('stage mode must not authorize'),
+    );
+    expect(staged.code, ExitCodes.ok, reason: staged.text);
+
+    final run = await harness.run(
+      stageOnly: false,
+      confirm: (_) async => '1.2.3',
+    );
+
+    expect(run.code, ExitCodes.refused, reason: run.text);
+    expect(run.problemCodes, contains('RK-PUB-011'));
   });
 
   for (final failure in [
@@ -1195,7 +1387,10 @@ void main() {
           return '1.2.3';
         },
         onInvocation: (call) {
-          if (planted || call.key != 'dart pub publish --dry-run') return;
+          if (planted ||
+              call.key != 'dart pub publish --to-archive <archive>') {
+            return;
+          }
           Directory(harness.stage.directory.resolve(failure.path))
               .createSync(recursive: true);
           planted = true;
@@ -1229,7 +1424,7 @@ void main() {
 
   for (final boundary in [
     (step: 'source-snapshot', preflightDone: false, buildDone: false),
-    (step: 'pub-preflight:tool', preflightDone: true, buildDone: false),
+    (step: 'pub-archive:tool', preflightDone: true, buildDone: false),
     (step: 'release-notes', preflightDone: true, buildDone: false),
     (step: 'build:tool:linux-x64', preflightDone: true, buildDone: true),
     (step: 'archive:tool:linux-x64', preflightDone: true, buildDone: true),
@@ -1258,7 +1453,8 @@ void main() {
 
       expect(resumed.code, ExitCodes.ok, reason: resumed.text);
       if (boundary.preflightDone) {
-        expect(resumed.keys, isNot(contains('dart pub publish --dry-run')));
+        expect(resumed.keys,
+            isNot(contains('dart pub publish --to-archive <archive>')));
       }
       if (boundary.buildDone) {
         expect(
@@ -1301,7 +1497,7 @@ void main() {
       rebuilt.keys.where((key) => key.startsWith('dart compile exe')),
       hasLength(1),
     );
-    expect(rebuilt.keys, contains('dart pub publish --dry-run'));
+    expect(rebuilt.keys, contains('dart pub publish --to-archive <archive>'));
     expect(harness.stage.inspect().reusable, isTrue);
   });
 
@@ -1314,7 +1510,7 @@ void main() {
     final receipt = harness.stage.requireReceipt();
     StageReceiptStore(harness.stage.directory).write(StageReceipt(
       identity: receipt.identity,
-      steps: receipt.steps.where((step) => step.name != 'pub-preflight:tool'),
+      steps: receipt.steps.where((step) => step.name != 'pub-archive:tool'),
     ));
 
     final inspected = harness.stage.inspect();
@@ -1519,7 +1715,8 @@ void main() {
       reason: 'the already-pushed tag remains real, but pub.dev and every '
           'later destination are untouched',
     );
-    expect(refused.keys, isNot(contains('dart pub publish --force')));
+    expect(refused.keys,
+        isNot(contains('dart pub publish --from-archive <archive> --force')));
   });
 
   test('a refreshed HEAD commit drift refuses before consent or public acts',
@@ -1789,9 +1986,6 @@ class _Harness {
       registry: runRegistry,
       pubDev: PubDevTarget(
         registry: runRegistry,
-        comparator: Comparator(tools: const SystemTools()),
-        source: source,
-        allowCurrentSourceFallback: git.isBound,
       ),
       git: git,
       tools: readTools ?? tools,
@@ -1859,18 +2053,6 @@ class _ObservedRegistry implements RegistryReader {
   }
 
   @override
-  Future<List<int>> archive(PublishedVersion version) {
-    onRead();
-    return delegate.archive(version);
-  }
-
-  @override
-  Future<Inspection> inspect(String name, Version version) {
-    onRead();
-    return delegate.inspect(name, version);
-  }
-
-  @override
   void forget(String name) => delegate.forget(name);
 }
 
@@ -1916,8 +2098,18 @@ class _Invocation {
   final String? workingDirectory;
   final bool interactive;
 
-  String get key => '${_isDart(executable) ? 'dart' : executable} '
-      '${arguments.join(' ')}';
+  String get key {
+    if (_isDart(executable) && _starts(arguments, ['pub', 'publish'])) {
+      if (arguments.contains('--to-archive')) {
+        return 'dart pub publish --to-archive <archive>';
+      }
+      if (arguments.contains('--from-archive')) {
+        return 'dart pub publish --from-archive <archive> --force';
+      }
+    }
+    return '${_isDart(executable) ? 'dart' : executable} '
+        '${arguments.join(' ')}';
+  }
 
   String? get publicKind {
     if (executable == 'git' && arguments.firstOrNull == 'tag') return 'tag';
@@ -1928,8 +2120,9 @@ class _Invocation {
       return 'tag';
     }
     if (interactive &&
-        executable == 'dart' &&
-        arguments.join(' ') == 'pub publish --force') {
+        _isDart(executable) &&
+        _starts(arguments, ['pub', 'publish']) &&
+        arguments.contains('--from-archive')) {
       return 'pub.dev';
     }
     if (executable == 'gh' &&
@@ -2056,6 +2249,7 @@ class _WorldTools implements Tools {
   bool conflictHomebrewAfterPush = false;
   List<int>? caskAtNextClone;
   bool failPubPublish = false;
+  bool failPubArchiveCapability = false;
   bool failPubLogin = false;
   bool losePubPublishResponse = false;
   bool _githubPublicUnreadable = false;
@@ -2089,6 +2283,15 @@ class _WorldTools implements Tools {
       File(output)
         ..parent.createSync(recursive: true)
         ..writeAsBytesSync(utf8.encode('BINARY tool 1.2.3'));
+      return _ok();
+    }
+    if (_isDart(executable) &&
+        _starts(arguments, ['pub', 'publish']) &&
+        arguments.contains('--to-archive')) {
+      final output = arguments[arguments.indexOf('--to-archive') + 1];
+      File(output)
+        ..parent.createSync(recursive: true)
+        ..writeAsBytesSync(_publishedPackage());
       return _ok();
     }
     if (arguments.length == 1 &&
@@ -2384,12 +2587,16 @@ class _WorldTools implements Tools {
     );
     invocations.add(invocation);
     onInvocation?.call(invocation);
-    if (executable == 'dart' && arguments.join(' ') == 'pub login') {
+    if (_isDart(executable) && arguments.join(' ') == 'pub login') {
       if (failPubLogin) return 1;
     }
-    if (executable == 'dart' && arguments.join(' ') == 'pub publish --force') {
+    if (_isDart(executable) &&
+        _starts(arguments, ['pub', 'publish']) &&
+        arguments.contains('--from-archive')) {
+      if (failPubArchiveCapability) return 64;
       if (failPubPublish) return 1;
-      registry.archives['tool@1.2.3'] = _publishedPackage();
+      final archive = arguments[arguments.indexOf('--from-archive') + 1];
+      registry.archives['tool@1.2.3'] = File(archive).readAsBytesSync();
       (registry.published['tool'] ??= <String>[]).add('1.2.3');
       if (losePubPublishResponse) return 1;
     }

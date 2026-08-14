@@ -214,11 +214,17 @@ The release manifest binds each cask's:
 - cask path;
 - size and SHA-256 digest.
 
-This lets status authenticate current or historical tap bytes through:
+This lets status authenticate the intended current tap bytes through:
 
 ```text
-annotated Git tag -> GitHub release manifest -> cask digest -> tap bytes
+annotated Git tag -> GitHub release manifest -> public archive digests
+                  -> deterministic cask bytes -> tap bytes
 ```
+
+RK does not reconstruct older release trees merely to authorize a channel
+advance. A recognizable rk-generated lower-version cask may move forward under
+compare-and-swap; same-version differences, newer values, and unrecognized
+content block.
 
 The private stage path stays only in the terminal receipt. A public tap path
 may be owned by exactly one project.

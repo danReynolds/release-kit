@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-133 codes across 25 families.
+134 codes across 25 families.
 
 
 ## RK-AUTH — Authorization
@@ -191,12 +191,13 @@ fails, and the count below is checked against the rows.
 |---|---|---|
 | `RK-PUB-001` | pub refuses to publish ${project.name} | `lib/src/targets/pub_dev_target.dart` |
 | `RK-PUB-003` | ${project.name}: dart pub publish did not complete | `lib/src/targets/pub_dev_target.dart` |
-| `RK-PUB-005` | the published version's exact public archive could not be confirmed | `lib/src/targets/pub_dev_target.dart` |
-| `RK-PUB-006` | the immutable public archive differs from the release source | `lib/src/targets/pub_dev_target.dart` |
+| `RK-PUB-005` | the published coordinate could not be confirmed after acting | `lib/src/targets/pub_dev_target.dart` |
+| `RK-PUB-006` | the immutable public archive differs from the staged native archive | `lib/src/targets/pub_dev_target.dart` |
 | `RK-PUB-007` | dart pub login did not complete | `lib/src/targets/pub_dev_target.dart` |
 | `RK-PUB-008` | ${project.name}: tracked dependency overrides mask consumer resolution | `lib/src/targets/pub_dev_target.dart` |
 | `RK-PUB-009` | the native Dart configuration redirects pub.dev publication | `lib/src/targets/pub_dev_target.dart` |
 | `RK-PUB-010` | a pub.dev package points to another repository | `lib/src/targets/pub_dev_target.dart` |
+| `RK-PUB-011` | this Dart SDK cannot stage the native Pub archive | `lib/src/targets/pub_dev_target.dart` |
 
 RK-PUB-002 (the consumer-resolve probe) and RK-PUB-004 are retired historical
 meanings and are not reused.

@@ -70,7 +70,7 @@ enum ProgressRowState { pending, active, complete, failed, notAttempted }
 /// The visual mark for a settled progress row.
 ///
 /// State and mark are separate because a completed observation can mean
-/// either "RK completed this" or "public truth was already exact".
+/// either "RK completed this" or "the publication was already present".
 enum ProgressRowMark { done, satisfied, none }
 
 enum ProgressRowEmphasis { plain, muted, attention }

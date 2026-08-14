@@ -69,6 +69,15 @@ abstract final class ReleaseAssets {
   static String caskPath(ResolvedProject project) =>
       '${producerRoot(project)}/homebrew/${caskName(project.executable!)}';
 
+  /// Private native package bytes uploaded to pub.dev.
+  ///
+  /// This is a stage artifact, not a GitHub Release asset. Keeping it under
+  /// the same producer root gives publishers one content-addressed artifact
+  /// boundary without implying that their public payloads match.
+  static String pubArchivePath(ResolvedProject project) =>
+      '${producerRoot(project)}/pub/'
+      '${project.name}-${project.version.canonical}.tar.gz';
+
   static String archiveName(
     String executable,
     String version,
