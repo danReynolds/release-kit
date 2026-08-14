@@ -141,7 +141,7 @@ executables:
           kind: 'homebrew',
           id: 'cli/homebrew/example_tool/tool',
           label: 'Homebrew · example/homebrew-tools',
-          coordinate: 'example/homebrew-tools/Formula/tool.rb',
+          coordinate: 'example/homebrew-tools/Casks/tool.rb',
           version: '1.2.3',
           artifacts: 'tool.rb',
           uses: 'tool.rb bound in the release manifest',
@@ -179,9 +179,9 @@ executables:
         ),
         (
           StageContributionPhase.afterArtifacts,
-          'homebrew-formula:example_tool',
+          'homebrew-cask:example_tool',
           'producers/example_tool/archives/tool-1.2.3-linux-x64.tar.gz',
-          'producers/example_tool/homebrew/tool.rb:formula',
+          'producers/example_tool/homebrew/tool.rb:cask',
         ),
       ],
     );
@@ -374,7 +374,7 @@ publish = ["pub.dev"]
           'StepKind.tag',
           'StepKind.publishRegistry',
           'StepKind.publishRelease',
-          'StepKind.publishFormula',
+          'StepKind.publishCask',
         ]) {
           expect(source, isNot(contains(kind)), reason: path);
         }
@@ -383,7 +383,7 @@ publish = ["pub.dev"]
     final chain = File('lib/src/binary_chain.dart').readAsStringSync();
     expect(chain, isNot(contains("import 'destinations/")));
     expect(chain, isNot(contains('publishRelease(')));
-    expect(chain, isNot(contains('updateFormula(')));
+    expect(chain, isNot(contains('updateCask(')));
     final contract =
         File('lib/src/engine/stage_contract.dart').readAsStringSync();
     expect(contract, isNot(contains("../destinations/")));

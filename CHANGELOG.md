@@ -9,9 +9,10 @@ Initial release of rk, an austere release tool for Dart repositories.
   the resume.
 - Releases to pub.dev, GitHub Releases and a Homebrew tap, with signed and
   notarized macOS binaries, cross-compiled Linux binaries, notarization
-  evidence published beside the archives, and a manifest binding every asset.
+  evidence published beside the archives, and a manifest binding every asset
+  and Homebrew Cask.
 - `release --stage` runs every private step for real — package preflight,
-  build, sign, notarize, archive, notes, manifest, and formula —
+  build, sign, notarize, archive, notes, manifest, and Cask —
   and records exact reusable artifacts without publishing them.
 - `status` and `release` share exact target inspection for Git tags, pub.dev,
   GitHub Releases, and Homebrew; every public act is inspected before and

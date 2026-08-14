@@ -41,7 +41,7 @@ least one release output is selected. The selector starts conservatively:
 native package publication may be selected when unambiguous, executables only
 expose capability, and Binary, GitHub, and Homebrew remain opt-in. Binary makes
 standalone archives locally and implies no destination; Homebrew selects Binary
-and the public prerequisites its formula needs. Turning a prerequisite off
+and the public prerequisites its cask needs. Turning a prerequisite off
 removes its dependents. Conventional example, fixture, and test paths are
 omitted from discovery. Review writes one small schema-2 file, Back returns to
 the selector, and field customization stays in TOML. Without a usable terminal,

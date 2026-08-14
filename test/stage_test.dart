@@ -500,10 +500,10 @@ void main() {
             artifact: archive,
           ),
         ],
-        formula: ReleaseManifestFormula.fromStage(
+        cask: ReleaseManifestCask.fromStage(
           project: 'rk',
           tap: 'example/homebrew-tap',
-          path: 'Formula/rk.rb',
+          path: 'Casks/rk.rb',
           artifact: archive,
         ),
       );
@@ -514,8 +514,8 @@ void main() {
 
       expect(parsed.commit, stage.identity.headCommit);
       expect(parsed.artifacts.single.sha256, archive.sha256);
-      expect(parsed.formula!.sha256, archive.sha256);
-      expect(parsed.formula!.path, 'Formula/rk.rb');
+      expect(parsed.cask!.sha256, archive.sha256);
+      expect(parsed.cask!.path, 'Casks/rk.rb');
       expect(document, contains(_commit));
       expect(
         document,
@@ -625,7 +625,7 @@ StageReceipt _writeCompleteStage(StageDirectory stage) {
         outputs: [manifest],
         evidence: const {
           'release_assets': {'rk': 'rk'},
-          'formula_binding': null,
+          'cask_binding': null,
         },
       ),
     ],

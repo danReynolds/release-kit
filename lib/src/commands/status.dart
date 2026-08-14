@@ -419,7 +419,7 @@ class StatusCommand {
     // exists. It does not answer whether a newer release exists. For registry,
     // tag, and forge lanes, only the provider's history/listing can answer the
     // separate "what version is this lane at?" question. Homebrew's exact
-    // formula read already carries the authenticated current version.
+    // cask read already carries the authenticated current version.
     final currentInspection = latest ?? inspection;
     final reportedVersion = currentInspection.evidence['version'];
     final parsedVersion =
@@ -502,15 +502,15 @@ class StatusCommand {
     if (releaseBindings is Map && releaseBindings[name] is String) {
       stagedPath = releaseBindings[name] as String;
     }
-    final formulaBinding = complete.evidence['formula_binding'];
-    if (formulaBinding is Map &&
+    final caskBinding = complete.evidence['cask_binding'];
+    if (caskBinding is Map &&
         target.target == PublishTarget.homebrew &&
-        formulaBinding['project'] == target.project?.name &&
-        formulaBinding['staged_path'] is String) {
-      final destinationPath = formulaBinding['path'];
+        caskBinding['project'] == target.project?.name &&
+        caskBinding['staged_path'] is String) {
+      final destinationPath = caskBinding['path'];
       if (destinationPath == name ||
           destinationPath is String && destinationPath.endsWith('/$name')) {
-        stagedPath = formulaBinding['staged_path'] as String;
+        stagedPath = caskBinding['staged_path'] as String;
       }
     }
 

@@ -456,22 +456,22 @@ class StageInspector {
                 entry.key as String: entry.value as String,
           }
         : <String, String>{};
-    final StagedFormulaBinding? formulaBinding;
+    final StagedCaskBinding? caskBinding;
     try {
-      final encoded = complete.evidence['formula_binding'];
-      formulaBinding =
-          encoded == null ? null : StagedFormulaBinding.fromEvidence(encoded);
+      final encoded = complete.evidence['cask_binding'];
+      caskBinding =
+          encoded == null ? null : StagedCaskBinding.fromEvidence(encoded);
     } on Object catch (error) {
       issues.add(StageIssue(
         StageIssueKind.invalidManifest,
-        'complete-stage has malformed formula bindings: $error',
+        'complete-stage has malformed cask bindings: $error',
         path: 'release-manifest.json',
       ));
       return;
     }
     final expectedCompleteInputs = {
       ...bindings.values,
-      if (formulaBinding != null) formulaBinding.stagedPath,
+      if (caskBinding != null) caskBinding.stagedPath,
     };
     if (encodedBindings is! Map ||
         encodedBindings.length != bindings.length ||
@@ -508,28 +508,27 @@ class StageInspector {
         continue;
       }
     }
-    final manifestFormula = manifest.formula;
-    if (formulaBinding?.identity != manifestFormula?.identity) {
+    final manifestCask = manifest.cask;
+    if (caskBinding?.identity != manifestCask?.identity) {
       issues.add(const StageIssue(
         StageIssueKind.invalidManifest,
-        'complete-stage formula evidence does not match the manifest',
+        'complete-stage cask evidence does not match the manifest',
         path: 'release-manifest.json',
       ));
     }
-    if (manifestFormula != null) {
-      final local = formulaBinding == null
-          ? null
-          : beforeComplete[formulaBinding.stagedPath];
-      if (formulaBinding == null ||
+    if (manifestCask != null) {
+      final local =
+          caskBinding == null ? null : beforeComplete[caskBinding.stagedPath];
+      if (caskBinding == null ||
           local == null ||
-          local.type != 'formula' ||
-          local.size != manifestFormula.size ||
-          local.sha256 != manifestFormula.sha256 ||
-          completeInputs[formulaBinding.stagedPath] != manifestFormula.sha256) {
+          local.type != 'cask' ||
+          local.size != manifestCask.size ||
+          local.sha256 != manifestCask.sha256 ||
+          completeInputs[caskBinding.stagedPath] != manifestCask.sha256) {
         issues.add(StageIssue(
           StageIssueKind.invalidManifest,
-          'formula metadata does not match the producer receipt',
-          path: '${manifestFormula.tap}/${manifestFormula.path}',
+          'cask metadata does not match the producer receipt',
+          path: '${manifestCask.tap}/${manifestCask.path}',
         ));
       }
     }

@@ -1275,7 +1275,7 @@ executables:
     var draftCreated = false;
     var released = false;
     String? notesAtCreate;
-    List<int>? publishedFormula;
+    List<int>? publishedCask;
     var publishedIdentityReads = 0;
     File stagedPublicAsset(String name) {
       final stage = stageFor(resolution.unit('cli')!);
@@ -1306,9 +1306,9 @@ executables:
     final tools = RecordingTools(
       probe: (key, workingDirectory) {
         if (key == 'git push' && workingDirectory != null) {
-          final formula = File('$workingDirectory/Formula/tool.rb');
-          if (formula.existsSync()) {
-            publishedFormula = formula.readAsBytesSync();
+          final cask = File('$workingDirectory/Casks/tool.rb');
+          if (cask.existsSync()) {
+            publishedCask = cask.readAsBytesSync();
           }
         }
       },
@@ -1614,11 +1614,11 @@ executables:
         }
         if (key.startsWith('gh api repos/example/homebrew-tap/contents/')) {
           // The public tap answers with what the push actually put there.
-          return publishedFormula != null
+          return publishedCask != null
               ? ToolResult(
                   exitCode: 0,
                   stdout: jsonEncode({
-                    'content': base64Encode(publishedFormula!),
+                    'content': base64Encode(publishedCask!),
                   }),
                   stderr: '',
                 )
@@ -1921,7 +1921,7 @@ executables:
   /// This group was deleted as collateral when `--rehearse` was cut, and the
   /// commit that did it never said so. What it guards is the one seam
   /// `engine/assets.dart` closes: the producer and inspector consume one
-  /// derived GitHub inventory, while the formula is separately bound to its
+  /// derived GitHub inventory, while the cask is separately bound to its
   /// tap through the manifest. The drive proves both destinations and the
   /// changelog-derived body through the command layer.
   group('phase 7b — the destinations', () {
@@ -1972,7 +1972,7 @@ executables:
       expect(
         run.expected,
         isNot(contains('tool.rb')),
-        reason: 'the formula belongs only in its tap; the release manifest '
+        reason: 'the cask belongs only in its tap; the release manifest '
             'binds its destination and digest',
       );
       expect(
@@ -1992,7 +1992,7 @@ executables:
             'commit-log digest',
       );
 
-      // The formula moves only after the release is public, and what the
+      // The cask moves only after the release is public, and what the
       // public tap serves is read back and proven.
       final publishAt = run.calls.indexWhere(
         (c) => c.contains(' -X PATCH repos/example/tool/releases/7 '),
@@ -2000,7 +2000,7 @@ executables:
       final tapCloneAt = run.calls.indexWhere(
           (c) => c.startsWith('git clone') && c.contains('homebrew-tap'));
       expect(tapCloneAt, greaterThan(publishAt),
-          reason: 'a formula pointing at an unpublished release would brew '
+          reason: 'a cask pointing at an unpublished release would brew '
               'a 404');
       expect(
         run.calls.any(
@@ -2009,7 +2009,7 @@ executables:
           ),
         ),
         isTrue,
-        reason: 'the formula is proven from the public tap after its push',
+        reason: 'the cask is proven from the public tap after its push',
       );
       expect(run.text, contains('released'));
     });
