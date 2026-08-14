@@ -24,7 +24,7 @@ class StageBoard {
   /// The rows one unit's stage will fill, in release order.
   ///
   /// A target that publishes no file of its own — a Git tag — contributes no
-  /// group. A Homebrew formula is shown under Homebrew because it is private
+  /// group. A Homebrew cask is shown under Homebrew because it is private
   /// input to that destination, not a GitHub Release asset.
   /// pub.dev contributes one row per package: it uploads no file rk makes,
   /// but it does validate the staged source, and that check is the most

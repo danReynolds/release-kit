@@ -502,7 +502,7 @@ interactive suspension, and non-TTY behavior are covered without target logic.
   rows from declared contracts/presentation bindings rather than target names,
   extensions, or receipt-name conditionals.
 - Wire Binary, pub.dev validation, GitHub release-note/manifest work, and the
-  Homebrew formula.
+  Homebrew cask.
 - Make `--stage` stop with the settled board and stage path.
 - Replace direct terminal-outcome writes from active stage/producer hooks with
   typed outcomes so the coordinator settles the board before printing issues.

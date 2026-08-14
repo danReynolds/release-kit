@@ -4,7 +4,7 @@ import 'resolve.dart';
 /// The names a release publishes, written once.
 ///
 /// These are a public contract, not an implementation detail: they are the
-/// filenames users download, the strings a Homebrew formula points at, and —
+/// filenames users download, the strings a Homebrew cask points at, and —
 /// per the RFC — names frozen for compatibility with releases keybay made
 /// before rk existed.
 ///
@@ -66,8 +66,8 @@ abstract final class ReleaseAssets {
       '${producerRoot(project)}/evidence/'
       '${notaryLogName(project.executable!, project.version.canonical, platform)}';
 
-  static String formulaPath(ResolvedProject project) =>
-      '${producerRoot(project)}/homebrew/${formulaName(project.executable!)}';
+  static String caskPath(ResolvedProject project) =>
+      '${producerRoot(project)}/homebrew/${caskName(project.executable!)}';
 
   static String archiveName(
     String executable,
@@ -95,11 +95,25 @@ abstract final class ReleaseAssets {
   ) =>
       '$executable-$version-$platform.notary-log.json';
 
-  /// The formula's public filename inside its Homebrew tap.
+  /// The cask's public filename inside its Homebrew tap.
   ///
-  /// Formula bytes belong to the tap and do not enter the GitHub Release
+  /// Cask bytes belong to the tap and do not enter the GitHub Release
   /// inventory. Their digest and tap path are bound by the release manifest.
-  static String formulaName(String executable) => '$executable.rb';
+  static String caskToken(String executable) {
+    final token = executable
+        .toLowerCase()
+        .replaceAll('_', '-')
+        .replaceAll(RegExp('-+'), '-')
+        .replaceAll(RegExp(r'^-+|-+$'), '');
+    if (!RegExp(r'^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$').hasMatch(token)) {
+      throw ArgumentError(
+        'executable does not produce a safe Homebrew cask token: $executable',
+      );
+    }
+    return token;
+  }
+
+  static String caskName(String executable) => '${caskToken(executable)}.rb';
 
   /// The complete public inventory excluding the manifest itself.
   static List<ReleaseAssetSpec> bundleFor(ResolvedUnit unit) {

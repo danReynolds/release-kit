@@ -464,7 +464,7 @@ class GithubRelease {
     // Exact means equal, not subset. A release carrying assets this
     // configuration would not produce is not "what this release would put
     // there" any more than one missing assets is — and reading a superset as
-    // exact would later bless a release whose notary log or formula went
+    // exact would later bless a release whose notary log or cask went
     // missing, because nothing counted the extras.
     differences.addAll({
       for (final name in missing) name: 'missing',

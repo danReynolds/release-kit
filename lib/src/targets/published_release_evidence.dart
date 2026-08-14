@@ -12,7 +12,7 @@ import 'target_module.dart';
 
 /// Cross-target provenance shared by GitHub Release and Homebrew reads.
 ///
-/// A formula is authenticated through the manifest bound into its Git tag and
+/// A cask is authenticated through the manifest bound into its Git tag and
 /// hosted by its GitHub Release. Keeping that proof here prevents either
 /// target module from reaching into the other module or weakening the chain.
 final class PublishedReleaseEvidence {
@@ -20,7 +20,7 @@ final class PublishedReleaseEvidence {
 
   final TargetReadContext context;
 
-  Future<PublishedFormulaRead> currentFormula(
+  Future<PublishedCaskRead> currentCask(
     ResolvedUnit unit, {
     required String project,
     required String tap,
@@ -30,7 +30,7 @@ final class PublishedReleaseEvidence {
     final object = context.git.tagObject(tag);
     final commit = context.git.tagTarget(tag);
     if (object == null || commit == null) {
-      return const PublishedFormulaRead(
+      return const PublishedCaskRead(
         Inspection.unknown('the release tag object could not be read'),
         null,
       );
@@ -50,7 +50,7 @@ final class PublishedReleaseEvidence {
           repository: context.repository!,
           workingDirectory: context.git.root,
         ).readManifest(manifestExpectation(unit, digest));
-        return _selectFormula(
+        return _selectCask(
           read.inspection,
           read.manifest,
           project: project,
@@ -58,7 +58,7 @@ final class PublishedReleaseEvidence {
           path: path,
         );
       } on Object catch (error) {
-        return PublishedFormulaRead(
+        return PublishedCaskRead(
           Inspection.unknown(
             'the expected release manifest could not be derived: $error',
           ),
@@ -66,7 +66,7 @@ final class PublishedReleaseEvidence {
         );
       }
     }
-    return PublishedFormulaRead(
+    return PublishedCaskRead(
       bindingInspection(tagBinding),
       null,
     );
@@ -111,7 +111,7 @@ final class PublishedReleaseEvidence {
     );
   }
 
-  Future<PublishedFormulaRead> historicalFormula(
+  Future<PublishedCaskRead> historicalCask(
     ResolvedUnit unit,
     Version version, {
     required ResolvedProject project,
@@ -123,7 +123,7 @@ final class PublishedReleaseEvidence {
     final object = context.git.tagObject(tag);
     final commit = context.git.tagTarget(tag);
     if (object == null || commit == null) {
-      return PublishedFormulaRead(
+      return PublishedCaskRead(
         Inspection.unknown(
           'the earlier release tag $tag is not available in this checkout',
         ),
@@ -153,7 +153,7 @@ final class PublishedReleaseEvidence {
           prerelease: version.isPrerelease,
         ),
       );
-      return _selectFormula(
+      return _selectCask(
         read.inspection,
         read.manifest,
         project: project.name,
@@ -161,7 +161,7 @@ final class PublishedReleaseEvidence {
         path: path,
       );
     }
-    return PublishedFormulaRead(
+    return PublishedCaskRead(
       bindingInspection(tagBinding),
       null,
     );
@@ -189,14 +189,14 @@ final class PublishedReleaseEvidence {
       };
 }
 
-final class PublishedFormulaRead {
-  const PublishedFormulaRead(this.inspection, this.formula);
+final class PublishedCaskRead {
+  const PublishedCaskRead(this.inspection, this.cask);
 
   final Inspection inspection;
-  final ReleaseManifestFormula? formula;
+  final ReleaseManifestCask? cask;
 }
 
-PublishedFormulaRead _selectFormula(
+PublishedCaskRead _selectCask(
   Inspection inspection,
   ReleaseManifest? manifest, {
   required String project,
@@ -204,25 +204,24 @@ PublishedFormulaRead _selectFormula(
   required String path,
 }) {
   if (!inspection.isExact || manifest == null) {
-    return PublishedFormulaRead(inspection, null);
+    return PublishedCaskRead(inspection, null);
   }
-  final formula = manifest.formula;
-  if (formula == null ||
-      !formula.names(project: project, tap: tap, path: path)) {
-    return PublishedFormulaRead(
+  final cask = manifest.cask;
+  if (cask == null || !cask.names(project: project, tap: tap, path: path)) {
+    return PublishedCaskRead(
       Inspection.conflict(
-        'the published release manifest does not bind the Homebrew formula '
+        'the published release manifest does not bind the Homebrew cask '
         'for $project',
         evidence: {
-          '$tap/$path': formula == null
+          '$tap/$path': cask == null
               ? 'missing from manifest'
-              : 'manifest binds ${formula.tap}/${formula.path}',
+              : 'manifest binds ${cask.tap}/${cask.path}',
         },
       ),
       null,
     );
   }
-  return PublishedFormulaRead(inspection, formula);
+  return PublishedCaskRead(inspection, cask);
 }
 
 Set<String> expectedReleaseAssets(ResolvedUnit unit) =>

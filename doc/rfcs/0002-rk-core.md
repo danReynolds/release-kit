@@ -439,7 +439,7 @@ remediation, and `doc/json.md` freezes their machine names. In particular,
 updated local session state.
 
 **Every conflict prints the difference**, not the fact of one: differing
-files and digests, a formula line diff, a per-object asset table. "A human
+files and digests, a cask line diff, a per-object asset table. "A human
 decides" is only true if the human is given the evidence.
 
 **Refusing to act is not refusing to instruct.** Where rk will not perform
@@ -575,7 +575,7 @@ remote draft is deleted as cleanup.
 
 **The flip re-verifies against reality**: enumerate the draft's assets,
 require the exact inventory, confirm every digest, and compare the staged
-formula against the manifest-bound archive digests.
+cask against the manifest-bound archive digests.
 Only then publish once, and confirm the release reports immutable.
 
 The post-create inspection downloads or hashes the public assets and compares
@@ -595,17 +595,18 @@ their complexity. Deferring them costs nothing today.
 
 ### Mutable pointers
 
-The Homebrew formula updates compare-and-swap: inspect (absent / exact /
+The Homebrew cask updates compare-and-swap: inspect (absent / exact /
 older-clean-base / conflict), apply only if the inspected blob is still
 current, then re-read the public tap as the post-act check. "Older clean base"
-is derived from reality — the tap formula must byte-equal the formula asset of
-the release it names — so a hand-edited formula correctly yields `conflict`.
+is derived from reality — the tap cask must byte-equal the manifest-bound cask
+bytes of the release it names — so a hand-edited cask correctly yields
+`conflict`.
 A clean consumer install from the public tap remains a supervised live-canary
 gate rather than part of the mutation.
 
-The inspection compares the public formula bytes, version, URLs, and hashes
-with the formula derived from the release manifest. The swap applies against
-a fresh `--depth 1` clone, first requiring its formula to match the exact base
+The inspection compares the public cask bytes, version, URLs, and hashes
+with the cask derived from the release manifest. The swap applies against
+a fresh `--depth 1` clone, first requiring its cask to match the exact base
 authorized by inspection; a rejected push then catches movement after that
 check. The authoritative pre-act and post-act public reads use the GitHub
 contents API — REST, not a CDN path; the API serves blob content, not cached
@@ -741,7 +742,7 @@ act(expected, stage)
   retry reports the target already exact and performs no second publish.
 - **`github-release`** (destination): draft creation, upload, public flip, and
   exact public asset inspection as above.
-- **`homebrew-tap`** (destination): stable releases only; formula from a closed
+- **`homebrew-tap`** (destination): stable releases only; Cask from a closed
   template plus staged digests plus derived identity; compare-and-swap update;
   public byte-for-byte read-back. Prereleases leave the tap unchanged. A clean
   consumer install from the public tap,
@@ -782,7 +783,7 @@ What makes the CLI sufficient is already required for other reasons:
   <unit>/notarize/<platform>
   <unit>/archive/<platform>
   <unit>/github-release/<tag>
-  <unit>/homebrew/<formula>
+  <unit>/homebrew/<cask>
   ```
 
   `test/checklist_test.dart` holds them as frozen vectors.
@@ -884,7 +885,7 @@ concrete failure it prevents.
 3. **Binary chain + `github-release` + `homebrew-tap`.** Release keybay
    cli: three platforms — macos-arm64 native, both Linux targets
    cross-compiled and smoke-tested in containers — signed, notarized,
-   archived, staged, published, formula updated, then installed and
+   archived, staged, published, cask updated, then installed and
    smoke-tested from the public tap.
 4. **Fleury**, after its five packages are bootstrapped by hand, exercising
    multi-project units and derived ordering.

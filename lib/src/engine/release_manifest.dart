@@ -6,10 +6,10 @@ import 'stage_receipt.dart';
 
 /// Bumped freely until the first published release; after it, a bump
 /// orphans every manifest already public — the historical read paths
-/// (formula authentication, same-version re-inspection) parse only the
+/// (cask authentication, same-version re-inspection) parse only the
 /// current schema — so a post-release bump must teach the parser each
 /// retired schema it still needs to read.
-const releaseManifestSchemaVersion = 5;
+const releaseManifestSchemaVersion = 6;
 
 /// One public file, deliberately stripped of its local stage path and all
 /// producer evidence.
@@ -82,23 +82,23 @@ class ReleaseManifestArtifact {
       };
 }
 
-/// One private staged Homebrew formula and the tap path that will receive it.
+/// One private staged Homebrew cask and the tap path that will receive it.
 ///
 /// This exact shape is frozen into the terminal receipt. The public manifest
 /// receives the same public identity, but never the private [stagedPath].
-final class StagedFormulaBinding {
-  StagedFormulaBinding({
+final class StagedCaskBinding {
+  StagedCaskBinding({
     required this.project,
     required this.tap,
     required this.path,
     required String stagedPath,
   }) : stagedPath = StagePath.require(stagedPath) {
-    _requirePublicText('formula project', project);
-    _requirePublicText('formula tap', tap);
+    _requirePublicText('cask project', project);
+    _requirePublicText('cask tap', tap);
     _requireDestinationPath(path);
   }
 
-  factory StagedFormulaBinding.fromEvidence(Object? value) {
+  factory StagedCaskBinding.fromEvidence(Object? value) {
     final map = _strictMap(
       value,
       const {
@@ -107,9 +107,9 @@ final class StagedFormulaBinding {
         'staged_path',
         'tap',
       },
-      'staged formula binding',
+      'staged cask binding',
     );
-    return StagedFormulaBinding(
+    return StagedCaskBinding(
       project: _string(map, 'project'),
       tap: _string(map, 'tap'),
       path: _string(map, 'path'),
@@ -122,7 +122,7 @@ final class StagedFormulaBinding {
   final String path;
   final String stagedPath;
 
-  String get identity => _formulaIdentity(project, tap, path);
+  String get identity => _caskIdentity(project, tap, path);
 
   Map<String, Object?> toEvidence() => {
         'path': path,
@@ -131,11 +131,11 @@ final class StagedFormulaBinding {
         'tap': tap,
       };
 
-  ReleaseManifestFormula bind(StageArtifact artifact) {
+  ReleaseManifestCask bind(StageArtifact artifact) {
     if (artifact.path != stagedPath) {
-      throw ArgumentError('formula binding captured a different output');
+      throw ArgumentError('cask binding captured a different output');
     }
-    return ReleaseManifestFormula.fromStage(
+    return ReleaseManifestCask.fromStage(
       project: project,
       tap: tap,
       path: path,
@@ -144,38 +144,38 @@ final class StagedFormulaBinding {
   }
 }
 
-/// One Homebrew formula and the exact public tap path that receives it.
+/// One Homebrew cask and the exact public tap path that receives it.
 ///
 /// Unlike [ReleaseManifestArtifact], this file is not necessarily a release
 /// asset: it belongs only in its tap. The manifest carries enough public
 /// evidence to authenticate those bytes later, while the private stage path
 /// remains solely in `stage.json`.
-class ReleaseManifestFormula {
-  ReleaseManifestFormula({
+class ReleaseManifestCask {
+  ReleaseManifestCask({
     required this.project,
     required this.tap,
     required this.path,
     required this.size,
     required this.sha256,
   }) {
-    _requirePublicText('formula project', project);
-    _requirePublicText('formula tap', tap);
+    _requirePublicText('cask project', project);
+    _requirePublicText('cask tap', tap);
     _requireDestinationPath(path);
     if (size < 0) {
-      throw ArgumentError('formula size cannot be negative');
+      throw ArgumentError('cask size cannot be negative');
     }
     if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(sha256)) {
-      throw ArgumentError('formula must carry a lowercase SHA-256 digest');
+      throw ArgumentError('cask must carry a lowercase SHA-256 digest');
     }
   }
 
-  factory ReleaseManifestFormula.fromStage({
+  factory ReleaseManifestCask.fromStage({
     required String project,
     required String tap,
     required String path,
     required StageArtifact artifact,
   }) =>
-      ReleaseManifestFormula(
+      ReleaseManifestCask(
         project: project,
         tap: tap,
         path: path,
@@ -183,7 +183,7 @@ class ReleaseManifestFormula {
         sha256: artifact.sha256,
       );
 
-  factory ReleaseManifestFormula.fromJson(Object? value) {
+  factory ReleaseManifestCask.fromJson(Object? value) {
     final map = _strictMap(
       value,
       const {
@@ -193,13 +193,13 @@ class ReleaseManifestFormula {
         'size',
         'tap',
       },
-      'formula binding',
+      'cask binding',
     );
     final size = map['size'];
     if (size is! int) {
-      throw const FormatException('formula size is not an integer');
+      throw const FormatException('cask size is not an integer');
     }
-    return ReleaseManifestFormula(
+    return ReleaseManifestCask(
       project: _string(map, 'project'),
       tap: _string(map, 'tap'),
       path: _string(map, 'path'),
@@ -213,12 +213,12 @@ class ReleaseManifestFormula {
   /// Tap repository, such as `owner/homebrew-tap`.
   final String tap;
 
-  /// Public path inside that coordinate, such as `Formula/tool.rb`.
+  /// Public path inside that coordinate, such as `Casks/tool.rb`.
   final String path;
   final int size;
   final String sha256;
 
-  String get identity => _formulaIdentity(project, tap, path);
+  String get identity => _caskIdentity(project, tap, path);
   bool names({
     required String project,
     required String tap,
@@ -247,7 +247,7 @@ class ReleaseManifest {
     required this.tag,
     required this.commit,
     required Iterable<ReleaseManifestArtifact> artifacts,
-    this.formula,
+    this.cask,
   }) : artifacts = List<ReleaseManifestArtifact>.unmodifiable(
           artifacts.toList()
             ..sort((left, right) => left.name.compareTo(right.name)),
@@ -272,7 +272,7 @@ class ReleaseManifest {
       decoded,
       const {
         'artifacts',
-        'formula',
+        'cask',
         'schema',
         'source',
         'tag',
@@ -300,9 +300,9 @@ class ReleaseManifest {
       tag: map['tag'] == null ? null : _string(map, 'tag'),
       commit: source['commit'] == null ? null : _string(source, 'commit'),
       artifacts: artifacts.map(ReleaseManifestArtifact.fromJson),
-      formula: map['formula'] == null
+      cask: map['cask'] == null
           ? null
-          : ReleaseManifestFormula.fromJson(map['formula']),
+          : ReleaseManifestCask.fromJson(map['cask']),
     );
   }
 
@@ -316,11 +316,11 @@ class ReleaseManifest {
   final String? commit;
 
   final List<ReleaseManifestArtifact> artifacts;
-  final ReleaseManifestFormula? formula;
+  final ReleaseManifestCask? cask;
 
   Map<String, Object?> toJson() => {
         'artifacts': artifacts.map((artifact) => artifact.toJson()).toList(),
-        'formula': formula?.toJson(),
+        'cask': cask?.toJson(),
         'schema': releaseManifestSchemaVersion,
         'source': {'commit': commit},
         'tag': tag,
@@ -373,7 +373,7 @@ void _requirePublicText(String label, String value) {
   }
 }
 
-String _formulaIdentity(
+String _caskIdentity(
   String project,
   String tap,
   String path,

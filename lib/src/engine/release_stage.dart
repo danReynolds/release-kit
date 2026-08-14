@@ -181,23 +181,23 @@ class ReleaseStage {
         final manifest = ReleaseManifest.parse(
           File(directory.resolve('release-manifest.json')).readAsStringSync(),
         );
-        final wantedFormula = _formulaBinding()?.identity;
-        final manifestFormula = manifest.formula?.identity;
+        final wantedCask = _caskBinding()?.identity;
+        final manifestCask = manifest.cask?.identity;
         if (manifest.unit != unit.name ||
             manifest.version != unit.version.canonical ||
             manifest.tag != unit.tag ||
-            manifestFormula != wantedFormula) {
+            manifestCask != wantedCask) {
           issues.add(const StageIssue(
             StageIssueKind.invalidManifest,
             'release manifest names different release coordinates or '
-            'Homebrew formulas',
+            'Homebrew casks',
             path: 'release-manifest.json',
           ));
         }
       } on Object catch (error) {
         issues.add(StageIssue(
           StageIssueKind.invalidManifest,
-          'release manifest formulas could not be validated: $error',
+          'release manifest casks could not be validated: $error',
           path: 'release-manifest.json',
         ));
       }
@@ -412,17 +412,17 @@ class ReleaseStage {
       throw ArgumentError(
           'release assets must name unique public files and blobs');
     }
-    final formulaBinding = _formulaBinding();
-    final formulaStagedPaths = {
-      if (formulaBinding != null) formulaBinding.stagedPath,
+    final caskBinding = _caskBinding();
+    final caskStagedPaths = {
+      if (caskBinding != null) caskBinding.stagedPath,
     };
-    final duplicatedFormulas = stagedPaths.intersection(
-      formulaStagedPaths,
+    final duplicatedCasks = stagedPaths.intersection(
+      caskStagedPaths,
     );
-    if (duplicatedFormulas.isNotEmpty) {
+    if (duplicatedCasks.isNotEmpty) {
       throw ArgumentError(
-        'Homebrew formulas cannot also be release assets: '
-        '${duplicatedFormulas.join(', ')}',
+        'Homebrew casks cannot also be release assets: '
+        '${duplicatedCasks.join(', ')}',
       );
     }
     StageReceipt? progress;
@@ -443,11 +443,11 @@ class ReleaseStage {
       );
       final existingPublic =
           existingManifest.artifacts.map((artifact) => artifact.name).toSet();
-      final existingFormula = existingManifest.formula?.identity;
-      final wantedFormula = formulaBinding?.identity;
+      final existingCask = existingManifest.cask?.identity;
+      final wantedCask = caskBinding?.identity;
       if (existingPublic.length != publicNames.length ||
           existingPublic.difference(publicNames).isNotEmpty ||
-          existingFormula != wantedFormula) {
+          existingCask != wantedCask) {
         throw StateError(
           'the completed stage has a different publication inventory',
         );
@@ -486,7 +486,7 @@ class ReleaseStage {
     final byPath = {
       for (final artifact in beforeManifest) artifact.path: artifact
     };
-    final boundStagedPaths = {...stagedPaths, ...formulaStagedPaths};
+    final boundStagedPaths = {...stagedPaths, ...caskStagedPaths};
     final missing = boundStagedPaths.difference(byPath.keys.toSet());
     if (missing.isNotEmpty) {
       throw StateError(
@@ -518,7 +518,7 @@ class ReleaseStage {
             artifact: byPath[binding.stagedPath]!,
           ),
       ],
-      formula: formulaBinding?.bind(byPath[formulaBinding.stagedPath]!),
+      cask: caskBinding?.bind(byPath[caskBinding.stagedPath]!),
     );
     manifest.writeTo(directory);
 
@@ -542,8 +542,8 @@ class ReleaseStage {
     final completeInputs = <String, StageArtifact>{
       for (final binding in orderedBindings)
         binding.stagedPath: byPath[binding.stagedPath]!,
-      if (formulaBinding != null)
-        formulaBinding.stagedPath: byPath[formulaBinding.stagedPath]!,
+      if (caskBinding != null)
+        caskBinding.stagedPath: byPath[caskBinding.stagedPath]!,
     };
     final receipt = StageReceipt(
       identity: directory.identity,
@@ -562,7 +562,7 @@ class ReleaseStage {
               for (final binding in orderedBindings)
                 binding.publicName: binding.stagedPath,
             },
-            'formula_binding': formulaBinding?.toEvidence(),
+            'cask_binding': caskBinding?.toEvidence(),
             if (compiler != null) 'dart_compiler': compiler!.toJson(),
           },
         ),
@@ -655,7 +655,7 @@ class ReleaseStage {
     if (path == 'release-manifest.json') return 'manifest';
     if (path == 'release-notes.md') return 'notes';
     if (path.endsWith('.tar.gz')) return 'archive';
-    if (path.endsWith('.rb')) return 'formula';
+    if (path.endsWith('.rb')) return 'cask';
     if (path.endsWith('.notary-result.json') ||
         path.endsWith('.notary-log.json')) {
       return 'notary';
@@ -664,7 +664,7 @@ class ReleaseStage {
     return 'executable';
   }
 
-  StagedFormulaBinding? _formulaBinding() {
+  StagedCaskBinding? _caskBinding() {
     // Prereleases publish their archives but leave the stable tap unchanged.
     if (unit.version.isPrerelease) return null;
     final project = unit.projects
@@ -676,14 +676,14 @@ class ReleaseStage {
     final sourceRepository = repository;
     if (sourceRepository == null) {
       throw StateError(
-        'Homebrew formula bindings need a source repository coordinate',
+        'Homebrew cask bindings need a source repository coordinate',
       );
     }
-    return StagedFormulaBinding(
+    return StagedCaskBinding(
       project: project.name,
       tap: unit.tapFor(sourceRepository),
-      path: 'Formula/${project.executable!}.rb',
-      stagedPath: ReleaseAssets.formulaPath(project),
+      path: 'Casks/${ReleaseAssets.caskName(project.executable!)}',
+      stagedPath: ReleaseAssets.caskPath(project),
     );
   }
 }

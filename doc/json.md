@@ -26,7 +26,7 @@ unit when an automation caller needs the narrowest scope.
 
 | key | meaning |
 |---|---|
-| `rk` | schema version (currently `6`) |
+| `rk` | schema version (currently `7`) |
 | `command` | the verb that ran |
 | `mode` | present only where the run has one: `{stage}` on `release` |
 | `observed_at` | UTC ISO 8601 — when rk read the world |

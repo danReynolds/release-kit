@@ -132,21 +132,21 @@ class Checklist {
       steps.add(release);
 
       // The configured Homebrew target is the stable channel. Prerelease
-      // archives remain available from GitHub without replacing its formula.
-      for (final formulaProject in publicationOrder.where(
+      // archives remain available from GitHub without replacing its cask.
+      for (final caskProject in publicationOrder.where(
         (project) =>
             !unit.version.isPrerelease &&
             project.publish.contains(PublishTarget.homebrew),
       )) {
         steps.add(
           Step(
-            id: '${unit.name}/homebrew/${formulaProject.name}/'
-                '${formulaProject.executable}',
-            kind: StepKind.publishFormula,
+            id: '${unit.name}/homebrew/${caskProject.name}/'
+                '${caskProject.executable}',
+            kind: StepKind.publishCask,
             target: PublishTarget.homebrew,
             unit: unit.name,
-            project: formulaProject.name,
-            summary: 'update the ${formulaProject.executable} formula',
+            project: caskProject.name,
+            summary: 'update the ${caskProject.executable} cask',
             needs: [release.id],
           ),
         );
@@ -314,7 +314,7 @@ enum StepKind {
   completeStage,
   publishRegistry,
   publishRelease,
-  publishFormula,
+  publishCask,
 }
 
 /// The three safety phases a checklist may cross, in order.
@@ -335,7 +335,7 @@ extension StepKindFacts on StepKind {
         StepKind.tag ||
         StepKind.publishRegistry ||
         StepKind.publishRelease ||
-        StepKind.publishFormula =>
+        StepKind.publishCask =>
           StepPhase.publish,
       };
 
@@ -417,7 +417,7 @@ class Step {
   ///
   /// Only a registry publication: pub.dev burns a version number forever, so a
   /// mistake there costs a version rather than a retry. Tags, releases, and
-  /// formulas are still guarded against destructive repair, but they are not
+  /// casks are still guarded against destructive repair, but they are not
   /// irrevocable provider acts, so marking them permanent would spend the
   /// operator's attention on the wrong steps.
   bool get isPermanent => kind.isPermanent;

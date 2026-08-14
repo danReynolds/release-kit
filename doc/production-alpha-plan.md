@@ -5,7 +5,7 @@ Status: local implementation complete; supervised live gate pending,
 probe, `--offline`, and the transient unsigned build are gone; macOS
 build and signing are one producer; the pipeline is declared once; the
 manifest carries only externally checkable facts; notary evidence is
-stage-local; and `--json` is the agent contract at schema 6 with
+stage-local; and `--json` is the agent contract at schema 7 with
 `release --yes` as the noninteractive answer. This is
 the current forward plan.
 `doc/plan.md` remains the historical phase plan, review record, and evidence
@@ -225,7 +225,7 @@ rk release rk
 `--stage` performs every local and package preflight for real: source
 snapshot, package dry-run, build and sign as one step, smoke test where
 possible, notarization, archives, release notes, release
-manifest, and formula rendering. It may read public targets, use signing and
+manifest, and cask rendering. It may read public targets, use signing and
 notary credentials, and contact Apple. It must not create or push a tag,
 publish a registry package, create a GitHub Release, push a tap, or run
 `dart pub login`.
@@ -268,8 +268,8 @@ the newest version in every configured immutable public lane concurrently. An
 unreadable history refuses; a lane ahead of the intended version requires a
 version bump. This protects a shallow checkout whose local tags omit newer
 origin history. Homebrew needs no second version-only listing: its authenticated
-formula inspection permits an update only from bytes proved to be an earlier
-release, and refuses an equal, newer, or unauthenticated formula.
+cask inspection permits an update only from bytes proved to be an earlier
+release, and refuses an equal, newer, or unauthenticated cask.
 
 For the alpha, exact means:
 
@@ -281,8 +281,8 @@ For the alpha, exact means:
 - **GitHub Release:** the exact expected asset inventory exists and every
   artifact digest agrees with the release manifest; names alone are not
   sufficient.
-- **Homebrew:** the public formula bytes, version, URLs, and hashes equal the
-  formula derived from the released artifacts; a matching version substring
+- **Homebrew:** the public cask bytes, version, URLs, and hashes equal the
+  cask derived from the released artifacts; a matching version substring
   is not sufficient.
 
 The local stage is not rk's database. It is disposable before the first public
@@ -310,7 +310,7 @@ which remains an explicit alpha limitation.
 
 These are phase gates, not aspirations:
 
-1. No tag, registry package, GitHub Release, or formula mutation occurs until
+1. No tag, registry package, GitHub Release, or cask mutation occurs until
    a complete stage has been revalidated.
 2. Every public target uses the same inspection in status, pre-act release,
    and post-act release.
@@ -367,14 +367,14 @@ still exercised through release-target tests.
 - Move pub.dev lookup, polling, archive download, and source comparison behind
   one pub.dev target adapter.
 - Deepen GitHub inspection from asset names to exact inventory and digests.
-- Deepen Homebrew inspection from a version pointer to exact formula bytes.
+- Deepen Homebrew inspection from a version pointer to exact cask bytes.
 - Give every provider bounded timeouts. Timeouts and malformed responses are
   unknown, never absence.
 - Freeze each target contract with vectors for absent, exact, conflict, and
   unavailable worlds.
 
 **Done when:** status and release cannot disagree about a target; a wrong byte
-under the right name is detected; a same-version edited formula is detected;
+under the right name is detected; a same-version edited cask is detected;
 a moved remote tag is detected; and no target is skipped on presence alone.
 
 ### Phase 2 — Build the immutable stage and receipt
@@ -392,7 +392,7 @@ a moved remote tag is detected; and no target is skipped on presence alone.
   before the receipt may reference it.
 - Record, per completed step, input digests and output path/type/mode/size/hash,
   smoke evidence, signature identity and certificate fingerprint,
-  notarization binding/result/log, archive inventory, and notes/formula
+  notarization binding/result/log, archive inventory, and notes/cask
   digests.
 - Produce a separate publishable `release-manifest.json` containing no local
   secrets or paths. Publish it with binary releases; pub.dev-only exactness is
@@ -411,7 +411,7 @@ recovery-critical stage during partial publication must fail closed.
 
 ### Phase 3 — Make every producer stageable and reusable
 
-- Change build, sign, notarize, archive, notes, manifest, and formula
+- Change build, sign, notarize, archive, notes, manifest, and cask
   operations to return structured outcomes for the receipt writer.
 - Run package-manager dry-run and consumer-resolve evidence as stage inputs.
 - Derive every public filename through the one `ReleaseAssets` grammar.
@@ -423,7 +423,7 @@ recovery-critical stage during partial publication must fail closed.
   executed.
 
 **Done when:** a second identical stage performs no compile, sign, notary
-submission, archive, notes, formula, or manifest generation; cheap authority
+submission, archive, notes, cask, or manifest generation; cheap authority
 checks may rerun;
 and a fully validated incomplete prefix resumes after its last recorded step.
 If any recorded dependency differs, rk discards and rebuilds the still-private
@@ -440,7 +440,7 @@ stage that was reviewed is never replaced implicitly.
   inspect and preflight
     -> [normal interactive release with unfinished pub.dev: dart pub login]
     -> source snapshot
-    -> package/build+sign/notarize/archive/notes/formula
+    -> package/build+sign/notarize/archive/notes/cask
     -> complete stage
     -> tag
     -> dependency-ordered registry packages
@@ -532,7 +532,7 @@ Inject failure or interruption:
 - when the one interactive `dart pub login` exits unsuccessfully, proving the
   run halts before private staging or any public target change;
 - during GitHub upload and read-back;
-- after a tap push but before formula read-back;
+- after a tap push but before cask read-back;
 - while a representative three-target status read finishes in every possible
   order.
 
