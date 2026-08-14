@@ -2406,6 +2406,7 @@ class _WorldTools implements Tools {
         'name': githubTitle,
         'body': githubBody,
         'draft': githubDraft,
+        'prerelease': false,
         'id': 7,
         'assets': [
           for (var index = 0; index < uploadedAssets.length; index++)

@@ -105,6 +105,7 @@ final class PublishedReleaseEvidence {
       sourceCommit: context.git.head,
       title: '${unit.name} ${unit.version}',
       body: body,
+      prerelease: unit.version.isPrerelease,
       manifestSha256: digest,
       publicAssets: publicAssets ?? expectedReleaseAssets(unit),
     );
@@ -149,6 +150,7 @@ final class PublishedReleaseEvidence {
           tag: tag,
           sourceCommit: commit,
           manifestSha256: digest,
+          prerelease: version.isPrerelease,
         ),
       );
       return _selectFormula(

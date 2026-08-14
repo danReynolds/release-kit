@@ -94,7 +94,11 @@ final class GithubReleaseTargetModule extends TargetModule {
     );
     final stage = context.reusableStage(unit);
     if (stage == null) {
-      final inventory = await destination.inspect(tag, expected);
+      final inventory = await destination.inspect(
+        tag,
+        expected,
+        prerelease: unit.version.isPrerelease,
+      );
       if (!inventory.isExact) return inventory;
 
       final object = context.git.tagObject(tag);
@@ -178,6 +182,7 @@ final class GithubReleaseTargetModule extends TargetModule {
         tag: tag,
         title: '${unit.name} ${unit.version}',
         body: notes.readAsStringSync(),
+        prerelease: unit.version.isPrerelease,
         assetSha256: {
           for (final name in expected) name: staged[name]!.sha256,
         },
@@ -271,6 +276,7 @@ final class GithubReleaseTargetModule extends TargetModule {
       title: '${unit.name} ${unit.version}',
       notesPath: notesPath,
       assets: assets,
+      prerelease: unit.version.isPrerelease,
       onProgress: (event, current, total) {
         switch (event) {
           case GithubPublishEvent.drafting:

@@ -1523,12 +1523,14 @@ executables:
                   {
                     'tag_name': previousTag,
                     'draft': false,
+                    'prerelease': false,
                     'id': 6,
                   },
                 if (draftCreated)
                   {
                     'tag_name': 'v1.0.0',
                     'draft': !released,
+                    'prerelease': false,
                     'id': 7,
                   },
               ],
@@ -1553,6 +1555,7 @@ executables:
                 ? jsonEncode({
                     'tag_name': 'v1.0.0',
                     'draft': !released,
+                    'prerelease': false,
                     'id': 7,
                     'name': 'cli 1.0.0',
                     'body': notesAtCreate,
@@ -1575,6 +1578,9 @@ executables:
               exitCode: 0,
               stdout: jsonEncode({
                 'tag_name': previousTag,
+                'draft': false,
+                'prerelease': false,
+                'id': 6,
                 'assets': [
                   {'name': 'tool-0.9.0-macos-arm64.tar.gz'},
                 ],
@@ -1594,6 +1600,7 @@ executables:
                     'name': 'cli 1.0.0',
                     'body': notesAtCreate,
                     'draft': false,
+                    'prerelease': false,
                     'id': 7,
                     'assets': uploadedAssets(),
                   }),

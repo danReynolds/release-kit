@@ -131,8 +131,12 @@ class Checklist {
       );
       steps.add(release);
 
+      // The configured Homebrew target is the stable channel. Prerelease
+      // archives remain available from GitHub without replacing its formula.
       for (final formulaProject in publicationOrder.where(
-        (project) => project.publish.contains(PublishTarget.homebrew),
+        (project) =>
+            !unit.version.isPrerelease &&
+            project.publish.contains(PublishTarget.homebrew),
       )) {
         steps.add(
           Step(
