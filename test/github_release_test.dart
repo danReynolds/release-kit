@@ -19,6 +19,7 @@ void main() {
   Future<Inspection> inspect(
     List<({int code, String out, String err})> answers, {
     Set<String> expected = const {'tool-1.0.0-macos-arm64.tar.gz'},
+    bool prerelease = false,
   }) {
     return GithubRelease(
       tools: SequencedTools([
@@ -29,13 +30,14 @@ void main() {
       ]),
       repository: 'example/tool',
       workingDirectory: '/repo',
-    ).inspect('v1.0.0', expected);
+    ).inspect('v1.0.0', expected, prerelease: prerelease);
   }
 
   // The REST shape, not the porcelain's: the reader asks `gh api`, whose
   // fields are snake_case and whose id is numeric.
   String view({
     bool draft = false,
+    bool prerelease = false,
     String tag = 'v1.0.0',
     String? title = 'tool 1.0.0',
     String? body = 'release notes\n',
@@ -44,6 +46,7 @@ void main() {
       jsonEncode({
         'tag_name': tag,
         'draft': draft,
+        'prerelease': prerelease,
         'id': 41,
         'name': title,
         'body': body,
@@ -56,6 +59,20 @@ void main() {
       () async {
     final state = await inspect([(code: 0, out: view(), err: '')]);
     expect(state.verdict, Verdict.exact);
+  });
+
+  test('prerelease maturity is part of exact release identity', () async {
+    final exact = await inspect(
+      [(code: 0, out: view(prerelease: true), err: '')],
+      prerelease: true,
+    );
+    expect(exact.verdict, Verdict.exact);
+
+    final mismatch = await inspect([
+      (code: 0, out: view(prerelease: true), err: ''),
+    ]);
+    expect(mismatch.verdict, Verdict.conflict);
+    expect(mismatch.evidence['prerelease'], contains('expected stable'));
   });
 
   test('a draft is absent — it is not published — and says it exists',
@@ -175,11 +192,13 @@ void main() {
       String title = 'tool 1.0.0',
       String body = 'release notes\n',
       String? digest,
+      bool prerelease = false,
     }) =>
         GithubReleaseExpectation(
           tag: 'v1.0.0',
           title: title,
           body: body,
+          prerelease: prerelease,
           assetSha256: {asset: digest ?? Sha256.hex(bytes)},
         );
 
@@ -219,6 +238,7 @@ void main() {
         response: jsonEncode({
           'tag_name': 'v1.0.0',
           'draft': false,
+          'prerelease': false,
           'id': 41,
           'name': 'tool 1.0.0',
           'body': 'release notes\n',
@@ -236,6 +256,7 @@ void main() {
         tag: 'v1.0.0',
         title: 'tool 1.0.0',
         body: 'release notes\n',
+        prerelease: false,
         assetSha256: {
           for (final entry in downloads.entries)
             entry.key: Sha256.hex(entry.value),
@@ -265,6 +286,7 @@ void main() {
       final state = await inspectExact(jsonEncode({
         'tag_name': 'v1.0.0',
         'draft': false,
+        'prerelease': false,
         'id': 41,
         'assets': [
           {'name': asset},
@@ -316,6 +338,7 @@ void main() {
       final state = await inspectExact(jsonEncode({
         'tag_name': 'v1.0.0',
         'draft': false,
+        'prerelease': false,
         'id': 41,
         'name': 'tool 1.0.0',
         'body': 'release notes\n',
@@ -333,7 +356,7 @@ void main() {
         ),
         repository: 'example/tool',
         workingDirectory: '/repo',
-      ).inspect('v1.0.0', const {asset});
+      ).inspect('v1.0.0', const {asset}, prerelease: false);
       expect(state.verdict, Verdict.unknown);
       expect(state.detail, contains('gh executable disappeared'));
     });
@@ -397,6 +420,7 @@ void main() {
           sourceCommit: (stage ?? identity).headCommit!,
           title: title,
           body: body,
+          prerelease: false,
           manifestSha256: manifestSha256 ?? Sha256.hex(bytes),
           publicAssets: publicAssets ?? {asset, manifestName},
         );
@@ -416,6 +440,7 @@ void main() {
           tag: tag,
           sourceCommit: sourceCommit ?? identity.headCommit!,
           title: title,
+          prerelease: false,
           manifestSha256: manifestSha256 ?? Sha256.hex(bytes),
         );
 
@@ -605,6 +630,7 @@ void main() {
           sourceCommit: identity.headCommit!,
           title: 'tool 1.0.0',
           body: 'release notes\n',
+          prerelease: false,
           manifestSha256: Sha256.hex(manifest),
           publicAssets: const {asset, manifestName},
         ),
@@ -680,6 +706,7 @@ void main() {
       String historicalView() => jsonEncode({
             'tag_name': 'v1.0.0',
             'draft': false,
+            'prerelease': false,
             'id': 41,
             'name': 'tool 1.0.0',
             // Historical verification does not depend on old changelog text.
@@ -747,8 +774,15 @@ void main() {
   });
 
   group('publish: private draft transaction', () {
-    Future<({PublishOutcome outcome, RecordingTools tools})> publish({
+    Future<
+        ({
+          PublishOutcome outcome,
+          RecordingTools tools,
+          Map<String, Object?>? createPayload,
+          Map<String, Object?>? publishPayload,
+        })> publish({
       String slurp = '[[]]',
+      bool prerelease = false,
       bool duplicateAssetNames = false,
       List<String> initialDraftNames = const [],
       String draftTitle = 'tool 1.0.0',
@@ -802,6 +836,8 @@ void main() {
       var draft = true;
       var draftReads = 0;
       var uploadCount = 0;
+      Map<String, Object?>? createPayload;
+      Map<String, Object?>? publishPayload;
       late final RecordingTools tools;
       tools = RecordingTools(
         onRun: (key) {
@@ -825,6 +861,18 @@ void main() {
           }
           if (key.contains(' -X PATCH ') && (!patchFails || failedPatchLands)) {
             draft = false;
+          }
+          if (key.contains(' -X POST repos/example/tool/releases --input ')) {
+            createPayload = Map<String, Object?>.from(
+              jsonDecode(File(key.split('--input ').last).readAsStringSync())
+                  as Map,
+            );
+          }
+          if (key.contains(' -X PATCH repos/example/tool/releases/7 ')) {
+            publishPayload = Map<String, Object?>.from(
+              jsonDecode(File(key.split('--input ').last).readAsStringSync())
+                  as Map,
+            );
           }
         },
         answers: (key) {
@@ -869,6 +917,7 @@ void main() {
               stdout: jsonEncode({
                 'tag_name': 'v1.0.0',
                 'draft': draft,
+                'prerelease': prerelease,
                 'id': id,
                 'name': draftTitle,
                 'body': draftBody,
@@ -898,6 +947,7 @@ void main() {
         tag: 'v1.0.0',
         title: 'tool 1.0.0',
         notesPath: notes.path,
+        prerelease: prerelease,
         assets: [
           for (final path in paths)
             GithubReleaseAssetUpload(
@@ -908,20 +958,58 @@ void main() {
             ),
         ],
       );
-      return (outcome: outcome, tools: tools);
+      return (
+        outcome: outcome,
+        tools: tools,
+        createPayload: createPayload,
+        publishPayload: publishPayload,
+      );
     }
+
+    test('prerelease metadata is frozen across draft creation and publish',
+        () async {
+      final run = await publish(prerelease: true);
+
+      expect(run.outcome.ok, isTrue, reason: run.outcome.problem ?? '');
+      expect(run.createPayload, containsPair('draft', true));
+      expect(run.createPayload, containsPair('prerelease', true));
+      expect(run.publishPayload, containsPair('draft', false));
+      expect(run.publishPayload, containsPair('prerelease', true));
+      expect(run.createPayload, isNot(contains('make_latest')));
+      expect(run.publishPayload, isNot(contains('make_latest')));
+    });
 
     test('multiple same-tag drafts refuse without deleting or creating',
         () async {
       final run = await publish(
         slurp: jsonEncode([
           [
-            {'tag_name': 'v1.0.0', 'draft': true, 'id': 11},
-            {'tag_name': 'v1.0.0', 'draft': false, 'id': 99},
+            {
+              'tag_name': 'v1.0.0',
+              'draft': true,
+              'prerelease': false,
+              'id': 11,
+            },
+            {
+              'tag_name': 'v1.0.0',
+              'draft': false,
+              'prerelease': false,
+              'id': 99,
+            },
           ],
           [
-            {'tag_name': 'v1.0.0', 'draft': true, 'id': 12},
-            {'tag_name': 'v2.0.0', 'draft': true, 'id': 13},
+            {
+              'tag_name': 'v1.0.0',
+              'draft': true,
+              'prerelease': false,
+              'id': 12,
+            },
+            {
+              'tag_name': 'v2.0.0',
+              'draft': true,
+              'prerelease': false,
+              'id': 13,
+            },
           ],
         ]),
       );
@@ -957,7 +1045,12 @@ void main() {
       final run = await publish(
         slurp: jsonEncode([
           [
-            {'tag_name': 'v1.0.0', 'draft': true, 'id': 11},
+            {
+              'tag_name': 'v1.0.0',
+              'draft': true,
+              'prerelease': false,
+              'id': 11,
+            },
           ],
         ]),
         duplicateAssetNames: true,
@@ -974,7 +1067,12 @@ void main() {
       final run = await publish(
         slurp: jsonEncode([
           [
-            {'tag_name': 'v1.0.0', 'draft': true, 'id': 11},
+            {
+              'tag_name': 'v1.0.0',
+              'draft': true,
+              'prerelease': false,
+              'id': 11,
+            },
           ],
         ]),
         initialDraftNames: const ['b.tar.gz'],
@@ -1005,7 +1103,12 @@ void main() {
       final run = await publish(
         slurp: jsonEncode([
           [
-            {'tag_name': 'v1.0.0', 'draft': true, 'id': 11},
+            {
+              'tag_name': 'v1.0.0',
+              'draft': true,
+              'prerelease': false,
+              'id': 11,
+            },
           ],
         ]),
         initialDraftNames: const ['b.tar.gz', 'a.tar.gz'],
@@ -1027,7 +1130,12 @@ void main() {
       final run = await publish(
         slurp: jsonEncode([
           [
-            {'tag_name': 'v1.0.0', 'draft': true, 'id': 11},
+            {
+              'tag_name': 'v1.0.0',
+              'draft': true,
+              'prerelease': false,
+              'id': 11,
+            },
           ],
         ]),
         initialDraftNames: const ['b.tar.gz'],
@@ -1055,7 +1163,12 @@ void main() {
         final run = await publish(
           slurp: jsonEncode([
             [
-              {'tag_name': 'v1.0.0', 'draft': true, 'id': 11},
+              {
+                'tag_name': 'v1.0.0',
+                'draft': true,
+                'prerelease': false,
+                'id': 11,
+              },
             ],
           ]),
           initialDraftNames: scenario.names,

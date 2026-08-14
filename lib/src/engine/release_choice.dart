@@ -34,7 +34,7 @@ enum ReleaseChoice {
     id: 'homebrew',
     selectorLabel: 'Homebrew',
     category: ReleaseChoiceCategory.releaseTarget,
-    summary: 'Publish an executable through a Homebrew tap.',
+    summary: 'Publish stable executable releases through a Homebrew tap.',
   );
 
   const ReleaseChoice({

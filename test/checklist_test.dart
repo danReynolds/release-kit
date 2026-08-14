@@ -112,6 +112,30 @@ publish = ["git-tag", "github-release"]
         'core/github-release/v1.2.3',
       ]);
     });
+
+    test('a prerelease publishes GitHub assets without advancing Homebrew', () {
+      final prereleaseTree = MemorySourceTree({
+        'pubspec.yaml': '''
+name: example
+version: 1.3.0-beta.1
+executables:
+  example: example
+''',
+      });
+      final resolution = resolve('''
+schema = 2
+
+[release.cli]
+publish = ["git-tag", "github-release", "homebrew"]
+binary_platforms = ["linux-x64"]
+''', prereleaseTree);
+      final unit = resolution.unit('cli')!;
+      final checklist = Checklist.derive(unit, resolution, Diagnostics());
+      final ids = checklist.steps.map((step) => step.id).toList();
+
+      expect(ids, contains('cli/github-release/v1.3.0-beta.1'));
+      expect(ids.where((id) => id.contains('/homebrew/')), isEmpty);
+    });
   });
 
   test('a registry-only unit stages before its tag and publish', () {

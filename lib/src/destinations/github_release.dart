@@ -38,10 +38,15 @@ class GithubRelease {
   /// is paged, and a tag missing from the page rk happened to read is not a tag
   /// that does not exist — concluding absence from it would be exactly the
   /// collapse rk must never make.
-  Future<Inspection> inspect(String tag, Set<String> expectedAssets) async {
+  Future<Inspection> inspect(
+    String tag,
+    Set<String> expectedAssets, {
+    required bool prerelease,
+  }) async {
     return _inspect(
       tag: tag,
       expectedAssets: expectedAssets,
+      expectedPrerelease: prerelease,
     );
   }
 
@@ -133,6 +138,7 @@ class GithubRelease {
         expectedTitle: expected.title,
         expectedBody: expected.body,
         expectedDigests: expected.assetSha256,
+        expectedPrerelease: expected.prerelease,
       );
 
   /// Inspects an immutable release using its public manifest as the source of
@@ -173,6 +179,7 @@ class GithubRelease {
       manifestSha256: expected.manifestSha256,
       sourceCommit: expected.sourceCommit,
       title: expected.title,
+      prerelease: expected.prerelease,
     );
     return GithubManifestRead._(observed.inspection, observed.manifest);
   }
@@ -189,6 +196,7 @@ class GithubRelease {
         title: expected.title,
         body: expected.body,
         publicAssets: expected.publicAssets,
+        prerelease: expected.prerelease,
       );
 
   Future<_ManifestObservation> _observeManifestRelease({
@@ -200,6 +208,7 @@ class GithubRelease {
     String? title,
     String? body,
     Set<String>? publicAssets,
+    required bool prerelease,
   }) async {
     if (!_isSha256(manifestSha256)) {
       return const _ManifestObservation.failed(
@@ -235,6 +244,7 @@ class GithubRelease {
       expectedAssets: publicAssets,
       expectedTitle: title,
       expectedBody: body,
+      expectedPrerelease: prerelease,
     );
     if (!surface.isExact) return _ManifestObservation.failed(surface);
     if (!release.assets!.contains(ReleaseAssets.manifest)) {
@@ -330,6 +340,7 @@ class GithubRelease {
       expectedAssets: manifestPublicAssets,
       expectedTitle: title,
       expectedBody: body,
+      expectedPrerelease: prerelease,
     );
     if (!manifestSurface.isExact) {
       return _ManifestObservation.failed(manifestSurface);
@@ -356,6 +367,7 @@ class GithubRelease {
     String? expectedTitle,
     String? expectedBody,
     Map<String, String>? expectedDigests,
+    required bool expectedPrerelease,
   }) async {
     if (expectedDigests != null) {
       for (final entry in expectedDigests.entries) {
@@ -375,6 +387,7 @@ class GithubRelease {
       expectedAssets: expectedAssets,
       expectedTitle: expectedTitle,
       expectedBody: expectedBody,
+      expectedPrerelease: expectedPrerelease,
     );
     if (!surface.isExact) return surface;
     if (expectedDigests != null) {
@@ -413,6 +426,7 @@ class GithubRelease {
     Set<String>? expectedAssets,
     String? expectedTitle,
     String? expectedBody,
+    required bool expectedPrerelease,
   }) {
     if (expectedTitle != null && !release.titleReadable) {
       return const Inspection.unknown(
@@ -440,6 +454,11 @@ class GithubRelease {
     }
     if (expectedBody != null && release.body != expectedBody) {
       differences['body'] = 'published release notes differ';
+    }
+    if (release.isPrerelease != expectedPrerelease) {
+      differences['prerelease'] = expectedPrerelease
+          ? 'published as stable, expected prerelease'
+          : 'published as prerelease, expected stable';
     }
 
     // Exact means equal, not subset. A release carrying assets this
@@ -679,6 +698,7 @@ class GithubRelease {
     required String title,
     required String notesPath,
     required List<GithubReleaseAssetUpload> assets,
+    required bool prerelease,
     void Function(GithubPublishEvent event, int current, int total)? onProgress,
   }) async {
     var draftEffect = DraftEffect.none;
@@ -739,6 +759,7 @@ class GithubRelease {
           title: title,
           body: notes,
           expected: ordered,
+          prerelease: prerelease,
         );
         if (!reconciliation.inspection.isExact) {
           return failed(
@@ -755,6 +776,7 @@ class GithubRelease {
           'name': title,
           'body': notes,
           'draft': true,
+          'prerelease': prerelease,
         }));
         draftEffect = DraftEffect.uncertain;
         final created = await tools.run(
@@ -799,6 +821,7 @@ class GithubRelease {
           title: title,
           body: notes,
           expected: ordered,
+          prerelease: prerelease,
         );
         if (!reconciliation.inspection.isExact ||
             reconciliation.missing.length != ordered.length) {
@@ -871,6 +894,7 @@ class GithubRelease {
             title: title,
             body: notes,
             expected: ordered,
+            prerelease: prerelease,
           );
           if (!reconciliation.inspection.isExact ||
               reconciliation.missing
@@ -909,6 +933,7 @@ class GithubRelease {
         expectedAssets: names.toSet(),
         expectedTitle: title,
         expectedBody: notes,
+        expectedPrerelease: prerelease,
       );
       if (!surface.isExact) {
         return failed(
@@ -931,7 +956,10 @@ class GithubRelease {
       onProgress?.call(
           GithubPublishEvent.publishing, ordered.length, ordered.length);
       final publishInput = File('${scratch.path}/publish.json');
-      await publishInput.writeAsString(jsonEncode({'draft': false}));
+      await publishInput.writeAsString(jsonEncode({
+        'draft': false,
+        'prerelease': prerelease,
+      }));
       final published = await tools.run(
         'gh',
         [
@@ -961,6 +989,7 @@ class GithubRelease {
           expectedAssets: names.toSet(),
           expectedTitle: title,
           expectedBody: notes,
+          expectedPrerelease: prerelease,
         );
         if (!publicSurface.isExact) {
           return PublishOutcome.terminal(
@@ -1093,6 +1122,7 @@ class GithubRelease {
     required String title,
     required String body,
     required List<GithubReleaseAssetUpload> expected,
+    required bool prerelease,
   }) {
     if (!draft.isDraft) {
       return (
@@ -1116,6 +1146,11 @@ class GithubRelease {
       differences['title'] = 'private draft title differs';
     }
     if (draft.body != body) differences['body'] = 'private draft body differs';
+    if (draft.isPrerelease != prerelease) {
+      differences['prerelease'] = prerelease
+          ? 'private draft is stable, expected prerelease'
+          : 'private draft is a prerelease, expected stable';
+    }
     final expectedNames = expected.map((asset) => asset.publicName).toSet();
     final extra = draft.assets!.difference(expectedNames);
     for (final name in extra) {
@@ -1211,6 +1246,7 @@ class GithubRelease {
       }
       if (decoded['tag_name'] is! String ||
           decoded['draft'] is! bool ||
+          decoded['prerelease'] is! bool ||
           decoded['id'] == null) {
         return const _Unreadable(
           'GitHub answered without a readable release identity',
@@ -1254,6 +1290,7 @@ class GithubRelease {
       return _Found(_Release(
         tag: decoded['tag_name'] as String,
         isDraft: decoded['draft'] as bool,
+        isPrerelease: decoded['prerelease'] as bool,
         id: '${decoded['id']}',
         assets: assetNames,
         assetMetadata: assetMetadata,
@@ -1311,6 +1348,7 @@ class GithubRelease {
           if (entry is! Map ||
               entry['tag_name'] is! String ||
               entry['draft'] is! bool ||
+              entry['prerelease'] is! bool ||
               entry['id'] == null) {
             return null;
           }
@@ -1318,6 +1356,7 @@ class GithubRelease {
             drafts.add(_Release(
               tag: tag,
               isDraft: true,
+              isPrerelease: entry['prerelease'] as bool,
               id: '${entry['id']}',
               assets: null,
               assetMetadata: null,
@@ -1365,6 +1404,7 @@ class _Release {
   _Release({
     required this.tag,
     required this.isDraft,
+    required this.isPrerelease,
     required this.id,
     required this.assets,
     required this.assetMetadata,
@@ -1376,6 +1416,7 @@ class _Release {
 
   final String tag;
   final bool isDraft;
+  final bool isPrerelease;
   final String id;
 
   final String? title;
@@ -1425,12 +1466,14 @@ class GithubReleaseExpectation {
     required this.tag,
     required this.title,
     required this.body,
+    required this.prerelease,
     required Map<String, String> assetSha256,
   }) : assetSha256 = Map.unmodifiable(assetSha256);
 
   final String tag;
   final String title;
   final String body;
+  final bool prerelease;
 
   /// Exact public asset name to lowercase or uppercase SHA-256.
   final Map<String, String> assetSha256;
@@ -1445,6 +1488,7 @@ class GithubManifestExpectation {
     required this.sourceCommit,
     required this.title,
     required this.body,
+    required this.prerelease,
     required this.manifestSha256,
     required Set<String> publicAssets,
   }) : publicAssets = Set.unmodifiable(publicAssets);
@@ -1459,6 +1503,7 @@ class GithubManifestExpectation {
   final String sourceCommit;
   final String title;
   final String body;
+  final bool prerelease;
 
   /// SHA-256 read from the tag's authenticated manifest binding.
   final String manifestSha256;
@@ -1481,6 +1526,7 @@ class GithubHistoricalManifestExpectation {
     required this.tag,
     required this.sourceCommit,
     required this.manifestSha256,
+    required this.prerelease,
     this.title,
   });
 
@@ -1489,6 +1535,7 @@ class GithubHistoricalManifestExpectation {
   final String tag;
   final String sourceCommit;
   final String manifestSha256;
+  final bool prerelease;
 
   /// Optional stable title. Historical changelog bodies are not required.
   final String? title;

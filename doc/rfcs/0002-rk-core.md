@@ -194,9 +194,11 @@ from whatever an SDK happens to accept:
   identity. SemVer precedence does not make two different coordinate
   strings the same coordinate.
 - **Prereleases** are ordered by SemVer precedence, so `0.2.0-beta.1`
-  precedes `0.2.0`, and monotonicity uses that ordering. A prerelease is
-  otherwise an ordinary release: it publishes, it is verified, and it is
-  never treated as a draft or a lesser artifact.
+  precedes `0.2.0`, and monotonicity uses that ordering. They publish and are
+  verified as ordinary release coordinates. GitHub marks them as prereleases;
+  Homebrew remains on its last stable version until a stable release follows.
+  A GitHub prerelease is still assembled in a private draft before publication;
+  `draft` is transaction state, not release maturity.
 - Frozen parser and comparator test vectors are part of the engine, so two
   implementations cannot disagree about an ordering.
 
@@ -739,9 +741,10 @@ act(expected, stage)
   retry reports the target already exact and performs no second publish.
 - **`github-release`** (destination): draft creation, upload, public flip, and
   exact public asset inspection as above.
-- **`homebrew-tap`** (destination): formula from a closed template plus
-  staged digests plus derived identity; compare-and-swap update; public
-  byte-for-byte read-back. A clean consumer install from the public tap,
+- **`homebrew-tap`** (destination): stable releases only; formula from a closed
+  template plus staged digests plus derived identity; compare-and-swap update;
+  public byte-for-byte read-back. Prereleases leave the tap unchanged. A clean
+  consumer install from the public tap,
   without release credentials or the source checkout, is the supervised
   Homebrew canary rather than part of the mutation.
 

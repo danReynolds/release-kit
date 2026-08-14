@@ -665,6 +665,8 @@ class ReleaseStage {
   }
 
   StagedFormulaBinding? _formulaBinding() {
+    // Prereleases publish their archives but leave the stable tap unchanged.
+    if (unit.version.isPrerelease) return null;
     final project = unit.projects
         .where(
           (project) => project.publish.contains(PublishTarget.homebrew),

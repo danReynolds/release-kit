@@ -347,6 +347,56 @@ void main() {
     expect(homebrewStage.inspect().reusable, isTrue);
   });
 
+  test('a prerelease manifest carries archives without a Homebrew formula', () {
+    final prereleaseSource = MemorySourceTree({...source.files});
+    prereleaseSource.files['release.toml'] = _homebrewConfig;
+    prereleaseSource.files['pubspec.yaml'] = '''
+name: tool
+version: 1.3.0-beta.1
+executables:
+  tool: tool
+''';
+    final prereleaseUnit = _resolveUnit(
+      prereleaseSource,
+      configDocument: _homebrewConfig,
+    );
+    final prereleaseIdentity = StageIdentity.forPlan(
+      headCommit: _commit,
+      headTree: _tree,
+      resolvedPlan: {
+        'unit': prereleaseUnit.name,
+        'version': prereleaseUnit.version.canonical,
+      },
+    );
+    final prereleaseStage = ReleaseStage(
+      unit: prereleaseUnit,
+      source: prereleaseSource,
+      repository: 'owner/repo',
+      directory: StageDirectory(
+        repositoryRoot: repository.path,
+        identity: prereleaseIdentity,
+      ),
+    );
+    final project = prereleaseUnit.project('tool');
+    final archive = ReleaseAssets.archiveName(
+      project.executable!,
+      project.version.canonical,
+      'macos-arm64',
+    );
+    _recordArchives(prereleaseStage, {archive: 'archive'});
+
+    prereleaseStage.finalize(
+      releaseAssets: _fixtureReleaseAssets({archive}),
+    );
+    final manifest = ReleaseManifest.parse(
+      File(prereleaseStage.directory.resolve(ReleaseAssets.manifest))
+          .readAsStringSync(),
+    );
+
+    expect(manifest.artifacts.map((artifact) => artifact.name), [archive]);
+    expect(manifest.formula, isNull);
+  });
+
   test('completed manifest coordinates must match the resolved unit', () {
     _complete(release);
 
