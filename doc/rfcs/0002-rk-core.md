@@ -257,14 +257,16 @@ signer, where earlier tags are unsigned or absent, is the key about to sign,
 confirmed once. Keybay needs none of this: its 0.1.0 release supplies every
 baseline.
 
-## The three operational verbs
+## Release verbs and local maintenance
 
-`rk target` is a fourth, static reference command. It reads no repository,
+`rk target` is a static reference command. It reads no repository,
 network, or credentials: `target list` describes every release choice in the
 installed binary, and `target <name>` explains one choice's requirements,
 native sources, RK settings, and minimal configuration.
 
-`rk init` · `rk status` · `rk release`. Bare `rk` runs `status`.
+`rk init` · `rk status` · `rk release`. Bare `rk` runs `status`. `rk clean`
+is a separate repository-local maintenance command; it neither resolves a
+release plan nor reads a public target.
 
 `status` takes an optional unit. `release` takes an optional unit: naming one
 keeps the operation narrow, while a bare release coordinates all unfinished
@@ -694,8 +696,14 @@ blocks creation when the immutable coordinate is still absent; when that
 coordinate already exists, it skips as already published and never becomes
 permission to publish again. A failed step or non-clean verdict keeps its
 evidence for diagnosis.
-Residue from an abandoned release is surfaced by `status` and deleted only by
-a human.
+Residue from an abandoned release is deleted only by a human. `rk clean` is
+that explicit deletion surface. It inventories only
+`.rk/work/stages` beneath the current repository, preserves `.rk/diagnosis`,
+and requires a typed yes or `--yes` after disclosing that partial-release
+recovery may depend on those exact bytes. It does not infer safety from age or
+from current configuration, and it never runs automatically or across
+repositories. A shared repository stage-store lock prevents cleanup from
+racing an active RK release.
 
 ## Credentials
 
@@ -990,7 +998,7 @@ release-kit/
   bin/rk.dart            # the entry point, and the composition root
   lib/src/
     binary_chain.dart    # the local production chain: neither verb nor adapter
-    commands/            # init, status, release, and the static target reference
+    commands/            # init, status, release, clean, and target reference
     targets/             # the closed target catalog and lifecycle modules
     destinations/        # lower-level provider protocol clients
     builds/              # capability, dart_cli

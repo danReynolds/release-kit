@@ -5,7 +5,7 @@ Status: local implementation complete; supervised live gate pending,
 probe, `--offline`, and the transient unsigned build are gone; macOS
 build and signing are one producer; the pipeline is declared once; the
 manifest carries only externally checkable facts; notary evidence is
-stage-local; and `--json` is the agent contract at schema 8 with
+stage-local; and `--json` is the agent contract at schema 9 with
 `release --yes` as the noninteractive answer. This is
 the current forward plan. The append-only reconciliation amendment landed
 2026-08-14: Pub now stages and uploads one native archive, immutable occupied

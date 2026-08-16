@@ -9,6 +9,7 @@ import 'release_manifest.dart';
 import 'resolve.dart';
 import 'source_tree.dart';
 import 'stage.dart';
+import 'stage_store.dart';
 import 'producers.dart';
 import 'stage_contract.dart';
 import 'stage_inspection.dart';
@@ -248,7 +249,15 @@ class ReleaseStage {
         directory.unsafeFixedPath() != null) {
       throw FileSystemException('unsafe stage cannot be reset', directory.path);
     }
-    Directory(directory.path).deleteSync(recursive: true);
+    final removed = StageStore(directory.repositoryRoot).deleteEntry(
+      StageEntry(name: directory.identity.id, type: type),
+    );
+    if (!removed) {
+      throw FileSystemException(
+        'stage changed before it could be reset',
+        directory.path,
+      );
+    }
   }
 
   /// Copies the Git-tracked source into the stage and returns the captured

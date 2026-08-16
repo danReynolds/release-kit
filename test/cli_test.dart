@@ -104,13 +104,15 @@ void main() {
       expect(run.all, contains('staging publishes nothing'));
     });
 
-    test('--yes and -y apply only to release', () {
+    test('--yes and -y apply only to release and clean', () {
       // --help short-circuits before the verb runs, so this proves only the
       // surface: both spellings parse for release and are refused elsewhere.
       final accepted = repo(['release', '--yes', '--help']);
       expect(accepted.code, 0, reason: accepted.all);
       final alias = repo(['release', '-y', '--help']);
       expect(alias.code, 0, reason: alias.all);
+      final clean = repo(['clean', '--yes', '--help']);
+      expect(clean.code, 0, reason: clean.all);
 
       final elsewhere = repo(['status', '--yes', '--json']);
       expect(elsewhere.code, 2, reason: elsewhere.all);
