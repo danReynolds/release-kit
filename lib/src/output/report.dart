@@ -18,8 +18,8 @@ class Report {
   /// is looking at without being told out of band.
   final String command;
 
-  /// Wire format version, bumped only when a key changes meaning.
-  static const schema = 8;
+  /// Wire format version, bumped whenever the serialized contract changes.
+  static const schema = 9;
 
   /// Units by name, in the order they were first mentioned.
   ///
@@ -33,6 +33,7 @@ class Report {
   final List<String> _next = [];
   Map<String, Object?>? _repository;
   Map<String, Object?>? _init;
+  Map<String, Object?>? _cleanup;
   List<Map<String, Object?>>? _releaseChoices;
   Map<String, Object?>? _halt;
 
@@ -224,6 +225,22 @@ class Report {
 
   void initPlan(Map<String, Object?> plan) => _init = plan;
 
+  /// The repository-local stage inventory an explicit clean observed and how
+  /// much of that frozen set this invocation removed.
+  void cleanup({
+    required String root,
+    required String path,
+    required int found,
+    required int removed,
+  }) {
+    _cleanup = {
+      'root': root,
+      'path': path,
+      'found': found,
+      'removed': removed,
+    };
+  }
+
   /// Static reference entries reported by `rk target`.
   ///
   /// They deliberately carry no selected or available state: this command
@@ -261,6 +278,7 @@ class Report {
             'rerun_helps': rerunHelps,
             if (_repository != null) 'repository': _repository,
             if (_init != null) 'init': _init,
+            if (_cleanup != null) 'cleanup': _cleanup,
             if (_releaseChoices != null) 'release_choices': _releaseChoices,
             'units': _units.values.toList(),
             'problems': _problems,

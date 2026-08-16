@@ -15,18 +15,22 @@ rk status <unit> --json                 confirm: staged, good to release
 rk release [unit] --yes --json          publish and read back without prompting
 rk release [unit] --yes --json          idempotent: already-published, no second act
 rk target list --json                    installed rk's static release choices
+rk clean --json                          preview local stage cleanup
+rk clean --yes --json                    remove the reviewed local stages
 ```
 
-`--yes` answers only the ordinary release question. The unit versions and
-remaining targets are still reported, and every inspection and refusal still
-runs. A bare release may cover several independently versioned units; name a
-unit when an automation caller needs the narrowest scope.
+For `release`, `--yes` answers only the ordinary publication question. The
+unit versions and remaining targets are still reported, and every inspection
+and refusal still runs. A bare release may cover several independently
+versioned units; name a unit when an automation caller needs the narrowest
+scope. For `clean`, it authorizes only the repository-local stage set shown by
+that run.
 
 ## Top level
 
 | key | meaning |
 |---|---|
-| `rk` | schema version (currently `8`) |
+| `rk` | schema version (currently `9`) |
 | `command` | the verb that ran |
 | `mode` | present only where the run has one: `{stage}` on `release` |
 | `observed_at` | UTC ISO 8601 — when rk read the world |
@@ -34,6 +38,7 @@ unit when an automation caller needs the narrowest scope.
 | `rerun_helps` | whether re-running would move things forward — false on conflicts, where a human has to decide. Re-running is always *safe*: the same inspection precedes every act |
 | `repository` | `{name, branch?, head?, remote, uncommitted?, source_binding?, source_comparison?}`. `head` is the full 40-char SHA and is absent for unbound source. `remote` is always present and null when no origin exists. Status and release report `source_binding` as `gitCommit` or `unbound`, independently from `source_comparison` (`exact` or `unavailable`) |
 | `init` | present on `init`: `{source: {binding, git_remote, github_repository}, notices[], candidates[]}`. `github_repository` is always present and null when unavailable. Each candidate reports its unit, native project/path/version/executables and every option's `available`, redacted `reason`, `selected`, and deterministic `effects[]`. A candidate is included when at least one release output is selected |
+| `cleanup` | present on `clean`: `{root, path, found, removed}` for the frozen repository-local stage set. `root` is the absolute repository root and `path` is always `.rk/work/stages`; diagnoses are outside it and are never removed |
 | `release_choices` | present on `target`: the static choices understood by this installed rk. This command reads no repository and these entries never contain `selected` or `available` |
 | `units[]` | per-unit: `{name, version, tag, steps[], targets[]?}`. `tag` is null when Git tagging is not selected |
 | `problems[]` | `{code, message, remedy?, source?, unit?, target?}` — every refusal and blockage, with its `RK-*` code. `target`, when present, is the affected target id and makes that target's human row `✗` |
@@ -52,6 +57,16 @@ re-running can advance the work.
 An empty `problems[]` remains the release gate. `warnings[]` never changes the
 exit code or authorizes work by itself; it discloses facts such as a
 registry-only release capturing dirty working-tree state.
+
+## Cleanup
+
+`rk clean --json` never prompts or deletes without `--yes`. When staged work
+exists it returns exit `1`, records `found` with `removed: 0`, and names
+`rk clean --yes` in `next[]`. The authorized form deletes only the entries it
+inventoried under the current repository; entries that appear later or change
+entity type are left alone and the run refuses. Cleanup does not inspect
+publishers and does not claim a completed stage is disposable: deleting staged
+bytes can prevent a partially completed release from resuming.
 
 ## Target reference
 

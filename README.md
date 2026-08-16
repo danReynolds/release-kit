@@ -19,8 +19,9 @@ A private stage is disposable before publication begins and after every target
 is exact; during a partial binary release, retain it so the remaining targets
 receive the exact signed and notarized bytes already bound by the public ones.
 
-Three operational verbs: `rk init`, `rk status`, `rk release`, plus the static
-`rk target` reference. No hooks, no templates, no `--force`.
+Three release verbs: `rk init`, `rk status`, `rk release`; the local
+maintenance command `rk clean`; and the static `rk target` reference. No
+hooks, no templates, no `--force`.
 
 ## Using it
 
@@ -28,6 +29,7 @@ Three operational verbs: `rk init`, `rk status`, `rk release`, plus the static
 dart pub global activate rk    # the command is rk
 rk status                              # where things stand. Read-only.
 rk init                                # propose a release.toml
+rk clean                               # remove this repository's private stages
 rk target list                         # everything this rk can create or publish
 rk target homebrew                     # one choice's requirements and configuration
 rk release [unit] --stage              # exact stage; name it when several units exist
@@ -53,6 +55,12 @@ by the installed binary; it does not inspect the current repository. Use
 `rk target <name>` for requirements, inferred native values, RK-specific
 settings, and a minimal `release.toml` example. `rk status` remains the answer
 to what is configured here.
+
+`rk clean` removes only this repository's `.rk/work/stages`; it never scans
+other projects and never removes `.rk/diagnosis`. Because an unfinished public
+release may still need the exact staged bytes, cleanup always discloses that
+consequence and requires confirmation or `--yes`. RK never cleans stages
+automatically.
 
 Most releases are driven by agents: every command speaks `--json`
 ([doc/json.md](doc/json.md) is the contract and the drive loop), and `--yes`
@@ -97,7 +105,7 @@ verdict enum, and the blessed CI gate rule.
 
 `bin/rk.dart` is the composition root — it parses flags, reads and resolves
 `release.toml`, builds the collaborators, and dispatches to a verb.
-`lib/src/commands/` holds the three coordinators. `lib/src/targets/` is the
+`lib/src/commands/` holds the command coordinators. `lib/src/targets/` is the
 closed catalog of Git tag, pub.dev, GitHub Release, and Homebrew lanes; each
 module owns that target's expectation, reads, status policy, private stage
 contribution, public act, read-back settling, and retry/failure semantics.

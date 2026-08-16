@@ -15,6 +15,7 @@ library;
 
 import 'dart:io';
 
+import 'package:rk/src/commands/clean.dart';
 import 'package:rk/src/commands/init.dart';
 import 'package:rk/src/commands/init_selector.dart';
 import 'package:rk/src/commands/release.dart';
@@ -34,6 +35,7 @@ import 'package:rk/src/engine/registry.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/release_stage.dart';
 import 'package:rk/src/engine/release_source.dart';
+import 'package:rk/src/engine/stage_store.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/source_context.dart';
 import 'package:rk/src/engine/tools.dart';
@@ -48,6 +50,7 @@ Usage
   rk --version                    print this binary's version
   rk status [unit]                status all units or one
   rk init                         propose release.toml; write only on a yes
+  rk clean                        remove this repository's staged release work
   rk target list                  list every release choice this rk supports
   rk target <name>                explain one choice and its configuration
   rk release [unit]               release all unfinished units, or one named unit
@@ -57,7 +60,7 @@ Flags
   --version   print this binary's version and exit
   --json      the machine surface (doc/json.md)
   --stage     release: build, sign, and notarize exact artifacts; publish nothing
-  -y, --yes   release: answer yes without an interactive prompt
+  -y, --yes   release or clean: answer yes without an interactive prompt
   --write     init: accept the proposal without a prompt
 
 Marks: ✓ done,  · already satisfied,  ✗ problem or conflict,  ! warning,
@@ -88,7 +91,7 @@ Future<void> main(List<String> args) async {
   final positional = args.where((a) => !a.startsWith('-')).toList();
   final json = flags.contains('--json');
 
-  const verbs = {'status', 'release', 'init', 'target'};
+  const verbs = {'status', 'release', 'init', 'clean', 'target'};
   final first = positional.isEmpty ? null : positional.first;
   final command = first ?? 'status';
   final target = positional.length > 1 ? positional[1] : null;
@@ -120,6 +123,7 @@ Future<void> main(List<String> args) async {
     'status': {'-h', '--help', '--json'},
     'release': {'-h', '--help', '--json', '--stage', '-y', '--yes'},
     'init': {'-h', '--help', '--json', '--write'},
+    'clean': {'-h', '--help', '--json', '-y', '--yes'},
     'target': {'-h', '--help', '--json'},
   };
   final inapplicable = flags.difference(perVerb[command] ?? known);
@@ -179,18 +183,20 @@ Future<void> main(List<String> args) async {
   // Misuse is refused, not repaired: a third word would be dropped as if it
   // had not been said, and `rk init somepkg` would configure the whole
   // repository while reading as if it had scoped itself to one unit.
-  if (positional.length > 2 || (command == 'init' && target != null)) {
+  if (positional.length > 2 ||
+      ((command == 'init' || command == 'clean') && target != null)) {
     output.problem(
       Diagnostic(
         code: 'RK-CLI-007',
-        message: command == 'init' && positional.length <= 2
-            ? 'rk init takes no unit — it proposes for the whole '
-                'repository, and got "$target"'
-            : command == 'target'
-                ? 'rk target takes "list" or one release choice name, and '
-                    'got "${positional.skip(1).join(' ')}"'
-                : 'rk takes a verb and a unit, and got '
-                    '"${positional.join(' ')}"',
+        message:
+            (command == 'init' || command == 'clean') && positional.length <= 2
+                ? 'rk $command takes no unit — it applies to the whole '
+                    'repository, and got "$target"'
+                : command == 'target'
+                    ? 'rk target takes "list" or one release choice name, and '
+                        'got "${positional.skip(1).join(' ')}"'
+                    : 'rk takes a verb and a unit, and got '
+                        '"${positional.join(' ')}"',
         remedy: _usage.trim(),
       ),
     );
@@ -200,7 +206,11 @@ Future<void> main(List<String> args) async {
   }
 
   if (flags.contains('-h') || flags.contains('--help')) {
-    final usage = command == 'target' ? TargetCommand.usage : _usage;
+    final usage = switch (command) {
+      'target' => TargetCommand.usage,
+      'clean' => CleanCommand.usage,
+      _ => _usage,
+    };
     // Under --json stdout carries the document and nothing else, so the usage
     // travels inside it rather than beside it.
     if (json) {
@@ -227,6 +237,11 @@ Future<void> main(List<String> args) async {
           output,
           interactive: !json,
           write: flags.contains('--write'),
+        ),
+      'clean' => await _clean(
+          output,
+          yes: flags.contains('--yes') || flags.contains('-y'),
+          interactive: !json,
         ),
       'target' => TargetCommand(output: output).run(target),
       _ => await _status(output, target),
@@ -346,6 +361,23 @@ Future<int> _init(
   ).run();
 }
 
+Future<int> _clean(
+  Output output, {
+  required bool yes,
+  required bool interactive,
+}) {
+  final root = GitSourceTree.findRoot(Directory.current.path) ??
+      Directory.current.absolute.path;
+  return CleanCommand(
+    store: StageStore(root),
+    output: output,
+    yes: yes,
+    confirm: interactive && stdin.hasTerminal && stdout.hasTerminal
+        ? _promptOnTerminal
+        : null,
+  ).run();
+}
+
 void _ensureRkIgnored(String root) {
   final file = File('$root/.gitignore');
   final handle = file.openSync(mode: FileMode.append);
@@ -448,17 +480,27 @@ Future<int> _release(
     registry.close();
     return ExitCodes.refused;
   }
-  final resolution = source.resolution;
-  final tree = source.tree;
-  final git = source.binding;
-  final targets = TargetCatalog.builtIn();
-  final stages = ReleaseStages(
-    source: tree,
-    git: git,
-    stageContracts: targets.stageContractResolver(resolution),
-  );
-  const targetTools = SystemTools(timeout: Duration(minutes: 2));
+  StageStoreLock? stageLock;
   try {
+    try {
+      stageLock = StageStore(context.root).acquireForMutation();
+    } on StageStoreBusy catch (error) {
+      output.problem(_stageStoreProblem(error));
+      return ExitCodes.refused;
+    } on StageStoreUnsafe catch (error) {
+      output.problem(_stageStoreProblem(error));
+      return ExitCodes.refused;
+    }
+    final resolution = source.resolution;
+    final tree = source.tree;
+    final git = source.binding;
+    final targets = TargetCatalog.builtIn();
+    final stages = ReleaseStages(
+      source: tree,
+      git: git,
+      stageContracts: targets.stageContractResolver(resolution),
+    );
+    const targetTools = SystemTools(timeout: Duration(minutes: 2));
     return await ReleaseCommand(
       resolution: resolution,
       tree: tree,
@@ -495,6 +537,7 @@ Future<int> _release(
           : GitState.unbound(context.root),
     ).run(only: unit);
   } finally {
+    stageLock?.close();
     registry.close();
   }
 }
@@ -697,3 +740,13 @@ Future<int> _status(
     registry.close();
   }
 }
+
+Diagnostic _stageStoreProblem(Object error) => Diagnostic(
+      code: 'RK-STAGE-006',
+      message: error is StageStoreBusy
+          ? 'another rk command is using staged work'
+          : 'the local stage path is not safe to use',
+      remedy: error is StageStoreBusy
+          ? 'let that command finish, then run rk again'
+          : '$error\nRK did not follow or change the unexpected path.',
+    );

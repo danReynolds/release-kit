@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-134 codes across 25 families.
+140 codes across 26 families.
 
 
 ## RK-AUTH — Authorization
@@ -46,6 +46,16 @@ fails, and the count below is checked against the rows.
 | `RK-CHG-002` | the changelog has no entry for $version | `lib/src/engine/changelog.dart` |
 | `RK-CHG-003` | the release body was not prepared | `lib/src/targets/github_release_target.dart` |
 | `RK-CHG-004` | the changelog entry for ${project.version} is empty | `lib/src/targets/github_release_target.dart` |
+
+## RK-CLEAN — Local staged release work
+
+| code | says | declared in |
+|---|---|---|
+| `RK-CLEAN-001` | the local stage path is not safe to clean | `lib/src/commands/clean.dart` |
+| `RK-CLEAN-002` | another rk command is using staged work | `lib/src/commands/clean.dart` |
+| `RK-CLEAN-003` | staged work changed or could not be completely removed | `lib/src/commands/clean.dart` |
+| `RK-CLEAN-004` | nobody is here to authorize cleanup | `lib/src/commands/clean.dart` |
+| `RK-CLEAN-005` | partially completed releases may need the staged bytes | `lib/src/commands/clean.dart` |
 
 ## RK-CLI — How rk was invoked
 
@@ -260,6 +270,7 @@ meanings and are not reused.
 | `RK-STAGE-003` | committed release bytes could not be staged or did not remain valid | `lib/src/commands/release.dart` |
 | `RK-STAGE-004` | the repository or canonical release plan changed after staging | `lib/src/commands/release.dart` |
 | `RK-STAGE-005` | a partial binary release lost the exact stage it still needs | `lib/src/commands/release.dart`, `lib/src/commands/status.dart` |
+| `RK-STAGE-006` | staged work is locked or its fixed path is unsafe | `bin/rk.dart` |
 
 ## RK-TAG — The tag
 
