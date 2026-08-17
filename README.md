@@ -11,8 +11,8 @@ writes the configuration; `rk release` asks one question per unit.
 ## Start
 
 `rk init` reads the repository and proposes a configuration. In a
-terminal you pick targets per project — projects group into units that
-release together — and nothing is written without a yes:
+terminal you pick targets per project, and nothing is written without
+a yes:
 
 ```console
 $ rk init
@@ -91,10 +91,9 @@ installed rk supports.
 
 ## Two packages, one release
 
-Each `[release.<name>]` is a unit, released on its own version. A demo
-repository with two units, `cli` depending on `core`, each publishing
-under its pubspec name — `init` writes this file too, and it stays
-yours to edit:
+Each `[release.<name>]` is a unit, released on its own version. Two
+units, `cli` depending on `core`, publishing under their pubspec names
+— `init` writes this file too, and it stays yours to edit:
 
 ```toml
 schema = 2
@@ -106,36 +105,6 @@ publish = ["pub.dev"]
 [release.cli]
 path = "packages/cli"
 publish = ["pub.dev"]
-```
-
-`rk status` refuses to pretend: `cli` cannot publish until `core` is
-live, and the fix is a command:
-
-```console
-$ rk status
-workspace · main@565fb45
-
-  core 0.3.0
-
-    Not published
-      pub.dev                    example_core
-
-    Not staged
-      pub.dev                    example_core source
-
-  cli 0.3.0
-
-    Not published
-      pub.dev                    example_cli
-
-    Not staged
-      pub.dev                    example_cli source
-
-Issues
-✗   cli · example_core 0.3.0 must be live on pub.dev: not published: example_core has never been published
-      Fix: publish the prerequisite first: rk release core
-
-✗ 1 issue prevents release
 ```
 
 `rk release` orders the units, stages and checks everything private,
@@ -200,8 +169,7 @@ Release core 0.3.0? [y/N]
 
 Releases are driven by agents as much as by hands. Every command
 speaks `--json` ([doc/json.md](doc/json.md)) — the same facts as the
-terminal output, with stable codes. The Issues block above, as
-`.problems`:
+terminal output, with stable codes. Here, why `cli` waits for `core`:
 
 ```console
 $ rk status --json | jq .problems
@@ -215,21 +183,11 @@ $ rk status --json | jq .problems
 ]
 ```
 
-Without a terminal, a needed answer stops the release — this is the
-release above, run headless:
-
-```console
-Release core 0.3.0? [y/N]
-  no terminal to answer on — stopped; nothing was published.
-✗ the release was not authorized
-    answer yes at the prompt, or pass --yes for an unattended release
-
-  rk stopped. no public target changed. safe to re-run.
-```
-
-`--yes` is the unattended yes, and it skips no inspection. Exit codes:
-0 report or completed command, 1 refused or failed, 2 usage, 3 rk
-itself crashed — `--json` mirrors it in `exit`.
+Without a terminal, a needed answer stops the release — "no terminal
+to answer on — stopped; nothing was published." `--yes` is the
+unattended yes, and it skips no inspection. Exit codes: 0 report or
+completed command, 1 refused or failed, 2 usage, 3 rk itself crashed —
+`--json` mirrors it in `exit`.
 
 ## Behavior
 
