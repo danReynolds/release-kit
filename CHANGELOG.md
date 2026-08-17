@@ -2,7 +2,7 @@
 
 ## 0.1.0
 
-Initial release of rk, an austere release tool for Dart repositories.
+Initial release of rk, a release tool.
 
 - Three operational verbs: `status`, `init`, and `release`, plus the static
   `target` reference; public reality is the release record and re-running is
