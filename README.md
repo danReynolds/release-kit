@@ -1,135 +1,216 @@
 # rk
 
-An austere, fail-closed release tool. rk is a checklist compiler: it reads
-what native manifests already say plus one small `release.toml` of intent,
-derives the complete ordered checklist for a release, and executes it —
-validating everything before acting, inspecting reality before every step so
-re-running is always safe, and refusing to guess.
+rk publishes everything a repository ships — tag, registry, GitHub
+Release, Homebrew, standalone binaries — as one checked plan instead
+of a release script. Monorepo packages release in dependency order.
 
-rk manages the release steps and defers authentication to the native tools
-that own it (`dart pub`, `codesign`, `notarytool`, `gh`, `git`). A normal
-release completes and validates its private stage before it asks native tools
-for publication sessions (`dart pub login`, `gh auth status`). `status` and
-`release --stage` never acquire them. A session proves only that credentials
-are usable, not that they may change the intended destination. The attempted
-publish and public read-back remain the authority, and a retry records an
-already-published target without publishing it again. rk stores no secrets and
-keeps no authoritative release ledger: public targets are truth.
-A private stage is disposable before publication begins and after every target
-is exact; during a partial binary release, retain it so the remaining targets
-receive the exact signed and notarized bytes already bound by the public ones.
+It inspects each destination and publishes only what is missing: a
+stopped release resumes on re-run, and there is no `--force`. `rk init`
+writes the configuration; `rk release` asks one question per unit.
 
-Three release verbs: `rk init`, `rk status`, `rk release`; the local
-maintenance command `rk clean`; and the static `rk target` reference. No
-hooks, no templates, no `--force`.
+## Start
 
-## Using it
+`rk init` reads the repository and proposes a configuration. In a
+terminal you pick targets per project, and nothing is written without
+a yes:
 
-```
-dart pub global activate rk    # the command is rk
-rk status                              # where things stand. Read-only.
-rk init                                # propose a release.toml
-rk clean                               # remove this repository's private stages
-rk target list                         # everything this rk can create or publish
-rk target homebrew                     # one choice's requirements and configuration
-rk release [unit] --stage              # exact stage; name it when several units exist
-rk release [unit]                      # release unfinished units, or one named unit
-rk release [unit] --yes                # the same plan without an interactive prompt
+```console
+$ rk init
+release-kit
+
+  1 selected unit
+    rk                   0.1.0 · path . · executable rk
+
+    schema = 2
+
+    [release.rk]
+    publish = ["git-tag", "pub.dev"]
+
+    # A package here declares an executable, but standalone distribution was not selected.
+
+
+  nothing was written — there is no terminal to confirm in.
+→ rk init --write
 ```
 
-With a capable terminal, `init` opens a compact per-project selector for
-Binary, Git tag, pub.dev, GitHub, and Homebrew. A project is included when at
-least one release output is selected. The selector starts conservatively:
-native package publication may be selected when unambiguous, executables only
-expose capability, and Binary, GitHub, and Homebrew remain opt-in. Binary makes
-standalone archives locally and implies no destination; Homebrew selects Binary
-and the public prerequisites its cask needs. Turning a prerequisite off
-removes its dependents. Conventional example, fixture, and test paths are
-omitted from discovery. Review writes one small schema-2 file, Back returns to
-the selector, and field customization stays in TOML. Without a usable terminal,
-`init` prints the same conservative proposal and writes nothing; `init --write`
-accepts it directly.
+That proposal is the whole configuration. Targets are opt-in —
+release-kit's own file says yes to all of them. `rk status` checks the
+destinations themselves, not a log; "Not staged" is the private work
+that must finish before anything goes public:
 
-`rk target list` is the offline reference for every release choice supported
-by the installed binary; it does not inspect the current repository. Use
-`rk target <name>` for requirements, inferred native values, RK-specific
-settings, and a minimal `release.toml` example. `rk status` remains the answer
-to what is configured here.
+```console
+$ rk status
+release-kit · main@888444b
 
-`rk clean` removes only this repository's `.rk/work/stages`; it never scans
-other projects and never removes `.rk/diagnosis`. Because an unfinished public
-release may still need the exact staged bytes, cleanup always discloses that
-consequence and requires confirmation or `--yes`. RK never cleans stages
-automatically.
+  rk 0.1.0
 
-Most releases are driven by agents: every command speaks `--json`
-([doc/json.md](doc/json.md) is the contract and the drive loop), and `--yes`
-answers the same ordinary question noninteractively. It skips no plan,
-inspection, or refusal. Name a unit for the narrowest automated scope. There
-is still no `--force`.
+    Not published
+      Git tag                    v0.1.0
+      pub.dev                    rk
+      GitHub Release             danReynolds/release-kit
+      Homebrew                   danReynolds/homebrew-tap
 
-In a Git repository, targets whose public identity depends on Git (`git-tag`,
-GitHub Release, and Homebrew) require a clean working tree. A registry-only or
-local-output release may include uncommitted and untracked, non-ignored files:
-rk calls that out as a warning, captures the resulting working-tree state in
-an unbound one-invocation stage, and rechecks that snapshot before publishing.
-
-For release-kit's own first release, invoke the clean checkout explicitly
-instead of an older globally installed `rk`:
-
-```
-dart run bin/rk.dart --version
-dart run bin/rk.dart status rk
-dart run bin/rk.dart release rk --stage
-dart run bin/rk.dart release rk
+    Not staged
+      Local binaries
+        producers/rk/archives/rk-0.1.0-linux-arm64.tar.gz
+        producers/rk/archives/rk-0.1.0-linux-x64.tar.gz
+        producers/rk/archives/rk-0.1.0-macos-arm64.tar.gz
+      pub.dev                    rk source
+      GitHub Release             4 artifacts
+      Homebrew                   rk.rb
 ```
 
-Every published binary supports `rk --version`; staging uses that output to
-prove it built the intended version before the artifact can be released.
+The release itself — ordered, staged, disclosed, one yes per unit — is
+shown in [Two packages, one release](#two-packages-one-release).
 
-`status` has no separate authentication state. A concrete issue that belongs
-to a target marks that target `✗` and appears once under `Issues`; when a native
-tool offers no safe read-only authentication check, status stays silent and
-the normal release preflight owns the check.
+## Install
 
-The two production-alpha receipts are intentionally outside the default local
-suite. Run them explicitly with
-`dart test test/live_release_checkpoints.dart` when performing the supervised
-releases.
+```console
+$ dart pub global activate rk
+```
 
-`rk -h` lists every flag, the marks, and the exit codes.
-[doc/json.md](doc/json.md) is the `--json` contract: the schema, the frozen
-verdict enum, and the blessed CI gate rule.
+```console
+$ brew install --cask danreynolds/tap/rk
+```
 
-## Reading it
+The same CLI ships from pub.dev, Homebrew, and GitHub Releases —
+`rk --version` reports what you are running.
 
-`bin/rk.dart` is the composition root — it parses flags, reads and resolves
-`release.toml`, builds the collaborators, and dispatches to a verb.
-`lib/src/commands/` holds the command coordinators. `lib/src/targets/` is the
-closed catalog of Git tag, pub.dev, GitHub Release, and Homebrew lanes; each
-module owns that target's expectation, reads, status policy, private stage
-contribution, public act, read-back settling, and retry/failure semantics.
-The contribution's in-memory contract drives both production and validation
-of the reusable stage, so provider receipt rules are declared once.
-`lib/src/destinations/` holds the lower-level provider protocols those modules
-use. `lib/src/builds/` and `lib/src/transforms/` produce artifacts;
-`lib/src/output/` owns the prose and `--json` surfaces; and `lib/src/engine/`
-holds the shared model and readers.
-`examples/` holds five repository shapes the tests drive end to end.
+## Targets
 
-## Scope
+| | |
+|---|---|
+| `git-tag` | create and push a version tag |
+| `pub.dev` | publish a Dart package |
+| `github-release` | create a GitHub Release with selected outputs |
+| `homebrew` | publish the executable through a Homebrew tap |
+| `binary` | build standalone executable archives, publishing nothing |
 
-Dart packages and Dart CLIs released from the operator's own machine to
-pub.dev, GitHub Releases, and Homebrew. CI is designed-for and deferred.
-The production-alpha canary is release-kit itself; the older keybay work is
-preserved as historical design evidence in `doc/plan.md`.
+Planned: npm, RubyGems. `rk target list` is always the set your
+installed rk supports.
 
-The current path to a supervised local release is the
-[production-alpha plan](doc/production-alpha-plan.md). The design is
-[RFC 0002](doc/rfcs/0002-rk-core.md); the threat catalog and assurance ladder
-it prices against is [RFC 0001](doc/rfcs/0001-rk-secure-release-compiler.md).
-The implemented design for schema 2, interactive initialization, optional
-Git, and destination-neutral artifacts is the
-[initialization and target plan](doc/init-target-artifact-plan.md).
-[doc/plan.md](doc/plan.md) preserves the original build plan, review records,
-and evidence ledger.
+## Two packages, one release
+
+Each `[release.<name>]` is a unit, released on its own version. Two
+units, `cli` depending on `core`, publishing under their pubspec names
+— `init` writes this file too, and it stays yours to edit:
+
+```toml
+schema = 2
+
+[release.core]
+path = "packages/core"
+publish = ["pub.dev"]
+
+[release.cli]
+path = "packages/cli"
+publish = ["pub.dev"]
+```
+
+`rk release` orders the units, stages and checks the private work,
+and says what a yes makes permanent — before anything permanent acts:
+
+```console
+$ rk release
+Release order: core 0.3.0 -> cli 0.3.0
+
+    pub.dev · example_core                         not published
+core 0.3.0 · staging
+    pub.dev · example_core
+✓     package archive                              staged
+✓   Release inputs · targets · signing · staged bytes checked
+✓   pub.dev · example_core                         signed in
+
+  Release
+    core 0.3.0
+      publish example_core 0.3.0 to pub.dev
+  pub.dev never deletes a version. a version can be retracted, which hides it and removes nothing.
+  everything before this yes re-runs safely. after it, the first permanent step is: publish example_core 0.3.0 to pub.dev.
+
+  this release claims, for the first time:
+    pub.dev          example_core
+                     permanent: a package name cannot be renamed, reassigned, or released back
+Release core 0.3.0? [y/N]
+```
+
+## Features
+
+- **One small file, written for you.** `rk init` proposes it; versions,
+  names, and repositories come from native manifests and Git. Unknown
+  fields are errors.
+- **Reality first.** A target that is already public is recorded, not
+  published again.
+- **Fail-closed.** The complete plan is validated before the first step
+  acts, and every refusal names the problem and the fix
+  ([doc/codes.md](doc/codes.md)).
+- **No secrets.** Publication sessions belong to `dart pub`, `gh`,
+  `codesign`, `notarytool`, and `git`. rk asks for them only after
+  private work is finished and checked; `status` and `release --stage`
+  never do.
+- **Monorepos.** Cross-unit version constraints are checked before
+  anything acts.
+
+## Commands
+
+| | |
+|---|---|
+| `rk init` | propose a `release.toml` |
+| `rk status` | inspect this repository |
+| `rk release` | publish unfinished units |
+| `rk release <unit>` | one unit |
+| `rk release --stage` | private steps only |
+| `rk target list` | what this binary can create or publish |
+| `rk target <name>` | one target: requirements and a minimal example |
+| `rk clean` | remove this repository's private stages |
+
+`rk -h` lists every flag, the output marks, and the exit codes.
+
+## Agents
+
+Releases are driven by agents as much as by hands. Every command
+speaks `--json` ([doc/json.md](doc/json.md)) — the same facts as the
+terminal output, with stable codes. Here, why `cli` waits for `core`:
+
+```console
+$ rk status --json | jq .problems
+[
+  {
+    "unit": "cli",
+    "code": "RK-REL-001",
+    "message": "example_core 0.3.0 must be live on pub.dev: not published: example_core has never been published",
+    "remedy": "publish the prerequisite first: rk release core"
+  }
+]
+```
+
+Without a terminal, a needed answer stops the release — "no terminal
+to answer on — stopped; nothing was published." `--yes` is the
+unattended yes, and it skips no inspection. Exit codes: 0 report or
+completed command, 1 refused or failed, 2 usage, 3 rk itself crashed —
+`--json` mirrors it in `exit`.
+
+## Behavior
+
+Stages live under `.rk/work/stages`. Keep them while a binary release is
+partly public so the remaining targets receive the exact staged bytes
+the public ones already pinned; `rk clean` removes this repository's
+stages, and asks first.
+
+Git-identified targets (`git-tag`, `github-release`, `homebrew`) need a
+clean working tree. A registry-only or local release may include
+uncommitted work: rk warns, snapshots that tree, and rechecks the
+snapshot before publishing.
+
+Releases run from your machine. The design anticipates CI; support is
+deferred.
+
+## This repository
+
+rk releases itself, from a clean checkout:
+
+```console
+$ dart run bin/rk.dart status
+$ dart run bin/rk.dart release rk
+```
+
+[MIT](LICENSE). Working notes in [`doc/`](doc/).

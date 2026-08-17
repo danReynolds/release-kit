@@ -1,5 +1,8 @@
 # RFC 0002: rk core
 
+> Engineering contract from implementation, not the public pitch. See the
+> [README](../../README.md) for what rk is.
+
 - Status: Approved for implementation
 - Revision: 5 (2026-08-14) — append-only publication reconciliation
 - Supersedes: RFC 0001 as build authority; 0001 remains the threat catalog

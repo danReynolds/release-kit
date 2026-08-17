@@ -1,7 +1,5 @@
 name: rk
-description: >-
-  An austere, fail-closed release tool. Manages the release steps; defers
-  auth to native tooling.
+description: A release tool.
 version: 0.1.0
 repository: https://github.com/danReynolds/release-kit
 
