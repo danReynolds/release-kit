@@ -499,6 +499,9 @@ class ReleaseCommand {
             module.effectiveEndpoint(preflight, unit, [target]);
       }
     }
+    // Readiness that passed is not news; the transient rows served their
+    // purpose while the checks ran.
+    preflightProgress.discard();
 
     final _PreparedStage prepared;
     if (recoversWithoutStage) {
