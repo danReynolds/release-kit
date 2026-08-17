@@ -1,14 +1,27 @@
 # rk
 
-rk publishes everything a repository ships — tag, registry, GitHub
+Release kit manages releasing a project to your configured targets: Git tags, a Github release
 Release, Homebrew, standalone binaries — as one checked plan instead
-of a release script. Monorepo packages release in dependency order.
+of a release script.
 
-It inspects each destination and publishes only what is missing: a
-stopped release resumes on re-run, and there is no `--force`. `rk init`
-writes the configuration; `rk release` asks one question per unit.
+## Features
 
-## Start
+- **One small file, written for you.** `rk init` proposes it; versions,
+  names, and repositories come from native manifests and Git. Unknown
+  fields are errors.
+- **Reality first.** A target that is already public is recorded, not
+  published again.
+- **Fail-closed.** The complete plan is validated before the first step
+  acts, and every refusal names the problem and the fix
+  ([doc/codes.md](doc/codes.md)).
+- **No secrets.** Publication sessions belong to `dart pub`, `gh`,
+  `codesign`, `notarytool`, and `git`. rk asks for them only after
+  private work is finished and checked; `status` and `release --stage`
+  never do.
+- **Monorepos.** Cross-unit version constraints are checked before
+  anything acts.
+
+## Getting Started
 
 `rk init` reads the repository and proposes a configuration. In a
 terminal you pick targets per project, and nothing is written without
@@ -132,23 +145,6 @@ core 0.3.0 · staging
                      permanent: a package name cannot be renamed, reassigned, or released back
 Release core 0.3.0? [y/N]
 ```
-
-## Features
-
-- **One small file, written for you.** `rk init` proposes it; versions,
-  names, and repositories come from native manifests and Git. Unknown
-  fields are errors.
-- **Reality first.** A target that is already public is recorded, not
-  published again.
-- **Fail-closed.** The complete plan is validated before the first step
-  acts, and every refusal names the problem and the fix
-  ([doc/codes.md](doc/codes.md)).
-- **No secrets.** Publication sessions belong to `dart pub`, `gh`,
-  `codesign`, `notarytool`, and `git`. rk asks for them only after
-  private work is finished and checked; `status` and `release --stage`
-  never do.
-- **Monorepos.** Cross-unit version constraints are checked before
-  anything acts.
 
 ## Commands
 
