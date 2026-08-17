@@ -578,7 +578,6 @@ class Output {
     String? target,
     int depth = 0,
   }) {
-    _progressBoard?.failActiveAndSettle();
     report.problem(diagnostic, unit: unit, target: target);
     final where = diagnostic.source == null ? '' : '${diagnostic.source}  ';
     line(
@@ -937,33 +936,15 @@ final class LiveProgress {
     }
   }
 
-  /// While held, a diagnostic does not settle the board. Concurrent lanes
-  /// drain after a failure, and a problem printed mid-drain must not turn
-  /// the other lanes' still-running rows into failures; the coordinator
-  /// marks the one failed row itself and settles once the drain completes.
-  var _holdSettle = false;
-
-  // ignore: avoid_positional_boolean_parameters
-  void holdSettle(bool value) => _holdSettle = value;
-
-  /// Preserves the active operation as the failure point before diagnostics.
+  /// Concludes a stopped run: still-active rows fail, untouched pending
+  /// rows become an explicit "not attempted", and the board becomes its
+  /// durable snapshot. A no-op on a board already settled or discarded.
   ///
-  /// Targets can still use the ordinary diagnostic surface: the renderer
-  /// turns whichever row they were describing into the durable failed row
-  /// and makes every untouched downstream row explicit.
-  void failActiveAndSettle() {
-    if (_closed || _holdSettle) return;
-    if (!model.rows.any((row) => row.state == ProgressRowState.active)) {
-      return;
-    }
-    settleStopped();
-  }
-
-  /// Settles a board whose run stopped: still-active rows fail, untouched
-  /// pending rows become an explicit "not attempted", and the board becomes
-  /// its durable snapshot. Unlike [failActiveAndSettle], a fully drained
-  /// board — every lane already finished or failed — still settles.
-  void settleStopped() {
+  /// The renderer draws; the coordinator judges. A diagnostic never touches
+  /// board state — the owner that began the rows marks them and concludes
+  /// at its own halt sites, so a problem printed while concurrent lanes
+  /// drain cannot turn innocent still-running rows into failures.
+  void conclude() {
     if (_closed) return;
     final active = model.rows
         .where((row) => row.state == ProgressRowState.active)

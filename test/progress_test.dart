@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/output/progress.dart';
 import 'package:test/test.dart';
@@ -62,6 +63,31 @@ void main() {
   });
 
   group('row authority and clocks', () {
+    test('a diagnostic never settles a live board', () {
+      final harness = _Harness(terminal: false);
+      final board = harness.output.progressBoard('Staging');
+      final failing = board.addRow(id: 'build-x64', label: 'linux-x64');
+      final surviving = board.addRow(id: 'build-arm', label: 'linux-arm64');
+      failing.handle.begin(CommonProgressActivities.checking);
+      surviving.handle.begin(CommonProgressActivities.checking);
+
+      // The renderer draws; the coordinator judges. A problem printed while
+      // concurrent lanes are mid-flight must not fail or settle anything —
+      // only the owner marks rows and concludes.
+      failing.fail();
+      harness.output.problem(Diagnostic(
+        code: 'RK-STAGE-003',
+        message: 'one lane failed while another was mid-build',
+        remedy: 'drain, then conclude',
+      ));
+      expect(surviving.state, ProgressRowState.active);
+
+      surviving.complete(note: 'staged');
+      board.conclude();
+      expect(surviving.state, ProgressRowState.complete);
+      expect(failing.state, ProgressRowState.failed);
+    });
+
     test('targets describe work while the coordinator settles truth', () {
       final harness = _Harness(terminal: false);
       final board = harness.output.progressBoard('Releasing');

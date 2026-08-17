@@ -608,7 +608,10 @@ class ReleaseCommand {
       states: states,
       actions: publicActions,
     );
-    if (remaining == null) return ExitCodes.refused;
+    if (remaining == null) {
+      releaseInputs.conclude();
+      return ExitCodes.refused;
+    }
     if (remaining.isEmpty) {
       releaseInputsRow.complete(note: 'checked');
       releaseInputs.discard();
@@ -630,6 +633,7 @@ class ReleaseCommand {
     }
     final refreshedBaseline = await _signingBaseline(unit, macosProject);
     if (!refreshedBaseline.ok) {
+      releaseInputs.conclude();
       _showReleaseActions(targets, publicActions);
       return ExitCodes.refused;
     }
@@ -637,6 +641,7 @@ class ReleaseCommand {
         (prepared.signing == null ||
             refreshedBaseline.requirement !=
                 prepared.signing!.publishedRequirement)) {
+      releaseInputs.conclude();
       output.problem(Diagnostic(
         code: 'RK-SIGN-013',
         message: 'the published signing identity changed after staging',
@@ -655,6 +660,7 @@ class ReleaseCommand {
       changed: 'before authorization',
       halt: HaltKind.beforeActing,
     )) {
+      releaseInputs.conclude();
       _showReleaseActions(targets, publicActions);
       return ExitCodes.refused;
     }
@@ -669,6 +675,7 @@ class ReleaseCommand {
           changed: 'before authorization',
           halt: HaltKind.beforeActing,
         )) {
+      releaseInputs.conclude();
       _showReleaseActions(targets, publicActions);
       return ExitCodes.refused;
     }
@@ -686,7 +693,10 @@ class ReleaseCommand {
       states: states,
       actions: publicActions,
     );
-    if (remaining == null) return ExitCodes.refused;
+    if (remaining == null) {
+      releaseInputs.conclude();
+      return ExitCodes.refused;
+    }
     if (remaining.isEmpty) {
       releaseInputsRow.complete(note: 'checked');
       releaseInputs.discard();
@@ -1695,12 +1705,13 @@ class ReleaseCommand {
             ),
           );
         } on Object catch (error) {
+          stageProgress.conclude();
           _stageOperationFailed('${target.label} stage preparation', error);
           return false;
         }
         notices.addAll(result.notices);
         if (result case TargetStageFailure(:final diagnostic, :final unit)) {
-          stageProgress.failAndSettle();
+          stageProgress.conclude();
           for (final notice in notices) {
             output.say(notice, depth: 1);
           }
@@ -1714,6 +1725,7 @@ class ReleaseCommand {
           _persistStageProgress(stage, sourceArtifacts, progress);
           stageProgress.record(step);
         } on Object catch (error) {
+          stageProgress.conclude();
           _stageProgressFailed(error);
           return false;
         }
@@ -1744,12 +1756,12 @@ class ReleaseCommand {
       lanes.putIfAbsent(step.platform ?? step.id, () => []).add(step);
     }
 
-    // A failure drains. The lane that failed stops; the others finish the
-    // step already in flight — a killed half-written producer is exactly
-    // the ambiguity receipts exist to prevent — and start nothing new. The
-    // first interruption owns the halt, which is emitted after the drain so
-    // the board keeps describing the surviving lanes until they rest.
-    _PreparedStage? Function()? interrupted;
+    // A failure drains. The lane that failed marks its row and says its
+    // problem right away; the others finish the step already in flight — a
+    // killed half-written producer is exactly the ambiguity receipts exist
+    // to prevent — and start nothing new. The first failure picks the halt,
+    // spoken once after the drain, when the board has concluded.
+    HaltKind? interruption;
     var stopped = false;
 
     Future<void> runLane(List<Step> lane) async {
@@ -1778,16 +1790,14 @@ class ReleaseCommand {
         } on Object catch (error) {
           stopped = true;
           stageProgress.fail(receiptName);
-          interrupted ??= () => _stageOperationFailed(step.summary, error);
+          _stageOperationProblem(step.summary, error);
+          interruption ??= HaltKind.stoppedPartway;
           return;
         }
         if (!act.ok) {
           stopped = true;
           stageProgress.fail(receiptName);
-          interrupted ??= () {
-            if (!output.report.halted) output.halt(HaltKind.stoppedPartway);
-            return null;
-          };
+          interruption ??= HaltKind.stoppedPartway;
           return;
         }
         try {
@@ -1799,21 +1809,18 @@ class ReleaseCommand {
         } on Object catch (error) {
           stopped = true;
           stageProgress.fail(receiptName);
-          interrupted ??= () => _stageProgressFailed(error);
+          _stageProgressProblem(error);
+          interruption ??= HaltKind.beforeActing;
           return;
         }
       }
     }
 
-    stageProgress.holdSettle(true);
-    try {
-      await Future.wait([for (final lane in lanes.values) runLane(lane)]);
-    } finally {
-      stageProgress.holdSettle(false);
-    }
-    if (interrupted != null) {
-      stageProgress.settleStopped();
-      return interrupted!();
+    await Future.wait([for (final lane in lanes.values) runLane(lane)]);
+    if (interruption != null) {
+      stageProgress.conclude();
+      if (!output.report.halted) output.halt(interruption!);
+      return null;
     }
 
     if (!await prepareTargets(StageContributionPhase.afterArtifacts)) {
@@ -1837,6 +1844,7 @@ class ReleaseCommand {
         },
       );
     } on Object catch (error) {
+      stageProgress.conclude();
       output.problem(Diagnostic(
         code: 'RK-STAGE-003',
         message: 'the release stage could not be completed',
@@ -1938,23 +1946,31 @@ class ReleaseCommand {
     stage.writeProgress(steps);
   }
 
-  _PreparedStage? _stageProgressFailed(Object error) {
+  void _stageProgressProblem(Object error) {
     output.problem(Diagnostic(
       code: 'RK-STAGE-003',
       message: 'the completed producer could not be recorded safely',
       remedy: '$error',
     ));
+  }
+
+  _PreparedStage? _stageProgressFailed(Object error) {
+    _stageProgressProblem(error);
     output.halt(HaltKind.beforeActing);
     return null;
   }
 
-  _PreparedStage? _stageOperationFailed(String operation, Object error) {
+  void _stageOperationProblem(String operation, Object error) {
     output.problem(Diagnostic(
       code: 'RK-STAGE-003',
       message: '$operation failed while preparing the release stage',
       remedy: '$error\nfix the local failure, then re-run; no public target '
           'was changed',
     ));
+  }
+
+  _PreparedStage? _stageOperationFailed(String operation, Object error) {
+    _stageOperationProblem(operation, error);
     if (!output.report.halted) output.halt(HaltKind.stoppedPartway);
     return null;
   }
@@ -2840,8 +2856,6 @@ final class _StageProgress {
     return facts.toSet().join(' · ');
   }
 
-  void failAndSettle() => live.failActiveAndSettle();
-
   /// Marks one producer's row failed while the board stays live, so a
   /// draining run keeps describing its other lanes.
   void fail(String producer) {
@@ -2853,12 +2867,7 @@ final class _StageProgress {
     }
   }
 
-  /// While held, diagnostics do not settle the live board; see
-  /// [LiveProgress.holdSettle].
-  // ignore: avoid_positional_boolean_parameters
-  void holdSettle(bool value) => live.holdSettle(value);
-
-  void settleStopped() => live.settleStopped();
+  void conclude() => live.conclude();
 
   void settle({String? title}) => live.settle(title: title);
 }
