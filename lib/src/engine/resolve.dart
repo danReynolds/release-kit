@@ -2,6 +2,7 @@ import 'config.dart';
 import 'diagnostic.dart';
 import 'publish_target.dart';
 import 'pubspec.dart';
+import 'release_dependencies.dart';
 import 'source_tree.dart';
 import 'version.dart';
 
@@ -12,6 +13,11 @@ class Resolution {
 
   final List<ResolvedUnit> units;
   final SourceTree tree;
+
+  /// The one dependency graph over this resolution. Everything that orders
+  /// projects, units, or prerequisites reads it from here, so a plan can
+  /// never be paired with units from a different resolution.
+  late final dependencyPlan = ReleaseDependencyPlan(this);
 
   ResolvedUnit? unit(String name) {
     for (final unit in units) {

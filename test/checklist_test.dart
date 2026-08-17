@@ -1,6 +1,7 @@
 import 'package:rk/src/engine/checklist.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
+import 'package:rk/src/engine/release_dependencies.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:test/test.dart';
@@ -429,11 +430,8 @@ publish = ["pub.dev"]
     test('an ordinary caret pin still derives a prerequisite', () {
       final resolution = resolve(config, tree);
       final diagnostics = Diagnostics();
-      final prerequisites = externalPrerequisites(
-        resolution.unit('mcp')!,
-        resolution,
-        diagnostics,
-      );
+      final prerequisites = ReleaseDependencyPlan(resolution)
+          .prerequisites(resolution.unit('mcp')!, diagnostics);
 
       expect(prerequisites, hasLength(1));
       expect(prerequisites.single.package, 'fleury');
@@ -449,11 +447,8 @@ publish = ["pub.dev"]
     test('an exact pin derives one too', () {
       final resolution = resolve(keybayConfig, keybayTree);
       final diagnostics = Diagnostics();
-      final prerequisites = externalPrerequisites(
-        resolution.unit('cli')!,
-        resolution,
-        diagnostics,
-      );
+      final prerequisites = ReleaseDependencyPlan(resolution)
+          .prerequisites(resolution.unit('cli')!, diagnostics);
       expect(prerequisites.single.coordinate, 'pub.dev/keybay/0.2.0');
 
       final checklist = Checklist.derive(
@@ -488,11 +483,8 @@ dependencies:
           }));
       final diagnostics = Diagnostics();
       expect(
-        externalPrerequisites(
-          resolution.unit('lib')!,
-          resolution,
-          diagnostics,
-        ),
+        ReleaseDependencyPlan(resolution)
+            .prerequisites(resolution.unit('lib')!, diagnostics),
         isEmpty,
       );
     });
@@ -521,7 +513,8 @@ dependencies:
           }));
 
       final diagnostics = Diagnostics();
-      externalPrerequisites(resolution.unit('mcp')!, resolution, diagnostics);
+      ReleaseDependencyPlan(resolution)
+          .prerequisites(resolution.unit('mcp')!, diagnostics);
       expect(diagnostics.found.single.code, 'RK-DEP-001');
     });
   });
@@ -564,6 +557,103 @@ executables:
       'cli/github-release/keybay_cli-v0.2.0',
       'cli/homebrew/keybay_cli/keybay',
     ]);
+  });
+
+  group('dependency ordering under refusal', () {
+    const cycleWithDownstream = '''
+schema = 2
+
+[release.tools]
+tag = "tools-v{version}"
+publish = ["git-tag"]
+
+[[release.tools.project]]
+path = "packages/a"
+publish = ["pub.dev"]
+
+[[release.tools.project]]
+path = "packages/b"
+publish = ["pub.dev"]
+
+[[release.tools.project]]
+path = "packages/c"
+publish = ["pub.dev"]
+''';
+
+    final cycleTree = MemorySourceTree({
+      'packages/a/pubspec.yaml':
+          'name: alpha\nversion: 1.0.0\ndependencies:\n  beta: 1.0.0\n',
+      'packages/b/pubspec.yaml':
+          'name: beta\nversion: 1.0.0\ndependencies:\n  alpha: 1.0.0\n',
+      'packages/c/pubspec.yaml':
+          'name: gamma\nversion: 1.0.0\ndependencies:\n  alpha: 1.0.0\n',
+    });
+
+    test('a cyclic unit still derives every publish step', () {
+      final resolution = resolve(cycleWithDownstream, cycleTree);
+      final diagnostics = Diagnostics();
+      final checklist =
+          Checklist.derive(resolution.unit('tools')!, resolution, diagnostics);
+
+      expect(diagnostics.found.map((d) => d.code), contains('RK-DEP-003'));
+      // The diagnostic refuses the release; the rows still describe it, so
+      // status keeps showing what the cycle blocks.
+      expect(
+        checklist.steps.map((step) => step.id),
+        containsAll([
+          'tools/pub.dev/alpha@1.0.0',
+          'tools/pub.dev/beta@1.0.0',
+          'tools/pub.dev/gamma@1.0.0',
+        ]),
+      );
+    });
+
+    test('the cycle remedy names the circle, not its dependents', () {
+      final resolution = resolve(cycleWithDownstream, cycleTree);
+      final diagnostics = Diagnostics();
+      resolution.dependencyPlan
+          .projects(resolution.unit('tools')!, diagnostics);
+
+      final remedy =
+          diagnostics.found.singleWhere((d) => d.code == 'RK-DEP-003').remedy!;
+      expect(remedy, contains('alpha'));
+      expect(remedy, contains('beta'));
+      expect(remedy, isNot(contains('gamma')));
+    });
+
+    test('a devDependency edge appears on the publish step graph', () {
+      final resolution = resolve(
+          '''
+schema = 2
+
+[release.tools]
+tag = "tools-v{version}"
+publish = ["git-tag"]
+
+[[release.tools.project]]
+path = "packages/lib"
+publish = ["pub.dev"]
+
+[[release.tools.project]]
+path = "packages/lib_test"
+publish = ["pub.dev"]
+''',
+          MemorySourceTree({
+            'packages/lib/pubspec.yaml': 'name: lib\nversion: 1.0.0\n'
+                'dev_dependencies:\n  lib_test: 1.0.0\n',
+            'packages/lib_test/pubspec.yaml':
+                'name: lib_test\nversion: 1.0.0\n',
+          }));
+      final diagnostics = Diagnostics();
+      final checklist =
+          Checklist.derive(resolution.unit('tools')!, resolution, diagnostics);
+
+      expect(diagnostics.found, isEmpty);
+      final publish = checklist['tools/pub.dev/lib@1.0.0']!;
+      // The edge that ordered publication is recorded on the step, so a
+      // graph-driven consumer sees the same constraint the order obeys.
+      expect(publish.needs, contains('tools/pub.dev/lib_test@1.0.0'));
+    });
   });
 }
 

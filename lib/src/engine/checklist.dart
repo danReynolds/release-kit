@@ -2,7 +2,6 @@ import 'assets.dart';
 import 'diagnostic.dart';
 import 'publish_target.dart';
 import 'resolve.dart';
-import 'version.dart';
 
 /// The ordered set of steps a release performs.
 ///
@@ -27,6 +26,7 @@ class Checklist {
     Resolution resolution,
     Diagnostics diagnostics,
   ) {
+    final dependencies = resolution.dependencyPlan;
     final steps = <Step>[];
 
     // A dependency released by another unit must already be public, so it is
@@ -39,8 +39,7 @@ class Checklist {
     final byCoordinate = <String, Step>{};
     final waitsOn = <String, List<String>>{};
 
-    for (final prerequisite
-        in externalPrerequisites(unit, resolution, diagnostics)) {
+    for (final prerequisite in dependencies.prerequisites(unit, diagnostics)) {
       final id = '${unit.name}/requires/${prerequisite.coordinate}';
       final step = byCoordinate.putIfAbsent(
         prerequisite.coordinate,
@@ -58,7 +57,7 @@ class Checklist {
     }
     steps.addAll(byCoordinate.values);
 
-    final publicationOrder = _publicationOrder(unit, diagnostics);
+    final publicationOrder = dependencies.projects(unit, diagnostics);
 
     // Every local producer runs before a public identity exists. Their output
     // is not permission to publish until the complete-stage barrier has
@@ -110,7 +109,13 @@ class Checklist {
       if (step == null) continue;
       final needs = <String>[tag?.id ?? completeStage.id];
 
-      for (final name in project.pubspec.dependencies.keys) {
+      // Both dependency kinds: the same edges that ordered publication are
+      // recorded on the step graph, so a graph-driven consumer sees every
+      // constraint the linear order obeys.
+      for (final name in [
+        ...project.pubspec.dependencies.keys,
+        ...project.pubspec.devDependencies.keys,
+      ]) {
         final sibling = published[name];
         if (sibling != null && sibling.id != step.id) needs.add(sibling.id);
       }
@@ -190,48 +195,6 @@ class Checklist {
         }
       }
     }
-  }
-
-  /// Within a unit, a project that another depends on publishes first, so the
-  /// dependent resolves for consumers the moment it lands.
-  static List<ResolvedProject> _publicationOrder(
-    ResolvedUnit unit,
-    Diagnostics diagnostics,
-  ) {
-    final byName = {for (final p in unit.projects) p.name: p};
-    final ordered = <ResolvedProject>[];
-    final visiting = <String>{};
-
-    void visit(ResolvedProject project) {
-      if (ordered.contains(project)) return;
-      if (!visiting.add(project.name)) {
-        // Two packages that require each other cannot both publish second.
-        diagnostics.add(
-          'RK-DEP-003',
-          'the packages in "${unit.name}" depend on each other in a circle, '
-              'so there is no order that publishes them',
-          source: unit.location,
-          remedy: 'a cycle including "${project.name}" — break it before '
-              'releasing',
-        );
-        return;
-      }
-      for (final name in project.pubspec.dependencies.keys) {
-        final sibling = byName[name];
-        if (sibling != null) visit(sibling);
-      }
-      for (final name in project.pubspec.devDependencies.keys) {
-        final sibling = byName[name];
-        if (sibling != null) visit(sibling);
-      }
-      visiting.remove(project.name);
-      ordered.add(project);
-    }
-
-    for (final project in unit.projects) {
-      visit(project);
-    }
-    return ordered;
   }
 
   /// The ordered local producer steps for [unit] — the one derivation of
@@ -424,105 +387,4 @@ class Step {
 
   @override
   String toString() => id;
-}
-
-/// A dependency on a package released by another unit, which must be live and
-/// verified before this unit's publication can proceed.
-class ExternalPrerequisite {
-  ExternalPrerequisite({
-    required this.dependent,
-    required this.package,
-    required this.version,
-    required this.constraint,
-    required this.declaredBy,
-  });
-
-  final String dependent;
-  final String package;
-
-  /// The version required, read from the depended-on project's own manifest —
-  /// never inferred from the pin's form, since an ordinary caret pin would
-  /// otherwise derive nothing.
-  final Version version;
-
-  final String? constraint;
-
-  /// The unit whose project declares the depended-on package.
-  final String declaredBy;
-
-  String get coordinate => 'pub.dev/$package/$version';
-}
-
-/// Prerequisites a unit has on packages released by other units.
-List<ExternalPrerequisite> externalPrerequisites(
-  ResolvedUnit unit,
-  Resolution resolution,
-  Diagnostics diagnostics,
-) {
-  final result = <ExternalPrerequisite>[];
-  final own = {for (final p in unit.projects) p.name};
-
-  // Every declared project, across every unit, is the repository's first-party
-  // identity map: it is what lets a sibling be recognised rather than mistaken
-  // for an ordinary hosted package.
-  final firstParty = <String, ResolvedProject>{};
-  for (final project in resolution.allProjects) {
-    firstParty[project.name] = project;
-  }
-
-  for (final project in unit.projects) {
-    // Both kinds: a development dependency orders publication within a unit,
-    // and the consumer resolve a release runs resolves them too, so a
-    // coordinated bump must be refused before the work rather than at publish.
-    final required = {
-      ...project.pubspec.dependencies,
-      ...project.pubspec.devDependencies,
-    };
-    required.forEach((name, dependency) {
-      if (own.contains(name)) return; // ordered within the unit instead
-      final sibling = firstParty[name];
-      if (sibling == null) return; // an ordinary third-party dependency
-      if (!sibling.publish.contains(PublishTarget.pubDev)) return;
-
-      final satisfied = dependency.satisfiedBy(sibling.version);
-      if (satisfied == false) {
-        diagnostics.add(
-          'RK-DEP-001',
-          '"${project.name}" requires $name ${dependency.constraint}, and '
-              'this repository releases $name at ${sibling.version}',
-          source: SourceLocation(
-            project.pubspec.path,
-            dependency.line,
-          ),
-          remedy: 'align the constraint with the version being released',
-        );
-        return;
-      }
-      if (satisfied == null) {
-        // Not knowing is not the same as being satisfied. Treating it as
-        // satisfied would publish against a requirement rk never checked.
-        diagnostics.add(
-          'RK-DEP-002',
-          'rk cannot tell whether "${project.name}" accepts $name '
-              '${sibling.version}: it requires '
-              '${dependency.describeRequirement()}',
-          source: SourceLocation(project.pubspec.path, dependency.line),
-          remedy: 'first-party dependencies use an exact or caret version, '
-              'so rk can check the release against them',
-        );
-        return;
-      }
-
-      result.add(
-        ExternalPrerequisite(
-          dependent: project.name,
-          package: name,
-          version: sibling.version,
-          constraint: dependency.constraint,
-          declaredBy: sibling.unitName,
-        ),
-      );
-    });
-  }
-  return result;
 }

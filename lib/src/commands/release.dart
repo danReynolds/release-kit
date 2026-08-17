@@ -170,8 +170,13 @@ class ReleaseCommand {
       return ExitCodes.usage;
     }
 
-    final ordered = _releaseOrder();
-    if (ordered == null) return ExitCodes.refused;
+    final dependencyProblems = Diagnostics();
+    final ordered = resolution.dependencyPlan.units(dependencyProblems);
+    if (dependencyProblems.isNotEmpty) {
+      output.halt(HaltKind.beforeActing);
+      output.problems(dependencyProblems.found);
+      return ExitCodes.refused;
+    }
     for (final unit in ordered) {
       // Register the full repository scope before the first unit can stop, so
       // JSON retains the same ordered plan the human preamble shows.
@@ -193,53 +198,6 @@ class ReleaseCommand {
       output.previousUnitActed = output.report.acted;
     }
     return ExitCodes.ok;
-  }
-
-  /// Dependencies first, otherwise `release.toml` order.
-  ///
-  /// This is deliberately a short ordering pass over facts the checklist
-  /// already owns, not a second repository release state machine.
-  List<ResolvedUnit>? _releaseOrder() {
-    final problems = Diagnostics();
-    final dependencies = <String, Set<String>>{};
-    for (final unit in resolution.units) {
-      dependencies[unit.name] = {
-        for (final prerequisite
-            in externalPrerequisites(unit, resolution, problems))
-          prerequisite.declaredBy,
-      };
-    }
-    if (problems.isNotEmpty) {
-      output.halt(HaltKind.beforeActing);
-      output.problems(problems.found);
-      return null;
-    }
-
-    final ordered = <ResolvedUnit>[];
-    final settled = <String>{};
-    while (ordered.length < resolution.units.length) {
-      final ready = resolution.units.where((unit) {
-        return !settled.contains(unit.name) &&
-            dependencies[unit.name]!.every(settled.contains);
-      }).firstOrNull;
-      if (ready == null) {
-        final blocked = resolution.units
-            .where((unit) => !settled.contains(unit.name))
-            .map((unit) => unit.name)
-            .join(', ');
-        output.halt(HaltKind.beforeActing);
-        output.problem(Diagnostic(
-          code: 'RK-DEP-004',
-          message: 'the release units depend on each other in a circle',
-          remedy: 'break the first-party dependency cycle involving: '
-              '$blocked',
-        ));
-        return null;
-      }
-      ordered.add(ready);
-      settled.add(ready.name);
-    }
-    return ordered;
   }
 
   /// Cheap, source-owned refusals for every unit before the first one acts.
