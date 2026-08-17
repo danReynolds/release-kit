@@ -491,6 +491,59 @@ void main() {
       expect(harness.text, isEmpty);
     });
 
+    test('prose yields to a live terminal board, which repaints after',
+        () async {
+      final harness = _Harness(terminal: true);
+      final board = harness.output.progressBoard(
+        'Staging',
+        delay: Duration.zero,
+      );
+      final row = board.addRow(id: 'build', label: 'linux-x64');
+      row.handle.begin(CommonProgressActivities.checking);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(harness.text, contains('Staging'));
+
+      final beforeProse = harness.text.length;
+      harness.output.problem(Diagnostic(
+        code: 'RK-BUILD-001',
+        message: 'a diagnostic lands mid-flight',
+        remedy: 'the board yields and repaints',
+      ));
+      // The board survived the prose and repaints beneath it a frame later.
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      final afterProse = harness.text.substring(beforeProse);
+      expect(afterProse, contains('a diagnostic lands mid-flight'));
+      expect(
+        afterProse.indexOf('Staging'),
+        greaterThan(afterProse.indexOf('a diagnostic lands mid-flight')),
+        reason: 'the repaint follows the prose:\n$afterProse',
+      );
+
+      row.complete(note: 'staged');
+      board.settle();
+      // A settled board is silent: no timer paints after the owner ends it.
+      final settled = harness.text.length;
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      expect(harness.text.length, settled);
+      harness.output.close();
+    });
+
+    test('replacing an unresolved board is the same owner bug as leaking it',
+        () {
+      final harness = _Harness(terminal: false);
+      final first = harness.output.progressBoard('First');
+      first
+          .addRow(id: 'row', label: 'row')
+          .handle
+          .begin(CommonProgressActivities.checking);
+      // A successor board must never find its predecessor alive: two boards
+      // painting one terminal render interleaved garbage.
+      expect(
+        () => harness.output.progressBoard('Second'),
+        throwsA(isA<AssertionError>()),
+      );
+    });
+
     test('a board alive at close is an owner bug, said loudly', () {
       final harness = _Harness(terminal: true);
       harness.output
