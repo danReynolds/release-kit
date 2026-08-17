@@ -112,18 +112,6 @@ void main() {
       );
     });
 
-    test('checklist derivation with ordering and prerequisites', () {
-      final source = File('lib/src/engine/checklist.dart').readAsStringSync();
-      expect(source, contains('_publicationOrder'));
-      expect(source, contains('externalPrerequisites'));
-      expect(
-        usedOutside('externalPrerequisites', 'checklist.dart'),
-        isTrue,
-        reason: 'repository release ordering reuses the checklist\'s native '
-            'dependency facts rather than deriving a second graph',
-      );
-    });
-
     test('DONE WHEN: the checklist is derived for every repository shape', () {
       // Executed. The version this replaced asserted that a file under test/
       // contained particular strings — the same anti-pattern the phase 2

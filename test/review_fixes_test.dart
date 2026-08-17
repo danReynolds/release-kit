@@ -2,6 +2,7 @@ import 'package:rk/src/engine/checklist.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/pubspec.dart';
+import 'package:rk/src/engine/release_dependencies.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/version.dart';
@@ -103,7 +104,8 @@ dependencies:
           }));
 
       final diagnostics = Diagnostics();
-      externalPrerequisites(resolution.unit('mcp')!, resolution, diagnostics);
+      ReleaseDependencyPlan(resolution)
+          .prerequisites(resolution.unit('mcp')!, diagnostics);
       expect(diagnostics.found.single.code, 'RK-DEP-002');
     });
 

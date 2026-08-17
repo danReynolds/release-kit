@@ -1,6 +1,7 @@
 import 'package:rk/src/engine/checklist.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
+import 'package:rk/src/engine/release_dependencies.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:test/test.dart';
@@ -429,11 +430,8 @@ publish = ["pub.dev"]
     test('an ordinary caret pin still derives a prerequisite', () {
       final resolution = resolve(config, tree);
       final diagnostics = Diagnostics();
-      final prerequisites = externalPrerequisites(
-        resolution.unit('mcp')!,
-        resolution,
-        diagnostics,
-      );
+      final prerequisites = ReleaseDependencyPlan(resolution)
+          .prerequisites(resolution.unit('mcp')!, diagnostics);
 
       expect(prerequisites, hasLength(1));
       expect(prerequisites.single.package, 'fleury');
@@ -449,11 +447,8 @@ publish = ["pub.dev"]
     test('an exact pin derives one too', () {
       final resolution = resolve(keybayConfig, keybayTree);
       final diagnostics = Diagnostics();
-      final prerequisites = externalPrerequisites(
-        resolution.unit('cli')!,
-        resolution,
-        diagnostics,
-      );
+      final prerequisites = ReleaseDependencyPlan(resolution)
+          .prerequisites(resolution.unit('cli')!, diagnostics);
       expect(prerequisites.single.coordinate, 'pub.dev/keybay/0.2.0');
 
       final checklist = Checklist.derive(
@@ -488,11 +483,8 @@ dependencies:
           }));
       final diagnostics = Diagnostics();
       expect(
-        externalPrerequisites(
-          resolution.unit('lib')!,
-          resolution,
-          diagnostics,
-        ),
+        ReleaseDependencyPlan(resolution)
+            .prerequisites(resolution.unit('lib')!, diagnostics),
         isEmpty,
       );
     });
@@ -521,7 +513,8 @@ dependencies:
           }));
 
       final diagnostics = Diagnostics();
-      externalPrerequisites(resolution.unit('mcp')!, resolution, diagnostics);
+      ReleaseDependencyPlan(resolution)
+          .prerequisites(resolution.unit('mcp')!, diagnostics);
       expect(diagnostics.found.single.code, 'RK-DEP-001');
     });
   });
