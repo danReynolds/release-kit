@@ -26,8 +26,7 @@ of a release script.
 `rk init` reads the repository and proposes a configuration.
 
 ```console
-rk init
-
+$ rk init
 Select release outputs
 
                          Produce              Publish
