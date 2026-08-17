@@ -319,6 +319,17 @@ class Output {
   /// which in CI is worse than a crash because nothing reports it. Calling this
   /// on the way out is what makes that impossible rather than unlikely.
   void close() {
+    final board = _progressBoard;
+    if (board != null) {
+      // Every board's owner must resolve it — settle, conclude, or discard.
+      // A board alive at close is an owner bug; say so loudly in checked
+      // mode, and still reap its timers so a release build cannot hang.
+      assert(
+        false,
+        'a live progress board was never resolved by its owner',
+      );
+      board.discard();
+    }
     _clearTransient();
   }
 
@@ -530,7 +541,11 @@ class Output {
   }
 
   void _clearTransient() {
-    _progressBoard?.discard();
+    // The renderer draws; the coordinator judges. Prose never destroys a
+    // live board — it yields: the transient region clears so the line joins
+    // the transcript, and the next frame repaints the board beneath it.
+    // Boards end only by their owner's settle, conclude, or discard.
+    _progressBoard?.yieldToProse();
     if (!_transient) return;
     // Return to the start of the line and clear it.
     sink('\r\x1b[2K');
@@ -742,6 +757,17 @@ final class LiveProgress {
       _writeDurableRow(row, active: true);
       if (attached && !_closed) _output._progressBoard = this;
     });
+  }
+
+  /// Clears the transient region so a durable line can join the transcript;
+  /// the board repaints beneath it a frame later. Prose composes with a live
+  /// board — only the owner's settle, conclude, or discard ends one.
+  void yieldToProse() {
+    if (_closed || _suspended || !_visible) return;
+    _erase();
+    _visible = false;
+    _ticker?.cancel();
+    _ticker = Timer(const Duration(milliseconds: 40), _showTerminal);
   }
 
   void _showTerminal() {

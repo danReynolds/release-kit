@@ -614,6 +614,19 @@ the normal release creates the same stage internally. A file on disk is not
 evidence of itself, and no artifact is re-signed or otherwise mutated after
 the receipt that names it.
 
+*Amended (as built):* platform chains stage concurrently — each platform's
+build, notarize, and archive is an independent lane until the
+complete-stage barrier, and a failure drains: in-flight steps finish and
+are recorded, nothing new starts, and the strongest halt any failure asked
+for is spoken once after the drain. Execution order is scheduling; the
+record is canonical: progress receipts are always written in contract
+order, and an in-progress receipt is valid when its steps are an ordered
+subsequence of the contract — gaps are lanes that have not caught up. The
+loosening from strict prefix is backstopped, not trusted: a recorded step
+whose producer is missing fails the causal input check, and a stale input
+digest fails its comparison. A complete receipt still requires the exact
+pipeline, in order, with no gaps.
+
 ### The draft
 
 A forge cannot publish several assets in one atomic act: a release object is

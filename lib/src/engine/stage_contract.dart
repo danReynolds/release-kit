@@ -196,7 +196,7 @@ class StageReceiptContract {
   List<StageIssue> validate(StageDirectory stage, StageReceipt receipt) {
     final issues = <StageIssue>[];
     final names = receipt.steps.map((step) => step.name).toList();
-    final expected = _steps.map((step) => step.name).toList();
+    final expected = producerNames;
     // A complete receipt records the whole pipeline exactly. An in-progress
     // receipt records what has finished so far — contract order with gaps,
     // because concurrent platform lanes finish at their own pace.
@@ -269,6 +269,10 @@ bool _isPrefix(List<String> prefix, List<String> whole) =>
     List.generate(prefix.length, (index) => prefix[index] == whole[index])
         .every((same) => same);
 
+/// Gaps are safe because every real step chains through declared inputs:
+/// a recorded step whose producer is missing fails the inspector's causal
+/// check, and a stale input digest fails its comparison. A step declaring
+/// no inputs would escape that backstop — contracts declare inputs.
 bool _isOrderedSubsequence(List<String> names, List<String> whole) {
   var at = 0;
   for (final name in names) {

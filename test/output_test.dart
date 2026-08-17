@@ -85,6 +85,8 @@ void main() {
       ),
       unit: 'cli',
     );
+    // The problem never touches the board; its owner concludes it.
+    progress.conclude();
     output.close();
 
     expect(buffer.toString(), isNot(contains('RK-BUILD-001')));
