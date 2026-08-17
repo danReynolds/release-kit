@@ -267,7 +267,8 @@ void classificationTables() {
     Future<List<Diagnostic>> guardsFor({
       required Map<String, String> tagTargets,
     }) async {
-      final unit = await _binaryUnit(); // 1.0.0, tag v1.0.0
+      final resolution = await _binaryResolution();
+      final unit = resolution.unit('cli')!; // 1.0.0, tag v1.0.0
       final git = GitState(
         root: '/repo',
         head: 'abc123def456',
@@ -281,8 +282,7 @@ void classificationTables() {
         originUrl: 'example/tool',
       );
       final inspector = Inspector(registry: FakeRegistry({}), git: git);
-      final checklist =
-          Checklist.derive(unit, await _binaryResolution(), Diagnostics());
+      final checklist = Checklist.derive(unit, resolution, Diagnostics());
       // The version is not published yet, so the publish step is absent —
       // which is what arms both placement guards.
       final states = {
@@ -309,7 +309,8 @@ void classificationTables() {
     });
 
     test('the prose says unread too, not just the refusal', () async {
-      final unit = await _binaryUnit();
+      final resolution = await _binaryResolution();
+      final unit = resolution.unit('cli')!;
       final inspector = Inspector(
         registry: FakeRegistry({}),
         git: GitState(
@@ -332,10 +333,9 @@ void classificationTables() {
           ),
         }),
       );
-      final tag =
-          Checklist.derive(unit, await _binaryResolution(), Diagnostics())
-              .steps
-              .firstWhere((s) => s.kind == StepKind.tag);
+      final tag = Checklist.derive(unit, resolution, Diagnostics())
+          .steps
+          .firstWhere((s) => s.kind == StepKind.tag);
 
       final state = await inspector.inspect(tag, unit);
       expect(

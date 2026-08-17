@@ -125,9 +125,9 @@ fails, and the count below is checked against the rows.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-DEP-001` | "${project.name}" requires $name ${dependency.constraint}, and  this repository releases… | `lib/src/engine/release_dependencies.dart` |
-| `RK-DEP-002` | rk cannot tell whether "${project.name}" accepts $name  ${sibling.version}: it requires … | `lib/src/engine/release_dependencies.dart` |
-| `RK-DEP-003` | the packages in "${unit.name}" depend on each other in a circle,  so there is no order t… | `lib/src/engine/release_dependencies.dart` |
+| `RK-DEP-001` | "${project.name}" requires $name ${dependency.constraint}, and this repository releases… | `lib/src/engine/release_dependencies.dart` |
+| `RK-DEP-002` | rk cannot tell whether "${project.name}" accepts $name ${sibling.version}: it requires … | `lib/src/engine/release_dependencies.dart` |
+| `RK-DEP-003` | the packages in "${unit.name}" depend on each other in a circle, so there is no order t… | `lib/src/engine/release_dependencies.dart` |
 | `RK-DEP-004` | the release units depend on each other in a circle | `lib/src/engine/release_dependencies.dart` |
 
 ## RK-GIT — The repository

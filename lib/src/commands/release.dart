@@ -12,7 +12,6 @@ import '../engine/inspect.dart';
 import '../engine/producers.dart';
 import '../engine/publish_target.dart';
 import '../engine/public_release_gate.dart';
-import '../engine/release_dependencies.dart';
 import '../engine/resolve.dart';
 import '../engine/release_stage.dart';
 import '../engine/source_tree.dart';
@@ -128,7 +127,6 @@ class ReleaseCommand {
   final GitState Function() _refreshGit;
   final Map<String, String> Function() _refreshEnvironment;
   final Map<String, BinaryChain> _chains = {};
-  late final _dependencies = ReleaseDependencyPlan(resolution);
   var _sourceWarningShown = false;
 
   Future<int> run({String? only}) async {
@@ -173,8 +171,8 @@ class ReleaseCommand {
     }
 
     final dependencyProblems = Diagnostics();
-    final ordered = _dependencies.units(dependencyProblems);
-    if (ordered == null || dependencyProblems.isNotEmpty) {
+    final ordered = resolution.dependencyPlan.units(dependencyProblems);
+    if (dependencyProblems.isNotEmpty) {
       output.halt(HaltKind.beforeActing);
       output.problems(dependencyProblems.found);
       return ExitCodes.refused;
@@ -210,12 +208,7 @@ class ReleaseCommand {
     for (final unit in units) {
       final problems = Diagnostics();
       _validate(unit, problems);
-      Checklist.derive(
-        unit,
-        resolution,
-        problems,
-        dependencies: _dependencies,
-      );
+      Checklist.derive(unit, resolution, problems);
       for (final problem in problems.found) {
         final key = '${problem.code}\u0000${problem.message}\u0000'
             '${problem.source ?? ''}';
@@ -253,12 +246,7 @@ class ReleaseCommand {
       return ExitCodes.refused;
     }
 
-    final checklist = Checklist.derive(
-      unit,
-      resolution,
-      problems,
-      dependencies: _dependencies,
-    );
+    final checklist = Checklist.derive(unit, resolution, problems);
     if (problems.isNotEmpty) {
       output.halt(HaltKind.beforeActing);
       output.problems(problems.found);

@@ -1,7 +1,6 @@
 import 'assets.dart';
 import 'diagnostic.dart';
 import 'publish_target.dart';
-import 'release_dependencies.dart';
 import 'resolve.dart';
 
 /// The ordered set of steps a release performs.
@@ -25,10 +24,9 @@ class Checklist {
   static Checklist derive(
     ResolvedUnit unit,
     Resolution resolution,
-    Diagnostics diagnostics, {
-    ReleaseDependencyPlan? dependencies,
-  }) {
-    dependencies ??= ReleaseDependencyPlan(resolution);
+    Diagnostics diagnostics,
+  ) {
+    final dependencies = resolution.dependencyPlan;
     final steps = <Step>[];
 
     // A dependency released by another unit must already be public, so it is
@@ -111,7 +109,13 @@ class Checklist {
       if (step == null) continue;
       final needs = <String>[tag?.id ?? completeStage.id];
 
-      for (final name in project.pubspec.dependencies.keys) {
+      // Both dependency kinds: the same edges that ordered publication are
+      // recorded on the step graph, so a graph-driven consumer sees every
+      // constraint the linear order obeys.
+      for (final name in [
+        ...project.pubspec.dependencies.keys,
+        ...project.pubspec.devDependencies.keys,
+      ]) {
         final sibling = published[name];
         if (sibling != null && sibling.id != step.id) needs.add(sibling.id);
       }
