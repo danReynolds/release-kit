@@ -1733,44 +1733,87 @@ class ReleaseCommand {
           step.kind != StepKind.completeStage;
     }).toList();
     stageProgress.restore(progress);
+
+    // One lane per platform chain. A platform's build, notarize, and
+    // archive touch only that platform's artifacts, so lanes are
+    // independent until the complete-stage barrier: steps keep checklist
+    // order within their lane, and the receipt's causal check accepts any
+    // cross-lane interleaving because no input crosses a lane.
+    final lanes = <String, List<Step>>{};
     for (final step in producerSteps) {
-      if (_producerRecorded(progress, step)) {
-        output.step(
-          step,
-          verdict: Verdict.exact,
-          detail: 'validated in the interrupted stage',
-          show: false,
-        );
-        continue;
+      lanes.putIfAbsent(step.platform ?? step.id, () => []).add(step);
+    }
+
+    // A failure drains. The lane that failed stops; the others finish the
+    // step already in flight — a killed half-written producer is exactly
+    // the ambiguity receipts exist to prevent — and start nothing new. The
+    // first interruption owns the halt, which is emitted after the drain so
+    // the board keeps describing the surviving lanes until they rest.
+    _PreparedStage? Function()? interrupted;
+    var stopped = false;
+
+    Future<void> runLane(List<Step> lane) async {
+      for (final step in lane) {
+        if (stopped) return;
+        if (_producerRecorded(progress, step)) {
+          output.step(
+            step,
+            verdict: Verdict.exact,
+            detail: 'validated in the interrupted stage',
+            show: false,
+          );
+          continue;
+        }
+        output.report.acted = true;
+        final receiptName = receiptNameFor(step);
+        stageProgress.begin(receiptName, _producerActivity(step));
+        final LocalProducerOutcome act;
+        try {
+          act = await _actProducer(
+            step,
+            unit,
+            signing,
+            progress: stageProgress.handleFor(receiptName),
+          );
+        } on Object catch (error) {
+          stopped = true;
+          stageProgress.fail(receiptName);
+          interrupted ??= () => _stageOperationFailed(step.summary, error);
+          return;
+        }
+        if (!act.ok) {
+          stopped = true;
+          stageProgress.fail(receiptName);
+          interrupted ??= () {
+            if (!output.report.halted) output.halt(HaltKind.stoppedPartway);
+            return null;
+          };
+          return;
+        }
+        try {
+          final recorded = _captureProducerStep(
+              stage, unit, step, sourceStep, progress, act);
+          progress.add(recorded);
+          _persistStageProgress(stage, sourceArtifacts, progress);
+          stageProgress.record(recorded);
+        } on Object catch (error) {
+          stopped = true;
+          stageProgress.fail(receiptName);
+          interrupted ??= () => _stageProgressFailed(error);
+          return;
+        }
       }
-      output.report.acted = true;
-      final receiptName = receiptNameFor(step);
-      stageProgress.begin(receiptName, _producerActivity(step));
-      final LocalProducerOutcome act;
-      try {
-        act = await _actProducer(
-          step,
-          unit,
-          signing,
-          progress: stageProgress.handleFor(receiptName),
-        );
-      } on Object catch (error) {
-        return _stageOperationFailed(step.summary, error);
-      }
-      if (!act.ok) {
-        stageProgress.failAndSettle();
-        if (!output.report.halted) output.halt(HaltKind.stoppedPartway);
-        return null;
-      }
-      try {
-        final recorded =
-            _captureProducerStep(stage, unit, step, sourceStep, progress, act);
-        progress.add(recorded);
-        _persistStageProgress(stage, sourceArtifacts, progress);
-        stageProgress.record(recorded);
-      } on Object catch (error) {
-        return _stageProgressFailed(error);
-      }
+    }
+
+    stageProgress.holdSettle(true);
+    try {
+      await Future.wait([for (final lane in lanes.values) runLane(lane)]);
+    } finally {
+      stageProgress.holdSettle(false);
+    }
+    if (interrupted != null) {
+      stageProgress.settleStopped();
+      return interrupted!();
     }
 
     if (!await prepareTargets(StageContributionPhase.afterArtifacts)) {
@@ -2798,6 +2841,24 @@ final class _StageProgress {
   }
 
   void failAndSettle() => live.failActiveAndSettle();
+
+  /// Marks one producer's row failed while the board stays live, so a
+  /// draining run keeps describing its other lanes.
+  void fail(String producer) {
+    for (final row in board.rowsFor(producer)) {
+      final controller = _controllers[row]!;
+      if (controller.state == ProgressRowState.active) {
+        controller.fail();
+      }
+    }
+  }
+
+  /// While held, diagnostics do not settle the live board; see
+  /// [LiveProgress.holdSettle].
+  // ignore: avoid_positional_boolean_parameters
+  void holdSettle(bool value) => live.holdSettle(value);
+
+  void settleStopped() => live.settleStopped();
 
   void settle({String? title}) => live.settle(title: title);
 }

@@ -189,13 +189,21 @@ class StageReceiptContract {
   final String sourceRoot;
   final List<StageStepContract> _steps;
 
+  /// Every producer name this contract expects, in canonical order — the
+  /// order receipts are written in, however the work was scheduled.
+  List<String> get producerNames => [for (final step in _steps) step.name];
+
   List<StageIssue> validate(StageDirectory stage, StageReceipt receipt) {
     final issues = <StageIssue>[];
     final names = receipt.steps.map((step) => step.name).toList();
     final expected = _steps.map((step) => step.name).toList();
+    // A complete receipt records the whole pipeline exactly. An in-progress
+    // receipt records what has finished so far — contract order with gaps,
+    // because concurrent platform lanes finish at their own pace.
     final sequenceOk = receipt.complete
         ? _sameList(names, expected)
-        : _isPrefix(names, expected.take(expected.length - 1).toList());
+        : _isOrderedSubsequence(
+            names, expected.take(expected.length - 1).toList());
     if (!sequenceOk) {
       _issue(
         issues,
@@ -260,6 +268,16 @@ bool _isPrefix(List<String> prefix, List<String> whole) =>
     prefix.length <= whole.length &&
     List.generate(prefix.length, (index) => prefix[index] == whole[index])
         .every((same) => same);
+
+bool _isOrderedSubsequence(List<String> names, List<String> whole) {
+  var at = 0;
+  for (final name in names) {
+    at = whole.indexOf(name, at);
+    if (at < 0) return false;
+    at += 1;
+  }
+  return true;
+}
 
 bool _sameList(List<String> left, List<String> right) =>
     left.length == right.length && _isPrefix(left, right);

@@ -620,13 +620,36 @@ class ReleaseStage {
   /// A crash can preserve useful evidence, but only [finalize] may flip the
   /// receipt to complete. Outputs must already have been captured explicitly;
   /// an inventory scan never adopts an unrelated file.
+  ///
+  /// Concurrent platform lanes complete in scheduling order; the record is
+  /// canonical. Steps are written in contract order so the receipt reads
+  /// the same however the work interleaved.
   void writeProgress(Iterable<StageStep> steps) {
     if (steps.any((step) => step.name == 'complete-stage')) {
       throw StateError('only finalize may complete a stage');
     }
+    final order = <String, int>{
+      for (final (index, name) in StageReceiptContract.forUnit(
+        unit: unit,
+        repository: repository,
+        sourceRoot: sourceRoot,
+        targetContributions: targetContributions,
+        localProducers: localProducerContracts(unit),
+      ).producerNames.indexed)
+        name: index,
+    };
+    // Stable: names outside the contract keep their given order, which is
+    // already causal — a low-level fixture's whole point is its own graph.
+    final decorated = steps.indexed.toList()
+      ..sort((left, right) {
+        final byContract = (order[left.$2.name] ?? order.length)
+            .compareTo(order[right.$2.name] ?? order.length);
+        return byContract != 0 ? byContract : left.$1.compareTo(right.$1);
+      });
+    final ordered = [for (final (_, step) in decorated) step];
     StageReceiptStore(directory).write(StageReceipt(
       identity: directory.identity,
-      steps: steps,
+      steps: ordered,
     ));
   }
 

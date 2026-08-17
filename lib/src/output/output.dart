@@ -937,17 +937,37 @@ final class LiveProgress {
     }
   }
 
+  /// While held, a diagnostic does not settle the board. Concurrent lanes
+  /// drain after a failure, and a problem printed mid-drain must not turn
+  /// the other lanes' still-running rows into failures; the coordinator
+  /// marks the one failed row itself and settles once the drain completes.
+  var _holdSettle = false;
+
+  // ignore: avoid_positional_boolean_parameters
+  void holdSettle(bool value) => _holdSettle = value;
+
   /// Preserves the active operation as the failure point before diagnostics.
   ///
   /// Targets can still use the ordinary diagnostic surface: the renderer
   /// turns whichever row they were describing into the durable failed row
   /// and makes every untouched downstream row explicit.
   void failActiveAndSettle() {
+    if (_closed || _holdSettle) return;
+    if (!model.rows.any((row) => row.state == ProgressRowState.active)) {
+      return;
+    }
+    settleStopped();
+  }
+
+  /// Settles a board whose run stopped: still-active rows fail, untouched
+  /// pending rows become an explicit "not attempted", and the board becomes
+  /// its durable snapshot. Unlike [failActiveAndSettle], a fully drained
+  /// board — every lane already finished or failed — still settles.
+  void settleStopped() {
     if (_closed) return;
     final active = model.rows
         .where((row) => row.state == ProgressRowState.active)
         .toList();
-    if (active.isEmpty) return;
     for (final row in active) {
       _controllers[row.id]!.fail();
     }

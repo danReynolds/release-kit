@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -55,6 +56,14 @@ schema = 2
 [release.tool]
 path = "packages/tool"
 binary_platforms = ["linux-x64"]
+''';
+
+const _twoPlatformConfig = '''
+schema = 2
+
+[release.tool]
+path = "packages/tool"
+binary_platforms = ["linux-x64", "linux-arm64"]
 ''';
 
 const _pubspec = '''
@@ -173,6 +182,71 @@ void main() {
       expect(run.report['next'], isEmpty);
       expect(local.stage.inspect().reusable, isTrue);
     }
+  });
+
+  test('platform lanes stage concurrently', () async {
+    final local = _Harness(twoPlatforms: true);
+    addTearDown(local.close);
+    // Serial execution would deadlock here: the linux-x64 chain comes first
+    // in checklist order, and its compile waits below for the linux-arm64
+    // compile to have started — which only a concurrent lane can do.
+    final arm64Started = Completer<void>();
+    local.tools.gate = (call) async {
+      if (_compilesFor(call, 'linux-arm64') && !arm64Started.isCompleted) {
+        arm64Started.complete();
+      }
+      if (_compilesFor(call, 'linux-x64')) await arm64Started.future;
+    };
+
+    final ran = await local.run(stageOnly: true, confirm: null);
+
+    expect(ran.code, ExitCodes.ok, reason: ran.text);
+    expect(local.stage.inspect().reusable, isTrue);
+    final receipt = StageReceiptStore(local.stage.directory).read()!;
+    expect(
+      receipt.steps.map((step) => step.name),
+      containsAll([
+        'build:tool:linux-x64',
+        'archive:tool:linux-x64',
+        'build:tool:linux-arm64',
+        'archive:tool:linux-arm64',
+      ]),
+    );
+  });
+
+  test('a failed lane drains in-flight lanes and starts nothing new', () async {
+    final local = _Harness(twoPlatforms: true);
+    addTearDown(local.close);
+    // Hold the arm64 compile until the x64 compile has failed, so the drain
+    // window is real: one lane failed while the other is mid-build. The
+    // short delay lets the failure reach the coordinator before the held
+    // build completes; the assertions below fail loudly if it did not.
+    final x64Failed = Completer<void>();
+    local.tools.gate = (call) async {
+      if (_compilesFor(call, 'linux-arm64')) {
+        await x64Failed.future;
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+    };
+    local.tools.runFailure = (call) {
+      if (!_compilesFor(call, 'linux-x64')) return null;
+      if (!x64Failed.isCompleted) x64Failed.complete();
+      return ToolResult(exitCode: 1, stdout: '', stderr: 'boom');
+    };
+
+    final ran = await local.run(stageOnly: true, confirm: null);
+
+    expect(ran.code, isNot(ExitCodes.ok));
+    final recorded = StageReceiptStore(local.stage.directory).read()?.steps.map(
+              (step) => step.name,
+            ) ??
+        const <String>[];
+    // The in-flight arm64 build finished and was recorded; nothing new
+    // started after the failure.
+    expect(recorded, contains('build:tool:linux-arm64'));
+    expect(recorded, isNot(contains('archive:tool:linux-arm64')));
+    expect(recorded, isNot(contains('build:tool:linux-x64')));
+    expect(ran.text, contains('rk stopped partway'), reason: ran.text);
   });
 
   test('non-Git existing version skips without rebuilding historical bytes',
@@ -1879,14 +1953,25 @@ void _interruptAfter(ReleaseStage stage, String stepName) {
   ));
 }
 
+bool _compilesFor(_Invocation call, String platform) =>
+    call.arguments.length > 1 &&
+    call.arguments.take(2).join(' ') == 'compile exe' &&
+    call.arguments.any((argument) => argument.contains('/$platform/'));
+
 class _Harness {
-  _Harness({bool unbound = false, bool localBinaryOnly = false}) {
+  _Harness({
+    bool unbound = false,
+    bool localBinaryOnly = false,
+    bool twoPlatforms = false,
+  }) {
     root = Directory.systemTemp.createTempSync('rk-stage-command-');
-    final config = localBinaryOnly
-        ? _localBinaryConfig
-        : unbound
-            ? _pubOnlyConfig
-            : _config;
+    final config = twoPlatforms
+        ? _twoPlatformConfig
+        : localBinaryOnly
+            ? _localBinaryConfig
+            : unbound
+                ? _pubOnlyConfig
+                : _config;
     source = MemorySourceTree({
       'release.toml': config,
       'packages/tool/pubspec.yaml': _pubspec,
@@ -2229,6 +2314,10 @@ class _WorldTools implements Tools {
   final Set<String> remoteTags = {};
   final Map<String, List<int>> uploadedAssets = {};
   void Function(_Invocation call)? onInvocation;
+
+  /// Awaited before the call is simulated, so a test can hold one lane's
+  /// subprocess until another lane has reached a chosen point.
+  Future<void> Function(_Invocation call)? gate;
   ToolResult? Function(_Invocation call)? runFailure;
 
   bool githubReleaseExists = false;
@@ -2275,6 +2364,7 @@ class _WorldTools implements Tools {
     );
     invocations.add(invocation);
     onInvocation?.call(invocation);
+    if (gate != null) await gate!(invocation);
     final failure = runFailure?.call(invocation);
     if (failure != null) return failure;
 
