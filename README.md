@@ -23,27 +23,21 @@ of a release script.
 
 ## Getting Started
 
-`rk init` reads the repository and proposes a configuration. In a
-terminal you pick targets per project, and nothing is written without
-a yes:
+`rk init` reads the repository and proposes a configuration.
 
 ```console
-$ rk init
-release-kit
+rk init
 
-  1 selected unit
-    rk                   0.1.0 · path . · executable rk
+Select release outputs
 
-    schema = 2
+                         Produce              Publish
+  Unit                    Binary   Git tag   pub.dev   GitHub   Homebrew
+› rk                      [ ]      [x]       [x]       [ ]      [ ]
 
-    [release.rk]
-    publish = ["git-tag", "pub.dev"]
+Binary — standalone rk archives
 
-    # A package here declares an executable, but standalone distribution was not selected.
+↑↓ unit   ←→ option   space toggle   enter review   q cancel
 
-
-  nothing was written — there is no terminal to confirm in.
-→ rk init --write
 ```
 
 That proposal is the whole configuration. Targets are opt-in —
