@@ -2,7 +2,7 @@
 
 rk publishes everything a repository ships — tag, registry, GitHub
 Release, Homebrew, standalone binaries — as one checked plan instead
-of a release script. Packages in a monorepo release in dependency order.
+of a release script. Monorepo packages release in dependency order.
 
 It inspects each destination and publishes only what is missing: a
 stopped release resumes on re-run, and there is no `--force`. `rk init`
@@ -34,9 +34,9 @@ release-kit
 ```
 
 That proposal is the whole configuration. Targets are opt-in —
-release-kit's own file says yes to all of them — and `rk status` checks
-the destinations themselves, not a log. "Not staged" is the private
-work rk completes and verifies before anything goes public:
+release-kit's own file says yes to all of them. `rk status` checks the
+destinations themselves, not a log; "Not staged" is the private work
+that must finish before anything goes public:
 
 ```console
 $ rk status
@@ -107,7 +107,7 @@ path = "packages/cli"
 publish = ["pub.dev"]
 ```
 
-`rk release` orders the units, stages and checks everything private,
+`rk release` orders the units, stages and checks the private work,
 and says what a yes makes permanent — before anything permanent acts:
 
 ```console
