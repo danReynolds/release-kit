@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -55,6 +56,14 @@ schema = 2
 [release.tool]
 path = "packages/tool"
 binary_platforms = ["linux-x64"]
+''';
+
+const _twoPlatformConfig = '''
+schema = 2
+
+[release.tool]
+path = "packages/tool"
+binary_platforms = ["linux-x64", "linux-arm64"]
 ''';
 
 const _pubspec = '''
@@ -173,6 +182,120 @@ void main() {
       expect(run.report['next'], isEmpty);
       expect(local.stage.inspect().reusable, isTrue);
     }
+  });
+
+  test('platform lanes stage concurrently', () async {
+    final local = _Harness(twoPlatforms: true);
+    addTearDown(local.close);
+    // Platforms sort, so the linux-arm64 chain comes FIRST in checklist
+    // order; its compile waits below for the linux-x64 compile to have
+    // started — which only a concurrent lane can do. Under a serial revert
+    // the x64 compile never starts and the timeout fails fast.
+    final x64Started = Completer<void>();
+    local.tools.gate = (call) async {
+      if (_compilesFor(call, 'linux-x64') && !x64Started.isCompleted) {
+        x64Started.complete();
+      }
+      if (_compilesFor(call, 'linux-arm64')) {
+        await x64Started.future.timeout(const Duration(seconds: 5));
+      }
+    };
+
+    final ran = await local.run(stageOnly: true, confirm: null);
+
+    expect(ran.code, ExitCodes.ok, reason: ran.text);
+    expect(local.stage.inspect().reusable, isTrue);
+    final receipt = StageReceiptStore(local.stage.directory).read()!;
+    // The record is canonical however the lanes interleaved: producer
+    // steps appear in exact contract order.
+    expect(
+      receipt.steps
+          .map((step) => step.name)
+          .where((name) =>
+              name.startsWith('build:') || name.startsWith('archive:'))
+          .toList(),
+      [
+        'build:tool:linux-arm64',
+        'archive:tool:linux-arm64',
+        'build:tool:linux-x64',
+        'archive:tool:linux-x64',
+      ],
+    );
+  });
+
+  test('a failed lane drains in-flight lanes and starts nothing new', () async {
+    final local = _Harness(twoPlatforms: true);
+    addTearDown(local.close);
+    // Both compiles must be in flight together: the arm64 compile waits for
+    // the x64 compile to have started, and the x64 compile fails. The arm64
+    // gate releases only once rk has SAID the failure — synchronized on
+    // real output, not a guessed delay — plus one event-loop turn for the
+    // coordinator's stop, so the drained build completes strictly after it.
+    final x64Started = Completer<void>();
+    local.tools.gate = (call) async {
+      if (_compilesFor(call, 'linux-x64') && !x64Started.isCompleted) {
+        x64Started.complete();
+      }
+      if (_compilesFor(call, 'linux-arm64')) {
+        await x64Started.future.timeout(const Duration(seconds: 5));
+        while (!local.liveOutput
+            .toString()
+            .contains('did not produce a working binary')) {
+          await Future<void>.delayed(const Duration(milliseconds: 1));
+        }
+        await Future<void>.delayed(Duration.zero);
+      }
+    };
+    local.tools.runFailure = (call) => _compilesFor(call, 'linux-x64')
+        ? ToolResult(exitCode: 1, stdout: '', stderr: 'boom')
+        : null;
+
+    final ran = await local.run(stageOnly: true, confirm: null);
+
+    expect(ran.code, isNot(ExitCodes.ok));
+    final recorded = StageReceiptStore(local.stage.directory).read()?.steps.map(
+              (step) => step.name,
+            ) ??
+        const <String>[];
+    // The in-flight arm64 build finished and was recorded; nothing new
+    // started after the failure.
+    expect(recorded, contains('build:tool:linux-arm64'));
+    expect(recorded, isNot(contains('archive:tool:linux-arm64')));
+    expect(recorded, isNot(contains('build:tool:linux-x64')));
+    expect(ran.text, contains('rk stopped partway'), reason: ran.text);
+    // The concluded board reached the transcript: the failed row is durable
+    // and the drained lane's artifact says not attempted.
+    expect(ran.text, contains('build failed'), reason: ran.text);
+    expect(ran.text, contains('not attempted'), reason: ran.text);
+  });
+
+  test('a drained stage resumes: recorded work skips, missing work runs',
+      () async {
+    final local = _Harness(twoPlatforms: true);
+    addTearDown(local.close);
+    local.tools.runFailure = (call) => _compilesFor(call, 'linux-x64')
+        ? ToolResult(exitCode: 1, stdout: '', stderr: 'boom')
+        : null;
+    final failed = await local.run(stageOnly: true, confirm: null);
+    expect(failed.code, isNot(ExitCodes.ok));
+
+    // The gap-shaped receipt — arm64 recorded, x64 missing — is exactly
+    // what the ordered-subsequence rule exists to resume.
+    local.tools.runFailure = null;
+    final resumed = await local.run(stageOnly: true, confirm: null);
+
+    expect(resumed.code, ExitCodes.ok, reason: resumed.text);
+    expect(local.stage.inspect().reusable, isTrue);
+    final receipt = StageReceiptStore(local.stage.directory).read()!;
+    expect(
+      receipt.steps.map((step) => step.name),
+      containsAll([
+        'build:tool:linux-arm64',
+        'archive:tool:linux-arm64',
+        'build:tool:linux-x64',
+        'archive:tool:linux-x64',
+      ]),
+    );
   });
 
   test('non-Git existing version skips without rebuilding historical bytes',
@@ -1879,14 +2002,24 @@ void _interruptAfter(ReleaseStage stage, String stepName) {
   ));
 }
 
+bool _compilesFor(_Invocation call, String platform) =>
+    _starts(call.arguments, ['compile', 'exe']) &&
+    call.arguments.any((argument) => argument.contains('/$platform/'));
+
 class _Harness {
-  _Harness({bool unbound = false, bool localBinaryOnly = false}) {
+  _Harness({
+    bool unbound = false,
+    bool localBinaryOnly = false,
+    bool twoPlatforms = false,
+  }) {
     root = Directory.systemTemp.createTempSync('rk-stage-command-');
-    final config = localBinaryOnly
-        ? _localBinaryConfig
-        : unbound
-            ? _pubOnlyConfig
-            : _config;
+    final config = twoPlatforms
+        ? _twoPlatformConfig
+        : localBinaryOnly
+            ? _localBinaryConfig
+            : unbound
+                ? _pubOnlyConfig
+                : _config;
     source = MemorySourceTree({
       'release.toml': config,
       'packages/tool/pubspec.yaml': _pubspec,
@@ -1923,6 +2056,11 @@ class _Harness {
   }
 
   late final Directory root;
+
+  /// The output of the run in flight, so a tools gate can synchronize on
+  /// what rk has actually said rather than on a guessed delay.
+  StringBuffer? liveOutput;
+
   late final MemorySourceTree source;
   late final Resolution resolution;
   late final ResolvedUnit unit;
@@ -1974,6 +2112,7 @@ class _Harness {
   }) async {
     final start = tools.invocations.length;
     final buffer = StringBuffer();
+    liveOutput = buffer;
     final output = Output(
       sink: buffer.write,
       isTerminal: false,
@@ -2229,6 +2368,10 @@ class _WorldTools implements Tools {
   final Set<String> remoteTags = {};
   final Map<String, List<int>> uploadedAssets = {};
   void Function(_Invocation call)? onInvocation;
+
+  /// Awaited before the call is simulated, so a test can hold one lane's
+  /// subprocess until another lane has reached a chosen point.
+  Future<void> Function(_Invocation call)? gate;
   ToolResult? Function(_Invocation call)? runFailure;
 
   bool githubReleaseExists = false;
@@ -2275,9 +2418,13 @@ class _WorldTools implements Tools {
     );
     invocations.add(invocation);
     onInvocation?.call(invocation);
+    if (gate != null) await gate!(invocation);
     final failure = runFailure?.call(invocation);
     if (failure != null) return failure;
 
+    if (_isDart(executable) && _starts(arguments, ['pub', 'get'])) {
+      return _ok();
+    }
     if (_isDart(executable) && _starts(arguments, ['compile', 'exe'])) {
       final output = arguments[arguments.indexOf('-o') + 1];
       File(output)

@@ -168,6 +168,20 @@ class ReleaseStage {
   /// resolved unit's complete semantic receipt contract.
   final bool enforceUnitContract;
 
+  /// The one receipt contract for this stage, shared by the receipt writer
+  /// and the inspector so canonical order and validation cannot drift.
+  /// Null exactly when [enforceUnitContract] is off: a deliberately partial
+  /// graph has no unit contract to order by or validate against.
+  late final StageReceiptContract? _unitContract = enforceUnitContract
+      ? StageReceiptContract.forUnit(
+          unit: unit,
+          repository: repository,
+          sourceRoot: sourceRoot,
+          targetContributions: targetContributions,
+          localProducers: localProducerContracts(unit),
+        )
+      : null;
+
   String get sourceRoot => directory.resolve('source');
 
   StageInspection inspect() {
@@ -203,14 +217,8 @@ class ReleaseStage {
         ));
       }
     }
-    if (receipt != null && enforceUnitContract) {
-      issues.addAll(StageReceiptContract.forUnit(
-        unit: unit,
-        repository: repository,
-        sourceRoot: sourceRoot,
-        targetContributions: targetContributions,
-        localProducers: localProducerContracts(unit),
-      ).validate(directory, receipt));
+    if (receipt != null && _unitContract != null) {
+      issues.addAll(_unitContract.validate(directory, receipt));
     }
     final expectedCompiler = compiler;
     if (expectedCompiler == null || receipt?.complete != true) {
@@ -620,14 +628,43 @@ class ReleaseStage {
   /// A crash can preserve useful evidence, but only [finalize] may flip the
   /// receipt to complete. Outputs must already have been captured explicitly;
   /// an inventory scan never adopts an unrelated file.
+  ///
+  /// Concurrent platform lanes complete in scheduling order; the record is
+  /// canonical. Steps are written in contract order so the receipt reads
+  /// the same however the work interleaved.
   void writeProgress(Iterable<StageStep> steps) {
     if (steps.any((step) => step.name == 'complete-stage')) {
       throw StateError('only finalize may complete a stage');
     }
+    // Concurrent lanes complete in scheduling order; the record is
+    // canonical. A stage without a unit contract — a deliberately partial
+    // graph — keeps its given order, which is its own causal truth.
+    final contract = _unitContract;
+    final ordered = contract == null
+        ? List<StageStep>.of(steps)
+        : _contractOrdered(steps, contract.producerNames);
     StageReceiptStore(directory).write(StageReceipt(
       identity: directory.identity,
-      steps: steps,
+      steps: ordered,
     ));
+  }
+
+  /// Steps in contract order; names outside the contract keep their given
+  /// order, after the known ones. Stable via the given index.
+  static List<StageStep> _contractOrdered(
+    Iterable<StageStep> steps,
+    List<String> canonical,
+  ) {
+    final order = {
+      for (final (index, name) in canonical.indexed) name: index,
+    };
+    final decorated = steps.indexed.toList()
+      ..sort((left, right) {
+        final byContract = (order[left.$2.name] ?? order.length)
+            .compareTo(order[right.$2.name] ?? order.length);
+        return byContract != 0 ? byContract : left.$1.compareTo(right.$1);
+      });
+    return [for (final (_, step) in decorated) step];
   }
 
   List<StageArtifact> _captureAll() {

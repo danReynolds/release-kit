@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import '../builds/capability.dart';
@@ -608,7 +609,10 @@ class ReleaseCommand {
       states: states,
       actions: publicActions,
     );
-    if (remaining == null) return ExitCodes.refused;
+    if (remaining == null) {
+      releaseInputs.conclude();
+      return ExitCodes.refused;
+    }
     if (remaining.isEmpty) {
       releaseInputsRow.complete(note: 'checked');
       releaseInputs.discard();
@@ -630,6 +634,7 @@ class ReleaseCommand {
     }
     final refreshedBaseline = await _signingBaseline(unit, macosProject);
     if (!refreshedBaseline.ok) {
+      releaseInputs.conclude();
       _showReleaseActions(targets, publicActions);
       return ExitCodes.refused;
     }
@@ -637,6 +642,7 @@ class ReleaseCommand {
         (prepared.signing == null ||
             refreshedBaseline.requirement !=
                 prepared.signing!.publishedRequirement)) {
+      releaseInputs.conclude();
       output.problem(Diagnostic(
         code: 'RK-SIGN-013',
         message: 'the published signing identity changed after staging',
@@ -655,6 +661,7 @@ class ReleaseCommand {
       changed: 'before authorization',
       halt: HaltKind.beforeActing,
     )) {
+      releaseInputs.conclude();
       _showReleaseActions(targets, publicActions);
       return ExitCodes.refused;
     }
@@ -669,6 +676,7 @@ class ReleaseCommand {
           changed: 'before authorization',
           halt: HaltKind.beforeActing,
         )) {
+      releaseInputs.conclude();
       _showReleaseActions(targets, publicActions);
       return ExitCodes.refused;
     }
@@ -686,7 +694,10 @@ class ReleaseCommand {
       states: states,
       actions: publicActions,
     );
-    if (remaining == null) return ExitCodes.refused;
+    if (remaining == null) {
+      releaseInputs.conclude();
+      return ExitCodes.refused;
+    }
     if (remaining.isEmpty) {
       releaseInputsRow.complete(note: 'checked');
       releaseInputs.discard();
@@ -714,6 +725,7 @@ class ReleaseCommand {
         final module = inspector.targets.moduleForTarget(target);
         final binding = module.recoveryBinding(states[target.step.id]!);
         if (binding == null) {
+          releaseInputs.conclude();
           output.problem(Diagnostic(
             code: 'RK-STAGE-005',
             message: '${target.step.summary} can no longer recover without '
@@ -1020,6 +1032,10 @@ class ReleaseCommand {
                 ? HaltKind.stoppedPartway
                 : HaltKind.beforeActing,
           )) {
+        releaseProgress
+          ..fail(target)
+          ..notAttemptedPending()
+          ..settle();
         return ExitCodes.refused;
       }
       if (!_releaseContextStillValid(
@@ -1030,6 +1046,10 @@ class ReleaseCommand {
             ? HaltKind.stoppedPartway
             : HaltKind.beforeActing,
       )) {
+        releaseProgress
+          ..fail(target)
+          ..notAttemptedPending()
+          ..settle();
         return ExitCodes.refused;
       }
 
@@ -1540,15 +1560,22 @@ class ReleaseCommand {
         ));
       }
       final baseline = await _signingBaseline(unit, macosProject);
-      if (!baseline.ok) return null;
+      if (!baseline.ok) {
+        live.conclude();
+        return null;
+      }
       if (macosProject != null) {
         final publishedRequirement = baseline.requirement;
         final keychain = await _signingCertificate(unit, publishedRequirement);
-        if (!keychain.ok) return null;
+        if (!keychain.ok) {
+          live.conclude();
+          return null;
+        }
         final codeId = publishedRequirement == null
             ? macosProject.executable
             : BinaryChain.identifierOf(publishedRequirement);
         if (codeId == null || codeId.isEmpty) {
+          live.conclude();
           output.problem(Diagnostic(
             code: 'RK-SIGN-009',
             message: 'no release states what this program is called',
@@ -1631,6 +1658,9 @@ class ReleaseCommand {
       mayReplaceReviewed: stageOnly,
     );
     if (stageProblem != null) {
+      // Nothing began: the board owes no snapshot, matching the silent
+      // refusal this path always had.
+      stageProgress.discard();
       output.problem(stageProblem, unit: unit.name);
       output.halt(HaltKind.beforeActing);
       return null;
@@ -1647,6 +1677,7 @@ class ReleaseCommand {
       try {
         stage.reset();
       } on Object catch (error) {
+        stageProgress.discard();
         output.problem(Diagnostic(
           code: 'RK-STAGE-001',
           message: 'the old release stage could not be replaced safely',
@@ -1662,6 +1693,7 @@ class ReleaseCommand {
         progress.add(sourceStep);
         _persistStageProgress(stage, sourceArtifacts, progress);
       } on Object catch (error) {
+        stageProgress.discard();
         output.problem(Diagnostic(
           code: 'RK-STAGE-003',
           message: 'the committed source could not be staged',
@@ -1695,12 +1727,13 @@ class ReleaseCommand {
             ),
           );
         } on Object catch (error) {
+          stageProgress.conclude();
           _stageOperationFailed('${target.label} stage preparation', error);
           return false;
         }
         notices.addAll(result.notices);
         if (result case TargetStageFailure(:final diagnostic, :final unit)) {
-          stageProgress.failAndSettle();
+          stageProgress.conclude();
           for (final notice in notices) {
             output.say(notice, depth: 1);
           }
@@ -1714,6 +1747,7 @@ class ReleaseCommand {
           _persistStageProgress(stage, sourceArtifacts, progress);
           stageProgress.record(step);
         } on Object catch (error) {
+          stageProgress.conclude();
           _stageProgressFailed(error);
           return false;
         }
@@ -1733,44 +1767,159 @@ class ReleaseCommand {
           step.kind != StepKind.completeStage;
     }).toList();
     stageProgress.restore(progress);
+
+    // One lane per platform chain. A platform's build, notarize, and
+    // archive touch only that platform's artifacts, so lanes are
+    // independent until the complete-stage barrier: steps keep checklist
+    // order within their lane, and the receipt's causal check accepts any
+    // cross-lane interleaving because no input crosses a lane. A future
+    // producer without a platform fails the null check loudly here rather
+    // than quietly becoming its own concurrent lane.
+    final lanes = <String, List<Step>>{};
     for (final step in producerSteps) {
-      if (_producerRecorded(progress, step)) {
-        output.step(
-          step,
-          verdict: Verdict.exact,
-          detail: 'validated in the interrupted stage',
-          show: false,
+      lanes
+          .putIfAbsent('${step.project}/${step.platform!}', () => [])
+          .add(step);
+    }
+    assert(
+      () {
+        // The grouping and the checklist's graph must agree: every producer
+        // dependency resolves earlier in its own lane.
+        final producerIds = {for (final step in producerSteps) step.id};
+        for (final lane in lanes.values) {
+          final earlier = <String>{};
+          for (final step in lane) {
+            for (final need in step.needs) {
+              if (producerIds.contains(need) && !earlier.contains(need)) {
+                return false;
+              }
+            }
+            earlier.add(step.id);
+          }
+        }
+        return true;
+      }(),
+      'a producer depends on a step outside or later in its lane',
+    );
+
+    // Builds share one package resolution, and a cold checkout would let
+    // each compile trigger its own implicit `dart pub get` — two resolvers
+    // racing in one package directory. Resolve once, before the lanes fan
+    // out, so the builds themselves stay fully concurrent.
+    final binaryProject = unit.binaryProject;
+    if (binaryProject != null &&
+        producerSteps.any((step) =>
+            step.kind == StepKind.build &&
+            !_producerRecorded(progress, step))) {
+      final chain = _chain(unit);
+      final resolvedDeps = await tools.run(
+        chain.compilerExecutable,
+        const ['pub', 'get'],
+        workingDirectory: binaryProject.directoryIn(chain.repositoryRoot),
+      );
+      if (resolvedDeps.exitCode != 0) {
+        stageProgress.discard();
+        final detail = resolvedDeps.stderr.trim().isEmpty
+            ? resolvedDeps.stdout.trim()
+            : resolvedDeps.stderr.trim();
+        _stageOperationFailed(
+          'resolving ${binaryProject.name} dependencies',
+          detail,
         );
-        continue;
-      }
-      output.report.acted = true;
-      final receiptName = receiptNameFor(step);
-      stageProgress.begin(receiptName, _producerActivity(step));
-      final LocalProducerOutcome act;
-      try {
-        act = await _actProducer(
-          step,
-          unit,
-          signing,
-          progress: stageProgress.handleFor(receiptName),
-        );
-      } on Object catch (error) {
-        return _stageOperationFailed(step.summary, error);
-      }
-      if (!act.ok) {
-        stageProgress.failAndSettle();
-        if (!output.report.halted) output.halt(HaltKind.stoppedPartway);
         return null;
       }
+    }
+
+    // A failure drains. The lane that failed marks its row and says its
+    // problem right away; the others finish the step already in flight — a
+    // killed half-written producer is exactly the ambiguity receipts exist
+    // to prevent — and start nothing new. Failures collect the halts they
+    // ask for; the strongest is spoken once after the drain, so content,
+    // never scheduling, picks the epitaph. With near-simultaneous failures
+    // the problems print in completion order — the concurrency is real.
+    final failures = <HaltKind>[];
+
+    Future<void> runLane(List<Step> lane) async {
       try {
-        final recorded =
-            _captureProducerStep(stage, unit, step, sourceStep, progress, act);
-        progress.add(recorded);
-        _persistStageProgress(stage, sourceArtifacts, progress);
-        stageProgress.record(recorded);
+        for (final step in lane) {
+          if (failures.isNotEmpty) return;
+          try {
+            if (_producerRecorded(progress, step)) {
+              output.step(
+                step,
+                verdict: Verdict.exact,
+                detail: 'validated in the interrupted stage',
+                show: false,
+              );
+              continue;
+            }
+            output.report.acted = true;
+            final receiptName = receiptNameFor(step);
+            stageProgress.begin(receiptName, _producerActivity(step));
+            final LocalProducerOutcome act;
+            try {
+              act = await _actProducer(
+                step,
+                unit,
+                signing,
+                progress: stageProgress.handleFor(receiptName),
+              );
+            } on Object catch (error) {
+              stageProgress.fail(receiptName);
+              _stageOperationProblem(step.summary, error);
+              failures.add(HaltKind.stoppedPartway);
+              return;
+            }
+            if (!act.ok) {
+              stageProgress.fail(receiptName);
+              failures.add(act.halt ?? HaltKind.stoppedPartway);
+              return;
+            }
+            try {
+              final recorded = _captureProducerStep(
+                  stage, unit, step, sourceStep, progress, act);
+              progress.add(recorded);
+              try {
+                _persistStageProgress(stage, sourceArtifacts, progress);
+              } on Object {
+                // Unrecordable means unrecorded: the step must not ride a
+                // draining lane's later persist into the receipt.
+                progress.remove(recorded);
+                rethrow;
+              }
+              stageProgress.record(recorded);
+            } on Object catch (error) {
+              stageProgress.fail(receiptName);
+              _stageProgressProblem(error);
+              failures.add(HaltKind.beforeActing);
+              return;
+            }
+          } on Object catch (error) {
+            // Nothing may escape the join unfenced: an unexpected throw
+            // stops new work and is spoken like any other stage failure
+            // instead of crashing out while sibling lanes keep running.
+            _stageOperationProblem('the ${unit.name} stage', error);
+            failures.add(HaltKind.stoppedPartway);
+            return;
+          }
+        }
       } on Object catch (error) {
-        return _stageProgressFailed(error);
+        _stageOperationProblem('the ${unit.name} stage', error);
+        failures.add(HaltKind.stoppedPartway);
       }
+    }
+
+    await Future.wait([for (final lane in lanes.values) runLane(lane)]);
+    if (failures.isNotEmpty) {
+      // Rows still active belong to drained lanes whose in-flight step
+      // finished after the stop: their artifacts were not attempted, and
+      // the rows say that rather than borrowing the failure's wording.
+      stageProgress.concludeStopped();
+      if (!output.report.halted) {
+        output.halt(failures
+            .reduce((left, right) => left.index >= right.index ? left : right));
+      }
+      return null;
     }
 
     if (!await prepareTargets(StageContributionPhase.afterArtifacts)) {
@@ -1794,6 +1943,7 @@ class ReleaseCommand {
         },
       );
     } on Object catch (error) {
+      stageProgress.conclude();
       output.problem(Diagnostic(
         code: 'RK-STAGE-003',
         message: 'the release stage could not be completed',
@@ -1895,25 +2045,31 @@ class ReleaseCommand {
     stage.writeProgress(steps);
   }
 
-  _PreparedStage? _stageProgressFailed(Object error) {
+  void _stageProgressProblem(Object error) {
     output.problem(Diagnostic(
       code: 'RK-STAGE-003',
       message: 'the completed producer could not be recorded safely',
       remedy: '$error',
     ));
-    output.halt(HaltKind.beforeActing);
-    return null;
   }
 
-  _PreparedStage? _stageOperationFailed(String operation, Object error) {
+  void _stageProgressFailed(Object error) {
+    _stageProgressProblem(error);
+    output.halt(HaltKind.beforeActing);
+  }
+
+  void _stageOperationProblem(String operation, Object error) {
     output.problem(Diagnostic(
       code: 'RK-STAGE-003',
       message: '$operation failed while preparing the release stage',
       remedy: '$error\nfix the local failure, then re-run; no public target '
           'was changed',
     ));
+  }
+
+  void _stageOperationFailed(String operation, Object error) {
+    _stageOperationProblem(operation, error);
     if (!output.report.halted) output.halt(HaltKind.stoppedPartway);
-    return null;
   }
 
   bool _producerRecorded(List<StageStep> progress, Step step) =>
@@ -2797,7 +2953,36 @@ final class _StageProgress {
     return facts.toSet().join(' · ');
   }
 
-  void failAndSettle() => live.failActiveAndSettle();
+  /// Marks one producer's row failed while the board stays live, so a
+  /// draining run keeps describing its other lanes.
+  void fail(String producer) {
+    for (final row in board.rowsFor(producer)) {
+      final controller = _controllers[row]!;
+      if (controller.state == ProgressRowState.active) {
+        controller.fail();
+      }
+    }
+  }
+
+  void conclude() => live.conclude();
+
+  void discard() => live.discard();
+
+  /// Concludes a drained run. A row still active belongs to a lane whose
+  /// in-flight step finished after the stop — its artifact was not
+  /// attempted, and the row says so instead of borrowing the failure's
+  /// wording. Rows that failed were already marked by their own lane.
+  void concludeStopped() {
+    for (final group in board.groups) {
+      for (final row in group.rows) {
+        final controller = _controllers[row]!;
+        if (controller.state == ProgressRowState.active) {
+          controller.notAttempted();
+        }
+      }
+    }
+    live.conclude();
+  }
 
   void settle({String? title}) => live.settle(title: title);
 }

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/output/progress.dart';
 import 'package:test/test.dart';
@@ -62,6 +63,43 @@ void main() {
   });
 
   group('row authority and clocks', () {
+    test('a diagnostic never settles a live board', () {
+      final harness = _Harness(terminal: false);
+      final board = harness.output.progressBoard('Staging');
+      final failing = board.addRow(id: 'build-x64', label: 'linux-x64');
+      final surviving = board.addRow(id: 'build-arm', label: 'linux-arm64');
+      failing.handle.begin(CommonProgressActivities.checking);
+      surviving.handle.begin(CommonProgressActivities.checking);
+
+      // The renderer draws; the coordinator judges. A problem printed while
+      // concurrent lanes are mid-flight must not fail, settle, or discard
+      // anything — only the owner marks rows and concludes.
+      failing.fail();
+      harness.output.problem(Diagnostic(
+        code: 'RK-STAGE-003',
+        message: 'one lane failed while another was mid-build',
+        remedy: 'drain, then conclude',
+      ));
+      expect(surviving.state, ProgressRowState.active);
+
+      surviving.complete(note: 'staged');
+      board.conclude();
+      expect(surviving.state, ProgressRowState.complete);
+      expect(failing.state, ProgressRowState.failed);
+      // The conclusion actually rendered: the board survived the prose, so
+      // the settled snapshot follows the diagnostic in the transcript.
+      expect(harness.text, contains('one lane failed'));
+      expect(harness.text, contains('linux-arm64'));
+      expect(harness.text, contains('staged'));
+      expect(harness.text, contains('✗'));
+      expect(
+        harness.text.indexOf('Staging'),
+        greaterThan(harness.text.indexOf('one lane failed')),
+        reason: 'diagnostics stream as they happen; the owner concludes '
+            'the board afterwards:\n${harness.text}',
+      );
+    });
+
     test('targets describe work while the coordinator settles truth', () {
       final harness = _Harness(terminal: false);
       final board = harness.output.progressBoard('Releasing');
@@ -437,7 +475,7 @@ void main() {
       expect(harness.text, contains('not attempted'));
     });
 
-    test('discard and output close cancel delayed work', () async {
+    test('discard cancels delayed work', () async {
       final harness = _Harness(terminal: true);
       final board = harness.output.progressBoard(
         'Preparing release',
@@ -447,9 +485,23 @@ void main() {
           .addRow(id: 'tag', label: 'Git tag')
           .handle
           .begin(CommonProgressActivities.checking);
+      board.discard();
       harness.output.close();
       await Future<void>.delayed(const Duration(milliseconds: 30));
       expect(harness.text, isEmpty);
+    });
+
+    test('a board alive at close is an owner bug, said loudly', () {
+      final harness = _Harness(terminal: true);
+      harness.output
+          .progressBoard('Preparing release')
+          .addRow(id: 'tag', label: 'Git tag')
+          .handle
+          .begin(CommonProgressActivities.checking);
+      // Checked mode asserts; a release build would still reap the timers
+      // so nothing hangs. Owners resolve their boards — settle, conclude,
+      // or discard.
+      expect(harness.output.close, throwsA(isA<AssertionError>()));
     });
   });
 }

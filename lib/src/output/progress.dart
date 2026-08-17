@@ -247,8 +247,13 @@ final class ProgressRow {
   }
 
   void _notAttempted(String result) {
-    if (_state != ProgressRowState.pending) {
-      throw StateError('only pending progress row $id can be not attempted');
+    // Pending is the usual case. Active is the drained lane: its in-flight
+    // step finished after a stop elsewhere, and the owner records that the
+    // row's artifact was never attempted — the receipt keeps what did run.
+    if (_state != ProgressRowState.pending &&
+        _state != ProgressRowState.active) {
+      throw StateError('only pending or active progress row $id can be '
+          'not attempted');
     }
     _note = _text('progress skipped result', result, max: 120);
     _state = ProgressRowState.notAttempted;

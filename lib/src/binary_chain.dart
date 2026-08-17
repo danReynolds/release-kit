@@ -268,11 +268,13 @@ class BinaryChain {
         // The signing attempt changed private staged bytes, so the halt must
         // not claim that rk did nothing. Public release acts still have not
         // begun: staging is mandatory before the tag or any destination act.
-        output.halt(output.report.acted
-            ? HaltKind.actedAndUnfixable
-            : HaltKind.unfixableByRerun);
-        return const LocalProducerOutcome.failed(
+        // The producer states the verdict; the coordinator speaks the halt
+        // once, after every lane has rested.
+        return LocalProducerOutcome.failed(
           'the produced signature differs from the published identity',
+          output.report.acted
+              ? HaltKind.actedAndUnfixable
+              : HaltKind.unfixableByRerun,
         );
       }
     } else {
@@ -568,16 +570,23 @@ class LocalProducerOutcome {
     Map<String, Object?> evidence = const {},
   })  : ok = true,
         problem = null,
+        halt = null,
         outputs = List<LocalProducerOutput>.unmodifiable(outputs),
         evidence = Map<String, Object?>.unmodifiable(evidence);
 
-  const LocalProducerOutcome.failed([this.problem])
+  const LocalProducerOutcome.failed([this.problem, this.halt])
       : ok = false,
         outputs = const [],
         evidence = const {};
 
   final bool ok;
   final String? problem;
+
+  /// The halt this failure asks for, when stronger than the default
+  /// stopped-partway. The producer knows what its failure means; the
+  /// coordinator speaks the halt exactly once, after the drain.
+  final HaltKind? halt;
+
   final List<LocalProducerOutput> outputs;
   final Map<String, Object?> evidence;
 }

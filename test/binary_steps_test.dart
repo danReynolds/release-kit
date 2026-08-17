@@ -240,7 +240,12 @@ executables:
           'users\' machines — it must fail here instead',
     );
     expect(buffer.toString(), contains('leaf "OLD"'));
-    expect(buffer.toString(), contains('cannot be fixed by re-running'));
+    expect(
+      ok.halt,
+      HaltKind.unfixableByRerun,
+      reason: 'the producer states the verdict; the coordinator speaks the '
+          'halt once, after every lane has rested',
+    );
     expect(buffer.toString(), contains('leaf "NEW"'));
   });
 
