@@ -94,7 +94,7 @@ class StageArtifact {
       size: bytes.length,
       sha256: Sha256.hex(bytes),
     );
-    stage.noteDigested(path, stat);
+    stage.noteDigested(path, stat, captured.sha256);
     return captured;
   }
 
@@ -111,7 +111,7 @@ class StageArtifact {
     StageArtifact recorded, {
     required StageDirectory stage,
   }) =>
-      stage.digestStillStands(recorded.path)
+      stage.digestStillStands(recorded.path, recorded.sha256)
           ? recorded
           : StageArtifact.capture(
               stage: stage,

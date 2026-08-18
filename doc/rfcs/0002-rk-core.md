@@ -629,6 +629,18 @@ timestamps are only second-accurate the claim weakens to size and mode
 within that second. Concurrent writers are excluded separately, by the
 stage lock.
 
+*Amended (as built):* the same applies one level down. Confirming that a
+staged artifact is unchanged — which every receipt write does for
+everything already recorded, and sealing the source snapshot does for every
+tracked file — reads and digests it once, and afterwards asks only whether
+that file has moved. A confirmation binds both halves: the file's size,
+mode, and timestamps, and the digest that reading it produced. A file that
+moved, one whose recorded digest is not the digest being confirmed, one
+that has become a link, and one this process never digested are all read
+again. What this cannot see is narrower than the stage-level memo: a
+rewrite in the same microsecond, at the same size and mode, with no
+directory above it consulted.
+
 *Amended (as built):* platform chains stage concurrently — each platform's
 build, notarize, and archive is an independent lane until the
 complete-stage barrier, and a failure drains: in-flight steps finish and

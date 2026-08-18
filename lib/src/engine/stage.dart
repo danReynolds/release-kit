@@ -225,20 +225,32 @@ class StageDirectory {
   /// and remembering that would let a later confirmation vouch for bytes
   /// nobody digested. Such a file is not remembered at all, so the next
   /// confirmation reads it again.
-  void noteDigested(String relativePath, FileStat beforeReading) {
+  void noteDigested(
+      String relativePath, FileStat beforeReading, String sha256) {
     final settled = _describe(File(resolve(relativePath)).statSync());
     if (settled != _describe(beforeReading)) return;
-    _digested[relativePath] = settled;
+    _digested[relativePath] = '$settled\u0000$sha256';
   }
 
-  /// Whether [relativePath] is byte-for-byte what it was when this process
-  /// last digested it.
+  /// Whether [relativePath] is still the file this process digested to
+  /// [sha256].
   ///
-  /// The same trade [fingerprint] rests on, per file: a rewrite moves the
-  /// size, the mode, or a timestamp, and change time is the kernel's to
-  /// set. What this cannot see is a rewrite that restores every one of
-  /// them, which the writer cannot do to change time.
-  bool digestStillStands(String relativePath) {
+  /// Both halves are needed. A digest that no longer matches the file is
+  /// re-read, which is the point; but so is a file that has not moved since
+  /// a digest of *different* bytes — that is what a failed confirmation
+  /// leaves behind, and answering it from memory would let the second
+  /// confirmation pass what the first one refused.
+  ///
+  /// The trade [fingerprint] rests on, narrowed to one file — and it is
+  /// the weaker half of it. A rewrite moves the size, the mode, or a
+  /// timestamp, and change time is the kernel's to set rather than the
+  /// writer's. But [fingerprint] also stats the directories above a file,
+  /// so a path unlinked and recreated moves its parent even when the new
+  /// file's own stat collides; nothing here looks up. What this cannot see
+  /// is a rewrite landing in the same microsecond as the digest, at the
+  /// same size and mode — and on a volume whose timestamps are coarser
+  /// than that, correspondingly more.
+  bool digestStillStands(String relativePath, String sha256) {
     final when = _digested[relativePath];
     if (when == null) return false;
     final resolved = resolve(relativePath);
@@ -249,7 +261,7 @@ class StageDirectory {
         FileSystemEntityType.file) {
       return false;
     }
-    return when == _describe(File(resolved).statSync());
+    return when == '${_describe(File(resolved).statSync())}\u0000$sha256';
   }
 
   /// Creates only the fixed stage path, refusing any symlink or non-directory

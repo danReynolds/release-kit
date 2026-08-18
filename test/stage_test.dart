@@ -7,7 +7,23 @@ import 'package:rk/src/engine/release_manifest.dart';
 import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/engine/stage_inspection.dart';
 import 'package:rk/src/engine/stage_receipt.dart';
+import 'package:rk/src/transforms/digest.dart';
 import 'package:test/test.dart';
+
+String _sha(String text) => Sha256.hex(utf8.encode(text));
+
+/// Rewrites [file], after letting the clock move.
+///
+/// Timestamps are microseconds, and two writes in the same microsecond are
+/// indistinguishable by size, mode, and time — the collision the file-level
+/// memo documents and cannot see. A test that rewrites a file immediately
+/// after digesting it lands in exactly that window and passes or fails on
+/// how fast the machine is; the wait is what makes these tests about the
+/// guard rather than about the clock.
+void _rewriteAfterAMoment(File file, String text) {
+  sleep(const Duration(milliseconds: 5));
+  file.writeAsBytesSync(utf8.encode(text));
+}
 
 const _commit = '1111111111111111111111111111111111111111';
 const _tree = '2222222222222222222222222222222222222222';
@@ -178,36 +194,67 @@ void main() {
 
       // Rewritten before the digest was recorded: whatever was read is not
       // what is on disk now, so nothing may be remembered about it.
-      artifact.writeAsBytesSync(utf8.encode('two'));
-      stage.noteDigested('out/tool', beforeReading);
+      _rewriteAfterAMoment(artifact, 'two');
+      stage.noteDigested('out/tool', beforeReading, _sha('one'));
 
       expect(
-        stage.digestStillStands('out/tool'),
+        stage.digestStillStands('out/tool', _sha('one')),
         isFalse,
         reason: 'remembering this would vouch for bytes nobody digested',
       );
     });
 
-    test('a digest does not stand for a path that became a link', () {
+    test('a path that became a link is read again, whatever it points at', () {
       stage.ensureExists();
       final artifact = File(stage.resolve('out/tool'))
         ..parent.createSync(recursive: true)
         ..writeAsBytesSync(utf8.encode('one'));
-      StageArtifact.capture(
+      final recorded = StageArtifact.capture(
         stage: stage,
         path: 'out/tool',
         type: 'executable',
       );
-      expect(stage.digestStillStands('out/tool'), isTrue);
+      expect(stage.digestStillStands('out/tool', recorded.sha256), isTrue);
 
-      // The bytes a link points at are not the bytes that were digested,
-      // and stat would describe the target rather than the swap.
+      // stat follows a link and would describe its target, so the type is
+      // checked without following. A test cannot forge a target whose stat
+      // matches — change time is not settable — so this pins the mechanism
+      // rather than the collision it exists for.
       final elsewhere = File('${repository.path}/elsewhere')
         ..writeAsBytesSync(utf8.encode('one'));
       artifact.deleteSync();
       Link(stage.resolve('out/tool')).createSync(elsewhere.path);
 
-      expect(stage.digestStillStands('out/tool'), isFalse);
+      expect(stage.digestStillStands('out/tool', recorded.sha256), isFalse);
+    });
+
+    test('a refused confirmation is refused again, not remembered', () {
+      stage.ensureExists();
+      final artifact = File(stage.resolve('out/tool'))
+        ..parent.createSync(recursive: true)
+        ..writeAsBytesSync(utf8.encode('one'));
+      final recorded = StageArtifact.capture(
+        stage: stage,
+        path: 'out/tool',
+        type: 'executable',
+      );
+
+      // The file is now something else. Confirming it reads the new bytes
+      // and hands back a different artifact — and, having read them, knows
+      // them.
+      _rewriteAfterAMoment(artifact, 'two');
+      final first = StageArtifact.confirm(recorded, stage: stage);
+      expect(first.sha256, isNot(recorded.sha256));
+
+      // The second confirmation must reach the same verdict. Answering it
+      // from what the first read would vouch for bytes the caller already
+      // refused.
+      final second = StageArtifact.confirm(recorded, stage: stage);
+      expect(
+        second.sha256,
+        isNot(recorded.sha256),
+        reason: 'a check that passes on its second run is not a check',
+      );
     });
 
     test('a receipt refuses to record bytes that changed under it', () {
@@ -233,7 +280,7 @@ void main() {
       // Same length, so only the timestamps separate these bytes from the
       // ones that were digested. A confirmation that trusts its own memory
       // records a digest for bytes that are no longer there.
-      artifact.writeAsBytesSync(utf8.encode('two'));
+      _rewriteAfterAMoment(artifact, 'two');
 
       expect(
         () => StageReceiptStore(stage).write(receipt),
