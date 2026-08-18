@@ -1,0 +1,22 @@
+{
+  "recorded_on": {
+    "os": "macos",
+    "processors": 10,
+    "dart": "3.12.2"
+  },
+  "microseconds": {
+    "read repository state": 68612,
+    "list tracked files": 17395,
+    "read every blob (batched)": 56822,
+    "read 20 blobs (one call each)": 306419,
+    "hash the snapshot": 19821,
+    "hash an archive-sized buffer": 28637,
+    "parse release.toml": 66,
+    "resolve the repository": 121,
+    "derive every checklist": 92,
+    "verify a built stage": 700594,
+    "fingerprint that stage": 2610,
+    "tar an archive-sized file": 355,
+    "gzip the same archive": 15362
+  }
+}
