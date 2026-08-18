@@ -193,22 +193,46 @@ class StageDirectory {
       ..sort((left, right) => left.path.compareTo(right.path));
     final described = StringBuffer();
     for (final entry in entries) {
-      final stat = entry.statSync();
       described
         ..write(entry.path.substring(path.length))
         ..write('\u0000')
-        ..write(stat.type)
-        ..write('\u0000')
-        ..write(stat.size)
-        ..write('\u0000')
-        ..write(stat.mode)
-        ..write('\u0000')
-        ..write(stat.modified.microsecondsSinceEpoch)
-        ..write('\u0000')
-        ..write(stat.changed.microsecondsSinceEpoch)
+        ..write(_describe(entry.statSync()))
         ..write('\n');
     }
     return described.toString();
+  }
+
+  /// One entry's cheap description: what a rewrite cannot leave untouched.
+  static String _describe(FileStat stat) => [
+        stat.type,
+        stat.size,
+        stat.mode,
+        stat.modified.microsecondsSinceEpoch,
+        stat.changed.microsecondsSinceEpoch,
+      ].join('\u0000');
+
+  /// How each file looked when its bytes were last read and digested.
+  ///
+  /// Empty until something in this process actually hashes a file, so the
+  /// first verification of anything always reads it.
+  final Map<String, String> _digested = {};
+
+  /// Records that [relativePath] was just read and digested as it is now.
+  void noteDigested(String relativePath) {
+    _digested[relativePath] = _describe(File(resolve(relativePath)).statSync());
+  }
+
+  /// Whether [relativePath] is byte-for-byte what it was when this process
+  /// last digested it.
+  ///
+  /// The same trade [fingerprint] rests on, per file: a rewrite moves the
+  /// size, the mode, or a timestamp, and change time is the kernel's to
+  /// set. What this cannot see is a rewrite that restores every one of
+  /// them, which the writer cannot do to change time.
+  bool digestStillStands(String relativePath) {
+    final when = _digested[relativePath];
+    if (when == null) return false;
+    return when == _describe(File(resolve(relativePath)).statSync());
   }
 
   /// Creates only the fixed stage path, refusing any symlink or non-directory

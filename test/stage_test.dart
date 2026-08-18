@@ -168,6 +168,43 @@ void main() {
 
     tearDown(() => repository.deleteSync(recursive: true));
 
+    test('a receipt refuses to record bytes that changed under it', () {
+      stage.ensureExists();
+      final artifact = File(stage.resolve('out/tool'))
+        ..parent.createSync(recursive: true)
+        ..writeAsBytesSync(utf8.encode('one'));
+      final recorded = StageArtifact.capture(
+        stage: stage,
+        path: 'out/tool',
+        type: 'executable',
+      );
+      final receipt = StageReceipt(
+        identity: stage.identity,
+        steps: [
+          StageStep(name: 'build', inputs: const [], outputs: [recorded]),
+        ],
+      );
+      // Writing the receipt straight away is the ordinary case, and the
+      // bytes were digested a moment ago.
+      StageReceiptStore(stage).write(receipt);
+
+      // Same length, so only the timestamps separate these bytes from the
+      // ones that were digested. A confirmation that trusts its own memory
+      // records a digest for bytes that are no longer there.
+      artifact.writeAsBytesSync(utf8.encode('two'));
+
+      expect(
+        () => StageReceiptStore(stage).write(receipt),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            contains('artifact changed before receipt write'),
+          ),
+        ),
+      );
+    });
+
     test('lives at the content-addressed stages path', () {
       expect(
         stage.path,

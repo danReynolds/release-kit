@@ -429,11 +429,9 @@ class ReleaseStage {
       if (entity is! File) {
         throw StateError('staged source changed type: $relative');
       }
-      final actual = StageArtifact.capture(
-        stage: directory,
-        path: relative,
-        type: 'source',
-      );
+      // The snapshot is sealed after every producer, so most of these files
+      // were digested moments ago and have not moved since.
+      final actual = StageArtifact.confirm(wanted, stage: directory);
       if (actual.mode != wanted.mode ||
           actual.size != wanted.size ||
           actual.sha256 != wanted.sha256) {
