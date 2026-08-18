@@ -510,7 +510,8 @@ void main() {
         remedy: 'the board yields and repaints',
       ));
       // The board survived the prose and repaints beneath it a frame later.
-      await Future<void>.delayed(const Duration(milliseconds: 80));
+      // Generous margin over the 40ms repaint timer, for a busy CI host.
+      await Future<void>.delayed(const Duration(milliseconds: 200));
       final afterProse = harness.text.substring(beforeProse);
       expect(afterProse, contains('a diagnostic lands mid-flight'));
       expect(

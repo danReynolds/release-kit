@@ -550,10 +550,12 @@ class ReleaseCommand {
           final detail = resolvedDeps.stderr.trim().isEmpty
               ? resolvedDeps.stdout.trim()
               : resolvedDeps.stderr.trim();
-          _stageOperationFailed(
+          _stageOperationProblem(
             'resolving ${binaryProject.name} dependencies',
             detail,
           );
+          // Nothing has acted: resolution failed before any producer ran.
+          output.halt(HaltKind.beforeActing);
           if (!stageOnly) _showReleaseActions(targets, publicActions);
           return ExitCodes.refused;
         }
