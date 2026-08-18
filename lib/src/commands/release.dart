@@ -297,22 +297,33 @@ class ReleaseCommand {
     }
 
     var stageInspection = stage.inspect();
-    final states = <String, Inspection>{};
+
+    // Destinations are independent, so they are read together: every row
+    // says what it is doing at once, and the wait is the slowest read
+    // rather than their sum. The report is written afterwards in checklist
+    // order, so the document never depends on which answer arrived first.
     for (final step in checklist.steps) {
       final target = targetByStep[step.id];
-      if (target != null) {
-        initialProgress.begin(
-          target,
-          inspector.targets.moduleForTarget(target).inspectActivity,
-        );
-      }
-      states[step.id] = await _observeForRelease(
-        step,
-        unit,
-        stageInspection,
+      if (target == null) continue;
+      initialProgress.begin(
+        target,
+        inspector.targets.moduleForTarget(target).inspectActivity,
       );
+    }
+    final observed = await Future.wait([
+      for (final step in checklist.steps)
+        _observeForRelease(step, unit, stageInspection).then((state) {
+          final target = targetByStep[step.id];
+          if (target != null) initialProgress.observe(target, state);
+          return state;
+        }),
+    ]);
+    final states = <String, Inspection>{
+      for (final (index, step) in checklist.steps.indexed)
+        step.id: observed[index],
+    };
+    for (final step in checklist.steps) {
       final state = states[step.id]!;
-      if (target != null) initialProgress.observe(target, state);
       output.step(
         step,
         verdict: state.verdict,
