@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'dart:io';
 
 /// Read access to the repository being released.
@@ -191,16 +192,16 @@ class GitSourceTree implements SourceTree {
   ///
   /// A path containing a newline cannot be expressed in the batch protocol
   /// and is read on its own, so no path is silently skipped.
-  Future<Map<String, List<int>>> readBytesBatchAt(
+  Future<Map<String, Uint8List>> readBytesBatchAt(
     String commit,
     List<String> paths,
   ) async {
-    final result = <String, List<int>>{};
+    final result = <String, Uint8List>{};
     final batched = <String>[];
     for (final path in paths) {
       _resolve(path); // validates that [path] cannot escape the repository.
       if (path.contains('\n')) {
-        result[path] = readBytesAt(commit, path);
+        result[path] = Uint8List.fromList(readBytesAt(commit, path));
       } else {
         batched.add(path);
       }
@@ -212,8 +213,8 @@ class GitSourceTree implements SourceTree {
       const ['cat-file', '--batch'],
       workingDirectory: root,
     );
-    final stdoutBytes = <int>[];
-    final collected = process.stdout.forEach(stdoutBytes.addAll);
+    final incoming = BytesBuilder(copy: false);
+    final collected = process.stdout.forEach(incoming.add);
     final failure = process.stderr.transform(utf8.decoder).join();
     for (final path in batched) {
       process.stdin.write('$commit:$path\n');
@@ -224,6 +225,7 @@ class GitSourceTree implements SourceTree {
     if (code != 0) {
       throw SourceUnreadable(batched.first, (await failure).trim());
     }
+    final stdoutBytes = incoming.takeBytes();
 
     // Each answer is `<oid> <type> <size>\n`, then exactly size bytes, then
     // a newline. Answers arrive in the order asked.

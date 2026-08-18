@@ -297,6 +297,8 @@ class ReleaseStage {
       }
     }
 
+    final modes = <String, GitTreeEntry>{};
+
     // The whole snapshot is read in one request rather than one per file.
     final batched = gitSource == null
         ? const <String, List<int>>{}
@@ -304,20 +306,27 @@ class ReleaseStage {
             directory.identity.headCommit!,
             tracked,
           );
+    final staged = <String>[];
     for (final path in tracked) {
       final entry = byPath[path];
       final bytes = gitSource == null ? source.readBytes(path) : batched[path];
       if (bytes == null) {
         throw StateError('tracked source disappeared while staging: $path');
       }
-      final staged = 'source/$path';
-      directory.writeBytesAtomically(staged, bytes);
-      if (entry != null) {
-        _setGitFileMode(directory.resolve(staged), entry);
-      }
+      final at = 'source/$path';
+      directory.writeBytesAtomically(at, bytes);
+      staged.add(at);
+      if (entry != null) modes[directory.resolve(at)] = entry;
+    }
+
+    // Modes are set before anything is captured: an artifact records the
+    // mode it had when it was read, and the receipt has to name the file as
+    // it will remain.
+    _setGitFileModes(modes);
+    for (final at in staged) {
       outputs.add(StageArtifact.capture(
         stage: directory,
-        path: staged,
+        path: at,
         type: 'source',
       ));
     }
@@ -758,13 +767,28 @@ final class _PublicArtifactBinding {
   final String stagedPath;
 }
 
-void _setGitFileMode(String path, GitTreeEntry entry) {
-  final permissions = entry.executable ? '755' : '644';
-  final changed = Process.runSync('chmod', [permissions, path]);
-  if (changed.exitCode != 0) {
-    throw FileSystemException(
-      'could not preserve Git mode ${entry.mode}: ${changed.stderr}',
-      path,
-    );
-  }
+/// Gives the staged files the modes Git recorded, in one call per mode.
+///
+/// A `chmod` per file is a subprocess per file — the same shape as reading
+/// the snapshot one `git show` at a time, measured at 570ms for this
+/// repository against 4ms batched. Files already at the mode Git recorded
+/// are left alone, so the common repository, which tracks nothing
+/// executable, spawns nothing at all.
+void _setGitFileModes(Map<String, GitTreeEntry> byStagedPath) {
+  final needing = <String, List<String>>{};
+  byStagedPath.forEach((path, entry) {
+    final wanted = entry.executable ? 493 : 420; // 0755, 0644
+    final actual = File(path).statSync().mode & 511; // the permission bits
+    if (actual == wanted) return;
+    needing.putIfAbsent(entry.executable ? '755' : '644', () => []).add(path);
+  });
+  needing.forEach((permissions, paths) {
+    final changed = Process.runSync('chmod', [permissions, ...paths]);
+    if (changed.exitCode != 0) {
+      throw FileSystemException(
+        'could not preserve Git mode $permissions: ${changed.stderr}',
+        paths.first,
+      );
+    }
+  });
 }
