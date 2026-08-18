@@ -40,6 +40,16 @@ import '../binary_chain.dart';
 /// Every step is decided from its own inspection of reality, never from what a
 /// previous step left behind — which is what makes re-running the resume, and
 /// what will let CI split the steps across machines later.
+/// How long a preparation phase may take before it is worth drawing.
+///
+/// Reading claims, a signing baseline, or native readiness normally finishes
+/// in well under a second. Drawing a board for that is a blink: it appears,
+/// erases, and leaves nothing behind, which reads as a glitch rather than as
+/// progress. Past this, the wait is long enough that saying what rk is
+/// waiting on is the kinder answer — and a phase that fails still settles a
+/// durable row, whether or not it was ever drawn.
+const _briefPhase = Duration(milliseconds: 800);
+
 class ReleaseCommand {
   ReleaseCommand({
     required this.resolution,
@@ -467,6 +477,7 @@ class ReleaseCommand {
       output,
       title: '${unit.name} ${unit.version} · preparing release',
       targets: targets,
+      delay: _briefPhase,
     );
     final preflight = TargetReadinessContext(
       tools: tools,
@@ -1555,6 +1566,7 @@ class ReleaseCommand {
   ) async {
     final live = output.progressBoard(
       '${unit.name} ${unit.version} · preparing stage',
+      delay: _briefPhase,
       emitSlowToNonTerminal: true,
     );
     final row = live.addRow(
@@ -2727,9 +2739,11 @@ final class _TargetProgress {
     Output output, {
     required String title,
     required Iterable<TargetExpectation> targets,
+    Duration delay = const Duration(milliseconds: 80),
   })  : _output = output,
         live = output.progressBoard(
           title,
+          delay: delay,
           emitSlowToNonTerminal: true,
         ) {
     for (final target in targets) {
