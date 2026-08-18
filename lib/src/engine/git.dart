@@ -171,12 +171,6 @@ class GitState {
     return objects;
   }
 
-  static String _run(String root, List<String> args) {
-    final result = Process.runSync('git', args, workingDirectory: root);
-    if (result.exitCode != 0) return '';
-    return (result.stdout as String).trim();
-  }
-
   /// Paths from `git status --porcelain`, which prefixes every line with two
   /// status columns and a space.
   ///
@@ -277,42 +271,58 @@ class GitState {
     );
   }
 
-  static GitState read(String root) {
-    final result = Process.runSync('git', const ['status', '--porcelain'],
-        workingDirectory: root);
-    final statusError = result.exitCode == 0
+  /// Reads the repository's state.
+  ///
+  /// The eleven questions git is asked are independent — only "which remote
+  /// branches contain HEAD" needs an answer first — so they are asked
+  /// together rather than one at a time. Sequential `runSync` calls also
+  /// blocked the isolate, which froze every progress row rk was animating.
+  static Future<GitState> read(String root) async {
+    Future<ProcessResult> ask(List<String> args) =>
+        Process.run('git', args, workingDirectory: root);
+    String text(ProcessResult result) =>
+        result.exitCode != 0 ? '' : (result.stdout as String).trim();
+
+    final answers = await Future.wait([
+      ask(const ['status', '--porcelain']),
+      ask(const ['rev-parse', 'HEAD']),
+      ask(const ['rev-parse', 'HEAD^{tree}']),
+      ask(const ['rev-parse', '--abbrev-ref', 'HEAD']),
+      ask(const ['config', '--get', 'user.signingkey']),
+      ask(const ['show-ref', '--tags', '-d']),
+      ask(const ['remote']),
+      ask(const ['rev-list', '--count', '@{upstream}..HEAD']),
+      ask(const ['tag', '--list']),
+      ask(const ['remote', 'get-url', 'origin']),
+    ]);
+    final status = answers[0];
+    final statusError = status.exitCode == 0
         ? null
-        : _processFailure(result,
-            fallback: 'git status exited ${result.exitCode}');
-    final uncommitted = result.exitCode == 0
-        ? _uncommittedIn(result.stdout as String)
+        : _processFailure(status,
+            fallback: 'git status exited ${status.exitCode}');
+    final uncommitted = status.exitCode == 0
+        ? _uncommittedIn(status.stdout as String)
         : const <String>[];
+    final head = text(answers[1]);
+    final branch = text(answers[3]);
+    final showRef = text(answers[5]);
 
-    final head = _run(root, const ['rev-parse', 'HEAD']);
-    final headTree = _run(root, const ['rev-parse', 'HEAD^{tree}']);
-
-    // A commit is fetchable when some remote branch contains it.
-    final contains = _run(root, ['branch', '-r', '--contains', head]);
-
-    final branch = _run(root, const ['rev-parse', '--abbrev-ref', 'HEAD']);
-
-    final signingKey = _run(root, const ['config', '--get', 'user.signingkey']);
-
-    final showRef = _run(root, const ['show-ref', '--tags', '-d']);
+    // A commit is fetchable when some remote branch contains it, so this one
+    // waits for HEAD.
+    final contains = text(await ask(['branch', '-r', '--contains', head]));
 
     return GitState(
       root: root,
       head: head,
-      headTree: headTree,
+      headTree: text(answers[2]),
       branch: branch.isEmpty || branch == 'HEAD' ? null : branch,
       isClean: statusError == null && uncommitted.isEmpty,
       uncommitted: uncommitted,
       worktreeStatusError: statusError,
       headIsPushed: contains.trim().isNotEmpty,
-      hasRemote: _run(root, const ['remote']).trim().isNotEmpty,
-      aheadOfUpstream: int.tryParse(
-          _run(root, const ['rev-list', '--count', '@{upstream}..HEAD'])),
-      tags: _run(root, const ['tag', '--list'])
+      hasRemote: text(answers[6]).trim().isNotEmpty,
+      aheadOfUpstream: int.tryParse(text(answers[7])),
+      tags: text(answers[8])
           .split('\n')
           .where((t) => t.trim().isNotEmpty)
           .toList(),
@@ -322,8 +332,8 @@ class GitState {
       // commit-signing *preference* would answer a different question, and
       // still would not prove a key exists — so rk claims only what git
       // states, and signs or does not accordingly.
-      signingConfigured: signingKey.isNotEmpty,
-      originUrl: _originSlug(_run(root, const ['remote', 'get-url', 'origin'])),
+      signingConfigured: text(answers[4]).isNotEmpty,
+      originUrl: _originSlug(text(answers[9])),
     );
   }
 

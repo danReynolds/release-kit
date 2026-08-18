@@ -323,7 +323,8 @@ Future<int> _init(
   final tree = gitRoot == null
       ? FileSystemSourceTree(root)
       : GitSourceTree(gitRoot) as SourceTree;
-  final git = gitRoot == null ? GitState.unbound(root) : GitState.read(root);
+  final git =
+      gitRoot == null ? GitState.unbound(root) : await GitState.read(root);
   final selectorEnabled = interactive && !write && _usableInitTerminal();
 
   return InitCommand(
@@ -471,7 +472,7 @@ Future<int> _release(
   required bool interactive,
   required bool yes,
 }) async {
-  final prepared = _prepare(output);
+  final prepared = await _prepare(output);
   if (!prepared.isReady) return prepared.code!;
   final context = prepared.context!;
   final registry = prepared.registry!;
@@ -532,8 +533,8 @@ Future<int> _release(
       stageOnly: stageOnly,
       stageFor: stages.call,
       refreshStage: stages.refresh,
-      refreshGit: () => git.isBound
-          ? GitState.read(context.root)
+      refreshGit: () async => git.isBound
+          ? await GitState.read(context.root)
           : GitState.unbound(context.root),
     ).run(only: unit);
   } finally {
@@ -574,12 +575,17 @@ class _Prepared {
   bool get isReady => code == null;
 }
 
-_Prepared _prepare(Output output) {
+Future<_Prepared> _prepare(Output output) async {
+  // Reading git, the manifests, and the stage identity takes long enough on
+  // a real repository to look like a hang. The line is transient: whatever
+  // rk prints next erases it, so a fast repository never sees it settle.
+  output.progress('reading the repository');
   final gitRoot = GitSourceTree.findRoot(Directory.current.path);
   final root = gitRoot ?? Directory.current.absolute.path;
   SourceTree tree =
       gitRoot == null ? FileSystemSourceTree(root) : GitSourceTree(gitRoot);
-  final git = gitRoot == null ? GitState.unbound(root) : GitState.read(root);
+  final git =
+      gitRoot == null ? GitState.unbound(root) : await GitState.read(root);
   final String? source;
   try {
     source = tree.read('release.toml');
@@ -676,6 +682,7 @@ ReleaseSource? _selectReleaseSource(
   final source = ReleaseSource.select(
     tree: context.tree,
     git: context.git,
+    repository: context.git,
     resolution: prepared.resolution!,
     only: unit,
     diagnostics: diagnostics,
@@ -700,7 +707,7 @@ Future<int> _status(
   Output output,
   String? unit,
 ) async {
-  final prepared = _prepare(output);
+  final prepared = await _prepare(output);
   if (!prepared.isReady) return prepared.code!;
   final registry = prepared.registry!;
   final source = _selectReleaseSource(prepared, unit, output);

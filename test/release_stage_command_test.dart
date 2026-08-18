@@ -1963,7 +1963,7 @@ Future<void> _expectRefreshDriftRefused(
   var authorizationPrompts = 0;
   final drifted = await harness.run(
     stageOnly: false,
-    refreshGit: () => refreshed,
+    refreshGit: () async => refreshed,
     confirm: (_) async {
       authorizationPrompts++;
       return '1.2.3';
@@ -2101,7 +2101,7 @@ class _Harness {
   Future<_Run> run({
     required bool stageOnly,
     required Future<String?> Function(String prompt)? confirm,
-    GitState Function()? refreshGit,
+    Future<GitState> Function()? refreshGit,
     ReleaseStage Function(ResolvedUnit unit, GitState git)? refreshStage,
     HostCapabilities? capabilities,
     void Function(_Invocation call)? onInvocation,
@@ -2154,7 +2154,7 @@ class _Harness {
       stageOnly: stageOnly,
       stageFor: stages.call,
       refreshStage: refreshStage ?? stages.refresh,
-      refreshGit: refreshGit ?? () => git,
+      refreshGit: refreshGit ?? () async => git,
       wait: (_) => Future<void>.delayed(Duration.zero),
       capabilities: capabilities ??
           HostCapabilities(

@@ -54,7 +54,7 @@ class ReleaseCommand {
     this.stageOnly = false,
     ReleaseStage Function(ResolvedUnit unit)? stageFor,
     ReleaseStage Function(ResolvedUnit unit, GitState git)? refreshStage,
-    GitState Function()? refreshGit,
+    Future<GitState> Function()? refreshGit,
     Map<String, String> Function()? refreshEnvironment,
     Future<void> Function(Duration)? wait,
     HostCapabilities? capabilities,
@@ -74,7 +74,7 @@ class ReleaseCommand {
                   stageContracts:
                       inspector.targets.stageContractResolver(resolution),
                 ).call(unit)),
-        _refreshGit = refreshGit ?? (() => git),
+        _refreshGit = refreshGit ?? (() async => git),
         _refreshEnvironment = refreshEnvironment ??
             (() => Map<String, String>.of(Platform.environment)),
         _capabilities = capabilities;
@@ -125,7 +125,7 @@ class ReleaseCommand {
 
   final ReleaseStage Function(ResolvedUnit unit) _stageFor;
   final ReleaseStage Function(ResolvedUnit unit, GitState git) _refreshStage;
-  final GitState Function() _refreshGit;
+  final Future<GitState> Function() _refreshGit;
   final Map<String, String> Function() _refreshEnvironment;
   final Map<String, BinaryChain> _chains = {};
   var _sourceWarningShown = false;
@@ -574,7 +574,7 @@ class ReleaseCommand {
     // binds the PATH-selected compiler, host ABI, origin, destinations, and
     // tag-signing policy. Stage-only completion must make the same claim that
     // those inputs remained stable while producers ran.
-    if (!_releaseContextStillValid(
+    if (!await _releaseContextStillValid(
       stage,
       unit,
       changed: 'after staging',
@@ -670,7 +670,7 @@ class ReleaseCommand {
       return ExitCodes.refused;
     }
 
-    if (!_releaseContextStillValid(
+    if (!await _releaseContextStillValid(
       stage,
       unit,
       changed: 'before authorization',
@@ -781,7 +781,7 @@ class ReleaseCommand {
       if (provider == null) continue;
       final before = TargetReadinessContext(
         tools: tools,
-        git: _refreshGit(),
+        git: await _refreshGit(),
         environment: _refreshEnvironment(),
       );
       final endpoint = module.effectiveEndpoint(before, unit, [target]);
@@ -813,7 +813,7 @@ class ReleaseCommand {
       }
       final before = TargetReadinessContext(
         tools: tools,
-        git: _refreshGit(),
+        git: await _refreshGit(),
         environment: _refreshEnvironment(),
         progress: sessionProgress.combined(grouped),
         runInteractive: sessionProgress.interactive(tools),
@@ -846,7 +846,7 @@ class ReleaseCommand {
       }
       final after = TargetReadinessContext(
         tools: tools,
-        git: _refreshGit(),
+        git: await _refreshGit(),
         environment: _refreshEnvironment(),
       );
       final afterMatches = grouped.every((target) {
@@ -880,7 +880,7 @@ class ReleaseCommand {
       return ExitCodes.refused;
     }
     final authorizedStepIds = {for (final step in remaining) step.id};
-    if (!_releaseContextStillValid(
+    if (!await _releaseContextStillValid(
       stage,
       unit,
       changed: 'during authorization',
@@ -1053,7 +1053,7 @@ class ReleaseCommand {
           ..settle();
         return ExitCodes.refused;
       }
-      if (!_releaseContextStillValid(
+      if (!await _releaseContextStillValid(
         stage,
         unit,
         changed: 'before ${step.summary}',
@@ -1463,16 +1463,16 @@ class ReleaseCommand {
   /// that the repository, remote, signing policy, host, or PATH-selected
   /// compiler still describe the release the operator is about to publish.
   /// Re-resolving the stage identity binds those facts at each public boundary.
-  bool _releaseContextStillValid(
+  Future<bool> _releaseContextStillValid(
     ReleaseStage stage,
     ResolvedUnit unit, {
     required String changed,
     required HaltKind halt,
-  }) {
+  }) async {
     final drift = <String>[];
     final GitState current;
     try {
-      current = _refreshGit();
+      current = await _refreshGit();
     } on Object catch (error) {
       output.problem(Diagnostic(
         code: 'RK-STAGE-004',

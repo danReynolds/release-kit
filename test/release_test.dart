@@ -340,7 +340,7 @@ Future<Ran> release({
     stageOnly: dryRun,
     stageFor: stageFor,
     refreshStage: (unit, _) => stageFor(unit),
-    refreshGit: () => effectiveGit,
+    refreshGit: () async => effectiveGit,
     refreshEnvironment: refreshEnvironment,
   );
   final code = await command.run(only: only);

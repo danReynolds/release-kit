@@ -38,28 +38,28 @@ void main() {
     Process.runSync('git', ['commit', '-qm', 'x'], workingDirectory: root.path);
   }
 
-  test('a committed tree is clean', () {
+  test('a committed tree is clean', () async {
     write('a.txt', 'one\n');
     commit();
-    expect(GitState.read(root.path).isClean, isTrue);
+    expect((await GitState.read(root.path)).isClean, isTrue);
   });
 
-  test('a dirty tree is not clean', () {
+  test('a dirty tree is not clean', () async {
     // The false direction: a mutation hardcoding isClean true survived,
     // because every test read the list and none read the bit that gates a
     // release.
     write('a.txt', 'one\n');
     commit();
     write('a.txt', 'two\n');
-    expect(GitState.read(root.path).isClean, isFalse);
+    expect((await GitState.read(root.path)).isClean, isFalse);
   });
 
-  test('an unreadable worktree status never becomes a clean release', () {
+  test('an unreadable worktree status never becomes a clean release', () async {
     write('a.txt', 'one\n');
     commit();
     File('${root.path}/.git/index').writeAsBytesSync([0, 1, 2, 3]);
 
-    final state = GitState.read(root.path);
+    final state = await GitState.read(root.path);
     final problem = state.uncommittedProblem();
 
     expect(state.isClean, isFalse);
@@ -69,16 +69,17 @@ void main() {
     expect(problem?.remedy, contains('git status --porcelain'));
   });
 
-  test('a lightweight tag points at its commit', () {
+  test('a lightweight tag points at its commit', () async {
     write('a.txt', 'one\n');
     commit();
     Process.runSync('git', ['tag', 'v1.0.0'], workingDirectory: root.path);
-    final state = GitState.read(root.path);
+    final state = await GitState.read(root.path);
     expect(state.tagTarget('v1.0.0'), state.head);
     expect(state.tagObject('v1.0.0'), state.head);
   });
 
-  test('an annotated tag is peeled to the commit, not the tag object', () {
+  test('an annotated tag is peeled to the commit, not the tag object',
+      () async {
     write('a.txt', 'one\n');
     commit();
     Process.runSync(
@@ -86,7 +87,7 @@ void main() {
       ['tag', '-a', 'v1.0.0', '-m', 'release'],
       workingDirectory: root.path,
     );
-    final state = GitState.read(root.path);
+    final state = await GitState.read(root.path);
     expect(
       state.tagTarget('v1.0.0'),
       state.head,
@@ -101,26 +102,26 @@ void main() {
     );
   });
 
-  test('a tag left behind by history points where it was made', () {
+  test('a tag left behind by history points where it was made', () async {
     write('a.txt', 'one\n');
     commit();
-    final first = GitState.read(root.path).head;
+    final first = (await GitState.read(root.path)).head;
     Process.runSync('git', ['tag', 'v1.0.0'], workingDirectory: root.path);
     write('a.txt', 'two\n');
     commit();
 
-    final state = GitState.read(root.path);
+    final state = await GitState.read(root.path);
     expect(state.tagTarget('v1.0.0'), first);
     expect(state.tagTarget('v1.0.0'), isNot(state.head));
   });
 
-  test('a modified file keeps its whole name', () {
+  test('a modified file keeps its whole name', () async {
     write('packages/keybay/CHANGELOG.md', 'one\n');
     commit();
     write('packages/keybay/CHANGELOG.md', 'two\n');
 
     expect(
-      GitState.read(root.path).uncommitted,
+      (await GitState.read(root.path)).uncommitted,
       ['packages/keybay/CHANGELOG.md'],
       reason: 'porcelain writes " M path" for a worktree-only change, so '
           'trimming the block ate the first line\'s status column and rk '
@@ -128,31 +129,31 @@ void main() {
     );
   });
 
-  test('the first of several modified files is not the odd one out', () {
+  test('the first of several modified files is not the odd one out', () async {
     write('a.txt', 'one\n');
     write('b.txt', 'one\n');
     commit();
     write('a.txt', 'two\n');
     write('b.txt', 'two\n');
 
-    final uncommitted = GitState.read(root.path).uncommitted;
+    final uncommitted = (await GitState.read(root.path)).uncommitted;
     expect(uncommitted, ['a.txt', 'b.txt']);
   });
 
-  test('an untracked file is uncommitted', () {
+  test('an untracked file is uncommitted', () async {
     write('a.txt', 'one\n');
     commit();
     write('b.txt', 'new\n');
-    expect(GitState.read(root.path).uncommitted, ['b.txt']);
+    expect((await GitState.read(root.path)).uncommitted, ['b.txt']);
   });
 
-  test('rk\'s own workspace is not the operator\'s uncommitted work', () {
+  test('rk\'s own workspace is not the operator\'s uncommitted work', () async {
     write('a.txt', 'one\n');
     commit();
     write('.rk/diagnosis/2026-01-01/run.json', '{}');
     write('.rk/work/cli-v1.0.0-abc/keybay', 'binary');
 
-    final state = GitState.read(root.path);
+    final state = await GitState.read(root.path);
     expect(
       state.uncommitted,
       isEmpty,
@@ -162,24 +163,24 @@ void main() {
     expect(state.isClean, isTrue);
   });
 
-  test('a repository with no commits does not crash', () {
+  test('a repository with no commits does not crash', () async {
     write('a.txt', 'one\n');
-    final state = GitState.read(root.path);
+    final state = await GitState.read(root.path);
     expect(state.uncommitted, ['a.txt']);
   });
 
-  test('tags are read', () {
+  test('tags are read', () async {
     write('a.txt', 'one\n');
     commit();
     Process.runSync('git', ['tag', 'v1.0.0'], workingDirectory: root.path);
-    expect(GitState.read(root.path).hasTag('v1.0.0'), isTrue);
-    expect(GitState.read(root.path).hasTag('v2.0.0'), isFalse);
+    expect((await GitState.read(root.path)).hasTag('v1.0.0'), isTrue);
+    expect((await GitState.read(root.path)).hasTag('v2.0.0'), isFalse);
   });
 
-  test('a commit source tree ignores later worktree edits', () {
+  test('a commit source tree ignores later worktree edits', () async {
     write('packages/tool/pubspec.yaml', 'name: tool\nversion: 1.0.0\n');
     commit();
-    final head = GitState.read(root.path).head;
+    final head = (await GitState.read(root.path)).head;
     final source = GitCommitSourceTree(root.path, head);
 
     write('packages/tool/pubspec.yaml', 'name: tool\nversion: 9.9.9\n');
@@ -194,12 +195,12 @@ void main() {
     expect(source.trackedFiles(), ['packages/tool/pubspec.yaml']);
   });
 
-  test('a commit source tree preserves arbitrary blob bytes', () {
+  test('a commit source tree preserves arbitrary blob bytes', () async {
     const bytes = [0x00, 0xff, 0xfe, 0x0d, 0x0a, 0x1a];
     File('${root.path}/blob.bin').writeAsBytesSync(bytes);
     commit();
     final source =
-        GitCommitSourceTree(root.path, GitState.read(root.path).head);
+        GitCommitSourceTree(root.path, (await GitState.read(root.path)).head);
 
     File('${root.path}/blob.bin').writeAsBytesSync([0x01]);
 
@@ -211,11 +212,11 @@ void main() {
     );
   });
 
-  test('a commit source tree rejects every escaping read path', () {
+  test('a commit source tree rejects every escaping read path', () async {
     write('a.txt', 'one\n');
     commit();
     final source =
-        GitCommitSourceTree(root.path, GitState.read(root.path).head);
+        GitCommitSourceTree(root.path, (await GitState.read(root.path)).head);
 
     for (final operation in <Object? Function()>[
       () => source.read('../outside'),
@@ -665,7 +666,7 @@ void main() {
     );
     write('source.txt', 'the released source\n');
     commit();
-    final sourceCommit = GitState.read(root.path).head;
+    final sourceCommit = (await GitState.read(root.path)).head;
     expectOk(
       await tools.run(
         'git',
@@ -682,7 +683,7 @@ void main() {
       ),
       'source branch push',
     );
-    expect(GitState.read(root.path).headIsPushed, isTrue);
+    expect((await GitState.read(root.path)).headIsPushed, isTrue);
 
     const manifestBytes = '{"unit":"tool","version":"1.0.0"}\n';
     final manifest = File('${root.path}/.rk/work/release-manifest.json')
@@ -709,7 +710,7 @@ void main() {
       ),
       'annotated tag creation',
     );
-    final local = GitState.read(root.path);
+    final local = await GitState.read(root.path);
     final tagObject = local.tagObject(tag)!;
     expect(tagObject, isNot(sourceCommit));
     expect(local.tagTarget(tag), sourceCommit);
@@ -735,12 +736,12 @@ void main() {
       ),
       'local tag replacement',
     );
-    final replacementObject = GitState.read(root.path).tagObject(tag)!;
+    final replacementObject = (await GitState.read(root.path)).tagObject(tag)!;
     expect(replacementObject, isNot(tagObject));
 
     final staleCleanup = await destination.deleteLocalIfExact(tag, tagObject);
     expect(staleCleanup.ok, isFalse);
-    expect(GitState.read(root.path).tagObject(tag), replacementObject);
+    expect((await GitState.read(root.path)).tagObject(tag), replacementObject);
 
     expectOk(await destination.pushExact(tag, tagObject), 'release tag push');
     final firstReadback = await destination.inspectReleaseBinding(

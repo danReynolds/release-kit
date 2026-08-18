@@ -18,9 +18,12 @@ final class ReleaseSource {
     this.warning,
   });
 
+  /// [repository] is the state already read for this invocation. Reading
+  /// it again here asked git the same eleven questions twice per run.
   static ReleaseSource? select({
     required SourceTree tree,
     required GitState git,
+    required GitState repository,
     required Resolution resolution,
     required String? only,
     required Diagnostics diagnostics,
@@ -41,7 +44,6 @@ final class ReleaseSource {
       );
     }
 
-    final repository = GitState.read(git.root);
     if (repository.worktreeStatusError != null) {
       // The command will surface RK-GIT-008 before any stage or public act.
       // Retain the preliminary model because rk cannot safely decide whether

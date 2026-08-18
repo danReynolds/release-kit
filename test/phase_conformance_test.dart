@@ -716,7 +716,7 @@ publish = ["git-tag", "pub.dev"]
           wait: (_) async {},
           stageFor: stages.call,
           refreshStage: stages.refresh,
-          refreshGit: () => git,
+          refreshGit: () async => git,
         ).run(only: 'core');
       } on Object catch (error) {
         died = error;

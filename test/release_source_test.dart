@@ -36,10 +36,10 @@ publish = ["pub.dev"]
   tearDown(() => root.deleteSync(recursive: true));
 
   test('dirty registry-only source includes working-tree and untracked bytes',
-      () {
+      () async {
     _write(root, 'notes.txt', 'untracked release note\n');
     final tree = GitSourceTree(root.path);
-    final git = GitState.read(root.path);
+    final git = await GitState.read(root.path);
     final resolution = _resolve(tree);
     _write(root, 'pubspec.yaml', 'name: tool\nversion: 1.1.0\n');
     final diagnostics = Diagnostics();
@@ -47,6 +47,7 @@ publish = ["pub.dev"]
     final source = ReleaseSource.select(
       tree: tree,
       git: git,
+      repository: git,
       resolution: resolution,
       only: null,
       diagnostics: diagnostics,
@@ -67,7 +68,8 @@ publish = ["pub.dev"]
     );
   });
 
-  test('a Git-bound target keeps dirty source blocking and commit-bound', () {
+  test('a Git-bound target keeps dirty source blocking and commit-bound',
+      () async {
     _write(root, 'release.toml', '''
 schema = 2
 
@@ -75,13 +77,14 @@ schema = 2
 publish = ["git-tag", "pub.dev"]
 ''');
     final tree = GitSourceTree(root.path);
-    final git = GitState.read(root.path);
+    final git = await GitState.read(root.path);
     final resolution = _resolve(tree);
     final diagnostics = Diagnostics();
 
     final source = ReleaseSource.select(
       tree: tree,
       git: git,
+      repository: git,
       resolution: resolution,
       only: null,
       diagnostics: diagnostics,
@@ -92,10 +95,10 @@ publish = ["git-tag", "pub.dev"]
     expect(source.binding.uncommittedProblem(), isNotNull);
   });
 
-  test('a Git target added before freezing remains blocking', () {
+  test('a Git target added before freezing remains blocking', () async {
     _write(root, 'pubspec.yaml', 'name: tool\nversion: 1.1.0\n');
     final tree = GitSourceTree(root.path);
-    final git = GitState.read(root.path);
+    final git = await GitState.read(root.path);
     final resolution = _resolve(tree);
     _write(root, 'release.toml', '''
 schema = 2
@@ -108,6 +111,7 @@ publish = ["git-tag", "pub.dev"]
     final source = ReleaseSource.select(
       tree: tree,
       git: git,
+      repository: git,
       resolution: resolution,
       only: null,
       diagnostics: diagnostics,
