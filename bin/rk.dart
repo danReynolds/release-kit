@@ -576,10 +576,6 @@ class _Prepared {
 }
 
 Future<_Prepared> _prepare(Output output) async {
-  // Reading git, the manifests, and the stage identity takes long enough on
-  // a real repository to look like a hang. The line is transient: whatever
-  // rk prints next erases it, so a fast repository never sees it settle.
-  output.progress('reading the repository');
   final gitRoot = GitSourceTree.findRoot(Directory.current.path);
   final root = gitRoot ?? Directory.current.absolute.path;
   SourceTree tree =
