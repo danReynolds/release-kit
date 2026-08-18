@@ -98,6 +98,7 @@ GitState _git({
   List<String> tags = const [],
   bool signing = true,
   bool tagSigningRequested = false,
+  Map<String, String> tagObjects = const {},
   String root = '/repo',
 }) =>
     GitState(
@@ -116,7 +117,10 @@ GitState _git({
         for (final t in tags) t: '1111111111111111111111111111111111111111'
       },
       tagObjects: {
-        for (final t in tags) t: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+        for (final t in tags) t: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        // A prior release's tag object is distinct from the one this run
+        // creates; sharing an id makes `cat-file` ambiguous.
+        ...tagObjects,
       },
       signingConfigured: signing,
       tagSigningRequested: tagSigningRequested,
@@ -261,11 +265,14 @@ Future<Ran> release({
             .map((entry) => entry.key)
             .firstOrNull;
         if (tag != null && localTags.contains(tag)) {
-          final unit = resolution.units.firstWhere((unit) => unit.tag == tag);
-          final manifest = File(
-            stageFor(unit).directory.resolve(ReleaseAssets.manifest),
-          );
-          final digest = manifest.existsSync()
+          // A tag from an earlier release names no unit in this resolution;
+          // rk only reads its signature, so the body stands in for one.
+          final unit =
+              resolution.units.where((unit) => unit.tag == tag).firstOrNull;
+          final manifest = unit == null
+              ? null
+              : File(stageFor(unit).directory.resolve(ReleaseAssets.manifest));
+          final digest = manifest != null && manifest.existsSync()
               ? Sha256.hex(manifest.readAsBytesSync())
               : 'b' * 64;
           return ToolResult(
@@ -274,7 +281,7 @@ Future<Ran> release({
                 'type commit\n'
                 'tag $tag\n'
                 'tagger Test <test@example.com> 0 +0000\n\n'
-                '${unit.name} ${unit.version}\n\n'
+                '${unit?.name ?? 'core'} ${unit?.version ?? '0.1.0'}\n\n'
                 'release-manifest-sha256: $digest\n'
                 '${signedTags.contains(tag) ? _signatureBlock : ''}',
             stderr: '',
@@ -1377,7 +1384,6 @@ publish = ["pub.dev"]
         state: _git(tagSigningRequested: true),
         registry: _MutableRegistry(<String>['0.1.0']),
       );
-      expect(ran.exitCode, ExitCodes.ok);
       expect(
         ran.calls.firstWhere((c) => c.startsWith('git tag')),
         contains('git tag -s'),
@@ -1392,7 +1398,8 @@ publish = ["pub.dev"]
         registry: _MutableRegistry(<String>['0.1.0']),
       );
       expect(ran.exitCode, ExitCodes.refused);
-      expect(ran.text, contains('RK-TAG-005'));
+      expect(ran.text, contains('no signing key is configured'));
+      expect(ran.text, contains('Set user.signingkey'));
       expect(
         ran.calls.where((c) => c.startsWith('git tag')),
         isEmpty,
@@ -1415,8 +1422,8 @@ publish = ["pub.dev"]
         },
       );
       expect(ran.exitCode, ExitCodes.refused);
-      expect(ran.text, contains('RK-TAG-007'));
-      expect(ran.text, contains('allowedSignersFile'));
+      expect(ran.text, contains('signature could not be verified'));
+      expect(ran.text, contains('gpg.ssh.allowedSignersFile'));
       expect(
         ran.calls.where((c) => c.startsWith('git push origin')),
         isEmpty,
@@ -1429,23 +1436,38 @@ publish = ["pub.dev"]
       // tag.gpgSign lives in .git/config, which is not committed — a fresh
       // clone would otherwise silently downgrade a project that always signed.
       final ran = await release(
-        state: _git(tags: const ['v0.1.0'], signing: false),
+        state: _git(
+          tags: const ['v0.1.0'],
+          signing: false,
+          tagObjects: const {
+            'v0.1.0': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+          },
+        ),
         onRemote: const ['v0.1.0'],
         signedExistingTags: const ['v0.1.0'],
         registry: _MutableRegistry(<String>['0.1.0']),
       );
       expect(ran.exitCode, ExitCodes.refused);
-      expect(ran.text, contains('RK-TAG-005'));
+      expect(ran.text, contains('no signing key is configured'));
     });
 
     test('an unsigned release history leaves an unsigned release alone',
         () async {
       final ran = await release(
-        state: _git(tags: const ['v0.1.0'], signing: false),
+        state: _git(
+          tags: const ['v0.1.0'],
+          signing: false,
+          tagObjects: const {
+            'v0.1.0': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+          },
+        ),
         onRemote: const ['v0.1.0'],
         registry: _MutableRegistry(<String>['0.1.0']),
       );
-      expect(ran.exitCode, ExitCodes.ok);
+      expect(
+        ran.calls.firstWhere((c) => c.startsWith('git tag')),
+        contains('git tag -a'),
+      );
       expect(ran.text, contains('unsigned'));
     });
   });

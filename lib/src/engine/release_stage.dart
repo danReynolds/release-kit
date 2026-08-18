@@ -812,12 +812,40 @@ void _setGitFileModes(Map<String, GitTreeEntry> byStagedPath) {
     needing.putIfAbsent(entry.executable ? '755' : '644', () => []).add(path);
   });
   needing.forEach((permissions, paths) {
-    final changed = Process.runSync('chmod', [permissions, ...paths]);
-    if (changed.exitCode != 0) {
-      throw FileSystemException(
-        'could not preserve Git mode $permissions: ${changed.stderr}',
-        paths.first,
-      );
+    // In batches, because one argument list has a length the kernel will
+    // refuse: a repository tracking thousands of executables would exceed
+    // it and staging would fail on a limit that has nothing to do with the
+    // release. The bound is well under every platform's, and the common
+    // repository needs a single call.
+    for (final batch in _batched(paths, 32000)) {
+      final changed = Process.runSync('chmod', [permissions, ...batch]);
+      if (changed.exitCode != 0) {
+        throw FileSystemException(
+          'could not preserve Git mode $permissions: ${changed.stderr}',
+          batch.first,
+        );
+      }
     }
   });
+}
+
+/// [paths] in groups whose combined length stays under [maxCharacters].
+Iterable<List<String>> _batched(
+  List<String> paths,
+  int maxCharacters,
+) {
+  final batches = <List<String>>[];
+  var batch = <String>[];
+  var length = 0;
+  for (final path in paths) {
+    if (batch.isNotEmpty && length + path.length + 1 > maxCharacters) {
+      batches.add(batch);
+      batch = <String>[];
+      length = 0;
+    }
+    batch.add(path);
+    length += path.length + 1;
+  }
+  if (batch.isNotEmpty) batches.add(batch);
+  return batches;
 }
