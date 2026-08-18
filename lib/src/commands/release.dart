@@ -1772,15 +1772,20 @@ class ReleaseCommand {
     }).toList();
     stageProgress.restore(progress);
 
-    // One lane per platform chain. A platform's build, notarize, and
-    // archive touch only that platform's artifacts, so lanes are
-    // independent until the complete-stage barrier: steps keep checklist
-    // order within their lane, and the receipt's causal check accepts any
-    // cross-lane interleaving because no input crosses a lane. A future
-    // producer without a platform fails the null check loudly here rather
-    // than quietly becoming its own concurrent lane.
+    // Platform-less producers — dependency resolution — are the serial
+    // prelude: they run to completion, in checklist order, before any lane
+    // starts, because every build's `needs` edge points at them. Then one
+    // lane per platform chain: a platform's build, notarize, and archive
+    // touch only that platform's artifacts, so lanes are independent until
+    // the complete-stage barrier, and the receipt's causal check accepts
+    // any cross-lane interleaving because no input crosses a lane.
+    final prelude = [
+      for (final step in producerSteps)
+        if (step.platform == null) step,
+    ];
     final lanes = <String, List<Step>>{};
     for (final step in producerSteps) {
+      if (step.platform == null) continue;
       lanes
           .putIfAbsent('${step.project}/${step.platform!}', () => [])
           .add(step);
@@ -1788,10 +1793,11 @@ class ReleaseCommand {
     assert(
       () {
         // The grouping and the checklist's graph must agree: every producer
-        // dependency resolves earlier in its own lane.
+        // dependency resolves in the prelude or earlier in its own lane.
         final producerIds = {for (final step in producerSteps) step.id};
+        final preludeIds = {for (final step in prelude) step.id};
         for (final lane in lanes.values) {
-          final earlier = <String>{};
+          final earlier = <String>{...preludeIds};
           for (final step in lane) {
             for (final need in step.needs) {
               if (producerIds.contains(need) && !earlier.contains(need)) {
@@ -1803,53 +1809,8 @@ class ReleaseCommand {
         }
         return true;
       }(),
-      'a producer depends on a step outside or later in its lane',
+      'a producer depends on a step outside its prelude or lane',
     );
-
-    // Builds share one package resolution, and a cold checkout would let
-    // each compile trigger its own implicit `dart pub get` — two resolvers
-    // racing in one package directory. Resolve once — in the staged source
-    // the builds compile from, which exists only now — before the lanes fan
-    // out, and say so: this is the longest silent wait staging has.
-    final binaryProject = unit.binaryProject;
-    if (binaryProject != null &&
-        producerSteps.any((step) =>
-            step.kind == StepKind.build &&
-            !_producerRecorded(progress, step))) {
-      output.say('resolving ${binaryProject.name} dependencies', depth: 1);
-      final chain = _chain(unit);
-      final ToolResult resolvedDeps;
-      try {
-        resolvedDeps = await tools.run(
-          chain.compilerExecutable,
-          const ['pub', 'get'],
-          workingDirectory: binaryProject.directoryIn(chain.repositoryRoot),
-        );
-      } on Object catch (error) {
-        // A missing tool or directory is a refusal with evidence, not a
-        // crash without a message.
-        stageProgress.discard();
-        _stageOperationProblem(
-          'resolving ${binaryProject.name} dependencies',
-          error,
-        );
-        output.halt(HaltKind.beforeActing);
-        return null;
-      }
-      if (resolvedDeps.exitCode != 0) {
-        stageProgress.discard();
-        final detail = resolvedDeps.stderr.trim().isEmpty
-            ? resolvedDeps.stdout.trim()
-            : resolvedDeps.stderr.trim();
-        _stageOperationProblem(
-          'resolving ${binaryProject.name} dependencies',
-          detail,
-        );
-        // Nothing has acted: resolution failed before any producer ran.
-        output.halt(HaltKind.beforeActing);
-        return null;
-      }
-    }
 
     // A failure drains. The lane that failed marks its row and says its
     // problem right away; the others finish the step already in flight — a
@@ -1930,7 +1891,10 @@ class ReleaseCommand {
       }
     }
 
-    await Future.wait([for (final lane in lanes.values) runLane(lane)]);
+    await runLane(prelude);
+    if (failures.isEmpty) {
+      await Future.wait([for (final lane in lanes.values) runLane(lane)]);
+    }
     if (failures.isNotEmpty) {
       // Rows still active belong to drained lanes whose in-flight step
       // finished after the stop: their artifacts were not attempted, and
@@ -2500,6 +2464,8 @@ class ReleaseCommand {
   }) async {
     final project = unit.project(step.project!);
     switch (step.kind) {
+      case StepKind.resolve:
+        return _chain(unit).resolveStep(step, project);
       case StepKind.build:
         return _chain(unit).buildStep(
           step,
@@ -2538,6 +2504,10 @@ class ReleaseCommand {
       });
 
   ProgressActivity _producerActivity(Step step) => switch (step.kind) {
+        StepKind.resolve => ProgressActivity(
+            running: 'resolving',
+            failed: 'resolution failed',
+          ),
         StepKind.build => ProgressActivity(
             running: 'building',
             failed: 'build failed',

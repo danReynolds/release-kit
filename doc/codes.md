@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-140 codes across 26 families.
+141 codes across 26 families.
 
 
 ## RK-AUTH — Authorization
@@ -37,6 +37,7 @@ fails, and the count below is checked against the rows.
 | code | says | declared in |
 |---|---|---|
 | `RK-BUILD-001` | $platform: the build did not produce a working binary | `lib/src/binary_chain.dart` |
+| `RK-BUILD-002` | ${project.name} dependencies could not be resolved | `lib/src/binary_chain.dart` |
 
 ## RK-CHG — The changelog
 

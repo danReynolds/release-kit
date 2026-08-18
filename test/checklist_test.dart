@@ -259,6 +259,7 @@ executables:
         Checklist.derive(resolution.unit('cli')!, resolution, Diagnostics());
     final producers = checklist.steps
         .where((step) => const {
+              StepKind.resolve,
               StepKind.build,
               StepKind.notarize,
               StepKind.archive,
@@ -544,6 +545,7 @@ executables:
 
     expect(checklist.steps.map((s) => s.id).toList(), [
       'cli/requires/pub.dev/keybay/0.2.0',
+      'cli/resolve/keybay_cli',
       'cli/build/keybay_cli/linux-arm64',
       'cli/archive/keybay_cli/linux-arm64',
       'cli/build/keybay_cli/linux-x64',

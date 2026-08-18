@@ -473,6 +473,13 @@ void _complete(ReleaseStage stage) {
     ],
   );
 
+  final resolveStep = StageStep(
+    name: 'resolve:tool',
+    inputs: [StageInput.step(sourceStep)],
+    outputs: const [],
+    evidence: const {'dart_pub_get': 'resolved'},
+  );
+
   final binaryBytes = utf8.encode('tool fixture');
   final binaryPath = ReleaseAssets.binaryPath(project, 'linux-x64');
   stage.directory.writeBytesAtomically(binaryPath, binaryBytes);
@@ -514,6 +521,7 @@ void _complete(ReleaseStage stage) {
   stage.writeProgress([
     sourceStep,
     notesStep,
+    resolveStep,
     buildStep,
     archiveStep,
   ]);

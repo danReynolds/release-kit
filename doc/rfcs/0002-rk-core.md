@@ -616,7 +616,9 @@ the receipt that names it.
 
 *Amended (as built):* platform chains stage concurrently — each platform's
 build, notarize, and archive is an independent lane until the
-complete-stage barrier, and a failure drains: in-flight steps finish and
+complete-stage barrier. Dependency resolution is itself a receipted
+producer step, the platform-less serial prelude every build's `needs` edge
+points at; it runs once before the lanes fan out. A failure drains: in-flight steps finish and
 are recorded, nothing new starts, and the strongest halt any failure asked
 for is spoken once after the drain. Execution order is scheduling; the
 record is canonical: progress receipts are always written in contract
