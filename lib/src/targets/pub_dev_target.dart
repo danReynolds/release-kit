@@ -639,6 +639,12 @@ final class _PubDevSession extends TargetSessionProvider {
     ResolvedUnit unit,
     List<TargetExpectation> targets,
   ) async {
+    // A token already answers for this repository, and pub reads its secret
+    // from the environment on every request. Signing in would create a second,
+    // durable credential the release does not use.
+    if (await _tokenConfigured(context)) {
+      return const TargetReady(note: 'token configured');
+    }
     int code;
     try {
       code = await context.runInteractive!(
@@ -662,17 +668,23 @@ final class _PubDevSession extends TargetSessionProvider {
     );
   }
 
-  @override
-  Future<bool?> established(TargetReadinessContext context) async {
-    // A token configured for pub.dev reads its secret from the environment on
-    // every request, so there is no stored session to create or clear. Treat
-    // that as established and leave the configuration untouched.
+  /// Whether pub already has a token for pub.dev in this repository.
+  ///
+  /// Only presence is read. The secret itself stays where pub keeps it — for an
+  /// `--env-var` token, in the environment at request time.
+  Future<bool> _tokenConfigured(TargetReadinessContext context) async {
     final tokens = await context.tools.run(
       'dart',
       const ['pub', 'token', 'list'],
       workingDirectory: context.git.root,
     );
-    if (tokens.ok && tokens.stdout.contains(_pubDevUrl)) return true;
+    return tokens.ok && tokens.stdout.contains(_pubDevUrl);
+  }
+
+  @override
+  Future<bool?> established(TargetReadinessContext context) async {
+    // A token needs no stored session, so there is nothing to create or clear.
+    if (await _tokenConfigured(context)) return true;
 
     final credentials = _pubCredentialsFile(context.environment);
     if (credentials == null) return null;

@@ -1446,6 +1446,12 @@ publish = ["pub.dev"]
         isNot(contains('dart pub logout')),
         reason: 'the secret comes from the environment; there is no session',
       );
+      expect(
+        ran.calls,
+        isNot(contains('dart pub login')),
+        reason: 'signing in would create a durable credential the release '
+            'does not use',
+      );
     });
 
     test('is cleared even when the release stops partway', () async {
