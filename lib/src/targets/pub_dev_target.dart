@@ -639,6 +639,12 @@ final class _PubDevSession extends TargetSessionProvider {
     ResolvedUnit unit,
     List<TargetExpectation> targets,
   ) async {
+    // A token already answers for this repository, and pub reads its secret
+    // from the environment on every request. Signing in would create a second,
+    // durable credential the release does not use.
+    if (await _tokenConfigured(context)) {
+      return const TargetReady(note: 'token configured');
+    }
     int code;
     try {
       code = await context.runInteractive!(
@@ -662,17 +668,36 @@ final class _PubDevSession extends TargetSessionProvider {
     );
   }
 
+  /// Whether pub already has a token for pub.dev in this repository.
+  ///
+  /// Only presence is read. The secret itself stays where pub keeps it — for an
+  /// `--env-var` token, in the environment at request time.
+  Future<bool> _tokenConfigured(TargetReadinessContext context) async {
+    try {
+      final tokens = await context.tools.run(
+        'dart',
+        const ['pub', 'token', 'list'],
+        workingDirectory: context.git.root,
+      );
+      if (!tokens.ok) return false;
+      // A whole line, not a substring: a token for a lookalike host such as
+      // https://pub.dev.example.com must not answer for pub.dev.
+      return tokens.stdout
+          .split('\n')
+          .map((line) => line.trim())
+          .any((line) => line == _pubDevUrl || line == '$_pubDevUrl/');
+    } on ProcessException {
+      // Nothing to ask. Publishing needs the same executable and refuses by
+      // name, so this question goes unanswered rather than ending the run in a
+      // crash.
+      return false;
+    }
+  }
+
   @override
   Future<bool?> established(TargetReadinessContext context) async {
-    // A token configured for pub.dev reads its secret from the environment on
-    // every request, so there is no stored session to create or clear. Treat
-    // that as established and leave the configuration untouched.
-    final tokens = await context.tools.run(
-      'dart',
-      const ['pub', 'token', 'list'],
-      workingDirectory: context.git.root,
-    );
-    if (tokens.ok && tokens.stdout.contains(_pubDevUrl)) return true;
+    // A token needs no stored session, so there is nothing to create or clear.
+    if (await _tokenConfigured(context)) return true;
 
     final credentials = _pubCredentialsFile(context.environment);
     if (credentials == null) return null;
