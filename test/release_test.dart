@@ -86,11 +86,18 @@ void _materializeNativePubArchive(
     ..writeAsBytesSync(ArchiveBuilder.gzip(ArchiveBuilder.tar(entries)));
 }
 
+/// The trailer `git tag -s` leaves on the tag object, abbreviated. rk looks for
+/// the BEGIN line, so the body only has to be present, not valid.
+const _signatureBlock = '-----BEGIN SSH SIGNATURE-----\n'
+    'U1NIU0lHAAAAAWZpeHR1cmU=\n'
+    '-----END SSH SIGNATURE-----\n';
+
 GitState _git({
   bool clean = true,
   bool pushed = true,
   List<String> tags = const [],
   bool signing = true,
+  bool tagSigningRequested = false,
   String root = '/repo',
 }) =>
     GitState(
@@ -112,6 +119,7 @@ GitState _git({
         for (final t in tags) t: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
       },
       signingConfigured: signing,
+      tagSigningRequested: tagSigningRequested,
       originUrl: 'danReynolds/keybay',
     );
 
@@ -127,6 +135,7 @@ extension _TagPlacement on GitState {
         tags: tags,
         tagTargets: {...tagTargets, tag: sha},
         signingConfigured: signingConfigured,
+        tagSigningRequested: tagSigningRequested,
         originUrl: originUrl,
       );
 }
@@ -162,6 +171,7 @@ Future<Ran> release({
   void Function()? onConfirm,
   ToolResult? Function(String key)? answers,
   Iterable<String> onRemote = const [],
+  Iterable<String> signedExistingTags = const [],
   String config = _config,
   String? only = 'core',
 }) async {
@@ -206,6 +216,10 @@ Future<Ran> release({
     for (final tag in effectiveGit.tags)
       tag: effectiveGit.tagObject(tag) ?? _tagObject,
   };
+  // Which tag objects carry a signature block. `git tag -s` adds one, and
+  // `cat-file` below is where rk reads it back — the fixture models the object,
+  // not the intent, because that is the distinction rk now enforces.
+  final signedTags = <String>{...signedExistingTags};
   final recorder = RecordingTools(
     answers: (key) {
       final scripted = results[_normalizedPubKey(key)];
@@ -261,7 +275,8 @@ Future<Ran> release({
                 'tag $tag\n'
                 'tagger Test <test@example.com> 0 +0000\n\n'
                 '${unit.name} ${unit.version}\n\n'
-                'release-manifest-sha256: $digest\n',
+                'release-manifest-sha256: $digest\n'
+                '${signedTags.contains(tag) ? _signatureBlock : ''}',
             stderr: '',
           );
         }
@@ -276,6 +291,7 @@ Future<Ran> release({
           final tag = key.split(' ')[3];
           localTags.add(tag);
           tagObjects[tag] = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+          if (key.startsWith('git tag -s ')) signedTags.add(tag);
         }
       }
       if (key.startsWith('git update-ref -d refs/tags/')) {
@@ -1351,6 +1367,87 @@ publish = ["pub.dev"]
       ran.calls.firstWhere((c) => c.startsWith('git tag')),
       contains('git tag -a'),
     );
+    expect(ran.text, contains('unsigned'));
+  });
+
+  group('a project that signs its releases', () {
+    test('says so through tag.gpgSign, and gets a verified signature',
+        () async {
+      final ran = await release(
+        state: _git(tagSigningRequested: true),
+        registry: _MutableRegistry(<String>['0.1.0']),
+      );
+      expect(ran.exitCode, ExitCodes.ok);
+      expect(
+        ran.calls.firstWhere((c) => c.startsWith('git tag')),
+        contains('git tag -s'),
+      );
+      expect(ran.calls, contains('git verify-tag $_tagObject'));
+      expect(ran.text, contains('signed, verified'));
+    });
+
+    test('refuses before acting when no signing key is configured', () async {
+      final ran = await release(
+        state: _git(signing: false, tagSigningRequested: true),
+        registry: _MutableRegistry(<String>['0.1.0']),
+      );
+      expect(ran.exitCode, ExitCodes.refused);
+      expect(ran.text, contains('RK-TAG-005'));
+      expect(
+        ran.calls.where((c) => c.startsWith('git tag')),
+        isEmpty,
+        reason: 'a project that cannot sign must not produce a tag at all',
+      );
+    });
+
+    test('refuses a signature this machine cannot verify, naming the fix',
+        () async {
+      final ran = await release(
+        state: _git(tagSigningRequested: true),
+        registry: _MutableRegistry(<String>['0.1.0']),
+        results: {
+          'git verify-tag $_tagObject': ToolResult(
+            exitCode: 1,
+            stdout: '',
+            stderr: 'error: gpg.ssh.allowedSignersFile needs to be '
+                'configured and exist for ssh signature verification',
+          ),
+        },
+      );
+      expect(ran.exitCode, ExitCodes.refused);
+      expect(ran.text, contains('RK-TAG-007'));
+      expect(ran.text, contains('allowedSignersFile'));
+      expect(
+        ran.calls.where((c) => c.startsWith('git push origin')),
+        isEmpty,
+        reason: 'an unverifiable signature is not published as signed',
+      );
+    });
+
+    test('a signed release history requires signing without any git config',
+        () async {
+      // tag.gpgSign lives in .git/config, which is not committed — a fresh
+      // clone would otherwise silently downgrade a project that always signed.
+      final ran = await release(
+        state: _git(tags: const ['v0.1.0'], signing: false),
+        onRemote: const ['v0.1.0'],
+        signedExistingTags: const ['v0.1.0'],
+        registry: _MutableRegistry(<String>['0.1.0']),
+      );
+      expect(ran.exitCode, ExitCodes.refused);
+      expect(ran.text, contains('RK-TAG-005'));
+    });
+
+    test('an unsigned release history leaves an unsigned release alone',
+        () async {
+      final ran = await release(
+        state: _git(tags: const ['v0.1.0'], signing: false),
+        onRemote: const ['v0.1.0'],
+        registry: _MutableRegistry(<String>['0.1.0']),
+      );
+      expect(ran.exitCode, ExitCodes.ok);
+      expect(ran.text, contains('unsigned'));
+    });
   });
 
   test('an existing tag is not created twice', () async {

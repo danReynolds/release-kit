@@ -205,19 +205,58 @@ final class GitTagTargetModule extends TargetModule {
     final tag = requiredTargetTag(unit, PublishTarget.gitTag);
     final destination = GitTag(tools: context.tools, root: git.root);
     final signed = git.signingConfigured;
+    final required = await _signatureRequired(context, unit, destination);
+
+    // Refuse before creating anything: a project that signs its releases must
+    // not produce an unsignable one, and the fix is local configuration.
+    if (required && !signed) {
+      return TargetActOutcome(
+        ok: false,
+        coordinate: tag,
+        diagnostic: Diagnostic(
+          code: 'RK-TAG-005',
+          message: 'this project signs its release tags, and no signing key '
+              'is configured',
+          remedy: 'Set user.signingkey (with gpg.format=ssh for an SSH key), '
+              'or, to release ${unit.name} unsigned, clear tag.gpgSign and '
+              'know that its signed release history no longer continues.',
+        ),
+      );
+    }
 
     // A prior interrupted run may have created the exact local tag without
     // getting it to origin. Push that validated object instead of recreating
     // or moving it.
     if (git.hasTag(tag)) {
+      // The policy applies to what that earlier run actually produced, not to
+      // what this run's configuration would have produced.
+      final existing = git.tagObject(tag);
+      var existingSigned = false;
+      if (existing != null) {
+        final signature = await _signatureState(
+          destination,
+          existing,
+          required: required,
+          tag: tag,
+          unit: unit,
+        );
+        if (signature.refusal != null) {
+          return TargetActOutcome(
+            ok: false,
+            coordinate: tag,
+            diagnostic: signature.refusal!,
+          );
+        }
+        existingSigned = signature.signed;
+      }
       context.progress.begin(
         ProgressActivity(running: 'pushing', failed: 'push failed'),
       );
       return _pushExisting(
         destination,
         unit,
-        object: git.tagObject(tag),
-        signed: signed,
+        object: existing,
+        signed: existingSigned,
       );
     }
 
@@ -261,12 +300,29 @@ final class GitTagTargetModule extends TargetModule {
     }
     Future<TargetCleanupResult> cleanup() =>
         _deleteLocalTag(destination, tag, object);
+
+    final signature = await _signatureState(
+      destination,
+      object,
+      required: required,
+      tag: tag,
+      unit: unit,
+    );
+    if (signature.refusal != null) {
+      return TargetActOutcome(
+        ok: false,
+        coordinate: tag,
+        cleanupIfAbsent: cleanup,
+        diagnostic: signature.refusal!,
+      );
+    }
+
     final local = await destination.inspectLocalReleaseBinding(
       tag: tag,
       expectedObject: object,
       expectedCommit: git.head,
       expectedManifestSha256: manifestSha256,
-      requireSignature: signed,
+      requireSignature: signature.signed,
     );
     if (!local.isExact) {
       return TargetActOutcome(
@@ -305,8 +361,92 @@ final class GitTagTargetModule extends TargetModule {
       ok: true,
       coordinate: tag,
       mayHaveActed: true,
-      successNote: [if (signed) 'signed' else 'unsigned', 'pushed'].join(', '),
+      successNote: [
+        if (signature.signed) 'signed, verified' else 'unsigned',
+        'pushed',
+      ].join(', '),
     );
+  }
+
+  /// What [object]'s signature actually is, and whether that satisfies the
+  /// project's signing policy.
+  ///
+  /// Presence is read from the object; verifiability is a separate question,
+  /// because `git verify-tag` fails both for an unsigned tag and for a signed
+  /// one this machine holds no allowed-signers list for. A signature rk cannot
+  /// authenticate is refused either way: rk would otherwise report a release as
+  /// signed on the strength of bytes it never checked.
+  Future<({bool signed, Diagnostic? refusal})> _signatureState(
+    GitTag destination,
+    String object, {
+    required bool required,
+    required String tag,
+    required ResolvedUnit unit,
+  }) async {
+    final present = await destination.hasSignature(object);
+    if (present == null) {
+      return (
+        signed: false,
+        refusal: Diagnostic(
+          code: 'RK-TAG-006',
+          message: 'the tag object for $tag could not be read',
+          remedy: 'Re-run rk release ${unit.name}. The local tag is removed '
+              'when it is not on origin, so a re-run starts from a clean state.',
+        ),
+      );
+    }
+    if (!present) {
+      if (!required) return (signed: false, refusal: null);
+      return (
+        signed: false,
+        refusal: Diagnostic(
+          code: 'RK-TAG-006',
+          message: 'this project signs its release tags, and $tag was created '
+              'without a signature',
+          remedy: 'Confirm the signing key works — git tag -s a throwaway tag '
+              'and check git cat-file tag on it — then re-run rk release '
+              '${unit.name}.',
+        ),
+      );
+    }
+    final verified = await destination.verifySignature(object);
+    if (!verified.ok) {
+      return (
+        signed: true,
+        refusal: Diagnostic(
+          code: 'RK-TAG-007',
+          message: '$tag is signed, and its signature could not be verified '
+              'on this machine',
+          remedy: 'For an SSH signing key, git needs a list of the signers it '
+              'should trust: write your public key to an allowed-signers file '
+              'and set gpg.ssh.allowedSignersFile to it. rk will not record a '
+              'release as signed on a signature it could not check.\n'
+              '${verified.summary}',
+        ),
+      );
+    }
+    return (signed: true, refusal: null);
+  }
+
+  /// Whether this project's next release tag must carry a signature.
+  ///
+  /// Two signals, both the project's own rather than an rk setting:
+  /// `tag.gpgSign` states the intent directly, and a signed release history
+  /// states it durably — `.git/config` is not committed, so a fresh clone would
+  /// otherwise silently downgrade a project that has always signed.
+  Future<bool> _signatureRequired(
+    TargetReleaseContext context,
+    ResolvedUnit unit,
+    GitTag destination,
+  ) async {
+    if (context.git.tagSigningRequested) return true;
+    final pattern = requiredTargetTagPattern(unit, PublishTarget.gitTag);
+    for (final tag in context.git.tagsMatching(pattern)) {
+      final object = context.git.tagObject(tag);
+      if (object == null) continue;
+      if (await destination.hasSignature(object) ?? false) return true;
+    }
+    return false;
   }
 
   Future<TargetActOutcome> _pushExisting(
@@ -348,7 +488,7 @@ final class GitTagTargetModule extends TargetModule {
       coordinate: tag,
       mayHaveActed: true,
       successNote: [
-        if (signed) 'signed' else 'unsigned',
+        if (signed) 'signed, verified' else 'unsigned',
         'pushed',
         'pre-existing local tag',
       ].join(', '),

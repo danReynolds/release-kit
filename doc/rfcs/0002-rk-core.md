@@ -614,6 +614,21 @@ the normal release creates the same stage internally. A file on disk is not
 evidence of itself, and no artifact is re-signed or otherwise mutated after
 the receipt that names it.
 
+*Amended (as built):* verifying a stage — re-reading it and re-hashing
+every artifact — is answered once and then remembered for as long as the
+stage holds still. A release asks whether the stage is still good dozens of
+times, and re-hashing tens of megabytes to answer again cost more than
+everything else it does locally. Every ask still re-reads the directory;
+only hashing is skipped, and only while every entry's path, kind, size,
+mode, and both timestamps are unchanged. This is a memo, not a promise: the
+first ask verifies bytes, and anything that writes to the stage — rk's own
+producers included — moves a timestamp and forces the next ask to verify
+again. What a stale answer would take is a rewrite of identical length that
+also preserves change time, which the writer cannot set; on a volume whose
+timestamps are only second-accurate the claim weakens to size and mode
+within that second. Concurrent writers are excluded separately, by the
+stage lock.
+
 *Amended (as built):* platform chains stage concurrently — each platform's
 build, notarize, and archive is an independent lane until the
 complete-stage barrier, and a failure drains: in-flight steps finish and

@@ -21,6 +21,7 @@ class GitState {
     this.tagObjects = const {},
     this.tagTargets = const {},
     required this.signingConfigured,
+    this.tagSigningRequested = false,
     required this.originUrl,
     this.isBound = true,
   }) : headTree = headTree ?? head;
@@ -98,6 +99,14 @@ class GitState {
   /// Whether `git tag -s` would succeed, so rk can say so before asking for
   /// one rather than letting git fail with rk's name nowhere in it.
   final bool signingConfigured;
+
+  /// Whether this repository asks for signed tags (`tag.gpgSign`).
+  ///
+  /// This is the project's own statement of intent, in Git's vocabulary rather
+  /// than an rk setting. It is machine-local — `.git/config` is not committed —
+  /// so a signed release history is treated as the same statement, and either
+  /// one makes a signature required rather than incidental.
+  final bool tagSigningRequested;
 
   /// `owner/name` for the origin remote, when it is a forge rk knows.
   final String? originUrl;
@@ -294,6 +303,8 @@ class GitState {
       ask(const ['rev-list', '--count', '@{upstream}..HEAD']),
       ask(const ['tag', '--list']),
       ask(const ['remote', 'get-url', 'origin']),
+      // Appended, not inserted: the positional reads below are index-addressed.
+      ask(const ['config', '--bool', '--get', 'tag.gpgSign']),
     ]);
     final status = answers[0];
     final statusError = status.exitCode == 0
@@ -333,6 +344,7 @@ class GitState {
       // still would not prove a key exists — so rk claims only what git
       // states, and signs or does not accordingly.
       signingConfigured: text(answers[4]).isNotEmpty,
+      tagSigningRequested: text(answers[10]) == 'true',
       originUrl: _originSlug(text(answers[9])),
     );
   }

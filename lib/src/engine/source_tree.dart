@@ -213,7 +213,10 @@ class GitSourceTree implements SourceTree {
       const ['cat-file', '--batch'],
       workingDirectory: root,
     );
-    final incoming = BytesBuilder(copy: false);
+    // Copies as it accumulates. `copy: false` would retain the stream's own
+    // buffers, and the snapshot every release verifies is not the place to
+    // depend on dart:io never reusing one.
+    final incoming = BytesBuilder();
     final collected = process.stdout.forEach(incoming.add);
     final failure = process.stderr.transform(utf8.decoder).join();
     for (final path in batched) {

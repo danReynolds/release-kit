@@ -17,6 +17,13 @@ import '../engine/version.dart';
 /// The protocol is here; the halting policy is not. Which halt sentence a
 /// failed push earns, and whether the local tag is removed, are decisions
 /// about what the operator must be told — they stay in `release.dart`.
+/// The signature block every git signing format writes into a tag object:
+/// OpenPGP, SSH, and X.509 (gpgsm) respectively.
+final _signatureBlock = RegExp(
+  r'^-----BEGIN (?:PGP SIGNATURE|SSH SIGNATURE|SIGNED MESSAGE)-----$',
+  multiLine: true,
+);
+
 class GitTag {
   GitTag({required this.tools, required this.root});
 
@@ -469,6 +476,38 @@ class GitTag {
       peeledRef: peeledRef,
     );
   }
+
+  /// Whether the annotated tag [object] carries a signature block.
+  ///
+  /// Read from the object rather than inferred from configuration: `tag.gpgSign`
+  /// makes even a `-a` tag signed, so what git was asked to do and what the
+  /// object actually holds are different questions. Null when the object could
+  /// not be read, which is never treated as an answer either way.
+  ///
+  /// Presence is deliberately separate from `git verify-tag`, which fails both
+  /// for an unsigned tag and for a signed one this machine cannot check
+  /// (`gpg.ssh.allowedSignersFile` unset). Those need different remedies.
+  Future<bool?> hasSignature(String object) async {
+    final ToolResult read;
+    try {
+      read = await tools.run(
+        'git',
+        ['cat-file', 'tag', object],
+        workingDirectory: root,
+      );
+    } on Object {
+      return null;
+    }
+    if (!read.ok) return null;
+    return _signatureBlock.hasMatch(read.stdout);
+  }
+
+  /// Whether git can authenticate [object]'s signature on this machine.
+  Future<ToolResult> verifySignature(String object) => tools.run(
+        'git',
+        ['verify-tag', object],
+        workingDirectory: root,
+      );
 
   /// Creates the tag locally, signed when the repository has a key.
   Future<ToolResult> create(

@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-140 codes across 26 families.
+143 codes across 26 families.
 
 
 ## RK-AUTH — Authorization
@@ -280,6 +280,9 @@ meanings and are not reused.
 | `RK-TAG-002` | the tag ${unit.tag} could not be pushed | `lib/src/targets/git_tag_target.dart` |
 | `RK-TAG-003` | the push reported success, and origin does not list  ${unit.tag} | `lib/src/targets/git_tag_target.dart` |
 | `RK-TAG-004` | origin did not confirm the release binding on ${act.coordinate ?? target.coordinate} | `lib/src/targets/git_tag_target.dart` |
+| `RK-TAG-005` | this project signs its release tags, and no signing key is configured | `lib/src/targets/git_tag_target.dart` |
+| `RK-TAG-006` | this project signs its release tags, and ${unit.tag} was created without a signature | `lib/src/targets/git_tag_target.dart` |
+| `RK-TAG-007` | ${unit.tag} is signed, and its signature could not be verified on this machine | `lib/src/targets/git_tag_target.dart` |
 
 ## RK-TOML — The TOML subset
 
