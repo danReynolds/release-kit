@@ -1715,7 +1715,7 @@ class ReleaseCommand {
       }
 
       try {
-        sourceArtifacts = stage.materializeSource();
+        sourceArtifacts = await stage.materializeSource();
         sourceStep = _sourceStageStep(stage, sourceArtifacts);
         progress.add(sourceStep);
         _persistStageProgress(stage, sourceArtifacts, progress);

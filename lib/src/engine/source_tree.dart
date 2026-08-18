@@ -183,6 +183,73 @@ class GitSourceTree implements SourceTree {
   List<String> trackedFilesAt(String commit) =>
       trackedEntriesAt(commit).map((entry) => entry.path).toList();
 
+  /// Every tracked blob at [commit], in one `git cat-file --batch`.
+  ///
+  /// One `git show` per file is a subprocess per file: measured at 2.44s for
+  /// this repository's 165 tracked files, against 0.065s batched. Staging
+  /// reads the whole snapshot at once, so it asks once.
+  ///
+  /// A path containing a newline cannot be expressed in the batch protocol
+  /// and is read on its own, so no path is silently skipped.
+  Future<Map<String, List<int>>> readBytesBatchAt(
+    String commit,
+    List<String> paths,
+  ) async {
+    final result = <String, List<int>>{};
+    final batched = <String>[];
+    for (final path in paths) {
+      _resolve(path); // validates that [path] cannot escape the repository.
+      if (path.contains('\n')) {
+        result[path] = readBytesAt(commit, path);
+      } else {
+        batched.add(path);
+      }
+    }
+    if (batched.isEmpty) return result;
+
+    final process = await Process.start(
+      'git',
+      const ['cat-file', '--batch'],
+      workingDirectory: root,
+    );
+    final stdoutBytes = <int>[];
+    final collected = process.stdout.forEach(stdoutBytes.addAll);
+    final failure = process.stderr.transform(utf8.decoder).join();
+    for (final path in batched) {
+      process.stdin.write('$commit:$path\n');
+    }
+    await process.stdin.close();
+    final code = await process.exitCode;
+    await collected;
+    if (code != 0) {
+      throw SourceUnreadable(batched.first, (await failure).trim());
+    }
+
+    // Each answer is `<oid> <type> <size>\n`, then exactly size bytes, then
+    // a newline. Answers arrive in the order asked.
+    var at = 0;
+    for (final path in batched) {
+      final endOfHeader = stdoutBytes.indexOf(0x0a, at);
+      if (endOfHeader < 0) {
+        throw SourceUnreadable(path, 'git cat-file ended early');
+      }
+      final header = utf8.decode(stdoutBytes.sublist(at, endOfHeader));
+      final fields = header.split(' ');
+      if (fields.length != 3) {
+        throw SourceUnreadable(path, header);
+      }
+      final size = int.tryParse(fields[2]);
+      if (size == null) throw SourceUnreadable(path, header);
+      final start = endOfHeader + 1;
+      if (start + size > stdoutBytes.length) {
+        throw SourceUnreadable(path, 'git cat-file returned a short object');
+      }
+      result[path] = stdoutBytes.sublist(start, start + size);
+      at = start + size + 1; // the newline that closes the object
+    }
+    return result;
+  }
+
   List<int> readBytesAt(String commit, String path) {
     _resolve(path); // validates that [path] cannot escape the repository.
     final result = Process.runSync(

@@ -270,7 +270,7 @@ class ReleaseStage {
 
   /// Copies the Git-tracked source into the stage and returns the captured
   /// records. Producers use [sourceRoot], never the mutable worktree.
-  List<StageArtifact> materializeSource() {
+  Future<List<StageArtifact>> materializeSource() async {
     final outputs = <StageArtifact>[];
     final gitSource = source is GitSourceTree ? source as GitSourceTree : null;
     final gitEntries = gitSource?.trackedEntriesAt(
@@ -282,6 +282,11 @@ class ReleaseStage {
     final tracked = [
       ...(gitEntries?.map((entry) => entry.path) ?? source.trackedFiles())
     ]..sort();
+    // What rk refuses to stage is decided before anything is read. A bulk
+    // read cannot say why a gitlink is unacceptable — it only reports that
+    // the object is missing, since a submodule's commit lives in another
+    // repository — so the refusal that names the path and its kind comes
+    // first.
     for (final path in tracked) {
       final entry = byPath[path];
       if (entry != null && !entry.isRegularFile) {
@@ -290,9 +295,18 @@ class ReleaseStage {
           'staging accepts only regular Git files (100644 or 100755)',
         );
       }
-      final bytes = gitSource == null
-          ? source.readBytes(path)
-          : gitSource.readBytesAt(directory.identity.headCommit!, path);
+    }
+
+    // The whole snapshot is read in one request rather than one per file.
+    final batched = gitSource == null
+        ? const <String, List<int>>{}
+        : await gitSource.readBytesBatchAt(
+            directory.identity.headCommit!,
+            tracked,
+          );
+    for (final path in tracked) {
+      final entry = byPath[path];
+      final bytes = gitSource == null ? source.readBytes(path) : batched[path];
       if (bytes == null) {
         throw StateError('tracked source disappeared while staging: $path');
       }

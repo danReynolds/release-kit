@@ -72,8 +72,9 @@ void main() {
 
   tearDown(() => repository.deleteSync(recursive: true));
 
-  test('materializes every tracked source byte in deterministic order', () {
-    final captured = release.materializeSource();
+  test('materializes every tracked source byte in deterministic order',
+      () async {
+    final captured = await release.materializeSource();
 
     expect(
       captured.map((artifact) => artifact.path),
@@ -102,7 +103,8 @@ void main() {
     );
   });
 
-  test('unbound source is byte-bound locally without inventing a revision', () {
+  test('unbound source is byte-bound locally without inventing a revision',
+      () async {
     final unbound = ReleaseStage(
       unit: unit,
       source: source,
@@ -114,7 +116,7 @@ void main() {
         ),
       ),
     );
-    final outputs = unbound.materializeSource();
+    final outputs = await unbound.materializeSource();
     unbound.writeProgress([
       StageStep(
         name: 'source-snapshot',
@@ -131,7 +133,7 @@ void main() {
     expect(unbound.unboundSourceProblem(), 'bin/tool.dart changed');
   });
 
-  test('materializes the committed tree, not later worktree bytes', () {
+  test('materializes the committed tree, not later worktree bytes', () async {
     final sourceRepository =
         Directory.systemTemp.createTempSync('rk-release-source-');
     addTearDown(() => sourceRepository.deleteSync(recursive: true));
@@ -166,7 +168,7 @@ void main() {
 
     // Models a worktree edit racing after HEAD and HEAD^{tree} were read.
     File('${sourceRepository.path}/README.md').writeAsStringSync('# Changed\n');
-    committedRelease.materializeSource();
+    await committedRelease.materializeSource();
 
     expect(
       File(committedRelease.directory.resolve('source/README.md'))
@@ -175,7 +177,8 @@ void main() {
     );
   });
 
-  test('preserves regular and executable Git modes in the staged source', () {
+  test('preserves regular and executable Git modes in the staged source',
+      () async {
     final sourceRepository = _gitRepository(_source());
     addTearDown(() => sourceRepository.deleteSync(recursive: true));
     final executable = File('${sourceRepository.path}/tool.sh')
@@ -185,7 +188,7 @@ void main() {
     _git(sourceRepository, ['commit', '-qm', 'add executable']);
 
     final staged = _gitRelease(sourceRepository, repository);
-    final artifacts = staged.materializeSource();
+    final artifacts = await staged.materializeSource();
     final regular = artifacts.singleWhere(
       (artifact) => artifact.path == 'source/README.md',
     );
@@ -198,7 +201,8 @@ void main() {
     expect(executable.existsSync(), isTrue);
   });
 
-  test('refuses a tracked symbolic link instead of changing its type', () {
+  test('refuses a tracked symbolic link instead of changing its type',
+      () async {
     final sourceRepository = _gitRepository(_source());
     addTearDown(() => sourceRepository.deleteSync(recursive: true));
     Link('${sourceRepository.path}/README-link').createSync('README.md');
@@ -206,8 +210,8 @@ void main() {
     _git(sourceRepository, ['commit', '-qm', 'add link']);
 
     final staged = _gitRelease(sourceRepository, repository);
-    expect(
-      staged.materializeSource,
+    await expectLater(
+      staged.materializeSource(),
       throwsA(
         isA<StateError>().having(
           (error) => '$error',
@@ -218,7 +222,7 @@ void main() {
     );
   });
 
-  test('refuses a tracked gitlink instead of writing its object id', () {
+  test('refuses a tracked gitlink instead of writing its object id', () async {
     final sourceRepository = _gitRepository(_source());
     addTearDown(() => sourceRepository.deleteSync(recursive: true));
     final nested = Directory.systemTemp.createTempSync('rk-gitlink-source-');
@@ -239,8 +243,8 @@ void main() {
     _git(sourceRepository, ['commit', '-qm', 'add gitlink']);
 
     final staged = _gitRelease(sourceRepository, repository);
-    expect(
-      staged.materializeSource,
+    await expectLater(
+      staged.materializeSource(),
       throwsA(
         isA<StateError>().having(
           (error) => '$error',
@@ -251,8 +255,9 @@ void main() {
     );
   });
 
-  test('complete receipt and public manifest are reusable as exact bytes', () {
-    _recordArchives(release, {_asset: 'archive'});
+  test('complete receipt and public manifest are reusable as exact bytes',
+      () async {
+    await _recordArchives(release, {_asset: 'archive'});
 
     final receipt = release.finalize(
       releaseAssets: _fixtureReleaseAssets({_asset}),
@@ -286,7 +291,8 @@ void main() {
     expect(resumed.requireReceipt().identity.id, identity.id);
   });
 
-  test('finalization binds a private cask only to its tap destination', () {
+  test('finalization binds a private cask only to its tap destination',
+      () async {
     final homebrewSource = MemorySourceTree({...source.files});
     homebrewSource.files['release.toml'] = _homebrewConfig;
     final homebrewUnit = _resolveUnit(
@@ -302,7 +308,7 @@ void main() {
         identity: identity,
       ),
     );
-    _recordArchives(homebrewStage, {_asset: 'archive'});
+    await _recordArchives(homebrewStage, {_asset: 'archive'});
     final progress = StageReceiptStore(homebrewStage.directory).read()!;
     final project = homebrewUnit.project('tool');
     final caskPath = ReleaseAssets.caskPath(project);
@@ -347,7 +353,8 @@ void main() {
     expect(homebrewStage.inspect().reusable, isTrue);
   });
 
-  test('a prerelease manifest carries archives without a Homebrew cask', () {
+  test('a prerelease manifest carries archives without a Homebrew cask',
+      () async {
     final prereleaseSource = MemorySourceTree({...source.files});
     prereleaseSource.files['release.toml'] = _homebrewConfig;
     prereleaseSource.files['pubspec.yaml'] = '''
@@ -383,7 +390,7 @@ executables:
       project.version.canonical,
       'macos-arm64',
     );
-    _recordArchives(prereleaseStage, {archive: 'archive'});
+    await _recordArchives(prereleaseStage, {archive: 'archive'});
 
     prereleaseStage.finalize(
       releaseAssets: _fixtureReleaseAssets({archive}),
@@ -397,8 +404,8 @@ executables:
     expect(manifest.cask, isNull);
   });
 
-  test('completed manifest coordinates must match the resolved unit', () {
-    _complete(release);
+  test('completed manifest coordinates must match the resolved unit', () async {
+    await _complete(release);
 
     final nextVersionSource = _source();
     nextVersionSource.files['pubspec.yaml'] = '''
@@ -447,8 +454,8 @@ executables:
     }
   });
 
-  test('final receipt preserves producer input and evidence records', () {
-    _recordArchives(release, {_asset: 'archive'});
+  test('final receipt preserves producer input and evidence records', () async {
+    await _recordArchives(release, {_asset: 'archive'});
 
     final finalized = release.finalize(
       releaseAssets: _fixtureReleaseAssets({_asset}),
@@ -465,8 +472,8 @@ executables:
     expect(archive.evidence['inventory'], isNotEmpty);
   });
 
-  test('tampering with a completed artifact invalidates reuse', () {
-    _complete(release);
+  test('tampering with a completed artifact invalidates reuse', () async {
+    await _complete(release);
     File(release.directory.resolve(_asset)).writeAsStringSync('tampered');
 
     final inspected = release.inspect();
@@ -478,8 +485,8 @@ executables:
     expect(() => release.requireReceipt(), throwsStateError);
   });
 
-  test('a complete filesystem fixture records every artifact type', () {
-    final receipt = _completeEveryArtifactType(release);
+  test('a complete filesystem fixture records every artifact type', () async {
+    final receipt = await _completeEveryArtifactType(release);
 
     expect(
       receipt.artifacts.map((artifact) => artifact.type).toSet(),
@@ -497,8 +504,9 @@ executables:
     expect(release.inspect().reusable, isTrue);
   });
 
-  test('every recorded artifact is bound to its exact filesystem bytes', () {
-    final receipt = _completeEveryArtifactType(release);
+  test('every recorded artifact is bound to its exact filesystem bytes',
+      () async {
+    final receipt = await _completeEveryArtifactType(release);
 
     for (final artifact in receipt.artifacts) {
       final file = File(release.directory.resolve(artifact.path));
@@ -528,7 +536,7 @@ executables:
 
   test(
       'each producer output stays untrusted until the receipt replacement '
-      'names its exact bytes', () {
+      'names its exact bytes', () async {
     for (final nextName in [
       'build:macos-arm64',
       'notarize:macos-arm64',
@@ -538,7 +546,7 @@ executables:
       'complete-stage',
     ]) {
       release.reset();
-      final complete = _completeEveryArtifactType(release);
+      final complete = await _completeEveryArtifactType(release);
       final nextIndex = complete.steps.indexWhere(
         (step) => step.name == nextName,
       );
@@ -646,8 +654,8 @@ executables:
       )).deleteSync(),
     ),
   ]) {
-    test('crash boundary never reuses ${crash.name}', () {
-      final receipt = _completeEveryArtifactType(release);
+    test('crash boundary never reuses ${crash.name}', () async {
+      final receipt = await _completeEveryArtifactType(release);
       crash.mutate(release, receipt);
 
       final inspected = release.inspect();
@@ -659,8 +667,8 @@ executables:
     });
   }
 
-  test('an extra file after completion invalidates reuse', () {
-    _complete(release);
+  test('an extra file after completion invalidates reuse', () async {
+    await _complete(release);
     release.directory.writeBytesAtomically(
       'planted-after-finalize.txt',
       utf8.encode('not receipted'),
@@ -674,8 +682,8 @@ executables:
     );
   });
 
-  test('finalize refuses to bless a planted pre-existing file', () {
-    _recordArchives(release, {_asset: 'archive'});
+  test('finalize refuses to bless a planted pre-existing file', () async {
+    await _recordArchives(release, {_asset: 'archive'});
     release.directory.writeBytesAtomically(
       'planted-before-finalize.txt',
       utf8.encode('must not become trusted merely by being present'),
@@ -695,8 +703,8 @@ executables:
   });
 
   test('missing public artifact is refused before manifest or receipt writes',
-      () {
-    _recordArchives(release, const {});
+      () async {
+    await _recordArchives(release, const {});
 
     expect(
       () => release.finalize(
@@ -711,8 +719,9 @@ executables:
     expect(StageReceiptStore(release.directory).read()!.complete, isFalse);
   });
 
-  test('reset deletes only this stage and never follows artifact symlinks', () {
-    release.materializeSource();
+  test('reset deletes only this stage and never follows artifact symlinks',
+      () async {
+    await release.materializeSource();
     final siblingIdentity = StageIdentity.forPlan(
       headCommit: _commit,
       headTree: _tree,
@@ -750,8 +759,9 @@ executables:
     expect(sentinel.readAsStringSync(), 'keep');
   });
 
-  test('public manifest inventory is deterministic across insertion order', () {
-    _recordArchives(release, {'z.tar.gz': 'z', 'a.tar.gz': 'a'});
+  test('public manifest inventory is deterministic across insertion order',
+      () async {
+    await _recordArchives(release, {'z.tar.gz': 'z', 'a.tar.gz': 'a'});
     release.finalize(
       releaseAssets: _fixtureReleaseAssets({'z.tar.gz', 'a.tar.gz'}),
     );
@@ -772,8 +782,9 @@ executables:
     );
   });
 
-  test('an input digest cannot be detached from its earlier producer', () {
-    _recordArchives(release, {_asset: 'archive'});
+  test('an input digest cannot be detached from its earlier producer',
+      () async {
+    await _recordArchives(release, {_asset: 'archive'});
     final receipt = StageReceiptStore(release.directory).read()!;
     final archive = receipt.steps.singleWhere(
       (step) => step.name == 'archive:$_asset',
@@ -802,8 +813,9 @@ executables:
     );
   });
 
-  test('archive inventory evidence is re-derived from the archive bytes', () {
-    _recordArchives(release, {_asset: 'archive'});
+  test('archive inventory evidence is re-derived from the archive bytes',
+      () async {
+    await _recordArchives(release, {_asset: 'archive'});
     final receipt = StageReceiptStore(release.directory).read()!;
     final archive = receipt.steps.singleWhere(
       (step) => step.name == 'archive:$_asset',
@@ -834,8 +846,8 @@ executables:
     );
   });
 
-  test('manifest metadata is checked against the producer relation', () {
-    _recordArchives(release, {_asset: 'archive'});
+  test('manifest metadata is checked against the producer relation', () async {
+    await _recordArchives(release, {_asset: 'archive'});
     final progress = StageReceiptStore(release.directory).read()!;
     final archive = progress.artifacts.singleWhere((a) => a.path == _asset);
     ReleaseManifest(
@@ -908,13 +920,13 @@ ResolvedUnit _resolveUnit(
   return resolution.unit('tool')!;
 }
 
-void _complete(ReleaseStage release) {
-  _recordArchives(release, {_asset: 'archive'});
+Future<void> _complete(ReleaseStage release) async {
+  await _recordArchives(release, {_asset: 'archive'});
   release.finalize(releaseAssets: _fixtureReleaseAssets({_asset}));
 }
 
-StageReceipt _completeEveryArtifactType(ReleaseStage release) {
-  final sourceArtifacts = release.materializeSource();
+Future<StageReceipt> _completeEveryArtifactType(ReleaseStage release) async {
+  final sourceArtifacts = await release.materializeSource();
   final source = StageStep(
     name: 'source-snapshot',
     inputs: [
@@ -1073,8 +1085,9 @@ List<ReleaseAssetSpec> _fixtureReleaseAssets(Iterable<String> paths) => [
         ReleaseAssetSpec(stagedPath: path, publicName: path),
     ];
 
-void _recordArchives(ReleaseStage release, Map<String, String> archives) {
-  final sourceArtifacts = release.materializeSource();
+Future<void> _recordArchives(
+    ReleaseStage release, Map<String, String> archives) async {
+  final sourceArtifacts = await release.materializeSource();
   final source = StageStep(
     name: 'source-snapshot',
     inputs: [

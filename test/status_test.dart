@@ -1291,12 +1291,12 @@ publish = ["pub.dev"]
   test('an exact stage lists exact filenames and is good to release', () async {
     final root = Directory.systemTemp.createTempSync('rk-status-stage-');
     addTearDown(() => root.deleteSync(recursive: true));
-    ReleaseStage? made;
-    ReleaseStage stageFor(ResolvedUnit unit) => made ??= _completedStage(
-          root: root,
-          unit: unit,
-          source: binaryTree,
-        );
+    final made = await _completedBinaryStage(
+      root: root,
+      config: binaryConfig,
+      source: binaryTree,
+    );
+    ReleaseStage stageFor(ResolvedUnit unit) => made;
 
     final run = await statusRun(
       withConfig: binaryConfig,
@@ -1316,7 +1316,7 @@ publish = ["pub.dev"]
     // The report collapses a set that agrees; the document keeps every
     // name, which is where a caller reading filenames should be reading
     // them anyway.
-    final expected = ReleaseAssets.expectedForUnit(made!.unit);
+    final expected = ReleaseAssets.expectedForUnit(made.unit);
     expect(
       run.text,
       matches(RegExp('${expected.length} artifacts')),
@@ -1359,12 +1359,12 @@ publish = ["pub.dev"]
       () async {
     final root = Directory.systemTemp.createTempSync('rk-status-resume-');
     addTearDown(() => root.deleteSync(recursive: true));
-    ReleaseStage? made;
-    ReleaseStage stageFor(ResolvedUnit unit) => made ??= _completedStage(
-          root: root,
-          unit: unit,
-          source: binaryTree,
-        );
+    final made = await _completedBinaryStage(
+      root: root,
+      config: binaryConfig,
+      source: binaryTree,
+    );
+    ReleaseStage stageFor(ResolvedUnit unit) => made;
     final registry = FakeRegistry({
       'keybay': ['0.2.0']
     });
@@ -1447,12 +1447,12 @@ publish = ["pub.dev"]
       () async {
     final root = Directory.systemTemp.createTempSync('rk-status-stage-host-');
     addTearDown(() => root.deleteSync(recursive: true));
-    ReleaseStage? made;
-    ReleaseStage stageFor(ResolvedUnit unit) => made ??= _completedStage(
-          root: root,
-          unit: unit,
-          source: binaryTree,
-        );
+    final made = await _completedBinaryStage(
+      root: root,
+      config: binaryConfig,
+      source: binaryTree,
+    );
+    ReleaseStage stageFor(ResolvedUnit unit) => made;
 
     final run = await statusRun(
       withConfig: binaryConfig,
@@ -1480,21 +1480,14 @@ publish = ["pub.dev"]
   test('a changed staged artifact is marked and explained once', () async {
     final root = Directory.systemTemp.createTempSync('rk-status-tamper-');
     addTearDown(() => root.deleteSync(recursive: true));
-    ReleaseStage? made;
-    ReleaseStage stageFor(ResolvedUnit unit) => made ??= _completedStage(
-          root: root,
-          unit: unit,
-          source: binaryTree,
-        );
-    // Resolve and create the stage before status inspects it.
-    final diagnostics = Diagnostics();
-    final parsed = ReleaseConfig.parse(
-      binaryConfig,
-      'release.toml',
-      diagnostics,
-    )!;
-    final resolution = Resolution.resolve(parsed, binaryTree, diagnostics)!;
-    final stage = stageFor(resolution.units.single);
+    final made = await _completedBinaryStage(
+      root: root,
+      config: binaryConfig,
+      source: binaryTree,
+    );
+    ReleaseStage stageFor(ResolvedUnit unit) => made;
+    // The stage above is created before status inspects it.
+    final stage = made;
     final archive = ReleaseAssets.archiveName(
       'keybay',
       '0.2.0',
@@ -1535,24 +1528,22 @@ publish = ["pub.dev"]
       () async {
     final root = Directory.systemTemp.createTempSync('rk-status-stage-global-');
     addTearDown(() => root.deleteSync(recursive: true));
-    ReleaseStage? made;
-    ReleaseStage stageFor(ResolvedUnit unit) => made ??= (() {
-          final complete = _completedStage(
-            root: root,
-            unit: unit,
-            source: binaryTree,
-          );
-          return ReleaseStage(
-            unit: unit,
-            source: binaryTree,
-            directory: complete.directory,
-            compiler: DartCompilerIdentity.recorded(
-              executable: '/status-test/dart',
-              version: 'Dart SDK version: status test compiler',
-              sha256: 'c' * 64,
-            ),
-          );
-        })();
+    final complete = await _completedBinaryStage(
+      root: root,
+      config: binaryConfig,
+      source: binaryTree,
+    );
+    final made = ReleaseStage(
+      unit: complete.unit,
+      source: binaryTree,
+      directory: complete.directory,
+      compiler: DartCompilerIdentity.recorded(
+        executable: '/status-test/dart',
+        version: 'Dart SDK version: status test compiler',
+        sha256: 'c' * 64,
+      ),
+    );
+    ReleaseStage stageFor(ResolvedUnit unit) => made;
 
     final run = await statusRun(
       withConfig: binaryConfig,
@@ -1664,11 +1655,28 @@ publish = ["pub.dev"]
   });
 }
 
-ReleaseStage _completedStage({
+/// Completes the single unit of [config] so a synchronous `stageFor` callback
+/// can hand back an already-built stage.
+Future<ReleaseStage> _completedBinaryStage({
+  required Directory root,
+  required String config,
+  required MemorySourceTree source,
+}) async {
+  final diagnostics = Diagnostics();
+  final parsed = ReleaseConfig.parse(config, 'release.toml', diagnostics)!;
+  final resolution = Resolution.resolve(parsed, source, diagnostics)!;
+  return _completedStage(
+    root: root,
+    unit: resolution.units.single,
+    source: source,
+  );
+}
+
+Future<ReleaseStage> _completedStage({
   required Directory root,
   required ResolvedUnit unit,
   required SourceTree source,
-}) {
+}) async {
   final identity = StageIdentity.forPlan(
     headCommit: testHead,
     headTree: testTree,
@@ -1684,7 +1692,7 @@ ReleaseStage _completedStage({
   );
   final public = ReleaseAssets.expectedForUnit(unit).toSet()
     ..remove(ReleaseAssets.manifest);
-  final sourceArtifacts = stage.materializeSource();
+  final sourceArtifacts = await stage.materializeSource();
   final sourceStep = StageStep(
     name: 'source-snapshot',
     inputs: [

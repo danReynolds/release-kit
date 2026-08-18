@@ -187,7 +187,7 @@ executables:
     if (repository.existsSync()) repository.deleteSync(recursive: true);
   });
 
-  test('the exact compiler bytes key and are recorded by the stage', () {
+  test('the exact compiler bytes key and are recorded by the stage', () async {
     final compilerA = DartCompilerIdentity.recorded(
       executable: '/toolchains/a/dart',
       version: 'Dart SDK version: compiler A',
@@ -201,7 +201,7 @@ executables:
       compilerIdentity: () => compilerA,
     );
     final first = firstResolver(unit);
-    _complete(first);
+    await _complete(first);
 
     expect(first.inspect().reusable, isTrue);
     expect(
@@ -447,7 +447,7 @@ publish = ["pub.dev"]
   });
 }
 
-void _complete(ReleaseStage stage) {
+Future<void> _complete(ReleaseStage stage) async {
   final project = stage.unit.projects.single;
   final sourceStep = StageStep(
     name: 'source-snapshot',
@@ -456,7 +456,7 @@ void _complete(ReleaseStage stage) {
       StageInput.tree(stage.directory.identity),
       StageInput.plan(stage.directory.identity),
     ],
-    outputs: stage.materializeSource(),
+    outputs: await stage.materializeSource(),
     evidence: const {'commit': _head, 'tree': _tree},
   );
 
