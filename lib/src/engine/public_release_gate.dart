@@ -20,10 +20,15 @@ final class PublicReleaseGate {
     required Iterable<Step> steps,
     required Iterable<TargetExpectation> targets,
   }) async {
-    final states = <String, Inspection>{};
-    for (final step in steps) {
-      states[step.id] = await inspector.inspect(step, unit);
-    }
+    // Destinations are independent; their reads happen together, the same
+    // way status checks them. The slowest read, not the sum, is the wait.
+    final stepList = steps.toList();
+    final inspections = await Future.wait(
+      [for (final step in stepList) inspector.inspect(step, unit)],
+    );
+    final states = <String, Inspection>{
+      for (final (index, step) in stepList.indexed) step.id: inspections[index],
+    };
 
     final monotonicity = Diagnostics();
     await inspector.releaseMonotonicity(

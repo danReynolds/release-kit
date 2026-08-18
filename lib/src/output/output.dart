@@ -174,6 +174,18 @@ class Output {
     bool emitSlowToNonTerminal = false,
     bool showElapsed = true,
   }) {
+    final previous = _progressBoard;
+    if (previous != null) {
+      // A board still live when its successor arrives was never resolved
+      // by its owner — the same bug [close] guards. Say so loudly in
+      // checked mode; reap it regardless, so two boards can never paint
+      // one terminal.
+      assert(
+        false,
+        'a live progress board was never resolved by its owner',
+      );
+      previous.discard();
+    }
     _clearTransient();
     final board = LiveProgress._(
       this,
