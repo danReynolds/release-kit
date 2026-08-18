@@ -673,12 +673,25 @@ final class _PubDevSession extends TargetSessionProvider {
   /// Only presence is read. The secret itself stays where pub keeps it — for an
   /// `--env-var` token, in the environment at request time.
   Future<bool> _tokenConfigured(TargetReadinessContext context) async {
-    final tokens = await context.tools.run(
-      'dart',
-      const ['pub', 'token', 'list'],
-      workingDirectory: context.git.root,
-    );
-    return tokens.ok && tokens.stdout.contains(_pubDevUrl);
+    try {
+      final tokens = await context.tools.run(
+        'dart',
+        const ['pub', 'token', 'list'],
+        workingDirectory: context.git.root,
+      );
+      if (!tokens.ok) return false;
+      // A whole line, not a substring: a token for a lookalike host such as
+      // https://pub.dev.example.com must not answer for pub.dev.
+      return tokens.stdout
+          .split('\n')
+          .map((line) => line.trim())
+          .any((line) => line == _pubDevUrl || line == '$_pubDevUrl/');
+    } on ProcessException {
+      // Nothing to ask. Publishing needs the same executable and refuses by
+      // name, so this question goes unanswered rather than ending the run in a
+      // crash.
+      return false;
+    }
   }
 
   @override

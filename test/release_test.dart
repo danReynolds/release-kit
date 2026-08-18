@@ -1454,6 +1454,47 @@ publish = ["pub.dev"]
       );
     });
 
+    test('a token for a lookalike host does not answer for pub.dev', () async {
+      final machine = home(signedIn: false);
+      final ran = await release(
+        refreshEnvironment: machine.environment,
+        registry: _MutableRegistry(<String>['0.1.0']),
+        results: {
+          'dart pub token list': ToolResult(
+            exitCode: 0,
+            stdout: 'You have secret tokens for 1 package repositories:\n'
+                'https://pub.dev.internal.example.com\n',
+            stderr: '',
+          ),
+        },
+      );
+      expect(
+        ran.calls,
+        contains('dart pub login'),
+        reason: 'that token is for another registry entirely',
+      );
+      expect(ran.calls, contains('dart pub logout'));
+    });
+
+    test('a missing dart executable refuses instead of crashing', () async {
+      final machine = home(signedIn: false);
+      final ran = await release(
+        refreshEnvironment: machine.environment,
+        registry: _MutableRegistry(<String>['0.1.0']),
+        answers: (key) {
+          if (key == 'dart pub token list') {
+            throw ProcessException('dart', const ['pub', 'token', 'list']);
+          }
+          return null;
+        },
+      );
+      expect(
+        ran.exitCode,
+        isNot(ExitCodes.crashed),
+        reason: 'an unanswerable question is not a crash',
+      );
+    });
+
     test('is cleared even when the release stops partway', () async {
       final machine = home(signedIn: false);
       final ran = await release(
