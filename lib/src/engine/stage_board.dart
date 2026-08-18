@@ -123,29 +123,21 @@ class StageBoard {
     }
 
     // Every producer of one platform's binary reports against that
-    // platform's archive: the binary itself never leaves the stage. The
-    // platform-less prelude — dependency resolution — is part of every
-    // platform's pipeline, so it reports against every archive row: each
-    // briefly says "resolving", and none can complete without it recorded.
+    // platform's archive: the binary itself never leaves the stage.
     for (final step in Checklist.localProducerSteps(unit)) {
       final platform = step.platform;
       final projectName = step.project;
-      if (projectName == null) continue;
+      if (platform == null || projectName == null) continue;
       final project = unit.project(projectName);
-      final archiveNames = {
-        for (final each
-            in platform == null ? project.binaryPlatforms : [platform]) ...{
-          ReleaseAssets.archiveName(
-            project.executable!,
-            project.version.canonical,
-            each,
-          ),
-          ReleaseAssets.archivePath(project, each),
-        },
-      };
+      final publicArchive = ReleaseAssets.archiveName(
+        project.executable!,
+        project.version.canonical,
+        platform,
+      );
+      final localArchive = ReleaseAssets.archivePath(project, platform);
       for (final group in groups) {
         for (final row in group.rows) {
-          if (archiveNames.contains(row.name)) {
+          if (row.name == publicArchive || row.name == localArchive) {
             bind(receiptNameFor(step), row);
           }
         }

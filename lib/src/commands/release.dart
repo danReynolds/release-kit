@@ -1772,20 +1772,23 @@ class ReleaseCommand {
     }).toList();
     stageProgress.restore(progress);
 
-    // Platform-less producers — dependency resolution — are the serial
-    // prelude: they run to completion, in checklist order, before any lane
-    // starts, because every build's `needs` edge points at them. Then one
-    // lane per platform chain: a platform's build, notarize, and archive
-    // touch only that platform's artifacts, so lanes are independent until
-    // the complete-stage barrier, and the receipt's causal check accepts
-    // any cross-lane interleaving because no input crosses a lane.
-    final prelude = [
-      for (final step in producerSteps)
-        if (step.platform == null) step,
-    ];
+    // Lanes share the staged package directory, and each build resolves it
+    // implicitly — pub serializes that on its own cache lock, so concurrent
+    // compiles from a cold checkout are safe (measured: three at once, no
+    // `.dart_tool`, all three succeeded). A shared pre-resolve step was
+    // tried and removed: the stage seals untracked producer scratch after
+    // every recorded step, so the resolution it produced was deleted before
+    // any build could use it.
+    //
+    // One lane per platform chain. A platform's build, notarize, and
+    // archive touch only that platform's artifacts, so lanes are
+    // independent until the complete-stage barrier: steps keep checklist
+    // order within their lane, and the receipt's causal check accepts any
+    // cross-lane interleaving because no input crosses a lane. A future
+    // producer without a platform fails the null check loudly here rather
+    // than quietly becoming its own concurrent lane.
     final lanes = <String, List<Step>>{};
     for (final step in producerSteps) {
-      if (step.platform == null) continue;
       lanes
           .putIfAbsent('${step.project}/${step.platform!}', () => [])
           .add(step);
@@ -1793,11 +1796,10 @@ class ReleaseCommand {
     assert(
       () {
         // The grouping and the checklist's graph must agree: every producer
-        // dependency resolves in the prelude or earlier in its own lane.
+        // dependency resolves earlier in its own lane.
         final producerIds = {for (final step in producerSteps) step.id};
-        final preludeIds = {for (final step in prelude) step.id};
         for (final lane in lanes.values) {
-          final earlier = <String>{...preludeIds};
+          final earlier = <String>{};
           for (final step in lane) {
             for (final need in step.needs) {
               if (producerIds.contains(need) && !earlier.contains(need)) {
@@ -1809,7 +1811,7 @@ class ReleaseCommand {
         }
         return true;
       }(),
-      'a producer depends on a step outside its prelude or lane',
+      'a producer depends on a step outside or later in its lane',
     );
 
     // A failure drains. The lane that failed marks its row and says its
@@ -1891,10 +1893,7 @@ class ReleaseCommand {
       }
     }
 
-    await runLane(prelude);
-    if (failures.isEmpty) {
-      await Future.wait([for (final lane in lanes.values) runLane(lane)]);
-    }
+    await Future.wait([for (final lane in lanes.values) runLane(lane)]);
     if (failures.isNotEmpty) {
       // Rows still active belong to drained lanes whose in-flight step
       // finished after the stop: their artifacts were not attempted, and
@@ -2464,8 +2463,6 @@ class ReleaseCommand {
   }) async {
     final project = unit.project(step.project!);
     switch (step.kind) {
-      case StepKind.resolve:
-        return _chain(unit).resolveStep(step, project);
       case StepKind.build:
         return _chain(unit).buildStep(
           step,
@@ -2504,10 +2501,6 @@ class ReleaseCommand {
       });
 
   ProgressActivity _producerActivity(Step step) => switch (step.kind) {
-        StepKind.resolve => ProgressActivity(
-            running: 'resolving',
-            failed: 'resolution failed',
-          ),
         StepKind.build => ProgressActivity(
             running: 'building',
             failed: 'build failed',

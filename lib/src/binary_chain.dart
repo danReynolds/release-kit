@@ -80,60 +80,6 @@ class BinaryChain {
   ) =>
       'producers/$project/$platform/$executable.zip';
 
-  // ---- resolve ----
-
-  /// Resolves the package's dependencies in the staged source, once, before
-  /// any platform build. Two implicit resolves racing in one package
-  /// directory is the only way concurrent builds could collide, so this is
-  /// the serial prelude every build's `needs` edge points at.
-  Future<LocalProducerOutcome> resolveStep(
-    Step step,
-    ResolvedProject project,
-  ) async {
-    final ToolResult resolved;
-    try {
-      resolved = await tools.run(
-        compilerExecutable,
-        const ['pub', 'get'],
-        workingDirectory: project.directoryIn(repositoryRoot),
-      );
-    } on Object catch (error) {
-      // A missing tool or directory is a refusal with evidence, not a
-      // crash without a message.
-      output.problem(
-        Diagnostic(
-          code: 'RK-BUILD-002',
-          message: '${project.name} dependencies could not be resolved',
-          remedy: '$error',
-        ),
-        unit: step.unit,
-      );
-      return const LocalProducerOutcome.failed(
-        'dependency resolution did not run',
-      );
-    }
-    if (resolved.exitCode != 0) {
-      final detail = resolved.stderr.trim().isEmpty
-          ? resolved.stdout.trim()
-          : resolved.stderr.trim();
-      output.problem(
-        Diagnostic(
-          code: 'RK-BUILD-002',
-          message: '${project.name} dependencies could not be resolved',
-          remedy: detail,
-        ),
-        unit: step.unit,
-      );
-      return const LocalProducerOutcome.failed(
-        'dependency resolution failed',
-      );
-    }
-    return LocalProducerOutcome.succeeded(
-      outputs: const [],
-      evidence: const {'dart_pub_get': 'resolved'},
-    );
-  }
-
   // ---- build ----
 
   /// Compiles — and on macOS signs — the platform binary, as one step.

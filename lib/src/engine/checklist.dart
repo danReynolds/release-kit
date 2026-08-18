@@ -211,19 +211,6 @@ class Checklist {
   ) {
     final steps = <Step>[];
 
-    // Dependency resolution is real staged work, so it is a real step:
-    // planned, shown, receipted, and resumable. It has no platform — it is
-    // the serial prelude every platform's build needs.
-    final resolve = Step(
-      id: '${unit.name}/resolve/${project.name}',
-      kind: StepKind.resolve,
-      unit: unit.name,
-      project: project.name,
-      summary: 'resolve ${project.name} dependencies',
-      needs: const [],
-    );
-    steps.add(resolve);
-
     // Sorted, so the checklist and the receipt agree on one sequence
     // without a second ordering rule anywhere.
     for (final platform in [...project.binaryPlatforms]..sort()) {
@@ -240,7 +227,7 @@ class Checklist {
         summary: macos
             ? 'build and sign ${project.executable} for $platform'
             : 'build ${project.executable} for $platform',
-        needs: [resolve.id],
+        needs: const [],
       );
       steps.add(build);
 
@@ -281,11 +268,6 @@ enum StepKind {
   /// Something another unit released, which must already be public.
   prerequisite,
 
-  /// Resolve the package's dependencies in the staged source, once,
-  /// before any platform builds: two implicit resolves racing in one
-  /// package directory is the only way concurrent builds could collide.
-  resolve,
-
   /// Compile the platform binary — and on macOS, sign it, as one step.
   build,
   notarize,
@@ -308,7 +290,6 @@ enum StepPhase { inspect, stage, publish }
 extension StepKindFacts on StepKind {
   StepPhase get phase => switch (this) {
         StepKind.prerequisite => StepPhase.inspect,
-        StepKind.resolve ||
         StepKind.build ||
         StepKind.notarize ||
         StepKind.archive ||

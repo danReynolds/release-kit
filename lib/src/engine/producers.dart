@@ -20,7 +20,6 @@ import 'stage_receipt.dart';
 
 /// The receipt producer name for one local checklist step.
 String receiptNameFor(Step step) => switch (step.kind) {
-      StepKind.resolve => 'resolve:${step.project}',
       StepKind.build => 'build:${step.project}:${step.platform}',
       StepKind.notarize => 'notarize:${step.project}:${step.platform}',
       StepKind.archive => 'archive:${step.project}:${step.platform}',
@@ -51,16 +50,6 @@ StageStepContract contractFor(ResolvedUnit unit, Step step) {
       platform == null ? null : ReleaseAssets.binaryPath(project, platform);
 
   switch (step.kind) {
-    case StepKind.resolve:
-      // Resolution mutates the staged source's package configuration, which
-      // is environment-bound rather than byte-reproducible — so the step
-      // records evidence, not artifacts.
-      return StageStepContract(
-        receiptNameFor(step),
-        inputs: const {'step:source-snapshot'},
-        validate: _resolveEvidence,
-      );
-
     case StepKind.build:
       return StageStepContract(
         receiptNameFor(step),
@@ -96,19 +85,6 @@ StageStepContract contractFor(ResolvedUnit unit, Step step) {
 }
 
 /// A build proves its smoke outcome, and a macOS build its signature too.
-Iterable<StageIssue> _resolveEvidence(
-  StageContractContext context,
-  StageStep step,
-) sync* {
-  if (step.evidence['dart_pub_get'] != 'resolved') {
-    yield StageIssue(
-      StageIssueKind.invalidReceipt,
-      '${step.name} does not record that dependencies resolved',
-      path: 'stage.json',
-    );
-  }
-}
-
 Iterable<StageIssue> _buildEvidence(
   StageContractContext context,
   StageStep step,

@@ -121,10 +121,7 @@ class Inspector {
       return _stageInspection(unit);
     }
     if (step.kind
-        case StepKind.resolve ||
-            StepKind.build ||
-            StepKind.notarize ||
-            StepKind.archive) {
+        case StepKind.build || StepKind.notarize || StepKind.archive) {
       return targetReads.reusableStage(unit) == null
           ? const Inspection.unknown('local work, decided when it runs')
           : const Inspection.exact(detail: 'validated in the release stage');

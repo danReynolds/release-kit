@@ -2423,18 +2423,6 @@ class _WorldTools implements Tools {
     if (failure != null) return failure;
 
     if (_isDart(executable) && _starts(arguments, ['pub', 'get'])) {
-      // Mirror the real process launcher: a working directory that does not
-      // exist throws before anything runs. The staged source must have been
-      // materialized before dependency resolution — this caught nothing
-      // until it caught a real ordering bug.
-      if (workingDirectory == null ||
-          !Directory(workingDirectory).existsSync()) {
-        throw ProcessException(
-          executable,
-          arguments,
-          'No such file or directory',
-        );
-      }
       return _ok();
     }
     if (_isDart(executable) && _starts(arguments, ['compile', 'exe'])) {
