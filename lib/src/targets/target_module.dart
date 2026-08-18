@@ -472,6 +472,20 @@ abstract base class TargetSessionProvider {
     ResolvedUnit unit,
     List<TargetExpectation> targets,
   );
+
+  /// Whether a usable session already exists, before [acquire] is called.
+  ///
+  /// Null means the question could not be answered, which is never read as
+  /// either answer: rk leaves a session it cannot account for alone. Providers
+  /// that keep no local session say nothing here.
+  Future<bool?> established(TargetReadinessContext context) async => null;
+
+  /// Ends a session that this run created, returning what to disclose.
+  ///
+  /// Only called when [established] answered false before [acquire] — a machine
+  /// that was already signed in is left signed in, because a release should not
+  /// change how the operator's tools are configured.
+  Future<String?> restore(TargetReadinessContext context) async => null;
 }
 
 final class TargetSessionRequirement {

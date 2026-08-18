@@ -661,6 +661,63 @@ final class _PubDevSession extends TargetSessionProvider {
       unit: unit.name,
     );
   }
+
+  @override
+  Future<bool?> established(TargetReadinessContext context) async {
+    // A token configured for pub.dev reads its secret from the environment on
+    // every request, so there is no stored session to create or clear. Treat
+    // that as established and leave the configuration untouched.
+    final tokens = await context.tools.run(
+      'dart',
+      const ['pub', 'token', 'list'],
+      workingDirectory: context.git.root,
+    );
+    if (tokens.ok && tokens.stdout.contains(_pubDevUrl)) return true;
+
+    final credentials = _pubCredentialsFile(context.environment);
+    if (credentials == null) return null;
+    try {
+      return credentials.existsSync();
+    } on FileSystemException {
+      return null;
+    }
+  }
+
+  @override
+  Future<String?> restore(TargetReadinessContext context) async {
+    final out = await context.tools.run(
+      'dart',
+      const ['pub', 'logout'],
+      workingDirectory: context.git.root,
+    );
+    return out.ok
+        ? 'pub session cleared — it did not exist before this release'
+        : 'pub session could not be cleared: ${out.summary}';
+  }
+}
+
+const _pubDevUrl = 'https://pub.dev';
+
+/// Where the pub client keeps the session `dart pub login` writes.
+///
+/// rk reads whether this exists, never what is in it, so it can leave the
+/// machine's session as it found it. Null when the location cannot be derived,
+/// which the caller treats as "do not touch".
+File? _pubCredentialsFile(Map<String, String> environment) {
+  const name = 'dart/pub-credentials.json';
+  if (Platform.isWindows) {
+    final appData = environment['APPDATA'];
+    return appData == null ? null : File('$appData/$name');
+  }
+  final home = environment['HOME'];
+  if (Platform.isMacOS) {
+    return home == null
+        ? null
+        : File('$home/Library/Application Support/$name');
+  }
+  final config =
+      environment['XDG_CONFIG_HOME'] ?? (home == null ? null : '$home/.config');
+  return config == null ? null : File('$config/$name');
 }
 
 StageArtifact _pubArchive(ReleaseStage stage, ResolvedProject project) {
