@@ -94,7 +94,7 @@ class StageArtifact {
       size: bytes.length,
       sha256: Sha256.hex(bytes),
     );
-    stage.noteDigested(path);
+    stage.noteDigested(path, stat);
     return captured;
   }
 

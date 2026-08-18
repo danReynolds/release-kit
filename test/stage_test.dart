@@ -168,6 +168,48 @@ void main() {
 
     tearDown(() => repository.deleteSync(recursive: true));
 
+    test('a file that moved while being read is not remembered', () {
+      stage.ensureExists();
+      final artifact = File(stage.resolve('out/tool'))
+        ..parent.createSync(recursive: true)
+        ..writeAsBytesSync(utf8.encode('one'));
+      // How the file looked when a read would have begun.
+      final beforeReading = artifact.statSync();
+
+      // Rewritten before the digest was recorded: whatever was read is not
+      // what is on disk now, so nothing may be remembered about it.
+      artifact.writeAsBytesSync(utf8.encode('two'));
+      stage.noteDigested('out/tool', beforeReading);
+
+      expect(
+        stage.digestStillStands('out/tool'),
+        isFalse,
+        reason: 'remembering this would vouch for bytes nobody digested',
+      );
+    });
+
+    test('a digest does not stand for a path that became a link', () {
+      stage.ensureExists();
+      final artifact = File(stage.resolve('out/tool'))
+        ..parent.createSync(recursive: true)
+        ..writeAsBytesSync(utf8.encode('one'));
+      StageArtifact.capture(
+        stage: stage,
+        path: 'out/tool',
+        type: 'executable',
+      );
+      expect(stage.digestStillStands('out/tool'), isTrue);
+
+      // The bytes a link points at are not the bytes that were digested,
+      // and stat would describe the target rather than the swap.
+      final elsewhere = File('${repository.path}/elsewhere')
+        ..writeAsBytesSync(utf8.encode('one'));
+      artifact.deleteSync();
+      Link(stage.resolve('out/tool')).createSync(elsewhere.path);
+
+      expect(stage.digestStillStands('out/tool'), isFalse);
+    });
+
     test('a receipt refuses to record bytes that changed under it', () {
       stage.ensureExists();
       final artifact = File(stage.resolve('out/tool'))

@@ -217,9 +217,18 @@ class StageDirectory {
   /// first verification of anything always reads it.
   final Map<String, String> _digested = {};
 
-  /// Records that [relativePath] was just read and digested as it is now.
-  void noteDigested(String relativePath) {
-    _digested[relativePath] = _describe(File(resolve(relativePath)).statSync());
+  /// Records that [relativePath] was read and digested — provided it held
+  /// still while it was being read.
+  ///
+  /// [beforeReading] is how the file looked when the read began. A file
+  /// rewritten between then and now was digested as bytes it no longer has,
+  /// and remembering that would let a later confirmation vouch for bytes
+  /// nobody digested. Such a file is not remembered at all, so the next
+  /// confirmation reads it again.
+  void noteDigested(String relativePath, FileStat beforeReading) {
+    final settled = _describe(File(resolve(relativePath)).statSync());
+    if (settled != _describe(beforeReading)) return;
+    _digested[relativePath] = settled;
   }
 
   /// Whether [relativePath] is byte-for-byte what it was when this process
@@ -232,7 +241,15 @@ class StageDirectory {
   bool digestStillStands(String relativePath) {
     final when = _digested[relativePath];
     if (when == null) return false;
-    return when == _describe(File(resolve(relativePath)).statSync());
+    final resolved = resolve(relativePath);
+    // A path that has become a link is not the file that was digested,
+    // whatever it now points at — and stat would describe the target.
+    // Reading it again is what refuses it, as it always did.
+    if (FileSystemEntity.typeSync(resolved, followLinks: false) !=
+        FileSystemEntityType.file) {
+      return false;
+    }
+    return when == _describe(File(resolved).statSync());
   }
 
   /// Creates only the fixed stage path, refusing any symlink or non-directory
