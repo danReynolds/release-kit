@@ -525,42 +525,6 @@ class ReleaseCommand {
         return ExitCodes.refused;
       }
 
-      // Builds share one package resolution, and a cold checkout would let
-      // each compile trigger its own implicit `dart pub get` — two
-      // resolvers racing in one package directory. Resolve once, before
-      // the board and the lanes, so builds stay fully concurrent — and say
-      // so, because this is the longest silent wait staging has.
-      final binaryProject = unit.binaryProject;
-      final recordedProducers = {
-        if (stageInspection.validProgress)
-          for (final step in stageInspection.receipt!.steps) step.name,
-      };
-      if (binaryProject != null &&
-          checklist.steps.any((step) =>
-              step.kind == StepKind.build &&
-              !recordedProducers.contains(receiptNameFor(step)))) {
-        output.progress('resolving ${binaryProject.name} dependencies');
-        final chain = _chain(unit);
-        final resolvedDeps = await tools.run(
-          chain.compilerExecutable,
-          const ['pub', 'get'],
-          workingDirectory: binaryProject.directoryIn(chain.repositoryRoot),
-        );
-        if (resolvedDeps.exitCode != 0) {
-          final detail = resolvedDeps.stderr.trim().isEmpty
-              ? resolvedDeps.stdout.trim()
-              : resolvedDeps.stderr.trim();
-          _stageOperationProblem(
-            'resolving ${binaryProject.name} dependencies',
-            detail,
-          );
-          // Nothing has acted: resolution failed before any producer ran.
-          output.halt(HaltKind.beforeActing);
-          if (!stageOnly) _showReleaseActions(targets, publicActions);
-          return ExitCodes.refused;
-        }
-      }
-
       final stageProgress = _StageProgress(
         output,
         title: '${unit.name} ${unit.version} · staging',
@@ -1841,6 +1805,51 @@ class ReleaseCommand {
       }(),
       'a producer depends on a step outside or later in its lane',
     );
+
+    // Builds share one package resolution, and a cold checkout would let
+    // each compile trigger its own implicit `dart pub get` — two resolvers
+    // racing in one package directory. Resolve once — in the staged source
+    // the builds compile from, which exists only now — before the lanes fan
+    // out, and say so: this is the longest silent wait staging has.
+    final binaryProject = unit.binaryProject;
+    if (binaryProject != null &&
+        producerSteps.any((step) =>
+            step.kind == StepKind.build &&
+            !_producerRecorded(progress, step))) {
+      output.say('resolving ${binaryProject.name} dependencies', depth: 1);
+      final chain = _chain(unit);
+      final ToolResult resolvedDeps;
+      try {
+        resolvedDeps = await tools.run(
+          chain.compilerExecutable,
+          const ['pub', 'get'],
+          workingDirectory: binaryProject.directoryIn(chain.repositoryRoot),
+        );
+      } on Object catch (error) {
+        // A missing tool or directory is a refusal with evidence, not a
+        // crash without a message.
+        stageProgress.discard();
+        _stageOperationProblem(
+          'resolving ${binaryProject.name} dependencies',
+          error,
+        );
+        output.halt(HaltKind.beforeActing);
+        return null;
+      }
+      if (resolvedDeps.exitCode != 0) {
+        stageProgress.discard();
+        final detail = resolvedDeps.stderr.trim().isEmpty
+            ? resolvedDeps.stdout.trim()
+            : resolvedDeps.stderr.trim();
+        _stageOperationProblem(
+          'resolving ${binaryProject.name} dependencies',
+          detail,
+        );
+        // Nothing has acted: resolution failed before any producer ran.
+        output.halt(HaltKind.beforeActing);
+        return null;
+      }
+    }
 
     // A failure drains. The lane that failed marks its row and says its
     // problem right away; the others finish the step already in flight — a
