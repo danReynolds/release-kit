@@ -161,6 +161,47 @@ class StageDirectory {
   String resolve(String relativePath) =>
       _join(path, StagePath.segments(relativePath));
 
+  /// What the stage looks like right now, without reading a byte of it.
+  ///
+  /// Verifying a stage means re-reading and re-hashing everything in it,
+  /// and a release asks whether the stage is still good dozens of times
+  /// over a run in which nothing touched it. This is the cheap half of that
+  /// question — the half that can say "nothing moved" — so the expensive
+  /// half only runs when something did.
+  ///
+  /// Every entry contributes its path, kind, size, mode, and both
+  /// timestamps. Modification time alone would not be enough: whoever
+  /// rewrote a file can restore it. Change time is set by the kernel on
+  /// every write and cannot be set back by the writer, so a rewrite that
+  /// keeps the same size and modification time still shows up here.
+  ///
+  /// A missing directory has a fingerprint too — the empty one — so the
+  /// answer for a stage that does not exist is as cacheable as any other.
+  String fingerprint() {
+    final directory = Directory(path);
+    if (!directory.existsSync()) return 'absent';
+    final entries = directory.listSync(recursive: true, followLinks: false)
+      ..sort((left, right) => left.path.compareTo(right.path));
+    final described = StringBuffer();
+    for (final entry in entries) {
+      final stat = entry.statSync();
+      described
+        ..write(entry.path.substring(path.length))
+        ..write('\u0000')
+        ..write(stat.type)
+        ..write('\u0000')
+        ..write(stat.size)
+        ..write('\u0000')
+        ..write(stat.mode)
+        ..write('\u0000')
+        ..write(stat.modified.microsecondsSinceEpoch)
+        ..write('\u0000')
+        ..write(stat.changed.microsecondsSinceEpoch)
+        ..write('\n');
+    }
+    return described.toString();
+  }
+
   /// Creates only the fixed stage path, refusing any symlink or non-directory
   /// component below the repository root.
   void ensureExists() {

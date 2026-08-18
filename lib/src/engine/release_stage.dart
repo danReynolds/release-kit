@@ -184,7 +184,36 @@ class ReleaseStage {
 
   String get sourceRoot => directory.resolve('source');
 
+  /// What this stage is, verified.
+  ///
+  /// The answer is a pure function of the bytes under the stage directory,
+  /// so it is remembered against a fingerprint of that directory: a run
+  /// asks this question dozens of times, and re-reading and re-hashing tens
+  /// of megabytes to answer it again is the largest cost in a release that
+  /// changed nothing.
+  ///
+  /// This is a memo, not a promise that the stage is unchanged. Every call
+  /// still re-reads the directory; only hashing is skipped, and only while
+  /// every path, size, mode, and timestamp is exactly as it was. Anything
+  /// that writes to the stage — rk's own producers included — moves a
+  /// timestamp, so the next call verifies from disk again. What a stale
+  /// answer would require is a rewrite that restores size, mode, and both
+  /// timestamps, which a writer cannot do to change time: the kernel sets
+  /// it. Concurrent writers are excluded separately, by the stage lock.
   StageInspection inspect() {
+    final now = directory.fingerprint();
+    final remembered = _inspected;
+    if (remembered != null && _inspectedAt == now) return remembered;
+    final fresh = _inspectFromDisk();
+    _inspected = fresh;
+    _inspectedAt = now;
+    return fresh;
+  }
+
+  StageInspection? _inspected;
+  String? _inspectedAt;
+
+  StageInspection _inspectFromDisk() {
     final inspected = const StageInspector().inspect(directory);
     final receipt = inspected.receipt;
     final issues = [...inspected.issues];

@@ -485,6 +485,33 @@ executables:
     expect(() => release.requireReceipt(), throwsStateError);
   });
 
+  test('a remembered inspection never outlives the bytes it described',
+      () async {
+    await _complete(release);
+    // Warm the memo with a good answer, which is the state a run is in
+    // every time it asks again.
+    expect(release.inspect().reusable, isTrue);
+
+    // Same length, so size alone cannot notice. Only the timestamps
+    // separate this from the bytes that were verified.
+    final asset = File(release.directory.resolve(_asset));
+    final swapped = asset.readAsBytesSync();
+    swapped[0] = swapped[0] ^ 0xff;
+    asset.writeAsBytesSync(swapped);
+
+    final after = release.inspect();
+    expect(
+      after.reusable,
+      isFalse,
+      reason: 'a cheap check that misses this is a stage that verifies once '
+          'and trusts forever',
+    );
+    expect(
+      after.issues.map((issue) => issue.kind),
+      contains(StageIssueKind.changedArtifact),
+    );
+  });
+
   test('a complete filesystem fixture records every artifact type', () async {
     final receipt = await _completeEveryArtifactType(release);
 

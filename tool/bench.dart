@@ -171,12 +171,17 @@ Future<void> main(List<String> args) async {
         .listSync(recursive: true)
         .whereType<File>()
         .fold<int>(0, (sum, file) => sum + file.lengthSync());
+    final directory =
+        StageDirectory(repositoryRoot: gitRoot, identity: identity);
     report.time(
       'verify a built stage',
-      () => const StageInspector().inspect(
-        StageDirectory(repositoryRoot: gitRoot, identity: identity),
-      ),
+      () => const StageInspector().inspect(directory),
       detail: '${_size(size)} re-read and re-hashed',
+    );
+    report.time(
+      'fingerprint that stage',
+      directory.fingerprint,
+      detail: 'the cheap check that skips the re-read',
     );
   }
 
