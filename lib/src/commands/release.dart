@@ -2476,7 +2476,7 @@ class ReleaseCommand {
           'permanent step is: ${permanent.first.step.summary}.');
     }
 
-    disclosed.addAll(_recordClaims(claims, signing));
+    disclosed.addAll(_recordClaims(claims, firstSigning));
 
     // A platform nothing here can run ships with its smoke test missing.
     // That belongs in the record every authorization carries, not in a
@@ -2774,20 +2774,18 @@ class ReleaseCommand {
   /// carries with its authorization.
   List<String> _recordClaims(
     List<TargetClaim> claims,
-    _ProjectSigningContext? signing,
+    _ProjectSigningContext? firstSigning,
   ) {
-    final firstSigning = signing?.firstCertificate == null ? null : signing;
+    // Sentences, not columns. This is read out of the report by whoever or
+    // whatever consented; the alignment it used to carry was for a screen
+    // that no longer prints it.
     final firstOf = <String>[
       for (final claim in claims)
-        '${claim.registrar.padRight(17)}${claim.name}\n'
-            '                 ${claim.consequence}',
+        '${claim.registrar} ${claim.name} — ${claim.consequence}',
       if (firstSigning != null)
-        '${'macOS identity'.padRight(17)}${firstSigning.codeId}\n'
-            '                 permanent: sealed into the designated '
-            'requirement, and into\n'
-            '                 every Keychain item this program creates. '
-            'Signed by\n'
-            '                 ${firstSigning.firstCertificate}',
+        'macOS identity ${firstSigning.codeId} — permanent: sealed into the '
+            'designated requirement, and into every Keychain item this '
+            'program creates. Signed by ${firstSigning.firstCertificate}',
     ];
     if (firstOf.isEmpty) return const [];
     return ['this release claims, for the first time:', ...firstOf];
