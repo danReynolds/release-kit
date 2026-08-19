@@ -2156,6 +2156,10 @@ class _Harness {
       refreshStage: refreshStage ?? stages.refresh,
       refreshGit: refreshGit ?? () async => git,
       wait: (_) => Future<void>.delayed(Duration.zero),
+      // Without a HOME of its own, rk reads the pub session of whoever is
+      // running the tests, and a case about a missing session stops being
+      // about anything.
+      refreshEnvironment: () => const {'HOME': '/nowhere'},
       capabilities: capabilities ??
           HostCapabilities(
             hostPlatform: 'linux-x64',

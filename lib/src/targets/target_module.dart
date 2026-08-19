@@ -208,6 +208,13 @@ abstract base class TargetModule {
 
   String? permanenceNotice(TargetExpectation target) => null;
 
+  /// What acting on this target changes, for the authorization plan.
+  ///
+  /// The row already names the destination, so this says only what arrives
+  /// there. The checklist's sentence names the destination again — right
+  /// for a step read on its own, redundant beside its own label.
+  String planNote(TargetExpectation target) => target.step.summary;
+
   /// Whether this absent target can act from authenticated public inputs when
   /// the original local stage is unavailable. Versioned publishers default to
   /// false; a moving channel may opt in with target-owned recovery authority.

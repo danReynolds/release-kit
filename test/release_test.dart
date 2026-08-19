@@ -364,7 +364,10 @@ Future<Ran> release({
     stageFor: stageFor,
     refreshStage: (unit, _) => stageFor(unit),
     refreshGit: () async => effectiveGit,
-    refreshEnvironment: refreshEnvironment,
+    // A release must not read the machine running the tests. Without a
+    // HOME of its own, rk finds whatever pub session the developer happens
+    // to have, and a test about a missing session passes or fails on that.
+    refreshEnvironment: refreshEnvironment ?? () => const {'HOME': '/nowhere'},
   );
   final code = await command.run(only: only);
 
@@ -1862,15 +1865,22 @@ dependencies:
     );
     expect(
       ran.text,
-      contains('this release claims, for the first time:'),
+      contains('first claim'),
       reason: 'what a first publish really takes is the NAME, permanently — '
           'so the operator reads it before consenting',
     );
     expect(
       ran.text,
-      contains('pub.dev          keybay'),
+      contains('keybay 0.2.0'),
       reason: 'the name itself is on the line, because a typo claiming a '
           'name nobody meant to own is the accident this guards against',
+    );
+    expect(
+      (ran.report['attachments'] as Map?)?['authorization-disclosures/core'],
+      contains('a package name cannot be renamed, reassigned, or released '
+          'back'),
+      reason: 'the prompt marks the claim; the record keeps why it matters, '
+          'which is what an unattended --yes run carries with its consent',
     );
   });
 

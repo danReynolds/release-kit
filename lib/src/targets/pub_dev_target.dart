@@ -22,6 +22,10 @@ final class PubDevTargetModule extends TargetModule {
   const PubDevTargetModule();
 
   @override
+  String planNote(TargetExpectation target) =>
+      '${target.identity} ${target.targetVersion}';
+
+  @override
   PublishTarget get target => PublishTarget.pubDev;
 
   @override
@@ -644,6 +648,14 @@ final class _PubDevSession extends TargetSessionProvider {
     // durable credential the release does not use.
     if (await _tokenConfigured(context)) {
       return const TargetReady(note: 'token configured');
+    }
+    // A session already on this machine needs no login. `dart pub login`
+    // reads the same file this asks about and, finding it, prints that it
+    // is already logged in and exits — so running it proves nothing the
+    // file did not, and rk passed pub's sentence, and the address in it,
+    // through to a terminal that had not asked.
+    if (await established(context) == true) {
+      return const TargetReady(note: 'signed in');
     }
     int code;
     try {

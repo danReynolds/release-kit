@@ -1881,15 +1881,18 @@ executables:
         isFalse,
         reason: 'nothing here could run it, so nothing pretended to',
       );
+      final disclosed = (run.json['attachments']
+          as Map?)?['authorization-disclosures/cli'] as String?;
       expect(
-        run.text,
+        disclosed,
         contains('built but never executed'),
-        reason: 'the operator accepts the weaker assurance knowingly, at '
-            'the prompt, before the release is authorized',
+        reason: 'the weaker assurance travels with the authorization — the '
+            'prompt marks it, the record says it, and an unattended --yes '
+            'carries it either way',
       );
-      expect(run.text, contains('linux-x64'));
+      expect(disclosed, contains('linux-x64'));
       expect(
-        run.text,
+        disclosed,
         isNot(contains('macos-arm64 — no container runtime')),
         reason: 'the host runs its own binaries for free; only the '
             'cross-compiled target is unproven',
@@ -2009,7 +2012,7 @@ executables:
       expect(run.code, 0, reason: run.text);
       expect(
         run.text,
-        contains('this release claims, for the first time:'),
+        contains('first claim'),
         reason: 'the identity about to become permanent is disclosed at the '
             'prompt, and this unit has nothing permanent in the pub.dev '
             'sense — which is what used to silence it',
@@ -2020,17 +2023,16 @@ executables:
       // one place it is too late to matter.
       expect(
         run.text,
-        contains('macOS identity   tool'),
+        contains('tool signed by D (TEAM123456)'),
         reason: 'the identifier is what becomes permanent, and it is on its '
-            'own line so a wrong one is seen rather than hunted for',
+            'own line beside who signed it, so a wrong one is seen rather '
+            'than hunted for',
       );
       expect(
-        run.text,
-        contains('Signed by\n'
-            '                     Developer ID Application: D (TEAM123456)'),
-        reason: 'the identifier is half of what becomes permanent, and the '
-            'RFC already claimed this sentence named it — it named only the '
-            'certificate',
+        (run.json['attachments'] as Map?)?['authorization-disclosures/cli'],
+        contains('Developer ID Application: D (TEAM123456)'),
+        reason: 'the row names the certificate; the record keeps its full '
+            'form, which is what an unattended --yes consents to',
       );
     });
 
