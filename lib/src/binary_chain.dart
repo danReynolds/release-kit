@@ -66,6 +66,17 @@ class BinaryChain {
   // These two are not public asset names: they name what lives under
   // `.rk/work/` between steps. The published grammar is ReleaseAssets.
 
+  /// Keeps what the tool said, under a name that says which step and which
+  /// platform produced it.
+  ///
+  /// Each diagnostic beside these calls carries one line and a remedy that
+  /// points at output rk is the last holder of. This is where that output
+  /// goes: `.rk/diagnosis/<stamp>/tool-output/`, and the --json document.
+  void _keepEvidence(String code, String platform, String? evidence) {
+    if (evidence == null) return;
+    output.report.attachEvidence('tool-output/$code-$platform.txt', evidence);
+  }
+
   static String binaryName(
     String project,
     String platform,
@@ -141,6 +152,7 @@ class BinaryChain {
         ),
         unit: step.unit,
       );
+      _keepEvidence('RK-BUILD-001', platform, built.evidence);
       return LocalProducerOutcome.failed(
         built.problem ?? 'the build failed',
       );
@@ -229,6 +241,7 @@ class BinaryChain {
         ),
         unit: step.unit,
       );
+      _keepEvidence('RK-SIGN-002', '${step.platform}', signed.evidence);
       return LocalProducerOutcome.failed(
         signed.problem ?? 'signing failed',
       );
@@ -361,6 +374,7 @@ class BinaryChain {
         ),
         unit: step.unit,
       );
+      _keepEvidence('RK-NOTARY-001', platform, zipped.transcript);
       return LocalProducerOutcome.failed(zipped.summary);
     }
 
@@ -377,6 +391,7 @@ class BinaryChain {
         ),
         unit: step.unit,
       );
+      _keepEvidence('RK-NOTARY-002', platform, notarized.evidence);
       return LocalProducerOutcome.failed(
         notarized.problem ?? 'Apple rejected the submission',
       );
@@ -401,6 +416,7 @@ class BinaryChain {
         ),
         unit: step.unit,
       );
+      _keepEvidence('RK-NOTARY-003', platform, log?.transcript);
       return const LocalProducerOutcome.failed(
         'the notarization log could not be fetched',
       );

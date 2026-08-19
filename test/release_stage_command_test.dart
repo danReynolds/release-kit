@@ -1396,6 +1396,27 @@ void main() {
         reason: 'the human surface keeps the cause while the machine surface '
             'owns its stable code',
       );
+      final attached = (failed.report['attachments'] as Map?) ?? const {};
+      final kept = attached.keys
+          .map((key) => '$key')
+          .where((key) => key.startsWith('tool-output/'))
+          .toList();
+      if (failure.name == 'binary compile') {
+        expect(
+          kept,
+          hasLength(1),
+          reason: '"see the compiler output" must point at something rk kept',
+        );
+        expect(attached[kept.single], contains('binary compile failed'));
+      } else {
+        expect(
+          kept,
+          isEmpty,
+          reason: 'the other two already carry their whole cause in the '
+              'problem they report',
+        );
+      }
+
       expect(prompts, 0, reason: 'authorization follows complete staging');
       expect(failed.publicMutations, isEmpty);
       expect(harness.stage.inspect().reusable, isFalse);

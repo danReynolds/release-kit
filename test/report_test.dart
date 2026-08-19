@@ -181,6 +181,24 @@ void main() {
       );
     });
 
+    test('evidence, unlike an attachment, earns a run its diagnosis', () {
+      // The two differ only in what they decide. A refused init attaches its
+      // proposed config and has already printed everything it knows; a failed
+      // compile attaches output that exists nowhere else, and a run that
+      // never acted must still write it down.
+      final proposal = Report('init')..attach('release.toml', '[unit.cli]');
+      expect(proposal.hasEvidence, isFalse);
+
+      final failed = Report('release')
+        ..attachEvidence('tool-output/RK-BUILD-001-macos-arm64.txt', 'boom');
+      expect(failed.hasEvidence, isTrue);
+      expect(
+          failed.attachments,
+          contains(
+            'tool-output/RK-BUILD-001-macos-arm64.txt',
+          ));
+    });
+
     test('two runs do not overwrite one another', () {
       final root = Directory.systemTemp.createTempSync('rk-diag-');
       addTearDown(() => root.deleteSync(recursive: true));

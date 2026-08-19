@@ -48,7 +48,10 @@ class DartCliBuilder {
       workingDirectory: workingDirectory,
     );
 
-    if (!compiled.ok) return BuildOutcome.failed(compiled.summary);
+    if (!compiled.ok) {
+      return BuildOutcome.failed(compiled.summary,
+          evidence: compiled.transcript);
+    }
 
     if (!capability.canProve) {
       // Built, and nothing here can run it. The absence of the proof is
@@ -134,14 +137,20 @@ class DartCliBuilder {
 enum DartBuildEvent { testing }
 
 class BuildOutcome {
-  const BuildOutcome._(this.path, this.problem, {this.unproven});
+  const BuildOutcome._(this.path, this.problem, {this.unproven, this.evidence});
 
   const BuildOutcome.built(String path, {String? unproven})
       : this._(path, null, unproven: unproven);
-  const BuildOutcome.failed(String problem) : this._(null, problem);
+  const BuildOutcome.failed(String problem, {String? evidence})
+      : this._(null, problem, evidence: evidence);
 
   final String? path;
   final String? problem;
+
+  /// The compiler's whole account of the failure, carried to whoever reports
+  /// it. [problem] is the line a person reads; this is what "see the compiler
+  /// output" refers to, and it exists nowhere else once this returns.
+  final String? evidence;
 
   /// Why the binary was never executed, when it was not. Null means it ran
   /// and reported the version it should — the only case rk calls proven.

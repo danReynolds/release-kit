@@ -166,7 +166,9 @@ class MacOsSigner {
       selected.sha1,
       binary,
     ]);
-    if (!signed.ok) return SignOutcome.failed(signed.summary);
+    if (!signed.ok) {
+      return SignOutcome.failed(signed.summary, evidence: signed.transcript);
+    }
 
     final requirement = await designatedRequirement(binary);
     if (requirement == null) {
@@ -235,6 +237,7 @@ class SignOutcome {
     this.problem, {
     this.certificate,
     this.certificateSha256,
+    this.evidence,
   });
   const SignOutcome.signed(
     String requirement, {
@@ -246,11 +249,17 @@ class SignOutcome {
           certificate: certificate,
           certificateSha256: certificateSha256,
         );
-  const SignOutcome.failed(String problem) : this._(null, problem);
+  const SignOutcome.failed(String problem, {String? evidence})
+      : this._(null, problem, evidence: evidence);
 
   /// The designated requirement the signature produced.
   final String? requirement;
   final String? problem;
+
+  /// codesign's whole account, when codesign is what failed. Null for the
+  /// failures rk reasons its way to — no certificate, an ambiguous team —
+  /// where [problem] is already the entire story.
+  final String? evidence;
 
   /// The certificate that signed, named so a first release can show which
   /// identity it just made permanent.
@@ -293,6 +302,7 @@ class MacOsNotarizer {
             ? 'store the credential once: xcrun notarytool '
                 'store-credentials $profile'
             : null,
+        evidence: result.transcript,
       );
     }
 
@@ -310,6 +320,7 @@ class MacOsNotarizer {
             ? null
             : 'the reason is in the log: xcrun notarytool log $id '
                 '--keychain-profile $profile',
+        evidence: result.transcript,
       );
     }
     return NotarizeOutcome.accepted(id, raw: result.stdout);
@@ -331,11 +342,12 @@ class MacOsNotarizer {
 
 class NotarizeOutcome {
   const NotarizeOutcome._(this.submissionId, this.problem, this.remedy,
-      {this.raw});
+      {this.raw, this.evidence});
   const NotarizeOutcome.accepted(String? id, {String? raw})
       : this._(id, null, null, raw: raw);
-  const NotarizeOutcome.failed(String problem, {String? remedy})
-      : this._(null, problem, remedy);
+  const NotarizeOutcome.failed(String problem,
+      {String? remedy, String? evidence})
+      : this._(null, problem, remedy, evidence: evidence);
 
   final String? submissionId;
   final String? problem;
@@ -344,6 +356,10 @@ class NotarizeOutcome {
   /// notarytool's own words for an accepted submission, kept verbatim
   /// because they become a published asset.
   final String? raw;
+
+  /// notarytool's own words for a rejected or failed one, which become
+  /// nothing unless they are carried out.
+  final String? evidence;
 
   bool get ok => problem == null;
 }

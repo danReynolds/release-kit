@@ -57,6 +57,18 @@ class ToolResult {
         .map((line) => line.trim())
         .firstWhere((line) => failure.hasMatch(line), orElse: () => lines.last);
   }
+
+  /// The whole of what the tool said.
+  ///
+  /// [summary] picks the one line worth a person's screen; this is the rest —
+  /// the thirty lines of compiler errors behind a remedy that says "see the
+  /// compiler output". Kept for the diagnosis, where an operator goes when
+  /// the one line was not enough.
+  String get transcript => [
+        'exit $exitCode',
+        if (stdout.trim().isNotEmpty) ...['--- stdout ---', stdout.trimRight()],
+        if (stderr.trim().isNotEmpty) ...['--- stderr ---', stderr.trimRight()],
+      ].join('\n');
 }
 
 class SystemTools implements Tools {
@@ -96,6 +108,12 @@ class SystemTools implements Tools {
       workingDirectory: workingDirectory,
       environment: environment,
     );
+    // The same closed stdin an unbounded run gets from Process.run. Left
+    // open, a tool that reads stdin blocks on a pipe nobody will ever write
+    // to, burning the whole bound before rk kills it — turning "this asked a
+    // question" into "this timed out", which is the one answer rk cannot act
+    // on. Closed, it sees EOF and fails in milliseconds.
+    unawaited(process.stdin.close().catchError((Object _) {}));
     final stdout = process.stdout.transform(utf8.decoder).join();
     final stderr = process.stderr.transform(utf8.decoder).join();
     var timedOut = false;

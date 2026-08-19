@@ -223,6 +223,24 @@ class Report {
 
   void attach(String name, String contents) => attachments[name] = contents;
 
+  /// Attaches what a native tool said when it failed, and records that this
+  /// run produced evidence.
+  ///
+  /// Distinct from [attach] because of what it decides: a run that never
+  /// acted normally writes no diagnosis, on the reasoning that a refusal has
+  /// already said everything it knows on stdout. That reasoning holds for an
+  /// unreadable release.toml and fails for a failed compile, where rk's own
+  /// line is "see the compiler output" and the output exists nowhere else.
+  void attachEvidence(String name, String contents) {
+    attachments[name] = contents;
+    _evidence = true;
+  }
+
+  /// Whether a native tool's own account of a failure is attached, and so
+  /// whether there is anything to write down that stdout did not already say.
+  bool get hasEvidence => _evidence;
+  bool _evidence = false;
+
   void initPlan(Map<String, Object?> plan) => _init = plan;
 
   /// The repository-local stage inventory an explicit clean observed and how
