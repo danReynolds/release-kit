@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import '../engine/tools.dart';
 
 /// Signs and notarizes a macOS binary.
@@ -7,6 +9,22 @@ import '../engine/tools.dart';
 /// thing that produced it proves nothing. On macOS the code identity is what
 /// the OS ties Keychain items and permission grants to, so a drift here
 /// silently locks existing users out of their own data.
+/// What a Dart AOT binary needs to start under the hardened runtime.
+///
+/// Kept minimal deliberately: this grants unsigned executable memory and
+/// nothing else, because every entitlement widens what the notarized binary is
+/// permitted to do.
+const String _dartRuntimeEntitlements =
+    '''<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+</dict>
+</plist>
+''';
+
 class MacOsSigner {
   MacOsSigner({required this.tools});
 
@@ -153,10 +171,26 @@ class MacOsSigner {
       );
     }
 
+    // The hardened runtime refuses the executable pages a Dart AOT snapshot
+    // maps at startup, and the kernel SIGKILLs the process before it prints
+    // anything. Nothing else reports the problem: the signature verifies, the
+    // notarization succeeds, and Gatekeeper assesses the binary as accepted —
+    // it simply cannot run. `allow-jit` is not sufficient; this is the one
+    // that is.
+    final entitlements = File('$binary.entitlements.plist');
+    try {
+      entitlements.writeAsStringSync(_dartRuntimeEntitlements);
+    } on FileSystemException catch (error) {
+      return SignOutcome.failed(
+          'the entitlements could not be written: $error');
+    }
+
     final signed = await tools.run('codesign', [
       '--force',
       '--timestamp',
       '--options=runtime',
+      '--entitlements',
+      entitlements.path,
       '--identifier',
       codeId,
       '--sign',
@@ -166,6 +200,7 @@ class MacOsSigner {
       selected.sha1,
       binary,
     ]);
+    if (entitlements.existsSync()) entitlements.deleteSync();
     if (!signed.ok) {
       return SignOutcome.failed(signed.summary, transcript: signed.transcript);
     }
