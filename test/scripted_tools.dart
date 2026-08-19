@@ -15,6 +15,7 @@ class ScriptedTools implements Tools {
     List<String> arguments, {
     String? workingDirectory,
     Map<String, String>? environment,
+    Duration? timeout,
   }) async {
     calls.add([executable, ...arguments]);
     return answers[executable] ??
@@ -43,6 +44,7 @@ class SequencedTools implements Tools {
     List<String> arguments, {
     String? workingDirectory,
     Map<String, String>? environment,
+    Duration? timeout,
   }) async =>
       _at < _answers.length
           ? _answers[_at++]

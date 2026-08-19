@@ -132,19 +132,21 @@ void main() {
     );
     final published = _expectTranscript(release, 'Release transcript', {
       'dart run bin/rk.dart release rk',
-      'dart pub login',
+      'pub.dev · rk',
       'rk $version',
       'rk $version released',
     });
     expect(
-      'dart pub login'.allMatches(published),
-      hasLength(1),
-      reason: 'one native session preflight serves this release',
+      published,
+      contains('signed in'),
+      reason: 'the session preflight still runs and still says it ran — but '
+          'quietly, so what reaches this transcript is rk\'s row rather '
+          'than pub\'s account of a session it just refreshed',
     );
     expect(
-      published.indexOf('dart pub login'),
-      lessThan(published.indexOf('rk $version')),
-      reason: 'native login must precede rk private-stage inspection',
+      published.indexOf('signed in'),
+      lessThan(published.indexOf('rk $version released')),
+      reason: 'the session is confirmed before anything is published',
     );
     _expectTranscript(release, 'Fresh-process status read-back', {
       'dart run bin/rk.dart status rk',

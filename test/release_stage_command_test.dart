@@ -450,6 +450,28 @@ void main() {
     );
   });
 
+  test('a live session is confirmed without pub saying so to the terminal',
+      () async {
+    final released = await harness.run(
+      stageOnly: false,
+      confirm: (_) async => 'yes',
+    );
+
+    expect(released.code, ExitCodes.ok, reason: released.text);
+    expect(
+      released.keys.where((key) => key == 'dart pub login'),
+      hasLength(1),
+      reason: 'the session is still checked — refreshed and put to the '
+          'provider — exactly once',
+    );
+    expect(
+      released.text,
+      isNot(contains('already logged in')),
+      reason: 'what pub says about a session it just confirmed is not what '
+          'a terminal asking about a release needs to read',
+    );
+  });
+
   test(
       'a failed pub session check keeps the exact stage but stops before '
       'authorization or public work', () async {
@@ -2300,6 +2322,7 @@ class _ForwardingReadTools implements Tools {
     List<String> arguments, {
     String? workingDirectory,
     Map<String, String>? environment,
+    Duration? timeout,
   }) {
     invocations.add(_Invocation(
       executable: executable,
@@ -2413,6 +2436,7 @@ class _WorldTools implements Tools {
     List<String> arguments, {
     String? workingDirectory,
     Map<String, String>? environment,
+    Duration? timeout,
   }) async {
     final invocation = _Invocation(
       executable: executable,
@@ -2426,6 +2450,14 @@ class _WorldTools implements Tools {
     final failure = runFailure?.call(invocation);
     if (failure != null) return failure;
 
+    // A dead session fails however it is asked: rk tries quietly first and
+    // attached second, and a fake that only refuses one of them lets a
+    // release past a check the real machine would stop.
+    if (_isDart(executable) && arguments.join(' ') == 'pub login') {
+      return failPubLogin
+          ? ToolResult(exitCode: 1, stdout: '', stderr: 'authentication failed')
+          : _ok(stdout: 'You are already logged in as <dev@example.com>\n');
+    }
     if (_isDart(executable) && _starts(arguments, ['pub', 'get'])) {
       return _ok();
     }
