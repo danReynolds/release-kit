@@ -368,7 +368,9 @@ class HomebrewTap {
       'https://github.com/$tap.git',
       checkout,
     ]);
-    if (!cloned.ok) return TapOutcome.failed(cloned.summary);
+    if (!cloned.ok) {
+      return TapOutcome.failed(cloned.summary, transcript: cloned.transcript);
+    }
 
     // The API inspection authorized one exact base. The fresh clone must
     // still contain that base before rk writes anything; the push then guards
@@ -411,14 +413,19 @@ class HomebrewTap {
       ['add', caskPath],
       workingDirectory: checkout,
     );
-    if (!added.ok) return TapOutcome.failed(added.summary);
+    if (!added.ok) {
+      return TapOutcome.failed(added.summary, transcript: added.transcript);
+    }
 
     final committed = await tools.run(
       'git',
       ['commit', '-m', message],
       workingDirectory: checkout,
     );
-    if (!committed.ok) return TapOutcome.failed(committed.summary);
+    if (!committed.ok) {
+      return TapOutcome.failed(committed.summary,
+          transcript: committed.transcript);
+    }
 
     final pushed = await tools.run(
       'git',
@@ -438,21 +445,30 @@ class HomebrewTap {
           ? TapOutcome.failed(
               'the tap moved while rk was working — re-running reads it '
               'fresh: ${pushed.summary}',
+              transcript: pushed.transcript,
             )
-          : TapOutcome.lostTrack('the push failed: ${pushed.summary}');
+          : TapOutcome.lostTrack('the push failed: ${pushed.summary}',
+              transcript: pushed.transcript);
     }
     return const TapOutcome.updated();
   }
 }
 
 class TapOutcome {
-  const TapOutcome._(this.problem, this.changed, this.mayHaveActed);
+  const TapOutcome._(this.problem, this.changed, this.mayHaveActed,
+      {this.transcript});
   const TapOutcome.updated() : this._(null, true, true);
   const TapOutcome.unchanged() : this._(null, false, false);
-  const TapOutcome.failed(String problem) : this._(problem, false, false);
-  const TapOutcome.lostTrack(String problem) : this._(problem, false, true);
+  const TapOutcome.failed(String problem, {String? transcript})
+      : this._(problem, false, false, transcript: transcript);
+  const TapOutcome.lostTrack(String problem, {String? transcript})
+      : this._(problem, false, true, transcript: transcript);
 
   final String? problem;
+
+  /// What git said when git is what failed — the rest of the account behind
+  /// [problem]'s one line.
+  final String? transcript;
   final bool changed;
   final bool mayHaveActed;
   bool get ok => problem == null;

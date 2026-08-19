@@ -1302,7 +1302,9 @@ publish = ["pub.dev"]
         _tagPush: ToolResult(
           exitCode: 1,
           stdout: '',
-          stderr: 'fatal: unable to access origin',
+          stderr: 'fatal: unable to access origin\n'
+              'ssh: connect to host github.com port 22: Network is unreachable\n'
+              'fatal: Could not read from remote repository.',
         ),
       },
     );
@@ -1317,6 +1319,17 @@ publish = ["pub.dev"]
     );
     expect(ran.text, contains('no public target changed'));
     expect(ran.problems.map((p) => p['code']), contains('RK-TAG-002'));
+
+    // A push that failed after rk began acting is the least reproducible
+    // failure rk has: what git said about it exists nowhere else once the
+    // run ends.
+    final pushFailure =
+        ran.problems.singleWhere((p) => p['code'] == 'RK-TAG-002');
+    final filed = pushFailure['evidence'] as String?;
+    expect(filed, isNotNull, reason: 'the push kept only its first line');
+    final account = (ran.report['attachments'] as Map)[filed] as String;
+    expect(account, contains('Network is unreachable'));
+    expect(account, contains('Could not read from remote repository'));
     expect(
       ran.calls.where((c) => c.contains('publish --force')),
       isEmpty,
@@ -1587,6 +1600,16 @@ publish = ["pub.dev"]
       );
       expect(ran.text, contains('signature could not be verified'));
       expect(ran.text, contains('gpg.ssh.allowedSignersFile'));
+      // The refusal builds its diagnostic in the act and classifyFailure
+      // builds the one that is reported: what git said has to survive the
+      // handover, not be attached to the diagnostic that is discarded.
+      final refusal =
+          ran.problems.singleWhere((p) => p['code'] == 'RK-TAG-007');
+      expect(refusal['evidence'], isNotNull);
+      expect(
+        (ran.report['attachments'] as Map)[refusal['evidence']],
+        contains('allowedSignersFile'),
+      );
       expect(
         ran.calls.where((c) => c.startsWith('git push origin')),
         isEmpty,

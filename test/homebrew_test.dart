@@ -369,7 +369,8 @@ void main() {
             ? ToolResult(
                 exitCode: 1,
                 stdout: '',
-                stderr: 'fatal: could not read Username',
+                stderr: 'fatal: could not read Username\n'
+                    'remote: Support for password authentication was removed',
               )
             : null,
         onRun: (key) {
@@ -391,6 +392,12 @@ void main() {
       expect(outcome.ok, isFalse);
       expect(outcome.problem, contains('the push failed'));
       expect(outcome.problem, isNot(contains('the tap moved')));
+      // A lostTrack push is the least reproducible failure rk has: git's
+      // second line is the one that says what to do about it.
+      expect(
+        outcome.transcript,
+        contains('Support for password authentication was removed'),
+      );
     });
 
     test('same length, different bytes, is still a change', () async {

@@ -279,6 +279,7 @@ final class GitTagTargetModule extends TargetModule {
           message: 'the tag $tag could not be created',
           remedy: created.summary,
         ),
+        evidence: created.transcript,
         reconciledNote: 'tag creation response was lost · origin confirmed '
             'the exact release tag',
       );
@@ -357,6 +358,7 @@ final class GitTagTargetModule extends TargetModule {
           remedy: '${pushed.summary}\norigin will be read before this result '
               'is classified; a re-run inspects before pushing again',
         ),
+        evidence: pushed.transcript,
         reconciledNote: 'push response was lost · origin confirmed exact',
       );
     }
@@ -425,6 +427,7 @@ final class GitTagTargetModule extends TargetModule {
               'and set gpg.ssh.allowedSignersFile to it. rk will not record a '
               'release as signed on a signature it could not check.\n'
               '${verified.summary}',
+          evidence: verified.transcript,
         ),
       );
     }
@@ -483,6 +486,7 @@ final class GitTagTargetModule extends TargetModule {
           remedy: '${pushed.summary}\nthe tag pre-existed this run, so it '
               'was left in place — re-running pushes it again',
         ),
+        evidence: pushed.transcript,
         reconciledNote: 'push response was lost · origin confirmed exact',
       );
     }
@@ -563,6 +567,7 @@ final class GitTagTargetModule extends TargetModule {
             ? 're-run; the shared destination inspection will classify the '
                 'public target before any retry'
             : details.join('\n'),
+        evidence: act.evidence ?? act.diagnostic?.evidence,
       ),
       halt: halt,
     );

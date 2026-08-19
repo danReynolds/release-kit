@@ -77,6 +77,31 @@ Future<String> _settled(Future<String> stream) => stream.timeout(
       onTimeout: () => '',
     );
 
+/// UTF-8 that survives a byte sequence it cannot make sense of.
+///
+/// A captured tool is not obliged to speak valid UTF-8 — a crashing binary
+/// can put raw bytes on stderr, and a strict decoder turns that into a
+/// FormatException thrown out of the middle of a release. rk would rather
+/// read a replacement character than lose the run.
+const _lenient = Utf8Codec(allowMalformed: true);
+
+/// What a bounded run tells git rather than be asked a question it cannot
+/// relay.
+///
+/// Only bounded runs. A bound is rk saying nobody will be waiting this long,
+/// and git's credential prompt goes to /dev/tty, which closing stdin does not
+/// touch — so an inspection meets the prompt, burns its whole bound, and is
+/// killed, reporting "timed out" for a tool that only asked a question.
+/// Unbounded runs are the acts, where the operator is at the terminal the
+/// prompt reaches and there is no deadline to miss: suppressing it there
+/// would turn an answerable push into a refusal.
+///
+/// One variable, deliberately. `SSH_ASKPASS_REQUIRE=never` sends ssh to the
+/// terminal rather than away from it, and `GIT_SSH_COMMAND` or `GIT_ASKPASS`
+/// would overwrite configuration the operator set for themselves. A caller
+/// that means to override this is spread in after and wins.
+const _unattended = {'GIT_TERMINAL_PROMPT': '0'};
+
 class SystemTools implements Tools {
   const SystemTools({this.timeout});
 
@@ -100,6 +125,8 @@ class SystemTools implements Tools {
         arguments,
         workingDirectory: workingDirectory,
         environment: environment,
+        stdoutEncoding: _lenient,
+        stderrEncoding: _lenient,
       );
       return ToolResult(
         exitCode: result.exitCode,
@@ -112,7 +139,7 @@ class SystemTools implements Tools {
       executable,
       arguments,
       workingDirectory: workingDirectory,
-      environment: environment,
+      environment: {..._unattended, ...?environment},
     );
     // The same closed stdin an unbounded run gets from Process.run. Left
     // open, a tool that reads stdin blocks on a pipe nobody will ever write
@@ -121,8 +148,8 @@ class SystemTools implements Tools {
     // prompts on /dev/tty still holds rk's terminal, and the lever for those
     // is the environment (GIT_TERMINAL_PROMPT and its kind), not this.
     unawaited(process.stdin.close().catchError((Object _) {}));
-    final stdout = process.stdout.transform(utf8.decoder).join();
-    final stderr = process.stderr.transform(utf8.decoder).join();
+    final stdout = process.stdout.transform(_lenient.decoder).join();
+    final stderr = process.stderr.transform(_lenient.decoder).join();
     var timedOut = false;
     var exitCode = 124;
     try {

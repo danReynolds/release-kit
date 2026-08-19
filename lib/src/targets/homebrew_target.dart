@@ -287,6 +287,7 @@ final class HomebrewTargetModule extends TargetModule {
       ok: outcome.ok,
       problem: outcome.problem,
       mayHaveActed: outcome.mayHaveActed,
+      evidence: outcome.ok ? null : outcome.transcript,
     );
   }
 
@@ -330,6 +331,7 @@ final class HomebrewTargetModule extends TargetModule {
             ? 're-run; the shared destination inspection will classify the '
                 'public target before any retry'
             : details.join('\n'),
+        evidence: act.evidence ?? act.diagnostic?.evidence,
       ),
       halt: halt,
     );
