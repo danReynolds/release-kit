@@ -123,16 +123,26 @@ void main() {
   });
 
   group('non-terminal output is append-only', () {
-    test('progress prints nothing at all', () {
+    test('a live board prints nothing at all', () {
       final (out, captured) = make(isTerminal: false);
-      out.progress('building linux-x64');
+      final board = out.progressBoard('Staging', delay: Duration.zero);
+      board
+          .addRow(id: 'build', label: 'linux-x64')
+          .handle
+          .begin(CommonProgressActivities.checking);
       expect(captured.text, isEmpty, reason: 'a pipe sees no spinner');
+      board.discard();
     });
 
     test('and no cursor movement is emitted', () {
       final (out, captured) = make(isTerminal: false);
-      out.progress('building');
+      final board = out.progressBoard('Staging', delay: Duration.zero);
+      board
+          .addRow(id: 'build', label: 'linux-x64')
+          .handle
+          .begin(CommonProgressActivities.checking);
       out.line('built', mark: Mark.done);
+      board.discard();
       expect(captured.text, isNot(contains('\r')));
       expect(captured.text, isNot(contains('\x1b')));
     });
@@ -146,18 +156,6 @@ void main() {
   });
 
   group('terminal output is transient', () {
-    test('progress writes, then is cleared by the next line', () {
-      final (out, captured) = make(isTerminal: true);
-      out.progress('building linux-x64');
-      expect(captured.text, contains('building linux-x64'));
-      out.line('built', mark: Mark.done);
-      expect(
-        captured.text,
-        contains('\r'),
-        reason: 'the transient line is erased rather than left behind',
-      );
-    });
-
     test('a concurrent target list is fixed, updated, then erased', () async {
       final (out, captured) = make(isTerminal: true);
       final checks = out.targetChecks(delay: Duration.zero);

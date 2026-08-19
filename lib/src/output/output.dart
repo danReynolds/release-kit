@@ -160,7 +160,6 @@ class Output {
 
   final Elapsed Function() _clock;
 
-  var _transient = false;
   LiveProgress? _progressBoard;
 
   /// A fixed-height, target-agnostic progress surface.
@@ -186,7 +185,7 @@ class Output {
       );
       previous.discard();
     }
-    _clearTransient();
+    _yieldToProse();
     final board = LiveProgress._(
       this,
       title,
@@ -210,7 +209,7 @@ class Output {
 
   /// A heading. Callers space their own sections; this adds nothing.
   void heading(String text) {
-    _clearTransient();
+    _yieldToProse();
     _writeSettled(text, continuationPrefix: '  ');
   }
 
@@ -342,11 +341,11 @@ class Output {
       );
       board.discard();
     }
-    _clearTransient();
+    _yieldToProse();
   }
 
   void blank() {
-    _clearTransient();
+    _yieldToProse();
     sink('\n');
   }
 
@@ -369,7 +368,7 @@ class Output {
     Tone tone = Tone.plain,
     Tone noteTone = Tone.plain,
   }) {
-    _clearTransient();
+    _yieldToProse();
     final plainGlyph = mark == Mark.none ? ' ' : mark.glyph;
     final paintedGlyph = mark == Mark.none ? ' ' : _paint(mark);
 
@@ -436,7 +435,7 @@ class Output {
 
   /// Free-form prose, wrapped in the same indentation as the tree.
   void say(String text, {int depth = 0}) {
-    _clearTransient();
+    _yieldToProse();
     final prefix = '  ${'  ' * depth}';
     for (final part in text.split('\n')) {
       final repeatsComment = part.startsWith('# ');
@@ -451,7 +450,7 @@ class Output {
   /// A terminal prompt, using the same width policy as settled prose while
   /// leaving the cursor after the final space for the answer.
   void prompt(String text) {
-    _clearTransient();
+    _yieldToProse();
     final body = text.trimRight();
     _writeSettled(
       body,
@@ -540,28 +539,14 @@ class Output {
     return lines.isEmpty ? const [''] : lines;
   }
 
-  /// A line that will be replaced by its own completion, so the terminal shows
-  /// what is happening and the scrollback shows only what happened.
+  /// Makes room for a durable line.
   ///
-  /// Suppressed entirely when not attached to a terminal: a log, a pipe, and
-  /// an agent see one line per step, on completion, never a redraw.
-  void progress(String text) {
-    if (!isTerminal) return;
-    _clearTransient();
-    sink('  $text');
-    _transient = true;
-  }
-
-  void _clearTransient() {
-    // The renderer draws; the coordinator judges. Prose never destroys a
-    // live board — it yields: the transient region clears so the line joins
-    // the transcript, and the next frame repaints the board beneath it.
-    // Boards end only by their owner's settle, conclude, or discard.
+  /// The renderer draws; the coordinator judges. Prose never destroys a
+  /// live board — it yields: the board's region clears so the line joins
+  /// the transcript, and the next frame repaints it beneath. Boards end
+  /// only by their owner's settle, conclude, or discard.
+  void _yieldToProse() {
     _progressBoard?.yieldToProse();
-    if (!_transient) return;
-    // Return to the start of the line and clear it.
-    sink('\r\x1b[2K');
-    _transient = false;
   }
 
   /// The plain sentence that opens every halt, before any verdict noun.
