@@ -50,7 +50,7 @@ class DartCliBuilder {
 
     if (!compiled.ok) {
       return BuildOutcome.failed(compiled.summary,
-          evidence: compiled.transcript);
+          transcript: compiled.transcript);
     }
 
     if (!capability.canProve) {
@@ -69,7 +69,7 @@ class DartCliBuilder {
       capability: capability,
       expectedVersion: expectedVersion,
     );
-    if (smoke != null) return BuildOutcome.failed(smoke);
+    if (smoke != null) return smoke;
 
     return BuildOutcome.built(output);
   }
@@ -79,7 +79,7 @@ class DartCliBuilder {
   /// The strongest cheap signal that the right thing was built: a binary that
   /// prints the wrong version is one nobody should ship, and it is exactly
   /// what a stale artifact looks like.
-  Future<String?> _smokeTest({
+  Future<BuildOutcome?> _smokeTest({
     required String platform,
     required String binary,
     required PlatformCapability capability,
@@ -95,7 +95,9 @@ class DartCliBuilder {
         // Unreachable through the capability gate, and stated rather than
         // assumed: the alternative is a null-check crash at the one step
         // whose whole job is to prove the binary runs.
-        return 'no container runtime is available to run it';
+        return const BuildOutcome.failed(
+          'no container runtime is available to run it',
+        );
       }
       result = await tools.run(runtime, [
         'run',
@@ -110,10 +112,17 @@ class DartCliBuilder {
       ]);
     }
 
-    if (!result.ok) return 'the binary would not run: ${result.summary}';
+    if (!result.ok) {
+      return BuildOutcome.failed(
+        'the binary would not run: ${result.summary}',
+        transcript: result.transcript,
+      );
+    }
     if (!result.stdout.contains(expectedVersion)) {
-      return 'it reports "${result.stdout.trim()}" rather than '
-          '$expectedVersion';
+      return BuildOutcome.failed(
+        'it reports "${result.stdout.trim()}" rather than $expectedVersion',
+        transcript: result.transcript,
+      );
     }
     return null;
   }
@@ -137,20 +146,22 @@ class DartCliBuilder {
 enum DartBuildEvent { testing }
 
 class BuildOutcome {
-  const BuildOutcome._(this.path, this.problem, {this.unproven, this.evidence});
+  const BuildOutcome._(this.path, this.problem,
+      {this.unproven, this.transcript});
 
   const BuildOutcome.built(String path, {String? unproven})
       : this._(path, null, unproven: unproven);
-  const BuildOutcome.failed(String problem, {String? evidence})
-      : this._(null, problem, evidence: evidence);
+  const BuildOutcome.failed(String problem, {String? transcript})
+      : this._(null, problem, transcript: transcript);
 
   final String? path;
   final String? problem;
 
-  /// The compiler's whole account of the failure, carried to whoever reports
-  /// it. [problem] is the line a person reads; this is what "see the compiler
-  /// output" refers to, and it exists nowhere else once this returns.
-  final String? evidence;
+  /// The whole of what the tool said, carried to whoever reports this.
+  ///
+  /// [problem] is the line a person reads. This is the rest, and rk is its
+  /// last holder: null only when no tool spoke.
+  final String? transcript;
 
   /// Why the binary was never executed, when it was not. Null means it ran
   /// and reported the version it should — the only case rk calls proven.

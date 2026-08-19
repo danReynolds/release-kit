@@ -285,23 +285,16 @@ Future<void> main(List<String> args) async {
   if (json) stdout.write(output.report.encode(exit: code));
 }
 
-/// Writes the evidence for a run that began changing things and then failed,
-/// or that failed holding something no other surface kept.
+/// Writes the evidence for a run that began changing things and then failed.
 ///
-/// A refusal that never acted — an unreadable release.toml — has already said
-/// everything it knows on stdout, and copying that into a directory would fill
-/// `.rk/diagnosis` with typos while teaching an operator to ignore it. The
-/// exceptions are the two cases where stdout is not the whole account: a crash,
-/// whose stack trace exists nowhere else, and a failed native tool, whose
-/// output rk reduced to one line on its way past.
+/// Only then: a refusal that never acted — an unreadable release.toml — has
+/// already said everything it knows on stdout, and copying that into a
+/// directory would fill `.rk/diagnosis` with typos while teaching an operator
+/// to ignore it. A crash is recorded whatever it was doing, because the stack
+/// trace is the only copy of what went wrong.
 void _recordDiagnosis(Output output, int code, {String? crash}) {
   if (code == ExitCodes.ok || code == ExitCodes.usage) return;
-  // ...or a run that never acted but holds a tool's own account of why it
-  // stopped: a failed compile publishes nothing and still leaves the only
-  // copy of the compiler's errors here.
-  if (!output.report.acted && crash == null && !output.report.hasEvidence) {
-    return;
-  }
+  if (!output.report.acted && crash == null) return;
   final root = GitSourceTree.findRoot(Directory.current.path) ??
       Directory.current.absolute.path;
   if (!File('$root/release.toml').existsSync()) return;

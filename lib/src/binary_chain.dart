@@ -66,17 +66,6 @@ class BinaryChain {
   // These two are not public asset names: they name what lives under
   // `.rk/work/` between steps. The published grammar is ReleaseAssets.
 
-  /// Keeps what the tool said, under a name that says which step and which
-  /// platform produced it.
-  ///
-  /// Each diagnostic beside these calls carries one line and a remedy that
-  /// points at output rk is the last holder of. This is where that output
-  /// goes: `.rk/diagnosis/<stamp>/tool-output/`, and the --json document.
-  void _keepEvidence(String code, String platform, String? evidence) {
-    if (evidence == null) return;
-    output.report.attachEvidence('tool-output/$code-$platform.txt', evidence);
-  }
-
   static String binaryName(
     String project,
     String platform,
@@ -149,10 +138,10 @@ class BinaryChain {
           code: 'RK-BUILD-001',
           message: '$platform: the build did not produce a working binary',
           remedy: built.problem ?? 'see the compiler output',
+          evidence: built.transcript,
         ),
         unit: step.unit,
       );
-      _keepEvidence('RK-BUILD-001', platform, built.evidence);
       return LocalProducerOutcome.failed(
         built.problem ?? 'the build failed',
       );
@@ -238,10 +227,10 @@ class BinaryChain {
           code: 'RK-SIGN-002',
           message: '${step.platform}: signing failed',
           remedy: signed.problem ?? 'see codesign\'s output',
+          evidence: signed.transcript,
         ),
         unit: step.unit,
       );
-      _keepEvidence('RK-SIGN-002', '${step.platform}', signed.evidence);
       return LocalProducerOutcome.failed(
         signed.problem ?? 'signing failed',
       );
@@ -371,10 +360,10 @@ class BinaryChain {
           code: 'RK-NOTARY-001',
           message: '$platform: the archive for notarization failed',
           remedy: zipped.summary,
+          evidence: zipped.transcript,
         ),
         unit: step.unit,
       );
-      _keepEvidence('RK-NOTARY-001', platform, zipped.transcript);
       return LocalProducerOutcome.failed(zipped.summary);
     }
 
@@ -388,10 +377,10 @@ class BinaryChain {
           code: 'RK-NOTARY-002',
           message: '$platform: notarization did not complete',
           remedy: notarized.remedy ?? notarized.problem ?? 'see notarytool',
+          evidence: notarized.transcript,
         ),
         unit: step.unit,
       );
-      _keepEvidence('RK-NOTARY-002', platform, notarized.evidence);
       return LocalProducerOutcome.failed(
         notarized.problem ?? 'Apple rejected the submission',
       );
@@ -413,10 +402,10 @@ class BinaryChain {
           remedy: log == null
               ? 'the submission id was not in notarytool\'s answer'
               : log.summary,
+          evidence: log?.transcript,
         ),
         unit: step.unit,
       );
-      _keepEvidence('RK-NOTARY-003', platform, log?.transcript);
       return const LocalProducerOutcome.failed(
         'the notarization log could not be fetched',
       );

@@ -86,6 +86,10 @@ SHA-1 hash: $_sha1
     expect(signed.problem, contains('did not verify after signing'));
     expect(tools.calls, contains('codesign -d -r- /tmp/tool'));
     expect(tools.calls, contains('codesign --verify --strict /tmp/tool'));
+    // rk's sentence says the signature is bad; only codesign says which
+    // resource, and after this returns nobody else can ask.
+    expect(signed.transcript, contains('a sealed resource is missing'));
+    expect(signed.transcript, contains('file modified: /tmp/tool'));
   });
 
   test('an unreadable fingerprint fails before codesign can mutate bytes',
@@ -137,7 +141,11 @@ RecordingTools _tools({
           return ToolResult(
             exitCode: signatureVerifies ? 0 : 1,
             stdout: '',
-            stderr: signatureVerifies ? '' : 'invalid signature',
+            stderr: signatureVerifies
+                ? ''
+                : 'invalid signature\n'
+                    '/tmp/tool: a sealed resource is missing or invalid\n'
+                    'file modified: /tmp/tool/Contents/MacOS/helper',
           );
         }
         return null;

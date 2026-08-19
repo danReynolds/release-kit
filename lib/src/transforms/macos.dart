@@ -167,15 +167,19 @@ class MacOsSigner {
       binary,
     ]);
     if (!signed.ok) {
-      return SignOutcome.failed(signed.summary, evidence: signed.transcript);
+      return SignOutcome.failed(signed.summary, transcript: signed.transcript);
     }
 
     final requirement = await designatedRequirement(binary);
     if (requirement == null) {
       return SignOutcome.failed('the signature could not be read back');
     }
-    if (!await verifies(binary)) {
-      return SignOutcome.failed('the signature did not verify after signing');
+    final verified = await verifies(binary);
+    if (!verified.ok) {
+      return SignOutcome.failed(
+        'the signature did not verify after signing',
+        transcript: verified.transcript,
+      );
     }
     return SignOutcome.signed(
       requirement,
@@ -202,16 +206,16 @@ class MacOsSigner {
     return null;
   }
 
-  /// Whether the signature is valid for exactly these bytes.
+  /// Whether the signature is valid for exactly these bytes, and what
+  /// codesign said deciding it.
   ///
   /// This is the verification the display commands are not: it fails on a
   /// binary modified after signing, where `-d -r-` happily prints the
-  /// requirement of the signature the modification broke.
-  Future<bool> verifies(String binary) async {
-    final result =
-        await tools.run('codesign', ['--verify', '--strict', binary]);
-    return result.ok;
-  }
+  /// requirement of the signature the modification broke. It answers with
+  /// the run rather than a bool because on the failing side codesign's own
+  /// account — which resource was sealed wrong — is the whole diagnosis.
+  Future<ToolResult> verifies(String binary) =>
+      tools.run('codesign', ['--verify', '--strict', binary]);
 }
 
 class SigningIdentity {
@@ -237,7 +241,7 @@ class SignOutcome {
     this.problem, {
     this.certificate,
     this.certificateSha256,
-    this.evidence,
+    this.transcript,
   });
   const SignOutcome.signed(
     String requirement, {
@@ -249,17 +253,21 @@ class SignOutcome {
           certificate: certificate,
           certificateSha256: certificateSha256,
         );
-  const SignOutcome.failed(String problem, {String? evidence})
-      : this._(null, problem, evidence: evidence);
+  const SignOutcome.failed(String problem, {String? transcript})
+      : this._(null, problem, transcript: transcript);
 
   /// The designated requirement the signature produced.
   final String? requirement;
   final String? problem;
 
-  /// codesign's whole account, when codesign is what failed. Null for the
-  /// failures rk reasons its way to — no certificate, an ambiguous team —
-  /// where [problem] is already the entire story.
-  final String? evidence;
+  /// codesign's whole account, for the two failures where codesign is what
+  /// spoke: the signing run and the verification after it.
+  ///
+  /// Null elsewhere — the failures rk reasons its way to (no certificate, an
+  /// ambiguous team), and, for now, the readers whose result shape carries no
+  /// room for it: `security find-identity`, `find-certificate`, and
+  /// `codesign -d -r-` still answer null-on-failure and lose what they said.
+  final String? transcript;
 
   /// The certificate that signed, named so a first release can show which
   /// identity it just made permanent.
@@ -302,7 +310,7 @@ class MacOsNotarizer {
             ? 'store the credential once: xcrun notarytool '
                 'store-credentials $profile'
             : null,
-        evidence: result.transcript,
+        transcript: result.transcript,
       );
     }
 
@@ -314,13 +322,24 @@ class MacOsNotarizer {
         result.stdout.contains('"status": "Accepted"');
 
     if (!accepted) {
+      // A rejection exits 0, so the submit output is a status line and not a
+      // reason. The reason is in Apple's log, which rk can fetch as easily
+      // as it can tell a person to — and telling them to run a command that
+      // needs an id rk already has is not a diagnosis.
+      final reason = id == null ? null : await log(id);
       return NotarizeOutcome.failed(
         'Apple did not accept it',
         remedy: id == null
             ? null
             : 'the reason is in the log: xcrun notarytool log $id '
                 '--keychain-profile $profile',
-        evidence: result.transcript,
+        transcript: [
+          result.transcript,
+          if (reason != null && reason.ok) ...[
+            '--- notarytool log $id ---',
+            reason.stdout.trimRight(),
+          ],
+        ].join('\n'),
       );
     }
     return NotarizeOutcome.accepted(id, raw: result.stdout);
@@ -342,12 +361,12 @@ class MacOsNotarizer {
 
 class NotarizeOutcome {
   const NotarizeOutcome._(this.submissionId, this.problem, this.remedy,
-      {this.raw, this.evidence});
+      {this.raw, this.transcript});
   const NotarizeOutcome.accepted(String? id, {String? raw})
       : this._(id, null, null, raw: raw);
   const NotarizeOutcome.failed(String problem,
-      {String? remedy, String? evidence})
-      : this._(null, problem, remedy, evidence: evidence);
+      {String? remedy, String? transcript})
+      : this._(null, problem, remedy, transcript: transcript);
 
   final String? submissionId;
   final String? problem;
@@ -359,7 +378,7 @@ class NotarizeOutcome {
 
   /// notarytool's own words for a rejected or failed one, which become
   /// nothing unless they are carried out.
-  final String? evidence;
+  final String? transcript;
 
   bool get ok => problem == null;
 }

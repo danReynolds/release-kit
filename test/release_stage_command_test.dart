@@ -1369,10 +1369,17 @@ void main() {
       harness.tools.runFailure = (call) => failure.matches(call)
           ? ToolResult(
               exitCode: 1,
-              stdout: '',
+              // Several lines, and something on stdout too: rk keeps one line
+              // for the person and the whole of it for the diagnosis, and a
+              // one-line fake cannot tell those two apart.
+              stdout: failure.name == 'package preflight'
+                  ? ''
+                  : 'compiling ${failure.name}...',
               stderr: failure.name == 'package preflight'
                   ? 'Package has 1 error.'
-                  : '${failure.name} failed',
+                  : '${failure.name} failed\n'
+                      'and here is the second line nobody was keeping\n'
+                      'and a third naming the cause',
             )
           : null;
       var prompts = 0;
@@ -1396,25 +1403,34 @@ void main() {
         reason: 'the human surface keeps the cause while the machine surface '
             'owns its stable code',
       );
+      // Whatever failed, the tool's whole account survives the one line rk
+      // showed.
       final attached = (failed.report['attachments'] as Map?) ?? const {};
-      final kept = attached.keys
-          .map((key) => '$key')
-          .where((key) => key.startsWith('tool-output/'))
-          .toList();
-      if (failure.name == 'binary compile') {
+      final reported = (failed.report['problems'] as List)
+          .cast<Map>()
+          .singleWhere((problem) => problem['code'] == failure.code);
+
+      if (failure.name == 'package preflight') {
+        // pub states its whole case in a few lines, so they are the remedy a
+        // person reads, kept under the name doc/json.md publishes.
+        expect(reported['remedy'], contains('Package has 1 error.'));
         expect(
-          kept,
-          hasLength(1),
-          reason: '"see the compiler output" must point at something rk kept',
-        );
-        expect(attached[kept.single], contains('binary compile failed'));
+            attached['pub-package-tool.txt'], contains('Package has 1 error.'));
       } else {
+        // A compiler does not, so the line is the remedy and the problem
+        // names where the rest went — read together, not matched by eye.
+        final filed = reported['evidence'] as String?;
+        expect(filed, isNotNull, reason: 'a failing tool kept nothing');
+        final account = attached[filed] as String;
+        expect(account, contains('${failure.name} failed'));
         expect(
-          kept,
-          isEmpty,
-          reason: 'the other two already carry their whole cause in the '
-              'problem they report',
+          account,
+          contains('the second line nobody was keeping'),
+          reason: 'the summary alone was the bug this fixes',
         );
+        expect(account, contains('and a third naming the cause'));
+        expect(account, contains('compiling ${failure.name}'),
+            reason: 'stdout is part of what the tool said');
       }
 
       expect(prompts, 0, reason: 'authorization follows complete staging');

@@ -41,11 +41,11 @@ that run.
 | `cleanup` | present on `clean`: `{root, path, found, removed}` for the frozen repository-local stage set. `root` is the absolute repository root and `path` is always `.rk/work/stages`; diagnoses are outside it and are never removed |
 | `release_choices` | present on `target`: the static choices understood by this installed rk. This command reads no repository and these entries never contain `selected` or `available` |
 | `units[]` | per-unit: `{name, version, tag, steps[], targets[]?}`. `tag` is null when Git tagging is not selected |
-| `problems[]` | `{code, message, remedy?, source?, unit?, target?}` — every refusal and blockage, with its `RK-*` code. `target`, when present, is the affected target id and makes that target's human row `✗` |
+| `problems[]` | `{code, message, remedy?, source?, unit?, target?, evidence?}` — every refusal and blockage, with its `RK-*` code. `target`, when present, is the affected target id and makes that target's human row `✗`. `evidence`, when present, is the `attachments` key holding the failing tool's own output |
 | `warnings[]` | nonblocking findings with the same shape as `problems[]`. Human output marks these with `!`; stable `RK-*` codes appear only in JSON |
 | `next[]` | the commands that would advance things, as data. The human report does not print them; this is where they live |
 | `halt` | `{kind, sentence}` when the run halted |
-| `attachments` | documents that travel with the run (a proposed release.toml, pub's validation text) |
+| `attachments` | documents that travel with the run (a proposed release.toml, pub's validation text). `tool-output/<n>-<code>.txt` holds what a native tool said when one is what failed; the `problems[]` entry names its key |
 | `diagnosis` | where evidence was written, on failed runs that acted |
 
 `halt.kind` is one of `beforeActing`, `stoppedPartway`, `lostTrack`,

@@ -222,7 +222,7 @@ class PublishedIdentity {
     }
 
     final signer = MacOsSigner(tools: tools);
-    if (!await signer.verifies('$into/$executable')) {
+    if (!(await signer.verifies('$into/$executable')).ok) {
       return const IdentityReading.unreadable(
         'the published binary signature is not valid for its bytes',
       );
