@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:rk/src/engine/config.dart';
+import 'package:rk/src/version.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/publish_target.dart';
 import 'package:rk/src/engine/release_choice.dart';
@@ -24,7 +25,9 @@ void main() {
     final run = rk(['target', 'list']);
 
     expect(run.code, 0, reason: run.all);
-    expect(run.stdout, contains('Release choices supported by rk 0.1.0'));
+    // Sourced, not spelled: a version bump is not a behaviour change, and
+    // freezing the literal here makes every release edit this test.
+    expect(run.stdout, contains('Release choices supported by rk $rkVersion'));
     expect(run.stdout, contains('does not read the current folder'));
     expect(run.stdout, contains('Local output'));
     expect(run.stdout, contains('binary'));
