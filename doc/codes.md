@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-143 codes across 26 families.
+144 codes across 26 families.
 
 
 ## RK-AUTH — Authorization
@@ -243,6 +243,7 @@ meanings and are not reused.
 | `RK-SIGN-001` | the published release names no team rk can read | `lib/src/binary_chain.dart` |
 | `RK-SIGN-002` | $platform: signing failed | `lib/src/binary_chain.dart` |
 | `RK-SIGN-003` | the signature does not match the identity users  already installed | `lib/src/binary_chain.dart` |
+| `RK-SIGN-014` | the signed binary does not run | `lib/src/binary_chain.dart` |
 | `RK-SIGN-004` | the identity users already installed could not be read | `lib/src/commands/release.dart` |
 | `RK-SIGN-006` | the login keychain could not be read | `lib/src/commands/release.dart` |
 | `RK-SIGN-007` | no Developer ID Application certificate is installed | `lib/src/commands/release.dart` |

@@ -284,11 +284,38 @@ class BinaryChain {
       // rather than assumed: the certificate that signed and the identifier
       // every later release must reproduce.
     }
+    // Run it again, now that it is signed. The smoke test above proved the
+    // *built* binary works; signing is a separate act that can stop it from
+    // starting at all, and every other check here is satisfied when it does —
+    // the signature verifies, the designated requirement matches, notarization
+    // succeeds, and Gatekeeper accepts a binary the kernel kills on launch.
+    // Only executing the signed bytes distinguishes those.
+    final signedSmoke = await tools.run(workspace.pathOf(name), const [
+      '--version',
+    ]);
+    if (!signedSmoke.ok) {
+      output.problem(
+        Diagnostic(
+          code: 'RK-SIGN-014',
+          message: 'the signed binary does not run',
+          remedy: 'It was built, it ran, and signing stopped it from '
+              'starting. On macOS the usual cause is the hardened runtime '
+              'refusing memory the program needs, which no signature or '
+              'notarization check reports. Run it directly to see what the '
+              'system says.',
+          evidence: signedSmoke.transcript,
+        ),
+        unit: step.unit,
+      );
+      return LocalProducerOutcome.failed('the signed binary does not run');
+    }
+
     final signedSha256 = Sha256.hex(workspace.readBytes(name)!);
     return LocalProducerOutcome.succeeded(
       outputs: [LocalProducerOutput(name, 'executable')],
       evidence: {
         'smoke': smoke,
+        'signed_smoke': {'status': 'pass', 'command': '--version'},
         'signature': {
           'first_identity': publishedRequirement == null,
           'published_requirement': publishedRequirement,
