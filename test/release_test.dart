@@ -1520,10 +1520,20 @@ publish = ["pub.dev"]
   group('a project that signs its releases', () {
     test('says so through tag.gpgSign, and gets a verified signature',
         () async {
+      // The pub.dev leg has to settle for the run to finish, or the test
+      // would assert a verified signature on a release that never landed.
+      final registry = _MutableRegistry(<String>['0.1.0']);
       final ran = await release(
         state: _git(tagSigningRequested: true),
-        registry: _MutableRegistry(<String>['0.1.0']),
+        registry: registry,
+        onRun: (key) {
+          if (key == 'dart pub publish --from-archive <archive> --force') {
+            registry.goLive('0.2.0');
+            registry.archives['keybay@0.2.0'] = publishedBytes();
+          }
+        },
       );
+      expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
       expect(
         ran.calls.firstWhere((c) => c.startsWith('git tag')),
         contains('git tag -s'),
@@ -1538,6 +1548,12 @@ publish = ["pub.dev"]
         registry: _MutableRegistry(<String>['0.1.0']),
       );
       expect(ran.exitCode, ExitCodes.refused);
+      // The code is the published interface a caller keys on; the words are
+      // what the operator reads. Assert both, so renaming either fails.
+      expect(
+        ran.problems.map((problem) => problem['code']),
+        contains('RK-TAG-005'),
+      );
       expect(ran.text, contains('no signing key is configured'));
       expect(ran.text, contains('Set user.signingkey'));
       expect(
@@ -1562,6 +1578,10 @@ publish = ["pub.dev"]
         },
       );
       expect(ran.exitCode, ExitCodes.refused);
+      expect(
+        ran.problems.map((problem) => problem['code']),
+        contains('RK-TAG-007'),
+      );
       expect(ran.text, contains('signature could not be verified'));
       expect(ran.text, contains('gpg.ssh.allowedSignersFile'));
       expect(

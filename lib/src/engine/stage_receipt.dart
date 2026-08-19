@@ -87,14 +87,37 @@ class StageArtifact {
     final file = _regularArtifact(stage, path);
     final stat = file.statSync();
     final bytes = file.readAsBytesSync();
-    return StageArtifact(
+    final captured = StageArtifact(
       path: path,
       type: type,
       mode: _mode(stat.mode),
       size: bytes.length,
       sha256: Sha256.hex(bytes),
     );
+    stage.noteDigested(path, stat, captured.sha256);
+    return captured;
   }
+
+  /// [recorded] again, read afresh unless the file has not moved since this
+  /// process digested it.
+  ///
+  /// A release confirms the same artifacts repeatedly — every receipt write
+  /// re-checks everything already recorded, and a stage of forty megabytes
+  /// makes that the largest cost in staging. Confirming is not the same as
+  /// trusting: a file whose size, mode, or timestamps differ by so much as a
+  /// microsecond is read and digested again, and one this process never
+  /// digested is always read.
+  static StageArtifact confirm(
+    StageArtifact recorded, {
+    required StageDirectory stage,
+  }) =>
+      stage.digestStillStands(recorded.path, recorded.sha256)
+          ? recorded
+          : StageArtifact.capture(
+              stage: stage,
+              path: recorded.path,
+              type: recorded.type,
+            );
 
   factory StageArtifact.fromJson(Object? value) {
     final map = _strictMap(
@@ -260,11 +283,7 @@ class StageReceiptStore {
       throw StateError('receipt belongs to a different stage');
     }
     for (final expected in receipt.artifacts) {
-      final actual = StageArtifact.capture(
-        stage: stage,
-        path: expected.path,
-        type: expected.type,
-      );
+      final actual = StageArtifact.confirm(expected, stage: stage);
       if (!_sameArtifact(expected, actual)) {
         throw StateError(
           'artifact changed before receipt write: ${expected.path}',
