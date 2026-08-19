@@ -2498,8 +2498,10 @@ class ReleaseCommand {
           '${unprovable.join('\n')}');
     }
 
-    // What the prompt disclosed travels with the yes. A --json --yes caller
-    // never sees the prose sink, so the document carries it.
+    // What the yes accepts travels with it. Some of this the prompt marks
+    // on a row and some of it — the long form of a first claim, and the
+    // platforms that ship built but never executed — it no longer shows at
+    // all, so the record is the only place either is said.
     if (disclosed.isNotEmpty) {
       output.report.attach(
         'authorization-disclosures/${unit.name}',

@@ -714,6 +714,9 @@ publish = ["git-tag", "pub.dev"]
           output: output,
           confirm: (_) async => 'yes',
           wait: (_) async {},
+          // A conformance run must not read the pub session of whoever is
+          // running it.
+          refreshEnvironment: () => const {'HOME': '/nowhere'},
           stageFor: stages.call,
           refreshStage: stages.refresh,
           refreshGit: () async => git,
@@ -1646,6 +1649,9 @@ executables:
         stageFor: stageFor,
         refreshStage: (unit, _) => stageFor(unit),
         wait: (_) => Future<void>.delayed(Duration.zero),
+        // A conformance run must not read the pub session of whoever is
+        // running it.
+        refreshEnvironment: () => const {'HOME': '/nowhere'},
         capabilities: HostCapabilities(
           hostPlatform: 'macos-arm64',
           containerRuntime: containerRuntime,
@@ -1886,9 +1892,9 @@ executables:
       expect(
         disclosed,
         contains('built but never executed'),
-        reason: 'the weaker assurance travels with the authorization — the '
-            'prompt marks it, the record says it, and an unattended --yes '
-            'carries it either way',
+        reason: 'the prompt no longer shows this at all; the record is '
+            'where the weaker assurance is said, and it travels with the '
+            'yes that accepted it',
       );
       expect(disclosed, contains('linux-x64'));
       expect(

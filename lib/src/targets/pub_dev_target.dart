@@ -649,14 +649,6 @@ final class _PubDevSession extends TargetSessionProvider {
     if (await _tokenConfigured(context)) {
       return const TargetReady(note: 'token configured');
     }
-    // A session already on this machine needs no login. `dart pub login`
-    // reads the same file this asks about and, finding it, prints that it
-    // is already logged in and exits — so running it proves nothing the
-    // file did not, and rk passed pub's sentence, and the address in it,
-    // through to a terminal that had not asked.
-    if (_sessionStored(context) == true) {
-      return const TargetReady(note: 'signed in');
-    }
     int code;
     try {
       code = await context.runInteractive!(
@@ -716,9 +708,14 @@ final class _PubDevSession extends TargetSessionProvider {
   /// Whether this machine already holds a pub session, or null when rk
   /// cannot tell where one would be kept.
   ///
-  /// Separate from [established] so a caller that has already ruled out a
-  /// token does not ask `dart pub token list` a second time to be told the
-  /// same thing.
+  /// This answers whether a session file is there — which is all the
+  /// lifecycle needs, to know whether rk created the session it may have
+  /// to clear. It is deliberately not used to skip the login preflight:
+  /// `dart pub login` refreshes the stored token, checks it against the
+  /// provider, and re-authorizes a session that has expired or been
+  /// revoked. A file on disk proves none of that, and a session that is
+  /// dead is a release that stops after the tag is public instead of
+  /// before anything is.
   static bool? _sessionStored(TargetReadinessContext context) {
     final credentials = _pubCredentialsFile(context.environment);
     if (credentials == null) return null;
