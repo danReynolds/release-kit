@@ -23,7 +23,7 @@ final class HomebrewTargetModule extends TargetModule {
 
   @override
   String planNote(TargetExpectation target) =>
-      '${target.project?.executable ?? target.identity} cask';
+      '${target.project!.executable} cask';
 
   @override
   PublishTarget get target => PublishTarget.homebrew;

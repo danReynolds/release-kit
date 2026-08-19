@@ -2057,7 +2057,7 @@ executables:
       );
       expect(
         run.text,
-        isNot(contains('this release claims, for the first time:')),
+        isNot(contains('first claim')),
         reason: 'there is an identity to reproduce, and it was just read',
       );
     });
@@ -2079,7 +2079,7 @@ executables:
       );
       expect(
         run.text,
-        isNot(contains('this release claims, for the first time:')),
+        isNot(contains('first claim')),
         reason: 'first-identity is receipt data, not inferred from the mere '
             'presence of a signing certificate',
       );

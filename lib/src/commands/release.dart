@@ -2430,12 +2430,20 @@ class ReleaseCommand {
     // permanent is said on the row it belongs to: a paragraph explaining
     // that publishing is forever tells an operator what they already know,
     // and buries the one line they do not.
-    final firstClaims = {for (final claim in claims) claim.registrar};
+    // Keyed by what is claimed, not by where: a unit publishing several
+    // packages to pub.dev has one row each, and marking them all because
+    // one name is new would tell the operator they are permanently taking
+    // names that were taken releases ago.
+    final firstClaims = {
+      for (final claim in claims) '${claim.registrar}\u0000${claim.name}',
+    };
     for (final target in remaining) {
       final module = inspector.targets.moduleForTarget(target);
       final permanence = <String>[
         if (target.step.isPermanent) 'permanent',
-        if (firstClaims.contains(target.kindLabel)) 'first claim',
+        if (firstClaims.contains('${target.kindLabel}\u0000'
+            '${target.coordinate}'))
+          'first claim',
       ];
       output.line(
         target.kindLabel,

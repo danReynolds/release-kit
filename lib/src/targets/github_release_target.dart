@@ -25,7 +25,8 @@ final class GithubReleaseTargetModule extends TargetModule {
 
   @override
   String planNote(TargetExpectation target) =>
-      '${target.artifacts.length} asset${target.artifacts.length == 1 ? '' : 's'}';
+      '${target.artifacts.length} asset${target.artifacts.length == 1 ? '' : 's'}'
+      ' to ${target.coordinate}';
 
   @override
   PublishTarget get target => PublishTarget.githubRelease;

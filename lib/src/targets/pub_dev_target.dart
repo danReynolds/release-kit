@@ -654,7 +654,7 @@ final class _PubDevSession extends TargetSessionProvider {
     // is already logged in and exits — so running it proves nothing the
     // file did not, and rk passed pub's sentence, and the address in it,
     // through to a terminal that had not asked.
-    if (await established(context) == true) {
+    if (_sessionStored(context) == true) {
       return const TargetReady(note: 'signed in');
     }
     int code;
@@ -710,7 +710,16 @@ final class _PubDevSession extends TargetSessionProvider {
   Future<bool?> established(TargetReadinessContext context) async {
     // A token needs no stored session, so there is nothing to create or clear.
     if (await _tokenConfigured(context)) return true;
+    return _sessionStored(context);
+  }
 
+  /// Whether this machine already holds a pub session, or null when rk
+  /// cannot tell where one would be kept.
+  ///
+  /// Separate from [established] so a caller that has already ruled out a
+  /// token does not ask `dart pub token list` a second time to be told the
+  /// same thing.
+  static bool? _sessionStored(TargetReadinessContext context) {
     final credentials = _pubCredentialsFile(context.environment);
     if (credentials == null) return null;
     try {

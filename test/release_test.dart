@@ -914,7 +914,7 @@ executables:
     expect(downloads.single, contains(' v0.8.0 '));
     expect(
       ran.text,
-      isNot(contains('this release claims, for the first time:')),
+      isNot(contains('first claim')),
     );
   });
 }
@@ -1836,6 +1836,58 @@ dependencies:
       contains('absent'),
     );
     expect(ran.problems.map((p) => p['code']), contains('RK-REL-001'));
+  });
+
+  test('only the name that is new is marked a first claim', () async {
+    // A unit publishing several packages has one row each, all labelled
+    // pub.dev. Marking by destination marked them all — telling the
+    // operator they were permanently taking names taken releases ago.
+    final ran = await release(
+      config: '''
+schema = 2
+
+[release.core]
+
+[[release.core.project]]
+path = "packages/keybay"
+publish = ["pub.dev"]
+
+[[release.core.project]]
+path = "packages/keybay_extra"
+publish = ["pub.dev"]
+''',
+      source: MemorySourceTree({
+        'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
+        'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
+        'packages/keybay_extra/pubspec.yaml':
+            'name: keybay_extra\nversion: 0.2.0\n',
+        'packages/keybay_extra/CHANGELOG.md': '## 0.2.0\n',
+      }, description: '/repo/keybay'),
+      registry: FakeRegistry({
+        'keybay': ['0.1.0'],
+      }),
+      typed: 'no',
+    );
+
+    final rows = ran.text.split('\n');
+    final taken = rows.firstWhere(
+      (row) => row.contains('keybay 0.2.0'),
+      orElse: () => fail('no row for the package already on pub.dev:\n'
+          '${ran.text}'),
+    );
+    final fresh = rows.firstWhere(
+      (row) => row.contains('keybay_extra 0.2.0'),
+      orElse: () => fail('no row for the new package:\n${ran.text}'),
+    );
+
+    expect(fresh, contains('first claim'));
+    expect(
+      taken,
+      isNot(contains('first claim')),
+      reason: 'this name was claimed releases ago; saying otherwise at the '
+          'one prompt that asks about permanence is a lie about what the '
+          'yes does',
+    );
   });
 
   test('a first publish states the name it claims, then performs it', () async {
