@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.1
+
+- Signed macOS binaries now start. The hardened runtime refuses the executable
+  pages a Dart AOT snapshot maps at launch, so 0.1.0's binary was killed by the
+  kernel before it printed anything — while its signature verified, its
+  notarization succeeded, and Gatekeeper reported it as accepted. Signing now
+  grants `com.apple.security.cs.allow-unsigned-executable-memory`, the one
+  entitlement that fixes it.
+- The signed binary is executed before a release can proceed. The smoke test ran
+  at build time, so it proved the built binary worked and signing then broke it
+  unobserved; a binary that will not start now fails the release (`RK-SIGN-014`).
+- Failure and publish evidence is retained where it was previously dropped, and
+  a run nobody is waiting on no longer stops to ask.
+
 ## 0.1.0
 
 Initial release of rk, a release tool.
