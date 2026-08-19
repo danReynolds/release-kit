@@ -2458,21 +2458,19 @@ class ReleaseCommand {
         labelWidth: 26,
       );
     }
-    if (permanent.isEmpty) {
-      output.say('nothing here is permanent.');
-    } else {
-      // The ground, marked where it matters: everything before the yes is
-      // resumable; the first permanent step after it is not.
+    // Nothing is said about permanence beyond the rows. A sentence telling
+    // an operator that a release is permanent, printed above a prompt they
+    // reached deliberately, is a paragraph they learn to scroll past — and
+    // the rows already name which destinations mean it. The full wording,
+    // and which step is the first that cannot be re-run, stay in the record
+    // that travels with the authorization.
+    if (permanent.isNotEmpty) {
       final notices = {
         for (final target in permanent)
           if (inspector.targets.moduleForTarget(target).permanenceNotice(target)
               case final notice?)
             notice,
       };
-      // The rows above already name what is permanent; this says what the
-      // yes itself changes. The notices keep their full wording in the
-      // record, which is where a caller reading --json finds them.
-      output.say('nothing before your yes is permanent.');
       disclosed.add('${notices.join('\n')}\n'
           'everything before this yes re-runs safely. after it, the first '
           'permanent step is: ${permanent.first.step.summary}.');
