@@ -838,6 +838,9 @@ void main() {
         unreadDraftsAfterCreate: true,
       );
 
+      // gh is what failed, and after this returns nobody can ask it again.
+      expect(run.outcome.transcript, contains('connection lost'));
+
       expect(run.outcome.ok, isFalse);
       expect(run.outcome.mayHaveActed, isFalse);
       expect(run.outcome.draftEffect, DraftEffect.uncertain);

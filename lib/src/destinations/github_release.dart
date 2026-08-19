@@ -725,6 +725,7 @@ class GithubRelease {
               'publication',
               url: url,
               draftEffect: draftEffect,
+              transcript: uploaded.transcript,
             );
           }
           final named = observed is _Found &&
@@ -759,6 +760,7 @@ class GithubRelease {
               'uploading $name to private draft $draftId could not be '
               'reconciled by bytes: '
               '${reconciliation.inspection.detail ?? reconciliation.inspection.verdict.name}',
+              transcript: uploaded.transcript,
             );
           }
         }

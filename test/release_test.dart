@@ -1600,6 +1600,16 @@ publish = ["pub.dev"]
       );
       expect(ran.text, contains('signature could not be verified'));
       expect(ran.text, contains('gpg.ssh.allowedSignersFile'));
+      // The refusal builds its diagnostic in the act and classifyFailure
+      // builds the one that is reported: what git said has to survive the
+      // handover, not be attached to the diagnostic that is discarded.
+      final refusal =
+          ran.problems.singleWhere((p) => p['code'] == 'RK-TAG-007');
+      expect(refusal['evidence'], isNotNull);
+      expect(
+        (ran.report['attachments'] as Map)[refusal['evidence']],
+        contains('allowedSignersFile'),
+      );
       expect(
         ran.calls.where((c) => c.startsWith('git push origin')),
         isEmpty,

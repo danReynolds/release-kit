@@ -79,35 +79,55 @@ and the repository exists.
     // A crashing binary is not obliged to put valid UTF-8 on stderr. Strict
     // decoding turned that into a FormatException thrown out of the middle
     // of a release, losing the run and the output both.
-    final result = await const SystemTools().run(
-      'sh',
-      const ['-c', r'printf "before\377\376after" >&2; exit 3'],
-    );
+    for (final tools in const [
+      SystemTools(),
+      SystemTools(timeout: Duration(seconds: 10)),
+    ]) {
+      final result = await tools.run(
+        'sh',
+        const [
+          '-c',
+          r'printf "out\377put"; printf "before\377\376after" >&2; exit 3',
+        ],
+      );
 
-    expect(result.exitCode, 3);
-    expect(result.stderr, contains('before'));
-    expect(result.stderr, contains('after'));
-    expect(result.transcript, contains('exit 3'));
+      expect(result.exitCode, 3);
+      expect(result.stdout, contains('out'));
+      expect(result.stdout, contains('put'));
+      expect(result.stderr, contains('before'));
+      expect(result.stderr, contains('after'));
+    }
   });
 
-  test('a captured run tells git not to stop and ask', () async {
+  test('a bounded run tells git not to ask what it cannot relay', () async {
     if (Platform.isWindows) return;
 
-    // Nobody is at the terminal of a captured run, so a credential prompt
-    // is a hang with extra steps. Closing stdin does not reach it: git reads
-    // those from /dev/tty.
-    final result = await const SystemTools().run(
-      'sh',
-      const ['-c', 'echo "\$GIT_TERMINAL_PROMPT"'],
-    );
+    // A bound is rk saying nobody will be waiting this long. git's credential
+    // prompt goes to /dev/tty, which closing stdin does not reach, so the
+    // read would burn its whole bound and be killed.
+    final bounded = await const SystemTools(timeout: Duration(seconds: 10))
+        .run('sh', const ['-c', 'echo "\$GIT_TERMINAL_PROMPT"']);
 
-    expect(result.stdout.trim(), '0');
+    expect(bounded.stdout.trim(), '0');
   });
 
-  test('and a caller that means to override one still wins', () async {
+  test('an unbounded act leaves the prompt the operator can answer', () async {
     if (Platform.isWindows) return;
 
-    final result = await const SystemTools().run(
+    // The acts run unbounded, with the operator at the terminal the prompt
+    // reaches. Suppressing it there turns an answerable push into a refusal.
+    final act = await const SystemTools()
+        .run('sh', const ['-c', 'echo "[\$GIT_TERMINAL_PROMPT]"']);
+
+    expect(act.stdout.trim(), '[]');
+  });
+
+  test('and a caller that means to override it still wins', () async {
+    if (Platform.isWindows) return;
+
+    // Spread order, not presence: rk's answer is a default, so a caller that
+    // states one is not quietly overruled by it.
+    final result = await const SystemTools(timeout: Duration(seconds: 10)).run(
       'sh',
       const ['-c', 'echo "\$GIT_TERMINAL_PROMPT"'],
       environment: const {'GIT_TERMINAL_PROMPT': '1'},

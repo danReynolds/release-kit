@@ -85,19 +85,22 @@ Future<String> _settled(Future<String> stream) => stream.timeout(
 /// read a replacement character than lose the run.
 const _lenient = Utf8Codec(allowMalformed: true);
 
-/// Answers rk gives, once, to every tool that would otherwise stop and ask.
+/// What a bounded run tells git rather than be asked a question it cannot
+/// relay.
 ///
-/// A captured run has nobody at its terminal: the operator cannot see the
-/// question and cannot type the answer, so a prompt is a hang with extra
-/// steps. Git and its credential helpers read those prompts from /dev/tty,
-/// which closing stdin does not touch — these are the levers that do. A
-/// caller that means to override one is spread in after and wins.
-const _unattended = {
-  'GIT_TERMINAL_PROMPT': '0',
-  'GIT_ASKPASS': '',
-  'SSH_ASKPASS_REQUIRE': 'never',
-  'GCM_INTERACTIVE': 'never',
-};
+/// Only bounded runs. A bound is rk saying nobody will be waiting this long,
+/// and git's credential prompt goes to /dev/tty, which closing stdin does not
+/// touch — so an inspection meets the prompt, burns its whole bound, and is
+/// killed, reporting "timed out" for a tool that only asked a question.
+/// Unbounded runs are the acts, where the operator is at the terminal the
+/// prompt reaches and there is no deadline to miss: suppressing it there
+/// would turn an answerable push into a refusal.
+///
+/// One variable, deliberately. `SSH_ASKPASS_REQUIRE=never` sends ssh to the
+/// terminal rather than away from it, and `GIT_SSH_COMMAND` or `GIT_ASKPASS`
+/// would overwrite configuration the operator set for themselves. A caller
+/// that means to override this is spread in after and wins.
+const _unattended = {'GIT_TERMINAL_PROMPT': '0'};
 
 class SystemTools implements Tools {
   const SystemTools({this.timeout});
@@ -121,7 +124,7 @@ class SystemTools implements Tools {
         executable,
         arguments,
         workingDirectory: workingDirectory,
-        environment: {..._unattended, ...?environment},
+        environment: environment,
         stdoutEncoding: _lenient,
         stderrEncoding: _lenient,
       );

@@ -567,7 +567,7 @@ final class GitTagTargetModule extends TargetModule {
             ? 're-run; the shared destination inspection will classify the '
                 'public target before any retry'
             : details.join('\n'),
-        evidence: act.evidence,
+        evidence: act.evidence ?? act.diagnostic?.evidence,
       ),
       halt: halt,
     );
