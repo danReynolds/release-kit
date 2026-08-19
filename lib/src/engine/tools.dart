@@ -57,7 +57,25 @@ class ToolResult {
         .map((line) => line.trim())
         .firstWhere((line) => failure.hasMatch(line), orElse: () => lines.last);
   }
+
+  /// The whole of what the tool said.
+  ///
+  /// [summary] picks the one line worth a person's screen; this is the rest —
+  /// the thirty lines of compiler errors behind a remedy that says "see the
+  /// compiler output". Kept for the diagnosis, where an operator goes when
+  /// the one line was not enough.
+  String get transcript => [
+        'exit $exitCode',
+        if (stdout.trim().isNotEmpty) ...['--- stdout ---', stdout.trimRight()],
+        if (stderr.trim().isNotEmpty) ...['--- stderr ---', stderr.trimRight()],
+      ].join('\n');
 }
+
+/// What a stream has produced, given a moment to finish after a kill.
+Future<String> _settled(Future<String> stream) => stream.timeout(
+      const Duration(seconds: 2),
+      onTimeout: () => '',
+    );
 
 class SystemTools implements Tools {
   const SystemTools({this.timeout});
@@ -96,6 +114,13 @@ class SystemTools implements Tools {
       workingDirectory: workingDirectory,
       environment: environment,
     );
+    // The same closed stdin an unbounded run gets from Process.run. Left
+    // open, a tool that reads stdin blocks on a pipe nobody will ever write
+    // to and burns the whole bound before rk kills it; closed, it sees EOF
+    // and fails in milliseconds. This governs stdin only — a tool that
+    // prompts on /dev/tty still holds rk's terminal, and the lever for those
+    // is the environment (GIT_TERMINAL_PROMPT and its kind), not this.
+    unawaited(process.stdin.close().catchError((Object _) {}));
     final stdout = process.stdout.transform(utf8.decoder).join();
     final stderr = process.stderr.transform(utf8.decoder).join();
     var timedOut = false;
@@ -112,8 +137,14 @@ class SystemTools implements Tools {
         await process.exitCode;
       }
     }
-    final capturedOut = await stdout;
-    final capturedErr = await stderr;
+    // A kill reaches the child, not whatever it started. An orphaned
+    // grandchild holds the write end of these pipes open, and joining them
+    // unconditionally waits for a process rk never knew about — so a bound
+    // that has already fired would go on to wait forever, which is the one
+    // thing a bound exists to rule out. What was read by then is what the
+    // tool said.
+    final capturedOut = timedOut ? await _settled(stdout) : await stdout;
+    final capturedErr = timedOut ? await _settled(stderr) : await stderr;
     return ToolResult(
       exitCode: exitCode,
       stdout: capturedOut,

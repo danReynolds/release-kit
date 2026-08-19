@@ -181,6 +181,60 @@ void main() {
       );
     });
 
+    test('a finding files its own account, and names it', () {
+      final report = Report('release')
+        ..problem(const Diagnostic(
+          code: 'RK-BUILD-001',
+          message: 'macos-arm64: the build did not produce a working binary',
+          evidence: 'exit 1\n--- stderr ---\nlib/a.dart:3:5: Error: nope',
+        ));
+
+      final problem = (jsonDecode(report.encode(exit: 1))['problems'] as List)
+          .single as Map;
+      expect(problem['evidence'], 'tool-output/1-RK-BUILD-001.txt');
+      expect(
+        report.attachments['tool-output/1-RK-BUILD-001.txt'],
+        contains('lib/a.dart:3:5'),
+      );
+    });
+
+    test('two findings of the same kind keep both accounts', () {
+      // Three platforms failing the same way carry one RK code between them.
+      // A name built from the code alone would keep the last and lose the
+      // rest without saying so.
+      final report = Report('release');
+      for (final platform in ['linux-x64', 'macos-arm64']) {
+        report.problem(Diagnostic(
+          code: 'RK-BUILD-001',
+          message: '$platform: the build did not produce a working binary',
+          evidence: 'the $platform compiler said this',
+        ));
+      }
+
+      expect(report.attachments, hasLength(2));
+      expect(
+        report.attachments.values,
+        containsAll([
+          contains('linux-x64'),
+          contains('macos-arm64'),
+        ]),
+      );
+    });
+
+    test('a finding with nothing to file attaches nothing', () {
+      final report = Report('release')
+        ..problem(const Diagnostic(
+          code: 'RK-CONF-019',
+          message: 'a project does not say where to publish',
+        ));
+      expect(report.attachments, isEmpty);
+      expect(
+        ((jsonDecode(report.encode(exit: 1))['problems'] as List).single
+            as Map),
+        isNot(contains('evidence')),
+      );
+    });
+
     test('two runs do not overwrite one another', () {
       final root = Directory.systemTemp.createTempSync('rk-diag-');
       addTearDown(() => root.deleteSync(recursive: true));

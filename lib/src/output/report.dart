@@ -186,12 +186,36 @@ class Report {
   }
 
   void problem(Diagnostic diagnostic, {String? unit, String? target}) {
-    _problems.add(_diagnostic(diagnostic, unit: unit, target: target));
+    _problems.add(_record(diagnostic, unit: unit, target: target));
   }
 
   void warning(Diagnostic diagnostic, {String? unit, String? target}) {
-    _warnings.add(_diagnostic(diagnostic, unit: unit, target: target));
+    _warnings.add(_record(diagnostic, unit: unit, target: target));
   }
+
+  /// Files a finding's own account of what failed beside the document, and
+  /// names it on the finding so the two correlate rather than being matched
+  /// by eye.
+  ///
+  /// Counted, not coded: three platforms failing the same way in one run
+  /// carry the same RK code, and a name built from the code alone would keep
+  /// one of the three and silently drop the other two.
+  Map<String, Object?> _record(
+    Diagnostic diagnostic, {
+    String? unit,
+    String? target,
+  }) {
+    final entry = _diagnostic(diagnostic, unit: unit, target: target);
+    final evidence = diagnostic.evidence;
+    if (evidence != null) {
+      final name = 'tool-output/${++_kept}-${diagnostic.code}.txt';
+      attachments[name] = evidence;
+      entry['evidence'] = name;
+    }
+    return entry;
+  }
+
+  int _kept = 0;
 
   static Map<String, Object?> _diagnostic(
     Diagnostic diagnostic, {

@@ -138,6 +138,7 @@ class BinaryChain {
           code: 'RK-BUILD-001',
           message: '$platform: the build did not produce a working binary',
           remedy: built.problem ?? 'see the compiler output',
+          evidence: built.transcript,
         ),
         unit: step.unit,
       );
@@ -226,6 +227,7 @@ class BinaryChain {
           code: 'RK-SIGN-002',
           message: '${step.platform}: signing failed',
           remedy: signed.problem ?? 'see codesign\'s output',
+          evidence: signed.transcript,
         ),
         unit: step.unit,
       );
@@ -358,6 +360,7 @@ class BinaryChain {
           code: 'RK-NOTARY-001',
           message: '$platform: the archive for notarization failed',
           remedy: zipped.summary,
+          evidence: zipped.transcript,
         ),
         unit: step.unit,
       );
@@ -374,6 +377,7 @@ class BinaryChain {
           code: 'RK-NOTARY-002',
           message: '$platform: notarization did not complete',
           remedy: notarized.remedy ?? notarized.problem ?? 'see notarytool',
+          evidence: notarized.transcript,
         ),
         unit: step.unit,
       );
@@ -398,6 +402,7 @@ class BinaryChain {
           remedy: log == null
               ? 'the submission id was not in notarytool\'s answer'
               : log.summary,
+          evidence: log?.transcript,
         ),
         unit: step.unit,
       );

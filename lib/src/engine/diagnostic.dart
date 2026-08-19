@@ -11,6 +11,7 @@ class Diagnostic {
     required this.message,
     this.source,
     this.remedy,
+    this.evidence,
   });
 
   final String code;
@@ -23,6 +24,14 @@ class Diagnostic {
 
   /// What to do about it, concretely.
   final String? remedy;
+
+  /// The whole of what a native tool said, when a tool is what failed.
+  ///
+  /// [message] and [remedy] are what a person reads; this is what they read
+  /// next, and rk is its last holder — nothing downstream can reproduce a
+  /// compile that already happened. The report files it beside the document
+  /// and names it on this finding, so the two correlate.
+  final String? evidence;
 
   @override
   String toString() {
