@@ -185,22 +185,28 @@ class MacOsSigner {
           'the entitlements could not be written: $error');
     }
 
-    final signed = await tools.run('codesign', [
-      '--force',
-      '--timestamp',
-      '--options=runtime',
-      '--entitlements',
-      entitlements.path,
-      '--identifier',
-      codeId,
-      '--sign',
-      // Names are display labels and need not be unique. The SHA-1 identity
-      // token is the exact keychain selector emitted by find-identity; the
-      // stage records the correlated SHA-256 certificate fingerprint.
-      selected.sha1,
-      binary,
-    ]);
-    if (entitlements.existsSync()) entitlements.deleteSync();
+    final ToolResult signed;
+    try {
+      signed = await tools.run('codesign', [
+        '--force',
+        '--timestamp',
+        '--options=runtime',
+        '--entitlements',
+        entitlements.path,
+        '--identifier',
+        codeId,
+        '--sign',
+        // Names are display labels and need not be unique. The SHA-1 identity
+        // token is the exact keychain selector emitted by find-identity; the
+        // stage records the correlated SHA-256 certificate fingerprint.
+        selected.sha1,
+        binary,
+      ]);
+    } finally {
+      // An input to codesign, never an artifact: it must not survive into the
+      // staged workspace even when signing throws.
+      if (entitlements.existsSync()) entitlements.deleteSync();
+    }
     if (!signed.ok) {
       return SignOutcome.failed(signed.summary, transcript: signed.transcript);
     }
