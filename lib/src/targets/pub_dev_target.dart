@@ -649,6 +649,28 @@ final class _PubDevSession extends TargetSessionProvider {
     if (await _tokenConfigured(context)) {
       return const TargetReady(note: 'token configured');
     }
+    // Asked quietly first. A session that is merely stale is refreshed and
+    // checked against the provider without anyone typing anything, and pub
+    // reports that at length — the address it prints is the one thing rk
+    // could not have said itself, and it says it to a terminal that asked
+    // about a release. Captured, that costs nothing and shows nothing.
+    //
+    // A session that needs the browser cannot be served on a pipe: pub
+    // would print a URL nobody can see and wait. So the quiet attempt is
+    // bounded, and anything but a clean answer is asked again attached,
+    // where the operator can act on it.
+    try {
+      final quiet = await context.tools.run(
+        'dart',
+        const ['pub', 'login'],
+        workingDirectory: context.git.root,
+        timeout: const Duration(seconds: 20),
+      );
+      if (quiet.exitCode == 0) return const TargetReady(note: 'signed in');
+    } on ProcessException {
+      // The launcher itself failed; the attached attempt reports it.
+    }
+
     int code;
     try {
       code = await context.runInteractive!(

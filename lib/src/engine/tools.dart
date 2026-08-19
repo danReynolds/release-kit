@@ -10,11 +10,16 @@ import 'dart:io';
 /// here: a native tool reads its own session from its own store.
 abstract class Tools {
   /// Runs [executable], returning what it said.
+  ///
+  /// [timeout] bounds this one call, whatever the toolset's own bound is:
+  /// some commands wait for a person, and a caller that has captured their
+  /// output has taken away the prompt they are waiting on.
   Future<ToolResult> run(
     String executable,
     List<String> arguments, {
     String? workingDirectory,
     Map<String, String>? environment,
+    Duration? timeout,
   });
 
   /// Runs [executable] attached to the terminal, so a native prompt — a
@@ -68,8 +73,9 @@ class SystemTools implements Tools {
     List<String> arguments, {
     String? workingDirectory,
     Map<String, String>? environment,
+    Duration? timeout,
   }) async {
-    final bound = timeout;
+    final bound = timeout ?? this.timeout;
     if (bound == null) {
       final result = await Process.run(
         executable,
@@ -174,6 +180,7 @@ class RecordingTools implements Tools {
     List<String> arguments, {
     String? workingDirectory,
     Map<String, String>? environment,
+    Duration? timeout,
   }) async {
     final key = '$executable ${arguments.join(' ')}';
     calls.add(key);

@@ -49,6 +49,7 @@ class OriginAgreeing implements Tools {
     List<String> arguments, {
     String? workingDirectory,
     Map<String, String>? environment,
+    Duration? timeout,
   }) async {
     if (executable == 'git' && arguments.first == 'ls-remote') {
       if (arguments.length == 3 && arguments[1] == '--tags') {

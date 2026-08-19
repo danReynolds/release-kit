@@ -1101,6 +1101,7 @@ class _DownloadTools implements Tools {
     List<String> arguments, {
     String? workingDirectory,
     Map<String, String>? environment,
+    Duration? timeout,
   }) async {
     if (executable == 'gh' &&
         arguments.length >= 2 &&
@@ -1164,6 +1165,7 @@ class _ConcurrentDownloadTools implements Tools {
     List<String> arguments, {
     String? workingDirectory,
     Map<String, String>? environment,
+    Duration? timeout,
   }) async {
     if (executable == 'gh' && arguments.first == 'api') {
       return ToolResult(exitCode: 0, stdout: response, stderr: '');
