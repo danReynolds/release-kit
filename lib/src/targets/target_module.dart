@@ -521,6 +521,7 @@ final class TargetActOutcome {
     this.successNote,
     this.includeInspectionDetail = false,
     this.reconciledNote,
+    this.evidence,
   });
 
   final bool ok;
@@ -534,6 +535,14 @@ final class TargetActOutcome {
   final String? successNote;
   final bool includeInspectionDetail;
   final String? reconciledNote;
+
+  /// What the native tool said, when a tool is what failed.
+  ///
+  /// [problem] is the line the operator reads. This is the rest, carried to
+  /// `classifyFailure`, which builds the one diagnostic that is reported —
+  /// so the account of a half-finished publish survives the sentence
+  /// summarizing it.
+  final String? evidence;
 }
 
 /// A private provider-side effect that is not itself a published release.

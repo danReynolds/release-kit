@@ -73,6 +73,49 @@ and the repository exists.
     expect(stopwatch.elapsed, lessThan(const Duration(seconds: 15)));
   });
 
+  test('a tool that speaks bytes is read, not thrown out of', () async {
+    if (Platform.isWindows) return;
+
+    // A crashing binary is not obliged to put valid UTF-8 on stderr. Strict
+    // decoding turned that into a FormatException thrown out of the middle
+    // of a release, losing the run and the output both.
+    final result = await const SystemTools().run(
+      'sh',
+      const ['-c', r'printf "before\377\376after" >&2; exit 3'],
+    );
+
+    expect(result.exitCode, 3);
+    expect(result.stderr, contains('before'));
+    expect(result.stderr, contains('after'));
+    expect(result.transcript, contains('exit 3'));
+  });
+
+  test('a captured run tells git not to stop and ask', () async {
+    if (Platform.isWindows) return;
+
+    // Nobody is at the terminal of a captured run, so a credential prompt
+    // is a hang with extra steps. Closing stdin does not reach it: git reads
+    // those from /dev/tty.
+    final result = await const SystemTools().run(
+      'sh',
+      const ['-c', 'echo "\$GIT_TERMINAL_PROMPT"'],
+    );
+
+    expect(result.stdout.trim(), '0');
+  });
+
+  test('and a caller that means to override one still wins', () async {
+    if (Platform.isWindows) return;
+
+    final result = await const SystemTools().run(
+      'sh',
+      const ['-c', 'echo "\$GIT_TERMINAL_PROMPT"'],
+      environment: const {'GIT_TERMINAL_PROMPT': '1'},
+    );
+
+    expect(result.stdout.trim(), '1');
+  });
+
   test('a transcript keeps what the summary throws away', () {
     final result = ToolResult(
       exitCode: 1,

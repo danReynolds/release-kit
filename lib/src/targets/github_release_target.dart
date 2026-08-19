@@ -261,6 +261,7 @@ final class GithubReleaseTargetModule extends TargetModule {
         DraftEffect.uncertain => TargetPrivateEffect.uncertain,
       },
       permanent: outcome.permanent,
+      evidence: outcome.transcript,
     );
   }
 
@@ -306,6 +307,7 @@ final class GithubReleaseTargetModule extends TargetModule {
             ? 're-run; the shared destination inspection will classify the '
                 'public target before any retry'
             : details.join('\n'),
+        evidence: act.evidence,
       ),
       halt: halt,
     );

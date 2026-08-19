@@ -77,6 +77,28 @@ Future<String> _settled(Future<String> stream) => stream.timeout(
       onTimeout: () => '',
     );
 
+/// UTF-8 that survives a byte sequence it cannot make sense of.
+///
+/// A captured tool is not obliged to speak valid UTF-8 — a crashing binary
+/// can put raw bytes on stderr, and a strict decoder turns that into a
+/// FormatException thrown out of the middle of a release. rk would rather
+/// read a replacement character than lose the run.
+const _lenient = Utf8Codec(allowMalformed: true);
+
+/// Answers rk gives, once, to every tool that would otherwise stop and ask.
+///
+/// A captured run has nobody at its terminal: the operator cannot see the
+/// question and cannot type the answer, so a prompt is a hang with extra
+/// steps. Git and its credential helpers read those prompts from /dev/tty,
+/// which closing stdin does not touch — these are the levers that do. A
+/// caller that means to override one is spread in after and wins.
+const _unattended = {
+  'GIT_TERMINAL_PROMPT': '0',
+  'GIT_ASKPASS': '',
+  'SSH_ASKPASS_REQUIRE': 'never',
+  'GCM_INTERACTIVE': 'never',
+};
+
 class SystemTools implements Tools {
   const SystemTools({this.timeout});
 
@@ -99,7 +121,9 @@ class SystemTools implements Tools {
         executable,
         arguments,
         workingDirectory: workingDirectory,
-        environment: environment,
+        environment: {..._unattended, ...?environment},
+        stdoutEncoding: _lenient,
+        stderrEncoding: _lenient,
       );
       return ToolResult(
         exitCode: result.exitCode,
@@ -112,7 +136,7 @@ class SystemTools implements Tools {
       executable,
       arguments,
       workingDirectory: workingDirectory,
-      environment: environment,
+      environment: {..._unattended, ...?environment},
     );
     // The same closed stdin an unbounded run gets from Process.run. Left
     // open, a tool that reads stdin blocks on a pipe nobody will ever write
@@ -121,8 +145,8 @@ class SystemTools implements Tools {
     // prompts on /dev/tty still holds rk's terminal, and the lever for those
     // is the environment (GIT_TERMINAL_PROMPT and its kind), not this.
     unawaited(process.stdin.close().catchError((Object _) {}));
-    final stdout = process.stdout.transform(utf8.decoder).join();
-    final stderr = process.stderr.transform(utf8.decoder).join();
+    final stdout = process.stdout.transform(_lenient.decoder).join();
+    final stderr = process.stderr.transform(_lenient.decoder).join();
     var timedOut = false;
     var exitCode = 124;
     try {

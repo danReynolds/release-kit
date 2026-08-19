@@ -554,9 +554,11 @@ class GithubRelease {
     void Function(GithubPublishEvent event, int current, int total)? onProgress,
   }) async {
     var draftEffect = DraftEffect.none;
-    PublishOutcome failed(String problem) => PublishOutcome.failed(
+    PublishOutcome failed(String problem, {String? transcript}) =>
+        PublishOutcome.failed(
           problem,
           draftEffect: draftEffect,
+          transcript: transcript,
         );
 
     final url = 'https://github.com/$repository/releases/tag/$tag';
@@ -652,6 +654,7 @@ class GithubRelease {
             return failed(
               'the private draft could not be identified after create: '
               '${created.summary}',
+              transcript: created.transcript,
             );
           }
           draftId = afterCreate.single.id;
@@ -734,6 +737,7 @@ class GithubRelease {
             return failed(
               'uploading $name to private draft $draftId did not complete: '
               '${uploaded.summary}',
+              transcript: uploaded.transcript,
             );
           }
           // A name in the draft inventory proves neither that the upload
@@ -833,6 +837,7 @@ class GithubRelease {
         if (release.isDraft) {
           return failed(
             'private draft $draftId was not published: ${published.summary}',
+            transcript: published.transcript,
           );
         }
         final publicSurface = _compareRelease(
@@ -860,6 +865,7 @@ class GithubRelease {
                 '${published.summary}',
         url: url,
         draftEffect: DraftEffect.uncertain,
+        transcript: published.ok ? null : published.transcript,
       );
     } on Object catch (error) {
       return failed('the private release draft failed: $error');
@@ -1390,6 +1396,7 @@ class PublishOutcome {
     this.confirmed, {
     this.permanent,
     this.draftEffect = DraftEffect.none,
+    this.transcript,
   });
 
   const PublishOutcome.published(
@@ -1403,7 +1410,9 @@ class PublishOutcome {
   const PublishOutcome.failed(
     String problem, {
     DraftEffect draftEffect = DraftEffect.none,
-  }) : this._(null, problem, false, draftEffect: draftEffect);
+    String? transcript,
+  }) : this._(null, problem, false,
+            draftEffect: draftEffect, transcript: transcript);
 
   /// Something may exist that rk could not read back, so the next run must
   /// inspect rather than assume.
@@ -1411,7 +1420,9 @@ class PublishOutcome {
     String problem, {
     String? url,
     DraftEffect draftEffect = DraftEffect.none,
-  }) : this._(url, problem, false, draftEffect: draftEffect);
+    String? transcript,
+  }) : this._(url, problem, false,
+            draftEffect: draftEffect, transcript: transcript);
 
   /// rk read back what it did and it is wrong, and it cannot be taken back.
   const PublishOutcome.terminal(
@@ -1438,6 +1449,10 @@ class PublishOutcome {
 
   /// What this attempt did to GitHub's private draft surface.
   final DraftEffect draftEffect;
+
+  /// What gh said when gh is what failed — the rest of the account behind
+  /// [problem]'s one line.
+  final String? transcript;
 
   bool get ok => confirmed;
 
