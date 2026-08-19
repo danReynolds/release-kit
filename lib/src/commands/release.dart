@@ -2424,52 +2424,84 @@ class ReleaseCommand {
 
     final disclosed = <String>[];
     output.blank();
-    output.line('Release', tone: Tone.header);
-    output.line(
-      '${unit.name} ${unit.version}',
-      depth: 1,
-      tone: Tone.header,
-    );
+    output.line('Release ${unit.name} ${unit.version}', tone: Tone.header);
+
+    // Grouped by destination, the way status and staging read. What is
+    // permanent is said on the row it belongs to: a paragraph explaining
+    // that publishing is forever tells an operator what they already know,
+    // and buries the one line they do not.
+    // Keyed by what is claimed, not by where: a unit publishing several
+    // packages to pub.dev has one row each, and marking them all because
+    // one name is new would tell the operator they are permanently taking
+    // names that were taken releases ago.
+    final firstClaims = {
+      for (final claim in claims) '${claim.registrar}\u0000${claim.name}',
+    };
     for (final target in remaining) {
-      output.line(target.step.summary, depth: 2);
+      final module = inspector.targets.moduleForTarget(target);
+      final permanence = <String>[
+        if (target.step.isPermanent) 'permanent',
+        if (firstClaims.contains('${target.kindLabel}\u0000'
+            '${target.coordinate}'))
+          'first claim',
+      ];
+      output.line(
+        target.kindLabel,
+        note: [module.planNote(target), ...permanence].join(' · '),
+        depth: 1,
+        labelWidth: 26,
+      );
     }
-    if (permanent.isEmpty) {
-      output.say('nothing here is permanent.');
-    } else {
-      // The ground, marked where it matters: everything before the yes is
-      // resumable; the first permanent step after it is not.
+    final firstSigning = signing?.firstCertificate == null ? null : signing;
+    if (firstSigning != null) {
+      // The identifier first: it is what gets sealed into the designated
+      // requirement and every Keychain item, so a wrong one has to be seen
+      // rather than hunted for. The certificate says who signed it.
+      output.line(
+        'macOS identity',
+        note: '${firstSigning.codeId} signed by '
+            '${_shortCertificate(firstSigning.firstCertificate!)} · '
+            'permanent · first claim',
+        depth: 1,
+        labelWidth: 26,
+      );
+    }
+    // Nothing is said about permanence beyond the rows. A sentence telling
+    // an operator that a release is permanent, printed above a prompt they
+    // reached deliberately, is a paragraph they learn to scroll past — and
+    // the rows already name which destinations mean it. The full wording,
+    // and which step is the first that cannot be re-run, stay in the record
+    // that travels with the authorization.
+    if (permanent.isNotEmpty) {
       final notices = {
         for (final target in permanent)
           if (inspector.targets.moduleForTarget(target).permanenceNotice(target)
               case final notice?)
             notice,
       };
-      final ground = '${notices.join('\n')}\n'
+      disclosed.add('${notices.join('\n')}\n'
           'everything before this yes re-runs safely. after it, the first '
-          'permanent step is: ${permanent.first.step.summary}.';
-      output.say(ground);
-      disclosed.add(ground);
+          'permanent step is: ${permanent.first.step.summary}.');
     }
 
-    disclosed.addAll(_sayClaims(claims, signing));
+    disclosed.addAll(_recordClaims(claims, firstSigning));
 
-    // Weaker assurance is accepted knowingly or not at all: a platform
-    // nothing here can run ships with its smoke test missing, and that is
-    // said before the release is authorized, not discovered afterwards.
+    // A platform nothing here can run ships with its smoke test missing.
+    // That belongs in the record every authorization carries, not in a
+    // paragraph at the prompt: the operator chose these platforms, and a
+    // machine without a container runtime cannot be told anything new by
+    // repeating it at every release.
     final unprovable = _unprovable(unit);
     if (unprovable.isNotEmpty) {
-      output.blank();
-      final warning = 'these ship built but never executed — rk cannot '
-          'prove they run or report ${unit.version}:';
-      output.say(warning);
-      for (final platform in unprovable) {
-        output.say(platform, depth: 1);
-      }
-      disclosed.add('$warning\n${unprovable.join('\n')}');
+      disclosed.add('these ship built but never executed — rk cannot '
+          'prove they run or report ${unit.version}:\n'
+          '${unprovable.join('\n')}');
     }
 
-    // What the prompt disclosed travels with the yes. A --json --yes caller
-    // never sees the prose sink, so the document carries it.
+    // What the yes accepts travels with it. Some of this the prompt marks
+    // on a row and some of it — the long form of a first claim, and the
+    // platforms that ship built but never executed — it no longer shows at
+    // all, so the record is the only place either is said.
     if (disclosed.isNotEmpty) {
       output.report.attach(
         'authorization-disclosures/${unit.name}',
@@ -2745,29 +2777,27 @@ class ReleaseCommand {
     }
   }
 
-  List<String> _sayClaims(
+  /// The first-claim disclosures, for the record rather than the screen.
+  ///
+  /// The plan marks which rows are first claims; this is the long form a
+  /// caller reading `--json` gets, and what an unattended `--yes` run
+  /// carries with its authorization.
+  List<String> _recordClaims(
     List<TargetClaim> claims,
-    _ProjectSigningContext? signing,
+    _ProjectSigningContext? firstSigning,
   ) {
-    final firstSigning = signing?.firstCertificate == null ? null : signing;
+    // Sentences, not columns. This is read out of the report by whoever or
+    // whatever consented; the alignment it used to carry was for a screen
+    // that no longer prints it.
     final firstOf = <String>[
       for (final claim in claims)
-        '${claim.registrar.padRight(17)}${claim.name}\n'
-            '                 ${claim.consequence}',
+        '${claim.registrar} ${claim.name} — ${claim.consequence}',
       if (firstSigning != null)
-        '${'macOS identity'.padRight(17)}${firstSigning.codeId}\n'
-            '                 permanent: sealed into the designated '
-            'requirement, and into\n'
-            '                 every Keychain item this program creates. '
-            'Signed by\n'
-            '                 ${firstSigning.firstCertificate}',
+        'macOS identity ${firstSigning.codeId} — permanent: sealed into the '
+            'designated requirement, and into every Keychain item this '
+            'program creates. Signed by ${firstSigning.firstCertificate}',
     ];
     if (firstOf.isEmpty) return const [];
-    output.blank();
-    output.say('this release claims, for the first time:');
-    for (final line in firstOf) {
-      output.say(line, depth: 1);
-    }
     return ['this release claims, for the first time:', ...firstOf];
   }
 

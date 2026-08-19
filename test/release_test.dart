@@ -364,7 +364,10 @@ Future<Ran> release({
     stageFor: stageFor,
     refreshStage: (unit, _) => stageFor(unit),
     refreshGit: () async => effectiveGit,
-    refreshEnvironment: refreshEnvironment,
+    // A release must not read the machine running the tests. Without a
+    // HOME of its own, rk finds whatever pub session the developer happens
+    // to have, and a test about a missing session passes or fails on that.
+    refreshEnvironment: refreshEnvironment ?? () => const {'HOME': '/nowhere'},
   );
   final code = await command.run(only: only);
 
@@ -911,7 +914,7 @@ executables:
     expect(downloads.single, contains(' v0.8.0 '));
     expect(
       ran.text,
-      isNot(contains('this release claims, for the first time:')),
+      isNot(contains('first claim')),
     );
   });
 }
@@ -1835,6 +1838,58 @@ dependencies:
     expect(ran.problems.map((p) => p['code']), contains('RK-REL-001'));
   });
 
+  test('only the name that is new is marked a first claim', () async {
+    // A unit publishing several packages has one row each, all labelled
+    // pub.dev. Marking by destination marked them all — telling the
+    // operator they were permanently taking names taken releases ago.
+    final ran = await release(
+      config: '''
+schema = 2
+
+[release.core]
+
+[[release.core.project]]
+path = "packages/keybay"
+publish = ["pub.dev"]
+
+[[release.core.project]]
+path = "packages/keybay_extra"
+publish = ["pub.dev"]
+''',
+      source: MemorySourceTree({
+        'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
+        'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
+        'packages/keybay_extra/pubspec.yaml':
+            'name: keybay_extra\nversion: 0.2.0\n',
+        'packages/keybay_extra/CHANGELOG.md': '## 0.2.0\n',
+      }, description: '/repo/keybay'),
+      registry: FakeRegistry({
+        'keybay': ['0.1.0'],
+      }),
+      typed: 'no',
+    );
+
+    final rows = ran.text.split('\n');
+    final taken = rows.firstWhere(
+      (row) => row.contains('keybay 0.2.0'),
+      orElse: () => fail('no row for the package already on pub.dev:\n'
+          '${ran.text}'),
+    );
+    final fresh = rows.firstWhere(
+      (row) => row.contains('keybay_extra 0.2.0'),
+      orElse: () => fail('no row for the new package:\n${ran.text}'),
+    );
+
+    expect(fresh, contains('first claim'));
+    expect(
+      taken,
+      isNot(contains('first claim')),
+      reason: 'this name was claimed releases ago; saying otherwise at the '
+          'one prompt that asks about permanence is a lie about what the '
+          'yes does',
+    );
+  });
+
   test('a first publish states the name it claims, then performs it', () async {
     // rk refused this outright as RK-REG-003, saying a first publish
     // "accepts the terms and names a publisher". pub's own publish command
@@ -1862,15 +1917,22 @@ dependencies:
     );
     expect(
       ran.text,
-      contains('this release claims, for the first time:'),
+      contains('first claim'),
       reason: 'what a first publish really takes is the NAME, permanently — '
           'so the operator reads it before consenting',
     );
     expect(
       ran.text,
-      contains('pub.dev          keybay'),
+      contains('keybay 0.2.0'),
       reason: 'the name itself is on the line, because a typo claiming a '
           'name nobody meant to own is the accident this guards against',
+    );
+    expect(
+      (ran.report['attachments'] as Map?)?['authorization-disclosures/core'],
+      contains('a package name cannot be renamed, reassigned, or released '
+          'back'),
+      reason: 'the prompt marks the claim; the record keeps why it matters, '
+          'which is what an unattended --yes run carries with its consent',
     );
   });
 

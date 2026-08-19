@@ -22,6 +22,10 @@ final class PubDevTargetModule extends TargetModule {
   const PubDevTargetModule();
 
   @override
+  String planNote(TargetExpectation target) =>
+      '${target.identity} ${target.targetVersion}';
+
+  @override
   PublishTarget get target => PublishTarget.pubDev;
 
   @override
@@ -698,7 +702,21 @@ final class _PubDevSession extends TargetSessionProvider {
   Future<bool?> established(TargetReadinessContext context) async {
     // A token needs no stored session, so there is nothing to create or clear.
     if (await _tokenConfigured(context)) return true;
+    return _sessionStored(context);
+  }
 
+  /// Whether this machine already holds a pub session, or null when rk
+  /// cannot tell where one would be kept.
+  ///
+  /// This answers whether a session file is there — which is all the
+  /// lifecycle needs, to know whether rk created the session it may have
+  /// to clear. It is deliberately not used to skip the login preflight:
+  /// `dart pub login` refreshes the stored token, checks it against the
+  /// provider, and re-authorizes a session that has expired or been
+  /// revoked. A file on disk proves none of that, and a session that is
+  /// dead is a release that stops after the tag is public instead of
+  /// before anything is.
+  static bool? _sessionStored(TargetReadinessContext context) {
     final credentials = _pubCredentialsFile(context.environment);
     if (credentials == null) return null;
     try {

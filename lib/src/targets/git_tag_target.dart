@@ -19,6 +19,9 @@ final class GitTagTargetModule extends TargetModule {
   const GitTagTargetModule();
 
   @override
+  String planNote(TargetExpectation target) => target.identity;
+
+  @override
   PublishTarget get target => PublishTarget.gitTag;
 
   @override
