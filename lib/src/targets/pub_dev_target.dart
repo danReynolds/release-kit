@@ -639,6 +639,12 @@ final class _PubDevSession extends TargetSessionProvider {
     ResolvedUnit unit,
     List<TargetExpectation> targets,
   ) async {
+    // A token already answers for this repository, and pub reads its secret
+    // from the environment on every request. Signing in would create a second,
+    // durable credential the release does not use.
+    if (await _tokenConfigured(context)) {
+      return const TargetReady(note: 'token configured');
+    }
     int code;
     try {
       code = await context.runInteractive!(
@@ -661,6 +667,82 @@ final class _PubDevSession extends TargetSessionProvider {
       unit: unit.name,
     );
   }
+
+  /// Whether pub already has a token for pub.dev in this repository.
+  ///
+  /// Only presence is read. The secret itself stays where pub keeps it — for an
+  /// `--env-var` token, in the environment at request time.
+  Future<bool> _tokenConfigured(TargetReadinessContext context) async {
+    try {
+      final tokens = await context.tools.run(
+        'dart',
+        const ['pub', 'token', 'list'],
+        workingDirectory: context.git.root,
+      );
+      if (!tokens.ok) return false;
+      // A whole line, not a substring: a token for a lookalike host such as
+      // https://pub.dev.example.com must not answer for pub.dev.
+      return tokens.stdout
+          .split('\n')
+          .map((line) => line.trim())
+          .any((line) => line == _pubDevUrl || line == '$_pubDevUrl/');
+    } on ProcessException {
+      // Nothing to ask. Publishing needs the same executable and refuses by
+      // name, so this question goes unanswered rather than ending the run in a
+      // crash.
+      return false;
+    }
+  }
+
+  @override
+  Future<bool?> established(TargetReadinessContext context) async {
+    // A token needs no stored session, so there is nothing to create or clear.
+    if (await _tokenConfigured(context)) return true;
+
+    final credentials = _pubCredentialsFile(context.environment);
+    if (credentials == null) return null;
+    try {
+      return credentials.existsSync();
+    } on FileSystemException {
+      return null;
+    }
+  }
+
+  @override
+  Future<String?> restore(TargetReadinessContext context) async {
+    final out = await context.tools.run(
+      'dart',
+      const ['pub', 'logout'],
+      workingDirectory: context.git.root,
+    );
+    return out.ok
+        ? 'pub session cleared — it did not exist before this release'
+        : 'pub session could not be cleared: ${out.summary}';
+  }
+}
+
+const _pubDevUrl = 'https://pub.dev';
+
+/// Where the pub client keeps the session `dart pub login` writes.
+///
+/// rk reads whether this exists, never what is in it, so it can leave the
+/// machine's session as it found it. Null when the location cannot be derived,
+/// which the caller treats as "do not touch".
+File? _pubCredentialsFile(Map<String, String> environment) {
+  const name = 'dart/pub-credentials.json';
+  if (Platform.isWindows) {
+    final appData = environment['APPDATA'];
+    return appData == null ? null : File('$appData/$name');
+  }
+  final home = environment['HOME'];
+  if (Platform.isMacOS) {
+    return home == null
+        ? null
+        : File('$home/Library/Application Support/$name');
+  }
+  final config =
+      environment['XDG_CONFIG_HOME'] ?? (home == null ? null : '$home/.config');
+  return config == null ? null : File('$config/$name');
 }
 
 StageArtifact _pubArchive(ReleaseStage stage, ResolvedProject project) {

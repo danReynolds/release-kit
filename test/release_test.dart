@@ -1377,6 +1377,146 @@ publish = ["pub.dev"]
     expect(ran.text, contains('unsigned'));
   });
 
+  group('the pub session a release needs', () {
+    /// A home directory rk will inspect for the pub client's session file.
+    ({Map<String, String> Function() environment, File credentials}) home({
+      required bool signedIn,
+    }) {
+      final root = Directory.systemTemp.createTempSync('rk-pub-session-');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
+      final credentials = File(
+        Platform.isMacOS
+            ? '${root.path}/Library/Application Support/dart/'
+                'pub-credentials.json'
+            : '${root.path}/.config/dart/pub-credentials.json',
+      );
+      if (signedIn) {
+        credentials
+          ..parent.createSync(recursive: true)
+          ..writeAsStringSync('{"accessToken":"fixture"}');
+      }
+      return (
+        environment: () => {'HOME': root.path},
+        credentials: credentials,
+      );
+    }
+
+    test('is cleared when the release is what created it', () async {
+      final machine = home(signedIn: false);
+      final ran = await release(
+        refreshEnvironment: machine.environment,
+        registry: _MutableRegistry(<String>['0.1.0']),
+      );
+      expect(ran.calls, contains('dart pub login'));
+      expect(ran.calls, contains('dart pub logout'));
+      expect(ran.text, contains('pub session cleared'));
+    });
+
+    test('is left alone when the machine was already signed in', () async {
+      final machine = home(signedIn: true);
+      final ran = await release(
+        refreshEnvironment: machine.environment,
+        registry: _MutableRegistry(<String>['0.1.0']),
+      );
+      expect(
+        ran.calls,
+        isNot(contains('dart pub logout')),
+        reason: 'a release must not change how the operator signed in',
+      );
+    });
+
+    test('is left alone when a token supplies the credential', () async {
+      final machine = home(signedIn: false);
+      final ran = await release(
+        refreshEnvironment: machine.environment,
+        registry: _MutableRegistry(<String>['0.1.0']),
+        results: {
+          'dart pub token list': ToolResult(
+            exitCode: 0,
+            stdout: 'You have secret tokens for 1 package repositories:\n'
+                'https://pub.dev\n',
+            stderr: '',
+          ),
+        },
+      );
+      expect(
+        ran.calls,
+        isNot(contains('dart pub logout')),
+        reason: 'the secret comes from the environment; there is no session',
+      );
+      expect(
+        ran.calls,
+        isNot(contains('dart pub login')),
+        reason: 'signing in would create a durable credential the release '
+            'does not use',
+      );
+    });
+
+    test('a token for a lookalike host does not answer for pub.dev', () async {
+      final machine = home(signedIn: false);
+      final ran = await release(
+        refreshEnvironment: machine.environment,
+        registry: _MutableRegistry(<String>['0.1.0']),
+        results: {
+          'dart pub token list': ToolResult(
+            exitCode: 0,
+            stdout: 'You have secret tokens for 1 package repositories:\n'
+                'https://pub.dev.internal.example.com\n',
+            stderr: '',
+          ),
+        },
+      );
+      expect(
+        ran.calls,
+        contains('dart pub login'),
+        reason: 'that token is for another registry entirely',
+      );
+      expect(ran.calls, contains('dart pub logout'));
+    });
+
+    test('a missing dart executable refuses instead of crashing', () async {
+      final machine = home(signedIn: false);
+      final ran = await release(
+        refreshEnvironment: machine.environment,
+        registry: _MutableRegistry(<String>['0.1.0']),
+        answers: (key) {
+          if (key == 'dart pub token list') {
+            throw ProcessException('dart', const ['pub', 'token', 'list']);
+          }
+          return null;
+        },
+      );
+      expect(
+        ran.exitCode,
+        isNot(ExitCodes.crashed),
+        reason: 'an unanswerable question is not a crash',
+      );
+    });
+
+    test('is cleared even when the release stops partway', () async {
+      final machine = home(signedIn: false);
+      final ran = await release(
+        refreshEnvironment: machine.environment,
+        registry: _MutableRegistry(<String>['0.1.0']),
+        results: {
+          'git push origin $_tagObject:refs/tags/v0.2.0': ToolResult(
+            exitCode: 1,
+            stdout: '',
+            stderr: 'remote rejected',
+          ),
+        },
+      );
+      expect(ran.exitCode, isNot(ExitCodes.ok));
+      expect(
+        ran.calls,
+        contains('dart pub logout'),
+        reason: 'a run that failed still must not leave a session behind',
+      );
+    });
+  });
+
   group('a project that signs its releases', () {
     test('says so through tag.gpgSign, and gets a verified signature',
         () async {

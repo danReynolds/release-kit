@@ -141,6 +141,41 @@ class ReleaseCommand {
   var _sourceWarningShown = false;
 
   Future<int> run({String? only}) async {
+    try {
+      return await _runUnits(only: only);
+    } finally {
+      // Every exit path, including the refusals and the single named unit: a
+      // run that stopped partway may still have created the session, and
+      // leaving one behind is exactly what this undoes.
+      await _restoreCreatedSessions();
+    }
+  }
+
+  /// Sessions this run brought into existence, by requirement key.
+  final Map<String, TargetSessionProvider> _createdSessions = {};
+
+  /// Returns each session this run created to the state it found.
+  Future<void> _restoreCreatedSessions() async {
+    if (_createdSessions.isEmpty) return;
+    final providers = _createdSessions.values.toList();
+    _createdSessions.clear();
+    for (final provider in providers) {
+      final String? note;
+      try {
+        note = await provider.restore(TargetReadinessContext(
+          tools: tools,
+          git: await _refreshGit(),
+          environment: _refreshEnvironment(),
+        ));
+      } on Object {
+        // Housekeeping never decides a release's result.
+        continue;
+      }
+      if (note != null) output.say(note);
+    }
+  }
+
+  Future<int> _runUnits({String? only}) async {
     // One repository fact for the whole invocation, including ordering or
     // scope refusals that happen before the first unit pipeline starts.
     output.report.repository(
@@ -843,8 +878,16 @@ class ReleaseCommand {
         _destinationChanged(grouped.first.target, targets, publicActions);
         return ExitCodes.refused;
       }
+      // Asked before acquiring, so "rk created this" is a fact rather than an
+      // inference from a login that may have found a session already there.
+      final established = _createdSessions.containsKey(requirement.key)
+          ? false
+          : await requirement.provider.established(before);
       final acquired =
           await requirement.provider.acquire(before, unit, grouped);
+      if (established == false) {
+        _createdSessions[requirement.key] = requirement.provider;
+      }
       if (acquired case TargetNotReady(:final diagnostic, :final unit)) {
         sessionProgress
           ..failAll(grouped, activity: requirement.provider.activity)

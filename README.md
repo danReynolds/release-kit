@@ -17,7 +17,13 @@ of a release script.
 - **No secrets.** Publication sessions belong to `dart pub`, `gh`,
   `codesign`, `notarytool`, and `git`. rk asks for them only after
   private work is finished and checked; `status` and `release --stage`
-  never do.
+  never do. A session rk had to create is cleared when the run ends, so
+  a release leaves no credential behind; one that already existed is
+  left exactly as it was.
+- **Signed when you say so.** `tag.gpgSign`, or a release history that is
+  already signed, makes a signature required rather than incidental — and
+  rk reads it back off the tag it created instead of trusting the config.
+  A signature it cannot verify is refused, not reported as signed.
 - **Monorepos.** Cross-unit version constraints are checked before
   anything acts.
 
