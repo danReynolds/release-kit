@@ -352,8 +352,19 @@ class BinaryChain {
   /// Public because the preflight compares it against a declared one before
   /// anything acts; it had a one-line public forwarder around it for that,
   /// which is a module punched through for a single caller.
-  static String? identifierOf(String requirement) =>
-      RegExp(r'identifier "([^"]+)"').firstMatch(requirement)?.group(1);
+  /// The program identity named by a designated requirement.
+  ///
+  /// codesign quotes an identifier only when it has to. `rk` prints bare while
+  /// `"io.github.danreynolds.keybay.cli"` is quoted, so reading only the quoted
+  /// form leaves a program unable to recognise its own published identity —
+  /// which surfaces on the second release, never the first, because the first
+  /// has no published requirement to read.
+  static String? identifierOf(String requirement) {
+    final match =
+        RegExp(r'identifier\s+(?:"([^"]+)"|([^\s"]+))').firstMatch(requirement);
+    if (match == null) return null;
+    return match.group(1) ?? match.group(2);
+  }
 
   // ---- notarize ----
 
