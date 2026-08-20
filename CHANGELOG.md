@@ -11,6 +11,10 @@
 - The signed binary is executed before a release can proceed. The smoke test ran
   at build time, so it proved the built binary worked and signing then broke it
   unobserved; a binary that will not start now fails the release (`RK-SIGN-014`).
+- A bare designated-requirement identifier is read, not only a quoted one. rk's
+  own identity prints unquoted, so rk could recognise every other project's
+  published identity and not its own — which surfaces on a second release and
+  never a first.
 - Failure and publish evidence is retained where it was previously dropped, and
   a run nobody is waiting on no longer stops to ask.
 
