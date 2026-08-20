@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:rk/src/binary_chain.dart';
 import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/builds/dart_cli.dart';
 import 'package:rk/src/engine/tools.dart';
@@ -79,6 +80,46 @@ void main() {
       final resolved = onAppleSilicon.resolve('macos-x64');
       expect(resolved.capability, Capability.blocked);
       expect(resolved.reason, contains('host'));
+    });
+  });
+
+  group('the published identity is read back', () {
+    // codesign quotes an identifier only when it must, so a program whose name
+    // needs no quotes prints bare. Reading only the quoted form let rk parse
+    // every other project's identity and not its own — and only on the second
+    // release, because the first has no published requirement to read.
+    test('a bare identifier is read', () {
+      expect(
+        BinaryChain.identifierOf(
+          'designated => identifier rk and anchor apple generic and '
+          'certificate leaf[subject.OU] = "5AHFA9FUZG"',
+        ),
+        'rk',
+      );
+    });
+
+    test('a quoted identifier is read', () {
+      expect(
+        BinaryChain.identifierOf(
+          'designated => identifier "io.github.danreynolds.keybay.cli" and '
+          'anchor apple generic',
+        ),
+        'io.github.danreynolds.keybay.cli',
+      );
+    });
+
+    test('a quoted identifier may contain spaces', () {
+      expect(
+        BinaryChain.identifierOf('designated => identifier "two words" and x'),
+        'two words',
+      );
+    });
+
+    test('a requirement naming no identifier answers null', () {
+      expect(
+        BinaryChain.identifierOf('designated => anchor apple generic'),
+        isNull,
+      );
     });
   });
 
