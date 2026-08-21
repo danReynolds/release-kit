@@ -63,7 +63,7 @@ and the repository exists.
     // bound.
     final result = await const SystemTools(
       timeout: Duration(milliseconds: 300),
-    ).run('sh', const ['-c', 'sleep 30 & sleep 30']).timeout(
+    ).run('sh', const ['-c', 'sleep 2 & sleep 2']).timeout(
       const Duration(seconds: 20),
       onTimeout: () => fail('the bounded run never returned'),
     );
@@ -71,6 +71,26 @@ and the repository exists.
     expect(result.exitCode, 124);
     expect(result.summary, contains('timed out'));
     expect(stopwatch.elapsed, lessThan(const Duration(seconds: 15)));
+  });
+
+  test('a bound includes pipes inherited after the child exits', () async {
+    if (Platform.isWindows) return;
+    final stopwatch = Stopwatch()..start();
+
+    // The shell exits successfully at once, but its backgrounded child keeps
+    // stdout and stderr open. Waiting only on the shell's exit code therefore
+    // declares success and then hangs while joining the streams. The process
+    // and both pipes are one operation and share one deadline.
+    final result = await const SystemTools(
+      timeout: Duration(milliseconds: 100),
+    ).run('sh', const ['-c', 'sleep 2 &']).timeout(
+      const Duration(seconds: 3),
+      onTimeout: () => fail('the inherited process pipes outlived the bound'),
+    );
+
+    expect(result.exitCode, 124);
+    expect(result.summary, contains('timed out'));
+    expect(stopwatch.elapsed, lessThan(const Duration(seconds: 2)));
   });
 
   test('a tool that speaks bytes is read, not thrown out of', () async {

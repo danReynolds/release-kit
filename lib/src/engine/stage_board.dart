@@ -31,7 +31,7 @@ class StageBoard {
   /// common reason a release stops later than it should have.
   factory StageBoard.forUnit(
     ResolvedUnit unit,
-    List<TargetExpectation> targets,
+    List<TargetPlan> targets,
     List<TargetStage> targetStages,
   ) {
     final groups = <StageBoardGroup>[];

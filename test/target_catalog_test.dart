@@ -88,7 +88,7 @@ executables:
         for (final target in targets)
           (
             target.step.isPermanent,
-            catalog.moduleForTarget(target).permanenceNotice(target) != null,
+            target.permanenceNotice != null,
           ),
       ],
       const [(false, false), (true, true), (false, false), (false, false)],
@@ -105,6 +105,8 @@ executables:
               version: target.targetVersion,
               artifacts: target.artifacts.join(','),
               uses: target.uses,
+              planNote: target.planNote,
+              completion: target.completionLines.join(','),
             ),
           )
           .toList(),
@@ -117,6 +119,8 @@ executables:
           version: '1.2.3',
           artifacts: '',
           uses: 'release-manifest.json from GitHub Release',
+          planNote: 'v1.2.3',
+          completion: '',
         ),
         (
           kind: 'pubDev',
@@ -126,6 +130,8 @@ executables:
           version: '1.2.3',
           artifacts: '',
           uses: null,
+          planNote: 'example_tool 1.2.3',
+          completion: 'pub.dev/packages/example_tool/versions/1.2.3',
         ),
         (
           kind: 'githubRelease',
@@ -136,6 +142,8 @@ executables:
           artifacts: 'release-manifest.json,'
               'tool-1.2.3-linux-x64.tar.gz',
           uses: null,
+          planNote: '2 assets to example/tool/releases/tag/v1.2.3',
+          completion: '',
         ),
         (
           kind: 'homebrew',
@@ -145,6 +153,8 @@ executables:
           version: '1.2.3',
           artifacts: 'tool.rb',
           uses: 'tool.rb bound in the release manifest',
+          planNote: 'tool cask',
+          completion: '',
         ),
       ],
     );

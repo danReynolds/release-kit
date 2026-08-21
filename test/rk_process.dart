@@ -81,7 +81,7 @@ class Rk {
   Run call(List<String> args) {
     final result = Process.runSync(
       Platform.resolvedExecutable,
-      ['run', _bin, ...args],
+      [_bin, ...args],
       workingDirectory: root,
     );
     return Run(

@@ -105,7 +105,7 @@ Future<Map<String, Object?>?> _run(
 ) async {
   final result = await Process.run(
     Platform.resolvedExecutable,
-    ['run', rk, ...args],
+    [rk, ...args],
     workingDirectory: directory,
   );
   try {

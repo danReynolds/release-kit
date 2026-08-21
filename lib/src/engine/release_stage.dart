@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:math';
 
 import '../transforms/digest.dart';
+import 'file_mode.dart';
 import 'release_asset.dart';
 import 'assets.dart';
 import 'publish_target.dart';
@@ -794,56 +795,10 @@ final class _PublicArtifactBinding {
   final String stagedPath;
 }
 
-/// Gives the staged files the modes Git recorded, in one call per mode.
-///
-/// A `chmod` per file is a subprocess per file — the same shape as reading
-/// the snapshot one `git show` at a time, measured at 570ms for this
-/// repository against 4ms batched. Files already at the mode Git recorded
-/// are left alone, so the common repository, which tracks nothing
-/// executable, spawns nothing at all.
+/// Gives staged files the modes Git recorded.
 void _setGitFileModes(Map<String, GitTreeEntry> byStagedPath) {
-  final needing = <String, List<String>>{};
-  byStagedPath.forEach((path, entry) {
-    final wanted = entry.executable ? 493 : 420; // 0755, 0644
-    final actual = File(path).statSync().mode & 511; // the permission bits
-    if (actual == wanted) return;
-    needing.putIfAbsent(entry.executable ? '755' : '644', () => []).add(path);
+  setFileModes({
+    for (final entry in byStagedPath.entries)
+      entry.key: entry.value.executable ? '0755' : '0644',
   });
-  needing.forEach((permissions, paths) {
-    // In batches, because one argument list has a length the kernel will
-    // refuse: a repository tracking thousands of executables would exceed
-    // it and staging would fail on a limit that has nothing to do with the
-    // release. The bound is well under every platform's, and the common
-    // repository needs a single call.
-    for (final batch in _batched(paths, 32000)) {
-      final changed = Process.runSync('chmod', [permissions, ...batch]);
-      if (changed.exitCode != 0) {
-        throw FileSystemException(
-          'could not preserve Git mode $permissions: ${changed.stderr}',
-          batch.first,
-        );
-      }
-    }
-  });
-}
-
-/// [paths] in groups whose combined length stays under [maxCharacters].
-Iterable<List<String>> _batched(
-  List<String> paths,
-  int maxCharacters,
-) {
-  final batches = <List<String>>[];
-  var batch = <String>[];
-  var length = 0;
-  for (final path in paths) {
-    if (batch.isNotEmpty && length + path.length + 1 > maxCharacters) {
-      batches.add(batch);
-      batch = <String>[];
-      length = 0;
-    }
-    batch.add(path);
-    length += path.length + 1;
-  }
-  if (batch.isNotEmpty) batches.add(batch);
-  return batches;
 }

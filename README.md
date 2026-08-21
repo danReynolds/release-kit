@@ -1,7 +1,7 @@
 # rk
 
-Release kit manages releasing a project to your configured targets: Git tags, a Github release
-Release, Homebrew, standalone binaries — as one checked plan instead
+Release kit manages releasing a project to your configured targets: Git tags,
+a GitHub Release, Homebrew, standalone binaries — as one checked plan instead
 of a release script.
 
 ## Features
@@ -100,6 +100,12 @@ The same CLI ships from pub.dev, Homebrew, and GitHub Releases —
 
 Planned: npm, RubyGems. `rk target list` is always the set your
 installed rk supports.
+
+Developing another built-in target? Start with
+[Adding a release target](doc/adding-a-target.md), which uses GitHub Release as
+the worked example and defines the modularity and correctness bar. The
+[release pipeline architecture](doc/release-pipeline.md) shows how target
+modules join the shared stage and publication coordinators.
 
 ## Two packages, one release
 

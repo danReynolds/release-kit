@@ -3,6 +3,7 @@ import 'dart:io';
 
 import '../transforms/digest.dart';
 import 'canonical_json.dart';
+import 'file_mode.dart';
 import 'stage.dart';
 
 /// One digest-bearing input to a completed release step.
@@ -90,7 +91,7 @@ class StageArtifact {
     final captured = StageArtifact(
       path: path,
       type: type,
-      mode: _mode(stat.mode),
+      mode: posixMode(stat.mode),
       size: bytes.length,
       sha256: Sha256.hex(bytes),
     );
@@ -337,8 +338,6 @@ File _regularArtifact(StageDirectory stage, String path) {
   }
   return File(stage.resolve(path));
 }
-
-String _mode(int mode) => (mode & 0xfff).toRadixString(8).padLeft(4, '0');
 
 Map<String, Object?> _evidence(Map<String, Object?> evidence) {
   final normalized = CanonicalJson.normalize(evidence);

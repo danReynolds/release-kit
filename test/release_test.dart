@@ -1,8 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/commands/release.dart';
-import 'package:rk/src/destinations/pub_dev.dart';
+import 'package:rk/src/targets/pub_dev/client.dart';
 import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/transforms/archive.dart';
 import 'package:rk/src/engine/config.dart';
@@ -178,6 +179,7 @@ Future<Ran> release({
   Iterable<String> signedExistingTags = const [],
   String config = _config,
   String? only = 'core',
+  HostCapabilities? capabilities,
 }) async {
   final buffer = StringBuffer();
   final diagnostics = Diagnostics();
@@ -368,6 +370,16 @@ Future<Ran> release({
     // HOME of its own, rk finds whatever pub session the developer happens
     // to have, and a test about a missing session passes or fails on that.
     refreshEnvironment: refreshEnvironment ?? () => const {'HOME': '/nowhere'},
+    // Like HOME above, host capabilities are test input rather than a fact
+    // about the machine running the suite. This fixture represents the
+    // strongest supported release host: native macOS plus Linux
+    // cross-compilation with an answering container runtime.
+    capabilities: capabilities ??
+        HostCapabilities(
+          hostPlatform: 'macos-arm64',
+          containerRuntime: 'docker',
+          hasNativeAssets: false,
+        ),
   );
   final code = await command.run(only: only);
 
@@ -1600,9 +1612,10 @@ publish = ["pub.dev"]
       );
       expect(ran.text, contains('signature could not be verified'));
       expect(ran.text, contains('gpg.ssh.allowedSignersFile'));
-      // The refusal builds its diagnostic in the act and classifyFailure
-      // builds the one that is reported: what git said has to survive the
-      // handover, not be attached to the diagnostic that is discarded.
+      // The refusal builds its diagnostic in publish and
+      // classifyUnconfirmedPublication builds the one that is reported: what
+      // git said has to survive the handover, not be attached to the
+      // diagnostic that is discarded.
       final refusal =
           ran.problems.singleWhere((p) => p['code'] == 'RK-TAG-007');
       expect(refusal['evidence'], isNotNull);

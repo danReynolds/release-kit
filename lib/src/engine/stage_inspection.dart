@@ -586,6 +586,7 @@ class StageInspector {
       final hasPublishedRequirement =
           signature.containsKey('published_requirement');
       final publishedRequirement = signature['published_requirement'];
+      final designatedRequirement = signature['designated_requirement'];
       final codeId = signature['code_id'];
       final unsigned = signature['unsigned_sha256'];
       final signed = signature['signed_sha256'];
@@ -603,6 +604,9 @@ class StageInspector {
         problem = 'signature evidence has an inconsistent published baseline';
       } else if (codeId is! String || codeId.trim().isEmpty) {
         problem = 'signature evidence has no code identifier';
+      } else if (designatedRequirement is! String ||
+          designatedRequirement.trim().isEmpty) {
+        problem = 'signature evidence has no designated requirement';
       } else if (unsigned is! String || !_sha256.hasMatch(unsigned)) {
         problem = 'signature evidence has no unsigned input digest';
       } else if (signed != binary.sha256) {

@@ -4,7 +4,7 @@ import 'dart:io';
 
 import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/commands/release.dart';
-import 'package:rk/src/destinations/pub_dev.dart';
+import 'package:rk/src/targets/pub_dev/client.dart';
 import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
@@ -221,6 +221,57 @@ void main() {
         'archive:tool:linux-x64',
       ],
     );
+  });
+
+  test('platform lanes isolate producer scratch from sibling cleanup',
+      () async {
+    final local = _Harness(twoPlatforms: true);
+    addTearDown(local.close);
+    final x64Started = Completer<void>();
+    final workingDirectories = <String>{};
+    var x64ScratchSurvived = false;
+    local.tools.gate = (call) async {
+      if (!_compilesFor(call, 'linux-x64') &&
+          !_compilesFor(call, 'linux-arm64')) {
+        return;
+      }
+      workingDirectories.add(call.workingDirectory!);
+      if (_compilesFor(call, 'linux-arm64')) {
+        await x64Started.future.timeout(const Duration(seconds: 5));
+        return;
+      }
+
+      final scratch = File(
+        '${call.workingDirectory}${Platform.pathSeparator}.dart_tool'
+        '${Platform.pathSeparator}sentinel',
+      )
+        ..parent.createSync(recursive: true)
+        ..writeAsStringSync('owned by linux-x64');
+      x64Started.complete();
+      await (() async {
+        while (true) {
+          final receipt = StageReceiptStore(local.stage.directory).read();
+          if (receipt?.steps.any(
+                (step) => step.name == 'build:tool:linux-arm64',
+              ) ==
+              true) {
+            return;
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 1));
+        }
+      })()
+          .timeout(const Duration(seconds: 5));
+      x64ScratchSurvived = scratch.existsSync();
+    };
+
+    final ran = await local.run(stageOnly: true, confirm: null);
+
+    expect(ran.code, ExitCodes.ok, reason: ran.text);
+    expect(workingDirectories, hasLength(2));
+    expect(x64ScratchSurvived, isTrue);
+    expect(
+        Directory('${local.stage.directory.path}.lanes').existsSync(), isFalse);
+    expect(local.stage.inspect().reusable, isTrue);
   });
 
   test('a failed lane drains in-flight lanes and starts nothing new', () async {

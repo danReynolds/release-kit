@@ -11,7 +11,6 @@ import 'release_stage.dart';
 import 'targets.dart';
 import 'tools.dart';
 import 'verdict.dart';
-import 'version.dart';
 
 /// Reads reality for one step, and nothing else.
 ///
@@ -107,12 +106,12 @@ class Inspector {
   Future<Inspection> inspect(Step step, ResolvedUnit unit) async {
     final module = targets.moduleForStep(step);
     if (module != null) {
-      final target = module.expectation(
+      final target = module.plan(
         unit: unit,
         step: step,
         repository: repository,
       );
-      return module.inspectExact(targetReads, unit, target);
+      return module.inspectCandidate(targetReads, unit, target);
     }
     if (step.kind == StepKind.prerequisite) {
       return _prerequisite(step);
@@ -134,11 +133,17 @@ class Inspector {
   /// This is status metadata, not a substitute for inspecting the exact
   /// candidate coordinate. The candidate answers whether acting is needed;
   /// this answers the separate operator question, "what is this lane at?"
-  Future<Inspection?> inspectLatestVersion(
-    TargetExpectation target,
-    ResolvedUnit unit,
-  ) =>
-      targets.moduleForTarget(target).inspectLatest(targetReads, unit, target);
+  Future<TargetHistory?> inspectHistory(
+    TargetPlan target,
+    ResolvedUnit unit, {
+    bool fresh = false,
+  }) =>
+      targets.moduleForTarget(target).inspectHistory(
+            targetReads,
+            unit,
+            target,
+            fresh: fresh,
+          );
 
   Inspection _stageInspection(ResolvedUnit unit) {
     final factory = stageFor;
@@ -185,26 +190,6 @@ class Inspector {
         : Inspection.absent(detail: '$name $version is not published yet');
   }
 
-  /// A version must exceed everything already published, and a tag must
-  /// exceed every earlier tag in its namespace.
-  ///
-  /// Here rather than in a command: the registry half is the tool's top-ranked
-  /// failure — publishing a back-version is permanent — and it was implemented
-  /// only in status, the verb that does not act. Both verbs call this now, and
-  /// release calls it as part of validating independently rather than
-  /// trusting status.
-  Future<void> monotonicity(ResolvedUnit unit, Diagnostics problems) async {
-    for (final module in targets.modules) {
-      if (module.stepKind == StepKind.tag &&
-          !unit.publish.contains(PublishTarget.gitTag)) {
-        continue;
-      }
-      module
-          .localReleaseDiagnostics(targetReads, unit)
-          .forEach(problems.report);
-    }
-  }
-
   /// The release-only monotonicity gate against every configured public lane.
   ///
   /// Exact-coordinate inspection answers whether this version exists. It
@@ -216,35 +201,17 @@ class Inspector {
   /// Targets decide whether their latest-version read is a meaningful guard.
   /// Homebrew, for example, authenticates its public cask bytes during its
   /// exact inspection and therefore declines a second, weaker version read.
-  Future<bool> releaseMonotonicity(
+  Future<ReleaseHistoryCheck> releaseMonotonicity(
     ResolvedUnit unit,
-    Iterable<TargetExpectation> targets,
+    Iterable<TargetPlan> targets,
     Diagnostics problems, {
     bool refreshRegistry = false,
   }) async {
-    final localTagProblems = Diagnostics();
-    if (unit.publish.contains(PublishTarget.gitTag)) {
-      for (final module in this
-          .targets
-          .modules
-          .where((item) => item.stepKind == StepKind.tag)) {
-        module
-            .localReleaseDiagnostics(targetReads, unit)
-            .forEach(localTagProblems.report);
-      }
-    }
-
-    final candidates = <TargetExpectation>[];
+    final candidates = <TargetPlan>[];
     final seen = <String>{};
     for (final target in targets) {
       final key = '${target.kind}\u0000${target.coordinate}';
       if (seen.add(key)) candidates.add(target);
-    }
-
-    if (refreshRegistry) {
-      for (final target in candidates) {
-        this.targets.moduleForTarget(target).invalidate(targetReads, target);
-      }
     }
 
     // Start every independent provider read before awaiting one. A slow
@@ -253,44 +220,46 @@ class Inspector {
       for (final target in candidates)
         () async {
           try {
-            return await inspectLatestVersion(target, unit);
+            return await inspectHistory(
+              target,
+              unit,
+              fresh: refreshRegistry,
+            );
           } on Object catch (error) {
-            return Inspection.unknown(
-              'the latest public version could not be read: $error',
+            return TargetHistory(
+              inspection: Inspection.unknown(
+                'the latest public version could not be read: $error',
+              ),
             );
           }
         }(),
     ];
     final latest = await Future.wait(reads);
 
-    var remoteTagAhead = false;
     var readIndependentHistory = false;
+    final claims = <TargetClaim>[];
     for (final (index, target) in candidates.indexed) {
-      final inspection = latest[index];
-      if (inspection == null) continue;
+      final history = latest[index];
+      if (history == null) continue;
       readIndependentHistory = true;
+      claims.addAll(history.claims);
+      history.problems.forEach(problems.report);
+      final inspection = history.inspection;
       if (inspection.isAbsent) continue;
       if (!inspection.isExact) {
-        final module = this.targets.moduleForTarget(target);
-        final diagnostic =
-            module.diagnosticForInspection(unit, target, inspection);
-        if (diagnostic != null) {
-          problems.report(diagnostic);
-          continue;
+        if (history.problems.isEmpty) {
+          problems.add(
+            'RK-REL-001',
+            '${target.label}: ${inspection.detail ?? 'the latest public '
+                'version could not be read'}',
+            remedy: 'restore read access to ${target.label} and re-run; rk '
+                'will not publish against an unknown public history',
+          );
         }
-        problems.add(
-          'RK-REL-001',
-          '${target.label}: ${inspection.detail ?? 'the latest public '
-              'version could not be read'}',
-          remedy: 'restore read access to ${target.label} and re-run; rk '
-              'will not publish against an unknown public history',
-        );
         continue;
       }
 
-      final raw = inspection.evidence['version'];
-      final version = raw == null ? null : Version.tryParse(raw);
-      if (version == null) {
+      if (history.version == null) {
         problems.add(
           'RK-REL-001',
           '${target.label}: the latest public version response carried no '
@@ -300,21 +269,11 @@ class Inspector {
         );
         continue;
       }
-
-      final targetVersion = Version.tryParse(target.targetVersion)!;
-      if (version <= targetVersion) continue;
-      final module = this.targets.moduleForTarget(target);
-      if (module.publicHistorySupersedesLocalTag) remoteTagAhead = true;
-      final diagnostic = module.aheadDiagnostic(unit, target, version);
-      if (diagnostic != null) problems.report(diagnostic);
     }
-
-    // The public lane is the stronger fact. Do not tell the operator twice
-    // about the same ahead tag merely because it is also present locally.
-    if (!remoteTagAhead) {
-      localTagProblems.found.forEach(problems.report);
-    }
-    return readIndependentHistory;
+    return ReleaseHistoryCheck(
+      readIndependentHistory: readIndependentHistory,
+      claims: claims,
+    );
   }
 
   /// Cross-step judgments about the tag, which no single step can make.
@@ -419,4 +378,18 @@ class Inspector {
 
   static String _short(String sha) =>
       sha.length > 12 ? sha.substring(0, 12) : sha;
+}
+
+/// Provider-neutral facts produced by one complete public-history pass.
+///
+/// Release carries these forward so authorization does not trigger a second
+/// set of remote reads merely to rediscover first-publication claims.
+final class ReleaseHistoryCheck {
+  ReleaseHistoryCheck({
+    required this.readIndependentHistory,
+    Iterable<TargetClaim> claims = const [],
+  }) : claims = List.unmodifiable(claims);
+
+  final bool readIndependentHistory;
+  final List<TargetClaim> claims;
 }

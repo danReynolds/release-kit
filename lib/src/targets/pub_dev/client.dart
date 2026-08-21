@@ -1,7 +1,7 @@
-import '../engine/reconciliation.dart';
-import '../engine/registry.dart';
-import '../engine/resolve.dart';
-import '../engine/verdict.dart';
+import '../../engine/reconciliation.dart';
+import '../../engine/registry.dart';
+import '../../engine/resolve.dart';
+import '../../engine/verdict.dart';
 
 class PubDevTarget implements PublicationInspector {
   PubDevTarget({required this.registry});

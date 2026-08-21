@@ -28,9 +28,9 @@ fails, and the count below is checked against the rows.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-BREW-001` | the tap cask was not updated | `lib/src/targets/homebrew_target.dart` |
-| `RK-BREW-002` | the tap was updated and could not be read back | `lib/src/targets/homebrew_target.dart` |
-| `RK-BREW-003` | the public tap does not hold what rk pushed | `lib/src/targets/homebrew_target.dart` |
+| `RK-BREW-001` | the tap cask was not updated | `lib/src/targets/homebrew/module.dart` |
+| `RK-BREW-002` | the tap was updated and could not be read back | `lib/src/targets/homebrew/module.dart` |
+| `RK-BREW-003` | the public tap does not hold what rk pushed | `lib/src/targets/homebrew/module.dart` |
 
 ## RK-BUILD — The build
 
@@ -44,8 +44,8 @@ fails, and the count below is checked against the rows.
 |---|---|---|
 | `RK-CHG-001` | "$packageName" has no changelog | `lib/src/engine/changelog.dart` |
 | `RK-CHG-002` | the changelog has no entry for $version | `lib/src/engine/changelog.dart` |
-| `RK-CHG-003` | the release body was not prepared | `lib/src/targets/github_release_target.dart` |
-| `RK-CHG-004` | the changelog entry for ${project.version} is empty | `lib/src/targets/github_release_target.dart` |
+| `RK-CHG-003` | the release body was not prepared | `lib/src/targets/github_release/release_notes_stage.dart`, `lib/src/targets/github_release/module.dart` |
+| `RK-CHG-004` | the changelog entry for ${project.version} is empty | `lib/src/targets/github_release/release_notes_stage.dart` |
 
 ## RK-CLEAN — Local staged release work
 
@@ -135,7 +135,7 @@ fails, and the count below is checked against the rows.
 | code | says | declared in |
 |---|---|---|
 | `RK-GIT-001` | — | `lib/src/engine/git.dart` |
-| `RK-GIT-002` | a publishing target needs an origin remote, and this repository has none | `lib/src/targets/github_release_target.dart`, `lib/src/targets/homebrew_target.dart` |
+| `RK-GIT-002` | a publishing target needs an origin remote, and this repository has none | `lib/src/targets/github_release/module.dart`, `lib/src/targets/homebrew/module.dart`, `lib/src/targets/homebrew/cask_stage.dart` |
 | `RK-GIT-003` | this repository has no remote | `lib/src/engine/git.dart` |
 | `RK-GIT-004` | ${unit.version} is already published, and the tag  ${unit.tag} does not exist | `lib/src/engine/inspect.dart` |
 | `RK-GIT-005` | the tag ${unit.tag} points at ${_short(target)}, and this  release would publish from ${… | `lib/src/engine/inspect.dart` |
@@ -147,7 +147,7 @@ fails, and the count below is checked against the rows.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-GITHUB-010` | the GitHub CLI has no usable session | `lib/src/targets/github_release_target.dart` |
+| `RK-GITHUB-010` | the GitHub CLI has no usable session | `lib/src/targets/github_release/module.dart` |
 
 ## RK-HOST — What this machine can produce
 
@@ -176,8 +176,8 @@ fails, and the count below is checked against the rows.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-MONO-001` | the tag $tag is ahead of ${unit.version}, which this release  would publish | `lib/src/targets/git_tag_target.dart` |
-| `RK-MONO-002` | ${project.name} ${project.version} is behind published version  $publicVersion | `lib/src/targets/pub_dev_target.dart` |
+| `RK-MONO-001` | the tag $tag is ahead of ${unit.version}, which this release  would publish | `lib/src/targets/git_tag/module.dart` |
+| `RK-MONO-002` | ${project.name} ${project.version} is behind published version  $publicVersion | `lib/src/targets/pub_dev/module.dart` |
 | `RK-MONO-003` | a public target is ahead of the version this release would publish | `lib/src/targets/target_module.dart` |
 
 ## RK-NOTARY — Notarization
@@ -199,15 +199,15 @@ fails, and the count below is checked against the rows.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-PUB-001` | pub refuses to publish ${project.name} | `lib/src/targets/pub_dev_target.dart` |
-| `RK-PUB-003` | ${project.name}: dart pub publish did not complete | `lib/src/targets/pub_dev_target.dart` |
-| `RK-PUB-005` | the published coordinate could not be confirmed after acting | `lib/src/targets/pub_dev_target.dart` |
-| `RK-PUB-006` | the immutable public archive differs from the staged native archive | `lib/src/targets/pub_dev_target.dart` |
-| `RK-PUB-007` | dart pub login did not complete | `lib/src/targets/pub_dev_target.dart` |
-| `RK-PUB-008` | ${project.name}: tracked dependency overrides mask consumer resolution | `lib/src/targets/pub_dev_target.dart` |
-| `RK-PUB-009` | the native Dart configuration redirects pub.dev publication | `lib/src/targets/pub_dev_target.dart` |
-| `RK-PUB-010` | a pub.dev package points to another repository | `lib/src/targets/pub_dev_target.dart` |
-| `RK-PUB-011` | this Dart SDK cannot stage the native Pub archive | `lib/src/targets/pub_dev_target.dart` |
+| `RK-PUB-001` | pub refuses to publish ${project.name} | `lib/src/targets/pub_dev/package_stage.dart` |
+| `RK-PUB-003` | ${project.name}: dart pub publish did not complete | `lib/src/targets/pub_dev/module.dart` |
+| `RK-PUB-005` | the published coordinate could not be confirmed after acting | `lib/src/targets/pub_dev/module.dart` |
+| `RK-PUB-006` | the immutable public archive differs from the staged native archive | `lib/src/targets/pub_dev/module.dart` |
+| `RK-PUB-007` | dart pub login did not complete | `lib/src/targets/pub_dev/session.dart` |
+| `RK-PUB-008` | ${project.name}: tracked dependency overrides mask consumer resolution | `lib/src/targets/pub_dev/package_stage.dart` |
+| `RK-PUB-009` | the native Dart configuration redirects pub.dev publication | `lib/src/targets/pub_dev/module.dart` |
+| `RK-PUB-010` | a pub.dev package points to another repository | `lib/src/targets/pub_dev/module.dart` |
+| `RK-PUB-011` | this Dart SDK cannot stage the native Pub archive | `lib/src/targets/pub_dev/package_stage.dart`, `lib/src/targets/pub_dev/module.dart` |
 
 RK-PUB-002 (the consumer-resolve probe) and RK-PUB-004 are retired historical
 meanings and are not reused.
@@ -217,7 +217,7 @@ meanings and are not reused.
 | code | says | declared in |
 |---|---|---|
 | `RK-REL-001` | ${first.summary}:  ${state.detail ?? state.verdict.name} | `lib/src/commands/release.dart` |
-| `RK-REL-003` | a public target could not be proven after rk acted | `lib/src/targets/github_release_target.dart` |
+| `RK-REL-003` | a public target could not be proven after rk acted | `lib/src/targets/target_module.dart`, `lib/src/commands/release.dart` |
 
 ## RK-RES — The config resolved against the repository
 
@@ -277,13 +277,13 @@ meanings and are not reused.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-TAG-001` | the tag ${unit.tag} could not be created | `lib/src/targets/git_tag_target.dart` |
-| `RK-TAG-002` | the tag ${unit.tag} could not be pushed | `lib/src/targets/git_tag_target.dart` |
-| `RK-TAG-003` | the push reported success, and origin does not list  ${unit.tag} | `lib/src/targets/git_tag_target.dart` |
-| `RK-TAG-004` | origin did not confirm the release binding on ${act.coordinate ?? target.coordinate} | `lib/src/targets/git_tag_target.dart` |
-| `RK-TAG-005` | this project signs its release tags, and no signing key is configured | `lib/src/targets/git_tag_target.dart` |
-| `RK-TAG-006` | this project signs its release tags, and ${unit.tag} was created without a signature | `lib/src/targets/git_tag_target.dart` |
-| `RK-TAG-007` | ${unit.tag} is signed, and its signature could not be verified on this machine | `lib/src/targets/git_tag_target.dart` |
+| `RK-TAG-001` | the tag ${unit.tag} could not be created | `lib/src/targets/git_tag/transaction.dart` |
+| `RK-TAG-002` | the tag ${unit.tag} could not be pushed | `lib/src/targets/git_tag/transaction.dart` |
+| `RK-TAG-003` | the push reported success, and origin does not list  ${unit.tag} | `lib/src/targets/git_tag/module.dart` |
+| `RK-TAG-004` | origin did not confirm the release binding on ${act.coordinate ?? target.coordinate} | `lib/src/targets/git_tag/module.dart` |
+| `RK-TAG-005` | this project signs its release tags, and no signing key is configured | `lib/src/targets/git_tag/transaction.dart` |
+| `RK-TAG-006` | this project signs its release tags, and ${unit.tag} was created without a signature | `lib/src/targets/git_tag/transaction.dart` |
+| `RK-TAG-007` | ${unit.tag} is signed, and its signature could not be verified on this machine | `lib/src/targets/git_tag/transaction.dart` |
 
 ## RK-TOML — The TOML subset
 
@@ -295,7 +295,7 @@ meanings and are not reused.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-WORK-001` | the staged workspace has no required target artifact | `lib/src/targets/github_release_target.dart`, `lib/src/targets/homebrew_target.dart` |
+| `RK-WORK-001` | the staged workspace has no required target artifact | `lib/src/targets/github_release/module.dart`, `lib/src/targets/homebrew/cask_stage.dart`, `lib/src/binary_chain.dart` |
 
 ## RK-YAML — The YAML subset
 

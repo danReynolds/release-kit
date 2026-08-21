@@ -14,6 +14,7 @@ import '../engine/targets.dart';
 import '../engine/verdict.dart';
 import '../engine/version.dart';
 import '../output/output.dart';
+import '../targets/target_module.dart';
 
 /// A read-only snapshot of the configured release targets.
 ///
@@ -208,11 +209,8 @@ class StatusCommand {
     final prerequisiteFutures = [
       for (final step in prerequisiteSteps) _inspectSafely(step, unit),
     ];
-    final monotonicity = inspector.monotonicity(unit, diagnostics);
-
     var targets = await Future.wait(targetFutures);
     final prerequisites = await Future.wait(prerequisiteFutures);
-    await monotonicity;
 
     final states = <String, Inspection>{
       for (final target in targets)
@@ -237,7 +235,8 @@ class StatusCommand {
               : const Inspection.unknown('the target was not inspected');
     }
 
-    for (final diagnostic in inspector.tagGuards(unit, checklist, states)) {
+    final tagGuardProblems = inspector.tagGuards(unit, checklist, states);
+    for (final diagnostic in tagGuardProblems) {
       diagnostics.report(diagnostic);
     }
 
@@ -256,6 +255,7 @@ class StatusCommand {
             currentVersion: target.currentVersion,
             currentKnown: target.currentKnown,
             currentDetail: target.currentDetail,
+            historyProblems: target.historyProblems,
             artifacts: [
               for (final artifact in target.artifacts)
                 artifact.status == ArtifactStatus.invalid
@@ -276,21 +276,35 @@ class StatusCommand {
       for (final diagnostic in diagnostics.found)
         StatusIssue(
           unit: unit.name,
-          target: _diagnosticTarget(diagnostic, targets),
+          target: tagGuardProblems.contains(diagnostic)
+              ? targets
+                  .where((target) =>
+                      target.expectation.target == PublishTarget.gitTag)
+                  .firstOrNull
+                  ?.expectation
+                  .step
+                  .id
+              : null,
           diagnostic: diagnostic,
         ),
       for (final target in targets)
-        if (target.inspection.verdict == Verdict.conflict ||
-            target.inspection.verdict == Verdict.unknown)
+        for (final diagnostic in target.historyProblems)
+          StatusIssue(
+            unit: unit.name,
+            target: target.expectation.step.id,
+            diagnostic: diagnostic,
+          ),
+      for (final target in targets)
+        if ((target.inspection.verdict == Verdict.conflict ||
+                target.inspection.verdict == Verdict.unknown) &&
+            !(target.inspection.verdict == Verdict.conflict &&
+                target.historyProblems.isNotEmpty))
           _targetIssue(unit, target),
       for (final target in targets)
         if (!target.currentKnown &&
             target.inspection.verdict != Verdict.unknown &&
             target.inspection.verdict != Verdict.conflict)
           _currentVersionIssue(unit, target),
-      for (final target in targets)
-        if (_isAhead(target) && !_aheadAlreadyReported(target, diagnostics))
-          _aheadIssue(unit, target),
       for (final step in prerequisiteSteps)
         if (Inspector.blocks(step, states[step.id]!))
           _prerequisiteIssue(unit, step, states[step.id]!),
@@ -332,7 +346,7 @@ class StatusCommand {
   }
 
   Future<TargetObservation> _observeAndFinish(
-    TargetExpectation expectation,
+    TargetPlan expectation,
     ResolvedUnit unit,
     StageInspection? stage,
     Map<String, String> artifactProblems,
@@ -405,27 +419,32 @@ class StatusCommand {
   }
 
   Future<TargetObservation> _observeTarget(
-    TargetExpectation expectation,
+    TargetPlan expectation,
     ResolvedUnit unit,
     StageInspection? stage,
     Map<String, String> artifactProblems,
   ) async {
     final inspectionFuture = _inspectSafely(expectation.step, unit);
-    final latestFuture = _inspectLatestSafely(expectation, unit);
+    final historyFuture = _inspectHistorySafely(expectation, unit);
 
     final inspection = await inspectionFuture;
-    final latest = await latestFuture;
+    final history = await historyFuture;
     // A direct read of the candidate coordinate answers whether this release
     // exists. It does not answer whether a newer release exists. For registry,
     // tag, and forge lanes, only the provider's history/listing can answer the
     // separate "what version is this lane at?" question. Homebrew's exact
     // cask read already carries the authenticated current version.
-    final currentInspection = latest ?? inspection;
-    final reportedVersion = currentInspection.evidence['version'];
-    final parsedVersion =
-        reportedVersion == null ? null : Version.tryParse(reportedVersion);
-    final current = parsedVersion != null
-        ? _CurrentVersion(value: parsedVersion.canonical, known: true)
+    final currentHistory = history ??
+        TargetHistory.versioned(
+          inspection: inspection,
+          target: expectation,
+        );
+    final currentInspection = currentHistory.inspection;
+    final current = currentHistory.version != null
+        ? _CurrentVersion(
+            value: currentHistory.version!.canonical,
+            known: true,
+          )
         : switch (currentInspection.verdict) {
             Verdict.absent => const _CurrentVersion(value: null, known: true),
             Verdict.exact ||
@@ -437,14 +456,16 @@ class StatusCommand {
     // A definitive conflict in the target's public history is also a
     // conflict for this candidate. Keep an unavailable history read separate:
     // the exact candidate inspection remains useful evidence in that case.
-    final effectiveInspection =
-        latest?.verdict == Verdict.conflict ? latest! : inspection;
+    final effectiveInspection = history?.inspection.verdict == Verdict.conflict
+        ? history!.inspection
+        : inspection;
     return TargetObservation(
       expectation: expectation,
       inspection: effectiveInspection,
       currentVersion: current.value,
       currentKnown: current.known,
       currentDetail: currentInspection.detail,
+      historyProblems: currentHistory.problems,
       artifacts: [
         for (final name in expectation.artifacts)
           _observeArtifact(
@@ -465,19 +486,23 @@ class StatusCommand {
     }
   }
 
-  Future<Inspection?> _inspectLatestSafely(
-    TargetExpectation target,
+  Future<TargetHistory?> _inspectHistorySafely(
+    TargetPlan target,
     ResolvedUnit unit,
   ) async {
     try {
-      return await inspector.inspectLatestVersion(target, unit);
+      return await inspector.inspectHistory(target, unit);
     } on Object catch (error) {
-      return Inspection.unknown('the current version read failed: $error');
+      return TargetHistory(
+        inspection: Inspection.unknown(
+          'the current version read failed: $error',
+        ),
+      );
     }
   }
 
   ArtifactObservation _observeArtifact(
-    TargetExpectation target,
+    TargetPlan target,
     String name,
     StageInspection? stage,
     String? productionProblem,
@@ -548,7 +573,7 @@ class StatusCommand {
 
   Map<String, String> _artifactProductionProblems(
     ResolvedUnit unit,
-    List<TargetExpectation> targets,
+    List<TargetPlan> targets,
   ) {
     final blocked = <String, String>{};
     for (final project in unit.projects) {
@@ -629,17 +654,14 @@ class StatusCommand {
   ) {
     final state = target.inspection;
     final label = target.expectation.label;
-    final module = inspector.targets.moduleForTarget(target.expectation);
-    final diagnostic =
-        module.diagnosticForInspection(unit, target.expectation, state) ??
-            Diagnostic(
-              code: 'RK-REL-001',
-              message: '$label: ${_condition(state)}',
-              remedy: state.verdict == Verdict.unknown
-                  ? 'restore read access to $label, then run '
-                      'rk status ${unit.name} again'
-                  : _targetConflictRemedy(unit, target),
-            );
+    final diagnostic = Diagnostic(
+      code: 'RK-REL-001',
+      message: '$label: ${_condition(state)}',
+      remedy: state.verdict == Verdict.unknown
+          ? 'restore read access to $label, then run '
+              'rk status ${unit.name} again'
+          : _targetConflictRemedy(unit, target),
+    );
     return StatusIssue(
       unit: unit.name,
       target: target.expectation.step.id,
@@ -675,39 +697,6 @@ class StatusCommand {
             'current version': target.currentDetail!,
         },
       );
-
-  bool _isAhead(TargetObservation target) {
-    final current = target.currentVersion == null
-        ? null
-        : Version.tryParse(target.currentVersion!);
-    final intended = Version.tryParse(target.expectation.targetVersion);
-    return current != null && intended != null && current > intended;
-  }
-
-  bool _aheadAlreadyReported(
-    TargetObservation target,
-    Diagnostics diagnostics,
-  ) {
-    final module = inspector.targets.moduleForTarget(target.expectation);
-    return diagnostics.found.any(
-      (problem) => module.ownsDiagnostic(problem, target.expectation),
-    );
-  }
-
-  StatusIssue _aheadIssue(
-    ResolvedUnit unit,
-    TargetObservation target,
-  ) {
-    final current = Version.tryParse(target.currentVersion!)!;
-    final diagnostic = inspector.targets
-        .moduleForTarget(target.expectation)
-        .aheadDiagnostic(unit, target.expectation, current)!;
-    return StatusIssue(
-      unit: unit.name,
-      target: target.expectation.step.id,
-      diagnostic: diagnostic,
-    );
-  }
 
   StatusIssue _prerequisiteIssue(
     ResolvedUnit unit,
@@ -1056,21 +1045,6 @@ class StatusCommand {
       for (final issue in issues)
         if (seen.add(issue.deduplicationKey)) issue,
     ];
-  }
-
-  String? _diagnosticTarget(
-    Diagnostic diagnostic,
-    List<TargetObservation> targets,
-  ) {
-    for (final target in targets) {
-      final expectation = target.expectation;
-      if (inspector.targets
-          .moduleForTarget(expectation)
-          .ownsDiagnostic(diagnostic, expectation)) {
-        return expectation.step.id;
-      }
-    }
-    return null;
   }
 
   void _record(Step step, Inspection state) {

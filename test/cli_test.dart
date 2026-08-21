@@ -139,12 +139,14 @@ void main() {
     final repo = Rk.example(scratch, 'binary-cli', as: 'shipped')..commit();
     // Committed: without a HEAD there is no stage to inspect, so the
     // program identity is never computed and this proves nothing.
-    // `exec -a` is how a shell that passes a bare argv[0] invokes it.
+    // `exec -a` is how a shell that passes a bare argv[0] invokes it. Use
+    // bash explicitly: Ubuntu's /bin/sh is dash, which has no -a option.
     final run = Process.runSync(
-      '/bin/sh',
+      '/bin/bash',
       ['-c', 'exec -a rk "$compiled" status --json'],
       workingDirectory: repo.root,
     );
+    expect(run.exitCode, 0, reason: '${run.stdout}${run.stderr}');
     final report = jsonDecode(run.stdout as String) as Map<String, Object?>;
     final problems = ((report['problems'] as List?) ?? const [])
         .cast<Map<String, Object?>>();

@@ -1,61 +1,52 @@
 import 'dart:convert';
 import 'dart:io';
 
-import '../destinations/github_release.dart';
-import '../destinations/homebrew.dart';
-import '../engine/assets.dart';
-import '../engine/checklist.dart';
-import '../engine/diagnostic.dart';
-import '../engine/publish_target.dart';
-import '../engine/producers.dart';
-import '../engine/resolve.dart';
-import '../engine/stage_contract.dart';
-import '../engine/stage_inspection.dart';
-import '../engine/stage_receipt.dart';
-import '../engine/targets.dart';
-import '../engine/verdict.dart';
-import '../output/output.dart';
-import '../output/progress.dart';
-import 'target_module.dart';
+import '../../engine/assets.dart';
+import '../../engine/checklist.dart';
+import '../../engine/diagnostic.dart';
+import '../../engine/publish_target.dart';
+import '../../engine/resolve.dart';
+import '../../engine/targets.dart';
+import '../../engine/verdict.dart';
+import '../../output/output.dart';
+import '../../output/progress.dart';
+import '../github_release/client.dart';
+import '../target_module.dart';
+import 'cask_stage.dart';
+import 'client.dart';
 
 final class HomebrewTargetModule extends TargetModule {
   const HomebrewTargetModule();
 
   @override
-  String planNote(TargetExpectation target) =>
-      '${target.project!.executable} cask';
-
-  @override
   PublishTarget get target => PublishTarget.homebrew;
 
   @override
-  StepKind get stepKind => StepKind.publishCask;
-
-  @override
-  Future<TargetReadinessOutcome> preflight(
+  Future<TargetReadinessOutcome> checkReadiness(
     TargetReadinessContext context,
     ResolvedUnit unit,
   ) async =>
       const TargetReady();
 
   @override
-  ProgressActivity get actActivity => ProgressActivity(
+  ProgressActivity get publishActivity => ProgressActivity(
         running: 'updating',
         failed: 'update failed',
       );
 
   @override
-  TargetExpectation expectation({
+  TargetPlan plan({
     required ResolvedUnit unit,
     required Step step,
     String? repository,
   }) {
     final project = unit.project(step.project!);
     final tap = repository == null ? unit.homebrewTap : unit.tapFor(repository);
-    return TargetExpectation(
+    return TargetPlan(
       label: tap == null ? 'Homebrew' : 'Homebrew · $tap',
       kindLabel: 'Homebrew',
       identity: tap ?? 'no tap configured',
+      planNote: '${project.executable} cask',
       coordinate: tap == null
           ? 'Casks/${ReleaseAssets.caskName(project.executable!)}'
           : '$tap/Casks/${ReleaseAssets.caskName(project.executable!)}',
@@ -69,10 +60,10 @@ final class HomebrewTargetModule extends TargetModule {
   }
 
   @override
-  Future<Inspection> inspectExact(
+  Future<Inspection> inspectCandidate(
     TargetReadContext context,
     ResolvedUnit unit,
-    TargetExpectation target,
+    TargetPlan target,
   ) async {
     final tools = context.tools;
     if (tools == null) {
@@ -201,7 +192,7 @@ final class HomebrewTargetModule extends TargetModule {
   }
 
   @override
-  String? recoveryBinding(Inspection inspected) =>
+  String? stageRecoveryBinding(Inspection inspected) =>
       switch (inspected.authority) {
         HomebrewUpdateAuthority(:final recoveryBinding) => recoveryBinding,
         _ => null,
@@ -210,17 +201,17 @@ final class HomebrewTargetModule extends TargetModule {
   @override
   String conflictRemedy(
     ResolvedUnit unit,
-    TargetExpectation target,
+    TargetPlan target,
   ) =>
       'restore the cask to the exact release bytes it is meant to '
       'reference, or advance the source version intentionally; then '
       'run rk status ${unit.name} again';
 
   @override
-  Future<TargetActOutcome> act(
+  Future<TargetActOutcome> publish(
     TargetReleaseContext context,
     ResolvedUnit unit,
-    TargetExpectation target,
+    TargetPlan target,
     Inspection inspected,
   ) async {
     final repository = context.repository;
@@ -292,10 +283,10 @@ final class HomebrewTargetModule extends TargetModule {
   }
 
   @override
-  Future<TargetFailure> classifyFailure(
+  Future<TargetFailure> classifyUnconfirmedPublication(
     TargetReleaseContext context,
     ResolvedUnit unit,
-    TargetExpectation target,
+    TargetPlan target,
     Inspection state,
     TargetActOutcome act, {
     required bool actedBefore,
@@ -338,174 +329,9 @@ final class HomebrewTargetModule extends TargetModule {
   }
 
   @override
-  TargetStage stage({
+  TargetStage stageInput({
     required ResolvedUnit unit,
-    required TargetExpectation target,
-  }) {
-    final tag = requiredTargetTag(unit, PublishTarget.homebrew);
-    final project = target.project!;
-    final executable = project.executable!;
-    final archives = {
-      for (final platform in project.binaryPlatforms)
-        ReleaseAssets.archivePath(project, platform),
-    };
-    final contract = StageContributionContract(
-      phase: StageContributionPhase.afterArtifacts,
-      step: StageStepContract(
-        'homebrew-cask:${project.name}',
-        inputs: archives,
-        outputs: {ReleaseAssets.caskPath(project): 'cask'},
-        validate: (context, step) {
-          final repository = context.repository;
-          if (repository == null) {
-            return const [
-              StageIssue(
-                StageIssueKind.invalidStructure,
-                'homebrew-cask has no repository identity',
-                path: 'stage.json',
-              ),
-            ];
-          }
-          final publicArchives = {
-            for (final platform in project.binaryPlatforms)
-              platform: PlatformAsset(
-                name: ReleaseAssets.archiveName(
-                  executable,
-                  project.version.canonical,
-                  platform,
-                ),
-                sha256: context.receipt.steps
-                    .singleWhere((item) =>
-                        item.name == archiveReceiptName(project.name, platform))
-                    .outputs
-                    .single
-                    .sha256,
-              ),
-          };
-          final expected = HomebrewCask.renderRelease(
-            token: ReleaseAssets.caskToken(executable),
-            version: project.version.canonical,
-            repository: repository,
-            tag: tag,
-            executable: executable,
-            assets: publicArchives,
-          );
-          final actual = File(
-            context.stage.resolve(ReleaseAssets.caskPath(project)),
-          );
-          if (actual.existsSync() && actual.readAsStringSync() == expected) {
-            return const [];
-          }
-          return const [
-            StageIssue(
-              StageIssueKind.invalidStructure,
-              'homebrew-cask does not match the staged archives',
-              path: 'stage.json',
-            ),
-          ];
-        },
-      ),
-    );
-    return TargetStage(
-      target: target,
-      contract: contract,
-      progress: [
-        TargetStageProgress.output(
-          id: 'cask',
-          output: ReleaseAssets.caskPath(target.project!),
-          artifact: ReleaseAssets.caskName(target.project!.executable!),
-        ),
-      ],
-      prepare: (context) => _prepareStage(context, unit, target),
-    );
-  }
-
-  Future<TargetStageOutcome> _prepareStage(
-    TargetStageContext context,
-    ResolvedUnit unit,
-    TargetExpectation target,
-  ) async {
-    final tag = requiredTargetTag(unit, PublishTarget.homebrew);
-    final receiptName = context.contract.step.name;
-    final repository = context.repository;
-    if (repository == null) {
-      return TargetStageFailure(
-        Diagnostic(
-          code: 'RK-GIT-002',
-          message: 'homebrew needs an origin remote, and this repository '
-              'has none',
-          remedy: 'rk publishes what others can fetch, and reads back what it '
-              'published. git remote add origin <url>, then git push -u '
-              'origin ${context.git.branch ?? 'main'}',
-        ),
-      );
-    }
-
-    final project = target.project!;
-    final archives = <String, StageArtifact>{};
-    for (final platform in project.binaryPlatforms) {
-      final record = context.priorSteps
-          .where(
-              (step) => step.name == archiveReceiptName(project.name, platform))
-          .firstOrNull;
-      final artifact = record?.outputs
-          .where((output) => output.type == 'archive')
-          .firstOrNull;
-      if (artifact == null) {
-        return TargetStageFailure(
-          Diagnostic(
-            code: 'RK-WORK-001',
-            message: 'the workspace has no archive for $platform',
-            remedy: 'the archive step produces it — re-running runs it',
-          ),
-          unit: unit.name,
-        );
-      }
-      archives[platform] = artifact;
-    }
-    final executable = project.executable!;
-    context.progress('cask').begin(
-          ProgressActivity(
-            running: 'rendering',
-            failed: 'rendering failed',
-          ),
-        );
-    final contents = HomebrewCask.renderRelease(
-      token: ReleaseAssets.caskToken(executable),
-      version: project.version.canonical,
-      repository: repository,
-      tag: tag,
-      executable: executable,
-      assets: {
-        for (final MapEntry(key: platform, value: archive) in archives.entries)
-          platform: PlatformAsset(
-            name: ReleaseAssets.archiveName(
-              executable,
-              project.version.canonical,
-              platform,
-            ),
-            sha256: archive.sha256,
-          ),
-      },
-    );
-    context.workspace.write(
-      ReleaseAssets.caskPath(project),
-      utf8.encode(contents),
-    );
-    return TargetStageSuccess(
-      StageStep(
-        name: receiptName,
-        inputs: [
-          for (final archive in archives.values) StageInput.artifact(archive),
-        ],
-        outputs: [
-          StageArtifact.capture(
-            stage: context.stage.directory,
-            path: ReleaseAssets.caskPath(project),
-            type: 'cask',
-          ),
-        ],
-      ),
-    );
-  }
+    required TargetPlan target,
+  }) =>
+      homebrewCaskStage(unit: unit, target: target);
 }

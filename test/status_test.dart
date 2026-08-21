@@ -4,7 +4,7 @@ import 'dart:io';
 
 import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/commands/status.dart';
-import 'package:rk/src/destinations/pub_dev.dart';
+import 'package:rk/src/targets/pub_dev/client.dart';
 import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/engine/checklist.dart';
 import 'package:rk/src/engine/config.dart';
@@ -26,6 +26,7 @@ import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/verdict.dart';
 import 'package:rk/src/engine/version.dart';
 import 'package:rk/src/output/output.dart';
+import 'package:rk/src/targets/target_module.dart';
 import 'package:rk/src/transforms/archive.dart';
 import 'package:test/test.dart';
 
@@ -218,33 +219,39 @@ class FixedInspector extends Inspector {
       answers[step.kind] ?? answer;
 
   @override
-  Future<Inspection?> inspectLatestVersion(
-    TargetExpectation target,
-    ResolvedUnit unit,
-  ) async {
+  Future<TargetHistory?> inspectHistory(
+    TargetPlan target,
+    ResolvedUnit unit, {
+    bool fresh = false,
+  }) async {
     final configured = latest;
-    if (configured != null) return configured;
+    if (configured != null) {
+      return TargetHistory.versioned(
+        inspection: configured,
+        target: target,
+      );
+    }
     final targetAnswer = answers[target.step.kind] ?? answer;
     if (targetAnswer.isExact) {
-      return Inspection.exact(
-        detail: targetAnswer.detail,
-        evidence: {
-          ...targetAnswer.evidence,
-          'version': target.targetVersion,
-        },
+      return TargetHistory.versioned(
+        inspection: Inspection.exact(
+          detail: targetAnswer.detail,
+          evidence: {
+            ...targetAnswer.evidence,
+            'version': target.targetVersion,
+          },
+        ),
+        target: target,
       );
     }
     if (targetAnswer.isAbsent && target.kind == 'pubDev') {
-      return super.inspectLatestVersion(target, unit);
+      return super.inspectHistory(target, unit, fresh: fresh);
     }
-    return targetAnswer;
+    return TargetHistory.versioned(
+      inspection: targetAnswer,
+      target: target,
+    );
   }
-
-  @override
-  Future<void> monotonicity(
-    ResolvedUnit unit,
-    Diagnostics problems,
-  ) async {}
 
   @override
   List<Diagnostic> tagGuards(
@@ -307,12 +314,6 @@ class CoordinatedInspector extends Inspector {
   }
 
   void finish(StepKind kind) => _gates[kind]!.complete();
-
-  @override
-  Future<void> monotonicity(
-    ResolvedUnit unit,
-    Diagnostics problems,
-  ) async {}
 
   @override
   List<Diagnostic> tagGuards(

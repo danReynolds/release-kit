@@ -21,7 +21,7 @@ import 'package:rk/src/commands/init_selector.dart';
 import 'package:rk/src/commands/release.dart';
 import 'package:rk/src/commands/status.dart';
 import 'package:rk/src/commands/target.dart';
-import 'package:rk/src/destinations/pub_dev.dart';
+import 'package:rk/src/targets/pub_dev/client.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/output/diagnosis.dart';
 import 'package:rk/src/engine/diagnostic.dart';

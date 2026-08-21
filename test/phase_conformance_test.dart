@@ -4,7 +4,7 @@ import 'dart:convert';
 
 import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/commands/release.dart';
-import 'package:rk/src/destinations/pub_dev.dart';
+import 'package:rk/src/targets/pub_dev/client.dart';
 import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
@@ -306,19 +306,33 @@ void main() {
       // target, so the comparison is byte-stable on any machine.
       final bare = Rk.repository(scratch, 'pty', {'README.md': 'nothing\n'});
       final piped = bare(['status']).stdout;
-      final pty = Process.runSync(
-        'script',
-        [
-          '-q',
-          '/dev/null',
+
+      ProcessResult runInPty(Map<String, String> environment) {
+        final command = [
           Platform.resolvedExecutable,
-          'run',
           File('bin/rk.dart').absolute.path,
           'status',
-        ],
-        workingDirectory: bare.root,
-        environment: {'NO_COLOR': '1'},
-      );
+        ];
+        // BSD script(1) accepts the command as trailing arguments. The
+        // util-linux implementation used by Ubuntu accepts it through -c.
+        final arguments = Platform.isLinux
+            ? [
+                '-q',
+                '-e',
+                '-c',
+                command.map(_shellQuote).join(' '),
+                '/dev/null',
+              ]
+            : ['-q', '/dev/null', ...command];
+        return Process.runSync(
+          'script',
+          arguments,
+          workingDirectory: bare.root,
+          environment: environment,
+        );
+      }
+
+      final pty = runInPty({'NO_COLOR': '1'});
 
       String settle(String raw) {
         // script(1) echoes the EOF it sends on this platform. That is the
@@ -343,6 +357,7 @@ void main() {
         return out.toString();
       }
 
+      expect(pty.exitCode, 0, reason: '${pty.stdout}\n${pty.stderr}');
       expect(
         settle(pty.stdout as String),
         settle(piped),
@@ -350,19 +365,7 @@ void main() {
             'showing',
       );
 
-      final dumbPty = Process.runSync(
-        'script',
-        [
-          '-q',
-          '/dev/null',
-          Platform.resolvedExecutable,
-          'run',
-          File('bin/rk.dart').absolute.path,
-          'status',
-        ],
-        workingDirectory: bare.root,
-        environment: {'TERM': 'dumb'},
-      );
+      final dumbPty = runInPty({'TERM': 'dumb'});
       final dumb = dumbPty.stdout as String;
       expect(dumbPty.exitCode, 0, reason: dumb);
       expect(
@@ -2266,3 +2269,5 @@ executables:
     });
   });
 }
+
+String _shellQuote(String value) => "'${value.replaceAll("'", "'\"'\"'")}'";

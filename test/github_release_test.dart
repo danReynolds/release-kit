@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:rk/src/destinations/github_release.dart';
+import 'package:rk/src/targets/github_release/client.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/verdict.dart';
 import 'package:rk/src/transforms/digest.dart';

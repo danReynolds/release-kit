@@ -23,7 +23,7 @@ import 'transforms/macos.dart';
 /// directories below it. It is not a verb — no argument parsing, no exit
 /// codes; its API is buildStep, notarizeStep, and archiveStep, each called by
 /// `commands/release.dart`. And it is not an
-/// adapter by this codebase's own test, the one `destinations/git_tag.dart`
+/// adapter by this codebase's own test, the one `targets/git_tag/client.dart`
 /// states: it holds an [Output] at thirty-odd sites, where every file in
 /// `builds/`, `transforms/` and `destinations/` holds one at zero.
 ///
