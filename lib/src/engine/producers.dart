@@ -129,6 +129,18 @@ Iterable<StageIssue> _buildEvidence(
   }
   if (isMacosBuildReceipt(step.name) && step.evidence['signature'] == null) {
     issues.add(_structure('${step.name} has no signature evidence'));
+  } else if (isMacosBuildReceipt(step.name)) {
+    final signedSmoke = step.evidence['signed_smoke'];
+    final signature = step.evidence['signature'];
+    if (signedSmoke is! Map ||
+        signedSmoke['status'] != 'pass' ||
+        signedSmoke['command'] != '--version' ||
+        signature is! Map ||
+        signature['verified_after_smoke'] != true) {
+      issues.add(
+        _structure('${step.name} has no post-smoke signature evidence'),
+      );
+    }
   }
   return issues;
 }

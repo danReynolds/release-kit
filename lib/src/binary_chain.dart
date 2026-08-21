@@ -348,6 +348,7 @@ class BinaryChain {
             'certificate_sha256': signed.certificateSha256,
           'unsigned_sha256': unsignedSha256,
           'signed_sha256': signedSha256,
+          'verified_after_smoke': true,
         },
       },
     );

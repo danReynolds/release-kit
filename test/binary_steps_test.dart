@@ -190,6 +190,7 @@ executables:
     expect(signature['certificate_sha256'], _certificateSha256);
     expect(signature['unsigned_sha256'], hasLength(64));
     expect(signature['signed_sha256'], hasLength(64));
+    expect(signature['verified_after_smoke'], isTrue);
 
     final notarized =
         await chain(tools).notarizeStep(step(StepKind.notarize), project);
@@ -362,8 +363,8 @@ executables:
     // step above had already written into the same buffer, so the whole
     // assertion held with the identifier mutated to 'zz.mutation' — and this
     // is the value that becomes the permanent designated requirement.
-    final sign = tools.calls
-        .firstWhere((c) => c.startsWith('codesign --force'));
+    final sign =
+        tools.calls.firstWhere((c) => c.startsWith('codesign --force'));
     expect(
       sign,
       contains('--identifier io.github.example.tool'),
@@ -537,8 +538,8 @@ executables:
       ),
     );
     expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
-    final sign = tools.calls
-        .firstWhere((c) => c.startsWith('codesign --force'));
+    final sign =
+        tools.calls.firstWhere((c) => c.startsWith('codesign --force'));
     expect(
       sign,
       contains('--identifier io.github.example.tool'),

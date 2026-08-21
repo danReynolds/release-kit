@@ -590,6 +590,7 @@ class StageInspector {
     } else if (signature is! Map) {
       problem = 'signed build has no signature evidence';
     } else {
+      final signedSmoke = producer.evidence['signed_smoke'];
       final certificate = signature['certificate'];
       final fingerprint = signature['certificate_sha256'];
       final firstIdentity = signature['first_identity'];
@@ -600,7 +601,12 @@ class StageInspector {
       final codeId = signature['code_id'];
       final unsigned = signature['unsigned_sha256'];
       final signed = signature['signed_sha256'];
-      if (certificate is! String || certificate.trim().isEmpty) {
+      final verifiedAfterSmoke = signature['verified_after_smoke'];
+      if (signedSmoke is! Map ||
+          signedSmoke['status'] != 'pass' ||
+          signedSmoke['command'] != '--version') {
+        problem = 'signed build has no successful signed smoke-test evidence';
+      } else if (certificate is! String || certificate.trim().isEmpty) {
         problem = 'signature evidence has no certificate identity';
       } else if (fingerprint is! String || !_sha256.hasMatch(fingerprint)) {
         problem = 'signature evidence has no certificate SHA-256 fingerprint';
@@ -621,6 +627,8 @@ class StageInspector {
         problem = 'signature evidence has no unsigned input digest';
       } else if (signed != binary.sha256) {
         problem = 'signature evidence is not bound to the signed bytes';
+      } else if (verifiedAfterSmoke != true) {
+        problem = 'signature was not verified after the signed smoke test';
       }
     }
     if (problem != null) {
