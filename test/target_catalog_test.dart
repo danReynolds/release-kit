@@ -106,7 +106,6 @@ executables:
               artifacts: target.artifacts.join(','),
               uses: target.uses,
               planNote: target.planNote,
-              completion: target.completionLines.join(','),
             ),
           )
           .toList(),
@@ -120,7 +119,6 @@ executables:
           artifacts: '',
           uses: 'release-manifest.json from GitHub Release',
           planNote: 'v1.2.3',
-          completion: '',
         ),
         (
           kind: 'pubDev',
@@ -131,7 +129,6 @@ executables:
           artifacts: '',
           uses: null,
           planNote: 'example_tool 1.2.3',
-          completion: 'pub.dev/packages/example_tool/versions/1.2.3',
         ),
         (
           kind: 'githubRelease',
@@ -143,7 +140,6 @@ executables:
               'tool-1.2.3-linux-x64.tar.gz',
           uses: null,
           planNote: '2 assets to example/tool/releases/tag/v1.2.3',
-          completion: '',
         ),
         (
           kind: 'homebrew',
@@ -154,7 +150,6 @@ executables:
           artifacts: 'tool.rb',
           uses: 'tool.rb bound in the release manifest',
           planNote: 'tool cask',
-          completion: '',
         ),
       ],
     );

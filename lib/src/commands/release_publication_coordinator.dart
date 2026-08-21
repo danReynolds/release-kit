@@ -655,11 +655,6 @@ final class ReleasePublicationCoordinator {
     }
 
     releaseProgress.settle(released: true);
-    for (final target in targets) {
-      for (final line in target.completionLines) {
-        output.say(line, depth: 1);
-      }
-    }
     return ExitCodes.ok;
   }
 
