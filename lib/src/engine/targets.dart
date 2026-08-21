@@ -18,12 +18,10 @@ class TargetPlan {
     required this.identity,
     required this.planNote,
     required Iterable<String> artifacts,
-    Iterable<String> completionLines = const [],
     this.project,
     this.uses,
     this.permanenceNotice,
-  })  : artifacts = List<String>.unmodifiable(artifacts),
-        completionLines = List<String>.unmodifiable(completionLines);
+  }) : artifacts = List<String>.unmodifiable(artifacts);
 
   PublishTarget get target => step.target!;
 
@@ -53,9 +51,6 @@ class TargetPlan {
   /// Target-specific wording for an irreversible public act, when there is
   /// one. The catalog requires this exactly when [step] is permanent.
   final String? permanenceNotice;
-
-  /// Lines printed after a successful release, such as a public package URL.
-  final List<String> completionLines;
 
   /// A concise reference to an artifact inventoried by another target.
   final String? uses;

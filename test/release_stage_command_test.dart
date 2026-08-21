@@ -557,6 +557,11 @@ void main() {
       isNot(contains('Successfully uploaded tool 1.2.3')),
       reason: 'captured Pub output must not break through the shared board',
     );
+    expect(
+      released.text,
+      isNot(contains('pub.dev/packages/tool/versions/1.2.3')),
+      reason: 'the completed target row is the release receipt',
+    );
   });
 
   test('a live session is confirmed without pub saying so to the terminal',

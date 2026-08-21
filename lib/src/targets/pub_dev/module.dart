@@ -44,9 +44,6 @@ final class PubDevTargetModule extends TargetModule {
       targetVersion: project.version.canonical,
       step: step,
       project: project,
-      completionLines: [
-        'pub.dev/packages/${project.name}/versions/${project.version}',
-      ],
       permanenceNotice:
           'pub.dev never deletes a version. a version can be retracted, '
           'which hides it and removes nothing.',

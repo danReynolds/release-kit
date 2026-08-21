@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.3
+
+- Staging and publication now run from validated dependency graphs. Independent
+  work starts in parallel, and dependent targets unlock as soon as their own
+  prerequisites finish instead of waiting for unrelated targets.
+- Stage artifact inputs are checked against their producers, platform build
+  lanes keep isolated scratch space, and failures stop new work while draining
+  operations that have already started to a known result.
+- Release progress remains on one coordinated target board, including concise
+  waiting-on-prerequisite status, while captured provider output no longer
+  disrupts the display.
+- The target documentation now explains the shared graph, lifecycle-specific
+  execution policies, and the minimal extension boundary for adding target
+  N+1 without target-specific scheduler hooks.
+
 ## 0.1.2
 
 - Release targets now live in small vertical slices behind a compact module
