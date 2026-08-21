@@ -6,10 +6,11 @@ import 'package:rk/src/engine/targets.dart';
 import 'package:rk/src/targets/target_module.dart';
 import 'package:test/test.dart';
 
-TargetExpectation _target() => TargetExpectation(
+TargetPlan _target() => TargetPlan(
       label: 'Example',
       kindLabel: 'Example',
       identity: 'example',
+      planNote: 'example assets',
       coordinate: 'example/1.0.0',
       targetVersion: '1.0.0',
       step: Step(

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 /// Runs the native tools rk defers to.
 ///
@@ -71,12 +72,6 @@ class ToolResult {
       ].join('\n');
 }
 
-/// What a stream has produced, given a moment to finish after a kill.
-Future<String> _settled(Future<String> stream) => stream.timeout(
-      const Duration(seconds: 2),
-      onTimeout: () => '',
-    );
-
 /// UTF-8 that survives a byte sequence it cannot make sense of.
 ///
 /// A captured tool is not obliged to speak valid UTF-8 — a crashing binary
@@ -101,6 +96,34 @@ const _lenient = Utf8Codec(allowMalformed: true);
 /// would overwrite configuration the operator set for themselves. A caller
 /// that means to override this is spread in after and wins.
 const _unattended = {'GIT_TERMINAL_PROMPT': '0'};
+
+/// Bytes read so far from one process pipe, with a cancellation handle.
+///
+/// `Stream.join` hides that handle. That is harmless for an ordinary child,
+/// but not for a child that exits after giving its pipe to a grandchild: the
+/// stream remains open and there is then no way to honor the caller's bound.
+final class _CapturedOutput {
+  _CapturedOutput(Stream<List<int>> stream) {
+    _subscription = stream.listen(
+      _bytes.add,
+      onError: (Object error, StackTrace stackTrace) {
+        if (!_done.isCompleted) _done.completeError(error, stackTrace);
+      },
+      onDone: () {
+        if (!_done.isCompleted) _done.complete();
+      },
+    );
+  }
+
+  final BytesBuilder _bytes = BytesBuilder(copy: false);
+  final Completer<void> _done = Completer<void>();
+  late final StreamSubscription<List<int>> _subscription;
+
+  Future<void> get done => _done.future;
+  String get text => _lenient.decode(_bytes.toBytes());
+
+  Future<void> cancel() => _subscription.cancel();
+}
 
 class SystemTools implements Tools {
   const SystemTools({this.timeout});
@@ -148,40 +171,89 @@ class SystemTools implements Tools {
     // prompts on /dev/tty still holds rk's terminal, and the lever for those
     // is the environment (GIT_TERMINAL_PROMPT and its kind), not this.
     unawaited(process.stdin.close().catchError((Object _) {}));
-    final stdout = process.stdout.transform(_lenient.decoder).join();
-    final stderr = process.stderr.transform(_lenient.decoder).join();
-    var timedOut = false;
-    var exitCode = 124;
+    final stdout = _CapturedOutput(process.stdout);
+    final stderr = _CapturedOutput(process.stderr);
+    int? observedExitCode;
+    final exitCode = process.exitCode.then((code) {
+      observedExitCode = code;
+      return code;
+    });
+    final completed = Future.wait<Object?>([
+      exitCode,
+      stdout.done,
+      stderr.done,
+    ]);
+    final deadline = Completer<void>();
+    final timer = Timer(bound, deadline.complete);
+    late final bool timedOut;
     try {
-      exitCode = await process.exitCode.timeout(bound);
-    } on TimeoutException {
-      timedOut = true;
-      process.kill(ProcessSignal.sigterm);
-      try {
-        await process.exitCode.timeout(const Duration(seconds: 2));
-      } on TimeoutException {
-        process.kill(ProcessSignal.sigkill);
-        await process.exitCode;
-      }
+      timedOut = await Future.any([
+        completed.then((_) => false),
+        deadline.future.then((_) => true),
+      ]);
+    } on Object {
+      await _cancel(stdout, stderr);
+      rethrow;
+    } finally {
+      timer.cancel();
     }
-    // A kill reaches the child, not whatever it started. An orphaned
-    // grandchild holds the write end of these pipes open, and joining them
-    // unconditionally waits for a process rk never knew about — so a bound
-    // that has already fired would go on to wait forever, which is the one
-    // thing a bound exists to rule out. What was read by then is what the
-    // tool said.
-    final capturedOut = timedOut ? await _settled(stdout) : await stdout;
-    final capturedErr = timedOut ? await _settled(stderr) : await stderr;
+
+    if (timedOut) {
+      // Killing is necessary only while the direct child is alive. A child
+      // that has already exited can still leave inherited pipe descriptors
+      // behind; canceling the captures below is what bounds that case.
+      if (observedExitCode == null) {
+        process.kill(ProcessSignal.sigterm);
+        try {
+          await exitCode.timeout(const Duration(seconds: 1));
+        } on TimeoutException {
+          process.kill(ProcessSignal.sigkill);
+          try {
+            await exitCode.timeout(const Duration(seconds: 1));
+          } on TimeoutException {
+            // The caller's result remains bounded even if the operating
+            // system does not report termination after SIGKILL.
+          }
+        }
+      }
+      await _cancel(stdout, stderr);
+    }
+
+    final capturedOut = stdout.text;
+    final capturedErr = stderr.text;
     return ToolResult(
-      exitCode: exitCode,
+      exitCode: timedOut ? 124 : observedExitCode!,
       stdout: capturedOut,
       stderr: timedOut
           ? [
               capturedErr.trimRight(),
-              'timed out after ${bound.inSeconds} seconds',
+              'timed out after ${_durationLabel(bound)}',
             ].where((line) => line.isNotEmpty).join('\n')
           : capturedErr,
     );
+  }
+
+  static Future<void> _cancel(
+    _CapturedOutput stdout,
+    _CapturedOutput stderr,
+  ) async {
+    try {
+      await Future.wait([stdout.cancel(), stderr.cancel()]).timeout(
+        const Duration(seconds: 1),
+        onTimeout: () => <void>[],
+      );
+    } on Object {
+      // Capture cancellation is best-effort housekeeping after the result is
+      // already known. It must not turn a timeout into another unbounded wait
+      // or hide the tool outcome.
+    }
+  }
+
+  static String _durationLabel(Duration duration) {
+    if (duration.inMilliseconds < 1000) {
+      return '${duration.inMilliseconds} milliseconds';
+    }
+    return '${duration.inSeconds} seconds';
   }
 
   @override

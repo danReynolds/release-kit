@@ -1,11 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
 
-import '../engine/reconciliation.dart';
-import '../engine/tools.dart';
-import '../engine/verdict.dart';
-import '../engine/version.dart';
-import '../transforms/digest.dart';
+import '../../engine/reconciliation.dart';
+import '../../engine/tools.dart';
+import '../../engine/verdict.dart';
+import '../../engine/version.dart';
+import '../../transforms/digest.dart';
 
 /// Renders and publishes the cask that points at a release's assets.
 ///

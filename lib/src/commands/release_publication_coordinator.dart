@@ -1,0 +1,1166 @@
+import '../builds/capability.dart';
+import '../engine/checklist.dart';
+import '../engine/diagnostic.dart';
+import '../engine/git.dart';
+import '../engine/inspect.dart';
+import '../engine/publish_target.dart';
+import '../engine/public_release_gate.dart';
+import '../engine/release_stage.dart';
+import '../engine/resolve.dart';
+import '../engine/targets.dart';
+import '../engine/tools.dart';
+import '../engine/verdict.dart';
+import '../output/output.dart';
+import '../output/progress.dart';
+import '../targets/target_module.dart';
+import 'release_preparation.dart';
+import 'release_progress.dart';
+import 'release_stage_coordinator.dart';
+
+/// Long enough that a preparation board helps instead of flashing briefly.
+const _briefPhase = Duration(milliseconds: 800);
+
+enum ReleaseAction {
+  notAttempted('not_attempted', 'not attempted'),
+  attempted('attempted', 'attempted; result unknown'),
+  alreadyPublished('already_published', 'already published'),
+  completed('completed', 'completed'),
+  failed('failed', 'failed');
+
+  const ReleaseAction(this.wire, this.human);
+
+  final String wire;
+  final String human;
+}
+
+/// Everything public publication receives after private preparation settles.
+final class PublicationPlan {
+  PublicationPlan({
+    required this.unit,
+    required Iterable<Step> publicSteps,
+    required Iterable<TargetPlan> targets,
+    required Map<String, Inspection> states,
+    required Map<String, String> endpointBaselines,
+    required Map<String, ReleaseAction> actions,
+    required this.prepared,
+    required this.stage,
+    required this.recoversWithoutStage,
+  })  : publicSteps = List.unmodifiable(publicSteps),
+        targets = List.unmodifiable(targets),
+        states = Map.of(states),
+        actions = Map.of(actions),
+        endpointBaselines = Map.unmodifiable(endpointBaselines);
+
+  final ResolvedUnit unit;
+  final List<Step> publicSteps;
+  final List<TargetPlan> targets;
+  final Map<String, Inspection> states;
+  final Map<String, String> endpointBaselines;
+  final Map<String, ReleaseAction> actions;
+  final PreparedRelease prepared;
+  final ReleaseStage stage;
+  final bool recoversWithoutStage;
+}
+
+/// Owns the late, public half of a release.
+final class ReleasePublicationCoordinator {
+  ReleasePublicationCoordinator({
+    required this.inspector,
+    required this.initialGit,
+    required this.tools,
+    required this.output,
+    required this.stages,
+    required this.refreshGit,
+    required this.refreshEnvironment,
+    required this.wait,
+    required this.confirm,
+    required this.capabilities,
+    required this.confirmDeadline,
+    required this.confirmInterval,
+  });
+
+  final Inspector inspector;
+  final GitState initialGit;
+  final Tools tools;
+  final Output output;
+  final ReleaseStageCoordinator stages;
+  final Future<GitState> Function() refreshGit;
+  final Map<String, String> Function() refreshEnvironment;
+  final Future<void> Function(Duration) wait;
+  final Future<String?> Function(String prompt)? confirm;
+  final HostCapabilities capabilities;
+  final Duration confirmDeadline;
+  final Duration confirmInterval;
+
+  final Map<String, TargetSessionProvider> _createdSessions = {};
+
+  /// Proves every unfinished target can publish from this host and freezes
+  /// the destination each later credential acquisition must preserve.
+  Future<Map<String, String>?> prepareDestinations({
+    required ResolvedUnit unit,
+    required List<TargetPlan> targets,
+    required Map<String, Inspection> states,
+    required Map<String, ReleaseAction> actions,
+    required bool stageOnly,
+  }) async {
+    final progress = TargetReleaseProgress(
+      output,
+      title: '${unit.name} ${unit.version} · preparing release',
+      targets: targets,
+      delay: _briefPhase,
+    );
+    final context = TargetReadinessContext(
+      tools: tools,
+      git: initialGit,
+      environment: refreshEnvironment(),
+    );
+    final outstanding =
+        targets.where((target) => !states[target.step.id]!.isExact).toList();
+    final bindings = <String, String>{};
+    for (final targetKind in outstanding.map((item) => item.target).toSet()) {
+      final grouped =
+          outstanding.where((item) => item.target == targetKind).toList();
+      final module = inspector.targets.moduleForTarget(grouped.first);
+      for (final target in grouped) {
+        progress.begin(target, CommonProgressActivities.checking);
+      }
+      final readiness = await module.checkReadiness(
+        TargetReadinessContext(
+          tools: tools,
+          git: initialGit,
+          environment: refreshEnvironment(),
+          progress: progress.combined(grouped),
+        ),
+        unit,
+      );
+      if (readiness case TargetNotReady(:final diagnostic, :final unit)) {
+        progress
+          ..failAll(grouped, activity: CommonProgressActivities.checking)
+          ..notAttemptedPending()
+          ..settle();
+        output.problem(diagnostic, unit: unit);
+        output.halt(HaltKind.beforeActing);
+        if (!stageOnly) showActions(targets, actions);
+        return null;
+      }
+      final note = (readiness as TargetReady).note;
+      for (final target in grouped) {
+        progress.complete(target, note: note);
+        bindings[target.step.id] =
+            module.destinationBinding(context, unit, [target]);
+      }
+    }
+    progress.discard();
+    return Map.unmodifiable(bindings);
+  }
+
+  Future<void> restoreCreatedSessions() async {
+    if (_createdSessions.isEmpty) return;
+    final providers = _createdSessions.values.toList();
+    _createdSessions.clear();
+    for (final provider in providers) {
+      final String? note;
+      try {
+        note = await provider.restore(TargetReadinessContext(
+          tools: tools,
+          git: await refreshGit(),
+          environment: refreshEnvironment(),
+        ));
+      } on Object {
+        continue;
+      }
+      if (note != null) output.say(note);
+    }
+  }
+
+  void showActions(
+    List<TargetPlan> targets,
+    Map<String, ReleaseAction> actions,
+  ) {
+    output.blank();
+    output.heading('Release targets');
+    for (final target in targets) {
+      final action = actions[target.step.id] ?? ReleaseAction.notAttempted;
+      final mark = switch (action) {
+        ReleaseAction.completed => Mark.done,
+        ReleaseAction.alreadyPublished => Mark.satisfied,
+        ReleaseAction.failed => Mark.blocked,
+        ReleaseAction.notAttempted || ReleaseAction.attempted => Mark.none,
+      };
+      output.line(
+        target.label,
+        mark: mark,
+        note: action.human,
+        depth: 1,
+      );
+    }
+  }
+
+  void haltForState(Step step, Inspection state, {bool afterAct = false}) {
+    output.problem(Diagnostic(
+      code: afterAct ? 'RK-REL-003' : 'RK-REL-001',
+      message: '${step.summary}: ${state.detail ?? state.verdict.name}',
+      remedy: state.evidence.isEmpty
+          ? (state.verdict == Verdict.unknown
+              ? 'the target could not be proven; fix the read and re-run'
+              : null)
+          : state.evidence.entries
+              .map((entry) => '${entry.key}: ${entry.value}')
+              .join('\n'),
+    ));
+    output.halt(
+      state.verdict == Verdict.conflict
+          ? (afterAct ? HaltKind.actedAndUnfixable : HaltKind.unfixableByRerun)
+          : afterAct
+              ? HaltKind.lostTrack
+              : HaltKind.beforeActing,
+    );
+  }
+
+  Future<int> publish(PublicationPlan plan) async {
+    final unit = plan.unit;
+    final publicSteps = plan.publicSteps;
+    final targets = plan.targets;
+    final states = plan.states;
+    final endpointBaselines = plan.endpointBaselines;
+    final publicActions = plan.actions;
+    final prepared = plan.prepared;
+    final stage = plan.stage;
+    final recoversWithoutStage = plan.recoversWithoutStage;
+    final targetByStep = {
+      for (final target in targets) target.step.id: target,
+    };
+
+    // Consent is based on fresh public truth and the same private stage that
+    // was reviewed. These reads intentionally happen here, immediately before
+    // sessions and authorization, rather than in the outer command.
+    final releaseInputs = output.progressBoard(
+      '${unit.name} ${unit.version} · preparing release',
+      emitSlowToNonTerminal: true,
+    );
+    final releaseInputsRow = releaseInputs.addRow(
+      id: '${unit.name}/release-inputs',
+      label: 'Release inputs',
+      coordinate: 'targets · signing · staged bytes',
+    );
+    releaseInputsRow.handle.begin(CommonProgressActivities.checking);
+    final gate = PublicReleaseGate(inspector);
+    var remaining = await _refreshPublicGate(
+      gate: gate,
+      unit: unit,
+      publicSteps: publicSteps,
+      targets: targets,
+      states: states,
+      actions: publicActions,
+    );
+    if (remaining == null) {
+      releaseInputs.conclude();
+      return ExitCodes.refused;
+    }
+    if (remaining.isEmpty) {
+      releaseInputsRow.complete(note: 'checked');
+      releaseInputs.discard();
+      output.blank();
+      output.line(
+        '${unit.name} ${unit.version}',
+        mark: Mark.done,
+        note: 'already released',
+      );
+      return ExitCodes.ok;
+    }
+
+    if (!recoversWithoutStage && prepared.signing != null) {
+      releaseInputsRow.handle.begin(ProgressActivity(
+        running: 'checking signing',
+        failed: 'signing check failed',
+      ));
+    }
+    if (!recoversWithoutStage &&
+        !await stages.signingStillValid(unit, prepared)) {
+      releaseInputs.conclude();
+      showActions(targets, publicActions);
+      return ExitCodes.refused;
+    }
+    if (!await stages.contextStillValid(
+      stage,
+      unit,
+      changed: 'before authorization',
+      halt: HaltKind.beforeActing,
+    )) {
+      releaseInputs.conclude();
+      showActions(targets, publicActions);
+      return ExitCodes.refused;
+    }
+    if (!recoversWithoutStage &&
+        !stages.stageStillValid(
+          stage,
+          unit,
+          changed: 'before authorization',
+          halt: HaltKind.beforeActing,
+        )) {
+      releaseInputs.conclude();
+      showActions(targets, publicActions);
+      return ExitCodes.refused;
+    }
+
+    // Slow reads above can change which targets remain. Authorization may
+    // lose work to another actor, but it never silently gains work.
+    releaseInputsRow.handle.begin(CommonProgressActivities.checking);
+    remaining = await _refreshPublicGate(
+      gate: gate,
+      unit: unit,
+      publicSteps: publicSteps,
+      targets: targets,
+      states: states,
+      actions: publicActions,
+    );
+    if (remaining == null) {
+      releaseInputs.conclude();
+      return ExitCodes.refused;
+    }
+    if (remaining.isEmpty) {
+      releaseInputsRow.complete(note: 'checked');
+      releaseInputs.discard();
+      output.blank();
+      output.line(
+        '${unit.name} ${unit.version}',
+        mark: Mark.done,
+        note: 'already released',
+      );
+      return ExitCodes.ok;
+    }
+    // Native sessions are deliberately late: package validation, builds,
+    // signing, notarization, bundle assembly, and exact remote reads have all
+    // completed. The operator is not asked to refresh credentials for bytes
+    // rk may later refuse. Each adapter's effective endpoint is frozen before
+    // staging and re-read after acquisition so ambient config cannot redirect
+    // the authorized publication.
+    final remainingTargets = [
+      for (final step in remaining) targetByStep[step.id]!,
+    ];
+    final recoveryBindings = <String, String>{};
+    if (recoversWithoutStage) {
+      for (final target in remainingTargets) {
+        final module = inspector.targets.moduleForTarget(target);
+        final binding = module.stageRecoveryBinding(states[target.step.id]!);
+        if (binding == null) {
+          releaseInputs.conclude();
+          output.problem(Diagnostic(
+            code: 'RK-STAGE-005',
+            message: '${target.step.summary} can no longer recover without '
+                'its stage',
+            remedy: 'public inputs changed before authorization. Re-run so '
+                'rk can inspect the release again; restore '
+                '${stage.directory.path} if the target still needs the '
+                'original bytes.',
+          ));
+          output.halt(HaltKind.beforeActing);
+          showActions(targets, publicActions);
+          return ExitCodes.refused;
+        }
+        recoveryBindings[target.step.id] = binding;
+      }
+    }
+    releaseInputsRow.complete(note: 'checked');
+    releaseInputs.discard();
+    final sessionProgress = TargetReleaseProgress(
+      output,
+      title: '${unit.name} ${unit.version} · preparing release',
+      targets: targets,
+    );
+    for (final target in targets.where(
+      (target) => !remainingTargets.contains(target),
+    )) {
+      sessionProgress.complete(
+        target,
+        note: 'already published',
+        satisfied: true,
+        restore: true,
+      );
+    }
+    final sessionRequirements = <String, TargetSessionRequirement>{};
+    for (final target in remainingTargets) {
+      final module = inspector.targets.moduleForTarget(target);
+      final provider = module.authentication;
+      if (provider == null) continue;
+      final before = TargetReadinessContext(
+        tools: tools,
+        git: await refreshGit(),
+        environment: refreshEnvironment(),
+      );
+      final endpoint = module.destinationBinding(before, unit, [target]);
+      final key = '${provider.id}\u0000$endpoint';
+      final existing = sessionRequirements[key];
+      sessionRequirements[key] = TargetSessionRequirement(
+        key: key,
+        provider: provider,
+        targets: [...?existing?.targets, target],
+      );
+    }
+    final sessionTargetIds = {
+      for (final requirement in sessionRequirements.values)
+        for (final target in requirement.targets) target.step.id,
+    };
+    for (final target in remainingTargets.where(
+      (target) => !sessionTargetIds.contains(target.step.id),
+    )) {
+      sessionProgress.begin(
+        target,
+        CommonProgressActivities.checking,
+      );
+      sessionProgress.complete(target, note: 'checked');
+    }
+    for (final requirement in sessionRequirements.values) {
+      final grouped = requirement.targets;
+      for (final target in grouped) {
+        sessionProgress.begin(target, requirement.provider.activity);
+      }
+      final before = TargetReadinessContext(
+        tools: tools,
+        git: await refreshGit(),
+        environment: refreshEnvironment(),
+        progress: sessionProgress.combined(grouped),
+        runInteractive: sessionProgress.interactive(tools),
+      );
+      final beforeMatches = grouped.every((target) {
+        final module = inspector.targets.moduleForTarget(target);
+        final baseline = endpointBaselines[target.step.id];
+        return baseline != null &&
+            module.destinationBinding(before, unit, [target]) == baseline;
+      });
+      if (!beforeMatches) {
+        sessionProgress
+          ..failAll(grouped, activity: requirement.provider.activity)
+          ..notAttemptedPending()
+          ..settle();
+        _destinationChanged(grouped.first.target, targets, publicActions);
+        return ExitCodes.refused;
+      }
+      // Asked before acquiring, so "rk created this" is a fact rather than an
+      // inference from a login that may have found a session already there.
+      final established = _createdSessions.containsKey(requirement.key)
+          ? false
+          : await requirement.provider.established(before);
+      final acquired =
+          await requirement.provider.acquire(before, unit, grouped);
+      if (established == false) {
+        _createdSessions[requirement.key] = requirement.provider;
+      }
+      if (acquired case TargetNotReady(:final diagnostic, :final unit)) {
+        sessionProgress
+          ..failAll(grouped, activity: requirement.provider.activity)
+          ..notAttemptedPending()
+          ..settle();
+        output.problem(diagnostic, unit: unit);
+        output.halt(HaltKind.beforeActing);
+        showActions(targets, publicActions);
+        return ExitCodes.refused;
+      }
+      final after = TargetReadinessContext(
+        tools: tools,
+        git: await refreshGit(),
+        environment: refreshEnvironment(),
+      );
+      final afterMatches = grouped.every((target) {
+        final module = inspector.targets.moduleForTarget(target);
+        final baseline = endpointBaselines[target.step.id];
+        return baseline != null &&
+            module.destinationBinding(after, unit, [target]) == baseline;
+      });
+      if (!afterMatches) {
+        sessionProgress
+          ..failAll(grouped, activity: requirement.provider.activity)
+          ..notAttemptedPending()
+          ..settle();
+        _destinationChanged(grouped.first.target, targets, publicActions);
+        return ExitCodes.refused;
+      }
+      final note = (acquired as TargetReady).note;
+      for (final target in grouped) {
+        sessionProgress.complete(target, note: note);
+      }
+    }
+
+    sessionProgress.discard();
+    if (!await _authorize(
+      unit,
+      [for (final step in remaining) targetByStep[step.id]!],
+      signing: prepared.signing,
+      claims: prepared.claims,
+    )) {
+      showActions(targets, publicActions);
+      return ExitCodes.refused;
+    }
+    final authorizedStepIds = {for (final step in remaining) step.id};
+    if (!await stages.contextStillValid(
+      stage,
+      unit,
+      changed: 'during authorization',
+      halt: HaltKind.beforeActing,
+    )) {
+      showActions(targets, publicActions);
+      return ExitCodes.refused;
+    }
+    if (!recoversWithoutStage &&
+        !stages.stageStillValid(
+          stage,
+          unit,
+          changed: 'during authorization',
+          halt: HaltKind.beforeActing,
+        )) {
+      showActions(targets, publicActions);
+      return ExitCodes.refused;
+    }
+
+    // Consent may lose work when another actor completes it, but it may not
+    // gain work. Sweep every omitted target together before the first act so
+    // one that disappeared from public truth cannot hide behind an earlier
+    // authorized step in checklist order.
+    for (final step
+        in publicSteps.where((step) => !authorizedStepIds.contains(step.id))) {
+      final state = await inspector.inspect(step, unit);
+      if (!state.isExact) {
+        _haltForAuthorizationGrowth(
+          step,
+          state,
+          unit,
+          targets,
+          publicActions,
+        );
+        return ExitCodes.refused;
+      }
+    }
+
+    final releaseProgress = TargetReleaseProgress(
+      output,
+      title: '${unit.name} ${unit.version} · releasing',
+      targets: targets,
+    );
+    for (final target in targets.where(
+      (target) => !authorizedStepIds.contains(target.step.id),
+    )) {
+      releaseProgress.complete(
+        target,
+        note: 'already published',
+        satisfied: true,
+        restore: true,
+      );
+    }
+    var completedPublicTarget = false;
+    for (final step in publicSteps) {
+      final target = targetByStep[step.id]!;
+      final module = inspector.targets.moduleForTarget(target);
+      releaseProgress.begin(target, CommonProgressActivities.checking);
+      var state = await inspector.inspect(step, unit);
+      if (!authorizedStepIds.contains(step.id) && !state.isExact) {
+        releaseProgress
+          ..fail(target, activity: CommonProgressActivities.checking)
+          ..notAttemptedPending()
+          ..settle();
+        _haltForAuthorizationGrowth(
+          step,
+          state,
+          unit,
+          targets,
+          publicActions,
+        );
+        return ExitCodes.refused;
+      }
+      if (state.isExact) {
+        publicActions[step.id] = ReleaseAction.alreadyPublished;
+        releaseProgress.complete(
+          targetByStep[step.id]!,
+          note: 'already published',
+          satisfied: true,
+        );
+        output.step(
+          step,
+          mark: Mark.satisfied,
+          verdict: state.verdict,
+          note: state.detail ?? 'already done',
+          action: publicActions[step.id]!.wire,
+          show: false,
+        );
+        continue;
+      }
+      if (!state.isAbsent) {
+        releaseProgress
+          ..fail(target, activity: CommonProgressActivities.checking)
+          ..notAttemptedPending()
+          ..settle();
+        haltForState(step, state);
+        return ExitCodes.refused;
+      }
+      final currentVersion = Diagnostics();
+      final historyCheck = await inspector.releaseMonotonicity(
+        unit,
+        [target],
+        currentVersion,
+        refreshRegistry: true,
+      );
+      if (currentVersion.isNotEmpty) {
+        releaseProgress
+          ..fail(target, activity: CommonProgressActivities.checking)
+          ..notAttemptedPending()
+          ..settle();
+        output.halt(
+          output.report.acted ? HaltKind.stoppedPartway : HaltKind.beforeActing,
+        );
+        output.problems(currentVersion.found);
+        return ExitCodes.refused;
+      }
+
+      if (historyCheck.readIndependentHistory) {
+        // The latest-version read may have refreshed a registry cache, and a
+        // candidate can appear while the operator is authorizing. Re-read the
+        // exact coordinate from that same fresh provider view before acting.
+        state = await inspector.inspect(step, unit);
+        output.step(
+          step,
+          verdict: state.verdict,
+          detail: state.detail,
+          evidence: state.evidence,
+          action: publicActions[step.id]!.wire,
+          show: false,
+        );
+        if (state.isExact) {
+          publicActions[step.id] = ReleaseAction.alreadyPublished;
+          releaseProgress.complete(
+            target,
+            note: 'already published',
+            satisfied: true,
+          );
+          output.step(
+            step,
+            mark: Mark.satisfied,
+            verdict: state.verdict,
+            note: state.detail ?? 'already done',
+            action: publicActions[step.id]!.wire,
+            show: false,
+          );
+          continue;
+        }
+        if (!state.isAbsent) {
+          releaseProgress
+            ..fail(target, activity: CommonProgressActivities.checking)
+            ..notAttemptedPending()
+            ..settle();
+          haltForState(step, state);
+          return ExitCodes.refused;
+        }
+      }
+
+      if (!recoversWithoutStage &&
+          !stages.stageStillValid(
+            stage,
+            unit,
+            changed: 'before ${step.summary}',
+            halt: completedPublicTarget
+                ? HaltKind.stoppedPartway
+                : HaltKind.beforeActing,
+          )) {
+        releaseProgress
+          ..fail(target)
+          ..notAttemptedPending()
+          ..settle();
+        return ExitCodes.refused;
+      }
+      if (!await stages.contextStillValid(
+        stage,
+        unit,
+        changed: 'before ${step.summary}',
+        halt: completedPublicTarget
+            ? HaltKind.stoppedPartway
+            : HaltKind.beforeActing,
+      )) {
+        releaseProgress
+          ..fail(target)
+          ..notAttemptedPending()
+          ..settle();
+        return ExitCodes.refused;
+      }
+
+      // Make the provider observation the last fallible read before the act.
+      // Local stage/context validation above cannot therefore create a gap in
+      // which a newly exact or conflicting target is acted on blindly.
+      state = await inspector.inspect(step, unit);
+      output.step(
+        step,
+        verdict: state.verdict,
+        detail: state.detail,
+        evidence: state.evidence,
+        action: publicActions[step.id]!.wire,
+        show: false,
+      );
+      if (state.isExact) {
+        publicActions[step.id] = ReleaseAction.alreadyPublished;
+        releaseProgress.complete(
+          target,
+          note: 'already published',
+          satisfied: true,
+        );
+        output.step(
+          step,
+          mark: Mark.satisfied,
+          verdict: state.verdict,
+          note: state.detail ?? 'already done',
+          action: publicActions[step.id]!.wire,
+          show: false,
+        );
+        continue;
+      }
+      if (!state.isAbsent) {
+        releaseProgress
+          ..fail(target, activity: CommonProgressActivities.checking)
+          ..notAttemptedPending()
+          ..settle();
+        haltForState(step, state);
+        return ExitCodes.refused;
+      }
+      if (recoversWithoutStage &&
+          module.stageRecoveryBinding(state) != recoveryBindings[step.id]) {
+        releaseProgress
+          ..fail(target, activity: CommonProgressActivities.checking)
+          ..notAttemptedPending()
+          ..settle();
+        output.problem(Diagnostic(
+          code: 'RK-STAGE-005',
+          message: '${step.summary} can no longer recover without its stage',
+          remedy: 'public inputs changed after authorization. Re-run so rk '
+              'can inspect the release again; restore ${stage.directory.path} '
+              'if the target still needs the original bytes.',
+        ));
+        output.halt(
+          completedPublicTarget
+              ? HaltKind.stoppedPartway
+              : HaltKind.beforeActing,
+        );
+        return ExitCodes.refused;
+      }
+      final actedBefore = output.report.acted;
+      output.report.acted = true;
+      publicActions[step.id] = ReleaseAction.attempted;
+      output.step(
+        step,
+        verdict: state.verdict,
+        detail: state.detail,
+        evidence: state.evidence,
+        action: publicActions[step.id]!.wire,
+        show: false,
+      );
+      final releaseContext = TargetReleaseContext(
+        reads: inspector.targetReads,
+        tools: tools,
+        stage: stage,
+        progress: releaseProgress.handle(target),
+        runInteractive: releaseProgress.interactive(tools),
+        wait: wait,
+        confirmDeadline: confirmDeadline,
+        confirmInterval: confirmInterval,
+      );
+      final mutationActivity = module.publishActivity;
+      releaseProgress.begin(target, mutationActivity);
+      late final TargetActOutcome act;
+      try {
+        act = await module.publish(releaseContext, unit, target, state);
+      } on Object catch (error) {
+        act = TargetActOutcome(
+          ok: false,
+          mayHaveActed: true,
+          problem: '${target.kindLabel} operation threw: $error',
+        );
+      }
+      final lastMutationActivity =
+          releaseContext.progress.activity ?? mutationActivity;
+      // An act's process result is not public truth. A registry can accept an
+      // upload before the client loses its response; Git can finish a push
+      // before the connection drops; GitHub can apply the final draft PATCH
+      // before `gh` exits non-zero. Always run the same destination inspection
+      // status uses before deciding what the command result means.
+      releaseProgress.begin(target, CommonProgressActivities.verifying);
+      try {
+        state = await module.confirmPublication(releaseContext, unit, target);
+      } on Object catch (error) {
+        state = Inspection.unknown(
+          '${target.kindLabel} verification threw: $error',
+        );
+      }
+      publicActions[step.id] =
+          state.isExact ? ReleaseAction.completed : ReleaseAction.failed;
+      output.step(
+        step,
+        verdict: state.verdict,
+        detail: state.detail,
+        evidence: state.evidence,
+        action: publicActions[step.id]!.wire,
+        show: false,
+      );
+      if (!act.ok) {
+        if (state.isExact && !output.report.halted) {
+          final inspected = act.includeInspectionDetail && state.detail != null
+              ? ' · ${state.detail}'
+              : '';
+          final note =
+              '${act.reconciledNote ?? 'command response was lost · public target confirmed exact'}$inspected';
+          releaseProgress.complete(
+            target,
+            note: note,
+          );
+          output.step(
+            step,
+            mark: Mark.done,
+            verdict: state.verdict,
+            detail: state.detail,
+            note: note,
+            action: publicActions[step.id]!.wire,
+            show: false,
+          );
+          completedPublicTarget = true;
+          continue;
+        }
+        releaseProgress.fail(
+          target,
+          activity: state.isAbsent
+              ? lastMutationActivity
+              : CommonProgressActivities.verifying,
+        );
+        releaseProgress.notAttemptedPending();
+        releaseProgress.settle();
+        final failure = await module.classifyUnconfirmedPublication(
+          releaseContext,
+          unit,
+          target,
+          state,
+          act,
+          actedBefore: actedBefore,
+        );
+        _reportTargetFailure(step, failure);
+        return ExitCodes.refused;
+      }
+      if (!state.isExact) {
+        releaseProgress.fail(
+          target,
+          activity: CommonProgressActivities.verifying,
+        );
+        releaseProgress.notAttemptedPending();
+        releaseProgress.settle();
+        final failure = await module.classifyUnconfirmedPublication(
+          releaseContext,
+          unit,
+          target,
+          state,
+          act,
+          actedBefore: actedBefore,
+        );
+        _reportTargetFailure(step, failure);
+        return ExitCodes.refused;
+      }
+      final inspected = act.includeInspectionDetail && state.detail != null
+          ? ' · ${state.detail}'
+          : '';
+      releaseProgress.complete(
+        target,
+        note: '${act.successNote ?? 'published'}$inspected',
+      );
+      if (act.successNote != null) {
+        output.step(
+          step,
+          mark: Mark.done,
+          verdict: state.verdict,
+          detail: state.detail,
+          note: '${act.successNote}$inspected',
+          action: publicActions[step.id]!.wire,
+          show: false,
+        );
+      }
+      completedPublicTarget = true;
+    }
+
+    releaseProgress.settle(released: true);
+    for (final target in targets) {
+      for (final line in target.completionLines) {
+        output.say(line, depth: 1);
+      }
+    }
+    return ExitCodes.ok;
+  }
+
+  Future<List<Step>?> _refreshPublicGate({
+    required PublicReleaseGate gate,
+    required ResolvedUnit unit,
+    required List<Step> publicSteps,
+    required List<TargetPlan> targets,
+    required Map<String, Inspection> states,
+    required Map<String, ReleaseAction> actions,
+  }) async {
+    final snapshot = await gate.refresh(
+      unit: unit,
+      steps: publicSteps,
+      targets: targets,
+    );
+    for (final step in publicSteps) {
+      final state = snapshot.states[step.id]!;
+      states[step.id] = state;
+      actions[step.id] = state.isExact
+          ? ReleaseAction.alreadyPublished
+          : ReleaseAction.notAttempted;
+      output.step(
+        step,
+        verdict: state.verdict,
+        detail: state.detail,
+        evidence: state.evidence,
+        action: actions[step.id]!.wire,
+        show: false,
+      );
+    }
+
+    final blocked = snapshot.blocked;
+    if (blocked != null) {
+      haltForState(blocked, snapshot.states[blocked.id]!);
+      showActions(targets, actions);
+      return null;
+    }
+    if (snapshot.monotonicityProblems.isNotEmpty) {
+      output.problems(snapshot.monotonicityProblems);
+      output.halt(HaltKind.beforeActing);
+      showActions(targets, actions);
+      return null;
+    }
+    return snapshot.remaining;
+  }
+
+  void _destinationChanged(
+    PublishTarget target,
+    List<TargetPlan> targets,
+    Map<String, ReleaseAction> actions,
+  ) {
+    output.problem(Diagnostic(
+      code: 'RK-DEST-001',
+      message: '${target.configName} changed destination while preparing '
+          'publication',
+      remedy: 'no public target changed. Restore the repository or native '
+          'publisher configuration used before staging, then re-run. rk does '
+          'not print destination values here because native coordinates may '
+          'contain credentials.',
+    ));
+    output.halt(HaltKind.beforeActing);
+    showActions(targets, actions);
+  }
+
+  void _haltForAuthorizationGrowth(
+    Step step,
+    Inspection state,
+    ResolvedUnit unit,
+    List<TargetPlan> targets,
+    Map<String, ReleaseAction> actions,
+  ) {
+    actions[step.id] = ReleaseAction.notAttempted;
+    output.step(
+      step,
+      verdict: state.verdict,
+      detail: state.detail,
+      evidence: state.evidence,
+      action: actions[step.id]!.wire,
+      show: false,
+    );
+    output.problem(
+      Diagnostic(
+        code: 'RK-AUTH-003',
+        message: 'the release plan grew after authorization',
+        remedy: '${step.summary} was not work when the plan was shown. RK '
+            'will not add it after the yes; inspect the changed destination '
+            'and authorize a fresh plan.',
+      ),
+      unit: unit.name,
+      target: step.id,
+    );
+    output.halt(
+      output.report.acted ? HaltKind.stoppedPartway : HaltKind.beforeActing,
+    );
+    showActions(targets, actions);
+  }
+
+  void _reportTargetFailure(Step step, TargetFailure failure) {
+    output.problem(failure.diagnostic, unit: step.unit);
+    if (failure.nextCommand case final next?) output.next(next);
+    output.halt(failure.halt);
+    if (!failure.rerunHelps) output.report.rerunHelps = false;
+  }
+
+  List<String> _unprovable(ResolvedUnit unit) {
+    if (!unit.shipsBinaries) return const [];
+    final unprovable = <String>[];
+    for (final project in unit.projects) {
+      for (final platform in project.binaryPlatforms) {
+        final resolved = capabilities.resolve(platform);
+        if (resolved.canProduce && !resolved.canProve) {
+          unprovable.add('$platform — ${resolved.reason}');
+        }
+      }
+    }
+    return unprovable;
+  }
+
+  Future<bool> _authorize(
+    ResolvedUnit unit,
+    List<TargetPlan> remaining, {
+    required ReleaseSigningContext? signing,
+    required List<TargetClaim> claims,
+  }) async {
+    final permanent = remaining.where((target) {
+      return target.step.isPermanent;
+    }).toList();
+
+    final disclosed = <String>[];
+    output.blank();
+    output.line('Release ${unit.name} ${unit.version}', tone: Tone.header);
+
+    // Grouped by destination, the way status and staging read. What is
+    // permanent is said on the row it belongs to: a paragraph explaining
+    // that publishing is forever tells an operator what they already know,
+    // and buries the one line they do not.
+    // Keyed by what is claimed, not by where: a unit publishing several
+    // packages to pub.dev has one row each, and marking them all because
+    // one name is new would tell the operator they are permanently taking
+    // names that were taken releases ago.
+    final firstClaims = {
+      for (final claim in claims) '${claim.registrar}\u0000${claim.name}',
+    };
+    for (final target in remaining) {
+      final permanence = <String>[
+        if (target.step.isPermanent) 'permanent',
+        if (firstClaims.contains('${target.kindLabel}\u0000'
+            '${target.coordinate}'))
+          'first claim',
+      ];
+      output.line(
+        target.kindLabel,
+        note: [target.planNote, ...permanence].join(' · '),
+        depth: 1,
+        labelWidth: 26,
+      );
+    }
+    final firstSigning = signing?.firstCertificate == null ? null : signing;
+    if (firstSigning != null) {
+      // The identifier first: it is what gets sealed into the designated
+      // requirement and every Keychain item, so a wrong one has to be seen
+      // rather than hunted for. The certificate says who signed it.
+      output.line(
+        'macOS identity',
+        note: '${firstSigning.codeId} signed by '
+            '${_shortCertificate(firstSigning.firstCertificate!)} · '
+            'permanent · first claim',
+        depth: 1,
+        labelWidth: 26,
+      );
+    }
+    // Nothing is said about permanence beyond the rows. A sentence telling
+    // an operator that a release is permanent, printed above a prompt they
+    // reached deliberately, is a paragraph they learn to scroll past — and
+    // the rows already name which destinations mean it. The full wording,
+    // and which step is the first that cannot be re-run, stay in the record
+    // that travels with the authorization.
+    if (permanent.isNotEmpty) {
+      final notices = {
+        for (final target in permanent)
+          if (target.permanenceNotice case final notice?) notice,
+      };
+      disclosed.add('${notices.join('\n')}\n'
+          'everything before this yes re-runs safely. after it, the first '
+          'permanent step is: ${permanent.first.step.summary}.');
+    }
+
+    disclosed.addAll(_recordClaims(claims, firstSigning));
+
+    // A platform nothing here can run ships with its smoke test missing.
+    // That belongs in the record every authorization carries, not in a
+    // paragraph at the prompt: the operator chose these platforms, and a
+    // machine without a container runtime cannot be told anything new by
+    // repeating it at every release.
+    final unprovable = _unprovable(unit);
+    if (unprovable.isNotEmpty) {
+      disclosed.add('these ship built but never executed — rk cannot '
+          'prove they run or report ${unit.version}:\n'
+          '${unprovable.join('\n')}');
+    }
+
+    // What the yes accepts travels with it. Some of this the prompt marks
+    // on a row and some of it — the long form of a first claim, and the
+    // platforms that ship built but never executed — it no longer shows at
+    // all, so the record is the only place either is said.
+    if (disclosed.isNotEmpty) {
+      output.report.attach(
+        'authorization-disclosures/${unit.name}',
+        disclosed.join('\n\n'),
+      );
+    }
+
+    if (!requireAuthorizer(unit)) return false;
+
+    final answer = await confirm!(
+      'Release ${unit.name} ${unit.version}? [y/N] ',
+    );
+    final accepted = switch (answer?.trim().toLowerCase()) {
+      'y' || 'yes' => true,
+      _ => false,
+    };
+    if (!accepted) {
+      output.blank();
+      output.say(answer == null
+          ? 'no terminal to answer on — stopped; nothing was published.'
+          : 'stopped. nothing was published.');
+      output.problem(
+        Diagnostic(
+          code: 'RK-AUTH-002',
+          message: 'the release was not authorized',
+          remedy: 'answer yes at the prompt, or pass --yes for an '
+              'unattended release',
+        ),
+        unit: unit.name,
+      );
+      output.halt(HaltKind.beforeActing);
+      return false;
+    }
+    return true;
+  }
+
+  bool requireAuthorizer(ResolvedUnit unit) {
+    if (confirm != null) return true;
+    output.problem(
+      Diagnostic(
+        code: 'RK-AUTH-001',
+        message: 'nobody is here to authorize this release',
+        remedy: 'answer yes at a terminal, or pass --yes for an unattended '
+            'release. Without either, rk refuses.',
+      ),
+      unit: unit.name,
+    );
+    output.halt(HaltKind.beforeActing);
+    return false;
+  }
+
+  /// Long-form first claims retained with the authorization record.
+  List<String> _recordClaims(
+    List<TargetClaim> claims,
+    ReleaseSigningContext? firstSigning,
+  ) {
+    // Sentences, not columns. This is read out of the report by whoever or
+    // whatever consented; the alignment it used to carry was for a screen
+    // that no longer prints it.
+    final firstOf = <String>[
+      for (final claim in claims)
+        '${claim.registrar} ${claim.name} — ${claim.consequence}',
+      if (firstSigning != null)
+        'macOS identity ${firstSigning.codeId} — permanent: sealed into the '
+            'designated requirement, and into every Keychain item this '
+            'program creates. Signed by ${firstSigning.firstCertificate}',
+    ];
+    if (firstOf.isEmpty) return const [];
+    return ['this release claims, for the first time:', ...firstOf];
+  }
+
+  /// Every Developer ID certificate begins the same way; what varies is the
+  /// team it names.
+  static String _shortCertificate(String certificate) =>
+      certificate.replaceFirst('Developer ID Application: ', '');
+}

@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:rk/src/destinations/homebrew.dart';
+import 'package:rk/src/targets/homebrew/client.dart';
 import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/engine/ref_name.dart';
 import 'package:rk/src/engine/tools.dart';

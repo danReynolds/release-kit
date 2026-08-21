@@ -13,6 +13,7 @@ import 'package:rk/src/engine/targets.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/verdict.dart';
 import 'package:rk/src/targets/catalog.dart';
+import 'package:rk/src/targets/target_module.dart';
 import 'package:test/test.dart';
 
 import 'scripted_tools.dart';
@@ -370,9 +371,21 @@ void classificationTables() {
           originUrl: 'example/tool',
         ),
       );
+      final resolution = await _binaryResolution();
+      final unit = resolution.unit('cli')!;
+      final checklist = Checklist.derive(unit, resolution, Diagnostics());
+      final targets = TargetCatalog.builtIn().derive(
+        unit,
+        checklist,
+        repository: 'example/tool',
+      );
       final problems = Diagnostics();
       // The unit is 1.0.0, so a v2.0.0 tag is a namespace already ahead.
-      await inspector.monotonicity(await _binaryUnit(), problems);
+      await inspector.releaseMonotonicity(
+        unit,
+        targets.where((target) => target.target == PublishTarget.gitTag),
+        problems,
+      );
       return problems.found;
     }
 
@@ -391,7 +404,7 @@ void classificationTables() {
   });
 
   group('release monotonicity reads complete public histories', () {
-    Future<({ResolvedUnit unit, List<TargetExpectation> targets})>
+    Future<({ResolvedUnit unit, List<TargetPlan> targets})>
         releaseTargets() async {
       final resolution = await _binaryResolution();
       final unit = resolution.unit('cli')!;
@@ -772,10 +785,11 @@ class _LatestInspector extends Inspector {
   var maximumActive = 0;
 
   @override
-  Future<Inspection?> inspectLatestVersion(
-    TargetExpectation target,
-    ResolvedUnit unit,
-  ) async {
+  Future<TargetHistory?> inspectHistory(
+    TargetPlan target,
+    ResolvedUnit unit, {
+    bool fresh = false,
+  }) async {
     if (target.kind == 'homebrew') return null;
     started.add(target.kind);
     if (expectedConcurrent > 0) {
@@ -787,7 +801,37 @@ class _LatestInspector extends Inspector {
       await _finish.future;
       active--;
     }
-    return answers[target.kind] ?? const Inspection.absent();
+    final inspection = answers[target.kind] ?? const Inspection.absent();
+    if (target.kind == 'pubDev' && inspection.verdict == Verdict.conflict) {
+      final project = target.project!;
+      final published = inspection.evidence['published repository'];
+      final local = inspection.evidence['this repository'];
+      return TargetHistory(
+        inspection: inspection,
+        problems: [
+          Diagnostic(
+            code: 'RK-PUB-010',
+            message: '${project.name} on pub.dev points to $published, not '
+                '$local',
+            remedy: 'choose an unclaimed package name in pubspec.yaml; '
+                'pub.dev package names cannot be reclaimed by publishing '
+                'a newer version',
+          ),
+        ],
+      );
+    }
+    return TargetHistory.versioned(
+      inspection: inspection,
+      target: target,
+      regressionDiagnostic: target.kind == 'pubDev'
+          ? (publicVersion) => Diagnostic(
+                code: 'RK-MONO-002',
+                message: '${target.project!.name} ${target.targetVersion} is '
+                    'behind published version $publicVersion',
+                remedy: 'a release moves forward — bump past $publicVersion',
+              )
+          : null,
+    );
   }
 
   void finish() {

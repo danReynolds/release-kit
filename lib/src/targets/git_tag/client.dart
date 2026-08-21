@@ -1,22 +1,19 @@
-import '../engine/tools.dart';
-import '../engine/verdict.dart';
-import '../engine/version.dart';
+import '../../engine/tools.dart';
+import '../../engine/verdict.dart';
+import '../../engine/version.dart';
 
 /// The git tag as a destination, spoken to through git.
 ///
-/// One of the destinations in this directory, beside `github_release.dart`
-/// `homebrew.dart`, and `pub_dev.dart`. Its act half remains in
-/// `commands/release.dart`; the adapter here owns the one exact read shared by
-/// status and both sides of that act.
+/// The transport adapter for the Git-tag target. The target module owns the
+/// release lifecycle, while this client owns exact reads and writes through
+/// git.
 ///
 /// It keeps the convention the other two keep: it takes [Tools] and
 /// coordinates, never an [Output]. That is the test for whether a cut is a
 /// destination at all — prose about what happened belongs to the verb,
 /// because only the verb knows what the operator is being told, and when.
 ///
-/// The protocol is here; the halting policy is not. Which halt sentence a
-/// failed push earns, and whether the local tag is removed, are decisions
-/// about what the operator must be told — they stay in `release.dart`.
+/// The protocol is here; the halting policy remains in the target module.
 /// The signature block every git signing format writes into a tag object:
 /// OpenPGP, SSH, and X.509 (gpgsm) respectively.
 final _signatureBlock = RegExp(

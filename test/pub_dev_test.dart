@@ -1,4 +1,4 @@
-import 'package:rk/src/destinations/pub_dev.dart';
+import 'package:rk/src/targets/pub_dev/client.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/registry.dart';

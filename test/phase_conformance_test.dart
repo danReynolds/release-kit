@@ -4,7 +4,7 @@ import 'dart:convert';
 
 import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/commands/release.dart';
-import 'package:rk/src/destinations/pub_dev.dart';
+import 'package:rk/src/targets/pub_dev/client.dart';
 import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
@@ -312,7 +312,6 @@ void main() {
           '-q',
           '/dev/null',
           Platform.resolvedExecutable,
-          'run',
           File('bin/rk.dart').absolute.path,
           'status',
         ],
@@ -356,7 +355,6 @@ void main() {
           '-q',
           '/dev/null',
           Platform.resolvedExecutable,
-          'run',
           File('bin/rk.dart').absolute.path,
           'status',
         ],

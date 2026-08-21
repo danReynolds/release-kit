@@ -51,92 +51,46 @@ abstract base class TargetModule {
   const TargetModule();
 
   PublishTarget get target;
-  StepKind get stepKind;
 
-  TargetExpectation expectation({
+  TargetPlan plan({
     required ResolvedUnit unit,
     required Step step,
     String? repository,
   });
 
-  Future<Inspection> inspectExact(
+  Future<Inspection> inspectCandidate(
     TargetReadContext context,
     ResolvedUnit unit,
-    TargetExpectation target,
+    TargetPlan target,
   );
 
-  /// A separate public-history read, when this lane has one.
+  /// Reads the lane's public version history, when it has one.
   ///
-  /// Null means the exact target inspection also answers "what version is
-  /// this lane at?" and no second monotonicity read is needed.
-  Future<Inspection?> inspectLatest(
+  /// Candidate inspection answers whether this release exists. History
+  /// answers the separate question "what is this lane already at?" and owns
+  /// any target-specific version refusal or first-publication claim. Null
+  /// means candidate inspection already carries the lane's current version.
+  Future<TargetHistory?> inspectHistory(
     TargetReadContext context,
     ResolvedUnit unit,
-    TargetExpectation target,
-  ) async =>
+    TargetPlan target, {
+    bool fresh = false,
+  }) async =>
       null;
-
-  /// Whether this public history makes the matching local-tag-ahead diagnostic
-  /// redundant.
-  bool get publicHistorySupersedesLocalTag => false;
-
-  /// Invalidates provider state after an act or before an authoritative read.
-  void invalidate(TargetReadContext context, TargetExpectation target) {}
-
-  Diagnostic? aheadDiagnostic(
-    ResolvedUnit unit,
-    TargetExpectation target,
-    Version publicVersion,
-  ) =>
-      Diagnostic(
-        code: 'RK-MONO-003',
-        message: '${target.label} is already at $publicVersion, ahead of the '
-            'target ${target.targetVersion}',
-        remedy: 'a release moves forward — bump past $publicVersion',
-      );
-
-  /// A provider-specific refusal carried by a public inspection.
-  ///
-  /// The coordinator owns when an inspection blocks. The adapter owns what a
-  /// provider-specific conflict means and how the operator can resolve it.
-  Diagnostic? diagnosticForInspection(
-    ResolvedUnit unit,
-    TargetExpectation target,
-    Inspection inspection,
-  ) =>
-      null;
-
-  /// Whether a cross-step diagnostic belongs on this target's status row.
-  bool ownsDiagnostic(
-    Diagnostic diagnostic,
-    TargetExpectation target,
-  ) =>
-      false;
-
-  /// Local facts that also guard release when a remote history read cannot
-  /// yet supersede them.
-  Iterable<Diagnostic> localReleaseDiagnostics(
-    TargetReadContext context,
-    ResolvedUnit unit,
-  ) =>
-      const [];
 
   String conflictRemedy(
     ResolvedUnit unit,
-    TargetExpectation target,
+    TargetPlan target,
   );
 
-  ProgressActivity get inspectActivity => CommonProgressActivities.checking;
-  ProgressActivity get preflightActivity => CommonProgressActivities.checking;
-  ProgressActivity get actActivity;
-  ProgressActivity get verifyActivity => CommonProgressActivities.verifying;
+  ProgressActivity get publishActivity;
 
   /// Performs this target's ambient, fail-before-staging readiness check.
   ///
   /// Every target must choose this explicitly. A silent inherited success
   /// would let a new publisher omit credential checks and fail only after an
   /// earlier target had acted.
-  Future<TargetReadinessOutcome> preflight(
+  Future<TargetReadinessOutcome> checkReadiness(
     TargetReadinessContext context,
     ResolvedUnit unit,
   );
@@ -147,15 +101,15 @@ abstract base class TargetModule {
   /// Returning false means the module already reported a refusal. Every
   /// module chooses explicitly, including destinations whose native tool has
   /// no separate session-acquisition command.
-  TargetSessionProvider? get sessionProvider => null;
+  TargetSessionProvider? get authentication => null;
 
   /// The effective destination bound before staging and checked after native
   /// credential acquisition. It is never serialized: an origin URL can carry
   /// credentials even though GitState normally redacts it for reports.
-  String effectiveEndpoint(
+  String destinationBinding(
     TargetReadinessContext context,
     ResolvedUnit unit,
-    List<TargetExpectation> targets,
+    List<TargetPlan> targets,
   ) {
     final coordinates = targets.map((item) => item.coordinate).toList()..sort();
     return [
@@ -164,69 +118,137 @@ abstract base class TargetModule {
     ].join('\n');
   }
 
-  Future<TargetActOutcome> act(
+  Future<TargetActOutcome> publish(
     TargetReleaseContext context,
     ResolvedUnit unit,
-    TargetExpectation target,
+    TargetPlan target,
     Inspection inspected,
   );
 
-  Future<Inspection> settleAfterAct(
+  Future<Inspection> confirmPublication(
     TargetReleaseContext context,
     ResolvedUnit unit,
-    TargetExpectation target,
+    TargetPlan target,
   ) =>
-      inspectExact(context.reads, unit, target);
+      inspectCandidate(context.reads, unit, target);
 
-  Future<TargetFailure> classifyFailure(
+  /// Classifies a provider operation that did not settle exact.
+  ///
+  /// Most append-only targets share this policy. A target overrides it only
+  /// when it has a real provider-specific recovery operation or when a public
+  /// conflict is repairable by a later run.
+  Future<TargetFailure> classifyUnconfirmedPublication(
     TargetReleaseContext context,
     ResolvedUnit unit,
-    TargetExpectation target,
+    TargetPlan target,
     Inspection state,
     TargetActOutcome act, {
     required bool actedBefore,
-  });
+  }) async {
+    final details = <String>[
+      if (act.diagnostic?.remedy != null) act.diagnostic!.remedy!,
+      if (act.problem != null) act.problem!,
+      if (act.privateEffectDetail != null) act.privateEffectDetail!,
+      if (act.privateEffectDetail == null &&
+          act.privateEffect == TargetPrivateEffect.changed)
+        'private provider state changed; this step did not confirm a public '
+            'release.',
+      if (act.privateEffectDetail == null &&
+          act.privateEffect == TargetPrivateEffect.uncertain)
+        'private provider state may have changed; no public release was '
+            'confirmed.',
+      if (state.detail != null) state.detail!,
+      ...state.evidence.entries.map((entry) => '${entry.key}: ${entry.value}'),
+      if (act.permanent != null) act.permanent!,
+    ];
+    final immutableConflict = state.verdict == Verdict.conflict;
+    final halt = act.permanent != null || immutableConflict
+        ? HaltKind.actedAndUnfixable
+        : act.mayHaveActed ||
+                act.privateEffect == TargetPrivateEffect.uncertain ||
+                state.verdict == Verdict.unknown
+            ? HaltKind.lostTrack
+            : act.privateEffect == TargetPrivateEffect.changed || actedBefore
+                ? HaltKind.stoppedPartway
+                : HaltKind.beforeActing;
+    return TargetFailure(
+      diagnostic: Diagnostic(
+        code: act.diagnostic?.code ?? 'RK-REL-003',
+        message: act.diagnostic?.message ??
+            '${target.step.summary}: '
+                '${act.problem ?? state.detail ?? 'the public result could not be confirmed'}',
+        remedy: details.isEmpty
+            ? 're-run; the shared destination inspection will classify the '
+                'public target before any retry'
+            : details.join('\n'),
+        evidence: act.evidence ?? act.diagnostic?.evidence,
+      ),
+      halt: halt,
+    );
+  }
 
-  Iterable<String> completionLines(
-    ResolvedUnit unit,
-    TargetExpectation target,
-  ) =>
-      const [];
-
-  TargetStage? stage({
+  TargetStage? stageInput({
     required ResolvedUnit unit,
-    required TargetExpectation target,
+    required TargetPlan target,
   }) =>
       null;
-
-  Future<Iterable<TargetClaim>> firstClaims(
-    TargetReadContext context,
-    ResolvedUnit unit,
-    TargetExpectation target,
-  ) async =>
-      const [];
-
-  String? permanenceNotice(TargetExpectation target) => null;
-
-  /// What acting on this target changes, for the authorization plan.
-  ///
-  /// The row already names the destination, so this says only what arrives
-  /// there. The checklist's sentence names the destination again — right
-  /// for a step read on its own, redundant beside its own label.
-  String planNote(TargetExpectation target) => target.step.summary;
-
-  /// Whether this absent target can act from authenticated public inputs when
-  /// the original local stage is unavailable. Versioned publishers default to
-  /// false; a moving channel may opt in with target-owned recovery authority.
-  bool canActWithoutReusableStage(Inspection inspected) =>
-      recoveryBinding(inspected) != null;
 
   /// Stable, non-secret identity of the public inputs authorizing recovery.
   ///
   /// Core freezes this before consent and compares it with the final
   /// observation immediately before the act. The adapter retains the actual
   /// authority and payload; orchestration needs only equality.
-  String? recoveryBinding(Inspection inspected) => null;
+  String? stageRecoveryBinding(Inspection inspected) => null;
+}
+
+/// One typed read of a target's independent public history.
+///
+/// The target translates provider payloads here. Core never recovers a
+/// semantic version from an evidence-map key, asks a second hook to explain
+/// that version, or guesses which target owns the resulting diagnostic.
+final class TargetHistory {
+  TargetHistory({
+    required this.inspection,
+    this.version,
+    Iterable<Diagnostic> problems = const [],
+    Iterable<TargetClaim> claims = const [],
+  })  : problems = List.unmodifiable(problems),
+        claims = List.unmodifiable(claims);
+
+  factory TargetHistory.versioned({
+    required Inspection inspection,
+    required TargetPlan target,
+    Diagnostic Function(Version publicVersion)? regressionDiagnostic,
+    Iterable<Diagnostic> problems = const [],
+    Iterable<TargetClaim> claims = const [],
+  }) {
+    final raw = inspection.evidence['version'];
+    final version = raw == null ? null : Version.tryParse(raw);
+    final found = [...problems];
+    final intended = Version.tryParse(target.targetVersion);
+    if (version != null && intended != null && version > intended) {
+      found.add(
+        regressionDiagnostic?.call(version) ??
+            Diagnostic(
+              code: 'RK-MONO-003',
+              message: '${target.label} is already at $version, ahead of the '
+                  'target ${target.targetVersion}',
+              remedy: 'a release moves forward — bump past $version',
+            ),
+      );
+    }
+    return TargetHistory(
+      inspection: inspection,
+      version: version,
+      problems: found,
+      claims: claims,
+    );
+  }
+
+  final Inspection inspection;
+  final Version? version;
+  final List<Diagnostic> problems;
+  final List<TargetClaim> claims;
 }
 
 /// Read-only dependencies shared by the four built-in target modules.
@@ -351,7 +373,7 @@ final class TargetStage {
     }
   }
 
-  final TargetExpectation target;
+  final TargetPlan target;
   final StageContributionContract contract;
   final List<TargetStageProgress> progress;
   final TargetStageProducer prepare;
@@ -477,7 +499,7 @@ abstract base class TargetSessionProvider {
   Future<TargetReadinessOutcome> acquire(
     TargetReadinessContext context,
     ResolvedUnit unit,
-    List<TargetExpectation> targets,
+    List<TargetPlan> targets,
   );
 
   /// Whether a usable session already exists, before [acquire] is called.
@@ -504,7 +526,7 @@ final class TargetSessionRequirement {
 
   final String key;
   final TargetSessionProvider provider;
-  final List<TargetExpectation> targets;
+  final List<TargetPlan> targets;
 }
 
 /// Provider-neutral facts returned by one target act.
@@ -514,6 +536,7 @@ final class TargetActOutcome {
     this.problem,
     this.mayHaveActed = false,
     this.privateEffect = TargetPrivateEffect.none,
+    this.privateEffectDetail,
     this.permanent,
     this.diagnostic,
     this.coordinate,
@@ -528,6 +551,7 @@ final class TargetActOutcome {
   final String? problem;
   final bool mayHaveActed;
   final TargetPrivateEffect privateEffect;
+  final String? privateEffectDetail;
   final String? permanent;
   final Diagnostic? diagnostic;
   final String? coordinate;
@@ -539,7 +563,8 @@ final class TargetActOutcome {
   /// What the native tool said, when a tool is what failed.
   ///
   /// [problem] is the line the operator reads. This is the rest, carried to
-  /// `classifyFailure`, which builds the one diagnostic that is reported —
+  /// `classifyUnconfirmedPublication`, which builds the one diagnostic that
+  /// is reported —
   /// so the account of a half-finished publish survives the sentence
   /// summarizing it.
   final String? evidence;

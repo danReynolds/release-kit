@@ -4,23 +4,26 @@ import 'publish_target.dart';
 import 'resolve.dart';
 import 'verdict.dart';
 
-/// The immutable, manifest-derived identity of one public target.
+/// The immutable, manifest-derived plan for one public target.
 ///
-/// Status and release already share [Step] as their execution contract. This
-/// smaller view carries only what a report needs, without recovering meaning
-/// from a step id or its human prose.
-class TargetExpectation {
-  TargetExpectation({
+/// Status, staging, authorization, and release share this value rather than
+/// recovering provider meaning from a step id or its human prose.
+class TargetPlan {
+  TargetPlan({
     required this.label,
     required this.coordinate,
     required this.targetVersion,
     required this.step,
     required this.kindLabel,
     required this.identity,
+    required this.planNote,
     required Iterable<String> artifacts,
+    Iterable<String> completionLines = const [],
     this.project,
     this.uses,
-  }) : artifacts = List<String>.unmodifiable(artifacts);
+    this.permanenceNotice,
+  })  : artifacts = List<String>.unmodifiable(artifacts),
+        completionLines = List<String>.unmodifiable(completionLines);
 
   PublishTarget get target => step.target!;
 
@@ -40,6 +43,19 @@ class TargetExpectation {
   /// identically — a destination knows both of these about itself.
   final String kindLabel;
   final String identity;
+
+  /// What this target contributes to the authorization plan.
+  ///
+  /// This is immutable plan data, not a lifecycle extension point: the row
+  /// already names the destination, so the note says only what arrives there.
+  final String planNote;
+
+  /// Target-specific wording for an irreversible public act, when there is
+  /// one. The catalog requires this exactly when [step] is permanent.
+  final String? permanenceNotice;
+
+  /// Lines printed after a successful release, such as a public package URL.
+  final List<String> completionLines;
 
   /// A concise reference to an artifact inventoried by another target.
   final String? uses;
@@ -72,10 +88,12 @@ class TargetObservation {
     required this.currentVersion,
     required this.currentKnown,
     this.currentDetail,
+    Iterable<Diagnostic> historyProblems = const [],
     required Iterable<ArtifactObservation> artifacts,
-  }) : artifacts = List<ArtifactObservation>.unmodifiable(artifacts);
+  })  : historyProblems = List<Diagnostic>.unmodifiable(historyProblems),
+        artifacts = List<ArtifactObservation>.unmodifiable(artifacts);
 
-  final TargetExpectation expectation;
+  final TargetPlan expectation;
   final Inspection inspection;
 
   /// Null with [currentKnown] true means the provider definitively has no
@@ -83,6 +101,7 @@ class TargetObservation {
   final String? currentVersion;
   final bool currentKnown;
   final String? currentDetail;
+  final List<Diagnostic> historyProblems;
   final List<ArtifactObservation> artifacts;
 
   /// The kind of destination, without the thing it points at.

@@ -234,14 +234,14 @@ executor.
 
 | Existing hook | Progress ownership |
 | --- | --- |
-| `inspectExact` / public gate | coordinator shows `checking` |
-| `preflight` | coordinator shows `checking`; target may refine it |
-| `acquireSession` | target normally shows `checking sign-in` |
-| `TargetStage.prepare` | target updates its stage-output row |
+| `inspectCandidate` / public gate | coordinator shows `checking` |
+| `checkReadiness` | coordinator shows `checking`; target may refine it |
+| `authentication` provider | target normally shows `checking sign-in` |
+| `stageInput` producer | target updates its stage-output row |
 | local producer act | producer updates its artifact row |
-| `act` | target reports `creating`, `pushing`, `publishing`, `uploading`, or bespoke work |
-| `settleAfterAct` | target reports `verifying`, optionally `waiting for <provider>` |
-| `classifyFailure` | existing diagnostic supplies the issue and selects mutation versus verification failure |
+| `publish` | target reports `creating`, `pushing`, `publishing`, `uploading`, or bespoke work |
+| `confirmPublication` | target reports `verifying`, optionally `waiting for <provider>` |
+| `classifyUnconfirmedPublication` | existing diagnostic supplies the issue and selects mutation versus verification failure |
 
 The current readiness booleans are too weak for this contract. Replace them
 with a typed readiness outcome carrying a diagnostic and affected scope. Hooks
@@ -252,7 +252,7 @@ producer hooks as they are migrated.
 
 An exception or unsuccessful act does not immediately finish the progress row.
 The coordinator snapshots the last mutation activity, shows reconciliation as
-`verifying`, and still calls `settleAfterAct`. Final attribution is:
+`verifying`, and still calls `confirmPublication`. Final attribution is:
 
 | Act and read-back | Final row |
 | --- | --- |

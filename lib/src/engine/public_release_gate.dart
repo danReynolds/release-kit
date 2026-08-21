@@ -18,7 +18,7 @@ final class PublicReleaseGate {
   Future<PublicReleaseSnapshot> refresh({
     required ResolvedUnit unit,
     required Iterable<Step> steps,
-    required Iterable<TargetExpectation> targets,
+    required Iterable<TargetPlan> targets,
   }) async {
     // Destinations are independent; their reads happen together, the same
     // way status checks them. The slowest read, not the sum, is the wait.

@@ -716,6 +716,7 @@ StageReceipt _writeCompleteStage(StageDirectory stage) {
         'certificate_sha256': 'a' * 64,
         'first_identity': true,
         'published_requirement': null,
+        'designated_requirement': 'designated => identifier "io.example.rk"',
         'code_id': 'io.example.rk',
         'unsigned_sha256': 'c' * 64,
         'signed_sha256': artifact.sha256,

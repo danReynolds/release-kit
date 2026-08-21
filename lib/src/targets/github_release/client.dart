@@ -1,11 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
 
-import '../engine/reconciliation.dart';
-import '../engine/tools.dart';
-import '../engine/verdict.dart';
-import '../engine/version.dart';
-import '../transforms/digest.dart';
+import '../../engine/reconciliation.dart';
+import '../../engine/tools.dart';
+import '../../engine/verdict.dart';
+import '../../engine/version.dart';
+import '../../transforms/digest.dart';
 
 /// Publishes a set of assets as one immutable release.
 ///

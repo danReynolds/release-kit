@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:rk/src/destinations/git_tag.dart';
+import 'package:rk/src/targets/git_tag/client.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/tools.dart';

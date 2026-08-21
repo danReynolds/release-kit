@@ -4,10 +4,10 @@ import '../engine/publish_target.dart';
 import '../engine/resolve.dart';
 import '../engine/stage_contract.dart';
 import '../engine/targets.dart';
-import 'git_tag_target.dart';
-import 'github_release_target.dart';
-import 'homebrew_target.dart';
-import 'pub_dev_target.dart';
+import 'git_tag/module.dart';
+import 'github_release/module.dart';
+import 'homebrew/module.dart';
+import 'pub_dev/module.dart';
 import 'target_module.dart';
 
 /// The fixed, compile-time catalog of public targets rk understands.
@@ -28,9 +28,6 @@ final class TargetCatalog {
       if (byTarget[module.target] != null) {
         throw StateError('two target modules handle '
             '${module.target.configName}');
-      }
-      if (!module.stepKind.isPublic) {
-        throw StateError('${module.stepKind.name} is not a public step');
       }
       byTarget[module.target] = module;
     }
@@ -57,15 +54,14 @@ final class TargetCatalog {
 
   TargetModule? moduleForStep(Step step) => _byTarget[step.target];
 
-  TargetModule moduleForTarget(TargetExpectation target) =>
-      _byTarget[target.target]!;
+  TargetModule moduleForTarget(TargetPlan target) => _byTarget[target.target]!;
 
-  List<TargetExpectation> derive(
+  List<TargetPlan> derive(
     ResolvedUnit unit,
     Checklist checklist, {
     String? repository,
   }) {
-    final targets = <TargetExpectation>[];
+    final targets = <TargetPlan>[];
     for (final step in checklist.steps) {
       final module = _byTarget[step.target];
       if (module == null) {
@@ -75,34 +71,34 @@ final class TargetCatalog {
         }
         continue;
       }
-      final target = module.expectation(
+      final target = module.plan(
         unit: unit,
         step: step,
         repository: repository,
       );
       if (target.step.id != step.id ||
-          target.step.kind != module.stepKind ||
+          !target.step.isPublic ||
           target.target != module.target) {
         throw StateError('${module.runtimeType} derived the wrong target');
       }
-      if (step.isPermanent != (module.permanenceNotice(target) != null)) {
+      if (step.isPermanent != (target.permanenceNotice != null)) {
         throw StateError(
           '${module.runtimeType} must explain every permanent target',
         );
       }
       targets.add(target);
     }
-    return List<TargetExpectation>.unmodifiable(targets);
+    return List<TargetPlan>.unmodifiable(targets);
   }
 
   List<TargetStage> stages({
     required ResolvedUnit unit,
-    required Iterable<TargetExpectation> targets,
+    required Iterable<TargetPlan> targets,
   }) {
     final stages = <TargetStage>[];
     for (final target in targets) {
       final module = moduleForTarget(target);
-      final stage = module.stage(unit: unit, target: target);
+      final stage = module.stageInput(unit: unit, target: target);
       if (stage != null) stages.add(stage);
     }
     return orderStageContributions(stages, (stage) => stage.contract);

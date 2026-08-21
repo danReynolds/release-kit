@@ -3,8 +3,10 @@ import 'dart:io';
 
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/assets.dart';
+import 'package:rk/src/engine/canonical_json.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/release_asset.dart';
+import 'package:rk/src/engine/release_bundle.dart';
 import 'package:rk/src/engine/release_manifest.dart';
 import 'package:rk/src/engine/release_stage.dart';
 import 'package:rk/src/engine/resolve.dart';
@@ -101,6 +103,50 @@ void main() {
       contains('hello'),
       reason: 'the staged snapshot no longer reads the mutable source tree',
     );
+  });
+
+  test('release bundle exposes the exact public names and receipt artifacts',
+      () async {
+    final project = unit.binaryProject!;
+    final stagedPath = ReleaseAssets.archivePath(project, 'macos-arm64');
+    final publicName =
+        ReleaseAssets.archiveName('tool', '1.2.3', 'macos-arm64');
+    await _recordArchives(release, {stagedPath: 'archive'});
+    release.finalize(releaseAssets: ReleaseAssets.bundleFor(unit));
+
+    final resolved = ReleaseBundle.resolve(release, unit);
+
+    expect(resolved, isA<ReleaseBundleAvailable>());
+    final bundle = (resolved as ReleaseBundleAvailable).bundle;
+    expect(bundle.publicNames, {publicName, ReleaseAssets.manifest});
+    expect(bundle.assets.map((asset) => asset.publicName), [
+      publicName,
+      ReleaseAssets.manifest,
+    ]);
+    expect(
+      bundle.assets
+          .singleWhere((asset) => asset.publicName == publicName)
+          .artifact
+          .path,
+      stagedPath,
+    );
+    expect(
+      bundle.sha256ByPublicName.keys,
+      {publicName, ReleaseAssets.manifest},
+    );
+  });
+
+  test('release bundle refuses a completed stage with another inventory',
+      () async {
+    await _recordArchives(release, const {});
+    release.finalize(releaseAssets: const []);
+
+    final resolved = ReleaseBundle.resolve(release, unit);
+
+    expect(resolved, isA<ReleaseBundleInvalid>());
+    final invalid = resolved as ReleaseBundleInvalid;
+    expect(invalid.message, contains('different release-asset inventory'));
+    expect(invalid.evidence[_asset], 'missing from stage');
   });
 
   test('unbound source is byte-bound locally without inventing a revision',
@@ -485,6 +531,30 @@ executables:
     expect(() => release.requireReceipt(), throwsStateError);
   });
 
+  test('malformed recorded signing identity invalidates reuse', () async {
+    await _completeEveryArtifactType(release);
+    final receiptFile = File(release.directory.resolve('stage.json'));
+    final document = jsonDecode(receiptFile.readAsStringSync()) as Map;
+    final steps = document['steps'] as List;
+    final build = steps.cast<Map>().singleWhere(
+          (step) => step['name'] == 'build:tool:macos-arm64',
+        );
+    final evidence = build['evidence'] as Map;
+    final signature = evidence['signature'] as Map;
+    signature['designated_requirement'] = 42;
+    receiptFile.writeAsStringSync(
+      '${CanonicalJson.encode(document)}\n',
+      flush: true,
+    );
+
+    final inspected = const StageInspector().inspect(release.directory);
+    expect(inspected.reusable, isFalse);
+    expect(
+      inspected.issues.map((issue) => issue.kind),
+      contains(StageIssueKind.invalidStructure),
+    );
+  });
+
   test('a remembered inspection never outlives the bytes it described',
       () async {
     await _complete(release);
@@ -565,7 +635,7 @@ executables:
       'each producer output stays untrusted until the receipt replacement '
       'names its exact bytes', () async {
     for (final nextName in [
-      'build:macos-arm64',
+      'build:tool:macos-arm64',
       'notarize:macos-arm64',
       'archive:$_asset',
       'release-notes',
@@ -976,7 +1046,7 @@ Future<StageReceipt> _completeEveryArtifactType(ReleaseStage release) async {
     type: 'executable',
   );
   final sign = StageStep(
-    name: 'build:macos-arm64',
+    name: 'build:tool:macos-arm64',
     inputs: [StageInput.step(source)],
     outputs: [binary],
     evidence: {
@@ -986,6 +1056,7 @@ Future<StageReceipt> _completeEveryArtifactType(ReleaseStage release) async {
         'certificate_sha256': 'a' * 64,
         'first_identity': true,
         'published_requirement': null,
+        'designated_requirement': 'designated => identifier "io.example.tool"',
         'code_id': 'io.example.tool',
         'unsigned_sha256': 'b' * 64,
         'signed_sha256': binary.sha256,
@@ -1138,7 +1209,7 @@ Future<void> _recordArchives(
     type: 'executable',
   );
   final build = StageStep(
-    name: 'build:macos-arm64',
+    name: 'build:tool:macos-arm64',
     inputs: [StageInput.step(source)],
     outputs: [binary],
     evidence: {
@@ -1148,6 +1219,7 @@ Future<void> _recordArchives(
         'certificate_sha256': 'a' * 64,
         'first_identity': true,
         'published_requirement': null,
+        'designated_requirement': 'designated => identifier "io.example.tool"',
         'code_id': 'io.example.tool',
         'unsigned_sha256': 'b' * 64,
         'signed_sha256': binary.sha256,
