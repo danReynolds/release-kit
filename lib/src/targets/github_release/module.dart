@@ -150,13 +150,19 @@ final class GithubReleaseTargetModule extends TargetModule {
   }
 
   @override
-  String conflictRemedy(
+  Diagnostic diagnoseConflict(
     ResolvedUnit unit,
     TargetPlan target,
+    Inspection conflict,
   ) =>
-      'compare the published release with the source named by its tag. '
-      'If they are not the intended release, bump the version and '
-      'changelog; rk will not replace conflicting public bytes';
+      Diagnostic(
+        code: 'RK-REL-001',
+        message: '${target.label}: '
+            '${conflict.detail ?? 'the published release does not match'}',
+        remedy: 'compare the published release with the source named by its '
+            'tag. If they are not the intended release, bump the version '
+            'and changelog; rk will not replace conflicting public bytes',
+      );
 
   @override
   Future<TargetActOutcome> publish(

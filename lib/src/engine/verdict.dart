@@ -28,6 +28,7 @@ class Inspection {
     this.detail,
     this.evidence = const {},
     this.authority,
+    this.sourceMismatch,
   });
 
   const Inspection.absent({
@@ -53,12 +54,15 @@ class Inspection {
         );
 
   const Inspection.conflict(String detail,
-      {Map<String, String> evidence = const {}, Object? authority})
+      {Map<String, String> evidence = const {},
+      Object? authority,
+      SourceBindingMismatch? sourceMismatch})
       : this(
           Verdict.conflict,
           detail: detail,
           evidence: evidence,
           authority: authority,
+          sourceMismatch: sourceMismatch,
         );
 
   /// rk could not determine the state.
@@ -81,6 +85,21 @@ class Inspection {
   /// the one this inspection authorized.
   final Object? authority;
 
+  /// A public release that is valid for an earlier source while the current
+  /// source still declares the same version. This is typed because core must
+  /// not recover release semantics by parsing a provider evidence map.
+  final SourceBindingMismatch? sourceMismatch;
+
   bool get isAbsent => verdict == Verdict.absent;
   bool get isExact => verdict == Verdict.exact;
+}
+
+final class SourceBindingMismatch {
+  const SourceBindingMismatch({
+    required this.releasedCommit,
+    required this.currentCommit,
+  });
+
+  final String releasedCommit;
+  final String currentCommit;
 }

@@ -78,9 +78,15 @@ abstract base class TargetModule {
   }) async =>
       null;
 
-  String conflictRemedy(
+  /// Explains one conflicting public observation in this target's terms.
+  ///
+  /// Core owns when a conflict blocks. The module owns what the provider
+  /// conflict means and the safe next action; this keeps target-specific
+  /// semantics out of generic status prose without adding lifecycle hooks.
+  Diagnostic diagnoseConflict(
     ResolvedUnit unit,
     TargetPlan target,
+    Inspection conflict,
   );
 
   ProgressActivity get publishActivity;
@@ -318,28 +324,73 @@ typedef TargetStageProducer = Future<TargetStageOutcome> Function(
 sealed class TargetStageOutcome {
   const TargetStageOutcome();
 
-  List<String> get notices;
+  List<Diagnostic> get warnings;
 }
 
 final class TargetStageSuccess extends TargetStageOutcome {
-  const TargetStageSuccess(this.step, {this.notices = const []});
+  TargetStageSuccess(
+    StageStep step, {
+    Iterable<Diagnostic> warnings = const [],
+  })  : warnings = List.unmodifiable(warnings),
+        step = _recordTargetStageWarnings(step, warnings);
 
   final StageStep step;
   @override
-  final List<String> notices;
+  final List<Diagnostic> warnings;
 }
 
 final class TargetStageFailure extends TargetStageOutcome {
-  const TargetStageFailure(
+  TargetStageFailure(
     this.diagnostic, {
     this.unit,
-    this.notices = const [],
-  });
+    Iterable<Diagnostic> warnings = const [],
+  }) : warnings = List.unmodifiable(warnings);
 
   final Diagnostic diagnostic;
   final String? unit;
   @override
-  final List<String> notices;
+  final List<Diagnostic> warnings;
+}
+
+const _targetStageWarningsKey = 'rk_warnings';
+
+StageStep _recordTargetStageWarnings(
+  StageStep step,
+  Iterable<Diagnostic> warnings,
+) {
+  final recorded = warnings.toList();
+  if (recorded.isEmpty) return step;
+  return StageStep(
+    name: step.name,
+    inputs: step.inputs,
+    outputs: step.outputs,
+    evidence: {
+      ...step.evidence,
+      _targetStageWarningsKey: [
+        for (final warning in recorded)
+          {
+            'code': warning.code,
+            'message': warning.message,
+            if (warning.remedy != null) 'remedy': warning.remedy,
+          },
+      ],
+    },
+  );
+}
+
+/// Nonblocking target warnings preserved by a reusable stage receipt.
+List<Diagnostic> recordedTargetStageWarnings(StageStep step) {
+  final values = step.evidence[_targetStageWarningsKey];
+  if (values is! List) return const [];
+  return [
+    for (final value in values)
+      if (value is Map && value['code'] is String && value['message'] is String)
+        Diagnostic(
+          code: value['code'] as String,
+          message: value['message'] as String,
+          remedy: value['remedy'] is String ? value['remedy'] as String : null,
+        ),
+  ];
 }
 
 /// One optional, target-owned contribution to the reusable local stage.

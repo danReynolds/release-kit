@@ -1,4 +1,3 @@
-import '../builds/capability.dart';
 import '../engine/checklist.dart';
 import '../engine/dependency_graph.dart';
 import '../engine/diagnostic.dart';
@@ -78,7 +77,6 @@ final class ReleasePublicationCoordinator {
     required this.refreshEnvironment,
     required this.wait,
     required this.confirm,
-    required this.capabilities,
     required this.confirmDeadline,
     required this.confirmInterval,
   });
@@ -92,7 +90,6 @@ final class ReleasePublicationCoordinator {
   final Map<String, String> Function() refreshEnvironment;
   final Future<void> Function(Duration) wait;
   final Future<String?> Function(String prompt)? confirm;
-  final HostCapabilities capabilities;
   final Duration confirmDeadline;
   final Duration confirmInterval;
 
@@ -489,6 +486,7 @@ final class ReleasePublicationCoordinator {
     if (!await _authorize(
       unit,
       [for (final step in remaining) targetByStep[step.id]!],
+      stage: stage,
       signing: prepared.signing,
       claims: prepared.claims,
     )) {
@@ -1152,16 +1150,19 @@ final class ReleasePublicationCoordinator {
     showActions(targets, actions);
   }
 
-  List<String> _unprovable(ResolvedUnit unit) {
-    if (!unit.shipsBinaries) return const [];
-    final unprovable = <String>[];
-    for (final project in unit.projects) {
-      for (final platform in project.binaryPlatforms) {
-        final resolved = capabilities.resolve(platform);
-        if (resolved.canProduce && !resolved.canProve) {
-          unprovable.add('$platform — ${resolved.reason}');
-        }
-      }
+  List<({String platform, String reason})> _unprovable(ReleaseStage stage) {
+    final unprovable = <({String platform, String reason})>[];
+    final inspected = stage.inspect();
+    final receipt = inspected.reusable ? inspected.receipt : null;
+    if (receipt == null) return unprovable;
+    for (final step in receipt.steps) {
+      final parts = step.name.split(':');
+      if (parts.length != 3 || parts.first != 'build') continue;
+      final smoke = step.evidence['smoke'];
+      if (smoke is! Map || smoke['status'] != 'not-executed') continue;
+      final reason = smoke['reason'];
+      if (reason is! String || reason.isEmpty) continue;
+      unprovable.add((platform: parts.last, reason: reason));
     }
     return unprovable;
   }
@@ -1169,6 +1170,7 @@ final class ReleasePublicationCoordinator {
   Future<bool> _authorize(
     ResolvedUnit unit,
     List<TargetPlan> remaining, {
+    required ReleaseStage stage,
     required ReleaseSigningContext? signing,
     required List<TargetClaim> claims,
   }) async {
@@ -1237,22 +1239,33 @@ final class ReleasePublicationCoordinator {
 
     disclosed.addAll(_recordClaims(claims, firstSigning));
 
-    // A platform nothing here can run ships with its smoke test missing.
-    // That belongs in the record every authorization carries, not in a
-    // paragraph at the prompt: the operator chose these platforms, and a
-    // machine without a container runtime cannot be told anything new by
-    // repeating it at every release.
-    final unprovable = _unprovable(unit);
+    // A weaker build proof belongs on the authorization surface as well as in
+    // its durable record. Read the completed receipt rather than this host's
+    // capability: a reused stage may have been smoke-tested elsewhere.
+    final unprovable = _unprovable(stage);
     if (unprovable.isNotEmpty) {
+      output.blank();
+      output.heading('Warnings');
+      for (final item in unprovable) {
+        output.warning(
+          Diagnostic(
+            code: 'RK-BUILD-002',
+            message: '${item.platform} was built but not executed: '
+                '${item.reason}',
+            remedy: 'run the staged binary on ${item.platform} before '
+                'release if that platform is release-critical',
+          ),
+          unit: unit.name,
+          depth: 1,
+        );
+      }
       disclosed.add('these ship built but never executed — rk cannot '
           'prove they run or report ${unit.version}:\n'
-          '${unprovable.join('\n')}');
+          '${unprovable.map((item) => '${item.platform} — ${item.reason}').join('\n')}');
     }
 
-    // What the yes accepts travels with it. Some of this the prompt marks
-    // on a row and some of it — the long form of a first claim, and the
-    // platforms that ship built but never executed — it no longer shows at
-    // all, so the record is the only place either is said.
+    // What the yes accepts travels with it. The attachment keeps the long
+    // form even when the terminal surface intentionally stays concise.
     if (disclosed.isNotEmpty) {
       output.report.attach(
         'authorization-disclosures/${unit.name}',

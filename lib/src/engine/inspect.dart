@@ -367,9 +367,10 @@ class Inspector {
           code: 'RK-GIT-005',
           message: 'the tag $tag points at ${_short(target)}, and this '
               'release would publish from ${_short(git.head)}',
-          remedy: 'what would be published is not what the tag names. Move '
-              'the tag deliberately, or check out the tagged commit:\n'
-              '  git tag -sf $tag && git push -f origin $tag',
+          remedy: 'check out ${_short(target)} if that is the intended '
+              'release source. If $tag is already public, do not move it; '
+              'bump the version and changelog. If it is local-only and '
+              'mistaken, remove it locally before retrying',
         ),
       ];
     }

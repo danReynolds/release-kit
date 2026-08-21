@@ -107,6 +107,58 @@ class OriginAgreeing implements Tools {
       0;
 }
 
+/// A valid historical release tag whose source predates the current checkout.
+class ReleasedTagOrigin implements Tools {
+  const ReleasedTagOrigin({required this.tag, required this.releasedHead});
+
+  final String tag;
+  final String releasedHead;
+
+  @override
+  Future<ToolResult> run(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+    Map<String, String>? environment,
+    Duration? timeout,
+  }) async {
+    if (executable == 'git' && arguments.first == 'ls-remote') {
+      return ToolResult(
+        exitCode: 0,
+        stdout: '$testTagObject\trefs/tags/$tag\n'
+            '$releasedHead\trefs/tags/$tag^{}\n',
+        stderr: '',
+      );
+    }
+    if (executable == 'git' &&
+        arguments.length == 3 &&
+        arguments[0] == 'cat-file' &&
+        arguments[1] == 'tag' &&
+        arguments[2] == testTagObject) {
+      return ToolResult(
+        exitCode: 0,
+        stdout: 'object $releasedHead\n'
+            'type commit\n'
+            'tag $tag\n\n'
+            'release-manifest-sha256: $testManifestDigest\n',
+        stderr: '',
+      );
+    }
+    if (executable == 'git' && arguments.first == 'verify-tag') {
+      return ToolResult(exitCode: 0, stdout: '', stderr: '');
+    }
+    return ToolResult(exitCode: 127, stdout: '', stderr: 'not scripted');
+  }
+
+  @override
+  Future<int> runInteractive(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+  }) async =>
+      0;
+}
+
 const testHead = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const testTree = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 const testTagObject = 'cccccccccccccccccccccccccccccccccccccccc';
@@ -328,6 +380,7 @@ GitState git({
   bool clean = true,
   bool pushed = true,
   List<String> tags = const [],
+  String? tagTarget,
 }) =>
     GitState(
       root: '/repo',
@@ -341,7 +394,7 @@ GitState git({
       // Stated rather than omitted, for the reason RK-GIT-007 exists: an
       // unread target is not "at HEAD".
       tagObjects: {for (final t in tags) t: testTagObject},
-      tagTargets: {for (final t in tags) t: testHead},
+      tagTargets: {for (final t in tags) t: tagTarget ?? testHead},
       signingConfigured: true,
       originUrl: 'danReynolds/keybay',
     );
@@ -480,6 +533,49 @@ void main() {
     expect(text, matches(RegExp(r'^\s+Published$', multiLine: true)));
     expect(text, isNot(contains('prevent')));
     expect(text, isNot(contains('rk release')));
+  });
+
+  test('post-release commits ask for the next version, not a moved tag',
+      () async {
+    const releasedHead = 'dddddddddddddddddddddddddddddddddddddddd';
+    final run = await statusRun(
+      source: tree(),
+      state: git(
+        tags: const ['v0.2.0'],
+        tagTarget: releasedHead,
+      ),
+      registry: FakeRegistry({
+        'keybay': ['0.2.0']
+      }),
+      tools: const ReleasedTagOrigin(
+        tag: 'v0.2.0',
+        releasedHead: releasedHead,
+      ),
+    );
+
+    expect(
+      run.text,
+      contains('version already released; current source differs'),
+    );
+    expect(run.text, contains('released from ddddddd'));
+    expect(
+        run.text,
+        contains('current source still declares released '
+            'version 0.2.0'));
+    expect(run.text, contains('bump the version and changelog'));
+    expect(run.text, contains('Do not move v0.2.0'));
+    expect(run.text, isNot(contains('Not staged')));
+    expect(_targetLine(run.text, 'Git tag').trimLeft(), isNot(startsWith('✗')));
+
+    final problems = (run.report['problems'] as List).cast<Map>();
+    expect(problems.map((problem) => problem['code']), ['RK-MONO-004']);
+    expect(problems.single.containsKey('target'), isFalse);
+    final targets =
+        ((run.report['units'] as List).single as Map)['targets'] as List;
+    final tag = targets.singleWhere(
+      (target) => (target as Map)['kind'] == 'gitTag',
+    ) as Map;
+    expect(tag['verdict'], 'exact');
   });
 
   test('a pub-only tag does not invent a public manifest file', () async {

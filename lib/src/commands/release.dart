@@ -145,7 +145,6 @@ class ReleaseCommand {
     refreshEnvironment: _refreshEnvironment,
     wait: _wait,
     confirm: confirm,
-    capabilities: capabilities,
     confirmDeadline: confirmDeadline,
     confirmInterval: confirmInterval,
   );

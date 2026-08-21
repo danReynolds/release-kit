@@ -199,13 +199,19 @@ final class HomebrewTargetModule extends TargetModule {
       };
 
   @override
-  String conflictRemedy(
+  Diagnostic diagnoseConflict(
     ResolvedUnit unit,
     TargetPlan target,
+    Inspection conflict,
   ) =>
-      'restore the cask to the exact release bytes it is meant to '
-      'reference, or advance the source version intentionally; then '
-      'run rk status ${unit.name} again';
+      Diagnostic(
+        code: 'RK-REL-001',
+        message: '${target.label}: '
+            '${conflict.detail ?? 'the published cask does not match'}',
+        remedy: 'restore the cask to the exact release bytes it is meant to '
+            'reference, or advance the source version intentionally; then '
+            'run rk status ${unit.name} again',
+      );
 
   @override
   Future<TargetActOutcome> publish(

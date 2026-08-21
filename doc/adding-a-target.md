@@ -33,7 +33,7 @@ operations. Its complete surface is small enough to read as one table:
 | `plan` | yes | Describes the destination, intended version, and public artifacts. |
 | `inspectCandidate` | yes | Reads whether this exact release already exists. |
 | `inspectHistory` | no | Returns typed current-version, refusal, and first-publication facts when candidate inspection is not enough. |
-| `conflictRemedy` | yes | Explains how to resolve conflicting candidate state. |
+| `diagnoseConflict` | yes | Names a conflicting public state and its safe next action in provider terms. |
 | `publishActivity` | yes | Names the module's one meaningful public mutation. |
 | `checkReadiness` | yes | Checks ambient requirements before private preparation. |
 | `authentication` | no | Acquires a native-tool session late in the pipeline. |
@@ -97,7 +97,7 @@ final class GithubReleaseTargetModule extends TargetModule {
   }
 
   // inspectCandidate, checkReadiness, publishActivity, publish, and
-  // conflictRemedy follow.
+  // diagnoseConflict follows.
 }
 ```
 

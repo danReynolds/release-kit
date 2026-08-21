@@ -1903,9 +1903,8 @@ executables:
       expect(
         disclosed,
         contains('built but never executed'),
-        reason: 'the prompt no longer shows this at all; the record is '
-            'where the weaker assurance is said, and it travels with the '
-            'yes that accepted it',
+        reason: 'the durable record travels with the yes that accepted the '
+            'weaker assurance',
       );
       expect(disclosed, contains('linux-x64'));
       expect(
@@ -1913,6 +1912,13 @@ executables:
         isNot(contains('macos-arm64 — no container runtime')),
         reason: 'the host runs its own binaries for free; only the '
             'cross-compiled target is unproven',
+      );
+      expect(run.text, contains('Warnings'));
+      expect(run.text, contains('linux-x64 was built but not executed'));
+      expect(
+        (run.json['warnings'] as List)
+            .map((warning) => (warning as Map)['code']),
+        contains('RK-BUILD-002'),
       );
       expect(run.text, contains('released'));
     });

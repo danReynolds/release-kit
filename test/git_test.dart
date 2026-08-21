@@ -579,6 +579,7 @@ void main() {
       String objectBytes = tagObject,
       bool signed = true,
       ToolResult? signature,
+      String expectedCommit = commit,
     }) async {
       final tools = RecordingTools(results: {
         'git ls-remote origin refs/tags/v1.0.0 refs/tags/v1.0.0^{}':
@@ -592,7 +593,7 @@ void main() {
       final state =
           await GitTag(tools: tools, root: '/repo').inspectReleaseBinding(
         tag: 'v1.0.0',
-        expectedCommit: commit,
+        expectedCommit: expectedCommit,
         expectedManifestSha256: digest,
         requireSignature: signed,
       );
@@ -626,6 +627,21 @@ void main() {
       );
       expect(result.state.verdict, Verdict.conflict);
       expect(result.state.evidence['manifest sha256'], contains(digest));
+    });
+
+    test('a historical release remains proven when current source moved',
+        () async {
+      const current = 'dddddddddddddddddddddddddddddddddddddddd';
+      final result = await prove(expectedCommit: current);
+
+      expect(result.state.verdict, Verdict.conflict);
+      expect(result.state.detail, contains('released from a different source'));
+      expect(result.state.evidence['released source commit'], commit);
+      expect(result.state.evidence['current source commit'], current);
+      expect(result.state.evidence['manifest sha256'], digest);
+      expect(result.state.evidence['signature'], 'verified');
+      expect(result.tools.calls, contains('git cat-file tag $object'));
+      expect(result.tools.calls, contains('git verify-tag $object'));
     });
 
     test('a promised signature must verify on the remote object id', () async {

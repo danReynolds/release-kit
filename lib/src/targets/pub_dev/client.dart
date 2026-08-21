@@ -29,6 +29,11 @@ class PubDevTarget implements PublicationInspector {
 
     final when = published.published;
     final age = when == null ? 'already published' : 'published ${_ago(when)}';
+    final unavailableReason = expectedArchiveSha256 == null
+        ? 'no matching stage'
+        : published.archiveSha256 == null
+            ? 'pub.dev did not provide an archive digest'
+            : 'archive proof was incomplete';
     return PublicReconciliation.appendOnly(
       label: 'the pub.dev archive',
       expected: const {'archive'},
@@ -41,7 +46,7 @@ class PubDevTarget implements PublicationInspector {
         if (published.archiveSha256 != null)
           'archive': 'sha256:${published.archiveSha256!.toLowerCase()}',
       },
-      occupiedDetail: '$age · comparison unavailable',
+      occupiedDetail: '$age · archive not compared ($unavailableReason)',
       verifiedDetail: '$age · archive matches the staged package',
     );
   }
