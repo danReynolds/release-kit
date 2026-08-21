@@ -1051,6 +1051,7 @@ Future<StageReceipt> _completeEveryArtifactType(ReleaseStage release) async {
     outputs: [binary],
     evidence: {
       'smoke': {'status': 'passed'},
+      'signed_smoke': {'status': 'pass', 'command': '--version'},
       'signature': {
         'certificate': 'Developer ID Application: Test (TEAM123456)',
         'certificate_sha256': 'a' * 64,
@@ -1060,6 +1061,7 @@ Future<StageReceipt> _completeEveryArtifactType(ReleaseStage release) async {
         'code_id': 'io.example.tool',
         'unsigned_sha256': 'b' * 64,
         'signed_sha256': binary.sha256,
+        'verified_after_smoke': true,
       },
     },
   );
@@ -1214,6 +1216,7 @@ Future<void> _recordArchives(
     outputs: [binary],
     evidence: {
       'smoke': const {'status': 'passed'},
+      'signed_smoke': const {'status': 'pass', 'command': '--version'},
       'signature': {
         'certificate': 'Developer ID Application: Test (TEAM123456)',
         'certificate_sha256': 'a' * 64,
@@ -1223,6 +1226,7 @@ Future<void> _recordArchives(
         'code_id': 'io.example.tool',
         'unsigned_sha256': 'b' * 64,
         'signed_sha256': binary.sha256,
+        'verified_after_smoke': true,
       },
     },
   );

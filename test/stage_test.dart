@@ -532,11 +532,13 @@ void main() {
         inputs: build.inputs,
         outputs: build.outputs,
         evidence: {
+          'signed_smoke': {'status': 'pass', 'command': '--version'},
           'signature': {
             'certificate': 'Developer ID Application: Test (TEAM123456)',
             'code_id': 'io.example.rk',
             'unsigned_sha256': 'c' * 64,
             'signed_sha256': binary.sha256,
+            'verified_after_smoke': true,
           },
         },
       );
@@ -568,12 +570,14 @@ void main() {
         inputs: build.inputs,
         outputs: build.outputs,
         evidence: {
+          'signed_smoke': {'status': 'pass', 'command': '--version'},
           'signature': {
             'certificate': 'Developer ID Application: Test (TEAM123456)',
             'certificate_sha256': 'a' * 64,
             'code_id': 'io.example.rk',
             'unsigned_sha256': 'c' * 64,
             'signed_sha256': binary.sha256,
+            'verified_after_smoke': true,
           },
         },
       );
@@ -711,6 +715,7 @@ StageReceipt _writeCompleteStage(StageDirectory stage) {
     inputs: [StageInput.step(sourceStep)],
     outputs: [artifact],
     evidence: {
+      'signed_smoke': {'status': 'pass', 'command': '--version'},
       'signature': {
         'certificate': 'Developer ID Application: Test (TEAM123456)',
         'certificate_sha256': 'a' * 64,
@@ -720,6 +725,7 @@ StageReceipt _writeCompleteStage(StageDirectory stage) {
         'code_id': 'io.example.rk',
         'unsigned_sha256': 'c' * 64,
         'signed_sha256': artifact.sha256,
+        'verified_after_smoke': true,
       },
       'notary': {'status': 'accepted', 'log_sha256': 'b' * 64},
     },

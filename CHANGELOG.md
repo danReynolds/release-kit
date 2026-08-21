@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.4
+
+- macOS signatures are verified again after the signed executable smoke test
+  and against the executable decoded from the final release archive. A release
+  now stops before publication if either final-artifact boundary fails.
+- Stage schema 10 records and validates archive-extracted signature evidence,
+  so a reusable stage cannot claim the stronger macOS gate without having run
+  it.
+
 ## 0.1.3
 
 - Staging and publication now run from validated dependency graphs. Independent

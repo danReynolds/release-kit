@@ -244,6 +244,8 @@ meanings and are not reused.
 | `RK-SIGN-002` | $platform: signing failed | `lib/src/binary_chain.dart` |
 | `RK-SIGN-003` | the signature does not match the identity users  already installed | `lib/src/binary_chain.dart` |
 | `RK-SIGN-014` | the signed binary does not run | `lib/src/binary_chain.dart` |
+| `RK-SIGN-015` | the signature no longer verifies after the signed binary ran | `lib/src/binary_chain.dart` |
+| `RK-SIGN-016` | the macOS signature does not verify in the final archive | `lib/src/binary_chain.dart` |
 | `RK-SIGN-004` | the identity users already installed could not be read | `lib/src/commands/release.dart` |
 | `RK-SIGN-006` | the login keychain could not be read | `lib/src/commands/release.dart` |
 | `RK-SIGN-007` | no Developer ID Application certificate is installed | `lib/src/commands/release.dart` |
