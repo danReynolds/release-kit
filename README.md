@@ -24,6 +24,9 @@ of a release script.
   already signed, makes a signature required rather than incidental — and
   rk reads it back off the tag it created instead of trusting the config.
   A signature it cannot verify is refused, not reported as signed.
+- **Final bytes checked.** Signed macOS executables are smoke-tested, verified
+  again after execution, archived, then decoded and verified once more from
+  the exact archive that release targets consume.
 - **Monorepos.** Cross-unit version constraints are checked before
   anything acts.
 
@@ -87,6 +90,10 @@ $ brew install --cask danreynolds/tap/rk
 
 The same CLI ships from pub.dev, Homebrew, and GitHub Releases —
 `rk --version` reports what you are running.
+
+The maintained [production release protocol](doc/production-alpha-plan.md)
+and [0.1.4 canary receipt](doc/production-alpha-receipt.md) show the proof
+required before calling those channels released.
 
 ## Targets
 

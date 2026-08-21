@@ -1,111 +1,115 @@
-# Production alpha receipt
+# Production release receipt: rk 0.1.4
 
-Status: not run
+Status: completed
+Date: 2026-08-21
+Unit: rk
+Version: 0.1.4
+Source commit: 4118904ad0827b854f1d9200fdaf5fa924e62bb7
+Release PR: https://github.com/danReynolds/release-kit/pull/50
+Tag object: f7f3adff75f1a44df1107fd296c7f93e43b70aab
+Stage identity: ed53e252c2e1f97e38b3bb0219b388fdc6a15661df8bfd791cbfd4e09810ea95
+Manifest SHA-256: af61e56a53c3014660790cb919dad6ef2efc4d83faf022fa8616d1b8471450aa
+Notary submission ID: d0f083fe-af5b-4cc2-ac4a-dc959dc21d79
 
-This is the evidence destination for the supervised release-kit canary in
-`production-alpha-plan.md`. Do not turn either live checkpoint green from a
-summary. Preserve the exact command transcript and public coordinates here.
+This receipt closes the supervised production canary described in
+[production-alpha-plan.md](production-alpha-plan.md). The source commit is the
+commit bound into the stage, tag, manifest, and public artifacts. This receipt
+is a post-release record and therefore lands after that tagged commit.
 
-The first recorded section must be titled "Release and provider receipt" and
-include the clean pushed source commit, unit/version, stage identity, manifest
-digest, configured adapters, target URLs, staged artifact inspection, release
-transcript including the single native pub login preflight, and fresh-process
-status read-back.
+## Implementation and CI
 
-The second recorded section must be titled "Idempotent retry and consumer
-receipt" and include the repeated release transcript showing zero public acts,
-plus real consumption from pub.dev and the GitHub Release. Record Homebrew only
-after a separately configured clean-consumer canary exercises it.
+The release source passed:
 
-Replace every angle-bracketed instruction below with exact evidence. Keep
-`Status: not run` until every field and transcript is complete; only then set
-it to `Status: completed` and run the live checkpoint test. In every fenced
-transcript, normalize each command line as `$ <exact command>` and preserve its
-output unchanged until the next `$ ` command line.
+- `dart format --output=none --set-exit-if-changed .`;
+- `dart analyze` with no issues;
+- `dart test` with 970 passing tests; and
+- GitHub CI on Ubuntu and macOS for release PR 50.
 
-## Release and provider receipt
+The 0.1.4 change added the final macOS artifact gate. The signed executable
+passed its smoke test, passed strict signature verification after that
+execution, was archived, and passed strict signature verification again after
+rk decoded the final archive into a new directory.
 
-Clean pushed source commit: <40-character lowercase commit hash>
-Unit: <unit name>
-Version: <semantic version>
-Stage identity: <64-character lowercase SHA-256>
-Manifest SHA-256: <64-character lowercase SHA-256>
-Notary submission ID: <UUID shown by both macOS notary JSON files>
+Signed smoke: pass
+Post-smoke signature verification: pass
+Archive-extracted signature verification: pass
+Notarization requirement: pass
+Certificate: Developer ID Application: Pollyn Inc (5AHFA9FUZG)
+Certificate SHA-256: 801984bb3b6a1592280ed7d581225a60543cf0b189c362893361963b1319d622
+macOS executable SHA-256: 9d5b60fb6484a5e9ac5ed0cf230851f23a7e8bdea60e244ae4311bc5ec2371a0
+Notary result: Accepted
 
-Configured adapters: <exact adapter names>
-Target URLs: <exact Git tag, pub.dev version, and GitHub Release URLs>
+The earlier 0.1.3 signature warning was reproduced and found to be a sandbox
+false negative: the restricted process could not access macOS trust/keychain
+services. Outside that boundary, the exact staged binary passed strict
+verification and its CodeDirectory hashes matched its bytes. The stronger
+0.1.4 checks were retained because verifying the final archive is the right
+release invariant regardless.
 
-### Staged artifact inspection
+## Stage artifacts
 
-```text
-<complete `dart run bin/rk.dart release rk --stage` command and output, showing
-no `dart pub login` invocation>
-<the exact stage path printed by rk>
-<`shasum -a 256 release-manifest.json` and its output>
-<`shasum -a 256 <archive>` output for each archive, matching its digest in
-`release-manifest.json`>
-<`$ tar -tzf <archive>` and the exact `rk`, `LICENSE`, `README.md` inventory,
-repeated for each of the three release archives>
-<a fresh `alpha_macos_dir`, extraction of the macOS archive into it, and
-`$ "$alpha_macos_dir/rk" --version` output>
-<`$ codesign --verify --strict --verbose=2 "$alpha_macos_dir/rk" && echo
-"signature valid"` and its output>
-<`$ codesign -d -r- --verbose=4 "$alpha_macos_dir/rk"` and its output>
-<`$ codesign --test-requirement=notarized -v "$alpha_macos_dir/rk" && echo
-"notarization valid"` and its output>
-<`$ cat rk-<version>-macos-arm64.notary-result.json` and the complete JSON>
-<`$ cat rk-<version>-macos-arm64.notary-log.json` and the complete JSON>
-```
+| Artifact | SHA-256 | Result |
+|---|---|---|
+| `rk-0.1.4-linux-arm64.tar.gz` | `18cb59621d9100b143b6573afd3e873e4da17ce4ed5eabc9f1285642f0df8ac3` | manifest match; inventory exact |
+| `rk-0.1.4-linux-x64.tar.gz` | `3725ae9316445dbdd10298528a3b0556e8f9eca118f40727cf61f669838056d0` | manifest match; inventory exact |
+| `rk-0.1.4-macos-arm64.tar.gz` | `1cf5c67f6fce119e915f98d0eb50f1337ec24fedab510176c565c64ee824ba68` | manifest match; inventory exact; extracted signature valid |
+| pub.dev package archive | `f8e9224330457e99855eb40201b1f76ee25b4706dc60ae711a1f0043683fdd09` | public archive exact |
+| `Casks/rk.rb` | `42f13b7626e2dd83ab5025039f658286921ace20c5b316661f53462daf405d17` | tap identity exact |
 
-### Release transcript
+Every binary archive contained exactly `rk`, `LICENSE`, and `README.md`. The
+macOS archive was independently extracted and its executable reported
+`rk 0.1.4`, passed `codesign --verify --strict`, and satisfied
+`codesign -R='notarized' -v`.
 
-```text
-<complete `dart run bin/rk.dart release rk` command and settled output,
-including exactly one attached `dart pub login` before the private-stage
-boundary, followed by authorization, publish, and exact read-back; record no
-credential or raw session values>
-```
+Linux smoke execution was not available during staging because no container
+runtime was running on the macOS producer. Linux compilation and archive
+validation passed, and the implementation/test suite ran on Ubuntu CI. This
+was recorded as `not-executed`, not promoted to a false local pass.
 
-### Fresh-process status read-back
+## Public reconciliation
 
-```text
-<complete `dart run bin/rk.dart status rk` command and settled output>
-```
+| Target | Public coordinate | Read-back |
+|---|---|---|
+| Git tag | `v0.1.4` | annotated tag binds source commit and manifest |
+| pub.dev | https://pub.dev/packages/rk/versions/0.1.4 | published archive matches staged package |
+| GitHub Release | https://github.com/danReynolds/release-kit/releases/tag/v0.1.4 | metadata and all four asset bytes match |
+| Homebrew | https://github.com/danReynolds/homebrew-tap/blob/main/Casks/rk.rb | cask points at 0.1.4 with exact staged identity |
 
-## Idempotent retry and consumer receipt
+pub.dev accepted the upload before its cached versions endpoint exposed it.
+rk's bounded 60-second read-back stopped the release with an uncertain effect,
+so GitHub Release and Homebrew did not incorrectly proceed from an unproved
+dependency. Approximately two minutes later, the package reconciled as exact
+and the same release safely completed.
 
-Unit: <unit name>
-Version: <semantic version>
-Public acts: <exact integer; must be zero>
-Asset: <one downloaded release archive filename>
-Asset SHA-256: <64-character lowercase SHA-256>
+An idempotent `dart run bin/rk.dart release rk --json` retry exited 0 with no
+problems or warnings. Its four public steps — Git tag, pub.dev, GitHub Release,
+and Homebrew — each reported `verdict: exact` and
+`action: already_published`. Public acts on retry: 0.
 
-### Repeated release transcript
+## Clean consumers
 
-```text
-<complete `dart run bin/rk.dart release rk --json` command and output, showing
-every configured public step with `verdict: exact` and `action: already_published`,
-and no second login or public act; login is not itself a public act or proof of
-uploader authority>
-```
+| Source | Isolation | Evidence | Result |
+|---|---|---|---|
+| pub.dev | fresh `PUB_CACHE` | activate `rk 0.1.4`; run version and bare-name status | pass |
+| GitHub Release | fresh download/extraction directory | manifest digest; signature; notarization; version; bare-name status | pass |
+| Homebrew | clean native Apple Silicon cask install | `/opt/homebrew/bin/rk --version`; signature; notarization; bare-name status | pass |
+| Installed CLI | user PATH installation | exact GitHub binary digest; `rk --version` | pass |
 
-### pub.dev consumer
+All three public consumers reported `rk 0.1.4` and successfully ran
+`rk status rk` against a clean checkout, observing Git tag, pub.dev, GitHub
+Release, and Homebrew as published. The installed CLI at
+`/Users/dan/.local/bin/rk` was replaced with the independently verified GitHub
+binary and has the recorded macOS executable digest.
 
-```text
-<set `alpha_pub_cache` to a fresh temporary directory>
-<`PUB_CACHE="$alpha_pub_cache" dart pub global activate rk <version>`>
-<the public version URL>
-<`"$alpha_pub_cache/bin/rk" --version` and output `rk <version>`>
-<`"$alpha_pub_cache/bin/rk" --help` and its three-verb output>
-```
+The machine also has an Intel Homebrew at `/usr/local`; it correctly refused
+the arm64-only cask. The native `/opt/homebrew` installation is the relevant
+consumer and completed successfully.
 
-### GitHub Release consumer
+## Conclusion
 
-```text
-<download both the chosen archive URL and `release-manifest.json` into a fresh
-directory>
-<select that archive's digest from the manifest and show that
-`shasum -a 256 <asset>` agrees>
-<extract the archive there and show the extracted `./rk --version` output as
-`rk <version>` and `./rk --help` with the three-verb surface>
-```
+The 0.1.4 canary proves the full supported lifecycle: reviewed source, green
+cross-platform CI, source-bound private staging, signed and notarized final
+archive bytes, dependency-aware public publication, uncertain-effect recovery,
+idempotent reconciliation, and clean consumption from every distribution
+channel. rk is ready for supervised production use within that target and
+platform boundary.
