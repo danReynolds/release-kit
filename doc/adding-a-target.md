@@ -20,10 +20,9 @@ plan -> inspect -> stage -> authorize -> publish -> confirm
 See [Release pipeline architecture](release-pipeline.md) for the coordinator
 boundaries and the typed handoffs between private preparation and publication.
 
-That includes checklist order, prerequisite enforcement, stage validity,
-progress rendering, authorization, retry policy, and the final decision about
-whether public state is exact. Core never branches on GitHub, pub.dev, or
-Homebrew.
+That includes dependency validation and scheduling, stage validity, progress
+rendering, authorization, retry policy, and the final decision about whether
+public state is exact. Core never branches on GitHub, pub.dev, or Homebrew.
 
 A target module owns only the destination-specific meaning of those
 operations. Its complete surface is small enough to read as one table:
@@ -151,8 +150,9 @@ destination's public-state semantics genuinely differ.
 
 1. Add its configuration name, scope, prerequisites, and Git requirement to
    `PublishTarget`.
-2. Add one public `StepKind` and place its step explicitly in `Checklist`, with
-   the exact prerequisites it needs. Do not hide ordering in target callbacks.
+2. Add one public `StepKind` and place its step explicitly in `Checklist`.
+   `Checklist` expands the target prerequisites from step 1 into concrete
+   dependency edges; do not copy them into a command or target callback.
 3. Create `lib/src/targets/<target>/module.dart`. Keep native API/CLI mechanics
    in a sibling client when they would obscure the lifecycle.
 4. Register one module in `TargetCatalog`. Its coverage check fails until every
@@ -166,6 +166,13 @@ Before adding a hook, ask whether core must coordinate the operation. If core
 only needs the final provider-neutral outcome, keep the operation inside the
 target's client. If several targets independently need the same lifecycle
 concept, add the smallest typed core abstraction after the second real use.
+
+The shared dependency graph is deliberately not a target hook. A target names
+only its coarse public prerequisites and the artifact/step inputs of its
+optional stage contribution. Core validates those edges, starts every ready
+node, and keeps one active operation per target kind. A newly added independent
+target therefore overlaps existing targets automatically; a dependent target
+waits without its module knowing how the scheduler works.
 
 ## Acceptance bar
 

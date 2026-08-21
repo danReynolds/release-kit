@@ -5,6 +5,7 @@ import '../builds/capability.dart';
 import '../engine/assets.dart';
 import '../engine/checklist.dart';
 import '../engine/diagnostic.dart';
+import '../engine/dependency_graph.dart';
 import '../engine/git.dart';
 import '../engine/identity.dart';
 import '../engine/producer_lane.dart';
@@ -13,7 +14,6 @@ import '../engine/publish_target.dart';
 import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
 import '../engine/stage_board.dart';
-import '../engine/stage_contract.dart';
 import '../engine/stage_inspection.dart';
 import '../engine/stage_receipt.dart';
 import '../engine/targets.dart';
@@ -294,195 +294,224 @@ final class ReleaseStageCoordinator {
       }
     }
 
-    Future<bool> prepareTargets(StageContributionPhase phase) async {
-      for (final targetStage in targetStages.where(
-        (item) => item.contract.phase == phase,
-      )) {
-        final target = targetStage.target;
-        final receiptName = targetStage.contract.step.name;
-        if (progress.any((record) => record.name == receiptName)) continue;
-        final TargetStageOutcome result;
-        try {
-          result = await targetStage.prepare(
-            TargetStageContext(
-              contract: targetStage.contract,
-              tools: tools,
-              git: initialGit,
-              attach: output.report.attach,
-              stage: stage,
-              sourceStep: sourceStep,
-              priorSteps: progress,
-              progress: stageProgress.handlesFor(targetStage),
-            ),
-          );
-        } on Object catch (error) {
-          stageProgress.conclude();
-          _stageOperationFailed('${target.label} stage preparation', error);
-          return false;
-        }
-        notices.addAll(result.notices);
-        if (result case TargetStageFailure(:final diagnostic, :final unit)) {
-          stageProgress.conclude();
-          for (final notice in notices) {
-            output.say(notice, depth: 1);
-          }
-          output.problem(diagnostic, unit: unit);
-          output.halt(HaltKind.beforeActing);
-          return false;
-        }
-        final step = (result as TargetStageSuccess).step;
-        progress.add(step);
-        try {
-          _persistStageProgress(stage, sourceArtifacts, progress);
-          stageProgress.record(step);
-        } on Object catch (error) {
-          stageProgress.conclude();
-          _stageProgressFailed(error);
-          return false;
-        }
-      }
-      return true;
-    }
-
-    if (!await prepareTargets(StageContributionPhase.beforeArtifacts)) {
-      return null;
-    }
-
     final producerSteps = checklist.steps.where((step) {
       return !step.isPublic &&
           step.kind != StepKind.prerequisite &&
           step.kind != StepKind.completeStage;
     }).toList();
     stageProgress.restore(progress);
-
-    final lanes = <String, List<Step>>{};
-    for (final step in producerSteps) {
-      lanes
-          .putIfAbsent('${step.project}/${step.platform!}', () => [])
-          .add(step);
-    }
-    assert(
-      () {
-        final producerIds = {for (final step in producerSteps) step.id};
-        for (final lane in lanes.values) {
-          final earlier = <String>{};
-          for (final step in lane) {
-            for (final need in step.needs) {
-              if (producerIds.contains(need) && !earlier.contains(need)) {
-                return false;
-              }
-            }
-            earlier.add(step.id);
-          }
-        }
-        return true;
-      }(),
-      'a producer depends on a step outside or later in its lane',
+    final producersByName = {
+      for (final step in producerSteps) receiptNameFor(step): step,
+    };
+    final targetStagesByName = {
+      for (final targetStage in targetStages)
+        targetStage.contract.step.name: targetStage,
+    };
+    final runnable = {
+      ...producersByName.keys,
+      ...targetStagesByName.keys,
+    };
+    final graph = DependencyGraph<String>(
+      stage.producerNames,
+      idOf: (producer) => producer,
+      dependenciesOf: stage.producerDependencies,
     );
-
+    final completed = {for (final step in progress) step.name};
+    final laneSources = <String, ProducerLaneSource>{};
+    final laneChains = <String, BinaryChain>{};
+    final activeTargets = <PublishTarget>{};
     final failures = <HaltKind>[];
 
-    Future<void> runLane(String laneName, List<Step> lane) async {
-      final laneSource = ProducerLaneSource(
-        stage: stage.directory,
-        lane: laneName,
-      );
+    void record(StageStep recorded) {
+      progress.add(recorded);
       try {
-        laneSource.materialize(sourceArtifacts);
-        final chain = _chain(unit, repositoryRoot: laneSource.path);
-        for (final step in lane) {
-          if (failures.isNotEmpty) return;
-          try {
-            if (_producerRecorded(progress, step)) {
-              output.step(
-                step,
-                verdict: Verdict.exact,
-                detail: 'validated in the interrupted stage',
-                show: false,
-              );
-              continue;
-            }
-            output.report.acted = true;
-            final receiptName = receiptNameFor(step);
-            stageProgress.begin(receiptName, _producerActivity(step));
-            final LocalProducerOutcome act;
-            try {
-              act = await _actProducer(
-                step,
-                unit,
-                signing,
-                chain: chain,
-                progress: stageProgress.handleFor(receiptName),
-              );
-            } on Object catch (error) {
-              stageProgress.fail(receiptName);
-              _stageOperationProblem(step.summary, error);
-              failures.add(HaltKind.stoppedPartway);
-              return;
-            }
-            if (!act.ok) {
-              stageProgress.fail(receiptName);
-              failures.add(act.halt ?? HaltKind.stoppedPartway);
-              return;
-            }
-            try {
-              final recorded = _captureProducerStep(
-                stage,
-                unit,
-                step,
-                sourceStep,
-                progress,
-                act,
-              );
-              progress.add(recorded);
-              try {
-                _persistStageProgress(stage, sourceArtifacts, progress);
-              } on Object {
-                progress.remove(recorded);
-                rethrow;
-              }
-              stageProgress.record(recorded);
-            } on Object catch (error) {
-              stageProgress.fail(receiptName);
-              _stageProgressProblem(error);
-              failures.add(HaltKind.beforeActing);
-              return;
-            }
-          } on Object catch (error) {
-            _stageOperationProblem('the ${unit.name} stage', error);
-            failures.add(HaltKind.stoppedPartway);
-            return;
-          }
-        }
-      } on Object catch (error) {
-        _stageOperationProblem('the ${unit.name} stage', error);
-        failures.add(HaltKind.stoppedPartway);
-      } finally {
-        try {
-          laneSource.close();
-        } on Object catch (error) {
-          _stageOperationProblem(
-            'the ${unit.name} producer lane cleanup',
-            error,
-          );
-          failures.add(HaltKind.stoppedPartway);
-        }
+        _persistStageProgress(stage, sourceArtifacts, progress);
+        stageProgress.record(recorded);
+      } on Object {
+        progress.remove(recorded);
+        rethrow;
       }
     }
 
-    await Future.wait([
-      for (final entry in lanes.entries) runLane(entry.key, entry.value),
-    ]);
+    Future<_StageWorkCompletion> runTargetStage(
+      String receiptName,
+      TargetStage targetStage,
+    ) async {
+      final target = targetStage.target;
+      try {
+        final result = await targetStage.prepare(
+          TargetStageContext(
+            contract: targetStage.contract,
+            tools: tools,
+            git: initialGit,
+            attach: output.report.attach,
+            stage: stage,
+            sourceStep: sourceStep,
+            priorSteps: List<StageStep>.unmodifiable(progress),
+            progress: stageProgress.handlesFor(targetStage),
+          ),
+        );
+        notices.addAll(result.notices);
+        if (result case TargetStageFailure(:final diagnostic, :final unit)) {
+          stageProgress.fail(receiptName);
+          output.problem(diagnostic, unit: unit);
+          return _StageWorkCompletion.failed(
+            receiptName,
+            HaltKind.beforeActing,
+          );
+        }
+        try {
+          record((result as TargetStageSuccess).step);
+          return _StageWorkCompletion.succeeded(receiptName);
+        } on Object catch (error) {
+          stageProgress.fail(receiptName);
+          _stageProgressProblem(error);
+          return _StageWorkCompletion.failed(
+            receiptName,
+            HaltKind.beforeActing,
+          );
+        }
+      } on Object catch (error) {
+        stageProgress.fail(receiptName);
+        _stageOperationProblem('${target.label} stage preparation', error);
+        return _StageWorkCompletion.failed(
+          receiptName,
+          HaltKind.stoppedPartway,
+        );
+      }
+    }
+
+    Future<_StageWorkCompletion> runProducer(
+      String receiptName,
+      Step step,
+    ) async {
+      final laneName = '${step.project}/${step.platform!}';
+      try {
+        final laneSource = laneSources.putIfAbsent(laneName, () {
+          final source = ProducerLaneSource(
+            stage: stage.directory,
+            lane: laneName,
+          );
+          source.materialize(sourceArtifacts);
+          return source;
+        });
+        final chain = laneChains.putIfAbsent(
+          laneName,
+          () => _chain(unit, repositoryRoot: laneSource.path),
+        );
+        output.report.acted = true;
+        stageProgress.begin(receiptName, _producerActivity(step));
+        final LocalProducerOutcome act;
+        try {
+          act = await _actProducer(
+            step,
+            unit,
+            signing,
+            chain: chain,
+            progress: stageProgress.handleFor(receiptName),
+          );
+        } on Object catch (error) {
+          stageProgress.fail(receiptName);
+          _stageOperationProblem(step.summary, error);
+          return _StageWorkCompletion.failed(
+            receiptName,
+            HaltKind.stoppedPartway,
+          );
+        }
+        if (!act.ok) {
+          stageProgress.fail(receiptName);
+          return _StageWorkCompletion.failed(
+            receiptName,
+            act.halt ?? HaltKind.stoppedPartway,
+          );
+        }
+        try {
+          record(_captureProducerStep(
+            stage,
+            unit,
+            step,
+            sourceStep,
+            progress,
+            act,
+          ));
+          return _StageWorkCompletion.succeeded(receiptName);
+        } on Object catch (error) {
+          stageProgress.fail(receiptName);
+          _stageProgressProblem(error);
+          return _StageWorkCompletion.failed(
+            receiptName,
+            HaltKind.beforeActing,
+          );
+        }
+      } on Object catch (error) {
+        stageProgress.fail(receiptName);
+        _stageOperationProblem('the ${unit.name} stage', error);
+        return _StageWorkCompletion.failed(
+          receiptName,
+          HaltKind.stoppedPartway,
+        );
+      }
+    }
+
+    Future<_StageWorkCompletion> runWork(String name) {
+      final targetStage = targetStagesByName[name];
+      if (targetStage != null) return runTargetStage(name, targetStage);
+      final producer = producersByName[name];
+      if (producer != null) return runProducer(name, producer);
+      throw StateError('the stage graph has no executor for "$name"');
+    }
+
+    final active = <String, Future<_StageWorkCompletion>>{};
+    while (completed.intersection(runnable).length < runnable.length ||
+        active.isNotEmpty) {
+      if (failures.isEmpty) {
+        final ready = graph
+            .ready(completed: completed, active: active.keys.toSet())
+            .where(runnable.contains)
+            .toList();
+        for (final name in ready) {
+          final target = targetStagesByName[name]?.target.target;
+          if (target != null && !activeTargets.add(target)) continue;
+          active[name] = runWork(name);
+        }
+        if (active.isEmpty && ready.isEmpty) {
+          _stageOperationProblem(
+            'the ${unit.name} stage dependency graph',
+            StateError('no producer is ready'),
+          );
+          failures.add(HaltKind.beforeActing);
+          break;
+        }
+      }
+      if (active.isEmpty) break;
+      final result = await Future.any(active.values);
+      active.remove(result.producer);
+      final target = targetStagesByName[result.producer]?.target.target;
+      if (target != null) activeTargets.remove(target);
+      if (result.halt case final halt?) {
+        failures.add(halt);
+      } else {
+        completed.add(result.producer);
+      }
+    }
+
+    for (final laneSource in laneSources.values) {
+      try {
+        laneSource.close();
+      } on Object catch (error) {
+        _stageOperationProblem(
+          'the ${unit.name} producer lane cleanup',
+          error,
+        );
+        failures.add(HaltKind.stoppedPartway);
+      }
+    }
     if (failures.isNotEmpty) {
       stageProgress.concludeStopped();
       if (!output.report.halted) {
         output.halt(failures
             .reduce((left, right) => left.index >= right.index ? left : right));
       }
-      return null;
-    }
-
-    if (!await prepareTargets(StageContributionPhase.afterArtifacts)) {
       return null;
     }
 
@@ -521,9 +550,9 @@ final class ReleaseStageCoordinator {
       detail: 'staged and validated',
       show: false,
     );
-    final completed = stage.inspect().receipt!.steps;
+    final completedReceipt = stage.inspect().receipt!.steps;
     stageProgress
-      ..restore(completed)
+      ..restore(completedReceipt)
       ..settle(title: '${unit.name} ${unit.version} · staged');
     for (final notice in notices) {
       output.say(notice, depth: 1);
@@ -597,11 +626,6 @@ final class ReleaseStageCoordinator {
     ));
   }
 
-  void _stageProgressFailed(Object error) {
-    _stageProgressProblem(error);
-    output.halt(HaltKind.beforeActing);
-  }
-
   void _stageOperationProblem(String operation, Object error) {
     output.problem(Diagnostic(
       code: 'RK-STAGE-003',
@@ -610,14 +634,6 @@ final class ReleaseStageCoordinator {
           'was changed',
     ));
   }
-
-  void _stageOperationFailed(String operation, Object error) {
-    _stageOperationProblem(operation, error);
-    if (!output.report.halted) output.halt(HaltKind.stoppedPartway);
-  }
-
-  bool _producerRecorded(List<StageStep> progress, Step step) =>
-      progress.any((record) => record.name == receiptNameFor(step));
 
   StageStep _captureProducerStep(
     ReleaseStage stage,
@@ -636,11 +652,21 @@ final class ReleaseStageCoordinator {
       name: contract.name,
       inputs: [
         for (final input in contract.inputs)
-          input == 'step:source-snapshot'
-              ? StageInput.step(sourceStep)
-              : StageInput.artifact(recorded[input] ??
-                  (throw StateError(
-                      '${contract.name} input $input is not recorded'))),
+          if (input.startsWith('step:'))
+            StageInput.step(
+              input == 'step:source-snapshot'
+                  ? sourceStep
+                  : progress.singleWhere(
+                      (step) => 'step:${step.name}' == input,
+                      orElse: () => throw StateError(
+                        '${contract.name} input $input is not recorded',
+                      ),
+                    ),
+            )
+          else
+            StageInput.artifact(recorded[input] ??
+                (throw StateError(
+                    '${contract.name} input $input is not recorded'))),
       ],
       outputs: [
         for (final artifact in outcome.outputs)
@@ -1016,4 +1042,13 @@ class _StageInputs {
   const _StageInputs({required this.signing});
 
   final ReleaseSigningContext? signing;
+}
+
+final class _StageWorkCompletion {
+  const _StageWorkCompletion.succeeded(this.producer) : halt = null;
+
+  const _StageWorkCompletion.failed(this.producer, this.halt);
+
+  final String producer;
+  final HaltKind? halt;
 }

@@ -577,6 +577,7 @@ class ReleaseCommand {
     return _publication.publish(
       PublicationPlan(
         unit: unit,
+        steps: checklist.steps,
         publicSteps: publicSteps,
         targets: targets,
         states: states,

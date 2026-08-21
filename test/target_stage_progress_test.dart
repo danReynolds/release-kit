@@ -25,7 +25,6 @@ TargetPlan _target() => TargetPlan(
     );
 
 StageContributionContract _contract() => const StageContributionContract(
-      phase: StageContributionPhase.beforeArtifacts,
       step: StageStepContract(
         'example-stage',
         outputs: {'private/one': 'one', 'private/two': 'two'},

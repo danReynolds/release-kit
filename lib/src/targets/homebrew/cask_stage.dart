@@ -31,7 +31,6 @@ TargetStage homebrewCaskStage({
       ReleaseAssets.archivePath(project, platform),
   };
   final contract = StageContributionContract(
-    phase: StageContributionPhase.afterArtifacts,
     step: StageStepContract(
       'homebrew-cask:${project.name}',
       inputs: archives,

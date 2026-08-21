@@ -18,6 +18,7 @@ import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/transforms/digest.dart';
+import 'package:rk/src/targets/catalog.dart';
 import 'package:test/test.dart';
 
 import 'status_test.dart' show FakeRegistry;
@@ -203,12 +204,21 @@ Future<Ran> release({
             'fixture_head': effectiveGit.head,
           },
         );
+        final directory = StageDirectory(
+          repositoryRoot: stageRoot.path,
+          identity: identity,
+        );
         return ReleaseStage(
           unit: unit,
           source: tree,
-          directory: StageDirectory(
-            repositoryRoot: stageRoot.path,
-            identity: identity,
+          directory: directory,
+          repository: effectiveGit.originUrl,
+          enforceUnitContract: true,
+          targetContributions:
+              TargetCatalog.builtIn().stageContractResolver(resolution)(
+            unit: unit,
+            repository: effectiveGit.originUrl,
+            sourceRoot: directory.resolve('source'),
           ),
         );
       });

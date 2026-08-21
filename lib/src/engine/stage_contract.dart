@@ -1,13 +1,9 @@
 import 'assets.dart';
+import 'dependency_graph.dart';
 import 'resolve.dart';
 import 'stage.dart';
 import 'stage_inspection.dart';
 import 'stage_receipt.dart';
-
-enum StageContributionPhase {
-  beforeArtifacts,
-  afterArtifacts,
-}
 
 typedef StageStepContractValidator = Iterable<StageIssue> Function(
   StageContractContext context,
@@ -29,17 +25,16 @@ final class StageStepContract {
 }
 
 final class StageContributionContract {
-  const StageContributionContract({required this.phase, required this.step});
+  const StageContributionContract({required this.step});
 
-  final StageContributionPhase phase;
   final StageStepContract step;
 }
 
-/// Orders the fixed target-owned stage work by position and stable name.
+/// Validates and canonically orders target-owned stage work by stable name.
 ///
-/// Built-in targets do not form a dependency graph: their only real ordering
-/// boundary is whether work happens before or after shared artifact producers.
-/// Duplicate producer and output claims are still refused fail-closed.
+/// Actual dependencies are resolved with the shared producer contracts by
+/// [StageReceiptContract]. A target can therefore consume another producer's
+/// artifact without inventing a lifecycle phase.
 List<T> orderStageContributions<T>(
   Iterable<T> values,
   StageContributionContract Function(T value) contractOf,
@@ -64,30 +59,8 @@ List<T> orderStageContributions<T>(
       outputs[output] = name;
     }
   }
-  for (final entry in entries) {
-    final contract = contractOf(entry);
-    for (final input in contract.step.inputs) {
-      final producer = input.startsWith('step:')
-          ? input.substring('step:'.length)
-          : outputs[input];
-      if (producer != null && names.contains(producer)) {
-        throw StateError(
-          'target stage producer "${contract.step.name}" depends on target '
-          'producer "$producer"; use a shared artifact boundary instead',
-        );
-      }
-    }
-  }
-  entries.sort((left, right) {
-    final leftContract = contractOf(left);
-    final rightContract = contractOf(right);
-    final position = leftContract.phase.index.compareTo(
-      rightContract.phase.index,
-    );
-    return position != 0
-        ? position
-        : leftContract.step.name.compareTo(rightContract.step.name);
-  });
+  entries.sort((left, right) =>
+      contractOf(left).step.name.compareTo(contractOf(right).step.name));
   return List<T>.unmodifiable(entries);
 }
 
@@ -126,7 +99,9 @@ class StageReceiptContract {
     required this.repository,
     required this.sourceRoot,
     required List<StageStepContract> steps,
-  }) : _steps = List<StageStepContract>.unmodifiable(steps);
+    required Map<String, Set<String>> dependencies,
+  })  : _steps = List<StageStepContract>.unmodifiable(steps),
+        _dependencies = Map<String, Set<String>>.unmodifiable(dependencies);
 
   factory StageReceiptContract.forUnit({
     required ResolvedUnit unit,
@@ -139,32 +114,21 @@ class StageReceiptContract {
       targetContributions,
       (contract) => contract,
     );
-    final steps = <StageStepContract>[
+    final declared = <StageStepContract>[
       const StageStepContract('source-snapshot'),
+      ...contributions.map((item) => item.step),
+      ...localProducers,
+      const StageStepContract(
+        'complete-stage',
+        outputs: {ReleaseAssets.manifest: 'manifest'},
+      ),
     ];
-    steps.addAll(contributions
-        .where((item) => item.phase == StageContributionPhase.beforeArtifacts)
-        .map((item) => item.step));
-
-    // The producer pipeline is declared once, beside the checklist that
-    // derives it — the caller passes it here the same way targets pass
-    // their contributions.
-    steps.addAll(localProducers);
-
-    steps.addAll(contributions
-        .where((item) => item.phase == StageContributionPhase.afterArtifacts)
-        .map((item) => item.step));
-
-    steps.add(const StageStepContract(
-      'complete-stage',
-      outputs: {ReleaseAssets.manifest: 'manifest'},
-    ));
-    final names = steps.map((step) => step.name).toList();
+    final names = declared.map((step) => step.name).toList();
     if (names.toSet().length != names.length) {
       throw StateError('two stage contracts claim the same producer name');
     }
     final outputOwners = <String, String>{};
-    for (final step in steps) {
+    for (final step in declared) {
       for (final output in step.outputs.keys) {
         final previous = outputOwners[output];
         if (previous != null) {
@@ -176,11 +140,33 @@ class StageReceiptContract {
         outputOwners[output] = step.name;
       }
     }
+    final dependencies = <String, Set<String>>{};
+    for (final step in declared) {
+      final needs = <String>{};
+      if (step.name == 'complete-stage') {
+        needs.addAll(names.where((name) => name != step.name));
+      } else {
+        for (final input in step.inputs) {
+          final producer = input.startsWith('step:')
+              ? input.substring('step:'.length)
+              : outputOwners[input];
+          if (producer != null && producer != step.name) needs.add(producer);
+        }
+      }
+      dependencies[step.name] = Set<String>.unmodifiable(needs);
+    }
+    final graph = DependencyGraph<StageStepContract>(
+      declared,
+      idOf: (step) => step.name,
+      dependenciesOf: (step) => dependencies[step.name]!,
+    );
+    final steps = graph.ordered();
     return StageReceiptContract._(
       unit: unit,
       repository: repository,
       sourceRoot: sourceRoot,
       steps: steps,
+      dependencies: dependencies,
     );
   }
 
@@ -188,10 +174,15 @@ class StageReceiptContract {
   final String? repository;
   final String sourceRoot;
   final List<StageStepContract> _steps;
+  final Map<String, Set<String>> _dependencies;
 
   /// Every producer name this contract expects, in canonical order — the
   /// order receipts are written in, however the work was scheduled.
   List<String> get producerNames => [for (final step in _steps) step.name];
+
+  Set<String> dependenciesOf(String producer) =>
+      _dependencies[producer] ??
+      (throw StateError('the stage contract has no producer "$producer"'));
 
   List<StageIssue> validate(StageDirectory stage, StageReceipt receipt) {
     final issues = <StageIssue>[];

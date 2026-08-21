@@ -112,6 +112,11 @@ final class ProgressRowController {
   ProgressRowState get state => _row.state;
   ProgressActivity? get activity => _row.activity;
 
+  /// Describes why a pending row cannot start yet.
+  void wait({required String note}) {
+    _row._wait(note);
+  }
+
   void complete({
     required String note,
     ProgressRowMark mark = ProgressRowMark.done,
@@ -179,6 +184,14 @@ final class ProgressRow {
   String? get detail => _detail;
   String? get note => _note;
   Duration get elapsed => _elapsed?.call() ?? Duration.zero;
+
+  void _wait(String result) {
+    if (_state != ProgressRowState.pending) {
+      throw StateError('only pending progress row $id can wait');
+    }
+    _note = _text('progress wait', result, max: 120);
+    _changed(this);
+  }
 
   void _begin(ProgressActivity next, {String? detail}) {
     if (_state == ProgressRowState.complete ||

@@ -269,10 +269,8 @@ executables:
     expect(checklist['cli/stage/complete']!.needs, producers);
     expect(
       checklist['cli/github-release/keybay_cli-v0.2.0']!.needs,
-      [
-        'cli/tag/keybay_cli-v0.2.0',
-        'cli/stage/complete',
-      ],
+      ['cli/tag/keybay_cli-v0.2.0'],
+      reason: 'the tag already carries the complete-stage dependency',
     );
   });
 

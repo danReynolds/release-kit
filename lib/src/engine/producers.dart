@@ -73,9 +73,13 @@ StageStepContract contractFor(ResolvedUnit unit, Step step) {
     case StepKind.archive:
       return StageStepContract(
         receiptNameFor(step),
-        inputs: {binary!},
+        inputs: {
+          binary!,
+          if (platform!.startsWith('macos-'))
+            'step:notarize:${project.name}:$platform',
+        },
         outputs: {
-          ReleaseAssets.archivePath(project, platform!): 'archive',
+          ReleaseAssets.archivePath(project, platform): 'archive',
         },
       );
 

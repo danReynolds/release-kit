@@ -183,6 +183,17 @@ class ReleaseStage {
         )
       : null;
 
+  /// Canonical stage producer IDs and their resolved dependency edges.
+  ///
+  /// Production stages always enforce a unit contract. Keeping this access on
+  /// the stage prevents the coordinator from rebuilding artifact ownership or
+  /// target-contribution dependencies a second time.
+  List<String> get producerNames => _unitContract?.producerNames ?? const [];
+
+  Set<String> producerDependencies(String producer) =>
+      _unitContract?.dependenciesOf(producer) ??
+      (throw StateError('this partial stage has no producer graph'));
+
   String get sourceRoot => directory.resolve('source');
 
   /// What this stage is, verified.

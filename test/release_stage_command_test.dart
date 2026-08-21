@@ -464,6 +464,12 @@ void main() {
           'worktree bytes',
     );
     expect(
+      publish.interactive,
+      isFalse,
+      reason: 'Pub output is captured after session preflight so concurrent '
+          'targets keep one coherent progress surface',
+    );
+    expect(
       File(harness.stage.directory.resolve('stage.json')).readAsStringSync(),
       receipt,
       reason: 'publishing a reusable stage is read-only with respect to it',
@@ -498,6 +504,58 @@ void main() {
       reads.invocations.where((call) => call.interactive),
       isEmpty,
       reason: 'login and publish use the operator-facing release tools',
+    );
+  });
+
+  test(
+      'independent publication lanes overlap and dependents unlock '
+      'immediately', () async {
+    final staged = await harness.run(
+      stageOnly: true,
+      confirm: (_) async => fail('stage mode must not authorize'),
+    );
+    expect(staged.code, ExitCodes.ok, reason: staged.text);
+
+    final pubStarted = Completer<void>();
+    final allowPubToFinish = Completer<void>();
+    final githubPublished = Completer<void>();
+    final homebrewStarted = Completer<void>();
+    harness.tools.gate = (call) async {
+      if (call.publicKind == 'pub.dev') {
+        if (!pubStarted.isCompleted) pubStarted.complete();
+        await allowPubToFinish.future;
+      }
+    };
+    final running = harness.run(
+      stageOnly: false,
+      confirm: (_) async => '1.2.3',
+      onInvocation: (call) {
+        if (call.publicKind == 'github-release' &&
+            !githubPublished.isCompleted) {
+          githubPublished.complete();
+        }
+        if (call.publicKind == 'homebrew' && !homebrewStarted.isCompleted) {
+          homebrewStarted.complete();
+        }
+      },
+    );
+
+    await pubStarted.future.timeout(const Duration(seconds: 5));
+    await githubPublished.future.timeout(const Duration(seconds: 5));
+    await homebrewStarted.future.timeout(
+      const Duration(seconds: 5),
+      onTimeout: () => throw StateError(
+        'Homebrew stayed queued behind the unrelated Pub publication',
+      ),
+    );
+    allowPubToFinish.complete();
+    final released = await running;
+
+    expect(released.code, ExitCodes.ok, reason: released.text);
+    expect(
+      released.text,
+      isNot(contains('Successfully uploaded tool 1.2.3')),
+      reason: 'captured Pub output must not break through the shared board',
     );
   });
 
@@ -2372,8 +2430,7 @@ class _Invocation {
         arguments[1] == 'origin') {
       return 'tag';
     }
-    if (interactive &&
-        _isDart(executable) &&
+    if (_isDart(executable) &&
         _starts(arguments, ['pub', 'publish']) &&
         arguments.contains('--from-archive')) {
       return 'pub.dev';
@@ -2564,6 +2621,35 @@ class _WorldTools implements Tools {
         ..parent.createSync(recursive: true)
         ..writeAsBytesSync(_publishedPackage());
       return _ok();
+    }
+    if (_isDart(executable) &&
+        _starts(arguments, ['pub', 'publish']) &&
+        arguments.contains('--from-archive')) {
+      if (failPubArchiveCapability) {
+        return ToolResult(
+          exitCode: 64,
+          stdout: '',
+          stderr: 'archive publication is unavailable',
+        );
+      }
+      if (failPubPublish) {
+        return ToolResult(
+          exitCode: 1,
+          stdout: '',
+          stderr: 'pub publish failed',
+        );
+      }
+      final archive = arguments[arguments.indexOf('--from-archive') + 1];
+      registry.archives['tool@1.2.3'] = File(archive).readAsBytesSync();
+      (registry.published['tool'] ??= <String>[]).add('1.2.3');
+      if (losePubPublishResponse) {
+        return ToolResult(
+          exitCode: 1,
+          stdout: '',
+          stderr: 'connection closed before the response',
+        );
+      }
+      return _ok(stdout: 'Successfully uploaded tool 1.2.3\n');
     }
     if (arguments.length == 1 &&
         arguments.single == '--version' &&
@@ -2860,16 +2946,6 @@ class _WorldTools implements Tools {
     onInvocation?.call(invocation);
     if (_isDart(executable) && arguments.join(' ') == 'pub login') {
       if (failPubLogin) return 1;
-    }
-    if (_isDart(executable) &&
-        _starts(arguments, ['pub', 'publish']) &&
-        arguments.contains('--from-archive')) {
-      if (failPubArchiveCapability) return 64;
-      if (failPubPublish) return 1;
-      final archive = arguments[arguments.indexOf('--from-archive') + 1];
-      registry.archives['tool@1.2.3'] = File(archive).readAsBytesSync();
-      (registry.published['tool'] ??= <String>[]).add('1.2.3');
-      if (losePubPublishResponse) return 1;
     }
     return 0;
   }
