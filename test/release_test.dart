@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/commands/release.dart';
 import 'package:rk/src/targets/pub_dev/client.dart';
 import 'package:rk/src/engine/assets.dart';
@@ -178,6 +179,7 @@ Future<Ran> release({
   Iterable<String> signedExistingTags = const [],
   String config = _config,
   String? only = 'core',
+  HostCapabilities? capabilities,
 }) async {
   final buffer = StringBuffer();
   final diagnostics = Diagnostics();
@@ -368,6 +370,16 @@ Future<Ran> release({
     // HOME of its own, rk finds whatever pub session the developer happens
     // to have, and a test about a missing session passes or fails on that.
     refreshEnvironment: refreshEnvironment ?? () => const {'HOME': '/nowhere'},
+    // Like HOME above, host capabilities are test input rather than a fact
+    // about the machine running the suite. This fixture represents the
+    // strongest supported release host: native macOS plus Linux
+    // cross-compilation with an answering container runtime.
+    capabilities: capabilities ??
+        HostCapabilities(
+          hostPlatform: 'macos-arm64',
+          containerRuntime: 'docker',
+          hasNativeAssets: false,
+        ),
   );
   final code = await command.run(only: only);
 
