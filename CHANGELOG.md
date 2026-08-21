@@ -1,6 +1,17 @@
 # Changelog
 
-## 0.1.1
+## 0.1.2
+
+- Release targets now live in small vertical slices behind a compact module
+  contract. GitHub Release is the worked example for adding an N+1 target,
+  while provider transactions remain private to their target.
+- Release orchestration is split into preparation, staging, and publication
+  coordinators. Targets describe their plans and observations; core retains
+  ordering, authorization, reconciliation, and reporting.
+- Concurrent platform builds use isolated producer lanes, and subprocess
+  deadlines now cover process exit plus inherited output streams.
+- Core CI runs formatting, static analysis, and the complete test suite on
+  Ubuntu and macOS.
 
 - Signed macOS binaries now start. The hardened runtime refuses the executable
   pages a Dart AOT snapshot maps at launch, so 0.1.0's binary was killed by the
