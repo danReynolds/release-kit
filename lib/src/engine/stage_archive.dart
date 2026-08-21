@@ -68,6 +68,23 @@ class StageArchiveEntry {
       };
 }
 
+/// The checked contents of one release archive.
+///
+/// The executable bytes come from the compressed archive itself. This lets a
+/// producer verify exactly what a consumer will extract without trusting the
+/// source file that was handed to the archive builder.
+class StageArchiveContents {
+  const StageArchiveContents._({
+    required this.inventory,
+    required this.executable,
+    required this.executableBytes,
+  });
+
+  final List<StageArchiveEntry> inventory;
+  final StageArchiveEntry executable;
+  final List<int> executableBytes;
+}
+
 /// Parses the deterministic gzip/ustar bytes rk itself produces.
 ///
 /// Only regular files with safe relative names are accepted. Header
@@ -75,7 +92,11 @@ class StageArchiveEntry {
 /// checked so receipt evidence describes the archive users will actually
 /// unpack, not merely a plausible prefix of it.
 abstract final class StageArchiveInventory {
-  static List<StageArchiveEntry> parse(List<int> archive) {
+  static List<StageArchiveEntry> parse(List<int> archive) =>
+      decode(archive).inventory;
+
+  /// Decodes and validates [archive], retaining its one executable payload.
+  static StageArchiveContents decode(List<int> archive) {
     final List<int> tar;
     try {
       tar = GZipCodec().decode(archive);
@@ -84,6 +105,7 @@ abstract final class StageArchiveInventory {
     }
 
     final entries = <StageArchiveEntry>[];
+    List<int>? executableBytes;
     final names = <String>{};
     var offset = 0;
     var zeroBlocks = 0;
@@ -139,6 +161,7 @@ abstract final class StageArchiveInventory {
         size: size,
         sha256: Sha256.hex(bytes),
       ));
+      if (modeValue == 0x1ed) executableBytes = bytes;
     }
 
     if (zeroBlocks != 2) {
@@ -150,12 +173,17 @@ abstract final class StageArchiveInventory {
     if (entries.isEmpty) {
       throw const FormatException('archive contains no files');
     }
-    if (entries.where((entry) => entry.executable).length != 1) {
+    final executables = entries.where((entry) => entry.executable).toList();
+    if (executables.length != 1 || executableBytes == null) {
       throw const FormatException(
         'archive must contain exactly one executable file',
       );
     }
-    return List<StageArchiveEntry>.unmodifiable(entries);
+    return StageArchiveContents._(
+      inventory: List<StageArchiveEntry>.unmodifiable(entries),
+      executable: executables.single,
+      executableBytes: List<int>.unmodifiable(executableBytes),
+    );
   }
 
   static List<StageArchiveEntry> parseEvidence(Object? value) {

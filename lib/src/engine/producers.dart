@@ -33,6 +33,13 @@ bool isMacosBuildReceipt(String name) {
       parts.last.startsWith('macos-');
 }
 
+bool isMacosArchiveReceipt(String name) {
+  final parts = name.split(':');
+  return parts.length == 3 &&
+      parts.first == 'archive' &&
+      parts.last.startsWith('macos-');
+}
+
 String archiveReceiptName(String project, String platform) =>
     'archive:$project:$platform';
 
@@ -81,11 +88,30 @@ StageStepContract contractFor(ResolvedUnit unit, Step step) {
         outputs: {
           ReleaseAssets.archivePath(project, platform): 'archive',
         },
+        validate: _archiveEvidence,
       );
 
     default:
       throw StateError('${step.kind.name} is not a local producer');
   }
+}
+
+/// A macOS archive proves the signature on its extracted executable, not
+/// merely on the source file that entered the archive builder.
+Iterable<StageIssue> _archiveEvidence(
+  StageContractContext context,
+  StageStep step,
+) {
+  if (!isMacosArchiveReceipt(step.name)) return const [];
+  final signature = step.evidence['signature'];
+  if (signature is Map &&
+      signature['status'] == 'valid' &&
+      signature['scope'] == 'archive-extracted') {
+    return const [];
+  }
+  return [
+    _structure('${step.name} has no final archive signature evidence'),
+  ];
 }
 
 /// A build proves its smoke outcome, and a macOS build its signature too.

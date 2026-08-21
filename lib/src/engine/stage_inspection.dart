@@ -553,6 +553,16 @@ class StageInspector {
         producer.evidence['inventory'],
       );
       StageArchiveInventory.requireSame(expected, actual);
+      if (isMacosArchiveReceipt(producer.name)) {
+        final signature = producer.evidence['signature'];
+        if (signature is! Map ||
+            signature['status'] != 'valid' ||
+            signature['scope'] != 'archive-extracted') {
+          throw const FormatException(
+            'macOS archive has no final signature verification evidence',
+          );
+        }
+      }
     } on Object catch (error) {
       issues.add(StageIssue(
         StageIssueKind.invalidArchive,

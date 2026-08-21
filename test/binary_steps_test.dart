@@ -82,64 +82,79 @@ executables:
       );
 
   /// Tools that answer by prefix and write the artifacts a real tool would.
-  Tools scripted({String designatedRequirement = 'designated => leaf "A"'}) =>
-      RecordingTools(
-        answers: (key) {
-          if (key.startsWith('dart compile exe')) {
-            return ToolResult(exitCode: 0, stdout: '', stderr: '');
-          }
-          if (key.startsWith('codesign -d -r-')) {
+  RecordingTools scripted({
+    String designatedRequirement = 'designated => leaf "A"',
+    int? failingSignatureVerification,
+  }) {
+    var signatureVerifications = 0;
+    return RecordingTools(
+      answers: (key) {
+        if (key.startsWith('dart compile exe')) {
+          return ToolResult(exitCode: 0, stdout: '', stderr: '');
+        }
+        if (key.startsWith('codesign -d -r-')) {
+          return ToolResult(
+            exitCode: 0,
+            stdout: designatedRequirement,
+            stderr: '',
+          );
+        }
+        if (key.startsWith('codesign --verify --strict')) {
+          signatureVerifications++;
+          if (signatureVerifications == failingSignatureVerification) {
             return ToolResult(
-              exitCode: 0,
-              stdout: designatedRequirement,
-              stderr: '',
+              exitCode: 1,
+              stdout: '',
+              stderr: 'invalid signature in final artifact',
             );
           }
-          if (key.startsWith('security find-identity')) {
-            return ToolResult(
-              exitCode: 0,
-              stdout: '1) $_certificateSha1 '
-                  '"Developer ID Application: Dan (TEAM123456)"',
-              stderr: '',
-            );
-          }
-          if (key.startsWith('security find-certificate')) {
-            return ToolResult(
-              exitCode: 0,
-              stdout: 'SHA-256 hash: $_certificateSha256\n'
-                  'SHA-1 hash: $_certificateSha1\n',
-              stderr: '',
-            );
-          }
-          if (key.startsWith('xcrun notarytool submit')) {
-            return ToolResult(
-              exitCode: 0,
-              stdout: '{"id": "abc-123", "status": "Accepted"}',
-              stderr: '',
-            );
-          }
-          if (key.contains('--version')) {
-            return ToolResult(exitCode: 0, stdout: '1.0.0', stderr: '');
-          }
-          return null;
-        },
-        onRun: (key) {
-          // The compiler and ditto write files; the script writes what they
-          // would, where the workspace said to.
-          if (key.startsWith('dart compile exe')) {
-            File(workspace
-                .pathOf(BinaryChain.binaryName('tool', 'macos-arm64', 'tool')))
-              ..parent.createSync(recursive: true)
-              ..writeAsBytesSync(utf8.encode('BINARY 1.0.0'));
-          }
-          if (key.startsWith('ditto')) {
-            File(workspace
-                .pathOf(BinaryChain.zipName('tool', 'macos-arm64', 'tool')))
-              ..parent.createSync(recursive: true)
-              ..writeAsBytesSync(utf8.encode('ZIP'));
-          }
-        },
-      );
+        }
+        if (key.startsWith('security find-identity')) {
+          return ToolResult(
+            exitCode: 0,
+            stdout: '1) $_certificateSha1 '
+                '"Developer ID Application: Dan (TEAM123456)"',
+            stderr: '',
+          );
+        }
+        if (key.startsWith('security find-certificate')) {
+          return ToolResult(
+            exitCode: 0,
+            stdout: 'SHA-256 hash: $_certificateSha256\n'
+                'SHA-1 hash: $_certificateSha1\n',
+            stderr: '',
+          );
+        }
+        if (key.startsWith('xcrun notarytool submit')) {
+          return ToolResult(
+            exitCode: 0,
+            stdout: '{"id": "abc-123", "status": "Accepted"}',
+            stderr: '',
+          );
+        }
+        if (key.contains('--version')) {
+          return ToolResult(exitCode: 0, stdout: '1.0.0', stderr: '');
+        }
+        return null;
+      },
+      onRun: (key) {
+        // The compiler and ditto write files; the script writes what they
+        // would, where the workspace said to.
+        if (key.startsWith('dart compile exe')) {
+          File(workspace
+              .pathOf(BinaryChain.binaryName('tool', 'macos-arm64', 'tool')))
+            ..parent.createSync(recursive: true)
+            ..writeAsBytesSync(utf8.encode('BINARY 1.0.0'));
+        }
+        if (key.startsWith('ditto')) {
+          File(workspace
+              .pathOf(BinaryChain.zipName('tool', 'macos-arm64', 'tool')))
+            ..parent.createSync(recursive: true)
+            ..writeAsBytesSync(utf8.encode('ZIP'));
+        }
+      },
+    );
+  }
 
   test(
       'each step reads and writes the workspace by name — no chain object '
@@ -205,8 +220,57 @@ executables:
     expect(inventory, hasLength(1));
     expect((inventory.single as Map)['name'], 'tool');
     expect((inventory.single as Map)['mode'], '0755');
+    expect(archived.evidence['signature'], {
+      'status': 'valid',
+      'scope': 'archive-extracted',
+    });
+    expect(
+      tools.calls.where((call) => call.startsWith('codesign --verify')),
+      hasLength(3),
+      reason: 'the signature is checked after signing, after the signed '
+          'smoke test, and on the final archive payload',
+    );
     expect(workspace.exists(ReleaseAssets.archivePath(project, 'macos-arm64')),
         isTrue);
+  });
+
+  test('a signature invalidated by the signed smoke test is refused', () async {
+    final tools = scripted(failingSignatureVerification: 2);
+
+    final built = await chain(tools).buildStep(
+      step(StepKind.build),
+      project,
+      signing: const MacSigning(
+        publishedRequirement: null,
+        codeId: 'com.example.tool',
+      ),
+    );
+
+    expect(built.ok, isFalse);
+    expect(buffer.toString(), contains('after the signed binary ran'));
+  });
+
+  test('an invalid signature in the final archive is refused', () async {
+    final tools = scripted(failingSignatureVerification: 3);
+    final built = await chain(tools).buildStep(
+      step(StepKind.build),
+      project,
+      signing: const MacSigning(
+        publishedRequirement: null,
+        codeId: 'com.example.tool',
+      ),
+    );
+    expect(built.ok, isTrue, reason: built.problem ?? buffer.toString());
+    final notarized =
+        await chain(tools).notarizeStep(step(StepKind.notarize), project);
+    expect(notarized.ok, isTrue,
+        reason: notarized.problem ?? buffer.toString());
+
+    final archived =
+        await chain(tools).archiveStep(step(StepKind.archive), project);
+
+    expect(archived.ok, isFalse);
+    expect(buffer.toString(), contains('in the final archive'));
   });
 
   test('a later step with an empty workspace refuses, naming the producer',
@@ -298,8 +362,7 @@ executables:
     // step above had already written into the same buffer, so the whole
     // assertion held with the identifier mutated to 'zz.mutation' — and this
     // is the value that becomes the permanent designated requirement.
-    final sign = (tools as RecordingTools)
-        .calls
+    final sign = tools.calls
         .firstWhere((c) => c.startsWith('codesign --force'));
     expect(
       sign,
@@ -474,8 +537,7 @@ executables:
       ),
     );
     expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
-    final sign = (tools as RecordingTools)
-        .calls
+    final sign = tools.calls
         .firstWhere((c) => c.startsWith('codesign --force'));
     expect(
       sign,

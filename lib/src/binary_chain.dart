@@ -310,6 +310,28 @@ class BinaryChain {
       return LocalProducerOutcome.failed('the signed binary does not run');
     }
 
+    // Execution is part of the signed artifact's proof boundary. Verify the
+    // bytes again after the smoke test so any mutation between signing and
+    // the recorded receipt fails here, while the build lane still owns it.
+    final verifiedAfterSmoke = await signer.verifies(workspace.pathOf(name));
+    if (!verifiedAfterSmoke.ok) {
+      output.problem(
+        Diagnostic(
+          code: 'RK-SIGN-015',
+          message: 'the signature no longer verifies after the signed binary '
+              'ran',
+          remedy: 'The signed smoke test passed, but the bytes that would be '
+              'recorded do not verify. See codesign\'s output; rk will not '
+              'notarize or archive them.',
+          evidence: verifiedAfterSmoke.transcript,
+        ),
+        unit: step.unit,
+      );
+      return const LocalProducerOutcome.failed(
+        'the signature did not verify after the signed smoke test',
+      );
+    }
+
     final signedSha256 = Sha256.hex(workspace.readBytes(name)!);
     return LocalProducerOutcome.succeeded(
       outputs: [LocalProducerOutput(name, 'executable')],
@@ -498,6 +520,42 @@ class BinaryChain {
     final name = ReleaseAssets.archivePath(project, platform);
     final bytes = ArchiveBuilder.gzip(ArchiveBuilder.tar(entries));
     workspace.write(name, bytes);
+    final contents = StageArchiveInventory.decode(bytes);
+
+    if (platform.startsWith('macos-')) {
+      if (contents.executable.name != executable) {
+        return LocalProducerOutcome.failed(
+          'the final archive names ${contents.executable.name} instead of '
+          '$executable',
+        );
+      }
+      final verificationDirectory =
+          Directory.systemTemp.createTempSync('rk-archive-verify-');
+      try {
+        final extracted = File('${verificationDirectory.path}/$executable');
+        extracted.writeAsBytesSync(contents.executableBytes, flush: true);
+        final verified =
+            await MacOsSigner(tools: tools).verifies(extracted.path);
+        if (!verified.ok) {
+          output.problem(
+            Diagnostic(
+              code: 'RK-SIGN-016',
+              message: 'the macOS signature does not verify in the final '
+                  'archive',
+              remedy: 'The archive payload differs from a valid signed '
+                  'program. See codesign\'s output; rk will not publish it.',
+              evidence: verified.transcript,
+            ),
+            unit: step.unit,
+          );
+          return const LocalProducerOutcome.failed(
+            'the final archived signature did not verify',
+          );
+        }
+      } finally {
+        verificationDirectory.deleteSync(recursive: true);
+      }
+    }
     output.step(
       step,
       show: false,
@@ -510,8 +568,13 @@ class BinaryChain {
       outputs: [LocalProducerOutput(name, 'archive')],
       evidence: {
         'inventory': StageArchiveInventory.evidence(
-          StageArchiveInventory.parse(bytes),
+          contents.inventory,
         ),
+        if (platform.startsWith('macos-'))
+          'signature': {
+            'status': 'valid',
+            'scope': 'archive-extracted',
+          },
       },
     );
   }
