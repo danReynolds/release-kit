@@ -18,7 +18,6 @@ import '../target_module.dart';
 TargetStage pubDevPackageStage({required TargetPlan target}) {
   final archivePath = ReleaseAssets.pubArchivePath(target.project!);
   final contract = StageContributionContract(
-    phase: StageContributionPhase.beforeArtifacts,
     step: StageStepContract(
       'pub-archive:${target.project!.name}',
       inputs: const {'step:source-snapshot'},

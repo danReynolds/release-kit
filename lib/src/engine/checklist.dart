@@ -1,4 +1,5 @@
 import 'assets.dart';
+import 'dependency_graph.dart';
 import 'diagnostic.dart';
 import 'publish_target.dart';
 import 'resolve.dart';
@@ -132,7 +133,10 @@ class Checklist {
         unit: unit.name,
         summary: 'publish ${ReleaseAssets.expectedForUnit(unit).length} assets '
             'to the ${unit.tag!} release',
-        needs: [tag!.id, completeStage.id],
+        needs: _targetPrerequisiteIds(
+          steps,
+          PublishTarget.githubRelease,
+        ),
       );
       steps.add(release);
 
@@ -152,7 +156,10 @@ class Checklist {
             unit: unit.name,
             project: caskProject.name,
             summary: 'update the ${caskProject.executable} cask',
-            needs: [release.id],
+            needs: _targetPrerequisiteIds(
+              steps,
+              PublishTarget.homebrew,
+            ),
           ),
         );
       }
@@ -165,35 +172,56 @@ class Checklist {
     return Checklist(unit: unit, steps: steps);
   }
 
+  /// Resolves target-to-target edges from the target vocabulary once.
+  ///
+  /// A prerequisite can have several concrete steps (for example, several
+  /// packages published through one registry), so dependency metadata names
+  /// the target while the derived checklist expands it to stable step ids.
+  static List<String> _targetPrerequisiteIds(
+    List<Step> steps,
+    PublishTarget target,
+  ) {
+    final ids = <String>[];
+    for (final prerequisite in target.prerequisites) {
+      final matches = steps.where(
+        (step) => step.isPublic && step.target == prerequisite,
+      );
+      if (matches.isEmpty) {
+        throw StateError(
+          '${target.configName} requires ${prerequisite.configName}, but its '
+          'step has not been derived',
+        );
+      }
+      ids.addAll(matches.map((step) => step.id));
+    }
+    return ids;
+  }
+
   /// A checklist whose contract is a stable id must not be able to emit two,
   /// and a step must never wait on one that comes later.
   ///
   /// Violations here are rk's own bugs, not the user's, so they throw rather
   /// than diagnose.
   static void _checkGraph(List<Step> steps) {
-    final seen = <String>{};
+    final graph = DependencyGraph<Step>(
+      steps,
+      idOf: (step) => step.id,
+      dependenciesOf: (step) => step.needs,
+    );
     var phase = StepPhase.inspect;
-    for (var i = 0; i < steps.length; i++) {
-      final step = steps[i];
+    for (final step in steps) {
       if (step.phase.index < phase.index) {
         throw StateError('"${step.id}" moves from the ${phase.name} phase '
             'back to ${step.phase.name}');
       }
       phase = step.phase;
-      if (!seen.add(step.id)) {
-        throw StateError('two steps share the id "${step.id}"');
-      }
-      for (final need in step.needs) {
-        final at = steps.indexWhere((s) => s.id == need);
-        if (at < 0) {
-          throw StateError('"${step.id}" waits on "$need", which is not a '
-              'step in this checklist');
-        }
-        if (at > i) {
-          throw StateError('"${step.id}" waits on "$need", which comes after '
-              'it');
-        }
-      }
+    }
+    final ordered = graph.ordered();
+    for (var index = 0; index < steps.length; index++) {
+      if (identical(steps[index], ordered[index])) continue;
+      throw StateError(
+        '"${steps[index].id}" appears before one of its dependencies',
+      );
     }
   }
 

@@ -166,7 +166,6 @@ executables:
     expect(
       contributions
           .map((binding) => (
-                binding.contract.phase,
                 binding.contract.step.name,
                 binding.contract.step.inputs.join(','),
                 binding.contract.step.outputs.entries
@@ -176,22 +175,19 @@ executables:
           .toList(),
       [
         (
-          StageContributionPhase.beforeArtifacts,
+          'homebrew-cask:example_tool',
+          'producers/example_tool/archives/tool-1.2.3-linux-x64.tar.gz',
+          'producers/example_tool/homebrew/tool.rb:cask',
+        ),
+        (
           'pub-archive:example_tool',
           'step:source-snapshot',
           'producers/example_tool/pub/example_tool-1.2.3.tar.gz:pub-archive',
         ),
         (
-          StageContributionPhase.beforeArtifacts,
           'release-notes',
           'step:source-snapshot',
           'release-notes.md:notes',
-        ),
-        (
-          StageContributionPhase.afterArtifacts,
-          'homebrew-cask:example_tool',
-          'producers/example_tool/archives/tool-1.2.3-linux-x64.tar.gz',
-          'producers/example_tool/homebrew/tool.rb:cask',
         ),
       ],
     );
@@ -203,7 +199,6 @@ executables:
         sourceRoot: '/stage/source',
         targetContributions: const [
           StageContributionContract(
-            phase: StageContributionPhase.afterArtifacts,
             step: StageStepContract(
               'bad-target',
               outputs: {ReleaseAssets.manifest: 'wrong'},
@@ -304,35 +299,30 @@ publish = ["pub.dev"]
   });
 
   test('stage contributions have simple stable order and unique claims', () {
-    const beforeZ = StageContributionContract(
-      phase: StageContributionPhase.beforeArtifacts,
+    const z = StageContributionContract(
       step: StageStepContract('z-before'),
     );
-    const beforeA = StageContributionContract(
-      phase: StageContributionPhase.beforeArtifacts,
+    const a = StageContributionContract(
       step: StageStepContract('a-before'),
     );
     const after = StageContributionContract(
-      phase: StageContributionPhase.afterArtifacts,
       step: StageStepContract('after'),
     );
     expect(
       orderStageContributions(
-        const [after, beforeZ, beforeA],
+        const [after, z, a],
         (contract) => contract,
       ).map((contract) => contract.step.name),
-      const ['a-before', 'z-before', 'after'],
+      const ['a-before', 'after', 'z-before'],
     );
 
     const duplicateOutputA = StageContributionContract(
-      phase: StageContributionPhase.beforeArtifacts,
       step: StageStepContract(
         'first',
         outputs: {'same.txt': 'test'},
       ),
     );
     const duplicateOutputB = StageContributionContract(
-      phase: StageContributionPhase.afterArtifacts,
       step: StageStepContract(
         'second',
         outputs: {'same.txt': 'test'},
@@ -347,26 +337,65 @@ publish = ["pub.dev"]
     );
 
     const producer = StageContributionContract(
-      phase: StageContributionPhase.beforeArtifacts,
       step: StageStepContract(
         'producer',
         outputs: {'shared.txt': 'test'},
       ),
     );
     const consumer = StageContributionContract(
-      phase: StageContributionPhase.afterArtifacts,
       step: StageStepContract(
         'consumer',
         inputs: {'shared.txt'},
       ),
     );
+    final diagnostics = Diagnostics();
+    final config = ReleaseConfig.parse('''
+schema = 2
+
+[release.example]
+publish = ["pub.dev"]
+''', 'release.toml', diagnostics)!;
+    final resolution = Resolution.resolve(
+      config,
+      MemorySourceTree({
+        'pubspec.yaml': 'name: example\nversion: 1.0.0\n',
+      }),
+      diagnostics,
+    )!;
+    final contract = StageReceiptContract.forUnit(
+      unit: resolution.unit('example')!,
+      repository: null,
+      sourceRoot: '/stage/source',
+      targetContributions: const [consumer, producer],
+      localProducers: const [],
+    );
     expect(
-      () => orderStageContributions(
-        const [producer, consumer],
-        (contract) => contract,
+      contract.producerNames,
+      ['source-snapshot', 'producer', 'consumer', 'complete-stage'],
+      reason: 'artifact inputs are dependency edges, not lifecycle phases',
+    );
+
+    const missingInput = StageContributionContract(
+      step: StageStepContract(
+        'broken-consumer',
+        inputs: {'missing.txt'},
       ),
-      throwsStateError,
-      reason: 'target contributions cannot form a hidden dependency graph',
+    );
+    expect(
+      () => StageReceiptContract.forUnit(
+        unit: resolution.unit('example')!,
+        repository: null,
+        sourceRoot: '/stage/source',
+        targetContributions: const [missingInput],
+        localProducers: const [],
+      ),
+      throwsA(
+        isA<StateError>().having(
+          (error) => '$error',
+          'message',
+          contains('needs unknown artifact "missing.txt"'),
+        ),
+      ),
     );
   });
 

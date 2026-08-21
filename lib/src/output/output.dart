@@ -842,7 +842,7 @@ final class LiveProgress {
     required bool active,
   }) {
     return switch (row.state) {
-      ProgressRowState.pending => ('…', 'queued', Tone.muted),
+      ProgressRowState.pending => ('…', row.note ?? 'queued', Tone.muted),
       ProgressRowState.active => (
           active ? _frames[_spin % _frames.length] : '…',
           [

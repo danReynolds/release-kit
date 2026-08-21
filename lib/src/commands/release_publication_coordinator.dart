@@ -1,5 +1,6 @@
 import '../builds/capability.dart';
 import '../engine/checklist.dart';
+import '../engine/dependency_graph.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
 import '../engine/inspect.dart';
@@ -37,6 +38,7 @@ enum ReleaseAction {
 final class PublicationPlan {
   PublicationPlan({
     required this.unit,
+    required Iterable<Step> steps,
     required Iterable<Step> publicSteps,
     required Iterable<TargetPlan> targets,
     required Map<String, Inspection> states,
@@ -45,13 +47,15 @@ final class PublicationPlan {
     required this.prepared,
     required this.stage,
     required this.recoversWithoutStage,
-  })  : publicSteps = List.unmodifiable(publicSteps),
+  })  : steps = List.unmodifiable(steps),
+        publicSteps = List.unmodifiable(publicSteps),
         targets = List.unmodifiable(targets),
         states = Map.of(states),
         actions = Map.of(actions),
         endpointBaselines = Map.unmodifiable(endpointBaselines);
 
   final ResolvedUnit unit;
+  final List<Step> steps;
   final List<Step> publicSteps;
   final List<TargetPlan> targets;
   final Map<String, Inspection> states;
@@ -546,143 +550,212 @@ final class ReleasePublicationCoordinator {
         restore: true,
       );
     }
-    var completedPublicTarget = false;
-    for (final step in publicSteps) {
-      final target = targetByStep[step.id]!;
-      final module = inspector.targets.moduleForTarget(target);
-      releaseProgress.begin(target, CommonProgressActivities.checking);
-      var state = await inspector.inspect(step, unit);
-      if (!authorizedStepIds.contains(step.id) && !state.isExact) {
-        releaseProgress
-          ..fail(target, activity: CommonProgressActivities.checking)
-          ..notAttemptedPending()
-          ..settle();
-        _haltForAuthorizationGrowth(
-          step,
-          state,
-          unit,
-          targets,
-          publicActions,
+    final graph = DependencyGraph<Step>(
+      plan.steps,
+      idOf: (step) => step.id,
+      dependenciesOf: (step) => step.needs,
+    );
+    final completed = <String>{
+      for (final step in plan.steps)
+        if (!step.isPublic || !authorizedStepIds.contains(step.id)) step.id,
+    };
+    final active = <String, Future<_PublicTargetCompletion>>{};
+    final activeTargets = <PublishTarget>{};
+    final failures = <_PublicationFailure>[];
+
+    while (completed.length < plan.steps.length || active.isNotEmpty) {
+      if (failures.isEmpty) {
+        final ready = graph.ready(
+          completed: completed,
+          active: active.keys.toSet(),
         );
-        return ExitCodes.refused;
+        for (final step in ready.where((step) => step.isPublic)) {
+          final target = targetByStep[step.id]!;
+          if (!activeTargets.add(target.target)) continue;
+          active[step.id] = _publishPublicTarget(
+            step: step,
+            target: target,
+            unit: unit,
+            publicActions: publicActions,
+            releaseProgress: releaseProgress,
+            stage: stage,
+            recoversWithoutStage: recoversWithoutStage,
+            recoveryBinding: recoveryBindings[step.id],
+          );
+        }
       }
-      if (state.isExact) {
-        publicActions[step.id] = ReleaseAction.alreadyPublished;
-        releaseProgress.complete(
-          targetByStep[step.id]!,
-          note: 'already published',
-          satisfied: true,
-        );
-        output.step(
-          step,
-          mark: Mark.satisfied,
-          verdict: state.verdict,
-          note: state.detail ?? 'already done',
-          action: publicActions[step.id]!.wire,
-          show: false,
-        );
-        continue;
-      }
-      if (!state.isAbsent) {
-        releaseProgress
-          ..fail(target, activity: CommonProgressActivities.checking)
-          ..notAttemptedPending()
-          ..settle();
-        haltForState(step, state);
-        return ExitCodes.refused;
-      }
-      final currentVersion = Diagnostics();
-      final historyCheck = await inspector.releaseMonotonicity(
-        unit,
-        [target],
-        currentVersion,
-        refreshRegistry: true,
+
+      _describePublicationWaits(
+        graph: graph,
+        completed: completed,
+        active: active.keys.toSet(),
+        activeTargets: activeTargets,
+        authorizedStepIds: authorizedStepIds,
+        targetByStep: targetByStep,
+        progress: releaseProgress,
       );
-      if (currentVersion.isNotEmpty) {
-        releaseProgress
-          ..fail(target, activity: CommonProgressActivities.checking)
-          ..notAttemptedPending()
-          ..settle();
-        output.halt(
-          output.report.acted ? HaltKind.stoppedPartway : HaltKind.beforeActing,
-        );
-        output.problems(currentVersion.found);
-        return ExitCodes.refused;
+
+      if (active.isEmpty) {
+        if (failures.isNotEmpty) break;
+        final unresolved = publicSteps
+            .where((step) => !completed.contains(step.id))
+            .map((step) => step.id)
+            .join(', ');
+        throw StateError('publication graph made no progress: $unresolved');
       }
 
-      if (historyCheck.readIndependentHistory) {
-        // The latest-version read may have refreshed a registry cache, and a
-        // candidate can appear while the operator is authorizing. Re-read the
-        // exact coordinate from that same fresh provider view before acting.
-        state = await inspector.inspect(step, unit);
-        output.step(
-          step,
-          verdict: state.verdict,
-          detail: state.detail,
-          evidence: state.evidence,
-          action: publicActions[step.id]!.wire,
-          show: false,
-        );
-        if (state.isExact) {
-          publicActions[step.id] = ReleaseAction.alreadyPublished;
-          releaseProgress.complete(
-            target,
-            note: 'already published',
-            satisfied: true,
-          );
-          output.step(
-            step,
-            mark: Mark.satisfied,
-            verdict: state.verdict,
-            note: state.detail ?? 'already done',
-            action: publicActions[step.id]!.wire,
-            show: false,
-          );
-          continue;
+      final completion = await Future.any(active.values);
+      active.remove(completion.step.id);
+      activeTargets.remove(completion.step.target);
+      if (completion.failure case final failure?) {
+        failures.add(failure);
+      } else {
+        completed.add(completion.step.id);
+      }
+      if (failures.isEmpty && output.report.acted) {
+        for (final omitted in publicSteps.where(
+          (step) => !authorizedStepIds.contains(step.id),
+        )) {
+          final state = await inspector.inspect(omitted, unit);
+          if (!state.isExact) {
+            publicActions[omitted.id] = ReleaseAction.notAttempted;
+            output.step(
+              omitted,
+              verdict: state.verdict,
+              detail: state.detail,
+              evidence: state.evidence,
+              action: publicActions[omitted.id]!.wire,
+              show: false,
+            );
+            failures.add(_PublicationFailure(
+              step: omitted,
+              diagnostics: [
+                Diagnostic(
+                  code: 'RK-AUTH-003',
+                  message: 'the release plan grew after authorization',
+                  remedy: '${omitted.summary} was not work when the plan was '
+                      'shown. RK will not add it after the yes; inspect the '
+                      'changed destination and authorize a fresh plan.',
+                ),
+              ],
+              halt: HaltKind.stoppedPartway,
+            ));
+            break;
+          }
         }
-        if (!state.isAbsent) {
-          releaseProgress
-            ..fail(target, activity: CommonProgressActivities.checking)
-            ..notAttemptedPending()
-            ..settle();
-          haltForState(step, state);
-          return ExitCodes.refused;
-        }
       }
+    }
 
-      if (!recoversWithoutStage &&
-          !stages.stageStillValid(
-            stage,
-            unit,
-            changed: 'before ${step.summary}',
-            halt: completedPublicTarget
-                ? HaltKind.stoppedPartway
-                : HaltKind.beforeActing,
-          )) {
-        releaseProgress
-          ..fail(target)
-          ..notAttemptedPending()
-          ..settle();
-        return ExitCodes.refused;
-      }
-      if (!await stages.contextStillValid(
-        stage,
-        unit,
-        changed: 'before ${step.summary}',
-        halt: completedPublicTarget
-            ? HaltKind.stoppedPartway
-            : HaltKind.beforeActing,
-      )) {
-        releaseProgress
-          ..fail(target)
-          ..notAttemptedPending()
-          ..settle();
-        return ExitCodes.refused;
-      }
+    if (failures.isNotEmpty || output.report.halted) {
+      releaseProgress
+        ..notAttemptedPending()
+        ..settle();
+      _reportPublicationFailures(failures);
+      return ExitCodes.refused;
+    }
 
-      // Make the provider observation the last fallible read before the act.
-      // Local stage/context validation above cannot therefore create a gap in
-      // which a newly exact or conflicting target is acted on blindly.
+    releaseProgress.settle(released: true);
+    for (final target in targets) {
+      for (final line in target.completionLines) {
+        output.say(line, depth: 1);
+      }
+    }
+    return ExitCodes.ok;
+  }
+
+  void _describePublicationWaits({
+    required DependencyGraph<Step> graph,
+    required Set<String> completed,
+    required Set<String> active,
+    required Set<PublishTarget> activeTargets,
+    required Set<String> authorizedStepIds,
+    required Map<String, TargetPlan> targetByStep,
+    required TargetReleaseProgress progress,
+  }) {
+    for (final step in graph.values.where(
+      (step) =>
+          step.isPublic &&
+          authorizedStepIds.contains(step.id) &&
+          !completed.contains(step.id) &&
+          !active.contains(step.id),
+    )) {
+      final target = targetByStep[step.id]!;
+      final blockers = graph
+          .unmet(step, completed)
+          .map((id) => graph[id])
+          .where((dependency) => dependency.isPublic)
+          .map((dependency) => targetByStep[dependency.id]!.label)
+          .toSet();
+      final note = blockers.isNotEmpty
+          ? 'waiting for ${blockers.join(', ')}'
+          : activeTargets.contains(target.target)
+              ? 'waiting for ${target.kindLabel} lane'
+              : null;
+      if (note != null) progress.waiting(target, note: note);
+    }
+  }
+
+  Future<_PublicTargetCompletion> _publishPublicTarget({
+    required Step step,
+    required TargetPlan target,
+    required ResolvedUnit unit,
+    required Map<String, ReleaseAction> publicActions,
+    required TargetReleaseProgress releaseProgress,
+    required ReleaseStage stage,
+    required bool recoversWithoutStage,
+    required String? recoveryBinding,
+  }) async {
+    final module = inspector.targets.moduleForTarget(target);
+    releaseProgress.begin(target, CommonProgressActivities.checking);
+    var state = await inspector.inspect(step, unit);
+    if (state.isExact) {
+      _completeExistingTarget(
+        step,
+        target,
+        state,
+        publicActions,
+        releaseProgress,
+      );
+      return _PublicTargetCompletion.completed(step);
+    }
+    if (!state.isAbsent) {
+      releaseProgress.fail(
+        target,
+        activity: CommonProgressActivities.checking,
+      );
+      return _PublicTargetCompletion.failed(
+        step,
+        _inspectionFailure(step, state),
+      );
+    }
+
+    final currentVersion = Diagnostics();
+    final historyCheck = await inspector.releaseMonotonicity(
+      unit,
+      [target],
+      currentVersion,
+      refreshRegistry: true,
+    );
+    if (currentVersion.isNotEmpty) {
+      releaseProgress.fail(
+        target,
+        activity: CommonProgressActivities.checking,
+      );
+      return _PublicTargetCompletion.failed(
+        step,
+        _PublicationFailure(
+          step: step,
+          diagnostics: currentVersion.found,
+          halt: output.report.acted
+              ? HaltKind.stoppedPartway
+              : HaltKind.beforeActing,
+        ),
+      );
+    }
+
+    if (historyCheck.readIndependentHistory) {
+      // A latest-version read may refresh a provider cache. Re-read this
+      // exact coordinate from the same fresh view before any act.
       state = await inspector.inspect(step, unit);
       output.step(
         step,
@@ -693,196 +766,300 @@ final class ReleasePublicationCoordinator {
         show: false,
       );
       if (state.isExact) {
-        publicActions[step.id] = ReleaseAction.alreadyPublished;
-        releaseProgress.complete(
-          target,
-          note: 'already published',
-          satisfied: true,
-        );
-        output.step(
+        _completeExistingTarget(
           step,
-          mark: Mark.satisfied,
-          verdict: state.verdict,
-          note: state.detail ?? 'already done',
-          action: publicActions[step.id]!.wire,
-          show: false,
+          target,
+          state,
+          publicActions,
+          releaseProgress,
         );
-        continue;
+        return _PublicTargetCompletion.completed(step);
       }
       if (!state.isAbsent) {
-        releaseProgress
-          ..fail(target, activity: CommonProgressActivities.checking)
-          ..notAttemptedPending()
-          ..settle();
-        haltForState(step, state);
-        return ExitCodes.refused;
+        releaseProgress.fail(
+          target,
+          activity: CommonProgressActivities.checking,
+        );
+        return _PublicTargetCompletion.failed(
+          step,
+          _inspectionFailure(step, state),
+        );
       }
-      if (recoversWithoutStage &&
-          module.stageRecoveryBinding(state) != recoveryBindings[step.id]) {
-        releaseProgress
-          ..fail(target, activity: CommonProgressActivities.checking)
-          ..notAttemptedPending()
-          ..settle();
-        output.problem(Diagnostic(
-          code: 'RK-STAGE-005',
-          message: '${step.summary} can no longer recover without its stage',
-          remedy: 'public inputs changed after authorization. Re-run so rk '
-              'can inspect the release again; restore ${stage.directory.path} '
-              'if the target still needs the original bytes.',
-        ));
-        output.halt(
-          completedPublicTarget
+    }
+
+    final validationHalt =
+        output.report.acted ? HaltKind.stoppedPartway : HaltKind.beforeActing;
+    if (!recoversWithoutStage &&
+        !stages.stageStillValid(
+          stage,
+          unit,
+          changed: 'before ${step.summary}',
+          halt: validationHalt,
+        )) {
+      releaseProgress.fail(target);
+      return _PublicTargetCompletion.failed(
+        step,
+        _PublicationFailure.reported(step),
+      );
+    }
+    if (!await stages.contextStillValid(
+      stage,
+      unit,
+      changed: 'before ${step.summary}',
+      halt: validationHalt,
+    )) {
+      releaseProgress.fail(target);
+      return _PublicTargetCompletion.failed(
+        step,
+        _PublicationFailure.reported(step),
+      );
+    }
+
+    // This provider observation is the last fallible read before the act.
+    state = await inspector.inspect(step, unit);
+    output.step(
+      step,
+      verdict: state.verdict,
+      detail: state.detail,
+      evidence: state.evidence,
+      action: publicActions[step.id]!.wire,
+      show: false,
+    );
+    if (state.isExact) {
+      _completeExistingTarget(
+        step,
+        target,
+        state,
+        publicActions,
+        releaseProgress,
+      );
+      return _PublicTargetCompletion.completed(step);
+    }
+    if (!state.isAbsent) {
+      releaseProgress.fail(
+        target,
+        activity: CommonProgressActivities.checking,
+      );
+      return _PublicTargetCompletion.failed(
+        step,
+        _inspectionFailure(step, state),
+      );
+    }
+    if (recoversWithoutStage &&
+        module.stageRecoveryBinding(state) != recoveryBinding) {
+      releaseProgress.fail(
+        target,
+        activity: CommonProgressActivities.checking,
+      );
+      return _PublicTargetCompletion.failed(
+        step,
+        _PublicationFailure(
+          step: step,
+          diagnostics: [
+            Diagnostic(
+              code: 'RK-STAGE-005',
+              message: '${step.summary} can no longer recover without its '
+                  'stage',
+              remedy: 'public inputs changed after authorization. Re-run so '
+                  'rk can inspect the release again; restore '
+                  '${stage.directory.path} if the target still needs the '
+                  'original bytes.',
+            ),
+          ],
+          halt: output.report.acted
               ? HaltKind.stoppedPartway
               : HaltKind.beforeActing,
-        );
-        return ExitCodes.refused;
-      }
-      final actedBefore = output.report.acted;
-      output.report.acted = true;
-      publicActions[step.id] = ReleaseAction.attempted;
-      output.step(
-        step,
-        verdict: state.verdict,
-        detail: state.detail,
-        evidence: state.evidence,
-        action: publicActions[step.id]!.wire,
-        show: false,
+        ),
       );
-      final releaseContext = TargetReleaseContext(
-        reads: inspector.targetReads,
-        tools: tools,
-        stage: stage,
-        progress: releaseProgress.handle(target),
-        runInteractive: releaseProgress.interactive(tools),
-        wait: wait,
-        confirmDeadline: confirmDeadline,
-        confirmInterval: confirmInterval,
+    }
+
+    final actedBefore = output.report.acted;
+    output.report.acted = true;
+    publicActions[step.id] = ReleaseAction.attempted;
+    output.step(
+      step,
+      verdict: state.verdict,
+      detail: state.detail,
+      evidence: state.evidence,
+      action: publicActions[step.id]!.wire,
+      show: false,
+    );
+    final releaseContext = TargetReleaseContext(
+      reads: inspector.targetReads,
+      tools: tools,
+      stage: stage,
+      progress: releaseProgress.handle(target),
+      runInteractive: releaseProgress.interactive(tools),
+      wait: wait,
+      confirmDeadline: confirmDeadline,
+      confirmInterval: confirmInterval,
+    );
+    final mutationActivity = module.publishActivity;
+    releaseProgress.begin(target, mutationActivity);
+    late final TargetActOutcome act;
+    try {
+      act = await module.publish(releaseContext, unit, target, state);
+    } on Object catch (error) {
+      act = TargetActOutcome(
+        ok: false,
+        mayHaveActed: true,
+        problem: '${target.kindLabel} operation threw: $error',
       );
-      final mutationActivity = module.publishActivity;
-      releaseProgress.begin(target, mutationActivity);
-      late final TargetActOutcome act;
-      try {
-        act = await module.publish(releaseContext, unit, target, state);
-      } on Object catch (error) {
-        act = TargetActOutcome(
-          ok: false,
-          mayHaveActed: true,
-          problem: '${target.kindLabel} operation threw: $error',
-        );
-      }
-      final lastMutationActivity =
-          releaseContext.progress.activity ?? mutationActivity;
-      // An act's process result is not public truth. A registry can accept an
-      // upload before the client loses its response; Git can finish a push
-      // before the connection drops; GitHub can apply the final draft PATCH
-      // before `gh` exits non-zero. Always run the same destination inspection
-      // status uses before deciding what the command result means.
-      releaseProgress.begin(target, CommonProgressActivities.verifying);
-      try {
-        state = await module.confirmPublication(releaseContext, unit, target);
-      } on Object catch (error) {
-        state = Inspection.unknown(
-          '${target.kindLabel} verification threw: $error',
-        );
-      }
-      publicActions[step.id] =
-          state.isExact ? ReleaseAction.completed : ReleaseAction.failed;
-      output.step(
-        step,
-        verdict: state.verdict,
-        detail: state.detail,
-        evidence: state.evidence,
-        action: publicActions[step.id]!.wire,
-        show: false,
+    }
+    final lastMutationActivity =
+        releaseContext.progress.activity ?? mutationActivity;
+
+    // A process result is not public truth. Every started operation performs
+    // its destination read-back even if another concurrent lane has failed.
+    releaseProgress.begin(target, CommonProgressActivities.verifying);
+    try {
+      state = await module.confirmPublication(releaseContext, unit, target);
+    } on Object catch (error) {
+      state = Inspection.unknown(
+        '${target.kindLabel} verification threw: $error',
       );
-      if (!act.ok) {
-        if (state.isExact && !output.report.halted) {
-          final inspected = act.includeInspectionDetail && state.detail != null
-              ? ' · ${state.detail}'
-              : '';
-          final note =
-              '${act.reconciledNote ?? 'command response was lost · public target confirmed exact'}$inspected';
-          releaseProgress.complete(
-            target,
-            note: note,
-          );
-          output.step(
-            step,
-            mark: Mark.done,
-            verdict: state.verdict,
-            detail: state.detail,
-            note: note,
-            action: publicActions[step.id]!.wire,
-            show: false,
-          );
-          completedPublicTarget = true;
-          continue;
-        }
-        releaseProgress.fail(
-          target,
-          activity: state.isAbsent
-              ? lastMutationActivity
-              : CommonProgressActivities.verifying,
-        );
-        releaseProgress.notAttemptedPending();
-        releaseProgress.settle();
-        final failure = await module.classifyUnconfirmedPublication(
-          releaseContext,
-          unit,
-          target,
-          state,
-          act,
-          actedBefore: actedBefore,
-        );
-        _reportTargetFailure(step, failure);
-        return ExitCodes.refused;
-      }
-      if (!state.isExact) {
-        releaseProgress.fail(
-          target,
-          activity: CommonProgressActivities.verifying,
-        );
-        releaseProgress.notAttemptedPending();
-        releaseProgress.settle();
-        final failure = await module.classifyUnconfirmedPublication(
-          releaseContext,
-          unit,
-          target,
-          state,
-          act,
-          actedBefore: actedBefore,
-        );
-        _reportTargetFailure(step, failure);
-        return ExitCodes.refused;
-      }
+    }
+    publicActions[step.id] =
+        state.isExact ? ReleaseAction.completed : ReleaseAction.failed;
+    output.step(
+      step,
+      verdict: state.verdict,
+      detail: state.detail,
+      evidence: state.evidence,
+      action: publicActions[step.id]!.wire,
+      show: false,
+    );
+    if (!act.ok && state.isExact) {
       final inspected = act.includeInspectionDetail && state.detail != null
           ? ' · ${state.detail}'
           : '';
-      releaseProgress.complete(
-        target,
-        note: '${act.successNote ?? 'published'}$inspected',
+      final note =
+          '${act.reconciledNote ?? 'command response was lost · public target confirmed exact'}$inspected';
+      releaseProgress.complete(target, note: note);
+      output.step(
+        step,
+        mark: Mark.done,
+        verdict: state.verdict,
+        detail: state.detail,
+        note: note,
+        action: publicActions[step.id]!.wire,
+        show: false,
       );
-      if (act.successNote != null) {
-        output.step(
-          step,
-          mark: Mark.done,
-          verdict: state.verdict,
-          detail: state.detail,
-          note: '${act.successNote}$inspected',
-          action: publicActions[step.id]!.wire,
-          show: false,
-        );
-      }
-      completedPublicTarget = true;
+      return _PublicTargetCompletion.completed(step);
+    }
+    if (!act.ok || !state.isExact) {
+      releaseProgress.fail(
+        target,
+        activity: !act.ok && state.isAbsent
+            ? lastMutationActivity
+            : CommonProgressActivities.verifying,
+      );
+      final failure = await module.classifyUnconfirmedPublication(
+        releaseContext,
+        unit,
+        target,
+        state,
+        act,
+        actedBefore: actedBefore,
+      );
+      return _PublicTargetCompletion.failed(
+        step,
+        _PublicationFailure.fromTarget(step, failure),
+      );
     }
 
-    releaseProgress.settle(released: true);
-    for (final target in targets) {
-      for (final line in target.completionLines) {
-        output.say(line, depth: 1);
-      }
+    final inspected = act.includeInspectionDetail && state.detail != null
+        ? ' · ${state.detail}'
+        : '';
+    releaseProgress.complete(
+      target,
+      note: '${act.successNote ?? 'published'}$inspected',
+    );
+    if (act.successNote != null) {
+      output.step(
+        step,
+        mark: Mark.done,
+        verdict: state.verdict,
+        detail: state.detail,
+        note: '${act.successNote}$inspected',
+        action: publicActions[step.id]!.wire,
+        show: false,
+      );
     }
-    return ExitCodes.ok;
+    return _PublicTargetCompletion.completed(step);
+  }
+
+  void _completeExistingTarget(
+    Step step,
+    TargetPlan target,
+    Inspection state,
+    Map<String, ReleaseAction> actions,
+    TargetReleaseProgress progress,
+  ) {
+    actions[step.id] = ReleaseAction.alreadyPublished;
+    progress.complete(
+      target,
+      note: 'already published',
+      satisfied: true,
+    );
+    output.step(
+      step,
+      mark: Mark.satisfied,
+      verdict: state.verdict,
+      note: state.detail ?? 'already done',
+      action: actions[step.id]!.wire,
+      show: false,
+    );
+  }
+
+  _PublicationFailure _inspectionFailure(Step step, Inspection state) {
+    final acted = output.report.acted;
+    return _PublicationFailure(
+      step: step,
+      diagnostics: [
+        Diagnostic(
+          code: 'RK-REL-001',
+          message: '${step.summary}: ${state.detail ?? state.verdict.name}',
+          remedy: state.evidence.isEmpty
+              ? (state.verdict == Verdict.unknown
+                  ? 'the target could not be proven; fix the read and re-run'
+                  : null)
+              : state.evidence.entries
+                  .map((entry) => '${entry.key}: ${entry.value}')
+                  .join('\n'),
+        ),
+      ],
+      halt: state.verdict == Verdict.conflict
+          ? acted
+              ? HaltKind.actedAndUnfixable
+              : HaltKind.unfixableByRerun
+          : acted
+              ? HaltKind.stoppedPartway
+              : HaltKind.beforeActing,
+    );
+  }
+
+  void _reportPublicationFailures(List<_PublicationFailure> failures) {
+    for (final failure in failures.where((failure) => !failure.reported)) {
+      for (final diagnostic in failure.diagnostics) {
+        output.problem(diagnostic, unit: failure.step.unit);
+      }
+      if (failure.nextCommand case final next?) output.next(next);
+      if (!failure.rerunHelps) output.report.rerunHelps = false;
+    }
+    if (output.report.halted || failures.isEmpty) return;
+    output.halt(failures.map((failure) => failure.halt).reduce(_strongerHalt));
+  }
+
+  HaltKind _strongerHalt(HaltKind left, HaltKind right) {
+    const severity = {
+      HaltKind.beforeActing: 0,
+      HaltKind.stoppedPartway: 1,
+      HaltKind.lostTrack: 2,
+      HaltKind.unfixableByRerun: 3,
+      HaltKind.actedAndUnfixable: 4,
+    };
+    return severity[left]! >= severity[right]! ? left : right;
   }
 
   Future<List<Step>?> _refreshPublicGate({
@@ -978,13 +1155,6 @@ final class ReleasePublicationCoordinator {
       output.report.acted ? HaltKind.stoppedPartway : HaltKind.beforeActing,
     );
     showActions(targets, actions);
-  }
-
-  void _reportTargetFailure(Step step, TargetFailure failure) {
-    output.problem(failure.diagnostic, unit: step.unit);
-    if (failure.nextCommand case final next?) output.next(next);
-    output.halt(failure.halt);
-    if (!failure.rerunHelps) output.report.rerunHelps = false;
   }
 
   List<String> _unprovable(ResolvedUnit unit) {
@@ -1163,4 +1333,48 @@ final class ReleasePublicationCoordinator {
   /// team it names.
   static String _shortCertificate(String certificate) =>
       certificate.replaceFirst('Developer ID Application: ', '');
+}
+
+final class _PublicTargetCompletion {
+  const _PublicTargetCompletion.completed(this.step) : failure = null;
+
+  const _PublicTargetCompletion.failed(this.step, this.failure);
+
+  final Step step;
+  final _PublicationFailure? failure;
+}
+
+final class _PublicationFailure {
+  const _PublicationFailure({
+    required this.step,
+    required this.diagnostics,
+    required this.halt,
+    this.nextCommand,
+  }) : reported = false;
+
+  const _PublicationFailure.reported(this.step)
+      : diagnostics = const [],
+        halt = HaltKind.beforeActing,
+        nextCommand = null,
+        reported = true;
+
+  factory _PublicationFailure.fromTarget(
+    Step step,
+    TargetFailure failure,
+  ) =>
+      _PublicationFailure(
+        step: step,
+        diagnostics: [failure.diagnostic],
+        halt: failure.halt,
+        nextCommand: failure.nextCommand,
+      );
+
+  final Step step;
+  final List<Diagnostic> diagnostics;
+  final HaltKind halt;
+  final String? nextCommand;
+  final bool reported;
+
+  bool get rerunHelps =>
+      halt != HaltKind.unfixableByRerun && halt != HaltKind.actedAndUnfixable;
 }

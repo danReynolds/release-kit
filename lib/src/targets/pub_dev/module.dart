@@ -252,7 +252,10 @@ final class PubDevTargetModule extends TargetModule {
     final directory = project.pubspec.directory == '.'
         ? sourceRoot
         : '$sourceRoot/${project.pubspec.directory}';
-    final code = await context.runInteractive(
+    // Publication is non-interactive after the explicit session preflight.
+    // Capture pub's output so it cannot write through RK's live multi-target
+    // progress surface; the transcript is retained if the act fails.
+    final result = await context.tools.run(
       'dart',
       [
         'pub',
@@ -264,8 +267,8 @@ final class PubDevTargetModule extends TargetModule {
       workingDirectory: directory,
     );
     context.reads.registry!.forget(project.name);
-    if (code != 0) {
-      if (code == 64) {
+    if (!result.ok) {
+      if (result.exitCode == 64) {
         return TargetActOutcome(
           ok: false,
           coordinate: '${project.name} ${project.version}',
@@ -283,6 +286,8 @@ final class PubDevTargetModule extends TargetModule {
         ok: false,
         coordinate: '${project.name} ${project.version}',
         mayHaveActed: true,
+        problem: result.summary,
+        evidence: result.transcript,
         diagnostic: Diagnostic(
           code: 'RK-PUB-003',
           message: '${project.name}: dart pub publish did not complete',

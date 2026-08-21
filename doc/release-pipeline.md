@@ -18,15 +18,15 @@ ReleaseCommand  ----->  initial observation and refusal
      |          safe readiness + frozen destination bindings
      |
      +----> ReleaseStageCoordinator.prepare
-     |          signing identity + isolated producer lanes
-     |          target stage inputs + receipt-backed stage
+     |          dependency-ready target inputs + isolated producer lanes
+     |          receipt-backed stage with completion receipts
      |                          |
      |                          +---- TargetModule.stageInput
      |
      +----> ReleasePublicationCoordinator.publish
                 refresh public truth + validate reviewed stage
                 acquire sessions + authorize
-                publish one target at a time + confirm public truth
+                run dependency-ready target lanes + confirm public truth
                                 |
                                 +---- TargetModule.publish/confirm
 ```
@@ -34,6 +34,29 @@ ReleaseCommand  ----->  initial observation and refusal
 The arrows are the architecture. There is no general event bus, lifecycle
 registry, or callback for every sub-step. A new target joins at the few points
 where core genuinely coordinates several destinations.
+
+## One graph, two execution policies
+
+`DependencyGraph` is the small shared structural primitive. `Checklist`
+derives stable public-step edges; `StageReceiptContract` resolves producer
+inputs to their owning operations. Both feed the same validation/readiness
+model instead of teaching either coordinator another ordering rule.
+
+Execution policy stays with the lifecycle that owns the risk:
+
+- Staging starts every ready producer. Platform chains use isolated scratch
+  lanes, each completion is persisted, and a failed lane stops new work while
+  already-running work drains into the resumable receipt.
+- Publication starts every ready public target, with at most one active
+  operation per target kind. Independent kinds overlap. A failure stops new
+  public work, but every operation already started still performs its
+  authoritative destination read-back before the command settles.
+
+Artifacts remain data, not schedulable pseudo-targets. A stage contribution
+names an artifact or producer input; receipt-contract resolution turns that
+into an edge to the operation that produces it. Public target prerequisites
+remain coarse and readable: GitHub Release waits for the Git tag, Homebrew
+waits for GitHub Release, and Pub can run beside GitHub once their tag is exact.
 
 ## Responsibilities
 
@@ -57,8 +80,9 @@ There are two deliberate cross-subsystem values:
   carries only the claims and signing facts that authorization needs; stage
   bytes remain addressed by `ReleaseStage` and proved by its receipt.
 - `PublicationPlan` is assembled after staging. It freezes the public steps,
-  target plans, observed states, destination bindings, and prepared stage
-  identity that publication must revalidate before acting.
+  complete dependency graph, target plans, observed states, destination
+  bindings, and prepared stage identity that publication must revalidate
+  before acting.
 
 Both copy their collections at the boundary. Coordinators may update their own
 working state without letting later command code silently change what was
@@ -81,6 +105,8 @@ The split preserves the safety properties that make a release resumable:
    target after the operator says yes.
 7. A publish command result is never treated as proof. The target performs an
    authoritative read-back and core decides from that state.
+8. A failed lane prevents new work from starting; work already in flight is
+   drained and reconciled before the final halt is reported.
 
 ## Extending the system
 

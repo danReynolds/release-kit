@@ -41,6 +41,12 @@ final class TargetReleaseProgress {
   ProgressHandle combined(Iterable<TargetPlan> targets) =>
       ProgressHandle.combine(targets.map(handle));
 
+  void waiting(TargetPlan target, {required String note}) {
+    final row = _row(target);
+    if (row.state != ProgressRowState.pending) return;
+    row.wait(note: note);
+  }
+
   void begin(TargetPlan target, ProgressActivity activity, {String? detail}) {
     final row = _row(target);
     if (row.state == ProgressRowState.complete) return;

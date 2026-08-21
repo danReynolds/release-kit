@@ -21,7 +21,6 @@ TargetStage githubReleaseNotesStage({
   required TargetPlan target,
 }) {
   final contract = StageContributionContract(
-    phase: StageContributionPhase.beforeArtifacts,
     step: StageStepContract(
       'release-notes',
       inputs: const {'step:source-snapshot'},

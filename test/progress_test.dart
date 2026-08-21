@@ -455,6 +455,22 @@ void main() {
       board.discard();
     });
 
+    test('a pending row can name the dependency it is waiting for', () async {
+      final harness = _Harness(terminal: true);
+      final board = harness.output.progressBoard(
+        'Releasing',
+        delay: Duration.zero,
+      );
+      final brew = board.addRow(id: 'brew', label: 'Homebrew');
+      brew.wait(note: 'waiting for GitHub Release');
+
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      board.discard();
+
+      expect(harness.text, contains('waiting for GitHub Release'));
+      expect(harness.text, isNot(contains('queued')));
+    });
+
     test('failure persists with downstream work not attempted', () {
       final harness = _Harness(terminal: false);
       final board = harness.output.progressBoard('Releasing');
