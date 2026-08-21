@@ -374,6 +374,29 @@ publish = ["pub.dev"]
       ['source-snapshot', 'producer', 'consumer', 'complete-stage'],
       reason: 'artifact inputs are dependency edges, not lifecycle phases',
     );
+
+    const missingInput = StageContributionContract(
+      step: StageStepContract(
+        'broken-consumer',
+        inputs: {'missing.txt'},
+      ),
+    );
+    expect(
+      () => StageReceiptContract.forUnit(
+        unit: resolution.unit('example')!,
+        repository: null,
+        sourceRoot: '/stage/source',
+        targetContributions: const [missingInput],
+        localProducers: const [],
+      ),
+      throwsA(
+        isA<StateError>().having(
+          (error) => '$error',
+          'message',
+          contains('needs unknown artifact "missing.txt"'),
+        ),
+      ),
+    );
   });
 
   test('commands coordinate targets without provider branches', () {

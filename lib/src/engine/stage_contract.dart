@@ -150,7 +150,13 @@ class StageReceiptContract {
           final producer = input.startsWith('step:')
               ? input.substring('step:'.length)
               : outputOwners[input];
-          if (producer != null && producer != step.name) needs.add(producer);
+          if (producer == null) {
+            throw StateError(
+              'stage producer "${step.name}" needs unknown artifact '
+              '"$input"',
+            );
+          }
+          if (producer != step.name) needs.add(producer);
         }
       }
       dependencies[step.name] = Set<String>.unmodifiable(needs);

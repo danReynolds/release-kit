@@ -1059,8 +1059,9 @@ void main() {
     );
   });
 
-  test('a definite private GitHub failure leaves Homebrew unattempted',
-      () async {
+  test(
+      'a definite private GitHub failure drains Pub but leaves Homebrew '
+      'unattempted', () async {
     final staged = await harness.run(
       stageOnly: true,
       confirm: (_) async => fail('stage mode must not authorize'),
@@ -1068,11 +1069,34 @@ void main() {
     expect(staged.code, ExitCodes.ok, reason: staged.text);
     harness.tools.failGithubDraftCreate = true;
 
+    final pubStarted = Completer<void>();
+    final githubDraftAttempted = Completer<void>();
+    harness.tools.gate = (call) async {
+      if (call.publicKind == 'pub.dev') {
+        if (!pubStarted.isCompleted) pubStarted.complete();
+        await githubDraftAttempted.future;
+      }
+    };
+
     final released = await harness.run(
       stageOnly: false,
       confirm: (_) async => '1.2.3',
+      onInvocation: (call) {
+        if (call.executable == 'gh' &&
+            _starts(call.arguments, [
+              'api',
+              '-X',
+              'POST',
+              'repos/example/tool/releases',
+            ]) &&
+            !githubDraftAttempted.isCompleted) {
+          githubDraftAttempted.complete();
+        }
+      },
     );
 
+    expect(pubStarted.isCompleted, isTrue);
+    expect(githubDraftAttempted.isCompleted, isTrue);
     expect(released.code, ExitCodes.refused);
     expect(released.problemCodes, contains('RK-REL-003'));
     expect((released.report['halt'] as Map?)?['kind'], 'stoppedPartway');
