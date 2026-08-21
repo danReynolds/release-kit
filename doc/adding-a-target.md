@@ -150,9 +150,11 @@ destination's public-state semantics genuinely differ.
 
 1. Add its configuration name, scope, prerequisites, and Git requirement to
    `PublishTarget`.
-2. Add one public `StepKind` and place its step explicitly in `Checklist`.
-   `Checklist` expands the target prerequisites from step 1 into concrete
-   dependency edges; do not copy them into a command or target callback.
+2. Place its public step explicitly in `Checklist`, reusing the matching
+   `StepKind` when its lifecycle mechanics already exist. Add a kind only for
+   a genuinely new lifecycle category. `Checklist` expands the target
+   prerequisites from step 1 into concrete dependency edges; do not copy them
+   into a command or target callback.
 3. Create `lib/src/targets/<target>/module.dart`. Keep native API/CLI mechanics
    in a sibling client when they would obscure the lifecycle.
 4. Register one module in `TargetCatalog`. Its coverage check fails until every

@@ -37,9 +37,10 @@ where core genuinely coordinates several destinations.
 
 ## One graph, two execution policies
 
-`DependencyGraph` is the small shared structural primitive. Stable step ids
-and their direct dependencies are derived once in `Checklist`; the same graph
-validation also orders receipt producers and drives public readiness.
+`DependencyGraph` is the small shared structural primitive. `Checklist`
+derives stable public-step edges; `StageReceiptContract` resolves producer
+inputs to their owning operations. Both feed the same validation/readiness
+model instead of teaching either coordinator another ordering rule.
 
 Execution policy stays with the lifecycle that owns the risk:
 
