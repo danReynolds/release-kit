@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.9
+
 - Status no longer reports local binary archives as unstaged after an exact
   public target has already bound every archive in the completed release.
 - Standalone macOS notarization verification examples now ask codesign to
