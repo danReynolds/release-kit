@@ -237,23 +237,23 @@ class ReleaseStage {
         final manifest = ReleaseManifest.parse(
           File(directory.resolve('release-manifest.json')).readAsStringSync(),
         );
-        final wantedCask = _caskBinding()?.identity;
-        final manifestCask = manifest.cask?.identity;
+        final wantedHomebrew = _homebrewBinding()?.identity;
+        final manifestHomebrew = manifest.homebrew?.identity;
         if (manifest.unit != unit.name ||
             manifest.version != unit.version.canonical ||
             manifest.tag != unit.tag ||
-            manifestCask != wantedCask) {
+            manifestHomebrew != wantedHomebrew) {
           issues.add(const StageIssue(
             StageIssueKind.invalidManifest,
             'release manifest names different release coordinates or '
-            'Homebrew casks',
+            'Homebrew formulae',
             path: 'release-manifest.json',
           ));
         }
       } on Object catch (error) {
         issues.add(StageIssue(
           StageIssueKind.invalidManifest,
-          'release manifest casks could not be validated: $error',
+          'release manifest Homebrew binding could not be validated: $error',
           path: 'release-manifest.json',
         ));
       }
@@ -491,17 +491,17 @@ class ReleaseStage {
       throw ArgumentError(
           'release assets must name unique public files and blobs');
     }
-    final caskBinding = _caskBinding();
-    final caskStagedPaths = {
-      if (caskBinding != null) caskBinding.stagedPath,
+    final homebrewBinding = _homebrewBinding();
+    final homebrewStagedPaths = {
+      if (homebrewBinding != null) homebrewBinding.stagedPath,
     };
-    final duplicatedCasks = stagedPaths.intersection(
-      caskStagedPaths,
+    final duplicatedHomebrew = stagedPaths.intersection(
+      homebrewStagedPaths,
     );
-    if (duplicatedCasks.isNotEmpty) {
+    if (duplicatedHomebrew.isNotEmpty) {
       throw ArgumentError(
-        'Homebrew casks cannot also be release assets: '
-        '${duplicatedCasks.join(', ')}',
+        'Homebrew formulae cannot also be release assets: '
+        '${duplicatedHomebrew.join(', ')}',
       );
     }
     StageReceipt? progress;
@@ -522,11 +522,11 @@ class ReleaseStage {
       );
       final existingPublic =
           existingManifest.artifacts.map((artifact) => artifact.name).toSet();
-      final existingCask = existingManifest.cask?.identity;
-      final wantedCask = caskBinding?.identity;
+      final existingHomebrew = existingManifest.homebrew?.identity;
+      final wantedHomebrew = homebrewBinding?.identity;
       if (existingPublic.length != publicNames.length ||
           existingPublic.difference(publicNames).isNotEmpty ||
-          existingCask != wantedCask) {
+          existingHomebrew != wantedHomebrew) {
         throw StateError(
           'the completed stage has a different publication inventory',
         );
@@ -565,7 +565,7 @@ class ReleaseStage {
     final byPath = {
       for (final artifact in beforeManifest) artifact.path: artifact
     };
-    final boundStagedPaths = {...stagedPaths, ...caskStagedPaths};
+    final boundStagedPaths = {...stagedPaths, ...homebrewStagedPaths};
     final missing = boundStagedPaths.difference(byPath.keys.toSet());
     if (missing.isNotEmpty) {
       throw StateError(
@@ -597,7 +597,9 @@ class ReleaseStage {
             artifact: byPath[binding.stagedPath]!,
           ),
       ],
-      cask: caskBinding?.bind(byPath[caskBinding.stagedPath]!),
+      homebrew: homebrewBinding?.bind(
+        byPath[homebrewBinding.stagedPath]!,
+      ),
     );
     manifest.writeTo(directory);
 
@@ -621,8 +623,8 @@ class ReleaseStage {
     final completeInputs = <String, StageArtifact>{
       for (final binding in orderedBindings)
         binding.stagedPath: byPath[binding.stagedPath]!,
-      if (caskBinding != null)
-        caskBinding.stagedPath: byPath[caskBinding.stagedPath]!,
+      if (homebrewBinding != null)
+        homebrewBinding.stagedPath: byPath[homebrewBinding.stagedPath]!,
     };
     final receipt = StageReceipt(
       identity: directory.identity,
@@ -641,7 +643,7 @@ class ReleaseStage {
               for (final binding in orderedBindings)
                 binding.publicName: binding.stagedPath,
             },
-            'cask_binding': caskBinding?.toEvidence(),
+            'homebrew_binding': homebrewBinding?.toEvidence(),
             if (compiler != null) 'dart_compiler': compiler!.toJson(),
           },
         ),
@@ -763,7 +765,7 @@ class ReleaseStage {
     if (path == 'release-manifest.json') return 'manifest';
     if (path == 'release-notes.md') return 'notes';
     if (path.endsWith('.tar.gz')) return 'archive';
-    if (path.endsWith('.rb')) return 'cask';
+    if (path.endsWith('.rb')) return 'formula';
     if (path.endsWith('.notary-result.json') ||
         path.endsWith('.notary-log.json')) {
       return 'notary';
@@ -772,7 +774,7 @@ class ReleaseStage {
     return 'executable';
   }
 
-  StagedCaskBinding? _caskBinding() {
+  StagedHomebrewBinding? _homebrewBinding() {
     // Prereleases publish their archives but leave the stable tap unchanged.
     if (unit.version.isPrerelease) return null;
     final project = unit.projects
@@ -784,14 +786,14 @@ class ReleaseStage {
     final sourceRepository = repository;
     if (sourceRepository == null) {
       throw StateError(
-        'Homebrew cask bindings need a source repository coordinate',
+        'Homebrew formula bindings need a source repository coordinate',
       );
     }
-    return StagedCaskBinding(
+    return StagedHomebrewBinding(
       project: project.name,
       tap: unit.tapFor(sourceRepository),
-      path: 'Casks/${ReleaseAssets.caskName(project.executable!)}',
-      stagedPath: ReleaseAssets.caskPath(project),
+      path: 'Formula/${ReleaseAssets.formulaName(project.executable!)}',
+      stagedPath: ReleaseAssets.formulaPath(project),
     );
   }
 }

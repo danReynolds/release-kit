@@ -15,7 +15,7 @@ different questions and none substitutes for a later level.
 1. **Implementation:** formatting, static analysis, and the full test suite
    pass on Linux and macOS CI.
 2. **Private stage:** one source-bound stage contains every package, binary,
-   archive, manifest, signature, notarization result, and rendered cask needed
+   archive, manifest, signature, notarization result, and rendered formula needed
    by the configured targets.
 3. **Public reconciliation:** every published target reads back as an exact
    match for the intended source and staged bytes. A retry performs no public
@@ -106,14 +106,12 @@ $ dart run bin/rk.dart release rk --json
 The final JSON retry must exit 0, contain no problems, and report every public
 step as `exact` with `action: already_published`.
 
-Provider acceptance and provider visibility are not always simultaneous. In
-the 0.1.4 canary, pub.dev accepted the upload but its cached versions endpoint
-did not expose it within rk's 60-second read-back window. rk correctly stopped
-with an uncertain effect instead of allowing dependant publication to assume
-success. After the provider's roughly two-minute cache window elapsed, a
-rerun reconciled the package as exact and safely completed. Treat this as a
-normal safe-retry case; do not publish the coordinate manually or discard the
-stage.
+Provider acceptance and provider visibility are not always simultaneous. rk
+confirms Pub through the immutable version coordinate and allows the service's
+documented ten-minute propagation window. If that exact read still times out,
+rk stops with an uncertain effect instead of allowing dependant publication
+to assume success. Treat that as a safe-retry case; do not publish the
+coordinate manually or discard the stage.
 
 ### 4. Consume public outputs
 
@@ -123,14 +121,14 @@ Use clean locations rather than the development checkout:
 $ PUB_CACHE=<empty-directory> dart pub global activate rk <version>
 $ <empty-directory>/bin/rk --version
 
-$ brew install --cask danreynolds/tap/rk
+$ brew install danreynolds/tap/rk
 $ rk --version
 ```
 
 Also download one GitHub Release archive and its manifest, verify the archive
 digest, extract it, and run the binary. On Apple Silicon, use the native
-`/opt/homebrew` installation; an Intel `/usr/local` Homebrew correctly refuses
-an arm64-only cask.
+`/opt/homebrew` installation; rk currently ships its macOS binary for Apple
+Silicon.
 
 Each consumed binary should run `rk status rk` against a clean checkout. A
 version print alone proves packaging, not that the shipped CLI can perform its

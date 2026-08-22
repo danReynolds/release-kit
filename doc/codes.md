@@ -28,7 +28,7 @@ fails, and the count below is checked against the rows.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-BREW-001` | the tap cask was not updated | `lib/src/targets/homebrew/module.dart` |
+| `RK-BREW-001` | the tap formula was not updated | `lib/src/targets/homebrew/module.dart` |
 | `RK-BREW-002` | the tap was updated and could not be read back | `lib/src/targets/homebrew/module.dart` |
 | `RK-BREW-003` | the public tap does not hold what rk pushed | `lib/src/targets/homebrew/module.dart` |
 

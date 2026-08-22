@@ -14,12 +14,12 @@ import '../../output/progress.dart';
 import '../target_module.dart';
 import 'client.dart';
 
-/// Homebrew's cask-rendering contribution to the reusable release stage.
+/// Homebrew's formula-rendering contribution to the reusable release stage.
 ///
-/// The contract binds the generated cask to the exact archive receipts. Its
+/// The contract binds the generated formula to the exact archive receipts. Its
 /// validator and producer use the same renderer so resumability cannot accept
-/// a cask that a fresh stage would not produce.
-TargetStage homebrewCaskStage({
+/// a formula that a fresh stage would not produce.
+TargetStage homebrewFormulaStage({
   required ResolvedUnit unit,
   required TargetPlan target,
 }) {
@@ -32,16 +32,16 @@ TargetStage homebrewCaskStage({
   };
   final contract = StageContributionContract(
     step: StageStepContract(
-      'homebrew-cask:${project.name}',
+      'homebrew-formula:${project.name}',
       inputs: archives,
-      outputs: {ReleaseAssets.caskPath(project): 'cask'},
+      outputs: {ReleaseAssets.formulaPath(project): 'formula'},
       validate: (context, step) {
         final repository = context.repository;
         if (repository == null) {
           return const [
             StageIssue(
               StageIssueKind.invalidStructure,
-              'homebrew-cask has no repository identity',
+              'homebrew-formula has no repository identity',
               path: 'stage.json',
             ),
           ];
@@ -62,8 +62,8 @@ TargetStage homebrewCaskStage({
                   .sha256,
             ),
         };
-        final expected = HomebrewCask.renderRelease(
-          token: ReleaseAssets.caskToken(executable),
+        final expected = HomebrewFormula.renderRelease(
+          className: ReleaseAssets.formulaClass(executable),
           version: project.version.canonical,
           repository: repository,
           tag: tag,
@@ -71,7 +71,7 @@ TargetStage homebrewCaskStage({
           assets: publicArchives,
         );
         final actual = File(
-          context.stage.resolve(ReleaseAssets.caskPath(project)),
+          context.stage.resolve(ReleaseAssets.formulaPath(project)),
         );
         if (actual.existsSync() && actual.readAsStringSync() == expected) {
           return const [];
@@ -79,7 +79,7 @@ TargetStage homebrewCaskStage({
         return const [
           StageIssue(
             StageIssueKind.invalidStructure,
-            'homebrew-cask does not match the staged archives',
+            'homebrew-formula does not match the staged archives',
             path: 'stage.json',
           ),
         ];
@@ -91,9 +91,9 @@ TargetStage homebrewCaskStage({
     contract: contract,
     progress: [
       TargetStageProgress.output(
-        id: 'cask',
-        output: ReleaseAssets.caskPath(target.project!),
-        artifact: ReleaseAssets.caskName(target.project!.executable!),
+        id: 'formula',
+        output: ReleaseAssets.formulaPath(target.project!),
+        artifact: ReleaseAssets.formulaName(target.project!.executable!),
       ),
     ],
     prepare: (context) => _prepareStage(context, unit, target),
@@ -144,14 +144,14 @@ Future<TargetStageOutcome> _prepareStage(
   }
 
   final executable = project.executable!;
-  context.progress('cask').begin(
+  context.progress('formula').begin(
         ProgressActivity(
           running: 'rendering',
           failed: 'rendering failed',
         ),
       );
-  final contents = HomebrewCask.renderRelease(
-    token: ReleaseAssets.caskToken(executable),
+  final contents = HomebrewFormula.renderRelease(
+    className: ReleaseAssets.formulaClass(executable),
     version: project.version.canonical,
     repository: repository,
     tag: tag,
@@ -169,7 +169,7 @@ Future<TargetStageOutcome> _prepareStage(
     },
   );
   context.workspace.write(
-    ReleaseAssets.caskPath(project),
+    ReleaseAssets.formulaPath(project),
     utf8.encode(contents),
   );
   return TargetStageSuccess(
@@ -181,8 +181,8 @@ Future<TargetStageOutcome> _prepareStage(
       outputs: [
         StageArtifact.capture(
           stage: context.stage.directory,
-          path: ReleaseAssets.caskPath(project),
-          type: 'cask',
+          path: ReleaseAssets.formulaPath(project),
+          type: 'formula',
         ),
       ],
     ),

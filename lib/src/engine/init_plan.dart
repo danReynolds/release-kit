@@ -170,7 +170,7 @@ final class InitPlan {
                 : 'a package version is required'),
         ReleaseChoice.homebrew: homebrewAvailable
             ? const InitAvailability.available(
-                'cask in the conventional or configured tap',
+                'formula in the conventional or configured tap',
               )
             : const InitAvailability.unavailable(
                 'Homebrew requires one standalone executable and GitHub',

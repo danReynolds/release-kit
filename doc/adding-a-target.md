@@ -137,7 +137,7 @@ lib/src/targets/pub_dev/
 lib/src/targets/homebrew/
   module.dart                 lifecycle and repairable-channel semantics
   client.dart                 GitHub tap reads and compare-and-swap update
-  cask_stage.dart             rendered cask stage input
+  formula_stage.dart          rendered formula stage input
 ```
 
 These differences did not require more core hooks. Git tag's signing and

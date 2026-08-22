@@ -1086,7 +1086,7 @@ executables:
         reason: 'settled facts wrap; only transient progress may truncate');
   });
 
-  test('Homebrew owns its cask without adding it to GitHub inventory',
+  test('Homebrew owns its formula without adding it to GitHub inventory',
       () async {
     final run = await statusRun(
       withConfig: binaryConfig.replaceFirst(
@@ -1920,17 +1920,17 @@ Future<ReleaseStage> _completedStage({
       },
     ));
   }
-  final cask = ReleaseAssets.caskName(executable);
-  if (public.contains(cask)) {
-    stage.directory.writeBytesAtomically(cask, utf8.encode('cask'));
+  final formula = ReleaseAssets.formulaName(executable);
+  if (public.contains(formula)) {
+    stage.directory.writeBytesAtomically(formula, utf8.encode('formula'));
     steps.add(StageStep(
-      name: 'homebrew-cask',
+      name: 'homebrew-formula',
       inputs: [for (final archive in archives) StageInput.artifact(archive)],
       outputs: [
         StageArtifact.capture(
           stage: stage.directory,
-          path: cask,
-          type: 'cask',
+          path: formula,
+          type: 'formula',
         ),
       ],
     ));

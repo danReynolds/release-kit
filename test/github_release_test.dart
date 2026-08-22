@@ -104,7 +104,7 @@ void main() {
       state.verdict,
       Verdict.conflict,
       reason: 'a superset read as exact would later bless a release whose '
-          'notary log or cask went missing, because nothing counted extras',
+          'notary log or formula went missing, because nothing counted extras',
     );
     expect(state.evidence.keys, contains('tool-1.0.0-macos-x64.tar.gz'));
   });

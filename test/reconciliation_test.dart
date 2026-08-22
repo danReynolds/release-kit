@@ -74,7 +74,7 @@ void main() {
 
     test('matching bytes are complete', () {
       final result = PublicReconciliation.movingChannel(
-        label: 'Homebrew cask',
+        label: 'Homebrew formula',
         intendedVersion: intended,
         publishedVersion: intended,
         payloadMatches: true,
@@ -88,7 +88,7 @@ void main() {
 
     test('a recognizable older value authorizes one forward update', () {
       final result = PublicReconciliation.movingChannel(
-        label: 'Homebrew cask',
+        label: 'Homebrew formula',
         intendedVersion: intended,
         publishedVersion: Version.tryParse('1.0.0'),
         payloadMatches: false,
@@ -103,7 +103,7 @@ void main() {
 
     test('same-version different bytes block', () {
       final result = PublicReconciliation.movingChannel(
-        label: 'Homebrew cask',
+        label: 'Homebrew formula',
         intendedVersion: intended,
         publishedVersion: intended,
         payloadMatches: false,
@@ -118,7 +118,7 @@ void main() {
 
     test('newer and unrecognized values block', () {
       final newer = PublicReconciliation.movingChannel(
-        label: 'Homebrew cask',
+        label: 'Homebrew formula',
         intendedVersion: intended,
         publishedVersion: Version.tryParse('3.0.0'),
         payloadMatches: false,
@@ -127,7 +127,7 @@ void main() {
         advanceAuthority: authority,
       );
       final unrecognized = PublicReconciliation.movingChannel(
-        label: 'Homebrew cask',
+        label: 'Homebrew formula',
         intendedVersion: intended,
         publishedVersion: null,
         payloadMatches: false,

@@ -201,7 +201,7 @@ void classificationTables() {
         StepKind.prerequisite: true,
         StepKind.publishRegistry: true,
         StepKind.publishRelease: true,
-        StepKind.publishCask: true,
+        StepKind.publishHomebrew: true,
         StepKind.build: false,
         StepKind.notarize: false,
         StepKind.archive: false,
@@ -220,7 +220,7 @@ void classificationTables() {
           StepKind.tag => PublishTarget.gitTag,
           StepKind.publishRegistry => PublishTarget.pubDev,
           StepKind.publishRelease => PublishTarget.githubRelease,
-          StepKind.publishCask => PublishTarget.homebrew,
+          StepKind.publishHomebrew => PublishTarget.homebrew,
           _ => null,
         },
         summary: 'x',
@@ -438,7 +438,7 @@ void classificationTables() {
       expect(
         inspector.started,
         {'gitTag', 'pubDev', 'githubRelease'},
-        reason: 'the authenticated cask inspection already owns the '
+        reason: 'the authenticated formula inspection already owns the '
             'Homebrew forward-only decision',
       );
       inspector.finish();
@@ -599,7 +599,7 @@ void classificationTables() {
     });
   });
 
-  test('the cask is unknown until a tap reader exists', () async {
+  test('the formula is unknown until a tap reader exists', () async {
     final inspector = Inspector(
       registry: FakeRegistry({}),
       git: GitState(
@@ -619,9 +619,9 @@ void classificationTables() {
         id: 'cli/homebrew/example_tool/example-tool',
         unit: 'cli',
         project: 'example_tool',
-        kind: StepKind.publishCask,
+        kind: StepKind.publishHomebrew,
         target: PublishTarget.homebrew,
-        summary: 'update the cask',
+        summary: 'update the formula',
         needs: const [],
       ),
       (await _binaryUnit()),
@@ -629,13 +629,15 @@ void classificationTables() {
     expect(
       state.verdict,
       Verdict.unknown,
-      reason: 'absent would report a cask that may already point at this '
+      reason: 'absent would report a formula that may already point at this '
           'release as work still to do',
     );
   });
 
-  group('the cask inspection reads the public tap', () {
-    Future<Inspection> cask(ToolResult? Function(String key) answers) async {
+  group('the formula inspection reads the public tap', () {
+    Future<Inspection> formula(
+      ToolResult? Function(String key) answers,
+    ) async {
       final inspector = Inspector(
         registry: FakeRegistry({}),
         git: GitState(
@@ -657,9 +659,9 @@ void classificationTables() {
           id: 'cli/homebrew/example_tool/example-tool',
           unit: 'cli',
           project: 'example_tool',
-          kind: StepKind.publishCask,
+          kind: StepKind.publishHomebrew,
           target: PublishTarget.homebrew,
-          summary: 'update the cask',
+          summary: 'update the formula',
           needs: const [],
         ),
         (await _binaryUnit()),
@@ -669,27 +671,28 @@ void classificationTables() {
     String contentsOf(String text) =>
         '{"content":"${base64Encode(utf8.encode(text))}"}';
 
-    test('a hand-written cask is a conflict without a manifest proof',
+    test('a hand-written formula is a conflict without a manifest proof',
         () async {
-      final state = await cask((key) => key.contains('/contents/')
-          ? ok(contentsOf('class T < Cask\n  version "1.0.0"\nend\n'))
+      final state = await formula((key) => key.contains('/contents/')
+          ? ok(contentsOf('class T < Formula\n  version "1.0.0"\nend\n'))
           : null);
       expect(state.verdict, Verdict.conflict);
       expect(state.detail, contains('not a recognizable rk-generated'));
     });
 
-    test('an older-looking cask is not trusted without exact bytes', () async {
+    test('an older-looking formula is not trusted without exact bytes',
+        () async {
       // A version substring in arbitrary Ruby is not authority to overwrite
       // the file. Only RK's generated channel format may advance.
-      final state = await cask((key) => key.contains('/contents/')
-          ? ok(contentsOf('class T < Cask\n  version "0.9.0"\nend\n'))
+      final state = await formula((key) => key.contains('/contents/')
+          ? ok(contentsOf('class T < Formula\n  version "0.9.0"\nend\n'))
           : null);
       expect(state.verdict, Verdict.conflict);
     });
 
     test('404 with a readable tap is absent; with an unreadable tap, unknown',
         () async {
-      final missing = await cask((key) {
+      final missing = await formula((key) {
         if (key.contains('/contents/')) {
           return failed('gh: Not Found (HTTP 404)');
         }
@@ -698,7 +701,7 @@ void classificationTables() {
       });
       expect(missing.verdict, Verdict.absent);
 
-      final unreadable = await cask((key) {
+      final unreadable = await formula((key) {
         if (key.contains('/contents/')) {
           return failed('gh: Not Found (HTTP 404)');
         }
@@ -716,7 +719,7 @@ void classificationTables() {
     });
 
     test('an answer that does not decode is unknown, never absent', () async {
-      final state = await cask(
+      final state = await formula(
           (key) => key.contains('/contents/') ? ok('not json at all') : null);
       expect(state.verdict, Verdict.unknown);
     });

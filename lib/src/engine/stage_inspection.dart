@@ -456,22 +456,23 @@ class StageInspector {
                 entry.key as String: entry.value as String,
           }
         : <String, String>{};
-    final StagedCaskBinding? caskBinding;
+    final StagedHomebrewBinding? homebrewBinding;
     try {
-      final encoded = complete.evidence['cask_binding'];
-      caskBinding =
-          encoded == null ? null : StagedCaskBinding.fromEvidence(encoded);
+      final encoded = complete.evidence['homebrew_binding'] ??
+          complete.evidence['cask_binding'];
+      homebrewBinding =
+          encoded == null ? null : StagedHomebrewBinding.fromEvidence(encoded);
     } on Object catch (error) {
       issues.add(StageIssue(
         StageIssueKind.invalidManifest,
-        'complete-stage has malformed cask bindings: $error',
+        'complete-stage has malformed Homebrew bindings: $error',
         path: 'release-manifest.json',
       ));
       return;
     }
     final expectedCompleteInputs = {
       ...bindings.values,
-      if (caskBinding != null) caskBinding.stagedPath,
+      if (homebrewBinding != null) homebrewBinding.stagedPath,
     };
     if (encodedBindings is! Map ||
         encodedBindings.length != bindings.length ||
@@ -508,27 +509,31 @@ class StageInspector {
         continue;
       }
     }
-    final manifestCask = manifest.cask;
-    if (caskBinding?.identity != manifestCask?.identity) {
+    final manifestHomebrew = manifest.homebrew;
+    if (homebrewBinding?.identity != manifestHomebrew?.identity) {
       issues.add(const StageIssue(
         StageIssueKind.invalidManifest,
-        'complete-stage cask evidence does not match the manifest',
+        'complete-stage Homebrew evidence does not match the manifest',
         path: 'release-manifest.json',
       ));
     }
-    if (manifestCask != null) {
-      final local =
-          caskBinding == null ? null : beforeComplete[caskBinding.stagedPath];
-      if (caskBinding == null ||
+    if (manifestHomebrew != null) {
+      final local = homebrewBinding == null
+          ? null
+          : beforeComplete[homebrewBinding.stagedPath];
+      final expectedType =
+          manifestHomebrew.path.startsWith('Casks/') ? 'cask' : 'formula';
+      if (homebrewBinding == null ||
           local == null ||
-          local.type != 'cask' ||
-          local.size != manifestCask.size ||
-          local.sha256 != manifestCask.sha256 ||
-          completeInputs[caskBinding.stagedPath] != manifestCask.sha256) {
+          local.type != expectedType ||
+          local.size != manifestHomebrew.size ||
+          local.sha256 != manifestHomebrew.sha256 ||
+          completeInputs[homebrewBinding.stagedPath] !=
+              manifestHomebrew.sha256) {
         issues.add(StageIssue(
           StageIssueKind.invalidManifest,
-          'cask metadata does not match the producer receipt',
-          path: '${manifestCask.tap}/${manifestCask.path}',
+          'Homebrew metadata does not match the producer receipt',
+          path: '${manifestHomebrew.tap}/${manifestHomebrew.path}',
         ));
       }
     }

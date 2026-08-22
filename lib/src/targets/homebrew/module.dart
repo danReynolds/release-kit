@@ -12,8 +12,8 @@ import '../../output/output.dart';
 import '../../output/progress.dart';
 import '../github_release/client.dart';
 import '../target_module.dart';
-import 'cask_stage.dart';
 import 'client.dart';
+import 'formula_stage.dart';
 
 final class HomebrewTargetModule extends TargetModule {
   const HomebrewTargetModule();
@@ -46,15 +46,15 @@ final class HomebrewTargetModule extends TargetModule {
       label: tap == null ? 'Homebrew' : 'Homebrew · $tap',
       kindLabel: 'Homebrew',
       identity: tap ?? 'no tap configured',
-      planNote: '${project.executable} cask',
+      planNote: '${project.executable} formula',
       coordinate: tap == null
-          ? 'Casks/${ReleaseAssets.caskName(project.executable!)}'
-          : '$tap/Casks/${ReleaseAssets.caskName(project.executable!)}',
+          ? 'Formula/${ReleaseAssets.formulaName(project.executable!)}'
+          : '$tap/Formula/${ReleaseAssets.formulaName(project.executable!)}',
       targetVersion: project.version.canonical,
       step: step,
       project: project,
-      artifacts: [ReleaseAssets.caskName(project.executable!)],
-      uses: '${ReleaseAssets.caskName(project.executable!)} bound in the '
+      artifacts: [ReleaseAssets.formulaName(project.executable!)],
+      uses: '${ReleaseAssets.formulaName(project.executable!)} bound in the '
           'release manifest',
     );
   }
@@ -77,21 +77,27 @@ final class HomebrewTargetModule extends TargetModule {
     final project = target.project!;
     final executable = project.executable!;
     final stage = context.reusableStage(unit);
-    final name = ReleaseAssets.caskName(executable);
-    final stagedPath = ReleaseAssets.caskPath(project);
+    final name = ReleaseAssets.formulaName(executable);
+    final stagedPath = ReleaseAssets.formulaPath(project);
     if (stage != null) {
       final expected = File(stage.directory.resolve(stagedPath));
       if (!expected.existsSync()) {
         return Inspection.conflict('the completed stage has no $name');
       }
-      return HomebrewTarget(
+      final destination = HomebrewTarget(
         tools: tools,
         tap: tap,
         workingDirectory: context.git.root,
-      ).inspect(
-        caskPath: 'Casks/${ReleaseAssets.caskName(executable)}',
+      );
+      final formula = await destination.inspect(
+        tapPath: 'Formula/${ReleaseAssets.formulaName(executable)}',
         intendedVersion: project.version,
         expectedBytes: expected.readAsBytesSync(),
+      );
+      return _withLegacyCaskMigration(
+        destination,
+        project,
+        formula,
       );
     }
 
@@ -100,38 +106,101 @@ final class HomebrewTargetModule extends TargetModule {
       tap: tap,
       workingDirectory: context.git.root,
     );
-    final publicCask = await destination.inspect(
-      caskPath: 'Casks/${ReleaseAssets.caskName(executable)}',
+    final publicFormula = await destination.inspect(
+      tapPath: 'Formula/${ReleaseAssets.formulaName(executable)}',
       intendedVersion: project.version,
       expectedBytes: null,
     );
     final sameVersion =
-        publicCask.evidence['version'] == project.version.canonical;
-    if (!publicCask.isAbsent && !sameVersion) return publicCask;
+        publicFormula.evidence['version'] == project.version.canonical;
+    if (!publicFormula.isAbsent && !sameVersion) return publicFormula;
 
-    final current = await _publishedCask(
+    final current = await _publishedFormula(
       context,
       unit,
       project: project,
     );
     if (!current.inspection.isExact) {
       if (current.inspection.isAbsent ||
-          publicCask.evidence['public cask'] == 'absent') {
+          publicFormula.evidence['public formula'] == 'absent') {
         // The GitHub release is not public yet. Ordinary staging will render
-        // the cask from the exact archives it is about to publish.
-        return publicCask;
+        // the formula from the exact archives it is about to publish.
+        return _withLegacyCaskMigration(
+          destination,
+          project,
+          publicFormula,
+        );
       }
       return current.inspection;
     }
 
-    return destination.inspect(
-      caskPath: 'Casks/${ReleaseAssets.caskName(executable)}',
+    final formula = await destination.inspect(
+      tapPath: 'Formula/${ReleaseAssets.formulaName(executable)}',
       intendedVersion: project.version,
       expectedBytes: current.bytes,
     );
+    return _withLegacyCaskMigration(destination, project, formula);
   }
 
-  Future<({Inspection inspection, List<int>? bytes})> _publishedCask(
+  Future<Inspection> _withLegacyCaskMigration(
+    HomebrewTarget destination,
+    ResolvedProject project,
+    Inspection formula,
+  ) async {
+    if (formula.verdict == Verdict.conflict ||
+        formula.verdict == Verdict.unknown) {
+      return formula;
+    }
+    final formulaAuthority = formula.authority;
+    if (formulaAuthority is! HomebrewUpdateAuthority) {
+      return const Inspection.unknown(
+        'the Homebrew formula inspection carried no update authority',
+      );
+    }
+    final legacyPath =
+        'Casks/${ReleaseAssets.formulaName(project.executable!)}';
+    final legacy = await destination.inspect(
+      tapPath: legacyPath,
+      intendedVersion: project.version,
+      expectedBytes: null,
+      kind: 'legacy cask',
+    );
+    if (legacy.verdict == Verdict.conflict ||
+        legacy.verdict == Verdict.unknown) {
+      return legacy;
+    }
+    final legacyAuthority = legacy.authority;
+    if (legacyAuthority is! HomebrewUpdateAuthority) {
+      return const Inspection.unknown(
+        'the legacy Homebrew cask inspection carried no update authority',
+      );
+    }
+    final authority = formulaAuthority.withLegacyCask(
+      path: legacyPath,
+      sha256: legacyAuthority.sha256,
+    );
+    final legacyPresent = legacyAuthority.sha256 != null;
+    if (!legacyPresent) {
+      return Inspection(
+        formula.verdict,
+        detail: formula.detail,
+        evidence: formula.evidence,
+        authority: authority,
+      );
+    }
+    return Inspection.absent(
+      detail: formula.isExact
+          ? 'the formula is current; the legacy cask still needs removal'
+          : formula.detail,
+      evidence: {
+        ...formula.evidence,
+        'legacy cask': 'will be removed',
+      },
+      authority: authority,
+    );
+  }
+
+  Future<({Inspection inspection, List<int>? bytes})> _publishedFormula(
     TargetReadContext context,
     ResolvedUnit unit, {
     required ResolvedProject project,
@@ -180,8 +249,8 @@ final class HomebrewTargetModule extends TargetModule {
     }
     return (
       inspection: read.inspection,
-      bytes: utf8.encode(HomebrewCask.renderRelease(
-        token: ReleaseAssets.caskToken(executable),
+      bytes: utf8.encode(HomebrewFormula.renderRelease(
+        className: ReleaseAssets.formulaClass(executable),
         version: project.version.canonical,
         repository: repository,
         tag: tag,
@@ -207,8 +276,8 @@ final class HomebrewTargetModule extends TargetModule {
       Diagnostic(
         code: 'RK-REL-001',
         message: '${target.label}: '
-            '${conflict.detail ?? 'the published cask does not match'}',
-        remedy: 'restore the cask to the exact release bytes it is meant to '
+            '${conflict.detail ?? 'the published formula does not match'}',
+        remedy: 'restore the formula to the exact release bytes it is meant to '
             'reference, or advance the source version intentionally; then '
             'run rk status ${unit.name} again',
       );
@@ -238,7 +307,7 @@ final class HomebrewTargetModule extends TargetModule {
     if (authority is! HomebrewUpdateAuthority) {
       return const TargetActOutcome(
         ok: false,
-        problem: 'the cask update has no exact public base; re-run so rk '
+        problem: 'the formula update has no exact public base; re-run so rk '
             'can inspect the tap before updating it',
       );
     }
@@ -246,13 +315,13 @@ final class HomebrewTargetModule extends TargetModule {
     final executable = project.executable!;
     // A recovered payload is authenticated public input. A non-reusable stage
     // may still contain stale files, so it must never outrank that authority.
-    final cask = authority.replacement ??
-        context.workspace.readBytes(ReleaseAssets.caskPath(project));
-    if (cask == null) {
+    final formula = authority.replacement ??
+        context.workspace.readBytes(ReleaseAssets.formulaPath(project));
+    if (formula == null) {
       return TargetActOutcome(
         ok: false,
         problem: 'the workspace has no '
-            '${ReleaseAssets.caskName(executable)}; the staging phase '
+            '${ReleaseAssets.formulaName(executable)}; the staging phase '
             'renders it — re-running runs it',
       );
     }
@@ -270,8 +339,8 @@ final class HomebrewTargetModule extends TargetModule {
       tap: unit.tapFor(repository),
       checkout: '${scratch.path}/tap',
     ).update(
-      caskPath: 'Casks/${ReleaseAssets.caskName(executable)}',
-      contents: utf8.decode(cask),
+      formulaPath: 'Formula/${ReleaseAssets.formulaName(executable)}',
+      contents: utf8.decode(formula),
       message: '$executable ${project.version}',
       authority: authority,
     );
@@ -305,7 +374,7 @@ final class HomebrewTargetModule extends TargetModule {
     final message = switch (state.verdict) {
       Verdict.unknown => 'the tap was updated and could not be read back',
       Verdict.conflict => 'the public tap does not hold what rk pushed',
-      Verdict.absent || Verdict.exact => 'the tap cask was not updated',
+      Verdict.absent || Verdict.exact => 'the tap formula was not updated',
     };
     final details = <String>[
       if (act.diagnostic?.remedy != null) act.diagnostic!.remedy!,
@@ -339,5 +408,5 @@ final class HomebrewTargetModule extends TargetModule {
     required ResolvedUnit unit,
     required TargetPlan target,
   }) =>
-      homebrewCaskStage(unit: unit, target: target);
+      homebrewFormulaStage(unit: unit, target: target);
 }

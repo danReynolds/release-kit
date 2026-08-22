@@ -88,6 +88,7 @@ abstract final class PublicReconciliation {
           'version': intendedVersion.canonical,
           'identity': publishedIdentity,
         },
+        authority: advanceAuthority,
       );
     }
     if (publishedVersion == null) {

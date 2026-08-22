@@ -630,10 +630,10 @@ void main() {
             artifact: archive,
           ),
         ],
-        cask: ReleaseManifestCask.fromStage(
+        homebrew: ReleaseManifestHomebrew.fromStage(
           project: 'rk',
           tap: 'example/homebrew-tap',
-          path: 'Casks/rk.rb',
+          path: 'Formula/rk.rb',
           artifact: archive,
         ),
       );
@@ -644,8 +644,8 @@ void main() {
 
       expect(parsed.commit, stage.identity.headCommit);
       expect(parsed.artifacts.single.sha256, archive.sha256);
-      expect(parsed.cask!.sha256, archive.sha256);
-      expect(parsed.cask!.path, 'Casks/rk.rb');
+      expect(parsed.homebrew!.sha256, archive.sha256);
+      expect(parsed.homebrew!.path, 'Formula/rk.rb');
       expect(document, contains(_commit));
       expect(
         document,
@@ -656,6 +656,32 @@ void main() {
       expect(document, isNot(contains('artifacts/rk.tar.gz')));
       expect(document, isNot(contains('Developer ID')));
       expect(document, isNot(contains('notary')));
+    });
+
+    test('schema 6 cask manifests remain readable after the formula migration',
+        () {
+      final legacy = '${CanonicalJson.encode({
+            'artifacts': <Object?>[],
+            'cask': {
+              'path': 'Casks/rk.rb',
+              'project': 'rk',
+              'sha256': 'a' * 64,
+              'size': 42,
+              'tap': 'example/homebrew-tap',
+            },
+            'schema': 6,
+            'source': {'commit': _commit},
+            'tag': 'v1.2.3',
+            'unit': 'rk',
+            'version': '1.2.3',
+          })}\n';
+
+      final parsed = ReleaseManifest.parse(legacy);
+      expect(parsed.homebrew!.path, 'Casks/rk.rb');
+      expect(parsed.homebrew!.sha256, 'a' * 64);
+      expect(parsed.toJson()['schema'], releaseManifestSchemaVersion);
+      expect(parsed.toJson(), contains('homebrew'));
+      expect(parsed.toJson(), isNot(contains('cask')));
     });
 
     test('public artifact names cannot carry a local path', () {
@@ -758,7 +784,7 @@ StageReceipt _writeCompleteStage(StageDirectory stage) {
         outputs: [manifest],
         evidence: const {
           'release_assets': {'rk': 'rk'},
-          'cask_binding': null,
+          'homebrew_binding': null,
         },
       ),
     ],
