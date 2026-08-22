@@ -42,7 +42,7 @@ Select release outputs
   Unit                    Binary   Git tag   pub.dev   GitHub   Homebrew
 › rk                      [ ]      [x]       [x]       [ ]      [ ]
 
-Binary — standalone rk archives
+Binary — standalone rk archives for macos-arm64
 
 ↑↓ unit   ←→ option   space toggle   enter review   q cancel
 
@@ -52,6 +52,14 @@ That proposal is the whole configuration. Targets are opt-in —
 release-kit's own file says yes to all of them. `rk status` checks the
 destinations themselves, not a log; "Not staged" is the private work
 that must finish before anything goes public:
+
+When Binary or Homebrew is selected, `rk init` proposes the current host's
+native binary platform. A Linux host can publish a Linux-only Homebrew Formula;
+it does not silently add a macOS artifact that requires a macOS release host.
+Add another supported platform to `binary_platforms` only when the release
+host can produce it. Docker and Podman are optional: without one, an explicitly
+selected cross-built Linux binary is marked as built but not executed instead
+of blocking the release.
 
 ```console
 $ rk status

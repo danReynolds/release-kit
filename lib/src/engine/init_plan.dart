@@ -1,4 +1,4 @@
-import 'config.dart';
+import '../builds/capability.dart';
 import 'dart_workspace.dart';
 import 'pubspec.dart';
 import 'release_choice.dart';
@@ -73,19 +73,29 @@ final class InitPlan {
   InitPlan({
     required Iterable<InitCandidate> candidates,
     required Iterable<String> notices,
+    required Iterable<PlatformCapability> platformCapabilities,
     required this.gitBound,
     required this.hasRemote,
     required this.githubRepository,
   })  : candidates = List.unmodifiable(candidates),
-        notices = List.unmodifiable(notices);
+        notices = List.unmodifiable(notices),
+        platformCapabilities = List.unmodifiable(platformCapabilities);
 
   factory InitPlan.discover({
     required SourceTree tree,
     required bool gitBound,
     required bool hasRemote,
     required String? githubRepository,
+    required Iterable<PlatformCapability> platformCapabilities,
     String? ambientPubHostedUrl,
   }) {
+    final platforms = List<PlatformCapability>.unmodifiable(
+      platformCapabilities,
+    );
+    final defaultBinaryPlatforms = platforms
+        .where((platform) => platform.capability == Capability.native)
+        .map((platform) => platform.platform)
+        .toList();
     final native = DartWorkspaceDiscovery(
       tree,
       trackedManifests: gitBound,
@@ -118,7 +128,8 @@ final class InitPlan {
       final tagAvailable = packageUsable && gitBound && hasRemote;
       final githubAvailable = tagAvailable && githubRepository != null;
       final oneExecutable = project.executables.length == 1;
-      final binaryAvailable = packageUsable && oneExecutable;
+      final binaryAvailable =
+          packageUsable && oneExecutable && defaultBinaryPlatforms.isNotEmpty;
       final homebrewAvailable = binaryAvailable && githubAvailable;
       final selected = <ReleaseChoice>{
         if (registryAvailable) ReleaseChoice.pubDev,
@@ -161,13 +172,18 @@ final class InitPlan {
                     : 'a package version is required'),
         ReleaseChoice.binary: binaryAvailable
             ? InitAvailability.available(
-                'standalone ${project.executables.single} archives',
+                'standalone ${project.executables.single} archives for '
+                '${defaultBinaryPlatforms.join(', ')}',
               )
-            : InitAvailability.unavailable(!oneExecutable
-                ? project.executables.isEmpty
-                    ? 'no executable is declared'
-                    : 'several executables need a hand-authored decision'
-                : 'a package version is required'),
+            : InitAvailability.unavailable(
+                defaultBinaryPlatforms.isEmpty
+                    ? 'this host cannot produce a supported binary platform'
+                    : !oneExecutable
+                        ? project.executables.isEmpty
+                            ? 'no executable is declared'
+                            : 'several executables need a hand-authored decision'
+                        : 'a package version is required',
+              ),
         ReleaseChoice.homebrew: homebrewAvailable
             ? const InitAvailability.available(
                 'formula in the conventional or configured tap',
@@ -189,6 +205,7 @@ final class InitPlan {
     return InitPlan(
       candidates: candidates,
       notices: notices,
+      platformCapabilities: platforms,
       gitBound: gitBound,
       hasRemote: hasRemote,
       githubRepository: githubRepository,
@@ -197,12 +214,46 @@ final class InitPlan {
 
   final List<InitCandidate> candidates;
   final List<String> notices;
+  final List<PlatformCapability> platformCapabilities;
   final bool gitBound;
   final bool hasRemote;
   final String? githubRepository;
 
   List<InitCandidate> get included =>
       candidates.where((candidate) => candidate.selected.isNotEmpty).toList();
+
+  List<String> get defaultBinaryPlatforms => platformCapabilities
+      .where((platform) => platform.capability == Capability.native)
+      .map((platform) => platform.platform)
+      .toList();
+
+  /// Host facts worth disclosing only when the proposal actually ships a
+  /// binary. Product intent stays editable in release.toml, but init's own
+  /// defaults must be finishable on the machine that proposed them.
+  List<String> get binaryPlatformNotices {
+    if (!included.any(
+      (candidate) => candidate.selected.contains(ReleaseChoice.binary),
+    )) {
+      return const [];
+    }
+    return [
+      for (final platform in platformCapabilities)
+        if (platform.capability != Capability.native)
+          if (!platform.canProduce)
+            '${platform.platform} was not selected: ${platform.reason}. '
+                'Add it only when the release will run on a host that can '
+                'produce it.'
+          else if (!platform.canProve)
+            '${platform.platform} was not selected by default. It can be '
+                'built here but not executed here: ${platform.reason}. The '
+                'container runtime is optional; rk will disclose the missing '
+                'smoke test instead of blocking if you add this cross-build '
+                'explicitly.'
+          else
+            '${platform.platform} was not selected by default. Add it to '
+                'binary_platforms if this release should cross-build it.',
+    ];
+  }
 
   InitToggleResult toggle(int index, ReleaseChoice option) {
     final candidate = candidates[index];
@@ -278,7 +329,7 @@ final class InitPlan {
       }
       if (candidate.selected.contains(ReleaseChoice.binary)) {
         buffer.write('binary_platforms = '
-            '[${ReleaseConfig.supportedPlatformsList.map((item) => '"$item"').join(', ')}]\n');
+            '[${defaultBinaryPlatforms.map((item) => '"$item"').join(', ')}]\n');
       }
     }
     if (candidates.any((candidate) => candidate.executables.isNotEmpty) &&
@@ -301,6 +352,15 @@ final class InitPlan {
         },
         'candidates':
             candidates.map((candidate) => candidate.toJson()).toList(),
+        'binary_platforms': [
+          for (final platform in platformCapabilities)
+            {
+              'name': platform.platform,
+              'selected_by_default': platform.capability == Capability.native,
+              'can_execute_here': platform.canProve,
+              if (platform.reason != null) 'reason': platform.reason,
+            },
+        ],
         'notices': notices,
       };
 
@@ -310,6 +370,7 @@ final class InitPlan {
             i == index ? replacement : candidates[i],
         ],
         notices: notices,
+        platformCapabilities: platformCapabilities,
         gitBound: gitBound,
         hasRemote: hasRemote,
         githubRepository: githubRepository,
