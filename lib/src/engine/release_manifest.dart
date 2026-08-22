@@ -4,10 +4,10 @@ import 'canonical_json.dart';
 import 'stage.dart';
 import 'stage_receipt.dart';
 
-/// Bumped freely until the first published release; after it, a bump
-/// orphans every manifest already public — the public Homebrew-consumption path
-/// parses the manifest bound by the release tag — so a post-release bump must
-/// teach the parser each retired schema it still needs to read.
+/// The only public release-manifest schema this build accepts.
+///
+/// Schema 7 is the Formula-only contract. Older schemas are not
+/// migrated because their Homebrew coordinates no longer belong to this model.
 const releaseManifestSchemaVersion = 7;
 
 /// One public file, deliberately stripped of its local stage path and all
@@ -94,7 +94,7 @@ final class StagedHomebrewBinding {
   }) : stagedPath = StagePath.require(stagedPath) {
     _requirePublicText('Homebrew project', project);
     _requirePublicText('Homebrew tap', tap);
-    _requireDestinationPath(path);
+    _requireFormulaPath(path);
   }
 
   factory StagedHomebrewBinding.fromEvidence(Object? value) {
@@ -159,7 +159,7 @@ class ReleaseManifestHomebrew {
   }) {
     _requirePublicText('Homebrew project', project);
     _requirePublicText('Homebrew tap', tap);
-    _requireDestinationPath(path);
+    _requireFormulaPath(path);
     if (size < 0) {
       throw ArgumentError('Homebrew formula size cannot be negative');
     }
@@ -270,32 +270,20 @@ class ReleaseManifest {
   factory ReleaseManifest.parse(String document) {
     final decoded = CanonicalJson.decodeDocument(document);
     final schema = decoded is Map ? decoded['schema'] : null;
-    final fields = switch (schema) {
-      6 => const {
-          'artifacts',
-          'cask',
-          'schema',
-          'source',
-          'tag',
-          'unit',
-          'version',
-        },
-      releaseManifestSchemaVersion => const {
-          'artifacts',
-          'homebrew',
-          'schema',
-          'source',
-          'tag',
-          'unit',
-          'version',
-        },
-      _ => throw FormatException(
-          'unsupported release manifest schema: $schema',
-        ),
-    };
+    if (schema != releaseManifestSchemaVersion) {
+      throw FormatException('unsupported release manifest schema: $schema');
+    }
     final map = _strictMap(
       decoded,
-      fields,
+      const {
+        'artifacts',
+        'homebrew',
+        'schema',
+        'source',
+        'tag',
+        'unit',
+        'version',
+      },
       'release manifest',
     );
     final source = _strictMap(
@@ -313,11 +301,9 @@ class ReleaseManifest {
       tag: map['tag'] == null ? null : _string(map, 'tag'),
       commit: source['commit'] == null ? null : _string(source, 'commit'),
       artifacts: artifacts.map(ReleaseManifestArtifact.fromJson),
-      homebrew: (schema == 6 ? map['cask'] : map['homebrew']) == null
+      homebrew: map['homebrew'] == null
           ? null
-          : ReleaseManifestHomebrew.fromJson(
-              schema == 6 ? map['cask'] : map['homebrew'],
-            ),
+          : ReleaseManifestHomebrew.fromJson(map['homebrew']),
     );
   }
 
@@ -411,5 +397,16 @@ void _requireDestinationPath(String path) {
   }
   for (final segment in segments) {
     _requirePublicText('destination path segment', segment);
+  }
+}
+
+void _requireFormulaPath(String path) {
+  _requireDestinationPath(path);
+  if (!RegExp(
+    r'^Formula/[a-z](?:[a-z0-9-]*[a-z0-9])?\.rb$',
+  ).hasMatch(path)) {
+    throw ArgumentError(
+      'Homebrew formula path must be Formula/<token>.rb: $path',
+    );
   }
 }

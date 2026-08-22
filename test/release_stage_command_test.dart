@@ -2617,7 +2617,6 @@ class _WorldTools implements Tools {
   String? tagManifestSha256;
 
   List<int>? publicFormula;
-  List<int>? legacyCask;
 
   @override
   Future<ToolResult> run(
@@ -2926,23 +2925,6 @@ class _WorldTools implements Tools {
           ? _notFound()
           : _ok(stdout: jsonEncode({'content': base64Encode(formula)}));
     }
-    if (executable == 'gh' &&
-        _starts(
-          arguments,
-          ['api', 'repos/example/homebrew-tap/contents/Casks/tool.rb'],
-        )) {
-      if (_homebrewPublicUnreadable) {
-        return ToolResult(
-          exitCode: 1,
-          stdout: '',
-          stderr: 'the tap could not be reached',
-        );
-      }
-      final cask = legacyCask;
-      return cask == null
-          ? _notFound()
-          : _ok(stdout: jsonEncode({'content': base64Encode(cask)}));
-    }
     if (executable == 'gh' && _starts(arguments, ['repo', 'view'])) {
       return _ok(stdout: '{"name":"tool"}');
     }
@@ -2960,11 +2942,6 @@ class _WorldTools implements Tools {
           ..parent.createSync(recursive: true)
           ..writeAsBytesSync(formula);
       }
-      if (legacyCask != null) {
-        File('${checkout.path}/Casks/tool.rb')
-          ..parent.createSync(recursive: true)
-          ..writeAsBytesSync(legacyCask!);
-      }
       return _ok();
     }
     if (executable == 'git' &&
@@ -2980,9 +2957,6 @@ class _WorldTools implements Tools {
       }
       publicFormula =
           File('$workingDirectory/Formula/tool.rb').readAsBytesSync();
-      if (!File('$workingDirectory/Casks/tool.rb').existsSync()) {
-        legacyCask = null;
-      }
       if (conflictHomebrewAfterPush) {
         publicFormula = utf8.encode('not the generated formula');
       }

@@ -458,8 +458,7 @@ class StageInspector {
         : <String, String>{};
     final StagedHomebrewBinding? homebrewBinding;
     try {
-      final encoded = complete.evidence['homebrew_binding'] ??
-          complete.evidence['cask_binding'];
+      final encoded = complete.evidence['homebrew_binding'];
       homebrewBinding =
           encoded == null ? null : StagedHomebrewBinding.fromEvidence(encoded);
     } on Object catch (error) {
@@ -521,11 +520,9 @@ class StageInspector {
       final local = homebrewBinding == null
           ? null
           : beforeComplete[homebrewBinding.stagedPath];
-      final expectedType =
-          manifestHomebrew.path.startsWith('Casks/') ? 'cask' : 'formula';
       if (homebrewBinding == null ||
           local == null ||
-          local.type != expectedType ||
+          local.type != 'formula' ||
           local.size != manifestHomebrew.size ||
           local.sha256 != manifestHomebrew.sha256 ||
           completeInputs[homebrewBinding.stagedPath] !=

@@ -204,10 +204,9 @@ installs the executable with `bin.install`. It is a private stage output
 published only to `Formula/<token>.rb` in the selected tap. Its token and Ruby
 class are derived from the executable name (`_` becomes `-`).
 
-The first Formula publication also handles rk's earlier Cask layout. RK
-inspects `Casks/<token>.rb`, binds its exact digest into the same update
-authority, then creates the Formula and removes the Cask in one tap commit. It
-never deletes an absent, changed, or unauthenticated legacy file.
+RK manages exactly one Homebrew coordinate, `Formula/<token>.rb`. Inspection,
+compare-and-swap authority, publication, and read-back all bind that same file;
+the target does not discover or mutate any second tap path.
 
 The release manifest binds each formula's:
 

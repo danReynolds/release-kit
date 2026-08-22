@@ -136,7 +136,7 @@ fails, and the count below is checked against the rows.
 | code | says | declared in |
 |---|---|---|
 | `RK-GIT-001` | — | `lib/src/engine/git.dart` |
-| `RK-GIT-002` | a publishing target needs an origin remote, and this repository has none | `lib/src/targets/github_release/module.dart`, `lib/src/targets/homebrew/module.dart`, `lib/src/targets/homebrew/cask_stage.dart` |
+| `RK-GIT-002` | a publishing target needs an origin remote, and this repository has none | `lib/src/targets/github_release/module.dart`, `lib/src/targets/homebrew/module.dart`, `lib/src/targets/homebrew/formula_stage.dart` |
 | `RK-GIT-003` | this repository has no remote | `lib/src/engine/git.dart` |
 | `RK-GIT-004` | ${unit.version} is already published, and the tag  ${unit.tag} does not exist | `lib/src/engine/inspect.dart` |
 | `RK-GIT-005` | the tag ${unit.tag} points at ${_short(target)}, and this  release would publish from ${… | `lib/src/engine/inspect.dart` |
@@ -300,7 +300,7 @@ meanings and are not reused.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-WORK-001` | the staged workspace has no required target artifact | `lib/src/targets/github_release/module.dart`, `lib/src/targets/homebrew/cask_stage.dart`, `lib/src/binary_chain.dart` |
+| `RK-WORK-001` | the staged workspace has no required target artifact | `lib/src/targets/github_release/module.dart`, `lib/src/targets/homebrew/formula_stage.dart`, `lib/src/binary_chain.dart` |
 
 ## RK-YAML — The YAML subset
 

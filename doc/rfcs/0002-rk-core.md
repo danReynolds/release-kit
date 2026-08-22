@@ -4,7 +4,7 @@
 > [README](../../README.md) for what rk is.
 
 - Status: Approved for implementation
-- Revision: 5 (2026-08-14) — append-only publication reconciliation
+- Revision: 6 (2026-08-22) — Formula-only Homebrew publication
 - Supersedes: RFC 0001 as build authority; 0001 remains the threat catalog
   and assurance ladder
 - MVP scope: Dart packages and Dart CLIs, released **from the operator's
@@ -505,7 +505,7 @@ remediation, and `doc/json.md` freezes their machine names. In particular,
 updated local session state.
 
 **Every conflict prints the difference**, not the fact of one: differing
-files and digests, a cask line diff, a per-object asset table. "A human
+files and digests, a formula line diff, a per-object asset table. "A human
 decides" is only true if the human is given the evidence.
 
 **Refusing to act is not refusing to instruct.** Where rk will not perform
@@ -687,7 +687,7 @@ remote draft is deleted as cleanup.
 
 **The flip re-verifies against reality**: enumerate the draft's assets,
 require the exact inventory, confirm every digest, and compare the staged
-cask against the manifest-bound archive digests.
+formula against the manifest-bound archive digests.
 Only then publish once, and confirm the release reports immutable.
 
 The post-create inspection downloads or hashes the public assets and compares
@@ -711,20 +711,20 @@ their complexity. Deferring them costs nothing today.
 
 ### Mutable pointers
 
-The Homebrew cask updates compare-and-swap: inspect (absent / exact /
+The Homebrew formula updates compare-and-swap: inspect (absent / exact /
 recognizable-older / conflict), apply only if the inspected blob is still
 current, then re-read the public tap as the post-act check. A same-version
 difference, a newer version, or content rk cannot recognize as its generated
-cask yields `conflict`; retry never reconstructs every historical release just
-to authorize a forward move.
+formula yields `conflict`; retry never reconstructs every historical release
+just to authorize a forward move.
 A clean consumer install from the public tap remains a supervised live-canary
 gate rather than part of the mutation.
 
-The inspection compares the public cask bytes, version, URLs, and hashes with
+The inspection compares the public formula bytes, version, URLs, and hashes with
 the intended channel value. That value comes from the retained stage when it
 exists, or from the actual public GitHub assets and their digests when Homebrew
 is the only unfinished target. The swap applies against a fresh `--depth 1`
-clone, first requiring its cask to match the exact blob authorized by
+clone, first requiring its formula to match the exact blob authorized by
 inspection; a rejected push then catches movement after that check. The
 authoritative pre-act and post-act public reads use the GitHub contents API —
 REST, not a CDN path; the API serves blob content, not cached pages.
@@ -871,8 +871,8 @@ act(expected, stage)
   fails clearly rather than falling back to custom ignore or packaging logic.
 - **`github-release`** (destination): draft creation, upload, public flip, and
   exact public asset inspection as above.
-- **`homebrew-tap`** (destination): stable releases only; Cask from a closed
-  template plus staged digests plus derived identity; compare-and-swap update;
+- **`homebrew-tap`** (destination): stable releases only; Formula from a closed
+  renderer plus staged digests plus derived identity; compare-and-swap update;
   public byte-for-byte read-back. Prereleases leave the tap unchanged. A clean
   consumer install from the public tap,
   without release credentials or the source checkout, is the supervised
@@ -912,7 +912,7 @@ What makes the CLI sufficient is already required for other reasons:
   <unit>/notarize/<platform>
   <unit>/archive/<platform>
   <unit>/github-release/<tag>
-  <unit>/homebrew/<cask>
+  <unit>/homebrew/<project>/<executable>
   ```
 
   `test/checklist_test.dart` holds them as frozen vectors.
@@ -1014,7 +1014,7 @@ concrete failure it prevents.
 3. **Binary chain + `github-release` + `homebrew-tap`.** Release keybay
    cli: three platforms — macos-arm64 native, both Linux targets
    cross-compiled and smoke-tested in containers — signed, notarized,
-   archived, staged, published, cask updated, then installed and
+   archived, staged, published, Formula updated, then installed and
    smoke-tested from the public tap.
 4. **Fleury**, after its five packages are bootstrapped by hand, exercising
    multi-project units and derived ordering.

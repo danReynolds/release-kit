@@ -89,15 +89,10 @@ final class HomebrewTargetModule extends TargetModule {
         tap: tap,
         workingDirectory: context.git.root,
       );
-      final formula = await destination.inspect(
-        tapPath: 'Formula/${ReleaseAssets.formulaName(executable)}',
+      return destination.inspect(
+        formulaPath: 'Formula/${ReleaseAssets.formulaName(executable)}',
         intendedVersion: project.version,
         expectedBytes: expected.readAsBytesSync(),
-      );
-      return _withLegacyCaskMigration(
-        destination,
-        project,
-        formula,
       );
     }
 
@@ -107,7 +102,7 @@ final class HomebrewTargetModule extends TargetModule {
       workingDirectory: context.git.root,
     );
     final publicFormula = await destination.inspect(
-      tapPath: 'Formula/${ReleaseAssets.formulaName(executable)}',
+      formulaPath: 'Formula/${ReleaseAssets.formulaName(executable)}',
       intendedVersion: project.version,
       expectedBytes: null,
     );
@@ -125,78 +120,15 @@ final class HomebrewTargetModule extends TargetModule {
           publicFormula.evidence['public formula'] == 'absent') {
         // The GitHub release is not public yet. Ordinary staging will render
         // the formula from the exact archives it is about to publish.
-        return _withLegacyCaskMigration(
-          destination,
-          project,
-          publicFormula,
-        );
+        return publicFormula;
       }
       return current.inspection;
     }
 
-    final formula = await destination.inspect(
-      tapPath: 'Formula/${ReleaseAssets.formulaName(executable)}',
+    return destination.inspect(
+      formulaPath: 'Formula/${ReleaseAssets.formulaName(executable)}',
       intendedVersion: project.version,
       expectedBytes: current.bytes,
-    );
-    return _withLegacyCaskMigration(destination, project, formula);
-  }
-
-  Future<Inspection> _withLegacyCaskMigration(
-    HomebrewTarget destination,
-    ResolvedProject project,
-    Inspection formula,
-  ) async {
-    if (formula.verdict == Verdict.conflict ||
-        formula.verdict == Verdict.unknown) {
-      return formula;
-    }
-    final formulaAuthority = formula.authority;
-    if (formulaAuthority is! HomebrewUpdateAuthority) {
-      return const Inspection.unknown(
-        'the Homebrew formula inspection carried no update authority',
-      );
-    }
-    final legacyPath =
-        'Casks/${ReleaseAssets.formulaName(project.executable!)}';
-    final legacy = await destination.inspect(
-      tapPath: legacyPath,
-      intendedVersion: project.version,
-      expectedBytes: null,
-      kind: 'legacy cask',
-    );
-    if (legacy.verdict == Verdict.conflict ||
-        legacy.verdict == Verdict.unknown) {
-      return legacy;
-    }
-    final legacyAuthority = legacy.authority;
-    if (legacyAuthority is! HomebrewUpdateAuthority) {
-      return const Inspection.unknown(
-        'the legacy Homebrew cask inspection carried no update authority',
-      );
-    }
-    final authority = formulaAuthority.withLegacyCask(
-      path: legacyPath,
-      sha256: legacyAuthority.sha256,
-    );
-    final legacyPresent = legacyAuthority.sha256 != null;
-    if (!legacyPresent) {
-      return Inspection(
-        formula.verdict,
-        detail: formula.detail,
-        evidence: formula.evidence,
-        authority: authority,
-      );
-    }
-    return Inspection.absent(
-      detail: formula.isExact
-          ? 'the formula is current; the legacy cask still needs removal'
-          : formula.detail,
-      evidence: {
-        ...formula.evidence,
-        'legacy cask': 'will be removed',
-      },
-      authority: authority,
     );
   }
 
