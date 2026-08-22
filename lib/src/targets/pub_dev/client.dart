@@ -13,19 +13,28 @@ class PubDevTarget implements PublicationInspector {
     ResolvedProject project, {
     String? expectedArchiveSha256,
   }) async {
-    final RegistryPackage? package;
+    PublishedVersion? published;
     try {
-      package = await registry.lookup(project.name);
+      published = await registry.lookupVersion(project.name, project.version);
     } on RegistryUnavailable catch (error) {
       return Inspection.unknown(error.message);
     }
 
-    if (package == null) {
-      return const Inspection.absent(detail: 'the package does not exist yet');
+    if (published == null) {
+      final RegistryPackage? package;
+      try {
+        package = await registry.lookup(project.name);
+      } on RegistryUnavailable catch (error) {
+        return Inspection.unknown(error.message);
+      }
+      if (package == null) {
+        return const Inspection.absent(
+          detail: 'the package does not exist yet',
+        );
+      }
+      published = package.at(project.version);
+      if (published == null) return const Inspection.absent();
     }
-
-    final published = package.at(project.version);
-    if (published == null) return const Inspection.absent();
 
     final when = published.published;
     final age = when == null ? 'already published' : 'published ${_ago(when)}';

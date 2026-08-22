@@ -30,21 +30,34 @@ void main() {
   late int status;
   late String body;
   late Duration delay;
+  late int versionStatus;
+  late String versionBody;
+  late Duration versionDelay;
 
   late List<HttpHeaders> requestHeaders;
+  late List<Uri> requestUris;
 
   setUp(() async {
     status = 200;
     body = '{"versions": []}';
     delay = Duration.zero;
+    versionStatus = 404;
+    versionBody = '';
+    versionDelay = Duration.zero;
     requestHeaders = [];
+    requestUris = [];
 
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     server.listen((request) async {
       requestHeaders.add(request.headers);
-      if (delay > Duration.zero) await Future<void>.delayed(delay);
-      request.response.statusCode = status;
-      request.response.write(body);
+      requestUris.add(request.uri);
+      final exact = request.uri.path.contains('/versions/');
+      final responseDelay = exact ? versionDelay : delay;
+      if (responseDelay > Duration.zero) {
+        await Future<void>.delayed(responseDelay);
+      }
+      request.response.statusCode = exact ? versionStatus : status;
+      request.response.write(exact ? versionBody : body);
       await request.response.close();
     });
 
@@ -93,6 +106,18 @@ publish = ["pub.dev"]
   });
 
   group('everything else is unknown, never absent', () {
+    test('an unreadable exact coordinate is not hidden by readable history',
+        () async {
+      versionStatus = 500;
+      body = '{"versions": [{"version": "0.9.0"}]}';
+
+      final inspection = await inspect();
+
+      expect(inspection.verdict, Verdict.unknown);
+      expect(inspection.detail, contains('500'));
+      expect(requestUris, hasLength(1));
+    });
+
     test('a provider that does not answer is bounded and stays unknown',
         () async {
       registry.close();
@@ -158,6 +183,24 @@ publish = ["pub.dev"]
   });
 
   group('what is there is reported as what is there', () {
+    test('the exact coordinate can confirm before package history catches up',
+        () async {
+      versionStatus = 200;
+      versionBody = '{"version": "1.0.0", '
+          '"archive_sha256": "AB12cd"}';
+      body = '{"versions": [{"version": "0.9.0"}]}';
+
+      final inspection = await PubDevTarget(registry: registry).inspectProject(
+        project,
+        expectedArchiveSha256: 'AB12cd',
+      );
+
+      expect(inspection.verdict, Verdict.exact);
+      expect(inspection.evidence['archive'], 'sha256:ab12cd');
+      expect(requestUris, hasLength(1));
+      expect(requestUris.single.path, endsWith('/versions/1.0.0'));
+    });
+
     test('an exact match', () async {
       body = '{"versions": [{"version": "1.0.0"}]}';
       final inspection = await inspect();

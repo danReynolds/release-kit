@@ -19,6 +19,7 @@ import 'package:rk/src/engine/stage_inspection.dart';
 import 'package:rk/src/engine/stage_plan.dart';
 import 'package:rk/src/engine/stage_receipt.dart';
 import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/engine/version.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/targets/catalog.dart';
 import 'package:rk/src/transforms/archive.dart';
@@ -2396,6 +2397,12 @@ class _ObservedRegistry implements RegistryReader {
   Future<RegistryPackage?> lookup(String name) {
     onRead();
     return delegate.lookup(name);
+  }
+
+  @override
+  Future<PublishedVersion?> lookupVersion(String name, Version version) {
+    onRead();
+    return delegate.lookupVersion(name, version);
   }
 
   @override

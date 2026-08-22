@@ -95,9 +95,10 @@ class ReleaseCommand {
   final Future<void> Function(Duration) _wait;
 
   /// How long the confirming read chases a version the registry has accepted
-  /// but does not list yet, and how often it asks. Bounded: an unlisted
-  /// version after a minute is worth a human's eyes, not an infinite loop.
-  static const confirmDeadline = Duration(seconds: 60);
+  /// but does not list yet, and how often it asks. Pub warns that a successful
+  /// upload can take up to ten minutes to become visible, so the bound covers
+  /// that documented propagation window without becoming an infinite loop.
+  static const confirmDeadline = Duration(minutes: 10);
   static const confirmInterval = Duration(seconds: 5);
 
   final Tools tools;
