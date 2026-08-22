@@ -307,6 +307,9 @@ void classificationTables() {
           await guardsFor(tagTargets: const {'v1.0.0': 'fedcba987654'});
 
       expect(found.map((d) => d.code), contains('RK-GIT-005'));
+      final guard = found.singleWhere((d) => d.code == 'RK-GIT-005');
+      expect(guard.remedy, isNot(contains('push -f')));
+      expect(guard.remedy, contains('do not move it'));
     });
 
     test('the prose says unread too, not just the refusal', () async {

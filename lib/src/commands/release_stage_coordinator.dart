@@ -120,9 +120,9 @@ final class ReleaseStageCoordinator {
       output.problem(Diagnostic(
         code: 'RK-STAGE-004',
         message: 'the release context could not be refreshed $changed',
-        remedy: '$error\n'
-            'restore a readable repository, then re-run '
+        remedy: 'restore a readable repository, then re-run '
             'rk release ${unit.name} --stage',
+        evidence: '$error',
       ));
       output.halt(halt);
       return false;
@@ -203,11 +203,22 @@ final class ReleaseStageCoordinator {
       title: '${unit.name} ${unit.version} · staging',
       board: StageBoard.forUnit(unit, targets, targetStages),
     );
-    final notices = <String>[];
+    final targetStagesByName = {
+      for (final targetStage in targetStages)
+        targetStage.contract.step.name: targetStage,
+    };
+    final warnings = <_StageWarning>[];
     if (inspected.reusable) {
       stageProgress
         ..restore(inspected.receipt!.steps)
         ..settle(title: '${unit.name} ${unit.version} · staged');
+      _showStageWarnings(
+        unit,
+        _recordedStageWarnings(
+          inspected.receipt!.steps,
+          targetStagesByName,
+        ),
+      );
       ReleaseSigningContext? recoveredSigning;
       for (final step in inspected.receipt!.steps.where(
         (step) => isMacosBuildReceipt(step.name),
@@ -271,7 +282,9 @@ final class ReleaseStageCoordinator {
         output.problem(Diagnostic(
           code: 'RK-STAGE-001',
           message: 'the old release stage could not be replaced safely',
-          remedy: '$error',
+          remedy: 'resolve the recorded filesystem failure, then re-run '
+              'rk release ${unit.name} --stage',
+          evidence: '$error',
         ));
         output.halt(HaltKind.beforeActing);
         return null;
@@ -287,7 +300,9 @@ final class ReleaseStageCoordinator {
         output.problem(Diagnostic(
           code: 'RK-STAGE-003',
           message: 'the committed source could not be staged',
-          remedy: '$error',
+          remedy: 'resolve the recorded source-staging failure, then re-run '
+              'rk release ${unit.name} --stage',
+          evidence: '$error',
         ));
         output.halt(HaltKind.beforeActing);
         return null;
@@ -302,10 +317,6 @@ final class ReleaseStageCoordinator {
     stageProgress.restore(progress);
     final producersByName = {
       for (final step in producerSteps) receiptNameFor(step): step,
-    };
-    final targetStagesByName = {
-      for (final targetStage in targetStages)
-        targetStage.contract.step.name: targetStage,
     };
     final runnable = {
       ...producersByName.keys,
@@ -351,7 +362,10 @@ final class ReleaseStageCoordinator {
             progress: stageProgress.handlesFor(targetStage),
           ),
         );
-        notices.addAll(result.notices);
+        warnings.addAll([
+          for (final warning in result.warnings)
+            _StageWarning(warning, target: target.step.id),
+        ]);
         if (result case TargetStageFailure(:final diagnostic, :final unit)) {
           stageProgress.fail(receiptName);
           output.problem(diagnostic, unit: unit);
@@ -536,7 +550,9 @@ final class ReleaseStageCoordinator {
       output.problem(Diagnostic(
         code: 'RK-STAGE-003',
         message: 'the release stage could not be completed',
-        remedy: '$error',
+        remedy: 'resolve the recorded stage assembly failure, then re-run '
+            'rk release ${unit.name} --stage',
+        evidence: '$error',
       ));
       output.halt(HaltKind.beforeActing);
       return null;
@@ -554,9 +570,7 @@ final class ReleaseStageCoordinator {
     stageProgress
       ..restore(completedReceipt)
       ..settle(title: '${unit.name} ${unit.version} · staged');
-    for (final notice in notices) {
-      output.say(notice, depth: 1);
-    }
+    _showStageWarnings(unit, warnings);
     return PreparedRelease(
       claims: claims,
       signing: signing,
@@ -618,11 +632,55 @@ final class ReleaseStageCoordinator {
     stage.writeProgress(steps);
   }
 
+  List<_StageWarning> _recordedStageWarnings(
+    Iterable<StageStep> steps,
+    Map<String, TargetStage> targetStages,
+  ) {
+    final warnings = <_StageWarning>[];
+    for (final step in steps) {
+      for (final warning in recordedTargetStageWarnings(step)) {
+        warnings.add(
+          _StageWarning(
+            warning,
+            target: targetStages[step.name]?.target.step.id,
+          ),
+        );
+      }
+    }
+    return warnings;
+  }
+
+  void _showStageWarnings(
+    ResolvedUnit unit,
+    Iterable<_StageWarning> found,
+  ) {
+    final seen = <String>{};
+    final warnings = [
+      for (final warning in found)
+        if (seen.add('${warning.diagnostic.code}\u0000'
+            '${warning.diagnostic.message}'))
+          warning,
+    ];
+    if (warnings.isEmpty) return;
+    output.blank();
+    output.heading('Warnings');
+    for (final warning in warnings) {
+      output.warning(
+        warning.diagnostic,
+        unit: unit.name,
+        target: warning.target,
+        depth: 1,
+      );
+    }
+  }
+
   void _stageProgressProblem(Object error) {
     output.problem(Diagnostic(
       code: 'RK-STAGE-003',
       message: 'the completed producer could not be recorded safely',
-      remedy: '$error',
+      remedy: 'resolve the recorded stage-write failure, then rebuild the '
+          'stage',
+      evidence: '$error',
     ));
   }
 
@@ -630,8 +688,9 @@ final class ReleaseStageCoordinator {
     output.problem(Diagnostic(
       code: 'RK-STAGE-003',
       message: '$operation failed while preparing the release stage',
-      remedy: '$error\nfix the local failure, then re-run; no public target '
+      remedy: 'fix the recorded local failure, then re-run; no public target '
           'was changed',
+      evidence: '$error',
     ));
   }
 
@@ -1036,6 +1095,13 @@ final class ReleaseStageCoordinator {
           ),
         _ => throw StateError('${step.kind.name} is not a stage producer'),
       };
+}
+
+final class _StageWarning {
+  const _StageWarning(this.diagnostic, {this.target});
+
+  final Diagnostic diagnostic;
+  final String? target;
 }
 
 class _StageInputs {

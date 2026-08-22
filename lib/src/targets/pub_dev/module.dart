@@ -191,12 +191,18 @@ final class PubDevTargetModule extends TargetModule {
   }
 
   @override
-  String conflictRemedy(
+  Diagnostic diagnoseConflict(
     ResolvedUnit unit,
     TargetPlan target,
+    Inspection conflict,
   ) =>
-      'pub.dev versions are immutable. Bump the version and changelog, '
-      'then stage the new release';
+      Diagnostic(
+        code: 'RK-REL-001',
+        message: '${target.label}: '
+            '${conflict.detail ?? 'the published package does not match'}',
+        remedy: 'pub.dev versions are immutable. Bump the version and '
+            'changelog, then stage the new release',
+      );
 
   @override
   Future<TargetReadinessOutcome> checkReadiness(

@@ -80,11 +80,11 @@ Future<TargetStageOutcome> _prepareStage(
       ],
       evidence: const {'package_archive': 'staged'},
     ),
-    notices: validation.notices,
+    warnings: validation.warnings,
   );
 }
 
-Future<({Diagnostic? diagnostic, List<String> notices})> _packageArchive(
+Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
   TargetStageContext context,
   ResolvedProject project,
 ) async {
@@ -107,7 +107,7 @@ Future<({Diagnostic? diagnostic, List<String> notices})> _packageArchive(
             'published archive, so validation here would not see what '
             'consumers see. Remove it and re-stage.',
       ),
-      notices: const <String>[],
+      warnings: const <Diagnostic>[],
     );
   }
 
@@ -137,7 +137,7 @@ Future<({Diagnostic? diagnostic, List<String> notices})> _packageArchive(
               'reimplement Pub packaging or publish different bytes from '
               'the ones it staged.',
         ),
-        notices: const <String>[],
+        warnings: const <Diagnostic>[],
       );
     }
     final summary = RegExp(r'Package has[^\n]*')
@@ -152,18 +152,31 @@ Future<({Diagnostic? diagnostic, List<String> notices})> _packageArchive(
         diagnostic: Diagnostic(
           code: 'RK-PUB-001',
           message: 'pub refuses to publish ${project.name}',
-          remedy: validation.isEmpty ? packaged.summary : validation,
+          remedy: 'fix the validation errors reported by Pub, then stage '
+              '${project.name} again',
+          evidence: validation.isEmpty ? packaged.summary : validation,
         ),
-        notices: const <String>[],
+        warnings: const <Diagnostic>[],
       );
     }
-    final notices = <String>[
-      'pub warns, and --force will publish past these:',
+    final details = <String>[
+      for (final line in validation.split('\n'))
+        if (line.trimLeft().startsWith('*'))
+          line.trim().replaceFirst(RegExp(r'^\*\s*'), ''),
     ];
-    for (final line in validation.split('\n')) {
-      if (line.trimLeft().startsWith('*')) notices.add(line.trim());
-    }
-    return (diagnostic: null, notices: notices);
+    if (details.isEmpty) details.add('Pub reported package warnings');
+    return (
+      diagnostic: null,
+      warnings: [
+        for (final detail in details)
+          Diagnostic(
+            code: 'RK-PUB-012',
+            message: 'pub validation for ${project.name}: $detail',
+            remedy: 'fix or consciously accept this warning before release; '
+                'rk publishes past it only after explicit authorization',
+          ),
+      ],
+    );
   }
 
   if (!archive.existsSync()) {
@@ -174,11 +187,11 @@ Future<({Diagnostic? diagnostic, List<String> notices})> _packageArchive(
         remedy: 'upgrade or repair the Dart SDK and re-run; rk publishes '
             'only the exact native archive recorded in its stage',
       ),
-      notices: const <String>[],
+      warnings: const <Diagnostic>[],
     );
   }
 
-  return (diagnostic: null, notices: const <String>[]);
+  return (diagnostic: null, warnings: const <Diagnostic>[]);
 }
 
 /// What masks resolution for the staged package, or null when nothing does.

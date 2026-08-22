@@ -1549,11 +1549,17 @@ void main() {
           .singleWhere((problem) => problem['code'] == failure.code);
 
       if (failure.name == 'package preflight') {
-        // pub states its whole case in a few lines, so they are the remedy a
-        // person reads, kept under the name doc/json.md publishes.
-        expect(reported['remedy'], contains('Package has 1 error.'));
+        // Pub's whole account is evidence; the remedy remains the action a
+        // person can take instead of presenting tool output as a Fix.
+        expect(
+          reported['remedy'],
+          contains('fix the validation errors reported by Pub'),
+        );
         expect(
             attached['pub-package-tool.txt'], contains('Package has 1 error.'));
+        final filed = reported['evidence'] as String?;
+        expect(filed, isNotNull);
+        expect(attached[filed], contains('Package has 1 error.'));
       } else {
         // A compiler does not, so the line is the remedy and the problem
         // names where the rest went — read together, not matched by eye.

@@ -274,14 +274,7 @@ class GitTag {
       );
     }
     final expectedSource = expectedCommit.toLowerCase();
-    if (remote.peeled != expectedSource) {
-      return Inspection.conflict(
-        'origin points the release tag at a different source commit',
-        evidence: {
-          'source commit': 'origin ${remote.peeled}, expected $expectedSource',
-        },
-      );
-    }
+    final sourceMatches = remote.peeled == expectedSource;
 
     final object = await tools.run(
       'git',
@@ -312,7 +305,7 @@ class GitTag {
     }
     final digest = binding.digest;
     final expectedDigest = expectedManifestSha256?.toLowerCase();
-    if (expectedDigest != null && digest != expectedDigest) {
+    if (sourceMatches && expectedDigest != null && digest != expectedDigest) {
       return Inspection.conflict(
         'origin\'s release tag binds a different manifest',
         evidence: {
@@ -334,13 +327,30 @@ class GitTag {
         );
       }
     }
+    final signature = requireSignature ? 'verified' : 'not required';
+    if (!sourceMatches) {
+      return Inspection.conflict(
+        'this version was released from a different source commit',
+        sourceMismatch: SourceBindingMismatch(
+          releasedCommit: remote.peeled!,
+          currentCommit: expectedSource,
+        ),
+        evidence: {
+          'tag object': remote.direct!,
+          'released source commit': remote.peeled!,
+          'current source commit': expectedSource,
+          'manifest sha256': digest,
+          'signature': signature,
+        },
+      );
+    }
     return Inspection.exact(
       detail: 'origin tag binds the expected source and release manifest',
       evidence: {
         'tag object': remote.direct!,
         'source commit': expectedSource,
         'manifest sha256': digest,
-        'signature': requireSignature ? 'verified' : 'not required',
+        'signature': signature,
       },
     );
   }

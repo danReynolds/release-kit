@@ -1278,6 +1278,16 @@ publish = ["pub.dev"]
       reason: 'the operator confirms the permanent act having seen the '
           'warnings pub would have shown',
     );
+    expect(
+      (ran.report['warnings'] as List)
+          .map((warning) => (warning as Map)['code']),
+      everyElement('RK-PUB-012'),
+    );
+    expect(
+      (ran.report['warnings'] as List)
+          .map((warning) => (warning as Map)['target']),
+      everyElement(isNotNull),
+    );
     expect(ran.calls,
         contains('dart pub publish --from-archive <archive> --force'));
   });
@@ -1704,7 +1714,16 @@ publish = ["pub.dev"]
       ),
     });
     expect(ran.exitCode, ExitCodes.refused);
-    expect(ran.text, contains('not in the package'));
+    expect(ran.text, contains('fix the validation errors reported by Pub'));
+    final problem = ran.problems.singleWhere(
+      (problem) => problem['code'] == 'RK-PUB-001',
+    );
+    final attachment = problem['evidence'] as String;
+    expect(
+      (ran.report['attachments'] as Map)[attachment],
+      contains('not in the package'),
+      reason: 'raw Pub output is evidence, not a misleading Fix paragraph',
+    );
     expect(ran.calls,
         isNot(contains('dart pub publish --from-archive <archive> --force')));
     expect(ran.calls.where((c) => c.startsWith('git tag')), isEmpty);
@@ -2291,7 +2310,7 @@ void mutationCloseout() {
 
     expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
     expect(ran.problems, isEmpty);
-    expect(ran.text, contains('comparison unavailable'));
+    expect(ran.text, contains('archive not compared'));
   });
 
   test('a non-zero publish reconciles when the exact archive landed', () async {

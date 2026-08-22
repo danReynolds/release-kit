@@ -70,7 +70,8 @@ publish = ["git-tag", "pub.dev"]
     final result = await inspect();
 
     expect(result.verdict, Verdict.exact);
-    expect(result.detail, contains('comparison unavailable'));
+    expect(result.detail, contains('archive not compared'));
+    expect(result.detail, contains('no matching stage'));
     expect(result.evidence['comparison'], 'unavailable');
   });
 

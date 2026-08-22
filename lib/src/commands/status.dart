@@ -211,6 +211,27 @@ class StatusCommand {
     ];
     var targets = await Future.wait(targetFutures);
     final prerequisites = await Future.wait(prerequisiteFutures);
+    final releasedSource = _releasedSourceMismatch(targets);
+    if (releasedSource != null) {
+      targets = [
+        for (final target in targets)
+          identical(target, releasedSource.target)
+              ? TargetObservation(
+                  expectation: target.expectation,
+                  inspection: Inspection.exact(
+                    detail: 'released from '
+                        '${_shortObjectId(releasedSource.releasedCommit)}',
+                    evidence: target.inspection.evidence,
+                  ),
+                  currentVersion: target.currentVersion,
+                  currentKnown: target.currentKnown,
+                  currentDetail: target.currentDetail,
+                  historyProblems: target.historyProblems,
+                  artifacts: target.artifacts,
+                )
+              : target,
+      ];
+    }
 
     final states = <String, Inspection>{
       for (final target in targets)
@@ -235,7 +256,11 @@ class StatusCommand {
               : const Inspection.unknown('the target was not inspected');
     }
 
-    final tagGuardProblems = inspector.tagGuards(unit, checklist, states);
+    final tagGuardProblems = [
+      for (final diagnostic in inspector.tagGuards(unit, checklist, states))
+        if (!(releasedSource != null && diagnostic.code == 'RK-GIT-005'))
+          diagnostic,
+    ];
     for (final diagnostic in tagGuardProblems) {
       diagnostics.report(diagnostic);
     }
@@ -286,6 +311,21 @@ class StatusCommand {
                   .id
               : null,
           diagnostic: diagnostic,
+        ),
+      if (releasedSource != null)
+        StatusIssue(
+          unit: unit.name,
+          diagnostic: inspector.targets
+              .moduleForTarget(releasedSource.target.expectation)
+              .diagnoseConflict(
+                unit,
+                releasedSource.target.expectation,
+                releasedSource.target.inspection,
+              ),
+          evidence: {
+            'released source': releasedSource.releasedCommit,
+            'current source': releasedSource.currentCommit,
+          },
         ),
       for (final target in targets)
         for (final diagnostic in target.historyProblems)
@@ -342,6 +382,29 @@ class StatusCommand {
       targets: targets,
       stage: stageResult.inspection,
       issues: issues,
+      sourceVersionAlreadyReleased: releasedSource != null,
+    );
+  }
+
+  ({
+    TargetObservation target,
+    String releasedCommit,
+    String currentCommit,
+  })? _releasedSourceMismatch(Iterable<TargetObservation> targets) {
+    final tag = targets
+        .where(
+          (target) =>
+              target.expectation.target == PublishTarget.gitTag &&
+              target.inspection.verdict == Verdict.conflict,
+        )
+        .firstOrNull;
+    if (tag == null) return null;
+    final mismatch = tag.inspection.sourceMismatch;
+    if (mismatch == null) return null;
+    return (
+      target: tag,
+      releasedCommit: mismatch.releasedCommit,
+      currentCommit: mismatch.currentCommit,
     );
   }
 
@@ -410,8 +473,9 @@ class StatusCommand {
           diagnostic: Diagnostic(
             code: 'RK-STAGE-002',
             message: 'the release stage could not be inspected',
-            remedy: 'fix the stage read error below, then rebuild it with '
-                'rk release ${unit.name} --stage\n$error',
+            remedy: 'fix the recorded stage read error, then rebuild it with '
+                'rk release ${unit.name} --stage',
+            evidence: '$error',
           ),
         ),
       );
@@ -654,14 +718,16 @@ class StatusCommand {
   ) {
     final state = target.inspection;
     final label = target.expectation.label;
-    final diagnostic = Diagnostic(
-      code: 'RK-REL-001',
-      message: '$label: ${_condition(state)}',
-      remedy: state.verdict == Verdict.unknown
-          ? 'restore read access to $label, then run '
-              'rk status ${unit.name} again'
-          : _targetConflictRemedy(unit, target),
-    );
+    final diagnostic = state.verdict == Verdict.conflict
+        ? inspector.targets
+            .moduleForTarget(target.expectation)
+            .diagnoseConflict(unit, target.expectation, state)
+        : Diagnostic(
+            code: 'RK-REL-001',
+            message: '$label: ${_condition(state)}',
+            remedy: 'restore read access to $label, then run '
+                'rk status ${unit.name} again',
+          );
     return StatusIssue(
       unit: unit.name,
       target: target.expectation.step.id,
@@ -669,14 +735,6 @@ class StatusCommand {
       evidence: state.evidence,
     );
   }
-
-  String _targetConflictRemedy(
-    ResolvedUnit unit,
-    TargetObservation target,
-  ) =>
-      inspector.targets
-          .moduleForTarget(target.expectation)
-          .conflictRemedy(unit, target.expectation);
 
   StatusIssue _currentVersionIssue(
     ResolvedUnit unit,
@@ -740,9 +798,11 @@ class StatusCommand {
     // is out there is the publication section's verdict, one line down —
     // naming a place and then the state of that place made two headers
     // argue about one fact.
-    final movement = agreedCurrent != null && agreedCurrent != version
-        ? _versionMovement(agreedCurrent, version)
-        : version;
+    final movement = snapshot.sourceVersionAlreadyReleased
+        ? '$version · version already released; current source differs'
+        : agreedCurrent != null && agreedCurrent != version
+            ? _versionMovement(agreedCurrent, version)
+            : version;
     final resolvedTag = snapshot.unit.tag;
     final displayedTag =
         resolvedTag == null || resolvedTag == 'v$version' ? null : resolvedTag;
@@ -801,8 +861,11 @@ class StatusCommand {
         (issue) => issue.target == target.expectation.step.id,
       );
       final tone = linked ? Tone.bad : Tone.of(state.verdict);
-      final speaks =
-          state.verdict == Verdict.conflict || state.verdict == Verdict.unknown;
+      final speaks = state.verdict == Verdict.conflict ||
+          state.verdict == Verdict.unknown ||
+          state.evidence['comparison'] == 'unavailable' ||
+          (snapshot.sourceVersionAlreadyReleased &&
+              target.expectation.target == PublishTarget.gitTag);
       output.line(
         target.kindLabel,
         mark: linked
@@ -839,6 +902,7 @@ class StatusCommand {
   /// Public-target rows disappear once their destinations are exact. Binary
   /// stays visible as a selected local output until its exact stage exists.
   void _renderStage(_UnitSnapshot snapshot) {
+    if (snapshot.sourceVersionAlreadyReleased) return;
     final staged = snapshot.stage?.reusable == true;
     final localProject =
         _hasLocalBinaries(snapshot) ? snapshot.unit.binaryProject : null;
@@ -1039,6 +1103,9 @@ class StatusCommand {
   static bool _isFullObjectId(String value) =>
       RegExp(r'^(?:[0-9a-f]{40}|[0-9a-f]{64})$').hasMatch(value);
 
+  static String _shortObjectId(String value) =>
+      value.length > 7 ? value.substring(0, 7) : value;
+
   static List<StatusIssue> _deduplicate(Iterable<StatusIssue> issues) {
     final seen = <String>{};
     return [
@@ -1091,6 +1158,7 @@ class _UnitSnapshot {
     required Iterable<TargetObservation> targets,
     required this.stage,
     required Iterable<StatusIssue> issues,
+    required this.sourceVersionAlreadyReleased,
   })  : states = Map<String, Inspection>.unmodifiable(states),
         targets = List<TargetObservation>.unmodifiable(targets),
         issues = List<StatusIssue>.unmodifiable(issues);
@@ -1101,6 +1169,7 @@ class _UnitSnapshot {
   final List<TargetObservation> targets;
   final StageInspection? stage;
   final List<StatusIssue> issues;
+  final bool sourceVersionAlreadyReleased;
 }
 
 bool _isLocalOnlyOutput(_UnitSnapshot snapshot) =>
@@ -1109,6 +1178,7 @@ bool _isLocalOnlyOutput(_UnitSnapshot snapshot) =>
 bool _hasLocalBinaries(_UnitSnapshot snapshot) => snapshot.unit.shipsBinaries;
 
 bool _workRemains(_UnitSnapshot snapshot) =>
+    snapshot.sourceVersionAlreadyReleased ||
     snapshot.targets.any((target) => !target.inspection.isExact) ||
     (_hasLocalBinaries(snapshot) && snapshot.stage?.reusable != true);
 

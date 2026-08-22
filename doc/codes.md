@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-144 codes across 26 families.
+149 codes across 26 families.
 
 
 ## RK-AUTH — Authorization
@@ -37,6 +37,7 @@ fails, and the count below is checked against the rows.
 | code | says | declared in |
 |---|---|---|
 | `RK-BUILD-001` | $platform: the build did not produce a working binary | `lib/src/binary_chain.dart` |
+| `RK-BUILD-002` | $platform was built but not executed | `lib/src/commands/release_publication_coordinator.dart` |
 
 ## RK-CHG — The changelog
 
@@ -179,6 +180,7 @@ fails, and the count below is checked against the rows.
 | `RK-MONO-001` | the tag $tag is ahead of ${unit.version}, which this release  would publish | `lib/src/targets/git_tag/module.dart` |
 | `RK-MONO-002` | ${project.name} ${project.version} is behind published version  $publicVersion | `lib/src/targets/pub_dev/module.dart` |
 | `RK-MONO-003` | a public target is ahead of the version this release would publish | `lib/src/targets/target_module.dart` |
+| `RK-MONO-004` | current source still declares a released version | `lib/src/targets/git_tag/module.dart` |
 
 ## RK-NOTARY — Notarization
 
@@ -208,6 +210,7 @@ fails, and the count below is checked against the rows.
 | `RK-PUB-009` | the native Dart configuration redirects pub.dev publication | `lib/src/targets/pub_dev/module.dart` |
 | `RK-PUB-010` | a pub.dev package points to another repository | `lib/src/targets/pub_dev/module.dart` |
 | `RK-PUB-011` | this Dart SDK cannot stage the native Pub archive | `lib/src/targets/pub_dev/package_stage.dart`, `lib/src/targets/pub_dev/module.dart` |
+| `RK-PUB-012` | pub validation reported a package warning | `lib/src/targets/pub_dev/package_stage.dart` |
 
 RK-PUB-002 (the consumer-resolve probe) and RK-PUB-004 are retired historical
 meanings and are not reused.

@@ -10,6 +10,7 @@ import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/targets/catalog.dart';
 import 'package:rk/src/engine/producers.dart';
 import 'package:rk/src/engine/stage_contract.dart';
+import 'package:rk/src/engine/verdict.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -82,6 +83,15 @@ executables:
         catalog.moduleForStep(target.step),
         same(catalog.moduleForTarget(target)),
       );
+      final conflict = catalog.moduleForTarget(target).diagnoseConflict(
+            unit,
+            target,
+            const Inspection.conflict('provider state differs'),
+          );
+      expect(conflict.message, contains(target.label));
+      expect(conflict.remedy, isNotEmpty);
+      expect(conflict.remedy, isNot(contains('push -f')));
+      expect(conflict.remedy, isNot(contains('force-push')));
     }
     expect(
       [
