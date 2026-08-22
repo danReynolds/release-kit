@@ -67,8 +67,15 @@ Use a clean branch whose intended changes have passed review and CI. Confirm
 the version and changelog, then inspect the plan:
 
 ```console
+$ dart run tool/prepare_release.dart <version>
+# Add the matching release notes to CHANGELOG.md, then commit and push.
 $ dart run bin/rk.dart status rk
 ```
+
+The repository-local preparation tool advances both `pubspec.yaml` and the
+version embedded in RK's compiled executable. It validates their existing
+agreement before writing; RK remains deliberately uninvolved in versioning
+other projects.
 
 Do not publish from an unreviewed or unpushed source commit when the release
 uses Git-identified targets.

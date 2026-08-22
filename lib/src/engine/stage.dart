@@ -156,6 +156,16 @@ class StageDirectory {
         ['.rk', 'work', 'stages', identity.id],
       );
 
+  /// The exact stage location as displayed from the repository boundary.
+  ///
+  /// The absolute path remains [path] for filesystem work and diagnostics.
+  /// Successful handoff output uses this form so a long checkout prefix does
+  /// not make the content-addressed id wrap across terminal lines.
+  String get repositoryRelativePath => _join(
+        '.rk',
+        ['work', 'stages', identity.id],
+      );
+
   Workspace get workspace => Workspace(path);
 
   String resolve(String relativePath) =>
