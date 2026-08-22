@@ -54,6 +54,7 @@ void main() {
     expect(formula, contains('on_arm do'));
     expect(formula, contains('on_linux do'));
     expect(formula, contains('on_intel do'));
+    expect(formula, contains('depends_on arch: :arm64'));
     expect(formula, contains(_assets['linux-arm64']!.sha256));
     expect(formula, contains(_assets['linux-x64']!.sha256));
   });
@@ -61,16 +62,45 @@ void main() {
   test('omits the checksum for a platform the release does not ship', () {
     final formula = render(assets: {'macos-arm64': _assets['macos-arm64']!});
     expect(formula, contains(_assets['macos-arm64']!.sha256));
+    expect(formula, contains('depends_on :macos'));
+    expect(formula, contains('depends_on arch: :arm64'));
+    expect(formula, isNot(contains('on_macos do')));
     expect(formula, isNot(contains('on_linux do')));
   });
 
   test('a single Linux architecture is explicit and Linux-only', () {
     final formula = render(assets: {'linux-arm64': _assets['linux-arm64']!});
-    expect(formula, contains('on_linux do'));
+    expect(formula, contains('depends_on :linux'));
+    expect(formula, contains('depends_on arch: :arm64'));
     expect(formula, contains('keybay-0.2.0-linux-arm64.tar.gz'));
-    expect(formula, contains('on_arm do'));
+    expect(formula, isNot(contains('on_linux do')));
+    expect(formula, isNot(contains('on_arm do')));
     expect(formula, isNot(contains('on_intel do')));
     expect(formula, isNot(contains('on_macos do')));
+  });
+
+  test('a single OS architecture stays readable on an unsupported host', () {
+    final formula = render(assets: {
+      'macos-arm64': _assets['macos-arm64']!,
+      'linux-x64': _assets['linux-x64']!,
+    });
+
+    expect(
+      formula,
+      contains('''  on_macos do
+    url "https://github.com/danReynolds/keybay/releases/download/keybay_cli-v0.2.0/keybay-0.2.0-macos-arm64.tar.gz"
+    sha256 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    depends_on arch: :arm64
+  end'''),
+    );
+    expect(
+      formula,
+      contains('''  on_linux do
+    url "https://github.com/danReynolds/keybay/releases/download/keybay_cli-v0.2.0/keybay-0.2.0-linux-x64.tar.gz"
+    sha256 "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    depends_on arch: :x86_64
+  end'''),
+    );
   });
 
   test('refuses an archive outside the closed platform contract', () {

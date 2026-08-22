@@ -557,7 +557,7 @@ class ReleaseCommand {
       output.blank();
       output.line(
         'Written to',
-        note: stage.directory.path,
+        note: stage.directory.repositoryRelativePath,
         depth: 1,
         labelWidth: 12,
         noteTone: Tone.muted,

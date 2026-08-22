@@ -90,36 +90,39 @@ class HomebrewFormula {
       ..writeln('  version "$version"')
       ..writeln();
 
-    if (macArm != null) {
+    final hasMac = macArm != null;
+    final hasLinux = linuxArm != null || linuxX64 != null;
+    if (hasMac && hasLinux) {
+      _writeAssets(
+        buffer,
+        scope: 'on_macos',
+        arm: macArm,
+        repository: repository,
+        tag: tag,
+      );
+      _writeAssets(
+        buffer,
+        scope: 'on_linux',
+        arm: linuxArm,
+        intel: linuxX64,
+        repository: repository,
+        tag: tag,
+      );
+    } else {
+      // Keep a URL available even on an unsupported host so Homebrew can
+      // reach the requirement and explain the actual OS/architecture
+      // mismatch. Hiding the only URL inside an inactive on_* block makes
+      // Homebrew stop earlier with the misleading "requires at least a URL".
       buffer
-        ..writeln('  on_macos do')
-        ..writeln('    on_arm do')
-        ..writeln('      url "${_url(repository, tag, macArm.name)}"')
-        ..writeln('      sha256 "${macArm.sha256}"')
-        ..writeln('    end')
-        ..writeln('  end')
+        ..writeln('  depends_on :${hasMac ? 'macos' : 'linux'}')
         ..writeln();
-    }
-
-    if (linuxArm != null || linuxX64 != null) {
-      buffer.writeln('  on_linux do');
-      if (linuxArm != null) {
-        buffer
-          ..writeln('    on_arm do')
-          ..writeln('      url "${_url(repository, tag, linuxArm.name)}"')
-          ..writeln('      sha256 "${linuxArm.sha256}"')
-          ..writeln('    end');
-      }
-      if (linuxX64 != null) {
-        buffer
-          ..writeln('    on_intel do')
-          ..writeln('      url "${_url(repository, tag, linuxX64.name)}"')
-          ..writeln('      sha256 "${linuxX64.sha256}"')
-          ..writeln('    end');
-      }
-      buffer
-        ..writeln('  end')
-        ..writeln();
+      _writeAssets(
+        buffer,
+        arm: hasMac ? macArm : linuxArm,
+        intel: hasMac ? null : linuxX64,
+        repository: repository,
+        tag: tag,
+      );
     }
 
     buffer
@@ -167,6 +170,67 @@ class HomebrewFormula {
   static String _url(String repository, String tag, String asset) =>
       'https://github.com/$repository/releases/download/'
       '${Uri.encodeComponent(tag)}/${Uri.encodeComponent(asset)}';
+
+  /// Writes one OS's archive selection without hiding its only URL behind an
+  /// architecture conditional. A single-architecture release instead states
+  /// the architecture as a Homebrew requirement, which gives an unsupported
+  /// host the useful refusal while keeping multi-architecture selection
+  /// declarative.
+  static void _writeAssets(
+    StringBuffer buffer, {
+    String? scope,
+    required PlatformAsset? arm,
+    PlatformAsset? intel,
+    required String repository,
+    required String tag,
+  }) {
+    final outer = scope == null ? '  ' : '    ';
+    if (scope != null) buffer.writeln('  $scope do');
+
+    if (arm != null && intel != null) {
+      _writeAssetBlock(
+        buffer,
+        block: 'on_arm',
+        asset: arm,
+        indent: outer,
+        repository: repository,
+        tag: tag,
+      );
+      _writeAssetBlock(
+        buffer,
+        block: 'on_intel',
+        asset: intel,
+        indent: outer,
+        repository: repository,
+        tag: tag,
+      );
+    } else {
+      final asset = arm ?? intel!;
+      buffer
+        ..writeln('${outer}url "${_url(repository, tag, asset.name)}"')
+        ..writeln('${outer}sha256 "${asset.sha256}"')
+        ..writeln('${outer}depends_on arch: '
+            ':${arm != null ? 'arm64' : 'x86_64'}');
+    }
+
+    if (scope != null) buffer.writeln('  end');
+    buffer.writeln();
+  }
+
+  static void _writeAssetBlock(
+    StringBuffer buffer, {
+    required String block,
+    required PlatformAsset asset,
+    required String indent,
+    required String repository,
+    required String tag,
+  }) {
+    buffer
+      ..writeln('$indent$block do')
+      ..writeln('$indent  url "${_url(repository, tag, asset.name)}"')
+      ..writeln('$indent  sha256 "${asset.sha256}"')
+      ..writeln('${indent}end');
+  }
 }
 
 class PlatformAsset {

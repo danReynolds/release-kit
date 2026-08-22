@@ -6,6 +6,12 @@
   public target has already bound every archive in the completed release.
 - Standalone macOS notarization verification examples now ask codesign to
   perform its required online ticket check.
+- Single-architecture Homebrew releases now declare explicit OS and CPU
+  requirements, so unsupported hosts receive the real compatibility refusal
+  instead of a misleading missing-URL error.
+- Successful staging prints its exact repository-relative directory instead
+  of wrapping a long absolute checkout path, and RK's repository-local release
+  helper advances both version declarations together.
 
 ## 0.1.8
 

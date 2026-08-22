@@ -180,6 +180,8 @@ void main() {
         contains('producers/tool/archives/tool-1.2.3-linux-x64.tar.gz'),
       );
       expect(run.text, contains('Written to'));
+      expect(run.text, contains(local.stage.directory.repositoryRelativePath));
+      expect(run.text, isNot(contains(local.stage.directory.path)));
       expect(run.report['next'], isEmpty);
       expect(local.stage.inspect().reusable, isTrue);
     }
