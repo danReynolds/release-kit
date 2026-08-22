@@ -416,6 +416,41 @@ void main() {
       expect(read.digests[asset], Sha256.hex(bytes));
       expect(tools.downloadRequests, [asset]);
     });
+
+    test('bound asset reads verify downloaded bytes, not provider claims',
+        () async {
+      final expected = utf8.encode('authenticated manifest');
+      final substituted = utf8.encode('different manifest');
+      final tools = _DownloadTools(
+        response: jsonEncode({
+          'tag_name': 'v1.0.0',
+          'draft': false,
+          'prerelease': false,
+          'id': 41,
+          'assets': [
+            {'name': asset, 'digest': 'sha256:${Sha256.hex(expected)}'},
+          ],
+        }),
+        downloads: {asset: substituted},
+      );
+
+      final read = await GithubRelease(
+        tools: tools,
+        repository: 'example/tool',
+        workingDirectory: '/repo',
+      ).readBoundAsset(
+        tag: 'v1.0.0',
+        expectedAssets: const {asset},
+        asset: asset,
+        expectedSha256: Sha256.hex(expected),
+        prerelease: false,
+      );
+
+      expect(read.inspection.verdict, Verdict.conflict);
+      expect(read.inspection.detail, contains('authenticated by the Git tag'));
+      expect(read.bytes, isNull);
+      expect(tools.downloadRequests, [asset]);
+    });
   });
 
   group('publish: private draft transaction', () {
