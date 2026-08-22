@@ -131,7 +131,7 @@ void main() {
     );
 
     test('a native build passes the target flags nowhere', () async {
-      final tools = RecordingTools(results: {
+      final tools = _TimeoutRecordingTools(results: {
         'build/keybay --version': ToolResult(
           exitCode: 0,
           stdout: 'keybay 0.2.0\n',
@@ -153,11 +153,12 @@ void main() {
       expect(outcome.ok, isTrue, reason: outcome.problem);
       expect(tools.calls.first, startsWith('/sdk/bin/dart compile exe'));
       expect(tools.calls.first, isNot(contains('--target-os')));
+      expect(tools.timeouts.last, const Duration(minutes: 2));
     });
 
     test('a cross build names the target and checks it in a container',
         () async {
-      final tools = RecordingTools(results: {
+      final tools = _TimeoutRecordingTools(results: {
         'docker run --rm --platform linux/amd64 -v build:/w:ro '
             'debian:bookworm-slim /w/keybay --version': ToolResult(
           exitCode: 0,
@@ -180,6 +181,7 @@ void main() {
       expect(tools.calls.first, contains('--target-os=linux'));
       expect(tools.calls.first, contains('--target-arch=x64'));
       expect(tools.calls.last, contains('docker run'));
+      expect(tools.timeouts.last, const Duration(minutes: 2));
     });
 
     test('a binary reporting the wrong version is not accepted', () async {
@@ -341,4 +343,28 @@ void main() {
       reason: 'nothing here could run it, so nothing pretended to',
     );
   });
+}
+
+class _TimeoutRecordingTools extends RecordingTools {
+  _TimeoutRecordingTools({required super.results});
+
+  final List<Duration?> timeouts = [];
+
+  @override
+  Future<ToolResult> run(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+    Map<String, String>? environment,
+    Duration? timeout,
+  }) {
+    timeouts.add(timeout);
+    return super.run(
+      executable,
+      arguments,
+      workingDirectory: workingDirectory,
+      environment: environment,
+      timeout: timeout,
+    );
+  }
 }
