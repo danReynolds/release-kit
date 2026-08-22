@@ -10,6 +10,8 @@
   `Casks/<name>.rb` that rk inspected.
 - Release manifests now describe a generic Homebrew binding while retaining
   read compatibility with the public schema-6 Cask manifests.
+- Native and containerized binary smoke tests now have a finite deadline, so
+  a wedged runtime or credential helper cannot hold staging indefinitely.
 
 ## 0.1.6
 

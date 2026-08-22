@@ -87,7 +87,11 @@ class DartCliBuilder {
   }) async {
     final ToolResult result;
     if (capability.capability == Capability.native) {
-      result = await tools.run(binary, const ['--version']);
+      result = await tools.run(
+        binary,
+        const ['--version'],
+        timeout: _smokeTimeout,
+      );
     } else {
       final target = _target(platform);
       final runtime = capabilities.containerRuntime;
@@ -99,17 +103,21 @@ class DartCliBuilder {
           'no container runtime is available to run it',
         );
       }
-      result = await tools.run(runtime, [
-        'run',
-        '--rm',
-        '--platform',
-        'linux/${target.arch == 'x64' ? 'amd64' : 'arm64'}',
-        '-v',
-        '${_directoryOf(binary)}:/w:ro',
-        'debian:bookworm-slim',
-        '/w/${_fileNameOf(binary)}',
-        '--version',
-      ]);
+      result = await tools.run(
+        runtime,
+        [
+          'run',
+          '--rm',
+          '--platform',
+          'linux/${target.arch == 'x64' ? 'amd64' : 'arm64'}',
+          '-v',
+          '${_directoryOf(binary)}:/w:ro',
+          'debian:bookworm-slim',
+          '/w/${_fileNameOf(binary)}',
+          '--version',
+        ],
+        timeout: _smokeTimeout,
+      );
     }
 
     if (!result.ok) {
@@ -126,6 +134,11 @@ class DartCliBuilder {
     }
     return null;
   }
+
+  /// A smoke test has no interactive work. Bounding both native execution
+  /// and the container wrapper prevents a broken runtime or credential helper
+  /// from holding the entire private stage forever.
+  static const _smokeTimeout = Duration(minutes: 2);
 
   static ({String os, String arch}) _target(String platform) {
     final parts = platform.split('-');
