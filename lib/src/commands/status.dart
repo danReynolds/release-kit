@@ -591,8 +591,7 @@ class StatusCommand {
     if (releaseBindings is Map && releaseBindings[name] is String) {
       stagedPath = releaseBindings[name] as String;
     }
-    final homebrewBinding = complete.evidence['homebrew_binding'] ??
-        complete.evidence['cask_binding'];
+    final homebrewBinding = complete.evidence['homebrew_binding'];
     if (homebrewBinding is Map &&
         target.target == PublishTarget.homebrew &&
         homebrewBinding['project'] == target.project?.name &&

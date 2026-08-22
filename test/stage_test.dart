@@ -658,9 +658,8 @@ void main() {
       expect(document, isNot(contains('notary')));
     });
 
-    test('schema 6 cask manifests remain readable after the formula migration',
-        () {
-      final legacy = '${CanonicalJson.encode({
+    test('pre-Formula release manifest schemas are not migrated', () {
+      final unsupported = '${CanonicalJson.encode({
             'artifacts': <Object?>[],
             'cask': {
               'path': 'Casks/rk.rb',
@@ -676,12 +675,38 @@ void main() {
             'version': '1.2.3',
           })}\n';
 
-      final parsed = ReleaseManifest.parse(legacy);
-      expect(parsed.homebrew!.path, 'Casks/rk.rb');
-      expect(parsed.homebrew!.sha256, 'a' * 64);
-      expect(parsed.toJson()['schema'], releaseManifestSchemaVersion);
-      expect(parsed.toJson(), contains('homebrew'));
-      expect(parsed.toJson(), isNot(contains('cask')));
+      expect(
+        () => ReleaseManifest.parse(unsupported),
+        throwsA(
+          isA<FormatException>().having(
+            (error) => error.message,
+            'message',
+            'unsupported release manifest schema: 6',
+          ),
+        ),
+      );
+    });
+
+    test('Homebrew bindings accept only Formula paths', () {
+      expect(
+        () => ReleaseManifestHomebrew(
+          project: 'rk',
+          tap: 'example/homebrew-tap',
+          path: 'Casks/rk.rb',
+          size: 42,
+          sha256: 'a' * 64,
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        () => StagedHomebrewBinding(
+          project: 'rk',
+          tap: 'example/homebrew-tap',
+          path: 'Formula/Rk.rb',
+          stagedPath: 'producers/rk/homebrew/rk.rb',
+        ),
+        throwsArgumentError,
+      );
     });
 
     test('public artifact names cannot carry a local path', () {

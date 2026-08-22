@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Homebrew is now Formula-only throughout inspection, staging, manifests, and
+  tap updates. RK no longer reads, converts, or removes legacy Cask state.
+
 ## 0.1.7
 
 - Homebrew releases now use a Formula, the native installation surface for a

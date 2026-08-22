@@ -1630,15 +1630,6 @@ executables:
                   stderr: 'gh: Not Found (HTTP 404)',
                 );
         }
-        if (key.startsWith(
-          'gh api repos/example/homebrew-tap/contents/Casks/tool.rb',
-        )) {
-          return ToolResult(
-            exitCode: 1,
-            stdout: '',
-            stderr: 'gh: Not Found (HTTP 404)',
-          );
-        }
         if (key.startsWith('gh repo view')) {
           return ToolResult(exitCode: 0, stdout: '{"name":"tool"}', stderr: '');
         }
@@ -2031,6 +2022,11 @@ executables:
         ),
         isTrue,
         reason: 'the formula is proven from the public tap after its push',
+      );
+      expect(
+        run.calls.where((call) => call.contains('/contents/Casks/')),
+        isEmpty,
+        reason: 'Formula publication has no second Homebrew coordinate',
       );
       expect(run.text, contains('released'));
     });
