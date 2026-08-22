@@ -2,8 +2,16 @@
 
 ## Unreleased
 
+## 0.1.8
+
 - Homebrew is now Formula-only throughout inspection, staging, manifests, and
   tap updates. RK no longer reads, converts, or removes legacy Cask state.
+- Binary and Homebrew initialization now defaults to the current host's native
+  platform, so a Linux host does not silently propose a macOS artifact it
+  cannot produce. Cross-builds remain explicit configuration choices.
+- Docker and Podman capability probes are bounded and run only for releases
+  that ship binaries. Missing or unresponsive runtimes remain optional and
+  degrade cross-build smoke evidence instead of blocking publication.
 
 ## 0.1.7
 
