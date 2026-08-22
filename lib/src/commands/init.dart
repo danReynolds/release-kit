@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import '../builds/capability.dart';
 import '../engine/config.dart';
 import '../engine/diagnostic.dart';
 import '../engine/init_plan.dart';
@@ -21,6 +22,7 @@ class InitCommand {
     required this.output,
     required this.write,
     required this.confirm,
+    HostCapabilities? capabilities,
     this.origin,
     this.gitBound = true,
     this.hasRemote,
@@ -28,13 +30,14 @@ class InitCommand {
     this.review,
     this.updateGitignore,
     this.ambientPubHostedUrl,
-  });
+  }) : capabilities = capabilities ?? HostCapabilities.inspect();
 
   final SourceTree tree;
   final Output output;
   final String? origin;
   final bool gitBound;
   final bool? hasRemote;
+  final HostCapabilities capabilities;
 
   /// Optional TTY editor. Null preserves the conservative generated plan.
   final Future<InitPlan?> Function(InitPlan plan)? select;
@@ -307,6 +310,8 @@ class InitCommand {
       gitBound: gitBound,
       hasRemote: hasRemote ?? origin != null,
       githubRepository: origin,
+      platformCapabilities:
+          ReleaseConfig.supportedPlatformsList.map(capabilities.resolve),
       ambientPubHostedUrl: ambientPubHostedUrl,
     );
     if (!gitBound) return plan;
@@ -326,6 +331,7 @@ class InitCommand {
             'git add ${untracked.join(' ')} to include '
             '${untracked.length == 1 ? 'it' : 'them'}',
       ],
+      platformCapabilities: plan.platformCapabilities,
       gitBound: plan.gitBound,
       hasRemote: plan.hasRemote,
       githubRepository: plan.githubRepository,
@@ -334,6 +340,7 @@ class InitCommand {
 
   List<String> _reasons(InitPlan plan) => {
         ...plan.notices,
+        ...plan.binaryPlatformNotices,
         for (final candidate in plan.candidates)
           if (!plan.included.contains(candidate))
             '${candidate.name}: '

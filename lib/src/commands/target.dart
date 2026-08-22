@@ -171,6 +171,8 @@ final Map<ReleaseChoice, _Reference> _references = {
     configure: [
       'binary_platforms = ["macos-arm64", "linux-x64"]',
       'Required on the project. Choose one or more supported platforms.',
+      '`rk init` defaults to this host\'s native platform. Add another only '
+          'when release will run on a host that can produce it.',
     ],
     usesBinaryPlatforms: true,
     nativeConfiguration: ['Executable and version    pubspec.yaml'],
@@ -244,6 +246,8 @@ publish = ["git-tag", "github-release"]''',
       '',
       'binary_platforms = ["macos-arm64", "linux-x64"]',
       'Required on the Homebrew project.',
+      'A Linux-only list publishes a valid Linux-only Formula; macOS is not '
+          'required to publish the target.',
     ],
     usesBinaryPlatforms: true,
     nativeConfiguration: [

@@ -15,6 +15,7 @@ library;
 
 import 'dart:io';
 
+import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/commands/clean.dart';
 import 'package:rk/src/commands/init.dart';
 import 'package:rk/src/commands/init_selector.dart';
@@ -330,6 +331,7 @@ Future<int> _init(
   return InitCommand(
     tree: tree,
     output: output,
+    capabilities: HostCapabilities.inspect(),
     origin: git.originUrl,
     gitBound: git.isBound,
     hasRemote: git.hasRemote,
@@ -481,6 +483,9 @@ Future<int> _release(
     registry.close();
     return ExitCodes.refused;
   }
+  final capabilities = source.resolution.units.any((unit) => unit.shipsBinaries)
+      ? await HostCapabilities.detect()
+      : HostCapabilities.inspect();
   StageStoreLock? stageLock;
   try {
     try {
@@ -518,6 +523,7 @@ Future<int> _release(
         targets: targets,
       ),
       tools: const SystemTools(),
+      capabilities: capabilities,
       output: output,
       // The prompt is written straight to stdout, past the sink --json
       // silences: asking would corrupt the document, and the consequences the

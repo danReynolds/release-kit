@@ -51,7 +51,7 @@ class ReleaseCommand {
     Future<GitState> Function()? refreshGit,
     Map<String, String> Function()? refreshEnvironment,
     Future<void> Function(Duration)? wait,
-    HostCapabilities? capabilities,
+    required this.capabilities,
   })  : repositoryGit = repositoryGit ?? git,
         _wait = wait ?? _sleep,
         _stageFor = stageFor ??
@@ -70,8 +70,7 @@ class ReleaseCommand {
                 ).call(unit)),
         _refreshGit = refreshGit ?? (() async => git),
         _refreshEnvironment = refreshEnvironment ??
-            (() => Map<String, String>.of(Platform.environment)),
-        _capabilities = capabilities;
+            (() => Map<String, String>.of(Platform.environment));
 
   static Future<void> _sleep(Duration duration) =>
       Future<void>.delayed(duration);
@@ -108,11 +107,10 @@ class ReleaseCommand {
   /// or null when there is nobody to ask.
   final Future<String?> Function(String prompt)? confirm;
 
-  /// What this host can produce — injectable so a drive can span platforms
-  /// the test machine does not have. Null detects lazily, once.
-  HostCapabilities? _capabilities;
-  HostCapabilities get capabilities =>
-      _capabilities ??= HostCapabilities.detect();
+  /// What this host can produce. Detection belongs at the composition edge so
+  /// its bounded optional-runtime probes complete before the command is built;
+  /// tests inject the host they mean to exercise.
+  final HostCapabilities capabilities;
 
   /// Prepare and validate the exact private stage, then stop before release
   /// authorization or any public mutation.

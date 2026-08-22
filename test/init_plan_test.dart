@@ -1,3 +1,5 @@
+import 'package:rk/src/builds/capability.dart';
+import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/init_plan.dart';
 import 'package:rk/src/engine/release_choice.dart';
 import 'package:rk/src/engine/source_tree.dart';
@@ -8,13 +10,23 @@ InitPlan discover(
   bool gitBound = true,
   bool hasRemote = true,
   String? githubRepository = 'owner/repo',
-}) =>
-    InitPlan.discover(
-      tree: MemorySourceTree(files),
-      gitBound: gitBound,
-      hasRemote: hasRemote,
-      githubRepository: githubRepository,
-    );
+  HostCapabilities? capabilities,
+}) {
+  final host = capabilities ??
+      HostCapabilities(
+        hostPlatform: 'macos-arm64',
+        containerRuntime: 'docker',
+        hasNativeAssets: false,
+      );
+  return InitPlan.discover(
+    tree: MemorySourceTree(files),
+    gitBound: gitBound,
+    hasRemote: hasRemote,
+    githubRepository: githubRepository,
+    platformCapabilities:
+        ReleaseConfig.supportedPlatformsList.map(host.resolve),
+  );
+}
 
 void main() {
   test('discovery selects only declared, unambiguous release intent', () {
@@ -69,6 +81,71 @@ executables:
       reason: 'removing public destinations keeps a valid local output',
     );
     expect(disabled.message, contains('disabled'));
+  });
+
+  test('Linux init proposes its native platform and no macOS binary', () {
+    var plan = discover(
+      {
+        'pubspec.yaml': '''
+name: tool
+version: 1.2.3
+executables:
+  tool: tool
+''',
+      },
+      capabilities: HostCapabilities(
+        hostPlatform: 'linux-x64',
+        containerRuntime: null,
+        hasNativeAssets: false,
+      ),
+    );
+
+    plan = plan.toggle(0, ReleaseChoice.homebrew).plan;
+    final proposal = plan.renderToml();
+
+    expect(proposal, contains('"linux-x64"'));
+    expect(proposal, isNot(contains('"linux-arm64"')));
+    expect(proposal, isNot(contains('"macos-arm64"')));
+    expect(
+      plan.binaryPlatformNotices,
+      contains(
+        startsWith('macos-arm64 was not selected:'),
+      ),
+    );
+    expect(
+      plan.binaryPlatformNotices,
+      contains(
+        contains('container runtime is optional'),
+      ),
+      reason: 'the cross-build stays available without Docker, but init '
+          'does not silently opt into weaker execution evidence',
+    );
+  });
+
+  test('native assets keep init on the host platform', () {
+    var plan = discover(
+      {
+        'pubspec.yaml': '''
+name: tool
+version: 1.2.3
+executables:
+  tool: tool
+''',
+      },
+      capabilities: HostCapabilities(
+        hostPlatform: 'linux-x64',
+        containerRuntime: 'docker',
+        hasNativeAssets: true,
+      ),
+    );
+
+    plan = plan.toggle(0, ReleaseChoice.binary).plan;
+
+    expect(
+      plan.renderToml(),
+      contains('binary_platforms = ["linux-x64"]'),
+    );
+    expect(plan.binaryPlatformNotices, hasLength(2));
   });
 
   test('GitHub Release does not imply a binary', () {
@@ -240,6 +317,13 @@ publish_to: https://token@packages.example.invalid
       gitBound: true,
       hasRemote: true,
       githubRepository: 'owner/repo',
+      platformCapabilities: ReleaseConfig.supportedPlatformsList.map(
+        HostCapabilities(
+          hostPlatform: 'macos-arm64',
+          containerRuntime: 'docker',
+          hasNativeAssets: false,
+        ).resolve,
+      ),
       ambientPubHostedUrl: 'https://token@packages.example.invalid',
     );
     expect(ambient.candidates.single.selected, isEmpty);

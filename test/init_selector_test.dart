@@ -1,4 +1,6 @@
+import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/commands/init_selector.dart';
+import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/init_plan.dart';
 import 'package:rk/src/engine/release_choice.dart';
 import 'package:rk/src/engine/source_tree.dart';
@@ -16,7 +18,16 @@ executables:
       gitBound: true,
       hasRemote: true,
       githubRepository: 'owner/repo',
+      platformCapabilities: _platformCapabilities,
     );
+
+final _platformCapabilities = ReleaseConfig.supportedPlatformsList.map(
+  HostCapabilities(
+    hostPlatform: 'macos-arm64',
+    containerRuntime: 'docker',
+    hasNativeAssets: false,
+  ).resolve,
+);
 
 void main() {
   test('wide and narrow selectors expose the same compact choices', () {
@@ -98,6 +109,7 @@ void main() {
       gitBound: true,
       hasRemote: true,
       githubRepository: 'owner/repo',
+      platformCapabilities: _platformCapabilities,
     );
     final selector = InitSelector(many);
     for (var index = 0; index < 20; index++) {

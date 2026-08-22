@@ -81,6 +81,50 @@ void main() {
       expect(resolved.capability, Capability.blocked);
       expect(resolved.reason, contains('host'));
     });
+
+    test('optional runtime probes are bounded and failure stays optional',
+        () async {
+      final tools = _TimeoutRecordingTools(results: {
+        'docker info': ToolResult(
+          exitCode: 124,
+          stdout: '',
+          stderr: 'timed out',
+        ),
+        'podman info': ToolResult(
+          exitCode: 1,
+          stdout: '',
+          stderr: 'not running',
+        ),
+      });
+
+      final detected = await HostCapabilities.detect(
+        tools: tools,
+        runtimeProbeTimeout: const Duration(milliseconds: 125),
+      );
+
+      expect(detected.containerRuntime, isNull);
+      expect(tools.calls, ['docker info', 'podman info']);
+      expect(
+        tools.timeouts,
+        everyElement(const Duration(milliseconds: 125)),
+      );
+    });
+
+    test('detection returns the optional runtime that actually answered',
+        () async {
+      final detected = await HostCapabilities.detect(
+        tools: RecordingTools(results: {
+          'docker info': ToolResult(
+            exitCode: 1,
+            stdout: '',
+            stderr: 'not running',
+          ),
+          'podman info': ToolResult(exitCode: 0, stdout: 'ok', stderr: ''),
+        }),
+      );
+
+      expect(detected.containerRuntime, 'podman');
+    });
   });
 
   group('the published identity is read back', () {

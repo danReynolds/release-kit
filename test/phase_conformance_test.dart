@@ -717,6 +717,11 @@ publish = ["git-tag", "pub.dev"]
           output: output,
           confirm: (_) async => 'yes',
           wait: (_) async {},
+          capabilities: HostCapabilities(
+            hostPlatform: 'linux-x64',
+            containerRuntime: null,
+            hasNativeAssets: false,
+          ),
           // A conformance run must not read the pub session of whoever is
           // running it.
           refreshEnvironment: () => const {'HOME': '/nowhere'},

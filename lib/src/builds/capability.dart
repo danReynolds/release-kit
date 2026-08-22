@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import '../engine/tools.dart';
+
 /// How, if at all, this machine can produce and check a platform's binary.
 ///
 /// Discovered rather than declared: which platforms a project ships is a
@@ -119,10 +121,21 @@ class HostCapabilities {
   }
 
   /// Reads the host, and whether a container runtime is answering.
-  static HostCapabilities detect({bool hasNativeAssets = false}) {
+  ///
+  /// A container runtime is optional evidence, so probing one must be optional
+  /// too: a missing, stopped, or wedged daemon degrades cross-build smoke tests
+  /// to `built, not executed`; it never holds up the release indefinitely.
+  static Future<HostCapabilities> detect({
+    bool hasNativeAssets = false,
+    Tools tools = const SystemTools(),
+    Duration runtimeProbeTimeout = const Duration(seconds: 2),
+  }) async {
     return HostCapabilities(
       hostPlatform: _hostPlatform(),
-      containerRuntime: _containerRuntimeRunning(),
+      containerRuntime: await _containerRuntimeRunning(
+        tools,
+        runtimeProbeTimeout,
+      ),
       hasNativeAssets: hasNativeAssets,
     );
   }
@@ -156,11 +169,18 @@ class HostCapabilities {
   /// The first runtime that answers, by name — docker first because it is
   /// what most machines have, podman because it is the common daemonless
   /// replacement and its CLI takes the same arguments rk uses.
-  static String? _containerRuntimeRunning() {
+  static Future<String?> _containerRuntimeRunning(
+    Tools tools,
+    Duration timeout,
+  ) async {
     for (final runtime in const ['docker', 'podman']) {
       try {
-        final result = Process.runSync(runtime, const ['info']);
-        if (result.exitCode == 0) return runtime;
+        final result = await tools.run(
+          runtime,
+          const ['info'],
+          timeout: timeout,
+        );
+        if (result.ok) return runtime;
       } on Object {
         continue; // not installed
       }

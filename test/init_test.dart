@@ -1,7 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/commands/init.dart';
+import 'package:rk/src/engine/release_choice.dart';
 import 'package:rk/src/output/report.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
@@ -47,6 +49,47 @@ void main() {
       reason: 'binary channels are the human\'s decision',
     );
     expect(buffer.toString(), contains('workspace root'));
+  });
+
+  test('a Linux proposal is finishable on Linux when binaries are selected',
+      () async {
+    final buffer = StringBuffer();
+    final written = <String, String>{};
+    final output =
+        Output(sink: buffer.write, isTerminal: false, useColor: false);
+    final code = await InitCommand(
+      tree: MemorySourceTree({
+        'pubspec.yaml': '''
+name: tool
+version: 1.0.0
+executables:
+  tool: tool
+''',
+      }, description: '/repo/tool'),
+      output: output,
+      origin: 'owner/tool',
+      capabilities: HostCapabilities(
+        hostPlatform: 'linux-x64',
+        containerRuntime: null,
+        hasNativeAssets: false,
+      ),
+      select: (plan) async => plan.toggle(0, ReleaseChoice.homebrew).plan,
+      write: (path, contents) => written[path] = contents,
+      confirm: (_) async => true,
+    ).run();
+
+    expect(code, ExitCodes.ok);
+    expect(written['release.toml'], contains('"linux-x64"'));
+    expect(written['release.toml'], isNot(contains('"linux-arm64"')));
+    expect(written['release.toml'], isNot(contains('"macos-arm64"')));
+    expect(buffer.toString(), contains('macos-arm64 was not selected'));
+    final document = jsonDecode(output.report.encode(exit: code)) as Map;
+    final platforms =
+        ((document['init'] as Map)['binary_platforms'] as List).cast<Map>();
+    expect(
+      platforms.singleWhere((item) => item['name'] == 'macos-arm64'),
+      containsPair('selected_by_default', false),
+    );
   });
 
   test('never edits an existing config', () async {
