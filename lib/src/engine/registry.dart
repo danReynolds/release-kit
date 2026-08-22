@@ -68,6 +68,12 @@ abstract class RegistryReader {
   /// The package, or null when it has never existed.
   Future<RegistryPackage?> lookup(String name);
 
+  /// One immutable version coordinate, or null when it does not exist.
+  ///
+  /// Candidate inspection uses the coordinate endpoint instead of waiting for
+  /// a registry's package-history listing to catch up after publication.
+  Future<PublishedVersion?> lookupVersion(String name, Version version);
+
   /// Discards what is known about [name].
   ///
   /// Called after rk itself acts on the package. Successful lookups are
@@ -121,9 +127,49 @@ class Registry implements RegistryReader {
   Future<RegistryPackage?> lookup(String name) async {
     if (_cache.containsKey(name)) return _cache[name];
 
-    final uri = secure
-        ? Uri.https(host, '/api/packages/$name')
-        : Uri.http(host, '/api/packages/$name');
+    final decoded = await _read('/api/packages/$name', name);
+    if (decoded == null) return _cache[name] = null;
+    try {
+      final entries = decoded['versions'];
+      if (entries is! List) {
+        throw RegistryUnavailable('$host listed no versions for $name');
+      }
+
+      final versions = <PublishedVersion>[];
+      for (final entry in entries) {
+        if (entry is! Map) continue;
+        final published = _publishedVersion(entry);
+        if (published != null) versions.add(published);
+      }
+
+      return _cache[name] = RegistryPackage(name: name, versions: versions);
+    } on RegistryUnavailable {
+      rethrow;
+    } on Object catch (error) {
+      throw RegistryUnavailable('$host could not be read: $error');
+    }
+  }
+
+  @override
+  Future<PublishedVersion?> lookupVersion(
+    String name,
+    Version version,
+  ) async {
+    final coordinate = '$name ${version.canonical}';
+    final decoded = await _read(
+      '/api/packages/$name/versions/${version.canonical}',
+      coordinate,
+    );
+    if (decoded == null) return null;
+    final published = _publishedVersion(decoded);
+    if (published == null || published.version != version) {
+      throw RegistryUnavailable('$host returned an unreadable $coordinate');
+    }
+    return published;
+  }
+
+  Future<Map?> _read(String path, String describe) async {
+    final uri = secure ? Uri.https(host, path) : Uri.http(host, path);
 
     // Reading the body and making sense of it are as fallible as connecting:
     // a captive portal answers 200 with HTML, and a truncated response
@@ -137,10 +183,10 @@ class Registry implements RegistryReader {
       final response = await request.close().timeout(responseTimeout);
 
       // Only an authenticated negative means "not there".
-      if (response.statusCode == 404) return _cache[name] = null;
+      if (response.statusCode == 404) return null;
       if (response.statusCode != 200) {
         throw RegistryUnavailable(
-          '$host answered ${response.statusCode} for $name',
+          '$host answered ${response.statusCode} for $describe',
         );
       }
 
@@ -148,39 +194,29 @@ class Registry implements RegistryReader {
           .transform(utf8.decoder)
           .join()
           .timeout(responseTimeout);
-
       final decoded = jsonDecode(body);
       if (decoded is! Map) {
         throw RegistryUnavailable('$host returned something unreadable');
       }
-      final entries = decoded['versions'];
-      if (entries is! List) {
-        throw RegistryUnavailable('$host listed no versions for $name');
-      }
-
-      final versions = <PublishedVersion>[];
-      for (final entry in entries) {
-        if (entry is! Map) continue;
-        final parsed = Version.tryParse(_text(entry['version']) ?? '');
-        if (parsed == null) continue;
-        versions.add(
-          PublishedVersion(
-            version: parsed,
-            published: DateTime.tryParse(_text(entry['published']) ?? ''),
-            archiveSha256: _text(entry['archive_sha256']),
-            repository: entry['pubspec'] is Map
-                ? _text((entry['pubspec'] as Map)['repository'])
-                : null,
-          ),
-        );
-      }
-
-      return _cache[name] = RegistryPackage(name: name, versions: versions);
+      return decoded;
     } on RegistryUnavailable {
       rethrow;
     } on Object catch (error) {
       throw RegistryUnavailable('$host could not be read: $error');
     }
+  }
+
+  static PublishedVersion? _publishedVersion(Map entry) {
+    final parsed = Version.tryParse(_text(entry['version']) ?? '');
+    if (parsed == null) return null;
+    return PublishedVersion(
+      version: parsed,
+      published: DateTime.tryParse(_text(entry['published']) ?? ''),
+      archiveSha256: _text(entry['archive_sha256']),
+      repository: entry['pubspec'] is Map
+          ? _text((entry['pubspec'] as Map)['repository'])
+          : null,
+    );
   }
 
   /// A field only when it really is text, so a number where a string was

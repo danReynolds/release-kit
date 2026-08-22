@@ -125,6 +125,10 @@ class _Registry implements RegistryReader {
   }
 
   @override
+  Future<PublishedVersion?> lookupVersion(String name, Version version) async =>
+      (await lookup(name))?.at(version);
+
+  @override
   void forget(String name) {}
 }
 

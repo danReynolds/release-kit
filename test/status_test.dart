@@ -235,6 +235,10 @@ class FakeRegistry implements RegistryReader, PublicationInspector {
   }
 
   @override
+  Future<PublishedVersion?> lookupVersion(String name, Version version) async =>
+      (await lookup(name))?.at(version);
+
+  @override
   Future<Inspection> inspectProject(
     ResolvedProject project, {
     String? expectedArchiveSha256,

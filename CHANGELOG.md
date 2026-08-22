@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.6
+
+- Pub publication confirmation now reads the immutable version coordinate
+  rather than waiting for the package-history listing to catch up.
+- Successful Pub uploads are given the service's documented ten-minute
+  propagation window before rk reports that it lost sight of the result.
+
 ## 0.1.5
 
 - Status now distinguishes a valid historical release tag from current source
