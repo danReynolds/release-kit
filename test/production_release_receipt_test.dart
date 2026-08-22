@@ -48,7 +48,7 @@ void main() {
       'Notarization requirement: pass',
       'Notary result: Accepted',
       'codesign --verify --strict',
-      "codesign -R='notarized' -v",
+      "codesign -vvvv -R='notarized' --check-notarization",
       '970 passing tests',
       'GitHub CI on Ubuntu and macOS',
     });

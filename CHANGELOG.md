@@ -2,8 +2,21 @@
 
 ## Unreleased
 
+- Status no longer reports local binary archives as unstaged after an exact
+  public target has already bound every archive in the completed release.
+- Standalone macOS notarization verification examples now ask codesign to
+  perform its required online ticket check.
+
+## 0.1.8
+
 - Homebrew is now Formula-only throughout inspection, staging, manifests, and
   tap updates. RK no longer reads, converts, or removes legacy Cask state.
+- Binary and Homebrew initialization now defaults to the current host's native
+  platform, so a Linux host does not silently propose a macOS artifact it
+  cannot produce. Cross-builds remain explicit configuration choices.
+- Docker and Podman capability probes are bounded and run only for releases
+  that ship binaries. Missing or unresponsive runtimes remain optional and
+  degrade cross-build smoke evidence instead of blocking publication.
 
 ## 0.1.7
 

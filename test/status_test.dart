@@ -2187,6 +2187,13 @@ executables:
       isNot(contains('build keybay')),
       reason: 'nine local lines under a finished release are noise',
     );
+    expect(
+      run.text,
+      isNot(contains('Not staged')),
+      reason: 'a public target already binds every binary archive, so a '
+          'compiler-specific private stage is no longer pending release work',
+    );
+    expect(run.report['next'], isEmpty);
 
     final steps = [
       for (final unit in (run.report['units'] as List))

@@ -88,7 +88,7 @@ only from the build directory:
 $ tar -xzf rk-<version>-macos-arm64.tar.gz -C <empty-directory>
 $ <empty-directory>/rk --version
 $ codesign --verify --strict --verbose=4 <empty-directory>/rk
-$ codesign -R='notarized' -v <empty-directory>/rk
+$ codesign -vvvv -R='notarized' --check-notarization <empty-directory>/rk
 ```
 
 The stage contract also performs a signed smoke test, verifies the signature
