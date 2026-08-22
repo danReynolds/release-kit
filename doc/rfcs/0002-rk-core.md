@@ -829,7 +829,7 @@ act(expected, stage)
   and log are receipt-bound stage evidence — a consumer verifies the binary
   with Apple directly, so they are not release assets. A reusable stage
   retains and revalidates that exact evidence instead of resubmitting.
-  `codesign --test-requirement=notarized -v` remains the binding check on
+  `codesign -R=notarized --check-notarization` remains the binding check on
   the exact signed bytes.
 - **`archive`** (transform): deterministic tar.gz per
   platform — fixed entry order, zeroed mtimes, normalized modes, no gzip

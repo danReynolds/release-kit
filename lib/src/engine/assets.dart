@@ -87,9 +87,9 @@ abstract final class ReleaseAssets {
 
   /// Apple's verdict, verbatim — and its log, which says what the verdict
   /// covered. Stage evidence, not published assets: a consumer verifies the
-  /// binary itself (`codesign --test-requirement=notarized` asks Apple about
-  /// the exact bytes), which no JSON beside it can strengthen. The receipt
-  /// records both files for diagnosis.
+  /// binary itself (`codesign -R=notarized --check-notarization` asks Apple
+  /// about the exact bytes), which no JSON beside it can strengthen. The
+  /// receipt records both files for diagnosis.
   static String notaryResultName(
     String executable,
     String version,

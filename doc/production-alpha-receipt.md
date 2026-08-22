@@ -59,7 +59,7 @@ release invariant regardless.
 Every binary archive contained exactly `rk`, `LICENSE`, and `README.md`. The
 macOS archive was independently extracted and its executable reported
 `rk 0.1.4`, passed `codesign --verify --strict`, and satisfied
-`codesign -R='notarized' -v`.
+`codesign -vvvv -R='notarized' --check-notarization`.
 
 Linux smoke execution was not available during staging because no container
 runtime was running on the macOS producer. Linux compilation and archive

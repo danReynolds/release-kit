@@ -295,8 +295,11 @@ class StatusCommand {
           ),
       ];
     }
-    final localOutputPending =
-        unit.shipsBinaries && stageResult.inspection?.reusable != true;
+    final localOutputPending = _localBinaryWorkRemains(
+      unit: unit,
+      targets: targets,
+      stage: stageResult.inspection,
+    );
     final issues = <StatusIssue>[
       for (final diagnostic in diagnostics.found)
         StatusIssue(
@@ -904,8 +907,13 @@ class StatusCommand {
   void _renderStage(_UnitSnapshot snapshot) {
     if (snapshot.sourceVersionAlreadyReleased) return;
     final staged = snapshot.stage?.reusable == true;
-    final localProject =
-        _hasLocalBinaries(snapshot) ? snapshot.unit.binaryProject : null;
+    final localProject = _localBinaryWorkRemains(
+      unit: snapshot.unit,
+      targets: snapshot.targets,
+      stage: snapshot.stage,
+    )
+        ? snapshot.unit.binaryProject
+        : null;
     final localBlocked = {
       if (localProject != null)
         for (final platform in localProject.binaryPlatforms)
@@ -1175,12 +1183,45 @@ class _UnitSnapshot {
 bool _isLocalOnlyOutput(_UnitSnapshot snapshot) =>
     snapshot.targets.isEmpty && snapshot.unit.shipsBinaries;
 
-bool _hasLocalBinaries(_UnitSnapshot snapshot) => snapshot.unit.shipsBinaries;
-
 bool _workRemains(_UnitSnapshot snapshot) =>
     snapshot.sourceVersionAlreadyReleased ||
     snapshot.targets.any((target) => !target.inspection.isExact) ||
-    (_hasLocalBinaries(snapshot) && snapshot.stage?.reusable != true);
+    _localBinaryWorkRemains(
+      unit: snapshot.unit,
+      targets: snapshot.targets,
+      stage: snapshot.stage,
+    );
+
+/// Whether this release still needs a private binary stage.
+///
+/// A binary is a selected local output until an exact public target binds all
+/// of its archives. Once that happens, losing a compiler-specific stage does
+/// not turn a completed release back into unfinished local work. This stays
+/// data-driven: the destination's artifact inventory establishes the binding,
+/// so status does not need to know which target kind published the bytes.
+bool _localBinaryWorkRemains({
+  required ResolvedUnit unit,
+  required Iterable<TargetObservation> targets,
+  required StageInspection? stage,
+}) {
+  final project = unit.binaryProject;
+  if (project == null || stage?.reusable == true) return false;
+
+  final archiveNames = {
+    for (final platform in project.binaryPlatforms)
+      ReleaseAssets.archiveName(
+        project.executable!,
+        project.version.canonical,
+        platform,
+      ),
+  };
+  final published = targets.any(
+    (target) =>
+        target.inspection.isExact &&
+        archiveNames.every(target.expectation.artifacts.contains),
+  );
+  return !published;
+}
 
 class _StageResult {
   const _StageResult({
