@@ -12,6 +12,9 @@
 - Successful staging prints its exact repository-relative directory instead
   of wrapping a long absolute checkout path, and RK's repository-local release
   helper advances both version declarations together.
+- Published Homebrew formulas are verified against the immutable Formula
+  digest recorded by their tag-bound release manifest, so later renderer
+  improvements do not rewrite release history.
 
 ## 0.1.8
 

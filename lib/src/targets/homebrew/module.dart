@@ -5,12 +5,14 @@ import '../../engine/assets.dart';
 import '../../engine/checklist.dart';
 import '../../engine/diagnostic.dart';
 import '../../engine/publish_target.dart';
+import '../../engine/release_manifest.dart';
 import '../../engine/resolve.dart';
 import '../../engine/targets.dart';
 import '../../engine/verdict.dart';
 import '../../output/output.dart';
 import '../../output/progress.dart';
 import '../github_release/client.dart';
+import '../git_tag/client.dart';
 import '../target_module.dart';
 import 'client.dart';
 import 'formula_stage.dart';
@@ -110,6 +112,23 @@ final class HomebrewTargetModule extends TargetModule {
         publicFormula.evidence['version'] == project.version.canonical;
     if (!publicFormula.isAbsent && !sameVersion) return publicFormula;
 
+    if (sameVersion) {
+      final historical = await _historicalFormulaIdentity(
+        context,
+        unit,
+        project: project,
+        tap: tap,
+        formulaPath: 'Formula/$name',
+      );
+      if (!historical.inspection.isExact) return historical.inspection;
+      return destination.inspect(
+        formulaPath: 'Formula/$name',
+        intendedVersion: project.version,
+        expectedBytes: null,
+        expectedSha256: historical.formulaSha256,
+      );
+    }
+
     final current = await _publishedFormula(
       context,
       unit,
@@ -131,6 +150,134 @@ final class HomebrewTargetModule extends TargetModule {
       expectedBytes: current.bytes,
     );
   }
+
+  Future<({Inspection inspection, String? formulaSha256})>
+      _historicalFormulaIdentity(
+    TargetReadContext context,
+    ResolvedUnit unit, {
+    required ResolvedProject project,
+    required String tap,
+    required String formulaPath,
+  }) async {
+    final tag = requiredTargetTag(unit, PublishTarget.gitTag);
+    final tagObject = context.git.tagObject(tag);
+    final tagCommit = context.git.tagTarget(tag);
+    if (tagObject == null || tagCommit == null) {
+      return (
+        inspection: const Inspection.unknown(
+          'the release tag identity is unavailable, so the published formula '
+          'cannot be authenticated',
+        ),
+        formulaSha256: null,
+      );
+    }
+    final binding = await GitTag(
+      tools: context.tools!,
+      root: context.git.root,
+    ).manifestBinding(
+      tag: tag,
+      expectedObject: tagObject,
+      expectedCommit: tagCommit,
+    );
+    final manifestSha256 = binding.sha256;
+    if (manifestSha256 == null) {
+      return (
+        inspection: _manifestBindingFailure(binding),
+        formulaSha256: null,
+      );
+    }
+
+    final read = await GithubRelease(
+      tools: context.tools!,
+      repository: context.repository!,
+      workingDirectory: context.git.root,
+    ).readBoundAsset(
+      tag: tag,
+      expectedAssets: ReleaseAssets.expectedForUnit(unit).toSet(),
+      asset: ReleaseAssets.manifest,
+      expectedSha256: manifestSha256,
+      prerelease: unit.version.isPrerelease,
+    );
+    if (!read.inspection.isExact) {
+      return (inspection: read.inspection, formulaSha256: null);
+    }
+
+    final ReleaseManifest manifest;
+    try {
+      manifest = ReleaseManifest.parse(utf8.decode(read.bytes!));
+    } on Object catch (error) {
+      return (
+        inspection: Inspection.conflict(
+          'the authenticated release manifest is invalid: $error',
+        ),
+        formulaSha256: null,
+      );
+    }
+    final coordinateDifferences = <String, String>{};
+    if (manifest.unit != unit.name) {
+      coordinateDifferences['unit'] =
+          'manifest ${manifest.unit}, expected ${unit.name}';
+    }
+    if (manifest.version != unit.version.canonical) {
+      coordinateDifferences['version'] =
+          'manifest ${manifest.version}, expected ${unit.version.canonical}';
+    }
+    if (manifest.tag != tag) {
+      coordinateDifferences['tag'] =
+          'manifest ${manifest.tag ?? '<none>'}, expected $tag';
+    }
+    if (manifest.commit != tagCommit) {
+      coordinateDifferences['source commit'] =
+          'manifest ${manifest.commit ?? '<none>'}, expected $tagCommit';
+    }
+    if (coordinateDifferences.isNotEmpty) {
+      return (
+        inspection: Inspection.conflict(
+          'the authenticated release manifest names a different release',
+          evidence: coordinateDifferences,
+        ),
+        formulaSha256: null,
+      );
+    }
+
+    final homebrew = manifest.homebrew;
+    if (homebrew == null ||
+        !homebrew.names(
+          project: project.name,
+          tap: tap,
+          path: formulaPath,
+        )) {
+      return (
+        inspection: Inspection.conflict(
+          'the authenticated release manifest does not bind '
+          '$tap/$formulaPath',
+        ),
+        formulaSha256: null,
+      );
+    }
+    return (
+      inspection: const Inspection.exact(
+        detail: 'published formula identity read from the authenticated '
+            'release manifest',
+      ),
+      formulaSha256: homebrew.sha256,
+    );
+  }
+
+  Inspection _manifestBindingFailure(TagManifestBinding binding) =>
+      switch (binding) {
+        TagManifestUnreadable(:final why) => Inspection.unknown(why),
+        TagManifestConflict(:final why, :final evidence) =>
+          Inspection.conflict(why, evidence: evidence),
+        TagManifestAbsent(:final why) ||
+        TagManifestMissing(:final why) ||
+        TagManifestMalformed(:final why) ||
+        TagManifestUnbound(:final why) =>
+          Inspection.conflict(
+            'the published formula cannot be authenticated: $why',
+          ),
+        TagManifestBound() => throw StateError('bound manifest has no digest'),
+      };
 
   Future<({Inspection inspection, List<int>? bytes})> _publishedFormula(
     TargetReadContext context,

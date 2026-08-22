@@ -204,6 +204,95 @@ class GithubRelease {
     );
   }
 
+  /// Reads one public asset only after proving its release inventory and
+  /// bytes against an independently authenticated digest.
+  ///
+  /// Consumers that need to parse an asset cannot rely only on GitHub's asset
+  /// metadata: they need the downloaded bytes, and the expected digest must
+  /// come from somewhere immutable outside the editable release. The Git tag
+  /// binding is that authority for `release-manifest.json`.
+  Future<GithubBoundAssetRead> readBoundAsset({
+    required String tag,
+    required Set<String> expectedAssets,
+    required String asset,
+    required String expectedSha256,
+    required bool prerelease,
+  }) async {
+    if (!expectedAssets.contains(asset)) {
+      return GithubBoundAssetRead._(
+        const Inspection.unknown(
+          'the requested asset is not in the expected release',
+        ),
+        null,
+      );
+    }
+    if (!_isSha256(expectedSha256)) {
+      return GithubBoundAssetRead._(
+        Inspection.unknown(
+            'the authenticated digest for $asset is not SHA-256'),
+        null,
+      );
+    }
+
+    final observed = await _readRelease(tag);
+    if (!observed.inspection.isExact) {
+      return GithubBoundAssetRead._(observed.inspection, null);
+    }
+    final release = observed.release!;
+    final surface = _compareRelease(
+      release,
+      tag: tag,
+      expectedAssets: expectedAssets,
+      expectedPrerelease: prerelease,
+    );
+    if (!surface.isExact) return GithubBoundAssetRead._(surface, null);
+
+    final expected = expectedSha256.toLowerCase();
+    final providerDigest = _publishedDigest(release, asset);
+    if (providerDigest != null && providerDigest != expected) {
+      return GithubBoundAssetRead._(
+        Inspection.conflict(
+          '$asset differs from the digest authenticated by the Git tag',
+          evidence: {
+            asset:
+                'published sha256:$providerDigest, expected sha256:$expected',
+          },
+        ),
+        null,
+      );
+    }
+
+    final downloaded = await _downloadAssetBytes(tag, asset);
+    final bytes = downloaded.bytes;
+    if (bytes == null) {
+      return GithubBoundAssetRead._(
+        Inspection.unknown(
+          downloaded.problem ?? '$asset produced no readable bytes',
+        ),
+        null,
+      );
+    }
+    final actual = Sha256.hex(bytes);
+    if (actual != expected) {
+      return GithubBoundAssetRead._(
+        Inspection.conflict(
+          '$asset differs from the digest authenticated by the Git tag',
+          evidence: {
+            asset: 'published sha256:$actual, expected sha256:$expected',
+          },
+        ),
+        null,
+      );
+    }
+    return GithubBoundAssetRead._(
+      Inspection.exact(
+        detail: '$asset matches the digest authenticated by the Git tag',
+        evidence: {asset: 'sha256:$actual'},
+      ),
+      bytes,
+    );
+  }
+
   Future<Inspection> _inspect({
     required String tag,
     required Set<String> expectedAssets,
@@ -1346,6 +1435,15 @@ class GithubAssetDigestRead {
 
   final Inspection inspection;
   final Map<String, String> digests;
+}
+
+/// One public GitHub asset whose downloaded bytes match an external digest.
+class GithubBoundAssetRead {
+  GithubBoundAssetRead._(this.inspection, List<int>? bytes)
+      : bytes = bytes == null ? null : List.unmodifiable(bytes);
+
+  final Inspection inspection;
+  final List<int>? bytes;
 }
 
 /// The public facts needed to verify a release after its local stage is gone.
