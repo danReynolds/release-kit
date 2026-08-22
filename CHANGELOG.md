@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.5
+
+- Status now distinguishes a valid historical release tag from current source
+  that still declares the released version, keeps the public target healthy,
+  and directs the next release to bump rather than move an immutable tag.
+- Target conflicts now carry structured, target-owned diagnostics and evidence
+  while core retains the small shared lifecycle and reporting contract.
+- Pub package warnings survive reusable stage receipts, raw provider failures
+  are separated from recovery instructions, and cross-built binaries that were
+  not executed are disclosed before release authorization.
+- Published package evidence states why archive bytes were not compared, and
+  already-released source no longer produces a misleading unstaged-artifact
+  section.
+
 ## 0.1.4
 
 - macOS signatures are verified again after the signed executable smoke test
