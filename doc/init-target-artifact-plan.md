@@ -3,7 +3,7 @@
 Status: implemented and validated, 2026-08-12.
 
 This record captures the decisions behind schema 2, `rk init`, optional Git,
-aggregate GitHub Releases, and Homebrew cask bindings. RFC 0002 owns
+aggregate GitHub Releases, and Homebrew formula bindings. RFC 0002 owns
 the complete release protocol; this document records the narrower product
 choices and review outcomes that produced the implementation.
 
@@ -27,7 +27,7 @@ The three relevant concepts remain distinct:
 
 GitHub Release therefore aggregates explicit release assets. It does not own
 binary production or upload arbitrary build directories. Homebrew owns its
-cask; the cask is not duplicated into GitHub.
+formula; the formula is not duplicated into GitHub.
 
 ## Configuration
 
@@ -79,7 +79,7 @@ publish = ["pub.dev"]
 ```
 
 Both packages share a version, tag, and GitHub Release. `server_cli` is the
-unit's one standalone program and publishes its archives and Homebrew cask;
+unit's one standalone program and publishes its archives and Homebrew formula;
 `admin_cli` is a registry package. A second standalone program is a separate
 release unit with its own signing identity and public lifecycle.
 
@@ -185,44 +185,46 @@ Bundle assembly validates the complete specification before publication:
 - public names must be one safe filename;
 - reserved names belong only to rk;
 - case-equivalent public names collide; and
-- Homebrew casks cannot also be release assets.
+- Homebrew formulae cannot also be release assets.
 
 `release-manifest.json` is always present on a selected GitHub Release and
 records the size and SHA-256 digest of every public asset. A metadata-only
 release therefore carries release notes and the manifest only.
 
-The manifest records public release assets separately from Homebrew casks.
+The manifest records public release assets separately from Homebrew formulae.
 It never exposes private stage paths, commands, logs, credentials, or
 free-form receipt evidence.
 
 ## Homebrew
 
-The Homebrew project produces one Cask from its standalone archive
-contract. A Cask is the native Homebrew model for an upstream-built binary;
-rk does not pretend its prebuilt archives are source-built formulae. The Cask
-is a private stage output published only to `Casks/<token>.rb` in the selected
-tap. Its token is derived from the executable name (`_` becomes `-`).
+The Homebrew project produces one Formula from its standalone archive
+contract. The Formula is the command-line installation surface: it selects the
+released archive for the host OS and architecture, verifies its digest, and
+installs the executable with `bin.install`. It is a private stage output
+published only to `Formula/<token>.rb` in the selected tap. Its token and Ruby
+class are derived from the executable name (`_` becomes `-`).
 
-RK never deletes an unauthenticated legacy tap file. Before the first Cask
-release of a token that was previously shipped as a Formula, remove the
-same-token `Formula/<executable>.rb` once as an explicit tap migration.
+The first Formula publication also handles rk's earlier Cask layout. RK
+inspects `Casks/<token>.rb`, binds its exact digest into the same update
+authority, then creates the Formula and removes the Cask in one tap commit. It
+never deletes an absent, changed, or unauthenticated legacy file.
 
-The release manifest binds each cask's:
+The release manifest binds each formula's:
 
 - project;
 - tap;
-- cask path;
+- formula path;
 - size and SHA-256 digest.
 
 This lets status authenticate the intended current tap bytes through:
 
 ```text
 annotated Git tag -> GitHub release manifest -> public archive digests
-                  -> deterministic cask bytes -> tap bytes
+                  -> deterministic formula bytes -> tap bytes
 ```
 
 RK does not reconstruct older release trees merely to authorize a channel
-advance. A recognizable rk-generated lower-version cask may move forward under
+advance. A recognizable rk-generated lower-version formula may move forward under
 compare-and-swap; same-version differences, newer values, and unrecognized
 content block.
 
@@ -291,7 +293,7 @@ changes were:
 - require explicit tag namespaces when several tagged units exist;
 - preserve concrete target identity alongside lifecycle kind;
 - keep producer state attached to the unit's one binary project;
-- separate public assets from Homebrew cask bytes;
+- separate public assets from Homebrew formula bytes;
 - support metadata-only GitHub Releases;
 - reject destructive GitHub draft recovery;
 - make source binding independent from destination exactness; and

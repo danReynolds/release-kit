@@ -5,10 +5,10 @@ import 'stage.dart';
 import 'stage_receipt.dart';
 
 /// Bumped freely until the first published release; after it, a bump
-/// orphans every manifest already public — the public cask-consumption path
+/// orphans every manifest already public — the public Homebrew-consumption path
 /// parses the manifest bound by the release tag — so a post-release bump must
 /// teach the parser each retired schema it still needs to read.
-const releaseManifestSchemaVersion = 6;
+const releaseManifestSchemaVersion = 7;
 
 /// One public file, deliberately stripped of its local stage path and all
 /// producer evidence.
@@ -81,23 +81,23 @@ class ReleaseManifestArtifact {
       };
 }
 
-/// One private staged Homebrew cask and the tap path that will receive it.
+/// One private staged Homebrew file and the tap path that will receive it.
 ///
 /// This exact shape is frozen into the terminal receipt. The public manifest
 /// receives the same public identity, but never the private [stagedPath].
-final class StagedCaskBinding {
-  StagedCaskBinding({
+final class StagedHomebrewBinding {
+  StagedHomebrewBinding({
     required this.project,
     required this.tap,
     required this.path,
     required String stagedPath,
   }) : stagedPath = StagePath.require(stagedPath) {
-    _requirePublicText('cask project', project);
-    _requirePublicText('cask tap', tap);
+    _requirePublicText('Homebrew project', project);
+    _requirePublicText('Homebrew tap', tap);
     _requireDestinationPath(path);
   }
 
-  factory StagedCaskBinding.fromEvidence(Object? value) {
+  factory StagedHomebrewBinding.fromEvidence(Object? value) {
     final map = _strictMap(
       value,
       const {
@@ -106,9 +106,9 @@ final class StagedCaskBinding {
         'staged_path',
         'tap',
       },
-      'staged cask binding',
+      'staged Homebrew binding',
     );
-    return StagedCaskBinding(
+    return StagedHomebrewBinding(
       project: _string(map, 'project'),
       tap: _string(map, 'tap'),
       path: _string(map, 'path'),
@@ -121,7 +121,7 @@ final class StagedCaskBinding {
   final String path;
   final String stagedPath;
 
-  String get identity => _caskIdentity(project, tap, path);
+  String get identity => _homebrewIdentity(project, tap, path);
 
   Map<String, Object?> toEvidence() => {
         'path': path,
@@ -130,11 +130,11 @@ final class StagedCaskBinding {
         'tap': tap,
       };
 
-  ReleaseManifestCask bind(StageArtifact artifact) {
+  ReleaseManifestHomebrew bind(StageArtifact artifact) {
     if (artifact.path != stagedPath) {
-      throw ArgumentError('cask binding captured a different output');
+      throw ArgumentError('Homebrew binding captured a different output');
     }
-    return ReleaseManifestCask.fromStage(
+    return ReleaseManifestHomebrew.fromStage(
       project: project,
       tap: tap,
       path: path,
@@ -143,38 +143,40 @@ final class StagedCaskBinding {
   }
 }
 
-/// One Homebrew cask and the exact public tap path that receives it.
+/// One Homebrew formula and the exact public tap path that receives it.
 ///
 /// Unlike [ReleaseManifestArtifact], this file is not necessarily a release
 /// asset: it belongs only in its tap. The manifest carries enough public
 /// evidence to authenticate those bytes later, while the private stage path
 /// remains solely in `stage.json`.
-class ReleaseManifestCask {
-  ReleaseManifestCask({
+class ReleaseManifestHomebrew {
+  ReleaseManifestHomebrew({
     required this.project,
     required this.tap,
     required this.path,
     required this.size,
     required this.sha256,
   }) {
-    _requirePublicText('cask project', project);
-    _requirePublicText('cask tap', tap);
+    _requirePublicText('Homebrew project', project);
+    _requirePublicText('Homebrew tap', tap);
     _requireDestinationPath(path);
     if (size < 0) {
-      throw ArgumentError('cask size cannot be negative');
+      throw ArgumentError('Homebrew formula size cannot be negative');
     }
     if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(sha256)) {
-      throw ArgumentError('cask must carry a lowercase SHA-256 digest');
+      throw ArgumentError(
+        'Homebrew formula must carry a lowercase SHA-256 digest',
+      );
     }
   }
 
-  factory ReleaseManifestCask.fromStage({
+  factory ReleaseManifestHomebrew.fromStage({
     required String project,
     required String tap,
     required String path,
     required StageArtifact artifact,
   }) =>
-      ReleaseManifestCask(
+      ReleaseManifestHomebrew(
         project: project,
         tap: tap,
         path: path,
@@ -182,7 +184,7 @@ class ReleaseManifestCask {
         sha256: artifact.sha256,
       );
 
-  factory ReleaseManifestCask.fromJson(Object? value) {
+  factory ReleaseManifestHomebrew.fromJson(Object? value) {
     final map = _strictMap(
       value,
       const {
@@ -192,13 +194,13 @@ class ReleaseManifestCask {
         'size',
         'tap',
       },
-      'cask binding',
+      'Homebrew binding',
     );
     final size = map['size'];
     if (size is! int) {
-      throw const FormatException('cask size is not an integer');
+      throw const FormatException('Homebrew formula size is not an integer');
     }
-    return ReleaseManifestCask(
+    return ReleaseManifestHomebrew(
       project: _string(map, 'project'),
       tap: _string(map, 'tap'),
       path: _string(map, 'path'),
@@ -212,12 +214,12 @@ class ReleaseManifestCask {
   /// Tap repository, such as `owner/homebrew-tap`.
   final String tap;
 
-  /// Public path inside that coordinate, such as `Casks/tool.rb`.
+  /// Public path inside that coordinate, such as `Formula/tool.rb`.
   final String path;
   final int size;
   final String sha256;
 
-  String get identity => _caskIdentity(project, tap, path);
+  String get identity => _homebrewIdentity(project, tap, path);
   bool names({
     required String project,
     required String tap,
@@ -246,7 +248,7 @@ class ReleaseManifest {
     required this.tag,
     required this.commit,
     required Iterable<ReleaseManifestArtifact> artifacts,
-    this.cask,
+    this.homebrew,
   }) : artifacts = List<ReleaseManifestArtifact>.unmodifiable(
           artifacts.toList()
             ..sort((left, right) => left.name.compareTo(right.name)),
@@ -267,23 +269,35 @@ class ReleaseManifest {
 
   factory ReleaseManifest.parse(String document) {
     final decoded = CanonicalJson.decodeDocument(document);
+    final schema = decoded is Map ? decoded['schema'] : null;
+    final fields = switch (schema) {
+      6 => const {
+          'artifacts',
+          'cask',
+          'schema',
+          'source',
+          'tag',
+          'unit',
+          'version',
+        },
+      releaseManifestSchemaVersion => const {
+          'artifacts',
+          'homebrew',
+          'schema',
+          'source',
+          'tag',
+          'unit',
+          'version',
+        },
+      _ => throw FormatException(
+          'unsupported release manifest schema: $schema',
+        ),
+    };
     final map = _strictMap(
       decoded,
-      const {
-        'artifacts',
-        'cask',
-        'schema',
-        'source',
-        'tag',
-        'unit',
-        'version',
-      },
+      fields,
       'release manifest',
     );
-    if (map['schema'] != releaseManifestSchemaVersion) {
-      throw FormatException(
-          'unsupported release manifest schema: ${map['schema']}');
-    }
     final source = _strictMap(
       map['source'],
       const {'commit'},
@@ -299,9 +313,11 @@ class ReleaseManifest {
       tag: map['tag'] == null ? null : _string(map, 'tag'),
       commit: source['commit'] == null ? null : _string(source, 'commit'),
       artifacts: artifacts.map(ReleaseManifestArtifact.fromJson),
-      cask: map['cask'] == null
+      homebrew: (schema == 6 ? map['cask'] : map['homebrew']) == null
           ? null
-          : ReleaseManifestCask.fromJson(map['cask']),
+          : ReleaseManifestHomebrew.fromJson(
+              schema == 6 ? map['cask'] : map['homebrew'],
+            ),
     );
   }
 
@@ -315,11 +331,11 @@ class ReleaseManifest {
   final String? commit;
 
   final List<ReleaseManifestArtifact> artifacts;
-  final ReleaseManifestCask? cask;
+  final ReleaseManifestHomebrew? homebrew;
 
   Map<String, Object?> toJson() => {
         'artifacts': artifacts.map((artifact) => artifact.toJson()).toList(),
-        'cask': cask?.toJson(),
+        'homebrew': homebrew?.toJson(),
         'schema': releaseManifestSchemaVersion,
         'source': {'commit': commit},
         'tag': tag,
@@ -372,7 +388,7 @@ void _requirePublicText(String label, String value) {
   }
 }
 
-String _caskIdentity(
+String _homebrewIdentity(
   String project,
   String tap,
   String path,

@@ -419,7 +419,7 @@ class ResolvedUnit {
   ResolvedProject project(String name) =>
       projects.firstWhere((project) => project.name == name);
 
-  /// The tap this unit's cask goes to, declared or by Homebrew's
+  /// The tap this unit's formula goes to, declared or by Homebrew's
   /// convention. Derived twice before, and a drift there means rk inspects
   /// one tap and pushes to another.
   String tapFor(String repository) =>

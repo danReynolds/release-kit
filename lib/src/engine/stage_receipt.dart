@@ -141,7 +141,7 @@ class StageArtifact {
 
   final String path;
 
-  /// Semantic type: for example `executable`, `archive`, or `cask`.
+  /// Semantic type: for example `executable`, `archive`, or `formula`.
   final String type;
 
   /// POSIX permission and special bits, rendered as four octal digits.

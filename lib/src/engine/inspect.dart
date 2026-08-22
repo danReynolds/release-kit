@@ -199,7 +199,7 @@ class Inspector {
   /// again immediately before authorization.
   ///
   /// Targets decide whether their latest-version read is a meaningful guard.
-  /// Homebrew, for example, authenticates its public cask bytes during its
+  /// Homebrew, for example, authenticates its public formula bytes during its
   /// exact inspection and therefore declines a second, weaker version read.
   Future<ReleaseHistoryCheck> releaseMonotonicity(
     ResolvedUnit unit,

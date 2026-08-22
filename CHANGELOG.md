@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.7
+
+- Homebrew releases now use a Formula, the native installation surface for a
+  command-line tool, so freshly downloaded signed binaries run under macOS
+  Gatekeeper instead of being rejected as an unstapled Cask artifact.
+- The first Formula publication compare-and-swaps both tap coordinates in one
+  commit: it creates `Formula/<name>.rb` and removes only the exact legacy
+  `Casks/<name>.rb` that rk inspected.
+- Release manifests now describe a generic Homebrew binding while retaining
+  read compatibility with the public schema-6 Cask manifests.
+
 ## 0.1.6
 
 - Pub publication confirmation now reads the immutable version coordinate

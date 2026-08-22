@@ -337,7 +337,7 @@ void main() {
     expect(resumed.requireReceipt().identity.id, identity.id);
   });
 
-  test('finalization binds a private cask only to its tap destination',
+  test('finalization binds a private formula only to its tap destination',
       () async {
     final homebrewSource = MemorySourceTree({...source.files});
     homebrewSource.files['release.toml'] = _homebrewConfig;
@@ -357,22 +357,22 @@ void main() {
     await _recordArchives(homebrewStage, {_asset: 'archive'});
     final progress = StageReceiptStore(homebrewStage.directory).read()!;
     final project = homebrewUnit.project('tool');
-    final caskPath = ReleaseAssets.caskPath(project);
+    final formulaPath = ReleaseAssets.formulaPath(project);
     homebrewStage.directory.writeBytesAtomically(
-      caskPath,
-      utf8.encode('class Tool < Cask\nend\n'),
+      formulaPath,
+      utf8.encode('class Tool < Formula\nend\n'),
     );
-    final cask = StageArtifact.capture(
+    final formula = StageArtifact.capture(
       stage: homebrewStage.directory,
-      path: caskPath,
-      type: 'cask',
+      path: formulaPath,
+      type: 'formula',
     );
     homebrewStage.writeProgress([
       ...progress.steps,
       StageStep(
-        name: 'homebrew-cask:tool',
+        name: 'homebrew-formula:tool',
         inputs: [StageInput.artifact(progress.artifacts.last)],
-        outputs: [cask],
+        outputs: [formula],
       ),
     ]);
 
@@ -383,23 +383,23 @@ void main() {
       File(homebrewStage.directory.resolve(ReleaseAssets.manifest))
           .readAsStringSync(),
     );
-    final caskBinding = manifest.cask!;
+    final homebrewBinding = manifest.homebrew!;
 
     expect(manifest.artifacts.map((artifact) => artifact.name), [_asset]);
-    expect(caskBinding.project, 'tool');
-    expect(caskBinding.tap, 'owner/homebrew-tap');
-    expect(caskBinding.path, 'Casks/tool.rb');
-    expect(caskBinding.sha256, cask.sha256);
-    expect(manifest.encode(), isNot(contains(caskPath)));
+    expect(homebrewBinding.project, 'tool');
+    expect(homebrewBinding.tap, 'owner/homebrew-tap');
+    expect(homebrewBinding.path, 'Formula/tool.rb');
+    expect(homebrewBinding.sha256, formula.sha256);
+    expect(manifest.encode(), isNot(contains(formulaPath)));
     expect(
       receipt.steps.last.inputs.map((input) => input.name),
-      contains(caskPath),
+      contains(formulaPath),
     );
-    expect(homebrewStage.releaseAssets(), isNot(contains(caskPath)));
+    expect(homebrewStage.releaseAssets(), isNot(contains(formulaPath)));
     expect(homebrewStage.inspect().reusable, isTrue);
   });
 
-  test('a prerelease manifest carries archives without a Homebrew cask',
+  test('a prerelease manifest carries archives without a Homebrew formula',
       () async {
     final prereleaseSource = MemorySourceTree({...source.files});
     prereleaseSource.files['release.toml'] = _homebrewConfig;
@@ -447,7 +447,7 @@ executables:
     );
 
     expect(manifest.artifacts.map((artifact) => artifact.name), [archive]);
-    expect(manifest.cask, isNull);
+    expect(manifest.homebrew, isNull);
   });
 
   test('completed manifest coordinates must match the resolved unit', () async {
@@ -594,7 +594,7 @@ executables:
         'notary',
         'archive',
         'notes',
-        'cask',
+        'formula',
         'manifest',
       },
     );
@@ -639,7 +639,7 @@ executables:
       'notarize:macos-arm64',
       'archive:$_asset',
       'release-notes',
-      'homebrew-cask',
+      'homebrew-formula',
       'complete-stage',
     ]) {
       release.reset();
@@ -1148,16 +1148,16 @@ Future<StageReceipt> _completeEveryArtifactType(ReleaseStage release) async {
 
   release.directory.writeBytesAtomically(
     'tool.rb',
-    utf8.encode('class Tool < Cask\nend\n'),
+    utf8.encode('class Tool < Formula\nend\n'),
   );
-  final cask = StageStep(
-    name: 'homebrew-cask',
+  final formula = StageStep(
+    name: 'homebrew-formula',
     inputs: [StageInput.artifact(archive)],
     outputs: [
       StageArtifact.capture(
         stage: release.directory,
         path: 'tool.rb',
-        type: 'cask',
+        type: 'formula',
       ),
     ],
   );
@@ -1168,7 +1168,7 @@ Future<StageReceipt> _completeEveryArtifactType(ReleaseStage release) async {
     notarize,
     archiveStep,
     notes,
-    cask,
+    formula,
   ]);
   return release.finalize(
     releaseAssets: _fixtureReleaseAssets({

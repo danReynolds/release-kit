@@ -307,7 +307,7 @@ executables:
     expect(checklist['cli/tag/keybay_cli-v0.2.0']!.phase, StepPhase.publish);
   });
 
-  test('the cask waits for the release to be public', () {
+  test('the formula waits for the release to be public', () {
     final resolution = resolve(keybayConfig, keybayTree);
     final checklist =
         Checklist.derive(resolution.unit('cli')!, resolution, Diagnostics());
@@ -329,7 +329,7 @@ executables:
     expect(
       checklist['cli/homebrew/keybay_cli/keybay']!.isPermanent,
       isFalse,
-      reason: 'a cask moves forward again; a published version cannot',
+      reason: 'a formula moves forward again; a published version cannot',
     );
   });
 

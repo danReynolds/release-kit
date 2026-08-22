@@ -228,14 +228,14 @@ publish = ["git-tag", "github-release"]''',
   ReleaseChoice.homebrew: const _Reference(
     choice: ReleaseChoice.homebrew,
     title: 'publish through a Homebrew tap',
-    description: 'Publishes stable releases through a cask that installs '
+    description: 'Publishes stable releases through a formula that installs '
         'one standalone executable from its GitHub Release. Prereleases keep '
         'the tap on its last stable version.',
     select: ['Add "homebrew" to the project\'s publish list.'],
     requirementReasons: {
       ReleaseChoice.binary: 'Builds the archives installed by Homebrew.',
       ReleaseChoice.gitTag: 'Gives the release a versioned source identity.',
-      ReleaseChoice.githubRelease: 'Hosts the archives used by the cask.',
+      ReleaseChoice.githubRelease: 'Hosts the archives used by the formula.',
     },
     configure: [
       'homebrew_tap = "owner/repository"',

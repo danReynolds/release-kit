@@ -85,8 +85,11 @@ $ dart pub global activate rk
 ```
 
 ```console
-$ brew install --cask danreynolds/tap/rk
+$ brew install danreynolds/tap/rk
 ```
+
+If rk was installed as a Cask before 0.1.7, migrate it once with
+`brew uninstall --cask rk` before installing the Formula.
 
 The same CLI ships from pub.dev, Homebrew, and GitHub Releases —
 `rk --version` reports what you are running.
