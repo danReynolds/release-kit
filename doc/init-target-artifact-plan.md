@@ -132,8 +132,12 @@ edits an existing config.
 - Several releasable packages receive no default per-package tags.
 - Executables expose standalone capability but do not select Binary, GitHub,
   or Homebrew.
-- Examples, fixtures, workspace grouping roots, private packages, and custom
-  registry packages remain visible with a reason and start unselected.
+- Conventional examples and fixtures are omitted from discovery. Workspace
+  grouping roots have no release output and stay out of the selector.
+- `publish_to: none` packages remain discoverable but start unselected and are
+  hidden from the default selector; `a` reveals them for intentional tags,
+  binaries, GitHub Releases, or Homebrew distribution.
+- Custom-registry packages remain visible with a reason and start unselected.
 - Non-Git discovery follows only the root native manifest and declared native
   workspace membership.
 
@@ -146,7 +150,8 @@ on/off choices:
 Binary  Git tag  pub.dev  GitHub  Homebrew
 ```
 
-Arrow keys move, Space toggles, Enter reviews, and Ctrl-C or EOF cancels.
+Arrow keys move, Space toggles, `a` shows or hides non-registry packages, Enter
+reviews, and Ctrl-C or EOF cancels.
 The selector bounds itself to terminal height, truncates long display names,
 and restores cursor and terminal modes on every exit.
 
@@ -166,6 +171,7 @@ or `.gitignore` change.
 Without a usable TTY, init prints the conservative proposal and writes
 nothing. `rk init --write` accepts that proposal. `rk init --json` reports the
 same candidates, availability, reasons, selection, and dependency effects.
+Selector filtering never removes candidates from JSON output.
 
 Generated TOML is parsed and resolved through the production path before it
 is shown.
