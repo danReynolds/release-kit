@@ -57,10 +57,7 @@ void main() {
 
     expect(RegExp(r'\x1b\[1;36m').allMatches(colored), hasLength(1));
     expect(colored, isNot(contains(';7m')));
-    expect(
-      colored.replaceAll(RegExp(r'\x1b\[[0-9;]*m'), ''),
-      plain,
-    );
+    expect(colored.replaceAll(RegExp(r'\x1b\[[0-9;]*m'), ''), plain);
   });
 
   test('arrows move focus and space applies dependency cascades', () {
@@ -74,29 +71,152 @@ void main() {
 
     final result = selector.handle(InitSelectorKey.toggle);
     expect(result, InitSelectorAction.changed);
-    expect(selector.plan.candidates.single.selected,
-        containsAll({ReleaseChoice.homebrew, ReleaseChoice.binary}));
+    expect(
+      selector.plan.candidates.single.selected,
+      containsAll({ReleaseChoice.homebrew, ReleaseChoice.binary}),
+    );
     expect(selector.render(60), contains('enabled'));
   });
 
-  test('raw keys recognize arrows, review, cancellation, and incomplete input',
-      () {
-    InitSelectorKey read(List<int> bytes) {
-      var index = 0;
-      return readInitSelectorKey(
-        () => index < bytes.length ? bytes[index++] : -1,
-      );
-    }
+  test(
+    'raw keys recognize arrows, review, cancellation, and incomplete input',
+    () {
+      InitSelectorKey read(List<int> bytes) {
+        var index = 0;
+        return readInitSelectorKey(
+          () => index < bytes.length ? bytes[index++] : -1,
+        );
+      }
 
-    expect(read([27, 91, 65]), InitSelectorKey.up);
-    expect(read([27, 91, 68]), InitSelectorKey.left);
-    expect(read([32]), InitSelectorKey.toggle);
-    expect(read([13]), InitSelectorKey.review);
-    expect(read([3]), InitSelectorKey.cancel);
-    expect(read([113]), InitSelectorKey.cancel);
-    expect(read([81]), InitSelectorKey.cancel);
-    expect(read([]), InitSelectorKey.cancel);
-    expect(read([27]), InitSelectorKey.ignore);
+      expect(read([27, 91, 65]), InitSelectorKey.up);
+      expect(read([27, 91, 68]), InitSelectorKey.left);
+      expect(read([32]), InitSelectorKey.toggle);
+      expect(read([97]), InitSelectorKey.toggleNonRegistry);
+      expect(read([65]), InitSelectorKey.toggleNonRegistry);
+      expect(read([13]), InitSelectorKey.review);
+      expect(read([3]), InitSelectorKey.cancel);
+      expect(read([113]), InitSelectorKey.cancel);
+      expect(read([81]), InitSelectorKey.cancel);
+      expect(read([]), InitSelectorKey.cancel);
+      expect(read([27]), InitSelectorKey.ignore);
+    },
+  );
+
+  test('default view hides non-registry and non-actionable projects', () {
+    final discovered = InitPlan.discover(
+      tree: MemorySourceTree({
+        'pubspec.yaml':
+            'name: workspace\npublish_to: none\nworkspace:\n  - packages/public\n',
+        'example_flutter/pubspec.yaml':
+            'name: example_flutter\nversion: 1.0.0\npublish_to: none\n',
+        'packages/public/pubspec.yaml': 'name: public\nversion: 1.0.0\n',
+      }),
+      gitBound: true,
+      hasRemote: true,
+      githubRepository: 'owner/repo',
+      platformCapabilities: _platformCapabilities,
+    );
+    final selector = InitSelector(discovered);
+
+    final defaults = selector.render(120);
+    expect(defaults, contains('public'));
+    expect(defaults, isNot(contains('example_flutter')));
+    expect(defaults, isNot(contains('workspace ')));
+    expect(defaults, contains('1 non-registry hidden'));
+    expect(defaults, contains('a show'));
+
+    selector.handle(InitSelectorKey.toggleNonRegistry);
+    final expanded = selector.render(120);
+    expect(expanded, contains('example_flutter'));
+    expect(expanded, isNot(contains('workspace ')));
+    expect(expanded, contains('1 non-registry shown'));
+    expect(expanded, contains('a hide'));
+  });
+
+  test(
+    'hidden projects do not change the candidate toggled by the selector',
+    () {
+      final discovered = InitPlan.discover(
+        tree: MemorySourceTree({
+          'private/pubspec.yaml':
+              'name: private\nversion: 1.0.0\npublish_to: none\n',
+          'public/pubspec.yaml':
+              'name: public\nversion: 1.0.0\nexecutables:\n  public: public\n',
+        }),
+        gitBound: true,
+        hasRemote: true,
+        githubRepository: 'owner/repo',
+        platformCapabilities: _platformCapabilities,
+      );
+      final selector = InitSelector(discovered);
+
+      expect(selector.candidate.name, 'public');
+      selector.handle(InitSelectorKey.toggle);
+
+      expect(
+        selector.plan.candidates
+            .singleWhere((candidate) => candidate.name == 'public')
+            .selected,
+        contains(ReleaseChoice.binary),
+      );
+      expect(
+        selector.plan.candidates
+            .singleWhere((candidate) => candidate.name == 'private')
+            .selected,
+        isEmpty,
+      );
+    },
+  );
+
+  test('a private-only repository can reveal its release choices', () {
+    final discovered = InitPlan.discover(
+      tree: MemorySourceTree({
+        'pubspec.yaml': 'name: internal\nversion: 1.0.0\npublish_to: none\n',
+      }),
+      gitBound: true,
+      hasRemote: true,
+      githubRepository: 'owner/repo',
+      platformCapabilities: _platformCapabilities,
+    );
+    final selector = InitSelector(discovered);
+
+    expect(selector.render(120), contains('No default release candidates.'));
+    expect(selector.handle(InitSelectorKey.toggle), InitSelectorAction.ignored);
+
+    selector.handle(InitSelectorKey.toggleNonRegistry);
+    expect(selector.candidate.name, 'internal');
+    expect(selector.render(120), contains('internal'));
+  });
+
+  test('selected non-registry units remain visible when the rest are hidden',
+      () {
+    final discovered = InitPlan.discover(
+      tree: MemorySourceTree({
+        'a/pubspec.yaml': 'name: a\nversion: 1.0.0\npublish_to: none\n',
+        'b/pubspec.yaml': 'name: b\nversion: 1.0.0\npublish_to: none\n',
+      }),
+      gitBound: true,
+      hasRemote: true,
+      githubRepository: 'owner/repo',
+      platformCapabilities: _platformCapabilities,
+    );
+    final selector = InitSelector(discovered);
+
+    selector
+      ..handle(InitSelectorKey.toggleNonRegistry)
+      ..handle(InitSelectorKey.right)
+      ..handle(InitSelectorKey.toggle)
+      ..handle(InitSelectorKey.toggleNonRegistry);
+
+    final rendered = selector.render(120);
+    expect(rendered, contains('› a'));
+    expect(rendered, isNot(contains('  b ')));
+    expect(
+      selector.plan.candidates
+          .singleWhere((candidate) => candidate.name == 'a')
+          .selected,
+      {ReleaseChoice.gitTag},
+    );
   });
 
   test('wide workspaces keep the focused unit in a bounded viewport', () {
@@ -133,20 +253,22 @@ void main() {
     expect(terminal.output, endsWith('\x1b[?25h\x1b[2J\x1b[H'));
   });
 
-  test('terminal modes and cursor are restored after cancel and failure',
-      () async {
-    final cancelled = FakeTerminal([3]);
-    expect(await runInitSelector(plan(), cancelled), isNull);
-    expect(cancelled.modes, (true, true, true));
+  test(
+    'terminal modes and cursor are restored after cancel and failure',
+    () async {
+      final cancelled = FakeTerminal([3]);
+      expect(await runInitSelector(plan(), cancelled), isNull);
+      expect(cancelled.modes, (true, true, true));
 
-    final failed = FakeTerminal(const [], failure: StateError('read failed'))
-      ..lineMode = true
-      ..echoMode = false
-      ..echoNewlineMode = true;
-    await expectLater(runInitSelector(plan(), failed), throwsStateError);
-    expect(failed.modes, (true, false, true));
-    expect(failed.output, endsWith('\x1b[?25h\x1b[2J\x1b[H'));
-  });
+      final failed = FakeTerminal(const [], failure: StateError('read failed'))
+        ..lineMode = true
+        ..echoMode = false
+        ..echoNewlineMode = true;
+      await expectLater(runInitSelector(plan(), failed), throwsStateError);
+      expect(failed.modes, (true, false, true));
+      expect(failed.output, endsWith('\x1b[?25h\x1b[2J\x1b[H'));
+    },
+  );
 }
 
 final class FakeTerminal implements InitTerminal {

@@ -11,10 +11,7 @@ final class InitAvailability {
   final bool available;
   final String reason;
 
-  Map<String, Object?> toJson() => {
-        'available': available,
-        'reason': reason,
-      };
+  Map<String, Object?> toJson() => {'available': available, 'reason': reason};
 }
 
 final class InitCandidate {
@@ -23,6 +20,7 @@ final class InitCandidate {
     required this.path,
     required this.version,
     required this.executables,
+    required this.vetoesRegistry,
     required this.availability,
     required this.selected,
   });
@@ -31,6 +29,7 @@ final class InitCandidate {
   final String path;
   final String? version;
   final List<String> executables;
+  final bool vetoesRegistry;
   final Map<ReleaseChoice, InitAvailability> availability;
   final Set<ReleaseChoice> selected;
 
@@ -41,6 +40,7 @@ final class InitCandidate {
         path: path,
         version: version,
         executables: executables,
+        vetoesRegistry: vetoesRegistry,
         availability: availability,
         selected: selected ?? this.selected,
       );
@@ -96,10 +96,7 @@ final class InitPlan {
         .where((platform) => platform.capability == Capability.native)
         .map((platform) => platform.platform)
         .toList();
-    final native = DartWorkspaceDiscovery(
-      tree,
-      trackedManifests: gitBound,
-    );
+    final native = DartWorkspaceDiscovery(tree, trackedManifests: gitBound);
     final notices = [...native.notices];
     final projects = native.projects
         .where((project) => !project.isExampleOrFixture)
@@ -138,38 +135,44 @@ final class InitPlan {
       };
       final availability = <ReleaseChoice, InitAvailability>{
         ReleaseChoice.pubDev: registryAvailable
-            ? const InitAvailability.available(
-                'native Dart package coordinate',
-              )
-            : InitAvailability.unavailable(project.isGroupingRoot
-                ? 'workspace root — select its packages instead'
-                : project.version == null
-                    ? 'the native manifest declares no version'
-                    : project.vetoesRegistry
-                        ? 'publish_to: none vetoes registry publication'
-                        : !repositoryPubDev
-                            ? 'publish_to names a custom registry; this build has no matching target'
-                            : !ambientPubDev
-                                ? 'PUB_HOSTED_URL redirects the default registry; declare publish_to in the pubspec first'
-                                : 'a package version is required'),
+            ? const InitAvailability.available('native Dart package coordinate')
+            : InitAvailability.unavailable(
+                project.isGroupingRoot
+                    ? 'workspace root — select its packages instead'
+                    : project.version == null
+                        ? 'the native manifest declares no version'
+                        : project.vetoesRegistry
+                            ? 'publish_to: none vetoes registry publication'
+                            : !repositoryPubDev
+                                ? 'publish_to names a custom registry; this build has no matching target'
+                                : !ambientPubDev
+                                    ? 'PUB_HOSTED_URL redirects the default registry; declare publish_to in the pubspec first'
+                                    : 'a package version is required',
+              ),
         ReleaseChoice.gitTag: tagAvailable
-            ? InitAvailability.available(selected.contains(ReleaseChoice.gitTag)
-                ? 'usable Git remote; selected conservatively'
-                : 'available; selecting writes an explicit package tag')
-            : InitAvailability.unavailable(!gitBound
-                ? 'Git is not available for this source'
-                : !hasRemote
-                    ? 'add a Git remote first'
-                    : 'a package version is required'),
+            ? InitAvailability.available(
+                selected.contains(ReleaseChoice.gitTag)
+                    ? 'usable Git remote; selected conservatively'
+                    : 'available; selecting writes an explicit package tag',
+              )
+            : InitAvailability.unavailable(
+                !gitBound
+                    ? 'Git is not available for this source'
+                    : !hasRemote
+                        ? 'add a Git remote first'
+                        : 'a package version is required',
+              ),
         ReleaseChoice.githubRelease: githubAvailable
             ? const InitAvailability.available(
                 'changelog and manifest, plus selected binaries',
               )
-            : InitAvailability.unavailable(!gitBound
-                ? 'GitHub Release requires Git'
-                : githubRepository == null
-                    ? 'origin is not a recognized GitHub repository'
-                    : 'a package version is required'),
+            : InitAvailability.unavailable(
+                !gitBound
+                    ? 'GitHub Release requires Git'
+                    : githubRepository == null
+                        ? 'origin is not a recognized GitHub repository'
+                        : 'a package version is required',
+              ),
         ReleaseChoice.binary: binaryAvailable
             ? InitAvailability.available(
                 'standalone ${project.executables.single} archives for '
@@ -192,16 +195,23 @@ final class InitPlan {
                 'Homebrew requires one standalone executable and GitHub',
               ),
       };
-      candidates.add(InitCandidate(
-        name: project.name,
-        path: project.path,
-        version: project.version,
-        executables: project.executables,
-        availability: Map.unmodifiable(availability),
-        selected: Set.unmodifiable(selected),
-      ));
+      candidates.add(
+        InitCandidate(
+          name: project.name,
+          path: project.path,
+          version: project.version,
+          executables: project.executables,
+          vetoesRegistry: project.vetoesRegistry,
+          availability: Map.unmodifiable(availability),
+          selected: Set.unmodifiable(selected),
+        ),
+      );
     }
-    if (vetoed > 0) notices.add('$vetoed excluded by publish_to: none');
+    if (vetoed > 0) {
+      notices.add(
+        '$vetoed excluded from registry publication by publish_to: none',
+      );
+    }
     return InitPlan(
       candidates: candidates,
       notices: notices,
@@ -325,11 +335,14 @@ final class InitPlan {
       ];
       if (publish.isNotEmpty) {
         buffer.write(
-            'publish = [${publish.map((item) => '"$item"').join(', ')}]\n');
+          'publish = [${publish.map((item) => '"$item"').join(', ')}]\n',
+        );
       }
       if (candidate.selected.contains(ReleaseChoice.binary)) {
-        buffer.write('binary_platforms = '
-            '[${defaultBinaryPlatforms.map((item) => '"$item"').join(', ')}]\n');
+        buffer.write(
+          'binary_platforms = '
+          '[${defaultBinaryPlatforms.map((item) => '"$item"').join(', ')}]\n',
+        );
       }
     }
     if (candidates.any((candidate) => candidate.executables.isNotEmpty) &&

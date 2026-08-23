@@ -48,6 +48,11 @@ Binary — standalone rk archives for macos-arm64
 
 ```
 
+The selector keeps workspace grouping roots out of the way and hides
+`publish_to: none` packages by default. If one of those packages intentionally
+ships through tags, binaries, GitHub, or Homebrew, press `a` to show it. JSON
+output still reports every discovered candidate.
+
 That proposal is the whole configuration. Targets are opt-in —
 release-kit's own file says yes to all of them. `rk status` checks the
 destinations themselves, not a log; "Not staged" is the private work

@@ -25,7 +25,17 @@ abstract interface class InitTerminal {
   Future<void> flush();
 }
 
-enum InitSelectorKey { up, down, left, right, toggle, review, cancel, ignore }
+enum InitSelectorKey {
+  up,
+  down,
+  left,
+  right,
+  toggle,
+  toggleNonRegistry,
+  review,
+  cancel,
+  ignore,
+}
 
 enum InitSelectorAction { changed, review, cancel, ignored }
 
@@ -34,26 +44,75 @@ final class InitSelector {
   InitSelector(this.plan)
       : row = 0,
         column = 0,
-        message = '';
+        message = '',
+        showNonRegistry = false;
 
   InitPlan plan;
   int row;
   int column;
   String message;
+  bool showNonRegistry;
 
   ReleaseChoice get option => ReleaseChoice.values[column];
-  InitCandidate get candidate => plan.candidates[row];
+  InitCandidate get candidate => plan.candidates[_visibleIndexes[row]];
+
+  List<int> get _actionableIndexes => [
+        for (var index = 0; index < plan.candidates.length; index++)
+          if (plan.candidates[index].availability.values.any(
+            (availability) => availability.available,
+          ))
+            index,
+      ];
+
+  List<int> get _nonRegistryIndexes => [
+        for (final index in _actionableIndexes)
+          if (plan.candidates[index].vetoesRegistry) index,
+      ];
+
+  List<int> get _hiddenNonRegistryIndexes => [
+        for (final index in _nonRegistryIndexes)
+          if (plan.candidates[index].selected.isEmpty) index,
+      ];
+
+  List<int> get _visibleIndexes => [
+        for (final index in _actionableIndexes)
+          if (showNonRegistry ||
+              !plan.candidates[index].vetoesRegistry ||
+              plan.candidates[index].selected.isNotEmpty)
+            index,
+      ];
 
   InitSelectorAction handle(InitSelectorKey key) {
-    if (plan.candidates.isEmpty) {
-      return InitSelectorAction.cancel;
+    if (key == InitSelectorKey.toggleNonRegistry) {
+      if (_hiddenNonRegistryIndexes.isEmpty) {
+        return InitSelectorAction.ignored;
+      }
+      final oldIndexes = _visibleIndexes;
+      final focused = oldIndexes.isEmpty ? null : oldIndexes[row];
+      showNonRegistry = !showNonRegistry;
+      final newIndexes = _visibleIndexes;
+      row = focused != null && newIndexes.contains(focused)
+          ? newIndexes.indexOf(focused)
+          : min(row, max(0, newIndexes.length - 1));
+      message = showNonRegistry
+          ? 'non-registry units shown'
+          : 'unselected non-registry units hidden';
+      return InitSelectorAction.changed;
+    }
+    final visibleIndexes = _visibleIndexes;
+    if (visibleIndexes.isEmpty) {
+      return switch (key) {
+        InitSelectorKey.review => InitSelectorAction.review,
+        InitSelectorKey.cancel => InitSelectorAction.cancel,
+        _ => InitSelectorAction.ignored,
+      };
     }
     switch (key) {
       case InitSelectorKey.up:
-        row = (row - 1) % plan.candidates.length;
+        row = (row - 1) % visibleIndexes.length;
         break;
       case InitSelectorKey.down:
-        row = (row + 1) % plan.candidates.length;
+        row = (row + 1) % visibleIndexes.length;
         break;
       case InitSelectorKey.left:
         column = (column - 1) % ReleaseChoice.values.length;
@@ -62,10 +121,13 @@ final class InitSelector {
         column = (column + 1) % ReleaseChoice.values.length;
         break;
       case InitSelectorKey.toggle:
-        final toggled = plan.toggle(row, option);
+        final toggled = plan.toggle(visibleIndexes[row], option);
         plan = toggled.plan;
         message = toggled.message;
+        row = min(row, max(0, _visibleIndexes.length - 1));
         return InitSelectorAction.changed;
+      case InitSelectorKey.toggleNonRegistry:
+        throw StateError('handled before candidate navigation');
       case InitSelectorKey.review:
         return InitSelectorAction.review;
       case InitSelectorKey.cancel:
@@ -77,30 +139,34 @@ final class InitSelector {
     return InitSelectorAction.changed;
   }
 
-  String render(
-    int width, {
-    int height = 24,
-    bool useColor = false,
-  }) =>
-      width >= 88 ? _matrix(height, useColor) : _card(useColor);
+  String render(int width, {int height = 24, bool useColor = false}) {
+    if (_visibleIndexes.isEmpty) return _empty();
+    return width >= 88 ? _matrix(height, useColor) : _card(useColor);
+  }
 
   String _matrix(int height, bool useColor) {
     const nameWidth = 24;
-    final visibleRows = min(plan.candidates.length, max(3, height - 10));
+    final indexes = _visibleIndexes;
+    final visibleRows = min(indexes.length, max(3, height - 10));
     final start = min(
       max(0, row - visibleRows ~/ 2),
-      max(0, plan.candidates.length - visibleRows),
+      max(0, indexes.length - visibleRows),
     );
-    final end = min(plan.candidates.length, start + visibleRows);
+    final end = min(indexes.length, start + visibleRows);
     final buffer = StringBuffer()
-      ..writeln('Select release outputs'
-          '${visibleRows < plan.candidates.length ? ' · ${row + 1}/${plan.candidates.length}' : ''}')
+      ..writeln(
+        'Select release outputs'
+        '${_visibilityLabel()}'
+        '${visibleRows < indexes.length ? ' · ${row + 1}/${indexes.length}' : ''}',
+      )
       ..writeln()
       ..writeln('                         Produce              Publish')
-      ..writeln('  Unit${' ' * (nameWidth - 4)}'
-          'Binary   Git tag   pub.dev   GitHub   Homebrew');
+      ..writeln(
+        '  Unit${' ' * (nameWidth - 4)}'
+        'Binary   Git tag   pub.dev   GitHub   Homebrew',
+      );
     for (var index = start; index < end; index++) {
-      final item = plan.candidates[index];
+      final item = plan.candidates[indexes[index]];
       final cursor = index == row ? '›' : ' ';
       buffer.write('$cursor ${_fit(item.unit, nameWidth).padRight(nameWidth)}');
       for (final option in ReleaseChoice.values) {
@@ -118,7 +184,7 @@ final class InitSelector {
   String _card(bool useColor) {
     final item = candidate;
     final buffer = StringBuffer()
-      ..writeln('Select release outputs')
+      ..writeln('Select release outputs${_visibilityLabel()}')
       ..writeln()
       ..writeln('› ${item.unit}');
     for (var index = 0; index < ReleaseChoice.values.length; index++) {
@@ -137,10 +203,40 @@ final class InitSelector {
     final availability = candidate.availability[option]!;
     buffer
       ..writeln()
-      ..writeln('${option.selectorLabel} — ${availability.reason}'
-          '${candidate.selected.contains(option) ? ' · selected' : ''}')
+      ..writeln(
+        '${option.selectorLabel} — ${availability.reason}'
+        '${candidate.selected.contains(option) ? ' · selected' : ''}',
+      )
       ..writeln()
-      ..writeln('↑↓ unit   ←→ option   space toggle   enter review   q cancel');
+      ..writeln(
+        '↑↓ unit   ←→ option   space toggle   '
+        '${_hiddenNonRegistryIndexes.isEmpty ? '' : showNonRegistry ? 'a hide   ' : 'a show   '}'
+        'enter review   q cancel',
+      );
+    if (message.isNotEmpty) buffer.writeln(message);
+    return buffer.toString();
+  }
+
+  String _visibilityLabel() => _hiddenNonRegistryIndexes.isEmpty
+      ? ''
+      : showNonRegistry
+          ? ' · ${_hiddenNonRegistryIndexes.length} non-registry shown'
+          : ' · ${_hiddenNonRegistryIndexes.length} non-registry hidden';
+
+  String _empty() {
+    final hidden = _hiddenNonRegistryIndexes.length;
+    final buffer = StringBuffer()
+      ..writeln(
+        'Select release outputs'
+        '${hidden == 0 ? '' : ' · $hidden non-registry hidden'}',
+      )
+      ..writeln()
+      ..writeln('No default release candidates.')
+      ..writeln()
+      ..writeln(
+        '${hidden == 0 ? '' : 'a show   '}'
+        'enter review   q cancel',
+      );
     if (message.isNotEmpty) buffer.writeln(message);
     return buffer.toString();
   }
@@ -215,6 +311,9 @@ InitSelectorKey readInitSelectorKey(int Function() readByte) {
   final first = readByte();
   if (first < 0 || first == 3) return InitSelectorKey.cancel;
   if (first == 113 || first == 81) return InitSelectorKey.cancel;
+  if (first == 97 || first == 65) {
+    return InitSelectorKey.toggleNonRegistry;
+  }
   if (first == 10 || first == 13) return InitSelectorKey.review;
   if (first == 32) return InitSelectorKey.toggle;
   if (first != 27) return InitSelectorKey.ignore;
