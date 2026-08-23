@@ -13,6 +13,7 @@ import '../engine/producers.dart';
 import '../engine/publish_target.dart';
 import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
+import '../engine/stage.dart';
 import '../engine/stage_board.dart';
 import '../engine/stage_inspection.dart';
 import '../engine/stage_receipt.dart';
@@ -70,18 +71,19 @@ final class ReleaseStageCoordinator {
       );
     }
 
-    final completedOrCorrupt =
-        inspected.receipt?.steps.any((step) => step.name == 'complete-stage') ==
-                true ||
-            inspected.issues
-                .any((issue) => issue.kind == StageIssueKind.invalidReceipt);
+    final completedOrCorrupt = inspected.claimsCompletion ||
+        inspected.issues
+            .any((issue) => issue.kind == StageIssueKind.invalidReceipt);
     if (completedOrCorrupt && !mayReplaceReviewed) {
+      final reviewed = inspected.claimsCompletion;
       return Diagnostic(
         code: 'RK-STAGE-002',
-        message: 'the reviewed release stage no longer validates',
+        message: reviewed
+            ? 'the reviewed release stage no longer validates'
+            : 'the release stage receipt is invalid',
         remedy: '${inspected.issues.join('\n')}\n'
-            'rk will not silently replace reviewed bytes. Rebuild it '
-            'explicitly: rk release ${unit.name} --stage',
+            '${reviewed ? 'rk will not silently replace reviewed bytes. ' : ''}'
+            'Rebuild it explicitly: rk release ${unit.name} --stage',
       );
     }
     return null;
@@ -195,6 +197,27 @@ final class ReleaseStageCoordinator {
     required StageInspection inspected,
     required List<TargetClaim> claims,
   }) async {
+    final producerSteps = checklist.steps.where((step) {
+      return !step.isPublic &&
+          step.kind != StepKind.prerequisite &&
+          step.kind != StepKind.completeStage;
+    }).toList();
+    final targetStagesByName = {
+      for (final targetStage in targetStages)
+        targetStage.contract.step.name: targetStage,
+    };
+    final outputsByProducer = <String, Set<String>>{
+      for (final step in producerSteps)
+        receiptNameFor(step): contractFor(unit, step).outputs.keys.toSet(),
+      for (final entry in targetStagesByName.entries)
+        entry.key: entry.value.contract.step.outputs.keys.toSet(),
+    };
+    inspected = _recoverInterruptedOutputs(
+      stage,
+      inspected,
+      outputsByProducer.values.expand((outputs) => outputs).toSet(),
+    );
+
     final inputs = await _prepareStageInputs(unit, inspected);
     if (inputs == null) return null;
     final signing = inputs.signing;
@@ -203,10 +226,6 @@ final class ReleaseStageCoordinator {
       title: '${unit.name} ${unit.version} · staging',
       board: StageBoard.forUnit(unit, targets, targetStages),
     );
-    final targetStagesByName = {
-      for (final targetStage in targetStages)
-        targetStage.contract.step.name: targetStage,
-    };
     final warnings = <_StageWarning>[];
     if (inspected.reusable) {
       stageProgress
@@ -309,11 +328,6 @@ final class ReleaseStageCoordinator {
       }
     }
 
-    final producerSteps = checklist.steps.where((step) {
-      return !step.isPublic &&
-          step.kind != StepKind.prerequisite &&
-          step.kind != StepKind.completeStage;
-    }).toList();
     stageProgress.restore(progress);
     final producersByName = {
       for (final step in producerSteps) receiptNameFor(step): step,
@@ -367,6 +381,10 @@ final class ReleaseStageCoordinator {
             _StageWarning(warning, target: target.step.id),
         ]);
         if (result case TargetStageFailure(:final diagnostic, :final unit)) {
+          _discardInterruptedOutputs(
+            stage,
+            outputsByProducer[receiptName]!,
+          );
           stageProgress.fail(receiptName);
           output.problem(diagnostic, unit: unit);
           return _StageWorkCompletion.failed(
@@ -386,6 +404,10 @@ final class ReleaseStageCoordinator {
           );
         }
       } on Object catch (error) {
+        _discardInterruptedOutputs(
+          stage,
+          outputsByProducer[receiptName]!,
+        );
         stageProgress.fail(receiptName);
         _stageOperationProblem('${target.label} stage preparation', error);
         return _StageWorkCompletion.failed(
@@ -425,6 +447,10 @@ final class ReleaseStageCoordinator {
             progress: stageProgress.handleFor(receiptName),
           );
         } on Object catch (error) {
+          _discardInterruptedOutputs(
+            stage,
+            outputsByProducer[receiptName]!,
+          );
           stageProgress.fail(receiptName);
           _stageOperationProblem(step.summary, error);
           return _StageWorkCompletion.failed(
@@ -433,6 +459,10 @@ final class ReleaseStageCoordinator {
           );
         }
         if (!act.ok) {
+          _discardInterruptedOutputs(
+            stage,
+            outputsByProducer[receiptName]!,
+          );
           stageProgress.fail(receiptName);
           return _StageWorkCompletion.failed(
             receiptName,
@@ -458,6 +488,10 @@ final class ReleaseStageCoordinator {
           );
         }
       } on Object catch (error) {
+        _discardInterruptedOutputs(
+          stage,
+          outputsByProducer[receiptName]!,
+        );
         stageProgress.fail(receiptName);
         _stageOperationProblem('the ${unit.name} stage', error);
         return _StageWorkCompletion.failed(
@@ -575,6 +609,58 @@ final class ReleaseStageCoordinator {
       claims: claims,
       signing: signing,
     );
+  }
+
+  /// Restores a valid receipt prefix after an interrupted producer left its
+  /// own declared output behind. Unknown paths and changed recorded bytes are
+  /// never cleaned here: either means the stage cannot be resumed safely.
+  StageInspection _recoverInterruptedOutputs(
+    ReleaseStage stage,
+    StageInspection inspected,
+    Set<String> declaredOutputs,
+  ) {
+    if (inspected.receipt?.complete != false || inspected.validProgress) {
+      return inspected;
+    }
+    final allowedExtras = <String>{};
+    for (final output in declaredOutputs) {
+      allowedExtras.add(output);
+      final parts = StagePath.segments(output);
+      for (var index = 1; index < parts.length; index++) {
+        allowedExtras.add(parts.take(index).join('/'));
+      }
+    }
+    final recoverable = inspected.issues.every(
+      (issue) =>
+          issue.kind == StageIssueKind.incompleteReceipt ||
+          (issue.kind == StageIssueKind.extraArtifact &&
+              issue.path != null &&
+              allowedExtras.contains(issue.path)),
+    );
+    if (!recoverable) return inspected;
+    try {
+      stage.discardUnrecordedOutputs(declaredOutputs);
+      final recovered = stage.inspect();
+      return recovered.validProgress ? recovered : inspected;
+    } on Object {
+      return inspected;
+    }
+  }
+
+  void _discardInterruptedOutputs(
+    ReleaseStage stage,
+    Set<String> declaredOutputs,
+  ) {
+    try {
+      final inspected = stage.inspect();
+      if (inspected.receipt?.complete == false) {
+        stage.discardUnrecordedOutputs(declaredOutputs);
+      }
+    } on Object {
+      // The original producer failure remains the useful diagnosis. A later
+      // run will inspect the leftover and either recover it or replace the
+      // incomplete stage; cleanup cannot make publication less safe.
+    }
   }
 
   /// Confirms that the public identity used to sign the reviewed stage has
@@ -752,13 +838,34 @@ final class ReleaseStageCoordinator {
     final row = live.addRow(
       id: '${unit.name}/release-inputs',
       label: 'Release inputs',
-      coordinate: 'signing identity',
+      coordinate: _macosProject(unit) == null
+          ? 'source and producer inputs'
+          : 'notarization and signing identity',
     );
     row.handle.begin(CommonProgressActivities.checking);
     ReleaseSigningContext? signing;
     if (!inspected.reusable) {
       final macosProject = _macosProject(unit);
       if (macosProject != null) {
+        row.handle.begin(ProgressActivity(
+          running: 'checking notarization',
+          failed: 'notarization check failed',
+        ));
+        final notary = await MacOsNotarizer(tools: tools).preflight();
+        if (!notary.ok) {
+          live.conclude();
+          output.problem(
+            Diagnostic(
+              code: 'RK-NOTARY-004',
+              message: 'the rk-notary credential is not ready',
+              remedy: notary.remedy ?? notary.problem,
+              evidence: notary.transcript,
+            ),
+            unit: unit.name,
+          );
+          output.halt(HaltKind.beforeActing);
+          return null;
+        }
         row.handle.begin(ProgressActivity(
           running: 'checking signing',
           failed: 'signing check failed',

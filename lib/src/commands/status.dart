@@ -456,9 +456,17 @@ class StatusCommand {
                 unit: unit.name,
                 diagnostic: Diagnostic(
                   code: 'RK-STAGE-002',
-                  message: 'the reviewed release stage no longer validates',
-                  remedy: 'rebuild it explicitly: '
-                      'rk release ${unit.name} --stage',
+                  message: inspected.incomplete
+                      ? 'the incomplete release stage cannot be resumed safely'
+                      : inspected.claimsCompletion
+                          ? 'the reviewed release stage no longer validates'
+                          : 'the release stage receipt is invalid',
+                  remedy: inspected.incomplete
+                      ? 're-run rk release ${unit.name} --stage. rk keeps '
+                          'validated completed lanes when it can and replaces '
+                          'only incomplete work'
+                      : 'rebuild it explicitly: '
+                          'rk release ${unit.name} --stage',
                 ),
                 evidence: {
                   for (final issue in inspected.issues)

@@ -309,6 +309,87 @@ class ReleaseStage {
     }
   }
 
+  /// Removes declared producer outputs that were written but never receipted.
+  ///
+  /// A producer writes bytes before rk can hash and record them. If that
+  /// producer fails, those exact paths are untrusted leftovers, not progress;
+  /// retaining them makes the otherwise-valid receipt prefix look corrupt and
+  /// forces unrelated completed lanes to run again. Recovery may delete only
+  /// output paths from the resolved stage contract and only while an
+  /// incomplete receipt proves they were never recorded. It never adopts
+  /// bytes and never traverses a symlink.
+  void discardUnrecordedOutputs(Iterable<String> declaredOutputs) {
+    if (directory.unsafeFixedPath() != null) {
+      throw FileSystemException(
+        'unsafe stage cannot discard interrupted outputs',
+        directory.path,
+      );
+    }
+    final receipt = StageReceiptStore(directory).read();
+    if (receipt == null || receipt.complete) {
+      throw StateError(
+        'only an incomplete receipted stage can discard interrupted outputs',
+      );
+    }
+    final recorded = {
+      for (final artifact in receipt.artifacts) artifact.path,
+    };
+    final candidates = declaredOutputs.toSet().difference(recorded).toList()
+      ..sort();
+    for (final relativePath in candidates) {
+      final parts = StagePath.segments(relativePath);
+      var current = directory.path;
+      var missing = false;
+      for (final part in parts.take(parts.length - 1)) {
+        current = '$current${Platform.pathSeparator}$part';
+        final type = FileSystemEntity.typeSync(current, followLinks: false);
+        if (type == FileSystemEntityType.notFound) {
+          missing = true;
+          break;
+        }
+        if (type != FileSystemEntityType.directory) {
+          throw FileSystemException(
+            'interrupted output path has an unsafe parent',
+            current,
+          );
+        }
+      }
+      if (missing) continue;
+
+      final path = directory.resolve(relativePath);
+      final type = FileSystemEntity.typeSync(path, followLinks: false);
+      switch (type) {
+        case FileSystemEntityType.notFound:
+          continue;
+        case FileSystemEntityType.file:
+          File(path).deleteSync();
+          break;
+        case FileSystemEntityType.link:
+          Link(path).deleteSync();
+          break;
+        case FileSystemEntityType.directory:
+        case FileSystemEntityType.pipe:
+        case FileSystemEntityType.unixDomainSock:
+          throw FileSystemException(
+            'interrupted output is not a regular file',
+            path,
+          );
+      }
+
+      // Producer-owned directories are not artifacts. Remove empty ones so
+      // the strict inventory sees the same tree the receipt describes, but
+      // stop at the stage root and retain anything another lane owns.
+      for (var index = parts.length - 1; index > 0; index--) {
+        final parent = directory.resolve(parts.take(index).join('/'));
+        final parentType =
+            FileSystemEntity.typeSync(parent, followLinks: false);
+        if (parentType != FileSystemEntityType.directory) break;
+        if (Directory(parent).listSync(followLinks: false).isNotEmpty) break;
+        Directory(parent).deleteSync();
+      }
+    }
+  }
+
   /// Copies the Git-tracked source into the stage and returns the captured
   /// records. Producers use [sourceRoot], never the mutable worktree.
   Future<List<StageArtifact>> materializeSource() async {

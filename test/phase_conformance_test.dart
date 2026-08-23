@@ -1188,6 +1188,8 @@ publish = ["git-tag", "pub.dev"]
     required bool dryRun,
     Set<String> remoteTags = const {},
     bool notaryRejects = false,
+    bool notaryProfileRejects = false,
+    bool appleTicketPending = false,
     bool signingRejects = false,
     List<String> platforms = const ['macos-arm64'],
     bool homebrew = false,
@@ -1202,7 +1204,8 @@ publish = ["git-tag", "pub.dev"]
     bool baselineChangesBeforeConsent = false,
   }) async {
     final root = Directory('${scratch.path}/drive-${dryRun ? 'd' : 'f'}'
-        '${notaryRejects ? '-nr' : ''}$label')
+        '${notaryRejects ? '-nr' : ''}'
+        '${notaryProfileRejects ? '-np' : ''}$label')
       ..createSync(recursive: true);
     final buffer = StringBuffer();
     final diagnostics = Diagnostics();
@@ -1414,6 +1417,17 @@ executables:
         if (key.startsWith('codesign --test-requirement')) {
           return ToolResult(exitCode: 1, stdout: '', stderr: 'no');
         }
+        if (key.startsWith(
+          'codesign -vvvv -R=notarized --check-notarization',
+        )) {
+          return appleTicketPending
+              ? ToolResult(
+                  exitCode: 1,
+                  stdout: '',
+                  stderr: 'online ticket lookup has not propagated',
+                )
+              : ToolResult(exitCode: 0, stdout: '', stderr: '');
+        }
         if (signingRejects && key.startsWith('codesign --force')) {
           return ToolResult(
             exitCode: 1,
@@ -1495,6 +1509,20 @@ executables:
                 'SHA-1 hash: ${certificateSha1(index)}\n',
             stderr: '',
           );
+        }
+        if (key.startsWith('xcrun notarytool history')) {
+          return notaryProfileRejects
+              ? ToolResult(
+                  exitCode: 1,
+                  stdout: '',
+                  stderr: 'No Keychain password item found for profile: '
+                      'rk-notary',
+                )
+              : ToolResult(
+                  exitCode: 0,
+                  stdout: '{"history": []}',
+                  stderr: '',
+                );
         }
         if (key.startsWith('xcrun notarytool submit')) {
           return notaryRejects
@@ -1741,12 +1769,14 @@ executables:
               'a unit with no pub.dev target has no pub session to acquire');
       // Every stage of the chain acted, separately, in checklist order.
       final order = [
+        'xcrun notarytool history',
         'dart compile exe',
         'codesign --force',
         'ditto',
         'xcrun notarytool submit',
         'xcrun notarytool log',
         'gh api -X POST repos/example/tool/releases --input',
+        'codesign -vvvv -R=notarized --check-notarization',
       ];
       var at = -1;
       for (final prefix in order) {
@@ -1762,6 +1792,49 @@ executables:
         contains('publish 2 assets to the v1.0.0 release'),
       );
       expect(run.text, contains('released'));
+    });
+
+    test('the notarization profile is verified before any build starts',
+        () async {
+      final run = await binaryDrive(
+        dryRun: true,
+        notaryProfileRejects: true,
+        label: '-notary-preflight',
+      );
+
+      expect(run.code, ExitCodes.refused, reason: run.text);
+      expect(
+        ((run.json['problems'] as List).cast<Map>())
+            .map((problem) => problem['code']),
+        contains('RK-NOTARY-004'),
+      );
+      expect(
+        run.calls.where((call) => call.startsWith('dart compile exe')),
+        isEmpty,
+      );
+      expect(
+        run.calls.where((call) => call.startsWith('xcrun notarytool submit')),
+        isEmpty,
+      );
+      expect((run.json['halt'] as Map?)?['kind'], 'beforeActing');
+    });
+
+    test('Apple ticket lag warns after an otherwise successful release',
+        () async {
+      final run = await binaryDrive(
+        dryRun: false,
+        appleTicketPending: true,
+        label: '-ticket-propagation',
+      );
+
+      expect(run.code, ExitCodes.ok, reason: run.text);
+      expect(run.text, contains('released'));
+      expect(
+        ((run.json['warnings'] as List).cast<Map>())
+            .map((warning) => warning['code']),
+        contains('RK-NOTARY-005'),
+      );
+      expect(run.text, contains('do not rebuild or republish the bytes'));
     });
 
     test(

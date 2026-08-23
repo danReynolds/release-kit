@@ -278,6 +278,53 @@ final class GithubReleaseTargetModule extends TargetModule {
   }
 
   @override
+  Future<TargetAvailabilityOutcome?> checkAvailability(
+    TargetAvailabilityContext context,
+    ResolvedUnit unit,
+    TargetPlan target,
+  ) async {
+    final stage = context.stage;
+    final project = unit.binaryProject;
+    final platforms = project?.binaryPlatforms
+        .where((platform) => platform.startsWith('macos-'))
+        .toList();
+    if (stage == null ||
+        !stage.inspect().reusable ||
+        project == null ||
+        platforms == null ||
+        platforms.isEmpty) {
+      return null;
+    }
+
+    for (final platform in platforms) {
+      final binary = stage.directory.resolve(
+        ReleaseAssets.binaryPath(project, platform),
+      );
+      final result = await context.tools.run(
+        'codesign',
+        [
+          '-vvvv',
+          '-R=notarized',
+          '--check-notarization',
+          binary,
+        ],
+        timeout: const Duration(seconds: 45),
+      );
+      if (!result.ok) {
+        return TargetAvailabilityPending(Diagnostic(
+          code: 'RK-NOTARY-005',
+          message: '$platform is published and Apple accepted its '
+              'submission, but Gatekeeper cannot see the ticket yet',
+          remedy: 'publication already reconciled exactly; wait for Apple '
+              'ticket propagation and do not rebuild or republish the bytes',
+          evidence: result.transcript,
+        ));
+      }
+    }
+    return const TargetAvailable(note: 'Apple ticket available');
+  }
+
+  @override
   TargetStage stageInput({
     required ResolvedUnit unit,
     required TargetPlan target,
