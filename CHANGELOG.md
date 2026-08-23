@@ -17,6 +17,8 @@
 - Published Homebrew formulas are verified against the immutable Formula
   digest recorded by their tag-bound release manifest, so later renderer
   improvements do not rewrite release history.
+- Generated multi-platform Formulae now use Homebrew's supported nested OS and
+  architecture DSL and include the standard Ruby and Sorbet headers.
 
 ## 0.1.8
 
