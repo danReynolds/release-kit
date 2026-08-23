@@ -14,7 +14,7 @@ It creates and verifies a private draft before making the release public.
 Core owns the pipeline:
 
 ```text
-plan -> inspect -> stage -> authorize -> publish -> confirm
+plan -> inspect -> stage -> authorize -> publish -> confirm -> availability
 ```
 
 See [Release pipeline architecture](release-pipeline.md) for the coordinator
@@ -40,6 +40,7 @@ operations. Its complete surface is small enough to read as one table:
 | `destinationBinding` | usually no | Freezes the effective destination across authentication. |
 | `publish` | yes | Performs one provider publication transaction. |
 | `confirmPublication` | usually no | Reads public state after publication; defaults to `inspectCandidate`. |
+| `checkAvailability` | no | Checks a delayed consumer path after exact publication; pending availability warns and never republishes. |
 | `classifyUnconfirmedPublication` | usually no | Refines shared failure handling for a real recovery semantic. |
 | `stageInput` | no | Derives a private, receipt-backed input required by this target. |
 | `stageRecoveryBinding` | no | Identifies public inputs that let a moving channel resume without its stage. |
@@ -50,8 +51,9 @@ translates provider data into its current `version`, any provider-specific
 ask a second callback what the first callback meant.
 
 Defaults cover shared read-back, destination binding, failure classification,
-and targets without history, authentication, stage inputs, or moving-channel
-recovery. Override one only for a concrete provider semantic.
+and targets without history, authentication, delayed consumer availability,
+stage inputs, or moving-channel recovery. Override one only for a concrete
+provider semantic.
 
 ## GitHub Release as the worked example
 

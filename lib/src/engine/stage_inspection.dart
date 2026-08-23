@@ -49,6 +49,16 @@ class StageInspection {
 
   bool get reusable => receipt?.complete == true && issues.isEmpty;
 
+  /// Whether this receipt describes work that stopped before reviewable
+  /// completion. Its recorded prefix may be reusable, but it must never be
+  /// described as a completed or reviewed stage.
+  bool get incomplete => receipt?.complete == false;
+
+  /// Whether the receipt claims the completion barrier was reached.
+  bool get claimsCompletion =>
+      receipt?.complete == true ||
+      receipt?.steps.any((step) => step.name == 'complete-stage') == true;
+
   /// Whether an interrupted receipt can be resumed without adopting any
   /// unchecked file. Every recorded byte and dependency has validated; only
   /// the deliberately incomplete barrier remains.

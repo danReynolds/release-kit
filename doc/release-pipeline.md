@@ -29,6 +29,11 @@ ReleaseCommand  ----->  initial observation and refusal
                 run dependency-ready target lanes + confirm public truth
                                 |
                                 +---- TargetModule.publish/confirm
+
+     +----> ReleasePublicationCoordinator.verifyAvailability
+                bounded, nonblocking consumer-path propagation checks
+                                |
+                                +---- TargetModule.checkAvailability
 ```
 
 The arrows are the architecture. There is no general event bus, lifecycle
@@ -64,8 +69,8 @@ waits for GitHub Release, and Pub can run beside GitHub once their tag is exact.
 | --- | --- | --- |
 | `ReleaseCommand` | repository/unit validation, checklist order, initial observation, cross-target refusal policy, stage-only exit | provider protocols, producer execution, sessions, authorization, publication transactions |
 | `ReleaseStageCoordinator` | stage reuse, signing continuity, source snapshot, isolated producer lanes, target-provided stage inputs, receipt persistence and revalidation | public credentials or public mutations |
-| `ReleasePublicationCoordinator` | ambient target readiness, destination binding, late sessions, final public-state gates, authorization, target publication and authoritative read-back | building or changing reviewed stage bytes |
-| `TargetModule` | one destination's plan, observations, optional history/readiness/session/stage contribution, publish transaction, and provider-specific recovery semantics | global ordering, authorization timing, retry policy, progress layout, or another target |
+| `ReleasePublicationCoordinator` | ambient target readiness, destination binding, late sessions, final public-state gates, authorization, target publication, authoritative read-back, and bounded availability retries | building or changing reviewed stage bytes |
+| `TargetModule` | one destination's plan, observations, optional history/readiness/session/stage/availability contribution, publish transaction, and provider-specific recovery semantics | global ordering, authorization timing, retry policy, progress layout, or another target |
 
 `release_progress.dart` contains presentation helpers shared by the two
 coordinators. `release_preparation.dart` contains the small typed handoff from

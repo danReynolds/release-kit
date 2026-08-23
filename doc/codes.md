@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-149 codes across 26 families.
+153 codes across 26 families.
 
 
 ## RK-AUTH — Authorization
@@ -189,6 +189,8 @@ fails, and the count below is checked against the rows.
 | `RK-NOTARY-001` | $platform: the archive for notarization failed | `lib/src/binary_chain.dart` |
 | `RK-NOTARY-002` | $platform: notarization did not complete | `lib/src/binary_chain.dart` |
 | `RK-NOTARY-003` | $platform: Apple accepted the submission and the log  could not be fetched | `lib/src/binary_chain.dart` |
+| `RK-NOTARY-004` | the rk-notary credential is not ready | `lib/src/commands/release_stage_coordinator.dart` |
+| `RK-NOTARY-005` | $platform is published and Apple accepted its submission, but Gatekeeper cannot see the ticket yet | `lib/src/targets/github_release/module.dart` |
 
 ## RK-PKG — The package as pub sees it
 
@@ -211,6 +213,7 @@ fails, and the count below is checked against the rows.
 | `RK-PUB-010` | a pub.dev package points to another repository | `lib/src/targets/pub_dev/module.dart` |
 | `RK-PUB-011` | this Dart SDK cannot stage the native Pub archive | `lib/src/targets/pub_dev/package_stage.dart`, `lib/src/targets/pub_dev/module.dart` |
 | `RK-PUB-012` | pub validation reported a package warning | `lib/src/targets/pub_dev/package_stage.dart` |
+| `RK-PUB-013` | a published version is not available to a fresh Dart resolver yet | `lib/src/targets/pub_dev/module.dart` |
 
 RK-PUB-002 (the consumer-resolve probe) and RK-PUB-004 are retired historical
 meanings and are not reused.
@@ -221,6 +224,7 @@ meanings and are not reused.
 |---|---|---|
 | `RK-REL-001` | ${first.summary}:  ${state.detail ?? state.verdict.name} | `lib/src/commands/release.dart` |
 | `RK-REL-003` | a public target could not be proven after rk acted | `lib/src/targets/target_module.dart`, `lib/src/commands/release.dart` |
+| `RK-REL-004` | a consumer availability check could not run | `lib/src/commands/release_publication_coordinator.dart` |
 
 ## RK-RES — The config resolved against the repository
 

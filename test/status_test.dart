@@ -1626,6 +1626,43 @@ publish = ["pub.dev"]
     );
   });
 
+  test('an interrupted stage is not described as reviewed', () async {
+    final root = Directory.systemTemp.createTempSync('rk-status-incomplete-');
+    addTearDown(() => root.deleteSync(recursive: true));
+    final made = await _completedBinaryStage(
+      root: root,
+      config: binaryConfig,
+      source: binaryTree,
+    );
+    final receipt = made.requireReceipt();
+    StageReceiptStore(made.directory).write(StageReceipt(
+      identity: receipt.identity,
+      steps: receipt.steps.take(2),
+    ));
+
+    final run = await statusRun(
+      withConfig: binaryConfig,
+      source: binaryTree,
+      state: git(),
+      registry: FakeRegistry(const {}),
+      stageFor: (_) => made,
+      inspectorBuilder: (git, _) => FixedInspector(
+        registry: FakeRegistry(const {}),
+        git: git,
+        answer: const Inspection.absent(),
+      ),
+    );
+
+    final stageProblem = (run.report['problems'] as List)
+        .cast<Map>()
+        .singleWhere((problem) => problem['code'] == 'RK-STAGE-002');
+    expect(
+      stageProblem['message'],
+      'the incomplete release stage cannot be resumed safely',
+    );
+    expect(stageProblem['message'], isNot(contains('reviewed')));
+  });
+
   test('a global completed-stage problem invalidates every artifact row',
       () async {
     final root = Directory.systemTemp.createTempSync('rk-status-stage-global-');

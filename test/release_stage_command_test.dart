@@ -180,7 +180,19 @@ void main() {
         contains('producers/tool/archives/tool-1.2.3-linux-x64.tar.gz'),
       );
       expect(run.text, contains('Written to'));
-      expect(run.text, contains(local.stage.directory.repositoryRelativePath));
+      final displayedPath = local.stage.directory.repositoryRelativePath;
+      final separator = displayedPath.lastIndexOf(Platform.pathSeparator);
+      expect(run.text, contains(displayedPath.substring(0, separator + 1)));
+      expect(run.text, contains(displayedPath.substring(separator + 1)));
+      final identityLine = run.text.split('\n').singleWhere(
+            (line) => line.contains(local.stage.directory.identity.id),
+          );
+      expect(
+        identityLine.runes.length,
+        lessThanOrEqualTo(80),
+        reason: 'the content-addressed id must stay on one narrow-terminal '
+            'line',
+      );
       expect(run.text, isNot(contains(local.stage.directory.path)));
       expect(run.report['next'], isEmpty);
       expect(local.stage.inspect().reusable, isTrue);
@@ -760,6 +772,34 @@ void main() {
     expect(released.problemCodes, isEmpty);
     expect(released.text, contains('archive matches the staged package'));
     expect(harness.registry.hideCandidateLookups, 0);
+  });
+
+  test('pub resolver propagation is bounded and does not fail publication',
+      () async {
+    final staged = await harness.run(
+      stageOnly: true,
+      confirm: (_) async => fail('stage mode must not authorize'),
+    );
+    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    harness.tools.pubAvailabilityFailures = 1000;
+
+    final released = await harness.run(
+      stageOnly: false,
+      confirm: (_) async => '1.2.3',
+    );
+
+    expect(released.code, ExitCodes.ok, reason: released.text);
+    expect(released.text, contains('released'));
+    expect(released.warningCodes, contains('RK-PUB-013'));
+    expect(
+      released.text,
+      contains('do not upload the version again'),
+    );
+    expect(
+      released.keys.where((key) => key.startsWith('dart pub cache add tool')),
+      hasLength(121),
+      reason: 'one initial check plus the bounded ten-minute retry window',
+    );
   });
 
   test('a newly pushed tag with the wrong binding is terminal before pub',
@@ -1804,6 +1844,53 @@ void main() {
     });
   }
 
+  test('an unreceipted declared output is discarded and prior lanes resume',
+      () async {
+    final first = await harness.run(
+      stageOnly: true,
+      confirm: (_) async => fail('stage mode must not authorize'),
+    );
+    expect(first.code, ExitCodes.ok, reason: first.text);
+    _interruptAfter(harness.stage, 'build:tool:linux-x64');
+    final retainedBinary = File(
+      harness.stage.directory.resolve('producers/tool/linux-x64/tool'),
+    ).readAsBytesSync();
+    final interruptedArchive = File(harness.stage.directory.resolve(
+      'producers/tool/archives/tool-1.2.3-linux-x64.tar.gz',
+    ))
+      ..parent.createSync(recursive: true)
+      ..writeAsStringSync('untrusted interrupted output');
+    final interrupted = harness.stage.inspect();
+    expect(interrupted.validProgress, isFalse);
+    expect(
+      interrupted.issues.map((issue) => issue.kind),
+      contains(StageIssueKind.extraArtifact),
+    );
+
+    final resumed = await harness.run(
+      stageOnly: true,
+      confirm: (_) async => fail('stage mode must not authorize'),
+    );
+
+    expect(resumed.code, ExitCodes.ok, reason: resumed.text);
+    expect(
+      resumed.keys.where((key) => key.startsWith('dart compile exe')),
+      isEmpty,
+      reason: 'the validated build lane must remain reusable',
+    );
+    expect(
+      File(harness.stage.directory.resolve('producers/tool/linux-x64/tool'))
+          .readAsBytesSync(),
+      retainedBinary,
+    );
+    expect(
+      interruptedArchive.readAsBytesSync(),
+      isNot(orderedEquals(utf8.encode('untrusted interrupted output'))),
+      reason: 'the missing archive producer must replace, not adopt, bytes',
+    );
+    expect(harness.stage.inspect().reusable, isTrue);
+  });
+
   test('a changed dependency in an interrupted prefix is rebuilt, not reused',
       () async {
     final first = await harness.run(
@@ -2611,6 +2698,7 @@ class _WorldTools implements Tools {
   bool failPubArchiveCapability = false;
   bool failPubLogin = false;
   bool losePubPublishResponse = false;
+  int pubAvailabilityFailures = 0;
   bool _githubPublicUnreadable = false;
   bool _tagPublicUnreadable = false;
   bool _homebrewPublicUnreadable = false;
@@ -2649,6 +2737,17 @@ class _WorldTools implements Tools {
           : _ok(stdout: 'You are already logged in as <dev@example.com>\n');
     }
     if (_isDart(executable) && _starts(arguments, ['pub', 'get'])) {
+      return _ok();
+    }
+    if (_isDart(executable) && _starts(arguments, ['pub', 'cache', 'add'])) {
+      if (pubAvailabilityFailures > 0) {
+        pubAvailabilityFailures--;
+        return ToolResult(
+          exitCode: 1,
+          stdout: '',
+          stderr: 'version is not visible to the resolver yet',
+        );
+      }
       return _ok();
     }
     if (_isDart(executable) && _starts(arguments, ['compile', 'exe'])) {

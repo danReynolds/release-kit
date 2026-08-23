@@ -409,6 +409,11 @@ class ReleaseCommand {
         mark: Mark.done,
         note: 'already released',
       );
+      await _publication.verifyAvailability(
+        unit: unit,
+        targets: targets,
+        stage: stageInspection.reusable ? stage : null,
+      );
       return ExitCodes.ok;
     }
 
@@ -557,11 +562,24 @@ class ReleaseCommand {
       output.blank();
       output.line(
         'Written to',
-        note: stage.directory.repositoryRelativePath,
         depth: 1,
-        labelWidth: 12,
-        noteTone: Tone.muted,
       );
+      final stagePath = stage.directory.repositoryRelativePath;
+      final separator = stagePath.lastIndexOf(Platform.pathSeparator);
+      if (separator < 0) {
+        output.line(stagePath, depth: 2, tone: Tone.muted);
+      } else {
+        output.line(
+          stagePath.substring(0, separator + 1),
+          depth: 2,
+          tone: Tone.muted,
+        );
+        output.line(
+          stagePath.substring(separator + 1),
+          depth: 3,
+          tone: Tone.muted,
+        );
+      }
       _sayStageClaims(
         prepared.claims,
         localOnly ? null : prepared.signing,

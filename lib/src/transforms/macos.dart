@@ -330,6 +330,54 @@ class MacOsNotarizer {
   /// configuration. rk never sees the credential it holds.
   final String profile;
 
+  /// Proves the configured profile can authenticate before producer work.
+  ///
+  /// Reading submission history is the lightest notarytool operation that
+  /// exercises both the keychain profile and Apple's service. Merely finding
+  /// a keychain item would defer an expired or malformed credential until
+  /// after compilation and signing.
+  Future<NotaryPreflightOutcome> preflight() async {
+    final ToolResult result;
+    try {
+      result = await tools.run(
+        'xcrun',
+        [
+          'notarytool',
+          'history',
+          '--keychain-profile',
+          profile,
+          '--output-format',
+          'json',
+        ],
+        timeout: const Duration(seconds: 45),
+      );
+    } on Object catch (error) {
+      return NotaryPreflightOutcome.failed(
+        'notarytool could not be started',
+        remedy: 'install the Xcode command-line tools and verify the '
+            '$profile credential with: xcrun notarytool history '
+            '--keychain-profile $profile',
+        transcript: '$error',
+      );
+    }
+    if (result.ok) return const NotaryPreflightOutcome.ready();
+
+    final account = '${result.stdout}\n${result.stderr}'.toLowerCase();
+    final missing = account.contains('profile') ||
+        account.contains('keychain') ||
+        account.contains('credentials');
+    return NotaryPreflightOutcome.failed(
+      result.summary,
+      remedy: missing
+          ? 'store or replace the credential once: xcrun notarytool '
+              'store-credentials $profile'
+          : 'restore access to Apple\'s notarization service and verify the '
+              '$profile credential with: xcrun notarytool history '
+              '--keychain-profile $profile',
+      transcript: result.transcript,
+    );
+  }
+
   Future<NotarizeOutcome> submit(String zipPath) async {
     final result = await tools.run('xcrun', [
       'notarytool',
@@ -398,6 +446,22 @@ class MacOsNotarizer {
         '--keychain-profile',
         profile,
       ]);
+}
+
+class NotaryPreflightOutcome {
+  const NotaryPreflightOutcome._(this.problem, this.remedy, this.transcript);
+  const NotaryPreflightOutcome.ready() : this._(null, null, null);
+  const NotaryPreflightOutcome.failed(
+    String problem, {
+    required String remedy,
+    String? transcript,
+  }) : this._(problem, remedy, transcript);
+
+  final String? problem;
+  final String? remedy;
+  final String? transcript;
+
+  bool get ok => problem == null;
 }
 
 class NotarizeOutcome {

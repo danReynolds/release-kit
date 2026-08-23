@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import '../../engine/checklist.dart';
 import '../../engine/diagnostic.dart';
 import '../../engine/publish_target.dart';
@@ -335,6 +337,59 @@ final class PubDevTargetModule extends TargetModule {
       }
       await context.wait(context.confirmInterval);
       waited += context.confirmInterval;
+    }
+  }
+
+  @override
+  Future<TargetAvailabilityOutcome?> checkAvailability(
+    TargetAvailabilityContext context,
+    ResolvedUnit unit,
+    TargetPlan target,
+  ) async {
+    final cache = Directory.systemTemp.createTempSync('rk-pub-availability-');
+    try {
+      final result = await context.tools.run(
+        Platform.resolvedExecutable,
+        [
+          'pub',
+          'cache',
+          'add',
+          target.coordinate,
+          '--version',
+          target.targetVersion,
+        ],
+        environment: {
+          'PUB_CACHE': cache.path,
+          'DART_DISABLE_ANALYTICS': '1',
+        },
+        timeout: const Duration(seconds: 45),
+      );
+      if (result.ok) {
+        return const TargetAvailable(note: 'available to Dart');
+      }
+      return TargetAvailabilityPending(Diagnostic(
+        code: 'RK-PUB-013',
+        message: '${target.coordinate} ${target.targetVersion} is published '
+            'but not available to a fresh Dart resolver yet',
+        remedy: 'publication already reconciled exactly; wait for pub.dev '
+            'propagation and do not upload the version again',
+        evidence: result.transcript,
+      ));
+    } on Object catch (error) {
+      return TargetAvailabilityPending(Diagnostic(
+        code: 'RK-PUB-013',
+        message: '${target.coordinate} ${target.targetVersion} is published '
+            'but fresh Dart availability could not be checked',
+        remedy: 'publication already reconciled exactly; restore Dart or '
+            'network access and verify from a fresh PUB_CACHE',
+        evidence: '$error',
+      ));
+    } finally {
+      try {
+        cache.deleteSync(recursive: true);
+      } on FileSystemException {
+        // The provider answer is independent of best-effort scratch cleanup.
+      }
     }
   }
 

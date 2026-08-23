@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- macOS release staging now verifies the `rk-notary` credential before any
+  build starts, and interrupted producers discard only their declared,
+  unreceipted outputs so retries can reuse validated independent lanes.
+- Incomplete stages are described as incomplete rather than reviewed, and
+  successful stage paths keep their content-addressed id on a readable line
+  in narrow terminals.
+- After exact publication read-back, rk gives pub.dev resolver visibility and
+  Apple notarization-ticket visibility a bounded consumer check. Provider lag
+  is reported as a nonblocking availability warning and never triggers a
+  second publication attempt.
+
 ## 0.1.9
 
 - Status no longer reports local binary archives as unstaged after an exact
