@@ -200,7 +200,7 @@ final class ReleasePlanRenderer {
       _node(complete, VisualRole.checkpoint),
       OutputSpan(
         work.isEmpty ? '' : ' · needs all stage work',
-        role: VisualRole.secondary,
+        role: VisualRole.requirement,
       ),
     ]);
     return lines;

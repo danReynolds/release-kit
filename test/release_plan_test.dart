@@ -620,6 +620,13 @@ dependencies:
       expect(colored, contains('\x1b[1;34m'));
       expect(colored, contains('\x1b[1;35m'));
       expect(colored, contains('\x1b[1;36m'));
+      final checkpointLines = colored
+          .split('\n')
+          .where((line) => line.contains('[finalize stage]'));
+      expect(checkpointLines, isNotEmpty);
+      for (final line in checkpointLines) {
+        expect(line, contains('\x1b[33m · needs all stage work'));
+      }
       expect(colored, isNot(contains('\x1b[32m')),
           reason: 'green is reserved for observed success, not a plan');
     });
