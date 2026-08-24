@@ -1,6 +1,6 @@
 name: rk
 description: A release tool.
-version: 0.1.10
+version: 0.1.11
 repository: https://github.com/danReynolds/release-kit
 
 environment:
