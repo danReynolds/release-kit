@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.10
+
 - `rk plan [unit]` now renders the configured source-only release graph from
   the same stage and public dependency contracts that `rk release` executes;
   `--json` retains every direct edge without inventing runtime state.
