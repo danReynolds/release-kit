@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.11
+
 - Releases no longer wait for Apple's online Gatekeeper ticket propagation
   after exact publication. Notarization acceptance remains a mandatory stage
   gate, and public release read-back remains exact.
