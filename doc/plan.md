@@ -2,7 +2,7 @@
 
 > Historical build plan and evidence ledger. It preserves decisions and test
 > drives from earlier phases; it is not the current CLI contract. The active
-> three-command path is [the production-alpha plan](production-alpha-plan.md).
+> command path is [the production-alpha plan](production-alpha-plan.md).
 
 Against RFC 0002 revision 3. Milestone 1 is a local release of keybay core
 to pub.dev; milestone 2 is the full binary chain for keybay cli.
