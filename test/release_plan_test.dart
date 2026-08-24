@@ -489,7 +489,7 @@ dependencies:
       expect(rendered, contains('├─▶ linux-x64'));
       expect(rendered, contains('[build] ─▶ [archive]'));
       expect(rendered, contains('[finalize stage]'));
-      expect(rendered, contains('needs all stage work'));
+      expect(rendered, isNot(contains('needs all stage work')));
       expect(rendered, contains('no destination checks · no changes'));
       expect(rendered, isNot(contains('source-only ·')));
       expect(rendered, isNot(contains('configured topology')));
@@ -584,6 +584,7 @@ dependencies:
       expect(rendered, isNot(contains('EXAMPLE RELEASE PLAN')));
       expect(rendered, contains('publish'));
       expect(rendered, contains('finalize stage'));
+      expect(rendered, isNot(contains('needs all stage work')));
       expect(rendered, contains('needs source snapshot'));
       expect(rendered, contains('needs tag cli-v1.2.0'));
       expect(rendered, contains('needs GitHub Release'));
@@ -627,7 +628,9 @@ dependencies:
           .where((line) => line.contains('[finalize stage]'));
       expect(checkpointLines, isNotEmpty);
       for (final line in checkpointLines) {
-        expect(line, contains('\x1b[33m · needs all stage work'));
+        expect(line, contains('\x1b[1;35m[finalize stage]\x1b[0m'));
+        expect(line, isNot(contains('needs')));
+        expect(line, isNot(contains('\x1b[33m')));
       }
       expect(colored, isNot(contains('\x1b[32m')),
           reason: 'green is reserved for observed success, not a plan');

@@ -198,10 +198,6 @@ final class ReleasePlanRenderer {
     lines.add([
       OutputSpan('$rail │     └─▶ ', role: VisualRole.secondary),
       _node(complete, VisualRole.checkpoint),
-      OutputSpan(
-        work.isEmpty ? '' : ' · needs all stage work',
-        role: VisualRole.requirement,
-      ),
     ]);
     return lines;
   }
@@ -482,18 +478,13 @@ final class ReleasePlanRenderer {
     ReleasePlanNode node,
     Iterable<ReleasePlanNode> nodes,
   ) {
+    if (node.kind == ReleasePlanNodeKind.completeStage) return null;
     if (node.needs.isEmpty) return null;
     final byId = {for (final candidate in nodes) candidate.id: candidate};
     final dependencies = [
       for (final id in node.needs)
         if (byId[id] case final dependency?) dependency,
     ];
-    if (node.kind == ReleasePlanNodeKind.completeStage &&
-        dependencies.any(
-          (dependency) => dependency.kind != ReleasePlanNodeKind.sourceSnapshot,
-        )) {
-      return 'all stage work';
-    }
     if (node.kind == ReleasePlanNodeKind.targetStage &&
         dependencies.isNotEmpty &&
         dependencies.every(
