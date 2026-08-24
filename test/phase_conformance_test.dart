@@ -242,20 +242,16 @@ void main() {
       late Run run;
 
       setUpAll(() {
-        // A manifest rk is not allowed to open. This is a real, currently
-        // unhandled failure rather than an injected one — which is the point:
+        // A release definition that is not UTF-8. This is a real, currently
+        // unhandled decoding failure rather than an injected one — which is
+        // the point:
         // the crash path has to be proved against something that actually
         // crashes. When rk learns to report this one, this test must be
         // pointed at another genuine crash, and if none can be found that is
         // a decision worth making deliberately rather than by deletion.
-        //
-        // multi-project-unit has no root pubspec, so `dart run` does not try
-        // to resolve the fixture as a package and hit the file before rk does.
-        broken = Rk.example(scratch, 'multi-project-unit', as: 'broken');
-        Process.runSync(
-            'chmod', ['000', '${broken.root}/packages/base/pubspec.yaml']);
-        addTearDown(() => Process.runSync(
-            'chmod', ['644', '${broken.root}/packages/base/pubspec.yaml']));
+        final directory = Directory('${scratch.path}/broken')..createSync();
+        File('${directory.path}/release.toml').writeAsBytesSync([0xff]);
+        broken = Rk(directory.path);
         run = broken(['status', '--json']);
       });
 
@@ -695,6 +691,7 @@ publish = ["git-tag", "pub.dev"]
           repositoryRoot: stageRoot.path,
         );
         code = await ReleaseCommand(
+          allowInteractiveTools: true,
           resolution: resolution,
           tree: tree,
           git: git,
@@ -1675,6 +1672,7 @@ executables:
       final output =
           Output(sink: buffer.write, isTerminal: false, useColor: false);
       final code = await ReleaseCommand(
+        allowInteractiveTools: true,
         resolution: resolution,
         tree: tree,
         git: git,

@@ -108,23 +108,34 @@ final class ReleaseSource {
     SourceTree source,
     Diagnostics diagnostics,
   ) {
-    final configSource = source.read('release.toml');
-    if (configSource == null) {
+    try {
+      final configSource = source.read('release.toml');
+      if (configSource == null) {
+        diagnostics.add(
+          'RK-SRC-003',
+          'release.toml disappeared while the source snapshot was frozen',
+          remedy: 'Restore the file, then run rk again.',
+        );
+        return null;
+      }
+      final config = ReleaseConfig.parse(
+        configSource,
+        'release.toml',
+        diagnostics,
+      );
+      return config == null
+          ? null
+          : Resolution.resolve(config, source, diagnostics);
+    } on SourceUnreadable catch (error) {
       diagnostics.add(
         'RK-SRC-003',
-        'release.toml disappeared while the source snapshot was frozen',
-        remedy: 'Restore the file, then run rk again.',
+        'the selected source could not be read',
+        remedy: '${error.path}: ${error.reason}\n'
+            'Make every release input a regular repository file, then run '
+            'rk again.',
       );
       return null;
     }
-    final config = ReleaseConfig.parse(
-      configSource,
-      'release.toml',
-      diagnostics,
-    );
-    return config == null
-        ? null
-        : Resolution.resolve(config, source, diagnostics);
   }
 
   static bool _validateUnboundTargets(

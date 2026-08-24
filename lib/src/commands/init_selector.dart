@@ -2,6 +2,7 @@ import 'dart:math';
 
 import '../engine/init_plan.dart';
 import '../engine/release_choice.dart';
+import '../output/output.dart';
 
 /// The small terminal surface used by the init selector.
 ///
@@ -153,14 +154,26 @@ final class InitSelector {
       max(0, indexes.length - visibleRows),
     );
     final end = min(indexes.length, start + visibleRows);
+    final theme = OutputTheme(useColor: useColor);
     final buffer = StringBuffer()
       ..writeln(
-        'Select release outputs'
+        '${theme.paint('Select release outputs', strong: true)}'
         '${_visibilityLabel()}'
         '${visibleRows < indexes.length ? ' · ${row + 1}/${indexes.length}' : ''}',
       )
       ..writeln()
-      ..writeln('                         Produce              Publish')
+      ..write('                         ')
+      ..write(theme.paint(
+        'Produce',
+        role: VisualRole.localWork,
+        strong: true,
+      ))
+      ..write('              ')
+      ..writeln(theme.paint(
+        'Publish',
+        role: VisualRole.releaseTarget,
+        strong: true,
+      ))
       ..writeln(
         '  Unit${' ' * (nameWidth - 4)}'
         'Binary   Git tag   pub.dev   GitHub   Homebrew',
@@ -173,7 +186,13 @@ final class InitSelector {
         final marker = _cell(item, option);
         final focused = index == row && option == this.option;
         buffer
-          ..write(focused ? _focused(marker, useColor) : marker)
+          ..write(_styledCell(
+            item,
+            option,
+            marker,
+            useColor: useColor,
+            focused: focused,
+          ))
           ..write(' ' * max(0, _cellWidth(option) - marker.length));
       }
       buffer.writeln();
@@ -183,16 +202,26 @@ final class InitSelector {
 
   String _card(bool useColor) {
     final item = candidate;
+    final theme = OutputTheme(useColor: useColor);
     final buffer = StringBuffer()
-      ..writeln('Select release outputs${_visibilityLabel()}')
+      ..writeln(
+        '${theme.paint('Select release outputs', strong: true)}'
+        '${_visibilityLabel()}',
+      )
       ..writeln()
-      ..writeln('› ${item.unit}');
+      ..writeln('› ${terminalSafeText(item.unit)}');
     for (var index = 0; index < ReleaseChoice.values.length; index++) {
       final current = ReleaseChoice.values[index];
       final marker = _cell(item, current);
       buffer.writeln(
         '${index == column ? '›' : ' '} '
-        '${index == column ? _focused(marker, useColor) : marker}'
+        '${_styledCell(
+          item,
+          current,
+          marker,
+          useColor: useColor,
+          focused: index == column,
+        )}'
         '${' ' * max(0, 4 - marker.length)} ${current.selectorLabel}',
       );
     }
@@ -204,7 +233,7 @@ final class InitSelector {
     buffer
       ..writeln()
       ..writeln(
-        '${option.selectorLabel} — ${availability.reason}'
+        '${option.selectorLabel} — ${terminalSafeText(availability.reason)}'
         '${candidate.selected.contains(option) ? ' · selected' : ''}',
       )
       ..writeln()
@@ -213,7 +242,7 @@ final class InitSelector {
         '${_hiddenNonRegistryIndexes.isEmpty ? '' : showNonRegistry ? 'a hide   ' : 'a show   '}'
         'enter review   q cancel',
       );
-    if (message.isNotEmpty) buffer.writeln(message);
+    if (message.isNotEmpty) buffer.writeln(terminalSafeText(message));
     return buffer.toString();
   }
 
@@ -237,7 +266,7 @@ final class InitSelector {
         '${hidden == 0 ? '' : 'a show   '}'
         'enter review   q cancel',
       );
-    if (message.isNotEmpty) buffer.writeln(message);
+    if (message.isNotEmpty) buffer.writeln(terminalSafeText(message));
     return buffer.toString();
   }
 }
@@ -248,8 +277,33 @@ String _cell(InitCandidate candidate, ReleaseChoice option) {
   return candidate.selected.contains(option) ? '[x]' : '[ ]';
 }
 
-String _focused(String value, bool useColor) =>
-    useColor ? '\x1b[1;36m$value\x1b[0m' : value;
+String _focused(String value, bool useColor) => OutputTheme(
+      useColor: useColor,
+    ).paint(
+      value,
+      role: VisualRole.operatorAction,
+      state: RuntimeState.active,
+      strong: true,
+    );
+
+String _styledCell(
+  InitCandidate candidate,
+  ReleaseChoice option,
+  String value, {
+  required bool useColor,
+  required bool focused,
+}) {
+  if (focused) return _focused(value, useColor);
+  final available = candidate.availability[option]!.available;
+  return OutputTheme(useColor: useColor).paint(
+    value,
+    role: !available
+        ? VisualRole.secondary
+        : option.category == ReleaseChoiceCategory.localOutput
+            ? VisualRole.localWork
+            : VisualRole.releaseTarget,
+  );
+}
 
 int _cellWidth(ReleaseChoice option) => switch (option) {
       ReleaseChoice.binary => 9,
@@ -303,6 +357,7 @@ Future<InitPlan?> runInitSelector(
 }
 
 String _fit(String value, int width) {
+  value = terminalSafeText(value);
   if (value.runes.length <= width) return value;
   return '${String.fromCharCodes(value.runes.take(width - 1))}…';
 }

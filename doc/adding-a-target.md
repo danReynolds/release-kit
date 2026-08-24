@@ -119,6 +119,12 @@ derived from the staged source, and required by this target. Their contract,
 validation, and producer live together in `release_notes_stage.dart` rather
 than becoming several general-purpose hooks.
 
+Every returned `TargetStage` also supplies a short, stable `planLabel`. This is
+the human name shown by `rk plan`; it must describe the produced input (for
+example `release notes` or `package archive`) without status, provider prose,
+or terminal styling. The stage contract remains authoritative for its exact
+producer id and dependencies, so the label cannot create a second graph.
+
 ## The same boundary across the built-ins
 
 The other targets use the same vertical-slice shape, with only the pieces their

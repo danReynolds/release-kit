@@ -2426,6 +2426,7 @@ class _Harness {
     );
     tools.onInvocation = onInvocation;
     final command = ReleaseCommand(
+      allowInteractiveTools: true,
       resolution: resolution,
       tree: source,
       git: git,

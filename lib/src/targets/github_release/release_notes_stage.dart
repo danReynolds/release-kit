@@ -49,6 +49,7 @@ TargetStage githubReleaseNotesStage({
   return TargetStage(
     target: target,
     contract: contract,
+    planLabel: 'release notes',
     prepare: (context) => _prepareReleaseNotes(context),
   );
 }

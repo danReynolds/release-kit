@@ -55,7 +55,7 @@ Usage
         output.line(
           'no staged release work',
           mark: Mark.satisfied,
-          tone: Tone.muted,
+          state: RuntimeState.satisfied,
         );
         return ExitCodes.ok;
       }
@@ -67,12 +67,16 @@ Usage
             '.rk/work/stages',
         depth: 1,
         labelWidth: 10,
+        role: VisualRole.localWork,
+        noteRole: VisualRole.secondary,
       );
       output.line(
         'keep',
         note: 'diagnoses · .rk/diagnosis',
         depth: 1,
         labelWidth: 10,
+        role: VisualRole.secondary,
+        noteRole: VisualRole.secondary,
       );
       output.blank();
       output.warning(const Diagnostic(
@@ -144,6 +148,7 @@ Usage
       output.line(
         'removed $removed ${removed == 1 ? 'stage' : 'stages'}',
         mark: Mark.done,
+        state: RuntimeState.success,
       );
       return ExitCodes.ok;
     } on StageStoreBusy {

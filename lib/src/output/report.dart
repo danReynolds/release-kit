@@ -19,7 +19,7 @@ class Report {
   final String command;
 
   /// Wire format version, bumped whenever the serialized contract changes.
-  static const schema = 9;
+  static const schema = 10;
 
   /// Units by name, in the order they were first mentioned.
   ///
@@ -34,6 +34,7 @@ class Report {
   Map<String, Object?>? _repository;
   Map<String, Object?>? _init;
   Map<String, Object?>? _cleanup;
+  Map<String, Object?>? _plan;
   List<Map<String, Object?>>? _releaseChoices;
   Map<String, Object?>? _halt;
 
@@ -249,6 +250,12 @@ class Report {
 
   void initPlan(Map<String, Object?> plan) => _init = plan;
 
+  /// The source-derived release graph reported by `rk plan`.
+  ///
+  /// It is deliberately separate from steps and targets: those carry runtime
+  /// verdicts, while a plan makes no destination observation at all.
+  void releasePlan(Map<String, Object?> plan) => _plan = plan;
+
   /// The repository-local stage inventory an explicit clean observed and how
   /// much of that frozen set this invocation removed.
   void cleanup({
@@ -303,6 +310,7 @@ class Report {
             if (_repository != null) 'repository': _repository,
             if (_init != null) 'init': _init,
             if (_cleanup != null) 'cleanup': _cleanup,
+            if (_plan != null) 'plan': _plan,
             if (_releaseChoices != null) 'release_choices': _releaseChoices,
             'units': _units.values.toList(),
             'problems': _problems,

@@ -50,14 +50,66 @@ void main() {
     expect(narrow, contains('› tool'));
   });
 
-  test('color highlights exactly the focused cell without changing layout', () {
+  test('color describes topology and focus without changing layout', () {
     final selector = InitSelector(plan());
-    final plain = selector.render(120);
-    final colored = selector.render(120, useColor: true);
+    for (final width in [120, 60]) {
+      final plain = selector.render(width);
+      final colored = selector.render(width, useColor: true);
 
-    expect(RegExp(r'\x1b\[1;36m').allMatches(colored), hasLength(1));
-    expect(colored, isNot(contains(';7m')));
-    expect(colored.replaceAll(RegExp(r'\x1b\[[0-9;]*m'), ''), plain);
+      expect(
+        RegExp(r'\x1b\[1;36m\[ \]\x1b\[0m').allMatches(colored),
+        hasLength(1),
+        reason: 'only the focused cell receives strong active emphasis',
+      );
+      expect(colored, isNot(contains(';7m')),
+          reason: 'focus does not depend on reverse video');
+      expect(colored, isNot(contains('\x1b[32m')),
+          reason: 'selection topology is not a completed runtime outcome');
+      expect(colored.replaceAll(RegExp(r'\x1b\[[0-9;]*m'), ''), plain);
+    }
+
+    final wide = selector.render(120, useColor: true);
+    expect(wide, contains('\x1b[1;34mProduce\x1b[0m'));
+    expect(wide, contains('\x1b[1;36mPublish\x1b[0m'));
+  });
+
+  test('repository-controlled selector text cannot inject terminal controls',
+      () {
+    final hostile = InitPlan(
+      candidates: [
+        InitCandidate(
+          name: 'tool',
+          path: '.',
+          version: '1.0.0',
+          executables: const ['tool\x1b[2J'],
+          vetoesRegistry: false,
+          availability: {
+            for (final option in ReleaseChoice.values)
+              option: InitAvailability.available(
+                option == ReleaseChoice.binary
+                    ? 'standalone tool\x1b[2J archive\x07'
+                    : 'available',
+              ),
+          },
+          selected: const {},
+        ),
+      ],
+      notices: const [],
+      platformCapabilities: _platformCapabilities,
+      gitBound: true,
+      hasRemote: true,
+      githubRepository: 'owner/repo',
+    );
+    final selector = InitSelector(hostile)
+      ..message = 'provider message\u009b31m';
+
+    final rendered = selector.render(120);
+
+    expect(rendered, isNot(contains('\x1b[2J')));
+    expect(rendered, isNot(contains('\x07')));
+    expect(rendered, isNot(contains('\u009b')));
+    expect(rendered, contains(r'standalone tool\x1b[2J archive\x07'));
+    expect(rendered, contains(r'provider message\x9b31m'));
   });
 
   test('arrows move focus and space applies dependency cascades', () {

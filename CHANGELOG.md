@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `rk plan [unit]` now renders the configured source-only release graph from
+  the same stage and public dependency contracts that `rk release` executes;
+  `--json` retains every direct edge without inventing runtime state.
+- Terminal output now uses one semantic role-and-state vocabulary across
+  commands, with plain-text parity, `NO_COLOR` support, and inert rendering of
+  captured control bytes. Machine and redirected releases no longer inherit
+  native login prompts.
 - macOS release staging now verifies the `rk-notary` credential before any
   build starts, and interrupted producers discard only their declared,
   unreceipted outputs so retries can reuse validated independent lanes.

@@ -65,6 +65,10 @@ Usage
         note: choice.summary,
         depth: 1,
         labelWidth: 20,
+        role: category == ReleaseChoiceCategory.localOutput
+            ? VisualRole.localWork
+            : VisualRole.releaseTarget,
+        noteRole: VisualRole.secondary,
       );
     }
   }
@@ -86,6 +90,8 @@ Usage
           note: reference.requirementReasons[required] ?? required.summary,
           depth: 1,
           labelWidth: 20,
+          role: VisualRole.requirement,
+          noteRole: VisualRole.secondary,
         );
       }
       output.blank();

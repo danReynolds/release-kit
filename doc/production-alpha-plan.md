@@ -29,10 +29,11 @@ future provider failure can be anticipated.
 
 ## Supported product surface
 
-The supported commands are:
+The currently supported commands are:
 
 ```text
 rk init
+rk plan [unit]
 rk status [unit]
 rk release [unit] [--stage]
 rk target list
@@ -69,8 +70,13 @@ the version and changelog, then inspect the plan:
 ```console
 $ dart run tool/prepare_release.dart <version>
 # Add the matching release notes to CHANGELOG.md, then commit and push.
+$ dart run bin/rk.dart plan rk
 $ dart run bin/rk.dart status rk
 ```
+
+`plan` confirms the configured source topology without contacting a
+destination. `status` then supplies the independent public and staged-state
+observations required by the release gate.
 
 The repository-local preparation tool advances both `pubspec.yaml` and the
 version embedded in RK's compiled executable. It validates their existing

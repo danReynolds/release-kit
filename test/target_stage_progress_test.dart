@@ -37,6 +37,7 @@ void main() {
     final stage = TargetStage(
       target: _target(),
       contract: _contract(),
+      planLabel: 'test input',
       progress: [
         TargetStageProgress.output(
           id: 'one',
@@ -64,6 +65,7 @@ void main() {
     final stage = TargetStage(
       target: _target(),
       contract: _contract(),
+      planLabel: 'test input',
       progress: [
         TargetStageProgress.output(
           id: 'one',

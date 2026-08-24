@@ -166,8 +166,12 @@ class InitCommand {
       }
 
       output.blank();
-      output.line('${plan.included.length} selected '
-          '${plan.included.length == 1 ? 'unit' : 'units'}');
+      output.line(
+        '${plan.included.length} selected '
+        '${plan.included.length == 1 ? 'unit' : 'units'}',
+        role: VisualRole.checkpoint,
+        strong: true,
+      );
       for (final candidate in plan.included) {
         output.line(
           candidate.unit,
@@ -176,10 +180,11 @@ class InitCommand {
           note: '${candidate.version} · path ${candidate.path}'
               '${candidate.executables.isEmpty ? '' : ' · executable '
                   '${candidate.executables.join(', ')}'}',
+          noteRole: VisualRole.secondary,
         );
       }
       for (final reason in reasons) {
-        output.say(reason, depth: 1);
+        output.say(reason, depth: 1, role: VisualRole.secondary);
       }
 
       final proposal = plan.renderToml();
@@ -198,7 +203,7 @@ class InitCommand {
         output.report.attach('release.toml.refused', proposal);
         output.report.rerunHelps = false;
         for (final line in proposal.split('\n')) {
-          output.say(line, depth: 1);
+          output.say(line, depth: 1, role: VisualRole.secondary);
         }
         return ExitCodes.refused;
       }
@@ -206,7 +211,7 @@ class InitCommand {
       output.report.attach('release.toml', proposal);
       output.blank();
       for (final line in proposal.split('\n')) {
-        output.say(line, depth: 1);
+        output.say(line, depth: 1, role: VisualRole.secondary);
       }
       if (needsIgnore) {
         output.say('and add .rk/ to .gitignore', depth: 1);

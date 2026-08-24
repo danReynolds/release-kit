@@ -7,6 +7,31 @@ import 'progress.dart';
 import 'report.dart';
 import '../engine/verdict.dart';
 
+/// Makes untrusted text inert on a terminal while leaving report evidence raw.
+///
+/// ESC is not the only terminal control: C0, DEL, and C1 bytes can ring a
+/// bell, move the cursor, clear the screen, or begin a control sequence. Human
+/// output spells them as ASCII escapes. JSON and diagnosis attachments never
+/// pass through this renderer and retain the provider's original evidence.
+String terminalSafeText(String text) {
+  String? escaped;
+  var start = 0;
+  final runes = text.runes.toList();
+  for (var index = 0; index < runes.length; index++) {
+    final rune = runes[index];
+    final control = rune < 0x20 || (rune >= 0x7f && rune <= 0x9f);
+    if (!control) continue;
+    escaped ??= '';
+    escaped += String.fromCharCodes(runes.sublist(start, index));
+    escaped += rune <= 0xff
+        ? '\\x${rune.toRadixString(16).padLeft(2, '0')}'
+        : '\\u{${rune.toRadixString(16)}}';
+    start = index + 1;
+  }
+  if (escaped == null) return text;
+  return escaped + String.fromCharCodes(runes.sublist(start));
+}
+
 /// How a line reads at a glance.
 ///
 /// A small mark vocabulary rather than one per state: anything finer is carried by the
@@ -47,33 +72,106 @@ enum Mark {
       };
 }
 
-/// The colour a word earns from what it says.
+/// What a subject represents before rk has observed an outcome for it.
 ///
-/// The gutter's marks stay the vocabulary; tones repeat the same
-/// judgment on the words for a reader scanning colour — never carrying
-/// anything the words do not, so `NO_COLOR` loses nothing.
-enum Tone {
-  plain,
+/// Roles describe release topology. They are deliberately separate from
+/// [RuntimeState]: a public target that fails is a failure, not a green public
+/// label beside a red failure mark. Commands pass typed meaning and this file
+/// remains the only place that knows ANSI colour numbers.
+enum VisualRole {
+  primary,
+  secondary,
+  localWork,
+  checkpoint,
+  requirement,
+  releaseTarget,
+  operatorAction,
+}
 
-  /// A section header: structure, not a fact.
-  header,
+/// What rk observed or is doing now.
+///
+/// A non-neutral state overrides a subject's [VisualRole]. This gives every
+/// operational row one answer at a glance while a source-only plan can use
+/// roles to describe its topology.
+enum RuntimeState {
+  neutral,
+  active,
+  satisfied,
+  success,
+  attention,
+  failure;
 
-  /// Already so; nothing to do here.
-  muted,
-
-  /// Blocked, conflicting, or failed.
-  bad,
-
-  /// rk could not read it, and wants eyes on that.
-  attention;
-
-  /// The tone a verdict earns, beside [Mark.of].
-  static Tone of(Verdict verdict) => switch (verdict) {
-        Verdict.exact => muted,
-        Verdict.conflict => bad,
+  static RuntimeState of(Verdict verdict) => switch (verdict) {
+        Verdict.exact => satisfied,
+        Verdict.conflict => failure,
         Verdict.unknown => attention,
-        Verdict.absent => plain,
+        Verdict.absent => neutral,
       };
+}
+
+/// One styled fragment whose unstyled [text] remains the output contract.
+final class OutputSpan {
+  const OutputSpan(
+    this.text, {
+    this.role = VisualRole.primary,
+    this.state = RuntimeState.neutral,
+    this.strong = false,
+  });
+
+  final String text;
+  final VisualRole role;
+  final RuntimeState state;
+  final bool strong;
+}
+
+/// RK's complete terminal colour vocabulary.
+///
+/// Standard ANSI colours let the terminal theme choose contrast. Styling is
+/// applied per span and reset immediately; it never crosses a newline or
+/// leaks into a native command.
+final class OutputTheme {
+  const OutputTheme({required this.useColor});
+
+  final bool useColor;
+
+  String paint(
+    String text, {
+    VisualRole role = VisualRole.primary,
+    RuntimeState state = RuntimeState.neutral,
+    bool strong = false,
+  }) {
+    final safe = terminalSafeText(text);
+    if (!useColor || safe.isEmpty) return safe;
+    final color = switch (state) {
+      RuntimeState.neutral => switch (role) {
+          VisualRole.primary => null,
+          VisualRole.secondary => '90', // grey
+          VisualRole.localWork => '34', // blue
+          VisualRole.checkpoint => '35', // violet/magenta
+          VisualRole.requirement => '33', // amber/yellow
+          VisualRole.releaseTarget || VisualRole.operatorAction => '36', // cyan
+        },
+      RuntimeState.active => '36', // cyan
+      RuntimeState.satisfied => '90', // grey
+      RuntimeState.success => '32', // green
+      RuntimeState.attention => '33', // yellow
+      RuntimeState.failure => '31', // red
+    };
+    final codes = [if (strong) '1', if (color != null) color];
+    if (codes.isEmpty) return safe;
+    return '\x1b[${codes.join(';')}m$safe\x1b[0m';
+  }
+
+  String render(Iterable<OutputSpan> spans) => spans
+      .map(
+        (span) => paint(
+          span.text,
+          role: span.role,
+          state: span.state,
+          strong: span.strong,
+        ),
+      )
+      .join();
 }
 
 /// Everything rk prints goes through here, so terseness, collapse, and the
@@ -86,12 +184,13 @@ class Output {
   Output({
     required this.sink,
     required this.isTerminal,
-    this.useColor = true,
+    bool useColor = true,
     int? terminalWidth,
     int? Function()? terminalWidthReader,
     Report? report,
     Elapsed Function()? clock,
-  })  : _terminalWidth = terminalWidth,
+  })  : useColor = isTerminal && useColor,
+        _terminalWidth = terminalWidth,
         _terminalWidthReader = terminalWidthReader,
         report = report ?? Report('rk'),
         _clock = clock ?? _wallClock;
@@ -138,6 +237,8 @@ class Output {
   final bool isTerminal;
 
   final bool useColor;
+
+  OutputTheme get theme => OutputTheme(useColor: useColor);
 
   /// Columns available on an attached terminal.
   ///
@@ -210,7 +311,55 @@ class Output {
   /// A heading. Callers space their own sections; this adds nothing.
   void heading(String text) {
     _yieldToProse();
-    _writeSettled(text, continuationPrefix: '  ');
+    _writeSettled(text, continuationPrefix: '  ', strong: true);
+  }
+
+  /// Renders a fixed help document without changing its plain-text bytes.
+  ///
+  /// Help is deliberately styled here rather than by each command: section
+  /// labels are structure, invocations are operator actions, and explanatory
+  /// copy stays neutral. JSON keeps the same unstyled document in `next`.
+  void help(String text, {int depth = 0}) {
+    _yieldToProse();
+    final prefix = depth == 0 ? '' : '  ${'  ' * depth}';
+    final endsWithNewline = text.endsWith('\n');
+    final lines = text.split('\n');
+    if (endsWithNewline) lines.removeLast();
+    for (final (index, line) in lines.indexed) {
+      sink(prefix);
+      sink(theme.render(_helpSpans(line)));
+      if (index < lines.length - 1 || endsWithNewline) sink('\n');
+    }
+  }
+
+  static List<OutputSpan> _helpSpans(String line) {
+    if (line.isEmpty) return const [OutputSpan('')];
+    if (!line.startsWith(' ')) {
+      final colon = line.indexOf(':');
+      if (colon > 0 && colon < 12) {
+        return [
+          OutputSpan(line.substring(0, colon + 1), strong: true),
+          OutputSpan(line.substring(colon + 1)),
+        ];
+      }
+      return [OutputSpan(line, strong: true)];
+    }
+
+    final trimmed = line.trimLeft();
+    final isInvocation =
+        trimmed == 'rk' || trimmed.startsWith('rk ') || trimmed.startsWith('-');
+    final match = isInvocation
+        ? RegExp(r'^(\s*)(.+?)(\s{2,})(\S.*)$').firstMatch(line)
+        : null;
+    if (match == null) {
+      return [OutputSpan(line, role: VisualRole.secondary)];
+    }
+    return [
+      OutputSpan(match.group(1)!),
+      OutputSpan(match.group(2)!, role: VisualRole.operatorAction),
+      OutputSpan(match.group(3)!),
+      OutputSpan(match.group(4)!),
+    ];
   }
 
   /// The repository line, recorded in parts so a caller is not left parsing
@@ -266,6 +415,8 @@ class Output {
       // name belongs beside it, not at the note column the rows below
       // share.
       labelWidth: 0,
+      strong: true,
+      noteRole: VisualRole.secondary,
     );
   }
 
@@ -314,12 +465,31 @@ class Output {
       note: note ?? (step.isPermanent ? 'permanent' : null),
       depth: depth,
       labelWidth: 48,
+      role: switch (step.kind) {
+        StepKind.prerequisite => VisualRole.requirement,
+        StepKind.build ||
+        StepKind.notarize ||
+        StepKind.archive =>
+          VisualRole.localWork,
+        StepKind.completeStage => VisualRole.checkpoint,
+        StepKind.tag ||
+        StepKind.publishRegistry ||
+        StepKind.publishRelease ||
+        StepKind.publishHomebrew =>
+          VisualRole.releaseTarget,
+      },
+      state: RuntimeState.of(verdict),
+      noteState: step.isPermanent ? RuntimeState.attention : null,
     );
     // The difference itself, not the fact of one — on the surface a person
     // reads, not only in the document. status's live forge conflict printed
     // a bare blocked line while the JSON carried the six-asset table.
     for (final entry in evidence.entries) {
-      line('${entry.key}  ${entry.value}', depth: depth + 1);
+      line(
+        '${entry.key}  ${entry.value}',
+        depth: depth + 1,
+        role: VisualRole.secondary,
+      );
     }
   }
 
@@ -354,10 +524,9 @@ class Output {
   /// [note] is the fact; [detail] is the part that only matters when it
   /// differs, and is aligned so a column of them stays readable.
   ///
-  /// Tones colour the words themselves, not only the gutter — a state word
-  /// reads at a glance in the colour its verdict earns. Layout is computed
-  /// on the plain text and colour applied after, so a painted label never
-  /// shifts the column it sits in; `NO_COLOR` and pipes get the same
+  /// Semantic roles and states colour the words themselves, not only the
+  /// gutter. Layout is computed on plain text and colour applied after, so a
+  /// painted label never shifts its column; `NO_COLOR` and pipes get the same
   /// characters uncoloured.
   void line(
     String label, {
@@ -365,23 +534,32 @@ class Output {
     String? note,
     int depth = 0,
     int labelWidth = 16,
-    Tone tone = Tone.plain,
-    Tone noteTone = Tone.plain,
+    VisualRole role = VisualRole.primary,
+    RuntimeState? state,
+    bool strong = false,
+    VisualRole noteRole = VisualRole.primary,
+    RuntimeState? noteState,
+    bool noteStrong = false,
   }) {
     _yieldToProse();
+    label = terminalSafeText(label);
+    note = note == null ? null : terminalSafeText(note);
+    final effectiveState = state ?? _stateForMark(mark);
+    final effectiveNoteState = noteState ?? effectiveState;
     final plainGlyph = mark == Mark.none ? ' ' : mark.glyph;
-    final paintedGlyph = mark == Mark.none ? ' ' : _paint(mark);
+    final paintedGlyph = mark == Mark.none ? ' ' : _paint(mark, effectiveState);
 
     // The indent is part of what is padded, so the note column stays put as
     // the tree deepens rather than drifting right with it.
     final indented = '${'  ' * depth}$label';
+    final indentedWidth = displayWidth(indented);
     final plain = note == null
         ? '$plainGlyph $indented'
-        : indented.length >= labelWidth
+        : indentedWidth >= labelWidth
             ? '$plainGlyph $indented $note'
-            : '$plainGlyph ${indented.padRight(labelWidth)} $note';
+            : '$plainGlyph ${_padToWidth(indented, labelWidth)} $note';
     final width = terminalWidth;
-    if (width != null && plain.runes.length > width) {
+    if (width != null && displayWidth(plain) > width) {
       final firstPrefix = '$plainGlyph ${'  ' * depth}';
       final paintedFirstPrefix = '$paintedGlyph ${'  ' * depth}';
       final continuationPrefix = '${' ' * firstPrefix.runes.length}  ';
@@ -390,14 +568,18 @@ class Output {
         firstPrefix: firstPrefix,
         paintedFirstPrefix: paintedFirstPrefix,
         continuationPrefix: continuationPrefix,
-        tone: tone,
+        role: role,
+        state: effectiveState,
+        strong: strong,
       );
       if (note != null) {
         _writeSettled(
           note,
           firstPrefix: continuationPrefix,
           continuationPrefix: continuationPrefix,
-          tone: noteTone,
+          role: noteRole,
+          state: effectiveNoteState,
+          strong: noteStrong,
         );
       }
       return;
@@ -405,36 +587,73 @@ class Output {
 
     final glyph = paintedGlyph;
     if (note == null) {
-      sink('$glyph ${_tint(indented, tone)}\n');
+      sink('$glyph '
+          '${_style(indented, role: role, state: effectiveState, strong: strong)}\n');
       return;
     }
-    if (indented.length >= labelWidth) {
+    if (indentedWidth >= labelWidth) {
       // Too long to keep the note on the grid. It follows the label anyway,
       // because a note describes the line it is on: given its own line it reads
       // as a fact about nothing, and "permanent" floating alone is worse than
       // "permanent" out of column.
-      sink('$glyph ${_tint(indented, tone)} ${_tint(note, noteTone)}\n');
+      sink(
+        '$glyph '
+        '${_style(indented, role: role, state: effectiveState, strong: strong)} '
+        '${_style(note, role: noteRole, state: effectiveNoteState, strong: noteStrong)}\n',
+      );
       return;
     }
-    final padded = indented.padRight(labelWidth);
-    sink('$glyph ${_tint(padded, tone)} ${_tint(note, noteTone)}\n');
+    final padded = _padToWidth(indented, labelWidth);
+    sink(
+      '$glyph '
+      '${_style(padded, role: role, state: effectiveState, strong: strong)} '
+      '${_style(note, role: noteRole, state: effectiveNoteState, strong: noteStrong)}\n',
+    );
   }
 
-  /// [text] in [tone]'s colour, or untouched without colour support.
-  String _tint(String text, Tone tone) {
-    if (!useColor || tone == Tone.plain) return text;
-    final code = switch (tone) {
-      Tone.plain => null,
-      Tone.header => '1', // bold
-      Tone.muted => '90', // grey
-      Tone.bad => '31', // red
-      Tone.attention => '33', // yellow
-    };
-    return code == null ? text : '\x1b[${code}m$text\x1b[0m';
+  String _style(
+    String text, {
+    VisualRole role = VisualRole.primary,
+    RuntimeState state = RuntimeState.neutral,
+    bool strong = false,
+  }) =>
+      theme.paint(text, role: role, state: state, strong: strong);
+
+  /// Writes one pre-laid-out line made of semantic spans.
+  ///
+  /// The caller owns wrapping and may use [plainWidth] to select a fallback.
+  /// This is the graph renderer's mixed-colour surface; ordinary command rows
+  /// should continue through [line] so they receive rk's width policy.
+  void spans(Iterable<OutputSpan> spans) {
+    _yieldToProse();
+    final values = List<OutputSpan>.unmodifiable(spans);
+    assert(values.every((span) => !span.text.contains('\n')));
+    sink('${theme.render(values)}\n');
+  }
+
+  static int plainWidth(Iterable<OutputSpan> spans) => spans.fold(
+        0,
+        (width, span) => width + displayWidth(span.text),
+      );
+
+  /// Terminal columns occupied by inert human text.
+  static int displayWidth(String text) => terminalSafeText(text)
+      .runes
+      .fold(0, (width, rune) => width + _terminalRuneWidth(rune));
+
+  static String _padToWidth(String text, int width) {
+    final missing = width - displayWidth(text);
+    return missing <= 0 ? text : '$text${' ' * missing}';
   }
 
   /// Free-form prose, wrapped in the same indentation as the tree.
-  void say(String text, {int depth = 0}) {
+  void say(
+    String text, {
+    int depth = 0,
+    VisualRole role = VisualRole.primary,
+    RuntimeState state = RuntimeState.neutral,
+    bool strong = false,
+  }) {
     _yieldToProse();
     final prefix = '  ${'  ' * depth}';
     for (final part in text.split('\n')) {
@@ -443,6 +662,9 @@ class Output {
         part,
         firstPrefix: prefix,
         continuationPrefix: '$prefix  ${repeatsComment ? '# ' : ''}',
+        role: role,
+        state: state,
+        strong: strong,
       );
     }
   }
@@ -455,6 +677,8 @@ class Output {
     _writeSettled(
       body,
       continuationPrefix: '  ',
+      role: VisualRole.operatorAction,
+      strong: true,
       endWithNewline: false,
     );
     if (text.length != body.length) sink(' ');
@@ -465,28 +689,34 @@ class Output {
     String firstPrefix = '',
     String? paintedFirstPrefix,
     required String continuationPrefix,
-    Tone tone = Tone.plain,
+    VisualRole role = VisualRole.primary,
+    RuntimeState state = RuntimeState.neutral,
+    bool strong = false,
     bool endWithNewline = true,
   }) {
+    text = terminalSafeText(text);
     final width = terminalWidth;
     if (width == null ||
-        firstPrefix.runes.length + text.runes.length <= width) {
-      sink('${paintedFirstPrefix ?? firstPrefix}${_tint(text, tone)}'
+        displayWidth(firstPrefix) + displayWidth(text) <= width) {
+      sink('${paintedFirstPrefix ?? firstPrefix}'
+          '${_style(text, role: role, state: state, strong: strong)}'
           '${endWithNewline ? '\n' : ''}');
       return;
     }
 
     final fragments = _wrapSettled(
       text,
-      firstWidth: width - firstPrefix.runes.length,
-      continuationWidth: width - continuationPrefix.runes.length,
+      firstWidth: width - displayWidth(firstPrefix),
+      continuationWidth: width - displayWidth(continuationPrefix),
     );
     for (final (index, fragment) in fragments.indexed) {
       final first = index == 0;
       final prefix =
           first ? paintedFirstPrefix ?? firstPrefix : continuationPrefix;
       final newline = index < fragments.length - 1 || endWithNewline;
-      sink('$prefix${_tint(fragment, tone)}${newline ? '\n' : ''}');
+      sink('$prefix'
+          '${_style(fragment, role: role, state: state, strong: strong)}'
+          '${newline ? '\n' : ''}');
     }
   }
 
@@ -514,15 +744,15 @@ class Output {
       var offset = 0;
       while (offset < runes.length) {
         final separator = current.isEmpty ? 0 : 1;
-        final available = width - current.runes.length - separator;
+        final available = width - displayWidth(current) - separator;
         if (available <= 0) {
           flush();
           continue;
         }
-        final remaining = runes.length - offset;
-        if (remaining <= available) {
+        final remaining = String.fromCharCodes(runes.skip(offset));
+        if (displayWidth(remaining) <= available) {
           current = '$current${separator == 0 ? '' : ' '}'
-              '${String.fromCharCodes(runes.skip(offset))}';
+              '$remaining';
           offset = runes.length;
           continue;
         }
@@ -530,8 +760,17 @@ class Output {
           flush();
           continue;
         }
-        current = String.fromCharCodes(runes.skip(offset).take(available));
-        offset += available;
+        var take = 0;
+        var used = 0;
+        while (offset + take < runes.length) {
+          final runeWidth = _terminalRuneWidth(runes[offset + take]);
+          if (take > 0 && used + runeWidth > available) break;
+          take++;
+          used += runeWidth;
+          if (used > available) break;
+        }
+        current = String.fromCharCodes(runes.skip(offset).take(take));
+        offset += take;
         flush();
       }
     }
@@ -596,10 +835,15 @@ class Output {
       '$where${diagnostic.message}',
       mark: Mark.blocked,
       depth: depth,
-      tone: Tone.bad,
+      state: RuntimeState.failure,
     );
     if (diagnostic.remedy != null) {
-      say(diagnostic.remedy!, depth: depth + 1);
+      if (diagnostic.code.startsWith('RK-CLI-') &&
+          diagnostic.remedy!.contains('\nUsage\n')) {
+        help(diagnostic.remedy!, depth: depth + 1);
+      } else {
+        say(diagnostic.remedy!, depth: depth + 1);
+      }
     }
   }
 
@@ -623,7 +867,7 @@ class Output {
       '$where${diagnostic.message}',
       mark: Mark.warning,
       depth: depth,
-      tone: Tone.attention,
+      state: RuntimeState.attention,
     );
     if (diagnostic.remedy != null) {
       say(diagnostic.remedy!, depth: depth + 1);
@@ -636,22 +880,26 @@ class Output {
     // Marked by position, not by content: two identical lines are two lines,
     // and only the first is the reader's next move.
     for (final (index, part) in command.split('\n').indexed) {
-      line(part, mark: index == 0 ? Mark.next : Mark.none, depth: depth);
+      line(
+        part,
+        mark: index == 0 ? Mark.next : Mark.none,
+        depth: depth,
+        role: VisualRole.operatorAction,
+      );
     }
   }
 
-  String _paint(Mark mark) {
-    if (!useColor) return mark.glyph;
-    final code = switch (mark) {
-      Mark.done => '32', // green
-      Mark.blocked => '31', // red
-      Mark.satisfied => '90', // grey
-      Mark.next => '36', // cyan
-      Mark.warning => '33', // yellow
-      Mark.none => null,
-    };
-    return code == null ? mark.glyph : '\x1b[${code}m${mark.glyph}\x1b[0m';
-  }
+  String _paint(Mark mark, RuntimeState state) =>
+      _style(mark.glyph, state: state);
+
+  static RuntimeState _stateForMark(Mark mark) => switch (mark) {
+        Mark.done => RuntimeState.success,
+        Mark.satisfied => RuntimeState.satisfied,
+        Mark.blocked => RuntimeState.failure,
+        Mark.next => RuntimeState.active,
+        Mark.warning => RuntimeState.attention,
+        Mark.none => RuntimeState.neutral,
+      };
 }
 
 /// One live fixed-height progress surface.
@@ -797,10 +1045,16 @@ final class LiveProgress {
   }
 
   List<String> _transientLines(int available) {
-    final lines = <String>[_fit(model.title, available)];
+    final lines = <String>[
+      _output._style(_fit(model.title, available), strong: true),
+    ];
     final grouped = model.groups.isNotEmpty;
     for (final group in model.groups) {
-      lines.add(_fit('  $group', available));
+      lines.add(_output._style(
+        _fit('  $group', available),
+        role: VisualRole.secondary,
+        strong: true,
+      ));
       for (final row in model.rows.where((row) => row.group == group)) {
         lines.add(_transientRow(row, available, depth: 2));
       }
@@ -812,10 +1066,13 @@ final class LiveProgress {
   }
 
   String _transientRow(ProgressRow row, int? available, {required int depth}) {
-    final (glyph, status, tone) = _rowPresentation(row, active: true);
+    final (glyph, rawStatus, glyphState, textState) =
+        _rowPresentation(row, active: true);
+    final status = terminalSafeText(rawStatus);
     final indent = '  ' * depth;
-    final left =
-        [row.label, if (row.coordinate != null) row.coordinate!].join('  ');
+    final left = terminalSafeText(
+      [row.label, if (row.coordinate != null) row.coordinate!].join('  '),
+    );
     final overhead = _displayWidth(indent) + _displayWidth(glyph) + 3;
     const minimumSubjectWidth = 6;
     final room = available == null ? null : _atLeastZero(available - overhead);
@@ -834,15 +1091,22 @@ final class LiveProgress {
         : _atLeastZero(available - overhead - _displayWidth(fittedLeft) - 2);
     final fittedStatus = _fit(status, remaining);
     final gap = fittedLeft.isEmpty || fittedStatus.isEmpty ? '' : '  ';
-    return '$indent$glyph $fittedLeft$gap${_output._tint(fittedStatus, tone)}';
+    return '$indent${_output._style(glyph, state: glyphState)} '
+        '${_output._style(fittedLeft, state: glyphState)}$gap'
+        '${_output._style(fittedStatus, state: textState)}';
   }
 
-  (String, String, Tone) _rowPresentation(
+  (String, String, RuntimeState, RuntimeState) _rowPresentation(
     ProgressRow row, {
     required bool active,
   }) {
     return switch (row.state) {
-      ProgressRowState.pending => ('…', row.note ?? 'queued', Tone.muted),
+      ProgressRowState.pending => (
+          '…',
+          row.note ?? 'queued',
+          RuntimeState.satisfied,
+          RuntimeState.satisfied,
+        ),
       ProgressRowState.active => (
           active ? _frames[_spin % _frames.length] : '…',
           [
@@ -850,7 +1114,8 @@ final class LiveProgress {
             if (row.detail != null) row.detail!,
             if (active && showElapsed) formatDuration(row.elapsed),
           ].join(' · '),
-          Tone.attention,
+          RuntimeState.active,
+          RuntimeState.active,
         ),
       ProgressRowState.complete => (
           switch (row.mark) {
@@ -859,18 +1124,29 @@ final class LiveProgress {
             ProgressRowMark.none => Mark.none.glyph,
           },
           row.note!,
+          switch (row.mark) {
+            ProgressRowMark.done => RuntimeState.success,
+            ProgressRowMark.satisfied => RuntimeState.satisfied,
+            ProgressRowMark.none => RuntimeState.neutral,
+          },
           switch (row.emphasis) {
-            ProgressRowEmphasis.plain => Tone.plain,
-            ProgressRowEmphasis.muted => Tone.muted,
-            ProgressRowEmphasis.attention => Tone.attention,
+            ProgressRowEmphasis.plain => RuntimeState.neutral,
+            ProgressRowEmphasis.muted => RuntimeState.satisfied,
+            ProgressRowEmphasis.attention => RuntimeState.attention,
           },
         ),
       ProgressRowState.failed => (
           Mark.blocked.glyph,
           row.note!,
-          Tone.bad,
+          RuntimeState.failure,
+          RuntimeState.failure,
         ),
-      ProgressRowState.notAttempted => ('—', row.note!, Tone.muted),
+      ProgressRowState.notAttempted => (
+          '—',
+          row.note!,
+          RuntimeState.satisfied,
+          RuntimeState.satisfied,
+        ),
     };
   }
 
@@ -949,7 +1225,12 @@ final class LiveProgress {
     }
     _output.heading(title ?? model.title);
     for (final group in model.groups) {
-      _output.line(group, depth: 1);
+      _output.line(
+        group,
+        depth: 1,
+        role: VisualRole.secondary,
+        strong: true,
+      );
       for (final row in model.rows.where((row) => row.group == group)) {
         _writeDurableRow(row, depth: 2);
       }
@@ -988,7 +1269,8 @@ final class LiveProgress {
     int depth = 1,
     bool active = false,
   }) {
-    final (glyph, status, tone) = _rowPresentation(row, active: active);
+    final (glyph, status, glyphState, textState) =
+        _rowPresentation(row, active: active);
     final mark = switch (glyph) {
       '✓' => Mark.done,
       '·' => Mark.satisfied,
@@ -1004,7 +1286,8 @@ final class LiveProgress {
       note: status,
       depth: depth,
       labelWidth: 48,
-      noteTone: tone,
+      state: glyphState,
+      noteState: textState,
     );
   }
 
@@ -1030,6 +1313,7 @@ final class LiveProgress {
   static int _lesser(int left, int right) => left < right ? left : right;
 
   static String _fit(String text, int? width) {
+    text = terminalSafeText(text);
     if (width == null || _displayWidth(text) <= width) return text;
     if (width <= 0) return '';
     if (width == 1) return '…';
@@ -1044,33 +1328,36 @@ final class LiveProgress {
     return '${out.toString()}…';
   }
 
-  static int _displayWidth(String text) =>
-      text.runes.fold(0, (width, rune) => width + _runeWidth(rune));
+  static int _displayWidth(String text) => Output.displayWidth(text);
 
   static int _runeWidth(int rune) {
-    if ((rune >= 0x0300 && rune <= 0x036f) ||
-        (rune >= 0x1ab0 && rune <= 0x1aff) ||
-        (rune >= 0x1dc0 && rune <= 0x1dff) ||
-        (rune >= 0xfe20 && rune <= 0xfe2f)) {
-      return 0;
-    }
-    if (rune >= 0x1100 &&
-        (rune <= 0x115f ||
-            rune == 0x2329 ||
-            rune == 0x232a ||
-            (rune >= 0x2e80 && rune <= 0xa4cf && rune != 0x303f) ||
-            (rune >= 0xac00 && rune <= 0xd7a3) ||
-            (rune >= 0xf900 && rune <= 0xfaff) ||
-            (rune >= 0xfe10 && rune <= 0xfe19) ||
-            (rune >= 0xfe30 && rune <= 0xfe6f) ||
-            (rune >= 0xff00 && rune <= 0xff60) ||
-            (rune >= 0xffe0 && rune <= 0xffe6) ||
-            (rune >= 0x1f300 && rune <= 0x1faff) ||
-            (rune >= 0x20000 && rune <= 0x3fffd))) {
-      return 2;
-    }
-    return 1;
+    return _terminalRuneWidth(rune);
   }
+}
+
+int _terminalRuneWidth(int rune) {
+  if ((rune >= 0x0300 && rune <= 0x036f) ||
+      (rune >= 0x1ab0 && rune <= 0x1aff) ||
+      (rune >= 0x1dc0 && rune <= 0x1dff) ||
+      (rune >= 0xfe20 && rune <= 0xfe2f)) {
+    return 0;
+  }
+  if (rune >= 0x1100 &&
+      (rune <= 0x115f ||
+          rune == 0x2329 ||
+          rune == 0x232a ||
+          (rune >= 0x2e80 && rune <= 0xa4cf && rune != 0x303f) ||
+          (rune >= 0xac00 && rune <= 0xd7a3) ||
+          (rune >= 0xf900 && rune <= 0xfaff) ||
+          (rune >= 0xfe10 && rune <= 0xfe19) ||
+          (rune >= 0xfe30 && rune <= 0xfe6f) ||
+          (rune >= 0xff00 && rune <= 0xff60) ||
+          (rune >= 0xffe0 && rune <= 0xffe6) ||
+          (rune >= 0x1f300 && rune <= 0x1faff) ||
+          (rune >= 0x20000 && rune <= 0x3fffd))) {
+    return 2;
+  }
+  return 1;
 }
 
 /// Compatibility adapter for status's parallel public-target reads.
@@ -1102,7 +1389,10 @@ final class TargetChecks {
     if (row == null) return;
     switch (verdict) {
       case Verdict.exact:
-        row.complete(note: 'checked');
+        row.complete(
+          note: 'checked',
+          mark: ProgressRowMark.satisfied,
+        );
       case Verdict.absent:
         row.complete(note: 'checked', mark: ProgressRowMark.none);
       case Verdict.conflict:

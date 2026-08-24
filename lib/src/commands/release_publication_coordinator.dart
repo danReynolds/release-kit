@@ -77,6 +77,7 @@ final class ReleasePublicationCoordinator {
     required this.refreshEnvironment,
     required this.wait,
     required this.confirm,
+    required this.allowInteractiveTools,
     required this.confirmDeadline,
     required this.confirmInterval,
   });
@@ -90,6 +91,7 @@ final class ReleasePublicationCoordinator {
   final Map<String, String> Function() refreshEnvironment;
   final Future<void> Function(Duration) wait;
   final Future<String?> Function(String prompt)? confirm;
+  final bool allowInteractiveTools;
   final Duration confirmDeadline;
   final Duration confirmInterval;
 
@@ -284,6 +286,14 @@ final class ReleasePublicationCoordinator {
         mark: mark,
         note: action.human,
         depth: 1,
+        role: VisualRole.releaseTarget,
+        state: switch (action) {
+          ReleaseAction.notAttempted => RuntimeState.neutral,
+          ReleaseAction.attempted => RuntimeState.attention,
+          ReleaseAction.alreadyPublished => RuntimeState.satisfied,
+          ReleaseAction.completed => RuntimeState.success,
+          ReleaseAction.failed => RuntimeState.failure,
+        },
       );
     }
   }
@@ -355,7 +365,7 @@ final class ReleasePublicationCoordinator {
       output.blank();
       output.line(
         '${unit.name} ${unit.version}',
-        mark: Mark.done,
+        mark: Mark.satisfied,
         note: 'already released',
       );
       await verifyAvailability(
@@ -421,7 +431,7 @@ final class ReleasePublicationCoordinator {
       output.blank();
       output.line(
         '${unit.name} ${unit.version}',
-        mark: Mark.done,
+        mark: Mark.satisfied,
         note: 'already released',
       );
       await verifyAvailability(
@@ -522,7 +532,8 @@ final class ReleasePublicationCoordinator {
         git: await refreshGit(),
         environment: refreshEnvironment(),
         progress: sessionProgress.combined(grouped),
-        runInteractive: sessionProgress.interactive(tools),
+        runInteractive:
+            allowInteractiveTools ? sessionProgress.interactive(tools) : null,
       );
       final beforeMatches = grouped.every((target) {
         final module = inspector.targets.moduleForTarget(target);
@@ -988,7 +999,8 @@ final class ReleasePublicationCoordinator {
       tools: tools,
       stage: stage,
       progress: releaseProgress.handle(target),
-      runInteractive: releaseProgress.interactive(tools),
+      runInteractive:
+          allowInteractiveTools ? releaseProgress.interactive(tools) : null,
       wait: wait,
       confirmDeadline: confirmDeadline,
       confirmInterval: confirmInterval,
@@ -1286,7 +1298,11 @@ final class ReleasePublicationCoordinator {
 
     final disclosed = <String>[];
     output.blank();
-    output.line('Release ${unit.name} ${unit.version}', tone: Tone.header);
+    output.line(
+      'Release ${unit.name} ${unit.version}',
+      role: VisualRole.checkpoint,
+      strong: true,
+    );
 
     // Grouped by destination, the way status and staging read. What is
     // permanent is said on the row it belongs to: a paragraph explaining
@@ -1311,6 +1327,9 @@ final class ReleasePublicationCoordinator {
         note: [target.planNote, ...permanence].join(' · '),
         depth: 1,
         labelWidth: 26,
+        role: VisualRole.releaseTarget,
+        noteState:
+            permanence.isEmpty ? RuntimeState.neutral : RuntimeState.attention,
       );
     }
     final firstSigning = signing?.firstCertificate == null ? null : signing;
@@ -1325,6 +1344,8 @@ final class ReleasePublicationCoordinator {
             'permanent · first claim',
         depth: 1,
         labelWidth: 26,
+        role: VisualRole.requirement,
+        noteState: RuntimeState.attention,
       );
     }
     // Nothing is said about permanence beyond the rows. A sentence telling

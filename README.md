@@ -54,7 +54,40 @@ ships through tags, binaries, GitHub, or Homebrew, press `a` to show it. JSON
 output still reports every discovered candidate.
 
 That proposal is the whole configuration. Targets are opt-in —
-release-kit's own file says yes to all of them. `rk status` checks the
+release-kit's own file says yes to all of them. `rk plan` draws the configured
+release graph before rk observes public state or changes anything:
+
+```console
+$ rk plan
+RELEASE-KIT RELEASE PLAN
+main@888444b · configured topology
+
+└─ 1 · rk 0.1.0
+   ├─ STAGE
+   │  └─ [source snapshot]
+   │     ├─▶ [package archive]
+   │     ├─▶ [release notes]
+   │     ├─▶ linux-arm64  [build] ─▶ [archive]
+   │     ├─▶ linux-x64  [build] ─▶ [archive]
+   │     ├─▶ macos-arm64  [build + sign] ─▶ [notarize] ─▶ [archive]
+   │     ├─▶ [Homebrew formula] · after platform archives
+   │     └─▶ [complete and validate stage] · joins every stage branch
+   └─ PUBLIC
+      └─▶ [tag v0.1.0]
+          ├─▶ [pub.dev rk@0.1.0]
+          └─▶ [GitHub Release · 4 assets]
+              └─▶ [Homebrew · rk.rb]
+
+source-only · destinations not inspected · nothing changed
+```
+
+The graph and its direct dependency edges come from the same stage and public
+contracts that `rk release` executes. It is source-only: it does not inspect
+destinations, acquire credentials, build artifacts, or write a stage. Wide
+terminals receive the tree; narrow terminals and pipes receive an outline, and
+`--json` exposes the canonical nodes.
+
+`rk status` checks the
 destinations themselves, not a log; "Not staged" is the private work
 that must finish before anything goes public:
 
@@ -176,6 +209,7 @@ Release core 0.3.0? [y/N]
 | | |
 |---|---|
 | `rk init` | propose a `release.toml` |
+| `rk plan [unit]` | show the configured source-only release graph |
 | `rk status` | inspect this repository |
 | `rk release` | publish unfinished units |
 | `rk release <unit>` | one unit |

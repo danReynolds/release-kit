@@ -267,9 +267,9 @@ network, or credentials: `target list` describes every release choice in the
 installed binary, and `target <name>` explains one choice's requirements,
 native sources, RK settings, and minimal configuration.
 
-`rk init` · `rk status` · `rk release`. Bare `rk` runs `status`. `rk clean`
-is a separate repository-local maintenance command; it neither resolves a
-release plan nor reads a public target.
+`rk init` · `rk plan` · `rk status` · `rk release`. Bare `rk` runs `status`.
+`rk clean` is a separate repository-local maintenance command; it neither
+resolves a release plan nor reads a public target.
 
 `status` takes an optional unit. `release` takes an optional unit: naming one
 keeps the operation narrow, while a bare release coordinates all unfinished
@@ -293,6 +293,10 @@ selector.
   never infers a binary channel from an `executables:` block — declaring an
   executable means `dart pub global activate` works, not "ship a signed
   tarball." A repository with nothing releasable exits 0.
+- **`rk plan [unit]`** — derive the complete configured prerequisite, private
+  producer, completion, and public-target graph from source. It inspects no
+  destination, acquires no credential, builds nothing, and writes no stage.
+  Naming a unit narrows the view; JSON retains the graph's direct edges.
 - **`rk status`** — online and read-only. Resolves the intended release,
   inspects an exact local stage when one exists, and inspects all configured
   public targets in parallel. It reports each target's current and intended
@@ -489,11 +493,20 @@ concrete `Fix:`. Only a refusal concludes the report — `N issues prevent
 release` — because success is the absence of one, and the rows above already
 say what is published and what is staged.
 
-Colour carries no unique information: green is success, red a concrete or
-actionable problem (including an online target read that failed), yellow an
-unknown with no linked issue such as an offline read, cyan a next command, and
-dim text secondary. `NO_COLOR`, `TERM=dumb`, non-TTY output, and `--json`
-contain no ANSI or cursor movement.
+Colour carries no unique information. Static roles are blue for local work,
+violet for completion checkpoints and joins, amber for requirements and safety
+disclosures, cyan for public destinations and operator actions, and grey for
+secondary context. Runtime state overrides that role: active is cyan, newly
+completed is green, already exact or skipped is grey, attention is amber, and
+failure is red. A source-only plan therefore never uses green. Marks and words
+carry the same meaning without colour. `NO_COLOR` disables SGR colour and
+emphasis while retaining live cursor rendering on a capable TTY.
+`TERM=dumb`, non-TTY output, and `--json` disable both SGR styling and cursor
+movement.
+
+Provider and tool text is untrusted terminal input. Human rendering spells
+control bytes inertly rather than allowing captured output to move the cursor
+or rewrite the screen; JSON and diagnosis evidence retain the original text.
 
 **Every halt opens with a plain sentence** answering the only two questions
 an operator has, before any verdict noun: did any public target change, and is
@@ -539,8 +552,10 @@ publication therefore share one fixed-height board:
   attempted`, and the normal issue immediately below supplies the explanation
   and fix. Ambiguous command failures are read back before RK chooses mutation
   failure versus verification failure.
-- **Native prompts remain native.** RK leaves one durable handoff line, yields
-  the terminal to login or publish, then restores the board below that output.
+- **Native prompts remain native on an attached terminal.** RK leaves one
+  durable handoff line, yields the terminal to login or publish, then restores
+  the board below that output. JSON and redirected releases never inherit a
+  native prompt; they require an existing token or session.
 - **On completion, the public result is printed** — the URLs and install
   command a person actually wants next — not a count of internal checks.
 
@@ -554,11 +569,12 @@ its own internals — reading files, resolving config, counting checks. It
 reports the work, while the work is the thing the user is waiting for.
 
 **Diagnosis.** Reality records what exists and nothing about why a run
-failed. When a failed run may have acted, or whenever rk itself crashes, rk
-writes a diagnosis directory inside the workspace with the report and its
-attachments. A refusal that provably acted on nothing remains entirely in its
-human or JSON report. rk never reads a diagnosis back; deleting it is always
-safe.
+failed. When a failed run may have acted, or whenever an operational command
+crashes, rk writes a diagnosis directory inside the workspace with the report
+and its attachments. `rk plan` keeps its stricter read-only promise even on an
+internal crash and reports the error without writing evidence. A refusal that
+provably acted on nothing remains entirely in its human or JSON report. rk
+never reads a diagnosis back; deleting it is always safe.
 
 ## Execution
 
@@ -770,11 +786,12 @@ Native tools remain the credential owners and rk never reads their secrets.
 For a normal release, rk performs safe readiness checks first, builds and
 validates the complete private stage, refreshes public observations, then
 acquires native sessions before authorization. `dart pub login` remains
-attached to the terminal; GitHub checks its existing `gh` session. `status`
-and `release --stage` never acquire sessions. Failure is target-specific and
-halts before acting. Success proves a usable session, not write authority;
-publish and exact read-back remain the final proof. Publishers also run
-attached to the terminal so native prompts can pass through.
+attached only for a human release with both terminal ends visible; JSON and
+redirected releases require an existing token or session. GitHub checks its
+existing `gh` session. `status` and `release --stage` never acquire sessions.
+Failure is target-specific and halts before acting. Success proves a usable
+session, not write authority; provider acts are non-interactive and captured,
+and exact read-back remains the final proof.
 
 ## Adapters
 

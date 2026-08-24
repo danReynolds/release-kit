@@ -39,6 +39,27 @@ MemorySourceTree _tree({String changelog = '## 0.2.0\n'}) => MemorySourceTree({
       'packages/keybay/CHANGELOG.md': changelog,
     }, description: '/repo/keybay');
 
+Map<String, String> _storedPubSessionEnvironment() {
+  final root = Directory.systemTemp.createTempSync('rk-pub-session-test-');
+  addTearDown(() {
+    if (root.existsSync()) root.deleteSync(recursive: true);
+  });
+  final environment =
+      Platform.isWindows ? {'APPDATA': root.path} : {'HOME': root.path};
+  final credentials = Platform.isWindows
+      ? File('${root.path}/dart/pub-credentials.json')
+      : Platform.isMacOS
+          ? File(
+              '${root.path}/Library/Application Support/dart/'
+              'pub-credentials.json',
+            )
+          : File('${root.path}/.config/dart/pub-credentials.json');
+  credentials
+    ..parent.createSync(recursive: true)
+    ..writeAsStringSync('{"accessToken":"fixture"}');
+  return environment;
+}
+
 /// The archive a faithful publish of `_tree()`'s package would produce.
 List<int> publishedBytes({String version = '0.2.0'}) =>
     ArchiveBuilder.gzip(ArchiveBuilder.tar([
@@ -165,6 +186,43 @@ class Ran {
       ((report['problems'] as List?) ?? const []).cast<Map<String, Object?>>();
 }
 
+final class _InteractiveTrackingTools implements Tools {
+  _InteractiveTrackingTools(this.delegate, this.onInteractive);
+
+  final RecordingTools delegate;
+  final void Function(String key)? onInteractive;
+
+  @override
+  Future<ToolResult> run(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+    Map<String, String>? environment,
+    Duration? timeout,
+  }) =>
+      delegate.run(
+        executable,
+        arguments,
+        workingDirectory: workingDirectory,
+        environment: environment,
+        timeout: timeout,
+      );
+
+  @override
+  Future<int> runInteractive(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+  }) {
+    onInteractive?.call('$executable ${arguments.join(' ')}');
+    return delegate.runInteractive(
+      executable,
+      arguments,
+      workingDirectory: workingDirectory,
+    );
+  }
+}
+
 Future<Ran> release({
   MemorySourceTree? source,
   GitState? state,
@@ -174,6 +232,7 @@ Future<Ran> release({
   bool dryRun = false,
   Map<String, ToolResult> results = const {},
   void Function(String key)? onRun,
+  void Function(String key)? onInteractive,
   void Function()? onConfirm,
   ToolResult? Function(String key)? answers,
   Iterable<String> onRemote = const [],
@@ -181,6 +240,7 @@ Future<Ran> release({
   String config = _config,
   String? only = 'core',
   HostCapabilities? capabilities,
+  bool allowInteractiveTools = true,
 }) async {
   final buffer = StringBuffer();
   final diagnostics = Diagnostics();
@@ -236,7 +296,7 @@ Future<Ran> release({
   // `cat-file` below is where rk reads it back — the fixture models the object,
   // not the intent, because that is the distinction rk now enforces.
   final signedTags = <String>{...signedExistingTags};
-  final recorder = RecordingTools(
+  final recording = RecordingTools(
     answers: (key) {
       final scripted = results[_normalizedPubKey(key)];
       if (scripted != null) return scripted;
@@ -338,6 +398,7 @@ Future<Ran> release({
       onRun?.call(_normalizedPubKey(key));
     },
   );
+  final recorder = _InteractiveTrackingTools(recording, onInteractive);
 
   final effectiveRegistry = registry ??
       FakeRegistry({
@@ -366,6 +427,7 @@ Future<Ran> release({
     // instead of failing, because even the framework's timeout timer starved.
     wait: (_) => Future<void>.delayed(Duration.zero),
     output: Output(sink: buffer.write, isTerminal: false, useColor: false),
+    allowInteractiveTools: allowInteractiveTools,
     confirm: typed == null
         ? null
         : (_) async {
@@ -396,7 +458,7 @@ Future<Ran> release({
   return Ran(
     code,
     buffer.toString(),
-    recorder.calls.map(_normalizedPubKey).toList(),
+    recording.calls.map(_normalizedPubKey).toList(),
     jsonDecode(command.output.report.encode(exit: code))
         as Map<String, Object?>,
   );
@@ -999,6 +1061,71 @@ void main() {
     expect(ran.calls,
         isNot(contains('dart pub publish --from-archive <archive> --force')));
     expect('not attempted'.allMatches(ran.text), hasLength(2));
+  });
+
+  test('a redirected release never falls through to inherited-stdio login',
+      () async {
+    final interactive = <String>[];
+    final ran = await release(
+      allowInteractiveTools: false,
+      refreshEnvironment: _storedPubSessionEnvironment,
+      onInteractive: interactive.add,
+      answers: (key) => key == 'dart pub login'
+          ? ToolResult(
+              exitCode: 1,
+              stdout: '',
+              stderr: 'browser login required',
+            )
+          : null,
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(ran.problems.map((problem) => problem['code']), ['RK-PUB-007']);
+    expect(ran.text, contains('requires an attached terminal'));
+    expect(
+      ran.calls.where((call) => call == 'dart pub login'),
+      hasLength(1),
+      reason: 'the one captured attempt is the quiet probe',
+    );
+    expect(
+      interactive,
+      isEmpty,
+      reason: 'redirected output must never launch an inherited-stdio tool',
+    );
+  });
+
+  test('an attached release may retry failed quiet login interactively',
+      () async {
+    final interactive = <String>[];
+    final ran = await release(
+      typed: 'no',
+      allowInteractiveTools: true,
+      refreshEnvironment: _storedPubSessionEnvironment,
+      onInteractive: interactive.add,
+      answers: (key) => key == 'dart pub login'
+          ? ToolResult(
+              exitCode: interactive.isEmpty ? 1 : 0,
+              stdout: '',
+              stderr: '',
+            )
+          : null,
+    );
+
+    expect(interactive, ['dart pub login']);
+    expect(
+      ran.calls.where((call) => call == 'dart pub login'),
+      hasLength(2),
+      reason: 'the attached run keeps the quiet-then-interactive behavior',
+    );
+    expect(
+      ran.problems.map((problem) => problem['code']),
+      isNot(contains('RK-PUB-007')),
+    );
+    expect(
+      ran.problems.map((problem) => problem['code']),
+      contains('RK-AUTH-002'),
+      reason: 'the successful interactive retry reaches authorization',
+    );
   });
 
   test('a pub login launch error is a release refusal, not an rk crash',

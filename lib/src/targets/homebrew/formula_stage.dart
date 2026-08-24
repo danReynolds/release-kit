@@ -89,6 +89,7 @@ TargetStage homebrewFormulaStage({
   return TargetStage(
     target: target,
     contract: contract,
+    planLabel: 'Homebrew formula',
     progress: [
       TargetStageProgress.output(
         id: 'formula',

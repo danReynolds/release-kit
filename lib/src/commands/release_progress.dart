@@ -213,7 +213,10 @@ final class StageReleaseProgress {
         final note = _noteFor(expected);
         switch (controller.state) {
           case ProgressRowState.pending:
-            controller.restoreComplete(note: note);
+            controller.restoreComplete(
+              note: note,
+              mark: ProgressRowMark.satisfied,
+            );
           case ProgressRowState.active:
             controller.complete(note: note);
           case ProgressRowState.complete:
