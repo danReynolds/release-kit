@@ -490,7 +490,8 @@ dependencies:
       expect(rendered, contains('[build] ─▶ [archive]'));
       expect(rendered, contains('[finalize stage]'));
       expect(rendered, contains('needs all stage work'));
-      expect(rendered, contains('source-only · no destination checks'));
+      expect(rendered, contains('no destination checks · no changes'));
+      expect(rendered, isNot(contains('source-only ·')));
       expect(rendered, isNot(contains('configured topology')));
     });
 
@@ -589,7 +590,8 @@ dependencies:
       expect(rendered, isNot(contains('cli/stage/source')));
       expect(rendered, isNot(contains('cli/tag/cli-v1.2.0')));
       expect(rendered, isNot(contains('cli/github-release/cli-v1.2.0')));
-      expect(rendered, contains('source-only · no destination checks'));
+      expect(rendered, contains('no destination checks · no changes'));
+      expect(rendered, isNot(contains('source-only ·')));
 
       final colored = _render(
         _plan().select('cli'),

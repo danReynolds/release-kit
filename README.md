@@ -78,7 +78,7 @@ main@888444b
           └─▶ [GitHub Release · 4 assets]
               └─▶ [Homebrew · rk.rb]
 
-source-only · no destination checks · no changes
+no destination checks · no changes
 ```
 
 The graph and its direct dependency edges come from the same stage and public

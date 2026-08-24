@@ -115,7 +115,7 @@ final class ReleasePlanRenderer {
       const [OutputSpan('')],
       const [
         OutputSpan(
-          'source-only · no destination checks · no changes',
+          'no destination checks · no changes',
           role: VisualRole.secondary,
         ),
       ],
@@ -336,7 +336,7 @@ final class ReleasePlanRenderer {
     }
     output.blank();
     output.say(
-      'source-only · no destination checks · no changes',
+      'no destination checks · no changes',
       role: VisualRole.secondary,
     );
   }
