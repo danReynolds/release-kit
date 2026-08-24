@@ -83,7 +83,7 @@ executables:
     expect(disabled.message, contains('disabled'));
   });
 
-  test('Linux init proposes its native platform and no macOS binary', () {
+  test('Linux init proposes every Linux platform it can build', () {
     var plan = discover(
       {
         'pubspec.yaml': '''
@@ -104,7 +104,7 @@ executables:
     final proposal = plan.renderToml();
 
     expect(proposal, contains('"linux-x64"'));
-    expect(proposal, isNot(contains('"linux-arm64"')));
+    expect(proposal, contains('"linux-arm64"'));
     expect(proposal, isNot(contains('"macos-arm64"')));
     expect(
       plan.binaryPlatformNotices,
@@ -112,14 +112,35 @@ executables:
         startsWith('macos-arm64 was not selected:'),
       ),
     );
-    expect(
-      plan.binaryPlatformNotices,
-      contains(
-        contains('container runtime is optional'),
+  });
+
+  test('macOS init proposes native macOS and both Linux cross-builds', () {
+    var plan = discover(
+      {
+        'pubspec.yaml': '''
+name: tool
+version: 1.2.3
+executables:
+  tool: tool
+''',
+      },
+      capabilities: HostCapabilities(
+        hostPlatform: 'macos-arm64',
+        containerRuntime: null,
+        hasNativeAssets: false,
       ),
-      reason: 'the cross-build stays available without Docker, but init '
-          'does not silently opt into weaker execution evidence',
     );
+
+    plan = plan.toggle(0, ReleaseChoice.binary).plan;
+
+    expect(
+      plan.renderToml(),
+      contains(
+        'binary_platforms = '
+        '["macos-arm64", "linux-x64", "linux-arm64"]',
+      ),
+    );
+    expect(plan.binaryPlatformNotices, isEmpty);
   });
 
   test('native assets keep init on the host platform', () {

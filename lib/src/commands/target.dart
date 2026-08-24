@@ -177,8 +177,9 @@ final Map<ReleaseChoice, _Reference> _references = {
     configure: [
       'binary_platforms = ["macos-arm64", "linux-x64"]',
       'Required on the project. Choose one or more supported platforms.',
-      '`rk init` defaults to this host\'s native platform. Add another only '
-          'when release will run on a host that can produce it.',
+      '`rk init` defaults to every platform this host can produce. Pure-Dart '
+          'Linux binaries can be cross-compiled from macOS; Docker or Podman '
+          'is optional proof, not a build requirement.',
     ],
     usesBinaryPlatforms: true,
     nativeConfiguration: ['Executable and version    pubspec.yaml'],

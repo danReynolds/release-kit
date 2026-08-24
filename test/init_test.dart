@@ -51,8 +51,7 @@ void main() {
     expect(buffer.toString(), contains('workspace root'));
   });
 
-  test('a Linux proposal is finishable on Linux when binaries are selected',
-      () async {
+  test('a Linux proposal includes every binary Linux can produce', () async {
     final buffer = StringBuffer();
     final written = <String, String>{};
     final output =
@@ -80,15 +79,15 @@ executables:
 
     expect(code, ExitCodes.ok);
     expect(written['release.toml'], contains('"linux-x64"'));
-    expect(written['release.toml'], isNot(contains('"linux-arm64"')));
+    expect(written['release.toml'], contains('"linux-arm64"'));
     expect(written['release.toml'], isNot(contains('"macos-arm64"')));
     expect(buffer.toString(), contains('macos-arm64 was not selected'));
     final document = jsonDecode(output.report.encode(exit: code)) as Map;
     final platforms =
         ((document['init'] as Map)['binary_platforms'] as List).cast<Map>();
     expect(
-      platforms.singleWhere((item) => item['name'] == 'macos-arm64'),
-      containsPair('selected_by_default', false),
+      platforms.singleWhere((item) => item['name'] == 'linux-arm64'),
+      containsPair('selected_by_default', true),
     );
   });
 

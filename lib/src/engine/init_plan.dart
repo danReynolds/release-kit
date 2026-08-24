@@ -92,10 +92,7 @@ final class InitPlan {
     final platforms = List<PlatformCapability>.unmodifiable(
       platformCapabilities,
     );
-    final defaultBinaryPlatforms = platforms
-        .where((platform) => platform.capability == Capability.native)
-        .map((platform) => platform.platform)
-        .toList();
+    final defaultBinaryPlatforms = _defaultBinaryPlatformsFor(platforms);
     final native = DartWorkspaceDiscovery(tree, trackedManifests: gitBound);
     final notices = [...native.notices];
     final projects = native.projects
@@ -232,10 +229,8 @@ final class InitPlan {
   List<InitCandidate> get included =>
       candidates.where((candidate) => candidate.selected.isNotEmpty).toList();
 
-  List<String> get defaultBinaryPlatforms => platformCapabilities
-      .where((platform) => platform.capability == Capability.native)
-      .map((platform) => platform.platform)
-      .toList();
+  List<String> get defaultBinaryPlatforms =>
+      _defaultBinaryPlatformsFor(platformCapabilities);
 
   /// Host facts worth disclosing only when the proposal actually ships a
   /// binary. Product intent stays editable in release.toml, but init's own
@@ -248,20 +243,10 @@ final class InitPlan {
     }
     return [
       for (final platform in platformCapabilities)
-        if (platform.capability != Capability.native)
-          if (!platform.canProduce)
-            '${platform.platform} was not selected: ${platform.reason}. '
-                'Add it only when the release will run on a host that can '
-                'produce it.'
-          else if (!platform.canProve)
-            '${platform.platform} was not selected by default. It can be '
-                'built here but not executed here: ${platform.reason}. The '
-                'container runtime is optional; rk will disclose the missing '
-                'smoke test instead of blocking if you add this cross-build '
-                'explicitly.'
-          else
-            '${platform.platform} was not selected by default. Add it to '
-                'binary_platforms if this release should cross-build it.',
+        if (platform.capability != Capability.native && !platform.canProduce)
+          '${platform.platform} was not selected: ${platform.reason}. '
+              'Add it only when the release will run on a host that can '
+              'produce it.',
     ];
   }
 
@@ -369,7 +354,7 @@ final class InitPlan {
           for (final platform in platformCapabilities)
             {
               'name': platform.platform,
-              'selected_by_default': platform.capability == Capability.native,
+              'selected_by_default': platform.canProduce,
               'can_execute_here': platform.canProve,
               if (platform.reason != null) 'reason': platform.reason,
             },
@@ -393,4 +378,15 @@ final class InitPlan {
     final cleaned = package.toLowerCase().replaceAll(RegExp('[^a-z0-9_-]'), '');
     return cleaned.isEmpty ? 'main' : cleaned;
   }
+
+  static List<String> _defaultBinaryPlatformsFor(
+    Iterable<PlatformCapability> platforms,
+  ) =>
+      [
+        for (final platform in platforms)
+          if (platform.capability == Capability.native) platform.platform,
+        for (final platform in platforms)
+          if (platform.capability != Capability.native && platform.canProduce)
+            platform.platform,
+      ];
 }

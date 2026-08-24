@@ -381,6 +381,8 @@ void main() {
 
     expect(outcome.ok, isTrue, reason: outcome.problem ?? '');
     expect(outcome.unproven, contains('container runtime'));
+    expect(tools.calls.first, contains('--target-os=linux'));
+    expect(tools.calls.first, contains('--target-arch=x64'));
     expect(
       tools.calls.any((c) => c.contains('--version')),
       isFalse,
