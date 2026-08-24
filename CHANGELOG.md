@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `rk init` now selects every binary platform the release host can produce;
+  macOS proposes its native archive plus both pure-Dart Linux cross-builds.
+- Cross-built Linux artifacts always receive explicit Dart target flags, even
+  when Docker or Podman is unavailable. Containers provide the optional smoke
+  test; they are not a cross-compilation requirement.
+
 ## 0.1.11
 
 - Releases no longer wait for Apple's online Gatekeeper ticket propagation

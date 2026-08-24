@@ -91,13 +91,12 @@ terminals receive the tree; narrow terminals and pipes receive an outline, and
 destinations themselves, not a log; "Not staged" is the private work
 that must finish before anything goes public:
 
-When Binary or Homebrew is selected, `rk init` proposes the current host's
-native binary platform. A Linux host can publish a Linux-only Homebrew Formula;
-it does not silently add a macOS artifact that requires a macOS release host.
-Add another supported platform to `binary_platforms` only when the release
-host can produce it. Docker and Podman are optional: without one, an explicitly
-selected cross-built Linux binary is marked as built but not executed instead
-of blocking the release.
+When Binary or Homebrew is selected, `rk init` proposes every binary platform
+the current host can produce. A macOS host can build its native macOS binary
+and cross-compile pure-Dart Linux binaries; a Linux host does not add a macOS
+artifact that requires a macOS release host. Docker and Podman are optional:
+they run cross-built Linux binaries for the smoke test. Without one, the Linux
+binary is still cross-compiled and is recorded as built but not executed.
 
 ```console
 $ rk status

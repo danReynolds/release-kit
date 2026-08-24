@@ -37,7 +37,8 @@ class DartCliBuilder {
       [
         'compile',
         'exe',
-        if (capability.capability == Capability.crossCompiled) ...[
+        if (capability.capability == Capability.crossCompiled ||
+            capability.capability == Capability.buildableUnproven) ...[
           '--target-os=${target.os}',
           '--target-arch=${target.arch}',
         ],
