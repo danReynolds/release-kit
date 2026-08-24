@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Releases no longer wait for Apple's online Gatekeeper ticket propagation
+  after exact publication. Notarization acceptance remains a mandatory stage
+  gate, and public release read-back remains exact.
+
 ## 0.1.10
 
 - `rk plan [unit]` now renders the configured source-only release graph from

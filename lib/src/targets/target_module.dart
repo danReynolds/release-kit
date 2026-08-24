@@ -142,8 +142,8 @@ abstract base class TargetModule {
   ///
   /// Publication read-back remains the release boundary. This optional check
   /// is for providers whose accepted bytes can become usable later (for
-  /// example a registry solver index or Apple's notarization ticket service).
-  /// A pending answer is a warning, never permission to publish again.
+  /// example a registry solver index). A pending answer is a warning, never
+  /// permission to publish again.
   Future<TargetAvailabilityOutcome?> checkAvailability(
     TargetAvailabilityContext context,
     ResolvedUnit unit,
@@ -529,13 +529,9 @@ final class TargetReleaseContext {
 
 /// Runtime dependencies for an informational post-release consumer check.
 final class TargetAvailabilityContext {
-  const TargetAvailabilityContext({
-    required this.tools,
-    required this.stage,
-  });
+  const TargetAvailabilityContext({required this.tools});
 
   final Tools tools;
-  final ReleaseStage? stage;
 }
 
 sealed class TargetAvailabilityOutcome {
