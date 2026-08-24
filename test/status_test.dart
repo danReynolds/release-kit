@@ -1094,6 +1094,87 @@ executables:
     );
   });
 
+  test('multiple units nest transient targets under semantic headings',
+      () async {
+    const multiUnitConfig = '''
+schema = 2
+
+[release.keybay]
+path = "packages/keybay"
+tag = "v{version}"
+publish = ["git-tag", "pub.dev"]
+
+[release.keybay_cli]
+path = "packages/keybay_cli"
+tag = "keybay_cli-v{version}"
+publish = ["git-tag", "pub.dev", "github-release"]
+''';
+    final multiUnitTree = MemorySourceTree({
+      'packages/keybay/pubspec.yaml': '''
+name: keybay
+version: 0.2.0
+repository: https://github.com/danReynolds/keybay
+''',
+      'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
+      'packages/keybay_cli/pubspec.yaml': '''
+name: keybay_cli
+version: 0.2.0
+repository: https://github.com/danReynolds/keybay
+''',
+      'packages/keybay_cli/CHANGELOG.md': '## 0.2.0\n',
+    }, description: '/repo/keybay');
+    late CoordinatedInspector controlled;
+    late StringBuffer buffer;
+    final running = statusRun(
+      withConfig: multiUnitConfig,
+      source: multiUnitTree,
+      state: git(),
+      registry: FakeRegistry(const {}),
+      isTerminal: true,
+      useColor: true,
+      onOutputReady: (output) => buffer = output,
+      inspectorBuilder: (git, _) => controlled = CoordinatedInspector(
+        registry: FakeRegistry(const {}),
+        git: git,
+        expected: 5,
+      ),
+    );
+
+    await controlled.allStarted.future.timeout(const Duration(seconds: 1));
+    await _waitForStatusText(
+      buffer,
+      (text) => text.contains('Release targets'),
+    );
+    final checking = _afterLastTransientErase(buffer.toString());
+    final visible = _withoutAnsi(checking);
+    expect(
+      visible.split('\n').where((line) => line.isNotEmpty),
+      [
+        'Release targets',
+        '  keybay',
+        matches(RegExp(r'^    . Git tag\s+checking$')),
+        matches(RegExp(r'^    . pub\.dev · keybay\s+checking$')),
+        '  keybay_cli',
+        matches(RegExp(r'^    . Git tag\s+checking$')),
+        matches(RegExp(r'^    . pub\.dev · keybay_cli\s+checking$')),
+        matches(RegExp(
+          r'^    . GitHub Release · danReynolds/keybay\s+checking$',
+        )),
+      ],
+    );
+    expect(checking, contains('\x1b[1;90m  keybay\x1b[0m'));
+    expect(checking, contains('\x1b[1;90m  keybay_cli\x1b[0m'));
+    expect(checking, contains('\x1b[36mGit tag'));
+    expect(visible, isNot(contains('keybay · Git tag')));
+    expect(visible, isNot(contains('keybay_cli · Git tag')));
+
+    controlled
+      ..finish(StepKind.tag)
+      ..finish(StepKind.publishRegistry)
+      ..finish(StepKind.publishRelease);
+    await running;
+  });
+
   test('publication headings and rows use the four verdict states', () async {
     const pubOnlyConfig = '''
 schema = 2

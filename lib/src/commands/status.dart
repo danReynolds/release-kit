@@ -77,7 +77,11 @@ class StatusCommand {
     try {
       snapshots = await Future.wait([
         for (final unit in units)
-          _gather(unit, checking, qualifyLabel: units.length > 1),
+          _gather(
+            unit,
+            checking,
+            group: units.length > 1 ? unit.name : null,
+          ),
       ]);
     } finally {
       checking.close();
@@ -159,7 +163,7 @@ class StatusCommand {
   Future<_UnitSnapshot> _gather(
     ResolvedUnit unit,
     TargetChecks checking, {
-    required bool qualifyLabel,
+    required String? group,
   }) async {
     final diagnostics = Diagnostics();
     final checklist = Checklist.derive(unit, resolution, diagnostics);
@@ -184,9 +188,8 @@ class StatusCommand {
     for (final expectation in expectations) {
       checking.add(
         expectation.step.id,
-        qualifyLabel
-            ? '${unit.name} · ${expectation.label}'
-            : expectation.label,
+        expectation.label,
+        group: group,
       );
     }
 

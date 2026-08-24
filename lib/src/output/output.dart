@@ -1376,9 +1376,9 @@ final class TargetChecks {
   final Map<String, ProgressRowController> _rows = {};
   var _closed = false;
 
-  void add(String id, String label) {
+  void add(String id, String label, {String? group}) {
     if (_closed || _rows.containsKey(id)) return;
-    final row = _board.addRow(id: id, label: label);
+    final row = _board.addRow(id: id, label: label, group: group);
     _rows[id] = row;
     row.handle.begin(CommonProgressActivities.checking);
   }
