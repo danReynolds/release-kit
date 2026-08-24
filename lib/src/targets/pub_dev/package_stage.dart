@@ -27,6 +27,7 @@ TargetStage pubDevPackageStage({required TargetPlan target}) {
   return TargetStage(
     target: target,
     contract: contract,
+    planLabel: 'package archive',
     progress: [
       TargetStageProgress.row(
         id: 'source',

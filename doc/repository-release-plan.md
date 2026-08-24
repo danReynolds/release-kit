@@ -9,6 +9,7 @@ release visits every unit that still has work, in dependency order; naming a
 unit narrows the operation to exactly that unit.
 
 ```text
+rk plan [unit]             show the configured graph; inspect no destination
 rk release                 release unfinished units in dependency order
 rk release <unit>          release exactly one unit
 rk release --yes           show the same plans; skip their yes/no prompts
@@ -105,8 +106,10 @@ Release order: fleury 0.3.0 -> fleury_test 0.2.1 -> fleury_widgets 0.4.2
 ```
 
 Each unit then retains the existing stage board, destination rows, safety
-disclosures, and completion output. Avoid a second batch state model or a
-speculative release-plan table.
+disclosures, and completion output. `rk release` does not repeat the static
+topology: `rk plan` is the separate source-only view of the same canonical
+stage and public edges. It adds no batch state model and makes no claim about
+what is already complete.
 
 The existing `units[]`, step verdicts/actions, `halt`, and `next[]` represent a
 multi-unit run in deterministic order. Authorization disclosures are qualified

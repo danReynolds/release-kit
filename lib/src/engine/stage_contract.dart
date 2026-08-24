@@ -86,27 +86,20 @@ typedef StageContractResolver = List<StageContributionContract> Function({
   required String sourceRoot,
 });
 
-/// The exact receipt shape one resolved unit is allowed to trust.
+/// The canonical private producer graph for one configured release unit.
 ///
-/// [StageInspector] proves that recorded bytes and dependency digests agree.
-/// This contract supplies the semantic half of that proof: every configured
-/// producer is present, in the order rk can resume, with the filenames,
-/// inputs, and evidence its operation owns. A canonical JSON document is not
-/// trusted merely because all of its hashes agree with itself.
-class StageReceiptContract {
-  StageReceiptContract._({
-    required this.unit,
-    required this.repository,
-    required this.sourceRoot,
+/// It is intentionally independent of a stage directory, compiler, host, and
+/// receipt. Both the receipt contract and `rk plan` consume this value, so the
+/// topology a person sees cannot omit target-owned work or drift from the
+/// graph a completed stage must prove.
+final class StageProducerGraph {
+  StageProducerGraph._({
     required List<StageStepContract> steps,
     required Map<String, Set<String>> dependencies,
-  })  : _steps = List<StageStepContract>.unmodifiable(steps),
+  })  : steps = List<StageStepContract>.unmodifiable(steps),
         _dependencies = Map<String, Set<String>>.unmodifiable(dependencies);
 
-  factory StageReceiptContract.forUnit({
-    required ResolvedUnit unit,
-    required String? repository,
-    required String sourceRoot,
+  factory StageProducerGraph.forUnit({
     required Iterable<StageContributionContract> targetContributions,
     required Iterable<StageStepContract> localProducers,
   }) {
@@ -166,13 +159,59 @@ class StageReceiptContract {
       idOf: (step) => step.name,
       dependenciesOf: (step) => dependencies[step.name]!,
     );
-    final steps = graph.ordered();
+    return StageProducerGraph._(
+      steps: graph.ordered(),
+      dependencies: dependencies,
+    );
+  }
+
+  final List<StageStepContract> steps;
+  final Map<String, Set<String>> _dependencies;
+
+  List<String> get producerNames => [for (final step in steps) step.name];
+
+  Set<String> dependenciesOf(String producer) =>
+      _dependencies[producer] ??
+      (throw StateError('the stage graph has no producer "$producer"'));
+}
+
+/// The exact receipt shape one resolved unit is allowed to trust.
+///
+/// [StageInspector] proves that recorded bytes and dependency digests agree.
+/// This contract supplies the semantic half of that proof: every configured
+/// producer is present, in the order rk can resume, with the filenames,
+/// inputs, and evidence its operation owns. A canonical JSON document is not
+/// trusted merely because all of its hashes agree with itself.
+class StageReceiptContract {
+  StageReceiptContract._({
+    required this.unit,
+    required this.repository,
+    required this.sourceRoot,
+    required List<StageStepContract> steps,
+    required Map<String, Set<String>> dependencies,
+  })  : _steps = List<StageStepContract>.unmodifiable(steps),
+        _dependencies = Map<String, Set<String>>.unmodifiable(dependencies);
+
+  factory StageReceiptContract.forUnit({
+    required ResolvedUnit unit,
+    required String? repository,
+    required String sourceRoot,
+    required Iterable<StageContributionContract> targetContributions,
+    required Iterable<StageStepContract> localProducers,
+  }) {
+    final graph = StageProducerGraph.forUnit(
+      targetContributions: targetContributions,
+      localProducers: localProducers,
+    );
     return StageReceiptContract._(
       unit: unit,
       repository: repository,
       sourceRoot: sourceRoot,
-      steps: steps,
-      dependencies: dependencies,
+      steps: graph.steps,
+      dependencies: {
+        for (final producer in graph.producerNames)
+          producer: graph.dependenciesOf(producer),
+      },
     );
   }
 

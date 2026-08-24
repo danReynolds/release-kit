@@ -86,9 +86,9 @@ class StatusCommand {
     output.repository(
       name: tree.description.split('/').last,
       branch: repositoryGit.branch,
-      commit: repositoryGit.isBound ? repositoryGit.shortHead : null,
+      commit: repositoryGit.hasCommit ? repositoryGit.shortHead : null,
       uncommitted: repositoryGit.uncommitted.length,
-      head: git.isBound ? git.head : null,
+      head: git.hasCommit ? git.head : null,
       remote: repositoryGit.originUrl,
       sourceBinding: git.isBound ? 'gitCommit' : 'unbound',
       sourceComparison: git.isBound ? 'exact' : 'unavailable',
@@ -99,7 +99,7 @@ class StatusCommand {
         note: 'unbound · comparison unavailable',
         depth: 1,
         labelWidth: 18,
-        noteTone: Tone.muted,
+        noteState: RuntimeState.attention,
       );
     }
 
@@ -134,7 +134,7 @@ class StatusCommand {
       output.line(
         '$count ${count == 1 ? 'issue prevents' : 'issues prevent'} release',
         mark: Mark.blocked,
-        tone: Tone.bad,
+        state: RuntimeState.failure,
       );
     }
 
@@ -852,6 +852,11 @@ class StatusCommand {
         snapshot.targets.every((t) => t.currentKnown) && currents.length == 1;
     final verdicts = snapshot.targets.map((t) => t.inspection.verdict).toSet();
     final agreed = verdicts.length == 1 ? verdicts.single : null;
+    final linkedTargets = {
+      for (final issue in snapshot.issues)
+        if (issue.target != null) issue.target,
+    };
+    final publicationState = _publicationState(verdicts);
 
     output.blank();
     output.line(
@@ -863,15 +868,16 @@ class StatusCommand {
         null => 'Public targets',
       },
       depth: 1,
-      tone: Tone.header,
+      role: VisualRole.releaseTarget,
+      state: publicationState,
+      strong: true,
     );
 
     for (final target in snapshot.targets) {
       final state = target.inspection;
-      final linked = snapshot.issues.any(
-        (issue) => issue.target == target.expectation.step.id,
-      );
-      final tone = linked ? Tone.bad : Tone.of(state.verdict);
+      final linked = linkedTargets.contains(target.expectation.step.id);
+      final visualState =
+          linked ? RuntimeState.failure : _publicationState({state.verdict});
       final speaks = state.verdict == Verdict.conflict ||
           state.verdict == Verdict.unknown ||
           state.evidence['comparison'] == 'unavailable' ||
@@ -884,7 +890,7 @@ class StatusCommand {
             : agreed != null
                 ? Mark.none
                 : switch (state.verdict) {
-                    Verdict.exact => Mark.done,
+                    Verdict.exact => Mark.satisfied,
                     Verdict.conflict => Mark.blocked,
                     Verdict.absent || Verdict.unknown => Mark.none,
                   },
@@ -902,8 +908,9 @@ class StatusCommand {
         ].join(' · '),
         depth: 2,
         labelWidth: 30,
-        tone: tone,
-        noteTone: speaks ? tone : Tone.muted,
+        role: VisualRole.releaseTarget,
+        state: visualState,
+        noteState: speaks ? visualState : RuntimeState.satisfied,
       );
     }
   }
@@ -961,6 +968,7 @@ class StatusCommand {
       for (final row in rows) row.$3,
     };
     final agreed = statuses.length == 1 ? statuses.single : null;
+    final stageState = _stageState(statuses);
 
     output.blank();
     output.line(
@@ -971,7 +979,9 @@ class StatusCommand {
         null => 'Stage',
       },
       depth: 1,
-      tone: Tone.header,
+      role: VisualRole.localWork,
+      state: stageState,
+      strong: true,
     );
 
     if (localProject != null) {
@@ -980,23 +990,33 @@ class StatusCommand {
         mark: agreed != null ? Mark.none : _artifactMark(localStatus!),
         note: agreed != null ? null : _artifactNote(localStatus!),
         depth: 2,
-        tone: Tone.plain,
-        noteTone: Tone.muted,
+        role: VisualRole.localWork,
+        state: _artifactState(localStatus!),
+        noteState: _artifactState(localStatus),
       );
       for (final platform in [...localProject.binaryPlatforms]..sort()) {
         final problem = localBlocked[platform];
         output.line(
           ReleaseAssets.archivePath(localProject, platform),
           mark: staged
-              ? Mark.done
+              ? Mark.satisfied
               : problem == null
                   ? Mark.none
                   : Mark.blocked,
           note: staged ? 'staged' : problem,
           depth: 3,
           labelWidth: 44,
-          tone: problem == null ? Tone.plain : Tone.bad,
-          noteTone: problem == null ? Tone.muted : Tone.bad,
+          role: VisualRole.localWork,
+          state: staged
+              ? RuntimeState.satisfied
+              : problem == null
+                  ? RuntimeState.active
+                  : RuntimeState.failure,
+          noteState: staged
+              ? RuntimeState.satisfied
+              : problem == null
+                  ? RuntimeState.active
+                  : RuntimeState.failure,
         );
       }
     }
@@ -1013,8 +1033,9 @@ class StatusCommand {
         note: agreed != null ? summary : '$summary · ${_artifactNote(status)}',
         depth: 2,
         labelWidth: 30,
-        tone: Tone.plain,
-        noteTone: Tone.muted,
+        role: VisualRole.localWork,
+        state: _artifactState(status),
+        noteState: _artifactState(status),
       );
       // A broken artifact is named, always: which one and why are the only
       // questions it raises, and a count answers neither.
@@ -1025,8 +1046,8 @@ class StatusCommand {
           note: artifact.problem,
           depth: 3,
           labelWidth: 36,
-          tone: Tone.bad,
-          noteTone: Tone.bad,
+          state: RuntimeState.failure,
+          noteState: RuntimeState.failure,
         );
       }
     }
@@ -1067,9 +1088,32 @@ class StatusCommand {
 
   static Mark _artifactMark(ArtifactStatus status) => switch (status) {
         ArtifactStatus.notStaged => Mark.none,
-        ArtifactStatus.staged => Mark.done,
+        ArtifactStatus.staged => Mark.satisfied,
         ArtifactStatus.invalid => Mark.blocked,
       };
+
+  static RuntimeState _artifactState(ArtifactStatus status) => switch (status) {
+        ArtifactStatus.notStaged => RuntimeState.active,
+        ArtifactStatus.staged => RuntimeState.satisfied,
+        ArtifactStatus.invalid => RuntimeState.failure,
+      };
+
+  static RuntimeState _publicationState(Set<Verdict> verdicts) {
+    if (verdicts.contains(Verdict.conflict)) return RuntimeState.failure;
+    if (verdicts.contains(Verdict.unknown)) return RuntimeState.attention;
+    if (verdicts.every((verdict) => verdict == Verdict.exact)) {
+      return RuntimeState.satisfied;
+    }
+    return RuntimeState.active;
+  }
+
+  static RuntimeState _stageState(Set<ArtifactStatus> statuses) {
+    if (statuses.contains(ArtifactStatus.invalid)) return RuntimeState.failure;
+    if (statuses.every((status) => status == ArtifactStatus.staged)) {
+      return RuntimeState.satisfied;
+    }
+    return RuntimeState.active;
+  }
 
   void _renderIssues(List<StatusIssue> issues) {
     output.blank();
@@ -1088,13 +1132,13 @@ class StatusCommand {
         '$unit$where${diagnostic.message}',
         mark: Mark.blocked,
         depth: 1,
-        tone: Tone.bad,
+        state: RuntimeState.failure,
       );
       for (final entry in issue.evidence.entries) {
         output.line(
           '${entry.key}: ${entry.value}',
           depth: 2,
-          tone: Tone.muted,
+          role: VisualRole.secondary,
         );
       }
       output.say(

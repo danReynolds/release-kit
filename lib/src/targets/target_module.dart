@@ -414,9 +414,11 @@ final class TargetStage {
   TargetStage({
     required this.target,
     required this.contract,
+    required String planLabel,
     Iterable<TargetStageProgress> progress = const [],
     required this.prepare,
-  }) : progress = List.unmodifiable(progress) {
+  })  : planLabel = _planLabel(planLabel),
+        progress = List.unmodifiable(progress) {
     final ids = <String>{};
     final outputs = <String>{};
     for (final view in this.progress) {
@@ -439,8 +441,17 @@ final class TargetStage {
 
   final TargetPlan target;
   final StageContributionContract contract;
+  final String planLabel;
   final List<TargetStageProgress> progress;
   final TargetStageProducer prepare;
+
+  static String _planLabel(String value) {
+    final label = value.trim();
+    if (label.isEmpty || label.contains('\n')) {
+      throw ArgumentError('a target stage plan label must be one line');
+    }
+    return label;
+  }
 }
 
 /// How one target-owned stage contribution appears in the shared board.
@@ -495,7 +506,7 @@ final class TargetReleaseContext {
     required this.tools,
     required this.stage,
     required this.progress,
-    required this.runInteractive,
+    this.runInteractive,
     required this.wait,
     required this.confirmDeadline,
     required this.confirmInterval,
@@ -507,7 +518,9 @@ final class TargetReleaseContext {
   String? get repository => reads.repository;
   final ReleaseStage stage;
   final ProgressHandle progress;
-  final ProgressInteractiveRunner runInteractive;
+
+  /// Native inherited-stdio access, absent for JSON and redirected output.
+  final ProgressInteractiveRunner? runInteractive;
   Workspace get workspace => stage.directory.workspace;
   final Future<void> Function(Duration duration) wait;
   final Duration confirmDeadline;

@@ -9,6 +9,7 @@ This is the surface an agent drives a release through. The loop it
 supports, end to end:
 
 ```
+rk plan [unit] --json                   configured topology; source-only
 rk status <unit> --json                 where things stand; read-only
 rk release [unit] --stage --json        exact stage; name it with several units
 rk status <unit> --json                 confirm: staged, good to release
@@ -30,7 +31,7 @@ that run.
 
 | key | meaning |
 |---|---|
-| `rk` | schema version (currently `9`) |
+| `rk` | schema version (currently `10`) |
 | `command` | the verb that ran |
 | `mode` | present only where the run has one: `{stage}` on `release` |
 | `observed_at` | UTC ISO 8601 — when rk read the world |
@@ -39,6 +40,7 @@ that run.
 | `repository` | `{name, branch?, head?, remote, uncommitted?, source_binding?, source_comparison?}`. `head` is the full 40-char SHA and is absent for unbound source. `remote` is always present and null when no origin exists. Status and release report `source_binding` as `gitCommit` or `unbound`, independently from `source_comparison` (`exact` or `unavailable`) |
 | `init` | present on `init`: `{source: {binding, git_remote, github_repository}, notices[], candidates[]}`. `github_repository` is always present and null when unavailable. Each discovered candidate is reported even when the interactive selector hides it by default, with its unit, native project/path/version/executables and every option's `available`, redacted `reason`, `selected`, and deterministic `effects[]`. A candidate is included when at least one release output is selected |
 | `cleanup` | present on `clean`: `{root, path, found, removed}` for the frozen repository-local stage set. `root` is the absolute repository root and `path` is always `.rk/work/stages`; diagnoses are outside it and are never removed |
+| `plan` | present on `plan`: the canonical configured release topology. It is source-only and contains no observation, verdict, action, credential, or stage receipt |
 | `release_choices` | present on `target`: the static choices understood by this installed rk. This command reads no repository and these entries never contain `selected` or `available` |
 | `units[]` | per-unit: `{name, version, tag, steps[], targets[]?}`. `tag` is null when Git tagging is not selected |
 | `problems[]` | `{code, message, remedy?, source?, unit?, target?, evidence?}` — every refusal and blockage, with its `RK-*` code. `target`, when present, is the affected target id and makes that target's human row `✗`. `evidence`, when present, is the `attachments` key holding the failing tool's own output |
@@ -46,7 +48,7 @@ that run.
 | `next[]` | the commands that would advance things, as data. The human report does not print them; this is where they live |
 | `halt` | `{kind, sentence}` when the run halted |
 | `attachments` | documents that travel with the run (a proposed release.toml, pub's validation text). `tool-output/<n>-<code>.txt` holds what a native tool said when one is what failed; the `problems[]` entry names its key |
-| `diagnosis` | where evidence was written, on failed runs that acted |
+| `diagnosis` | where evidence was written, on failed runs that acted or non-`plan` crashes |
 
 `halt.kind` is one of `beforeActing`, `stoppedPartway`, `lostTrack`,
 `unfixableByRerun`, or `actedAndUnfixable`. `beforeActing` means no public
@@ -57,6 +59,43 @@ re-running can advance the work.
 An empty `problems[]` remains the release gate. `warnings[]` never changes the
 exit code or authorizes work by itself; it discloses facts such as a
 registry-only release capturing dirty working-tree state.
+
+## Release plan
+
+`rk plan [unit] --json` derives topology from the configured source and native
+manifests. It does not inspect public destinations or decide what is already
+complete. A clean Git repository is read from immutable `HEAD`; dirty and
+unbound source is captured as one double-read byte snapshot, and bound Git
+identity is revalidated before the document is emitted. The top-level `plan`
+object is:
+
+```text
+{
+  source_only: true,
+  destinations_inspected: false,
+  units: [{name, version, tag, requires_units[], nodes[]}]
+}
+```
+
+Each node has `id`, `kind`, `phase`, `summary`, and its direct dependency ids
+in `needs[]`. Optional typed context is `producer`, `project`, `platform`,
+`target`, `coordinate`, `requires_unit`, and `lane`. `phase` is `inspect`,
+`stage`, or `publish`. The `kind` vocabulary is `prerequisite`,
+`sourceSnapshot`, `targetStage`, `build`, `notarize`, `archive`,
+`completeStage`, `tag`, `publishRegistry`, `publishRelease`, and
+`publishHomebrew`.
+
+Node ids and `needs[]` are the machine graph. `lane`, when present, is an
+opaque equality key scoped to one unit and phase: nodes with the same key are
+mutually exclusive, but the key does not add a dependency edge. Among ready
+nodes competing for one lane, their order in `nodes[]` is the deterministic
+preference. Consumers must compare lane values for equality rather than parse
+their spelling. The human tree may fold repeated edges for readability.
+
+The units are in the same dependency order a bare `rk release` uses. Naming a
+unit narrows the returned unit list without pretending an external sibling
+requirement is satisfied. Plan nodes deliberately have no `verdict` or
+`action`: use `status` to observe state and `release` to record execution.
 
 ## Cleanup
 

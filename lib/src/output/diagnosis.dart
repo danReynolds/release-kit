@@ -13,6 +13,19 @@ import 'report.dart';
 /// always safe and the directory can never become the state store rk does not
 /// have.
 class Diagnosis {
+  /// Whether a failed run is allowed to leave repository-local evidence.
+  ///
+  /// `rk plan` is an unusually strict read-only surface: even an rk bug must
+  /// not make its "nothing changed" contract false. Other commands retain a
+  /// crash because the stack is otherwise lost, and retain an ordinary
+  /// failure only after the run began acting.
+  static bool shouldWrite({
+    required String command,
+    required bool acted,
+    required bool crashed,
+  }) =>
+      command != 'plan' && (acted || crashed);
+
   /// Writes [report] and [attachments] under `<root>/.rk/diagnosis/<stamp>/`,
   /// returning where they went so the operator can be told.
   ///

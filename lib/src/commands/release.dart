@@ -45,6 +45,7 @@ class ReleaseCommand {
     required this.tools,
     required this.output,
     required this.confirm,
+    required this.allowInteractiveTools,
     this.stageOnly = false,
     ReleaseStage Function(ResolvedUnit unit)? stageFor,
     ReleaseStage Function(ResolvedUnit unit, GitState git)? refreshStage,
@@ -107,6 +108,13 @@ class ReleaseCommand {
   /// or null when there is nobody to ask.
   final Future<String?> Function(String prompt)? confirm;
 
+  /// Whether a native provider may inherit this process's terminal.
+  ///
+  /// Machine output and redirected disclosures keep this false: a native
+  /// login must never write beside the one JSON document or ask a question
+  /// whose release context the operator cannot see.
+  final bool allowInteractiveTools;
+
   /// What this host can produce. Detection belongs at the composition edge so
   /// its bounded optional-runtime probes complete before the command is built;
   /// tests inject the host they mean to exercise.
@@ -144,6 +152,7 @@ class ReleaseCommand {
     refreshEnvironment: _refreshEnvironment,
     wait: _wait,
     confirm: confirm,
+    allowInteractiveTools: allowInteractiveTools,
     confirmDeadline: confirmDeadline,
     confirmInterval: confirmInterval,
   );
@@ -166,7 +175,7 @@ class ReleaseCommand {
       name: tree.description.split('/').last,
       branch: repositoryGit.branch,
       uncommitted: repositoryGit.uncommitted.length,
-      head: git.isBound ? git.head : null,
+      head: git.hasCommit ? git.head : null,
       remote: repositoryGit.originUrl,
       sourceBinding: git.isBound ? 'gitCommit' : 'unbound',
       sourceComparison: git.isBound ? 'exact' : 'unavailable',
@@ -406,7 +415,7 @@ class ReleaseCommand {
         publicSteps.every((step) => states[step.id]!.isExact)) {
       output.line(
         '${unit.name} ${unit.version}',
-        mark: Mark.done,
+        mark: Mark.satisfied,
         note: 'already released',
       );
       await _publication.verifyAvailability(
@@ -563,21 +572,23 @@ class ReleaseCommand {
       output.line(
         'Written to',
         depth: 1,
+        role: VisualRole.localWork,
+        strong: true,
       );
       final stagePath = stage.directory.repositoryRelativePath;
       final separator = stagePath.lastIndexOf(Platform.pathSeparator);
       if (separator < 0) {
-        output.line(stagePath, depth: 2, tone: Tone.muted);
+        output.line(stagePath, depth: 2, role: VisualRole.secondary);
       } else {
         output.line(
           stagePath.substring(0, separator + 1),
           depth: 2,
-          tone: Tone.muted,
+          role: VisualRole.secondary,
         );
         output.line(
           stagePath.substring(separator + 1),
           depth: 3,
-          tone: Tone.muted,
+          role: VisualRole.secondary,
         );
       }
       _sayStageClaims(
@@ -697,7 +708,8 @@ class ReleaseCommand {
     output.line(
       'First release · permanent once published',
       depth: 1,
-      tone: Tone.header,
+      state: RuntimeState.attention,
+      strong: true,
     );
     for (final claim in claims) {
       output.line(
@@ -705,7 +717,7 @@ class ReleaseCommand {
         note: claim.name,
         depth: 2,
         labelWidth: 26,
-        noteTone: Tone.muted,
+        noteRole: VisualRole.secondary,
       );
     }
     if (firstSigning != null) {
@@ -714,14 +726,14 @@ class ReleaseCommand {
         note: firstSigning.codeId,
         depth: 2,
         labelWidth: 26,
-        noteTone: Tone.muted,
+        noteRole: VisualRole.secondary,
       );
       output.line(
         'Apple team',
         note: _shortCertificate(firstSigning.firstCertificate!),
         depth: 2,
         labelWidth: 26,
-        noteTone: Tone.muted,
+        noteRole: VisualRole.secondary,
       );
     }
   }

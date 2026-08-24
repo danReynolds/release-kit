@@ -287,18 +287,30 @@ class GitSourceTree implements SourceTree {
 /// handled by Dart workspace membership in `rk init`; this class never
 /// guesses release units by recursively searching unrelated directories.
 class FileSystemSourceTree implements SourceTree {
-  FileSystemSourceTree(this.root, {Iterable<String> roots = const ['.']})
-      : roots = List.unmodifiable(roots);
+  FileSystemSourceTree(
+    this.root, {
+    Iterable<String> roots = const ['.'],
+    this.rootsAreFiles = false,
+  }) : roots = List.unmodifiable(roots);
 
   final String root;
   final List<String> roots;
+
+  /// Whether every declared root is an exact file coordinate.
+  ///
+  /// Plan resolution needs only release.toml and configured manifests. A
+  /// directory at one of those coordinates is a wrong type, not permission to
+  /// recursively read unrelated contents beneath it.
+  final bool rootsAreFiles;
 
   @override
   String get description => root;
 
   String _resolve(String path) {
-    final parts =
-        path.split('/').where((part) => part.isNotEmpty && part != '.');
+    final parts = path
+        .split('/')
+        .where((part) => part.isNotEmpty && part != '.')
+        .toList();
     if (path.startsWith('/') ||
         path.startsWith('\\') ||
         path.contains('\\') ||
@@ -307,7 +319,19 @@ class FileSystemSourceTree implements SourceTree {
         parts.contains('..')) {
       throw ArgumentError('path escapes the source directory: $path');
     }
-    return [root, ...parts].join('/');
+    var resolved = root;
+    for (final part in parts) {
+      resolved = '$resolved/$part';
+      if (FileSystemEntity.typeSync(resolved, followLinks: false) ==
+          FileSystemEntityType.link) {
+        throw SourceUnreadable(
+          path,
+          'the path component "$part" is a symbolic link',
+          kind: SourceUnreadableKind.wrongType,
+        );
+      }
+    }
+    return resolved;
   }
 
   @override
@@ -322,7 +346,11 @@ class FileSystemSourceTree implements SourceTree {
     final type = FileSystemEntity.typeSync(file.path, followLinks: false);
     if (type == FileSystemEntityType.notFound) return null;
     if (type != FileSystemEntityType.file) {
-      throw SourceUnreadable(path, 'the path is not a regular file');
+      throw SourceUnreadable(
+        path,
+        'the path is not a regular file',
+        kind: SourceUnreadableKind.wrongType,
+      );
     }
     try {
       return file.readAsBytesSync();
@@ -347,6 +375,13 @@ class FileSystemSourceTree implements SourceTree {
       if (type == FileSystemEntityType.file) {
         files.add(normalized);
         continue;
+      }
+      if (rootsAreFiles && type != FileSystemEntityType.notFound) {
+        throw SourceUnreadable(
+          normalized,
+          'the path is not a regular file',
+          kind: SourceUnreadableKind.wrongType,
+        );
       }
       if (type != FileSystemEntityType.directory) continue;
       for (final entity in Directory(full).listSync(
@@ -411,6 +446,7 @@ class GitWorktreeSourceTree extends FileSystemSourceTree {
         throw SourceUnreadable(
           path,
           'the worktree entry is not a regular file',
+          kind: SourceUnreadableKind.wrongType,
         );
       }
       files.add(path);
@@ -427,15 +463,27 @@ class GitWorktreeSourceTree extends FileSystemSourceTree {
 /// being frozen; a reviewed package coordinate can therefore never publish
 /// later working-tree bytes.
 final class FrozenSourceTree implements SourceTree {
-  FrozenSourceTree._(this._files, this.description);
+  FrozenSourceTree._(this._files, this._existing, this.description);
 
-  factory FrozenSourceTree.capture(SourceTree source) {
+  factory FrozenSourceTree.capture(
+    SourceTree source, {
+    Iterable<String> preservePaths = const [],
+  }) {
+    final preserved = preservePaths.map(_normalizeSourcePath).toSet();
+    final existingBefore = <String>{
+      for (final path in preserved)
+        if (source.exists(path)) path,
+    };
     final before = source.trackedFiles().toSet();
     final captured = <String, List<int>>{};
     for (final path in before.toList()..sort()) {
       final bytes = source.readBytes(path);
       if (bytes == null) {
-        throw SourceUnreadable(path, 'the file disappeared while freezing');
+        throw SourceUnreadable(
+          path,
+          'the file disappeared while freezing',
+          kind: SourceUnreadableKind.changed,
+        );
       }
       captured[path] = List<int>.unmodifiable(bytes);
     }
@@ -445,6 +493,7 @@ final class FrozenSourceTree implements SourceTree {
       throw SourceUnreadable(
         'the working-tree file list',
         'files changed while the source snapshot was being frozen',
+        kind: SourceUnreadableKind.changed,
       );
     }
     for (final path in after.toList()..sort()) {
@@ -453,16 +502,31 @@ final class FrozenSourceTree implements SourceTree {
         throw SourceUnreadable(
           path,
           'the file changed while the source snapshot was being frozen',
+          kind: SourceUnreadableKind.changed,
         );
       }
     }
+    final existingAfter = <String>{
+      for (final path in preserved)
+        if (source.exists(path)) path,
+    };
+    if (!existingBefore.containsAll(existingAfter) ||
+        !existingAfter.containsAll(existingBefore)) {
+      throw SourceUnreadable(
+        'the working-tree path set',
+        'paths changed while the source snapshot was being frozen',
+        kind: SourceUnreadableKind.changed,
+      );
+    }
     return FrozenSourceTree._(
       Map<String, List<int>>.unmodifiable(captured),
+      Set<String>.unmodifiable(existingBefore),
       source.description,
     );
   }
 
   final Map<String, List<int>> _files;
+  final Set<String> _existing;
 
   @override
   final String description;
@@ -479,6 +543,8 @@ final class FrozenSourceTree implements SourceTree {
   @override
   bool exists(String path) {
     final target = _normalizeSourcePath(path);
+    if (target.isEmpty) return true;
+    if (_existing.contains(target)) return true;
     if (_files.containsKey(target)) return true;
     final prefix = '$target/';
     return _files.keys.any((candidate) => candidate.startsWith(prefix));
@@ -511,7 +577,7 @@ class GitCommitSourceTree implements SourceTree {
 
   final GitSourceTree _repository;
   final String commit;
-  List<String>? _tracked;
+  Map<String, GitTreeEntry>? _entries;
 
   @override
   String get description => '${_repository.root}@$commit';
@@ -526,8 +592,12 @@ class GitCommitSourceTree implements SourceTree {
   }
 
   @override
-  List<String> trackedFiles() =>
-      _tracked ??= _repository.trackedFilesAt(commit);
+  List<String> trackedFiles() => List.unmodifiable(_treeEntries.keys);
+
+  Map<String, GitTreeEntry> get _treeEntries => _entries ??= {
+        for (final entry in _repository.trackedEntriesAt(commit))
+          entry.path: entry,
+      };
 
   @override
   bool exists(String path) {
@@ -541,7 +611,16 @@ class GitCommitSourceTree implements SourceTree {
   @override
   List<int>? readBytes(String path) {
     final target = _path(path);
-    if (!trackedFiles().contains(target)) return null;
+    final entry = _treeEntries[target];
+    if (entry == null) return null;
+    if (!entry.isRegularFile) {
+      throw SourceUnreadable(
+        target,
+        'the committed entry is a ${entry.unsupportedKind}, not a regular '
+        'file',
+        kind: SourceUnreadableKind.wrongType,
+      );
+    }
     return _repository.readBytesAt(commit, target);
   }
 
@@ -655,11 +734,18 @@ class MemorySourceTree implements SourceTree {
 /// Distinct from absence on purpose: the two call for opposite responses, and
 /// telling an operator to create a file they already have is the kind of
 /// answer that costs them an afternoon.
+enum SourceUnreadableKind { unreadable, wrongType, changed }
+
 class SourceUnreadable implements Exception {
-  SourceUnreadable(this.path, this.reason);
+  SourceUnreadable(
+    this.path,
+    this.reason, {
+    this.kind = SourceUnreadableKind.unreadable,
+  });
 
   final String path;
   final String reason;
+  final SourceUnreadableKind kind;
 
   @override
   String toString() => '$path could not be read: $reason';

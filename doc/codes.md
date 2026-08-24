@@ -63,7 +63,7 @@ fails, and the count below is checked against the rows.
 | code | says | declared in |
 |---|---|---|
 | `RK-CLI-001` | rk does not have ${unknown.join( | `bin/rk.dart` |
-| `RK-CLI-003` | no unit named "$only" | `lib/src/commands/release.dart`, `lib/src/commands/status.dart` |
+| `RK-CLI-003` | no unit named "$only" | `lib/src/commands/plan.dart`, `lib/src/commands/release.dart`, `lib/src/commands/status.dart` |
 | `RK-CLI-004` | name the unit to stage | `lib/src/commands/release.dart` |
 | `RK-CLI-005` | rk $command does not have ${inapplicable.join( | `bin/rk.dart` |
 | `RK-CLI-007` | — | `bin/rk.dart` |
@@ -269,7 +269,7 @@ meanings and are not reused.
 |---|---|---|
 | `RK-SRC-001` | a unit selects targets that require Git from unbound source | `bin/rk.dart` |
 | `RK-SRC-002` | an unbound stage cannot be authorized by a later run | `lib/src/commands/release.dart` |
-| `RK-SRC-003` | the source snapshot could not be frozen | `lib/src/engine/release_source.dart` |
+| `RK-SRC-003` | the source snapshot could not be selected or read | `bin/rk.dart`, `lib/src/engine/release_source.dart` |
 
 ## RK-STAGE — The private release stage
 

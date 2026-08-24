@@ -47,6 +47,12 @@ derives stable public-step edges; `StageReceiptContract` resolves producer
 inputs to their owning operations. Both feed the same validation/readiness
 model instead of teaching either coordinator another ordering rule.
 
+`rk plan` composes those same two graphs into `RepositoryReleasePlan`. It is a
+source-only projection: no provider inspection, compiler selection, stage
+creation, or credential access is needed to render it. JSON retains every
+direct edge; the terminal renderer may fold repeated edges into a clearer tree
+or outline, but cannot invent sequencing.
+
 Execution policy stays with the lifecycle that owns the risk:
 
 - Staging starts every ready producer. Platform chains use isolated scratch

@@ -26,6 +26,10 @@ final class PubDevSession extends TargetSessionProvider {
     if (await _tokenConfigured(context)) {
       return const TargetReady(note: 'token configured');
     }
+    final runInteractive = context.runInteractive;
+    if (runInteractive == null && _sessionStored(context) != true) {
+      return _terminalRequired(unit);
+    }
     // Try quietly first so a current or refreshable session does not surface
     // provider chatter. A browser-assisted login must remain interactive.
     try {
@@ -40,9 +44,13 @@ final class PubDevSession extends TargetSessionProvider {
       // The attached attempt below reports launcher failure to the operator.
     }
 
+    if (runInteractive == null) {
+      return _terminalRequired(unit);
+    }
+
     int code;
     try {
-      code = await context.runInteractive!(
+      code = await runInteractive(
         'dart',
         const ['pub', 'login'],
         workingDirectory: context.git.root,
@@ -62,6 +70,17 @@ final class PubDevSession extends TargetSessionProvider {
       unit: unit.name,
     );
   }
+
+  static TargetNotReady _terminalRequired(ResolvedUnit unit) => TargetNotReady(
+        Diagnostic(
+          code: 'RK-PUB-007',
+          message: 'dart pub login requires an attached terminal',
+          remedy: 'Run dart pub login from a terminal, then re-run rk release '
+              '${unit.name}. Machine and redirected releases require an '
+              'existing token or session.',
+        ),
+        unit: unit.name,
+      );
 
   /// Whether pub already has a token for pub.dev in this repository.
   Future<bool> _tokenConfigured(TargetReadinessContext context) async {

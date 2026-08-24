@@ -148,6 +148,60 @@ void main() {
   });
 
   group('the diagnosis directory', () {
+    group('write policy', () {
+      test('plan never leaves repository-local evidence, even on a crash', () {
+        expect(
+          Diagnosis.shouldWrite(
+            command: 'plan',
+            acted: false,
+            crashed: true,
+          ),
+          isFalse,
+        );
+        expect(
+          Diagnosis.shouldWrite(
+            command: 'plan',
+            acted: true,
+            crashed: true,
+          ),
+          isFalse,
+          reason: 'the read-only verb stays write-free even under an '
+              'impossible acted flag',
+        );
+      });
+
+      test('other commands retain crashes and acted failures only', () {
+        expect(
+          Diagnosis.shouldWrite(
+            command: 'status',
+            acted: false,
+            crashed: true,
+          ),
+          isTrue,
+          reason: 'a crash stack is otherwise lost',
+        );
+        expect(
+          Diagnosis.shouldWrite(
+            command: 'release',
+            acted: true,
+            crashed: false,
+          ),
+          isTrue,
+          reason: 'an interrupted effect needs a receipt of what happened',
+        );
+        expect(
+          Diagnosis.shouldWrite(
+            command: 'release',
+            acted: false,
+            crashed: false,
+          ),
+          isFalse,
+          reason:
+              'an ordinary pre-act refusal already said everything it knows',
+        );
+      });
+    });
+
     test('holds what the run saw, under the stamp it was given', () {
       final root = Directory.systemTemp.createTempSync('rk-diag-');
       addTearDown(() => root.deleteSync(recursive: true));

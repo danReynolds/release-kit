@@ -44,6 +44,12 @@ class GitState {
 
   final bool isBound;
 
+  /// Whether this source has an actual commit identity.
+  ///
+  /// A freshly initialized repository is Git-bound but has no HEAD yet. It
+  /// must not serialize an empty string where reports promise a full commit.
+  bool get hasCommit => isBound && head.isNotEmpty;
+
   final String root;
 
   /// The commit a release would be built from.
@@ -287,8 +293,11 @@ class GitState {
   /// together rather than one at a time. Sequential `runSync` calls also
   /// blocked the isolate, which froze every progress row rk was animating.
   static Future<GitState> read(String root) async {
-    Future<ProcessResult> ask(List<String> args) =>
-        Process.run('git', args, workingDirectory: root);
+    Future<ProcessResult> ask(List<String> args) => Process.run(
+          'git',
+          ['--no-optional-locks', ...args],
+          workingDirectory: root,
+        );
     String text(ProcessResult result) =>
         result.exitCode != 0 ? '' : (result.stdout as String).trim();
 

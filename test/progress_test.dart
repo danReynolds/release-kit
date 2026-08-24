@@ -8,13 +8,14 @@ import 'package:test/test.dart';
 final class _Harness {
   _Harness({
     required bool terminal,
+    bool useColor = false,
     int? width,
     int? Function()? widthReader,
   }) {
     output = Output(
       sink: buffer.write,
       isTerminal: terminal,
-      useColor: false,
+      useColor: useColor,
       terminalWidth: width ?? (terminal && widthReader == null ? 80 : null),
       terminalWidthReader: widthReader,
       clock: () {
@@ -176,6 +177,48 @@ void main() {
   });
 
   group('rendering lifecycle', () {
+    test('active and completed work use runtime colors, not target colors',
+        () async {
+      final harness = _Harness(terminal: true, useColor: true);
+      final board = harness.output.progressBoard(
+        'Staging',
+        delay: Duration.zero,
+        showElapsed: false,
+      );
+      final row = board.addRow(
+        id: 'archive',
+        label: 'package archive',
+        group: 'Local artifacts',
+      );
+      row.handle.begin(CommonProgressActivities.checking);
+
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      expect(harness.text, contains('\x1b[1mStaging\x1b[0m'));
+      expect(
+        harness.text,
+        contains('\x1b[1;90m  Local artifacts\x1b[0m'),
+      );
+      expect(harness.text, contains('\x1b[36mpackage archive'),
+          reason: 'the active subject, not just its spinner, is cyan');
+      expect(harness.text, contains('\x1b[36mchecking\x1b[0m'),
+          reason: 'active activity is cyan');
+      expect(harness.text, isNot(contains('\x1b[33m')),
+          reason: 'active is not an attention or warning state');
+      expect(
+        harness.text.replaceAll(RegExp(r'\x1b\[[0-9;]*[A-Za-z]'), ''),
+        contains('checking'),
+      );
+
+      final beforeSettle = harness.text.length;
+      row.complete(note: 'staged');
+      board.settle();
+      final settled = harness.text.substring(beforeSettle);
+      expect(settled, contains('\x1b[32m✓\x1b[0m'));
+      expect(settled, matches(RegExp(r'\x1b\[32m +package archive')));
+      expect(settled, isNot(contains('\x1b[34m')),
+          reason: 'a successful runtime state overrides local-work topology');
+    });
+
     test('a slow non-terminal operation emits once, then settles once',
         () async {
       final harness = _Harness(terminal: false);
