@@ -868,7 +868,6 @@ class StatusCommand {
         null => 'Public targets',
       },
       depth: 1,
-      role: VisualRole.releaseTarget,
       state: publicationState,
       strong: true,
     );
@@ -877,7 +876,7 @@ class StatusCommand {
       final state = target.inspection;
       final linked = linkedTargets.contains(target.expectation.step.id);
       final visualState =
-          linked ? RuntimeState.failure : _publicationState({state.verdict});
+          linked ? RuntimeState.failure : RuntimeState.of(state.verdict);
       final speaks = state.verdict == Verdict.conflict ||
           state.verdict == Verdict.unknown ||
           state.evidence['comparison'] == 'unavailable' ||
@@ -908,9 +907,9 @@ class StatusCommand {
         ].join(' · '),
         depth: 2,
         labelWidth: 30,
-        role: VisualRole.releaseTarget,
         state: visualState,
-        noteState: speaks ? visualState : RuntimeState.satisfied,
+        noteRole: VisualRole.secondary,
+        noteState: speaks ? visualState : RuntimeState.neutral,
       );
     }
   }
@@ -979,7 +978,6 @@ class StatusCommand {
         null => 'Stage',
       },
       depth: 1,
-      role: VisualRole.localWork,
       state: stageState,
       strong: true,
     );
@@ -990,8 +988,8 @@ class StatusCommand {
         mark: agreed != null ? Mark.none : _artifactMark(localStatus!),
         note: agreed != null ? null : _artifactNote(localStatus!),
         depth: 2,
-        role: VisualRole.localWork,
         state: _artifactState(localStatus!),
+        noteRole: VisualRole.secondary,
         noteState: _artifactState(localStatus),
       );
       for (final platform in [...localProject.binaryPlatforms]..sort()) {
@@ -1006,16 +1004,17 @@ class StatusCommand {
           note: staged ? 'staged' : problem,
           depth: 3,
           labelWidth: 44,
-          role: VisualRole.localWork,
+          role: VisualRole.secondary,
           state: staged
               ? RuntimeState.satisfied
               : problem == null
-                  ? RuntimeState.active
+                  ? RuntimeState.neutral
                   : RuntimeState.failure,
+          noteRole: VisualRole.secondary,
           noteState: staged
               ? RuntimeState.satisfied
               : problem == null
-                  ? RuntimeState.active
+                  ? RuntimeState.neutral
                   : RuntimeState.failure,
         );
       }
@@ -1033,8 +1032,8 @@ class StatusCommand {
         note: agreed != null ? summary : '$summary · ${_artifactNote(status)}',
         depth: 2,
         labelWidth: 30,
-        role: VisualRole.localWork,
         state: _artifactState(status),
+        noteRole: VisualRole.secondary,
         noteState: _artifactState(status),
       );
       // A broken artifact is named, always: which one and why are the only
@@ -1093,7 +1092,7 @@ class StatusCommand {
       };
 
   static RuntimeState _artifactState(ArtifactStatus status) => switch (status) {
-        ArtifactStatus.notStaged => RuntimeState.active,
+        ArtifactStatus.notStaged => RuntimeState.neutral,
         ArtifactStatus.staged => RuntimeState.satisfied,
         ArtifactStatus.invalid => RuntimeState.failure,
       };
@@ -1104,6 +1103,9 @@ class StatusCommand {
     if (verdicts.every((verdict) => verdict == Verdict.exact)) {
       return RuntimeState.satisfied;
     }
+    if (verdicts.every((verdict) => verdict == Verdict.absent)) {
+      return RuntimeState.neutral;
+    }
     return RuntimeState.active;
   }
 
@@ -1111,6 +1113,9 @@ class StatusCommand {
     if (statuses.contains(ArtifactStatus.invalid)) return RuntimeState.failure;
     if (statuses.every((status) => status == ArtifactStatus.staged)) {
       return RuntimeState.satisfied;
+    }
+    if (statuses.every((status) => status == ArtifactStatus.notStaged)) {
+      return RuntimeState.neutral;
     }
     return RuntimeState.active;
   }

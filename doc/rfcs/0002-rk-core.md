@@ -493,14 +493,17 @@ concrete `Fix:`. Only a refusal concludes the report — `N issues prevent
 release` — because success is the absence of one, and the rows above already
 say what is published and what is staged.
 
-Colour carries no unique information. Static roles are blue for local work,
-violet for completion checkpoints and joins, amber for requirements and safety
-disclosures, cyan for public destinations and operator actions, and grey for
-secondary context. Runtime state overrides that role: active is cyan, newly
-completed is green, already exact or skipped is grey, attention is amber, and
-failure is red. A source-only plan therefore never uses green. Marks and words
-carry the same meaning without colour. `NO_COLOR` disables SGR colour and
-emphasis while retaining live cursor rendering on a capable TTY.
+Colour carries no unique information. Static topology and intent surfaces use
+blue for local work, violet for completion checkpoints and joins, amber for
+requirements and safety disclosures, cyan for public destinations and operator
+actions, and grey for secondary context. Observed status does not repaint its
+inventory with topology colours: expected absence is neutral and supporting
+identities and paths are grey. Runtime state overrides either surface: work in
+flight or a mixed transition is cyan, newly completed is green, already exact
+or skipped is grey, attention is amber, and failure is red. A source-only plan
+therefore never uses green. Marks and words carry the same meaning without
+colour. `NO_COLOR` disables SGR colour and emphasis while retaining live cursor
+rendering on a capable TTY.
 `TERM=dumb`, non-TTY output, and `--json` disable both SGR styling and cursor
 movement.
 

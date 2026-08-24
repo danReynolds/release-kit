@@ -527,7 +527,7 @@ String _withoutAnsi(String text) =>
 void _expectStyledSubject(
   String text,
   String label, {
-  required String code,
+  required String? code,
   bool strong = false,
   bool exact = false,
   String? after,
@@ -550,7 +550,21 @@ void _expectStyledSubject(
       '${lines.map(_withoutAnsi).join('\n')}',
     ),
   );
-  final opening = '\x1b[${strong ? '1;' : ''}${code}m';
+  if (code == null && !strong) {
+    final labelStart = line.indexOf(label);
+    final lastOpening = line.lastIndexOf('\x1b[', labelStart);
+    final lastReset = line.lastIndexOf('\x1b[0m', labelStart);
+    expect(
+      lastOpening <= lastReset,
+      isTrue,
+      reason: 'the neutral subject must not inherit a nearby ANSI span: $line',
+    );
+    return;
+  }
+  final opening = '\x1b[${[
+    if (strong) '1',
+    if (code != null) code,
+  ].join(';')}m';
   var start = -1;
   var end = -1;
   var searchFrom = 0;
@@ -1092,8 +1106,8 @@ publish = ["pub.dev"]
       String name,
       Inspection answer,
       String heading,
-      String headingCode,
-      String rowCode,
+      String? headingCode,
+      String? rowCode,
     })>[
       (
         name: 'exact',
@@ -1106,8 +1120,8 @@ publish = ["pub.dev"]
         name: 'absent',
         answer: const Inspection.absent(),
         heading: 'Not published',
-        headingCode: '36',
-        rowCode: '36',
+        headingCode: null,
+        rowCode: null,
       ),
       (
         name: 'conflict',
@@ -1161,6 +1175,50 @@ publish = ["pub.dev"]
         reason: '${vector.name} is observation, not a successful action',
       );
     }
+  });
+
+  test('a partial publication colors only the mixed aggregate as active',
+      () async {
+    final registry = FakeRegistry(const {});
+    final run = await statusRun(
+      withConfig: config,
+      source: tree(),
+      state: git(),
+      registry: registry,
+      isTerminal: true,
+      useColor: true,
+      inspectorBuilder: (git, _) => FixedInspector(
+        registry: registry,
+        git: git,
+        answer: const Inspection.absent(),
+        answers: const {
+          StepKind.tag: Inspection.exact(detail: 'tag matches'),
+          StepKind.publishRegistry: Inspection.absent(),
+        },
+      ),
+    );
+
+    _expectStyledSubject(
+      run.text,
+      'Public targets',
+      code: '36',
+      strong: true,
+      exact: true,
+    );
+    _expectStyledSubject(
+      run.text,
+      'Git tag',
+      code: '90',
+      after: 'Public targets',
+    );
+    _expectStyledSubject(
+      run.text,
+      'pub.dev',
+      code: null,
+      after: 'Public targets',
+    );
+    final settled = _afterLastTransientErase(run.text);
+    expect(settled, isNot(contains('\x1b[34m')));
   });
 
   test('unstaged status uses the austere target vocabulary', () async {
@@ -1617,7 +1675,7 @@ publish = ["pub.dev"]
     _expectStyledSubject(
       notStaged.text,
       'Not staged',
-      code: '36',
+      code: null,
       strong: true,
       exact: true,
     );
@@ -1625,10 +1683,19 @@ publish = ["pub.dev"]
       _expectStyledSubject(
         notStaged.text,
         row,
-        code: '36',
+        code: null,
         after: 'Not staged',
       );
     }
+    _expectStyledSubject(
+      notStaged.text,
+      'producers/keybay/archives/keybay-0.2.0-macos-arm64.tar.gz',
+      code: '90',
+      after: 'Not staged',
+    );
+    final settledNotStaged = _afterLastTransientErase(notStaged.text);
+    expect(settledNotStaged, isNot(contains('\x1b[34m')));
+    expect(settledNotStaged, isNot(contains('\x1b[36m')));
 
     final root = Directory.systemTemp.createTempSync('rk-status-colour-stage-');
     addTearDown(() => root.deleteSync(recursive: true));
@@ -1731,7 +1798,7 @@ publish = ["pub.dev"]
     _expectStyledSubject(
       mixed.text,
       'pub.dev',
-      code: '36',
+      code: null,
       after: 'Stage',
     );
     _expectStyledSubject(
