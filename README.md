@@ -71,7 +71,7 @@ main@888444b
    │     ├─▶ linux-x64  [build] ─▶ [archive]
    │     ├─▶ macos-arm64  [build + sign] ─▶ [notarize] ─▶ [archive]
    │     ├─▶ [Homebrew formula] · needs archives
-   │     └─▶ [finalize stage] · needs all stage work
+   │     └─▶ [finalize stage]
    └─ PUBLISH
       └─▶ [tag v0.1.0]
           ├─▶ [pub.dev rk@0.1.0]
