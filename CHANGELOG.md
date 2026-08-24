@@ -7,6 +7,8 @@
 - Cross-built Linux artifacts always receive explicit Dart target flags, even
   when Docker or Podman is unavailable. Containers provide the optional smoke
   test; they are not a cross-compilation requirement.
+- Multi-unit status checks now nest release targets beneath their unit instead
+  of repeating the unit on every row.
 
 ## 0.1.11
 
