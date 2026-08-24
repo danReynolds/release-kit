@@ -21,6 +21,9 @@
   Apple notarization-ticket visibility a bounded consumer check. Provider lag
   is reported as a nonblocking availability warning and never triggers a
   second publication attempt.
+- `rk init` now omits workspace grouping roots and hides `publish_to: none`
+  packages by default; press `a` to reveal intentional non-registry release
+  candidates, while JSON still reports every discovered candidate.
 
 ## 0.1.9
 
