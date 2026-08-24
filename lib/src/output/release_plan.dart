@@ -104,7 +104,7 @@ final class ReleasePlanRenderer {
       lines.add([OutputSpan('$rail │', role: VisualRole.secondary)]);
       lines.add([
         OutputSpan('$rail └─ ', role: VisualRole.secondary),
-        const OutputSpan('PUBLIC', strong: true),
+        const OutputSpan('PUBLISH', strong: true),
       ]);
       lines.addAll(_publicGraph(unit, '$rail    '));
       if (!lastUnit) {
@@ -115,7 +115,7 @@ final class ReleasePlanRenderer {
       const [OutputSpan('')],
       const [
         OutputSpan(
-          'source-only · destinations not inspected · nothing changed',
+          'source-only · no destination checks · no changes',
           role: VisualRole.secondary,
         ),
       ],
@@ -188,8 +188,8 @@ final class ReleasePlanRenderer {
           qualifyProject: projects.length > 1 || dependent.project != unit.name,
         ),
         OutputSpan(
-          ' · after ${_dependencySummary(dependent, nodes)}',
-          role: VisualRole.secondary,
+          ' · needs ${_dependencySummary(dependent, nodes)}',
+          role: VisualRole.requirement,
         ),
         if (_sharedLaneNote(dependent, targetLanes) case final lane?)
           OutputSpan(' · $lane', role: VisualRole.requirement),
@@ -199,7 +199,7 @@ final class ReleasePlanRenderer {
       OutputSpan('$rail │     └─▶ ', role: VisualRole.secondary),
       _node(complete, VisualRole.checkpoint),
       OutputSpan(
-        work.length <= 1 ? '' : ' · joins every stage branch',
+        work.isEmpty ? '' : ' · needs all stage work',
         role: VisualRole.secondary,
       ),
     ]);
@@ -302,17 +302,18 @@ final class ReleasePlanRenderer {
         final lane = _sharedLaneNote(node, stageLanes);
         output.line(
           _qualifiedSummary(node),
-          note: _outlineNote(node, lane),
+          note: _outlineNote(node, lane, stage),
           depth: 2,
           labelWidth: 34,
           role: node.kind == ReleasePlanNodeKind.completeStage
               ? VisualRole.checkpoint
               : VisualRole.localWork,
-          noteRole:
-              lane == null ? VisualRole.secondary : VisualRole.requirement,
+          noteRole: node.needs.isEmpty && lane == null
+              ? VisualRole.secondary
+              : VisualRole.requirement,
         );
       }
-      output.line('public', depth: 1, strong: true);
+      output.line('publish', depth: 1, strong: true);
       final public = unit.public.toList();
       final publicLanes = _laneCounts(public);
       if (public.isEmpty) {
@@ -322,19 +323,20 @@ final class ReleasePlanRenderer {
           final lane = _sharedLaneNote(node, publicLanes);
           output.line(
             _publicIdentity(node),
-            note: _outlineNote(node, lane),
+            note: _outlineNote(node, lane, unit.nodes),
             depth: 2,
             labelWidth: 34,
             role: VisualRole.releaseTarget,
-            noteRole:
-                lane == null ? VisualRole.secondary : VisualRole.requirement,
+            noteRole: node.needs.isEmpty && lane == null
+                ? VisualRole.secondary
+                : VisualRole.requirement,
           );
         }
       }
     }
     output.blank();
     output.say(
-      'source-only · destinations not inspected · nothing changed',
+      'source-only · no destination checks · no changes',
       role: VisualRole.secondary,
     );
   }
@@ -369,7 +371,8 @@ final class ReleasePlanRenderer {
 
   static String _qualifiedSummary(ReleasePlanNode node) {
     final project = node.project;
-    return project == null ? node.summary : '${node.summary} · $project';
+    final summary = _humanSummary(node);
+    return project == null ? summary : '$summary · $project';
   }
 
   static String _graphSummary(ReleasePlanNode node) => switch (node.kind) {
@@ -379,6 +382,11 @@ final class ReleasePlanRenderer {
         ReleasePlanNodeKind.build => 'build',
         ReleasePlanNodeKind.notarize => 'notarize',
         ReleasePlanNodeKind.archive => 'archive',
+        _ => _humanSummary(node),
+      };
+
+  static String _humanSummary(ReleasePlanNode node) => switch (node.kind) {
+        ReleasePlanNodeKind.completeStage => 'finalize stage',
         _ => node.summary,
       };
 
@@ -427,7 +435,7 @@ final class ReleasePlanRenderer {
     if (labels.isNotEmpty &&
         node.needs
             .every((id) => byId[id]?.kind == ReleasePlanNodeKind.archive)) {
-      return 'platform archives';
+      return 'archives';
     }
     return labels.isEmpty ? 'its inputs' : labels.join(', ');
   }
@@ -457,13 +465,70 @@ final class ReleasePlanRenderer {
     return 'serialized in $label lane';
   }
 
-  static String? _outlineNote(ReleasePlanNode node, String? lane) {
+  static String? _outlineNote(
+    ReleasePlanNode node,
+    String? lane,
+    Iterable<ReleasePlanNode> nodes,
+  ) {
+    final need = _outlineNeed(node, nodes);
     final facts = [
-      if (node.needs.isNotEmpty) 'after ${node.needs.join(', ')}',
+      if (need != null) 'needs $need',
       if (lane != null) lane,
     ];
     return facts.isEmpty ? null : facts.join(' · ');
   }
+
+  static String? _outlineNeed(
+    ReleasePlanNode node,
+    Iterable<ReleasePlanNode> nodes,
+  ) {
+    if (node.needs.isEmpty) return null;
+    final byId = {for (final candidate in nodes) candidate.id: candidate};
+    final dependencies = [
+      for (final id in node.needs)
+        if (byId[id] case final dependency?) dependency,
+    ];
+    if (node.kind == ReleasePlanNodeKind.completeStage &&
+        dependencies.any(
+          (dependency) => dependency.kind != ReleasePlanNodeKind.sourceSnapshot,
+        )) {
+      return 'all stage work';
+    }
+    if (node.kind == ReleasePlanNodeKind.targetStage &&
+        dependencies.isNotEmpty &&
+        dependencies.every(
+          (dependency) => dependency.kind == ReleasePlanNodeKind.archive,
+        )) {
+      return 'archives';
+    }
+    if (dependencies.length != node.needs.length) return 'configured inputs';
+    return dependencies.map(_outlineDependencyIdentity).join(', ');
+  }
+
+  static String _outlineDependencyIdentity(ReleasePlanNode node) =>
+      switch (node.kind) {
+        ReleasePlanNodeKind.sourceSnapshot => 'source snapshot',
+        ReleasePlanNodeKind.completeStage => 'finalize stage',
+        ReleasePlanNodeKind.build => [
+            if (node.platform != null) node.platform!,
+            'build',
+          ].join(' '),
+        ReleasePlanNodeKind.notarize => [
+            if (node.platform != null) node.platform!,
+            'notarization',
+          ].join(' '),
+        ReleasePlanNodeKind.archive => [
+            if (node.platform != null) node.platform!,
+            'archive',
+          ].join(' '),
+        ReleasePlanNodeKind.targetStage => _qualifiedSummary(node),
+        ReleasePlanNodeKind.prerequisite => _requirementIdentity(node),
+        ReleasePlanNodeKind.tag ||
+        ReleasePlanNodeKind.publishRegistry ||
+        ReleasePlanNodeKind.publishRelease ||
+        ReleasePlanNodeKind.publishHomebrew =>
+          _publicIdentity(node),
+      };
 
   static String _sourceLine(
     String? branch,
@@ -476,9 +541,6 @@ final class ReleasePlanRenderer {
       if (branch == null && commit != null) commit,
       if (uncommitted != null && uncommitted > 0) '$uncommitted uncommitted',
     ].join(' · ');
-    return [
-      if (identity.isNotEmpty) identity,
-      'configured topology',
-    ].join(' · ');
+    return identity.isEmpty ? 'configured flow' : identity;
   }
 }

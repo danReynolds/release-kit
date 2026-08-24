@@ -425,7 +425,7 @@ executables:
       );
       expect(
         _render(plan, terminal: true, color: false, width: 180),
-        contains('PUBLIC\n      none'),
+        contains('PUBLISH\n      none'),
       );
     });
 
@@ -484,13 +484,14 @@ dependencies:
         ),
       );
       expect(rendered, contains('STAGE'));
-      expect(rendered, contains('PUBLIC'));
+      expect(rendered, contains('PUBLISH'));
       expect(rendered, contains('├─▶ [package archive · example_cli]'));
       expect(rendered, contains('├─▶ linux-x64'));
       expect(rendered, contains('[build] ─▶ [archive]'));
-      expect(rendered, contains('[complete and validate stage]'));
-      expect(rendered, contains('joins every stage branch'));
-      expect(rendered, contains('source-only · destinations not inspected'));
+      expect(rendered, contains('[finalize stage]'));
+      expect(rendered, contains('needs all stage work'));
+      expect(rendered, contains('source-only · no destination checks'));
+      expect(rendered, isNot(contains('configured topology')));
     });
 
     test('target work is classified by dependencies, not label prose', () {
@@ -556,7 +557,18 @@ dependencies:
           reason: 'the label deliberately carries no target-type hint');
       expect(targetInput.summary, isNot(contains('after')),
           reason: 'the sequencing annotation must come from needs');
-      expect(targetLine, contains('after platform archives'));
+      expect(targetLine, contains('needs archives'));
+
+      final colored = _render(
+        plan,
+        terminal: true,
+        color: true,
+        width: 180,
+      );
+      final coloredTargetLine = colored
+          .split('\n')
+          .singleWhere((line) => line.contains('[channel metadata]'));
+      expect(coloredTargetLine, contains('\x1b[33m · needs archives'));
     });
 
     test('narrow terminals fall back to a dependency-complete outline', () {
@@ -569,10 +581,23 @@ dependencies:
 
       expect(rendered, contains('example · release plan'));
       expect(rendered, isNot(contains('EXAMPLE RELEASE PLAN')));
-      expect(rendered, contains('after cli/stage/source'));
-      expect(rendered, contains('after cli/tag/cli-v1.2.0'));
-      expect(rendered, contains('cli/github-release/cli-v1.2.0'));
-      expect(rendered, contains('source-only · destinations not'));
+      expect(rendered, contains('publish'));
+      expect(rendered, contains('finalize stage'));
+      expect(rendered, contains('needs source snapshot'));
+      expect(rendered, contains('needs tag cli-v1.2.0'));
+      expect(rendered, contains('needs GitHub Release'));
+      expect(rendered, isNot(contains('cli/stage/source')));
+      expect(rendered, isNot(contains('cli/tag/cli-v1.2.0')));
+      expect(rendered, isNot(contains('cli/github-release/cli-v1.2.0')));
+      expect(rendered, contains('source-only · no destination checks'));
+
+      final colored = _render(
+        _plan().select('cli'),
+        terminal: true,
+        color: true,
+        width: 52,
+      );
+      expect(colored, contains('\x1b[33mneeds source snapshot'));
     });
 
     test('semantic colors never change the graph text', () {

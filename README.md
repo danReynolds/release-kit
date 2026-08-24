@@ -60,7 +60,7 @@ release graph before rk observes public state or changes anything:
 ```console
 $ rk plan
 RELEASE-KIT RELEASE PLAN
-main@888444b · configured topology
+main@888444b
 
 └─ 1 · rk 0.1.0
    ├─ STAGE
@@ -70,15 +70,15 @@ main@888444b · configured topology
    │     ├─▶ linux-arm64  [build] ─▶ [archive]
    │     ├─▶ linux-x64  [build] ─▶ [archive]
    │     ├─▶ macos-arm64  [build + sign] ─▶ [notarize] ─▶ [archive]
-   │     ├─▶ [Homebrew formula] · after platform archives
-   │     └─▶ [complete and validate stage] · joins every stage branch
-   └─ PUBLIC
+   │     ├─▶ [Homebrew formula] · needs archives
+   │     └─▶ [finalize stage] · needs all stage work
+   └─ PUBLISH
       └─▶ [tag v0.1.0]
           ├─▶ [pub.dev rk@0.1.0]
           └─▶ [GitHub Release · 4 assets]
               └─▶ [Homebrew · rk.rb]
 
-source-only · destinations not inspected · nothing changed
+source-only · no destination checks · no changes
 ```
 
 The graph and its direct dependency edges come from the same stage and public

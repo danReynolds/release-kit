@@ -223,6 +223,13 @@ executables:
       expect(plan['destinations_inspected'], isFalse);
       final units = (plan['units']! as List).cast<Map<String, Object?>>();
       expect(units.map((unit) => unit['name']), ['lib', 'cli']);
+      final libNodes =
+          (units.first['nodes']! as List).cast<Map<String, Object?>>();
+      final complete = libNodes.singleWhere(
+        (node) => node['kind'] == 'completeStage',
+      );
+      expect(complete['summary'], 'complete and validate stage',
+          reason: 'concise human copy must not weaken the JSON contract');
       expect(
         jsonEncode(plan),
         allOf(
@@ -657,7 +664,7 @@ publish = ["pub.dev"]
       expect(run.stdout, contains('release notes'));
       expect(run.stdout, contains('build plan for linux-x64'));
       expect(run.stdout, contains('GitHub Release'));
-      expect(run.stdout, contains('destinations not inspected'));
+      expect(run.stdout, contains('no destination checks'));
       expect(run.stdout, isNot(contains('\x1b')));
     });
   });
