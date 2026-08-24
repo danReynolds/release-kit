@@ -106,7 +106,6 @@ final class ReleasePublicationCoordinator {
   Future<void> verifyAvailability({
     required ResolvedUnit unit,
     required List<TargetPlan> targets,
-    required ReleaseStage? stage,
   }) async {
     if (targets.isEmpty) return;
     final progress = output.progressBoard(
@@ -125,7 +124,6 @@ final class ReleasePublicationCoordinator {
         _verifyTargetAvailability(
           unit: unit,
           target: target,
-          stage: stage,
           row: rows[target.step.id]!,
         ),
     ]);
@@ -147,11 +145,10 @@ final class ReleasePublicationCoordinator {
   Future<_AvailabilityWarning?> _verifyTargetAvailability({
     required ResolvedUnit unit,
     required TargetPlan target,
-    required ReleaseStage? stage,
     required ProgressRowController row,
   }) async {
     final module = inspector.targets.moduleForTarget(target);
-    final context = TargetAvailabilityContext(tools: tools, stage: stage);
+    final context = TargetAvailabilityContext(tools: tools);
     var waited = Duration.zero;
     while (true) {
       row.handle.begin(CommonProgressActivities.verifying);
@@ -371,7 +368,6 @@ final class ReleasePublicationCoordinator {
       await verifyAvailability(
         unit: unit,
         targets: targets,
-        stage: stage.inspect().reusable ? stage : null,
       );
       return ExitCodes.ok;
     }
@@ -437,7 +433,6 @@ final class ReleasePublicationCoordinator {
       await verifyAvailability(
         unit: unit,
         targets: targets,
-        stage: stage.inspect().reusable ? stage : null,
       );
       return ExitCodes.ok;
     }
@@ -768,7 +763,6 @@ final class ReleasePublicationCoordinator {
     await verifyAvailability(
       unit: unit,
       targets: targets,
-      stage: stage.inspect().reusable ? stage : null,
     );
     return ExitCodes.ok;
   }

@@ -1186,7 +1186,6 @@ publish = ["git-tag", "pub.dev"]
     Set<String> remoteTags = const {},
     bool notaryRejects = false,
     bool notaryProfileRejects = false,
-    bool appleTicketPending = false,
     bool signingRejects = false,
     List<String> platforms = const ['macos-arm64'],
     bool homebrew = false,
@@ -1413,17 +1412,6 @@ executables:
         }
         if (key.startsWith('codesign --test-requirement')) {
           return ToolResult(exitCode: 1, stdout: '', stderr: 'no');
-        }
-        if (key.startsWith(
-          'codesign -vvvv -R=notarized --check-notarization',
-        )) {
-          return appleTicketPending
-              ? ToolResult(
-                  exitCode: 1,
-                  stdout: '',
-                  stderr: 'online ticket lookup has not propagated',
-                )
-              : ToolResult(exitCode: 0, stdout: '', stderr: '');
         }
         if (signingRejects && key.startsWith('codesign --force')) {
           return ToolResult(
@@ -1774,7 +1762,6 @@ executables:
         'xcrun notarytool submit',
         'xcrun notarytool log',
         'gh api -X POST repos/example/tool/releases --input',
-        'codesign -vvvv -R=notarized --check-notarization',
       ];
       var at = -1;
       for (final prefix in order) {
@@ -1790,6 +1777,12 @@ executables:
         contains('publish 2 assets to the v1.0.0 release'),
       );
       expect(run.text, contains('released'));
+      expect(
+        run.calls.where((call) => call.contains('--check-notarization')),
+        isEmpty,
+        reason: 'exact publication ends the release; Apple ticket '
+            'propagation is not a synchronous release gate',
+      );
     });
 
     test('the notarization profile is verified before any build starts',
@@ -1815,24 +1808,6 @@ executables:
         isEmpty,
       );
       expect((run.json['halt'] as Map?)?['kind'], 'beforeActing');
-    });
-
-    test('Apple ticket lag warns after an otherwise successful release',
-        () async {
-      final run = await binaryDrive(
-        dryRun: false,
-        appleTicketPending: true,
-        label: '-ticket-propagation',
-      );
-
-      expect(run.code, ExitCodes.ok, reason: run.text);
-      expect(run.text, contains('released'));
-      expect(
-        ((run.json['warnings'] as List).cast<Map>())
-            .map((warning) => warning['code']),
-        contains('RK-NOTARY-005'),
-      );
-      expect(run.text, contains('do not rebuild or republish the bytes'));
     });
 
     test(

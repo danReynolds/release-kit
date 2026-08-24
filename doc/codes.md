@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-153 codes across 26 families.
+152 codes across 26 families.
 
 
 ## RK-AUTH — Authorization
@@ -190,7 +190,9 @@ fails, and the count below is checked against the rows.
 | `RK-NOTARY-002` | $platform: notarization did not complete | `lib/src/binary_chain.dart` |
 | `RK-NOTARY-003` | $platform: Apple accepted the submission and the log  could not be fetched | `lib/src/binary_chain.dart` |
 | `RK-NOTARY-004` | the rk-notary credential is not ready | `lib/src/commands/release_stage_coordinator.dart` |
-| `RK-NOTARY-005` | $platform is published and Apple accepted its submission, but Gatekeeper cannot see the ticket yet | `lib/src/targets/github_release/module.dart` |
+
+RK-NOTARY-005 (the delayed Gatekeeper ticket warning) is a retired historical
+meaning and is not reused.
 
 ## RK-PKG — The package as pub sees it
 

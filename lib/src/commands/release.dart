@@ -421,7 +421,6 @@ class ReleaseCommand {
       await _publication.verifyAvailability(
         unit: unit,
         targets: targets,
-        stage: stageInspection.reusable ? stage : null,
       );
       return ExitCodes.ok;
     }

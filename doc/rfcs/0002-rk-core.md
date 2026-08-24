@@ -849,8 +849,9 @@ act(expected, stage)
   and log are receipt-bound stage evidence — a consumer verifies the binary
   with Apple directly, so they are not release assets. A reusable stage
   retains and revalidates that exact evidence instead of resubmitting.
-  `codesign -R=notarized --check-notarization` remains the binding check on
-  the exact signed bytes.
+  Apple ticket propagation is not a synchronous release gate: the accepted
+  notarization result binds staging, while an explicit consumer check can use
+  `codesign -R=notarized --check-notarization` on the exact signed bytes.
 - **`archive`** (transform): deterministic tar.gz per
   platform — fixed entry order, zeroed mtimes, normalized modes, no gzip
   timestamp — containing the executable, LICENSE, and README, with frozen
