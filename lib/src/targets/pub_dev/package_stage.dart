@@ -2,11 +2,14 @@ import 'dart:io';
 
 import '../../engine/assets.dart';
 import '../../engine/diagnostic.dart';
+import '../../engine/file_mode.dart';
 import '../../engine/release_stage.dart';
 import '../../engine/resolve.dart';
+import '../../engine/stage.dart';
 import '../../engine/stage_contract.dart';
 import '../../engine/stage_receipt.dart';
 import '../../engine/targets.dart';
+import '../../engine/tools.dart';
 import '../../engine/yaml.dart';
 import '../../output/progress.dart';
 import '../target_module.dart';
@@ -90,14 +93,14 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
   ResolvedProject project,
 ) async {
   final sourceRoot = context.stage.sourceRoot;
-  final directory = project.pubspec.directory == '.'
+  final sourceDirectory = project.pubspec.directory == '.'
       ? sourceRoot
       : '$sourceRoot/${project.pubspec.directory}';
 
   // Pub honours dependency overrides at the resolution root and strips them
   // from the published archive. Refusing is the honest consumer check: native
   // validation otherwise succeeds against a graph consumers never receive.
-  final masking = _maskedResolution(sourceRoot, directory);
+  final masking = _maskedResolution(sourceRoot, sourceDirectory);
   if (masking != null) {
     return (
       diagnostic: Diagnostic(
@@ -115,11 +118,24 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
   final archivePath = ReleaseAssets.pubArchivePath(project);
   final archive = File(context.workspace.pathOf(archivePath));
   archive.parent.createSync(recursive: true);
-  final packaged = await context.tools.run(
-    'dart',
-    ['pub', 'publish', '--to-archive', archive.path],
-    workingDirectory: directory,
-  );
+  final mirror = _mirrorSourceSnapshot(context);
+  late final ToolResult packaged;
+  try {
+    final mirroredSource = _join(mirror.path, const ['source']);
+    final directory = project.pubspec.directory == '.'
+        ? mirroredSource
+        : _join(
+            mirroredSource,
+            StagePath.segments(project.pubspec.directory),
+          );
+    packaged = await context.tools.run(
+      'dart',
+      ['pub', 'publish', '--to-archive', archive.path],
+      workingDirectory: directory,
+    );
+  } finally {
+    mirror.deleteSync(recursive: true);
+  }
   final validation = '${packaged.stdout}\n${packaged.stderr}'.trim();
   context.attach('pub-package-${project.name}.txt', validation);
 
@@ -194,6 +210,67 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
 
   return (diagnostic: null, warnings: const <Diagnostic>[]);
 }
+
+/// Copies the recorded snapshot outside the repository before invoking Pub.
+///
+/// Release stages deliberately live under `.rk/`, which repositories normally
+/// ignore. Pub walks ancestor Git ignore rules when it builds a package; run
+/// directly in the stage, that makes the whole package look ignored and can
+/// produce an empty archive. The mirror contains only receipt-bound source
+/// files, retains their modes and the workspace layout, and is deleted after
+/// the native archive command finishes.
+Directory _mirrorSourceSnapshot(TargetStageContext context) {
+  final mirror = Directory.systemTemp.createTempSync('rk-pub-source-');
+  try {
+    final gitControl = _gitControlAncestor(mirror.path);
+    if (gitControl != null) {
+      throw StateError(
+        'the system temporary directory is inside a Git worktree: '
+        '$gitControl',
+      );
+    }
+
+    final modes = <String, String>{};
+    for (final artifact in context.sourceStep.outputs) {
+      final parts = StagePath.segments(artifact.path);
+      if (artifact.type != 'source' ||
+          parts.length < 2 ||
+          parts.first != 'source') {
+        throw StateError(
+          'the source snapshot contains a non-source artifact: '
+          '${artifact.path}',
+        );
+      }
+      final destination = File(_join(mirror.path, parts));
+      destination.parent.createSync(recursive: true);
+      File(context.stage.directory.resolve(artifact.path))
+          .copySync(destination.path);
+      modes[destination.path] = artifact.mode;
+    }
+    setFileModes(modes);
+    return mirror;
+  } on Object {
+    if (mirror.existsSync()) mirror.deleteSync(recursive: true);
+    rethrow;
+  }
+}
+
+String? _gitControlAncestor(String path) {
+  var current = Directory(Directory(path).resolveSymbolicLinksSync());
+  while (true) {
+    final marker = _join(current.path, const ['.git']);
+    if (FileSystemEntity.typeSync(marker, followLinks: false) !=
+        FileSystemEntityType.notFound) {
+      return marker;
+    }
+    final parent = current.parent;
+    if (parent.path == current.path) return null;
+    current = parent;
+  }
+}
+
+String _join(String root, Iterable<String> parts) =>
+    [root, ...parts].join(Platform.pathSeparator);
 
 /// What masks resolution for the staged package, or null when nothing does.
 String? _maskedResolution(String sourceRoot, String directory) {

@@ -69,7 +69,10 @@ binary_platforms = ["linux-x64", "linux-arm64"]
 
 const _pubspec = '''
 name: tool
+description: A fixture package for release staging tests.
 version: 1.2.3
+environment:
+  sdk: ^3.5.0
 executables:
   tool: tool
 ''';
@@ -419,6 +422,17 @@ void main() {
         ),
       ],
     );
+    expect(
+      packaged.workingDirectory,
+      isNot(startsWith(harness.stage.directory.repositoryRoot)),
+      reason: 'Pub must not inherit the repository ignore rule that excludes '
+          'the .rk stage containing its package',
+    );
+    expect(
+      Directory(packaged.workingDirectory!).existsSync(),
+      isFalse,
+      reason: 'the private native-Pub source mirror is one-run scratch',
+    );
     expect(run.keys, isNot(contains('dart pub login')));
     expect(authorizationPrompts, 0);
     expect(
@@ -426,6 +440,35 @@ void main() {
       isEmpty,
       reason: 'stage mode may inspect targets, but cannot mutate any of them',
     );
+  });
+
+  test('native Pub packaging escapes a repository that ignores .rk', () async {
+    final native = _Harness(nativePubArchive: true);
+    addTearDown(native.close);
+    File('${native.root.path}/.gitignore').writeAsStringSync('.rk/\n');
+    final initialized = Process.runSync(
+      'git',
+      ['init', '--quiet'],
+      workingDirectory: native.root.path,
+    );
+    expect(initialized.exitCode, 0, reason: '${initialized.stderr}');
+
+    final run = await native.run(
+      stageOnly: true,
+      confirm: (_) async => fail('stage mode must not authorize'),
+    );
+
+    expect(run.code, ExitCodes.ok, reason: run.text);
+    expect(native.stage.inspect().reusable, isTrue);
+    expect(run.problemCodes, isEmpty);
+    final packaged = run.invocations.singleWhere(
+      (call) => call.arguments.contains('--to-archive'),
+    );
+    expect(
+      packaged.workingDirectory,
+      isNot(startsWith(native.stage.directory.repositoryRoot)),
+    );
+    expect(Directory(packaged.workingDirectory!).existsSync(), isFalse);
   });
 
   test(
@@ -2304,6 +2347,7 @@ class _Harness {
     bool unbound = false,
     bool localBinaryOnly = false,
     bool twoPlatforms = false,
+    bool nativePubArchive = false,
   }) {
     root = Directory.systemTemp.createTempSync('rk-stage-command-');
     final config = twoPlatforms
@@ -2314,9 +2358,11 @@ class _Harness {
                 ? _pubOnlyConfig
                 : _config;
     source = MemorySourceTree({
+      '.gitignore': '.rk/\n',
       'release.toml': config,
       'packages/tool/pubspec.yaml': _pubspec,
       'packages/tool/CHANGELOG.md': _changelog,
+      'packages/tool/LICENSE': 'Permission is hereby granted.\n',
       'packages/tool/bin/tool.dart': _entrypoint,
       'packages/tool/README.md': '# Tool\n',
     }, description: '${root.path}/worktree');
@@ -2345,6 +2391,7 @@ class _Harness {
     tools = _WorldTools(
       registry: registry,
       stageFor: () => stage,
+      nativePubArchive: nativePubArchive,
     );
   }
 
@@ -2664,10 +2711,12 @@ class _WorldTools implements Tools {
   _WorldTools({
     required this.registry,
     required this.stageFor,
+    this.nativePubArchive = false,
   });
 
   final FakeRegistry registry;
   final ReleaseStage Function() stageFor;
+  final bool nativePubArchive;
   final List<_Invocation> invocations = [];
   final Set<String> remoteTags = {};
   final Map<String, List<int>> uploadedAssets = {};
@@ -2761,6 +2810,15 @@ class _WorldTools implements Tools {
     if (_isDart(executable) &&
         _starts(arguments, ['pub', 'publish']) &&
         arguments.contains('--to-archive')) {
+      if (nativePubArchive) {
+        return const SystemTools().run(
+          executable,
+          arguments,
+          workingDirectory: workingDirectory,
+          environment: environment,
+          timeout: timeout,
+        );
+      }
       final output = arguments[arguments.indexOf('--to-archive') + 1];
       File(output)
         ..parent.createSync(recursive: true)
