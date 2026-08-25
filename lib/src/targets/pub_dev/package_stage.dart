@@ -222,12 +222,11 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
 Directory _mirrorSourceSnapshot(TargetStageContext context) {
   final mirror = Directory.systemTemp.createTempSync('rk-pub-source-');
   try {
-    if (_isWithin(
-      mirror.path,
-      context.stage.directory.repositoryRoot,
-    )) {
+    final gitControl = _gitControlAncestor(mirror.path);
+    if (gitControl != null) {
       throw StateError(
-        'the system temporary directory is inside the release repository',
+        'the system temporary directory is inside a Git worktree: '
+        '$gitControl',
       );
     }
 
@@ -256,11 +255,18 @@ Directory _mirrorSourceSnapshot(TargetStageContext context) {
   }
 }
 
-bool _isWithin(String path, String root) {
-  final absolutePath = Directory(path).absolute.path;
-  final absoluteRoot = Directory(root).absolute.path;
-  return absolutePath == absoluteRoot ||
-      absolutePath.startsWith('$absoluteRoot${Platform.pathSeparator}');
+String? _gitControlAncestor(String path) {
+  var current = Directory(Directory(path).resolveSymbolicLinksSync());
+  while (true) {
+    final marker = _join(current.path, const ['.git']);
+    if (FileSystemEntity.typeSync(marker, followLinks: false) !=
+        FileSystemEntityType.notFound) {
+      return marker;
+    }
+    final parent = current.parent;
+    if (parent.path == current.path) return null;
+    current = parent;
+  }
 }
 
 String _join(String root, Iterable<String> parts) =>
