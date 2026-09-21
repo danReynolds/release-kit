@@ -1,3 +1,6 @@
+import 'dart:io';
+import 'package:rk/src/transforms/archive.dart';
+import 'package:rk/src/builds/binary_artifact.dart';
 import 'package:rk/src/engine/identity.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/version.dart';
@@ -6,6 +9,15 @@ import 'package:test/test.dart';
 import 'scripted_tools.dart';
 
 void main() {
+  late Directory scratch;
+  setUp(() {
+    scratch = Directory.systemTemp.createTempSync('rk-identity-test-');
+    File('${scratch.path}/example-2.1.0-macos-arm64.tar.gz')
+        .writeAsBytesSync(ArchiveBuilder.gzip(ArchiveBuilder.tar([
+      ArchiveEntry(name: 'example', bytes: [1, 2, 3], executable: true),
+    ])));
+  });
+  tearDown(() => scratch.deleteSync(recursive: true));
   PublishedIdentity identity(Map<String, ToolResult> answers) =>
       PublishedIdentity(
         tools: ScriptedTools(answers),
@@ -62,7 +74,7 @@ void main() {
       ).read(
         tag: 'v0.9.0',
         executable: 'example',
-        into: '/tmp/w',
+        into: scratch.path,
         expectedPublished: true,
       );
 
@@ -74,30 +86,63 @@ void main() {
   test('reads the requirement from the published binary', () async {
     final reading = await identity({
       'gh': ok('{"assets":[{"name":"example-2.1.0-macos-arm64.tar.gz"}]}'),
-      'tar': ok(),
       'codesign': ok('designated => identifier "com.example.tool" and '
           'certificate leaf[subject.OU] = "ABCDE12345"'),
-    }).read(tag: 'v2.1.0', executable: 'example', into: '/tmp/w');
+    }).read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
 
     expect(reading.isKnown, isTrue, reason: reading.why);
     expect(reading.requirement, contains('ABCDE12345'));
   });
 
+  test(
+      'a published bundle verifies every code file and reads the runtime identity',
+      () async {
+    final bundle = BinaryArtifact.dartBundle('example');
+    File('${scratch.path}/example-2.1.0-macos-arm64.tar.gz')
+        .writeAsBytesSync(ArchiveBuilder.gzip(ArchiveBuilder.tar([
+      for (final file in bundle.files)
+        ArchiveEntry(
+            name: file.path,
+            bytes: file.path == BinaryArtifact.manifestName
+                ? bundle.manifest.codeUnits
+                : [1, 2, 3],
+            executable: file.executable),
+    ])));
+    final tools = ScriptedTools({
+      'gh': ok('{"assets":[{"name":"example-2.1.0-macos-arm64.tar.gz"}]}'),
+      'codesign': ok('designated => identifier "io.example.tool"'),
+    });
+    final reading = await PublishedIdentity(
+            tools: tools, repository: 'example/tool', workingDirectory: '/repo')
+        .read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
+    expect(reading.isKnown, isTrue, reason: reading.why);
+    final verifications = tools.calls
+        .where((call) => call.first == 'codesign' && call.contains('--verify'));
+    expect(verifications, hasLength(3));
+    expect(tools.calls.last, contains('-r-'));
+    expect(tools.calls.last.last, endsWith('/lib/example/dartaotruntime'));
+    expect(
+        tools.calls
+            .where((call) => call.first != 'gh' && call.first != 'codesign'),
+        isEmpty,
+        reason:
+            'reading published identity never executes the downloaded program');
+  });
+
   test('runs the steps in the order that makes them meaningful', () async {
     final tools = ScriptedTools({
       'gh': ok('{"assets":[{"name":"example-2.1.0-macos-arm64.tar.gz"}]}'),
-      'tar': ok(),
       'codesign': ok('designated => identifier "x"'),
     });
     await PublishedIdentity(
       tools: tools,
       repository: 'example/tool',
       workingDirectory: '/repo',
-    ).read(tag: 'v2.1.0', executable: 'example', into: '/tmp/w');
+    ).read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
 
     expect(
       tools.calls.map((c) => c.first).toList(),
-      ['gh', 'gh', 'tar', 'codesign', 'codesign'],
+      ['gh', 'gh', 'codesign', 'codesign'],
       reason: 'ask the release, download, open the named asset, then read the '
           'verified signature',
     );
@@ -126,7 +171,7 @@ void main() {
         ]),
         repository: 'example/tool',
         workingDirectory: '/repo',
-      ).read(tag: 'v2.1.0', executable: 'example', into: '/tmp/w');
+      ).read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
 
       expect(reading.isKnown, isFalse);
       expect(
@@ -146,7 +191,7 @@ void main() {
         ]),
         repository: 'example/tool',
         workingDirectory: '/repo',
-      ).read(tag: 'v2.1.0', executable: 'example', into: '/tmp/w');
+      ).read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
 
       expect(reading.answer, IdentityAnswer.none);
     });
@@ -162,7 +207,7 @@ void main() {
         ]),
         repository: 'example/typo',
         workingDirectory: '/repo',
-      ).read(tag: 'v2.1.0', executable: 'example', into: '/tmp/w');
+      ).read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
 
       expect(reading.isKnown, isFalse);
       expect(reading.answer, IdentityAnswer.unreadable);
@@ -171,7 +216,7 @@ void main() {
     test('a network failure is not an absence', () async {
       final reading = await identity({
         'gh': failed('could not resolve host: api.github.com'),
-      }).read(tag: 'v2.1.0', executable: 'example', into: '/tmp/w');
+      }).read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
 
       expect(reading.isKnown, isFalse);
       expect(
@@ -183,10 +228,11 @@ void main() {
     });
 
     test('an archive that will not open is not an absence', () async {
+      File('${scratch.path}/example-2.1.0-macos-arm64.tar.gz')
+          .writeAsStringSync('invalid gzip');
       final reading = await identity({
         'gh': ok('{"assets":[{"name":"example-2.1.0-macos-arm64.tar.gz"}]}'),
-        'tar': failed('unexpected end of file'),
-      }).read(tag: 'v2.1.0', executable: 'example', into: '/tmp/w');
+      }).read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
 
       expect(reading.isKnown, isFalse);
       expect(reading.why, contains('could not be opened'));
@@ -195,9 +241,8 @@ void main() {
     test('an unsigned published binary is not an absence either', () async {
       final reading = await identity({
         'gh': ok('{"assets":[{"name":"example-2.1.0-macos-arm64.tar.gz"}]}'),
-        'tar': ok(),
         'codesign': failed('code object is not signed at all'),
-      }).read(tag: 'v2.1.0', executable: 'example', into: '/tmp/w');
+      }).read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
 
       expect(reading.isKnown, isFalse);
       expect(reading.why, contains('signature is not valid'));
@@ -214,7 +259,6 @@ void main() {
             );
           }
           if (key.startsWith('gh release download')) return ok();
-          if (key.startsWith('tar -xzf')) return ok();
           if (key.startsWith('codesign --verify')) {
             return failed('code object is not signed at all');
           }
@@ -228,7 +272,7 @@ void main() {
         tools: tools,
         repository: 'example/tool',
         workingDirectory: '/repo',
-      ).read(tag: 'v2.1.0', executable: 'example', into: '/tmp/w');
+      ).read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
 
       expect(reading.answer, IdentityAnswer.unreadable);
       expect(reading.why, contains('not valid for its bytes'));
@@ -243,14 +287,13 @@ void main() {
       () async {
     final tools = ScriptedTools({
       'gh': ok('{"assets":[{"name":"example-2.1.0-macos-arm64.tar.gz"}]}'),
-      'tar': ok(),
       'codesign': ok('designated => identifier "x"'),
     });
     await PublishedIdentity(
       tools: tools,
       repository: 'example/tool',
       workingDirectory: '/repo',
-    ).read(tag: 'v2.1.0', executable: 'example', into: '/tmp/w');
+    ).read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
 
     expect(
       tools.calls.any((c) => c.first == 'security'),

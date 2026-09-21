@@ -119,7 +119,7 @@ void main() {
   });
 
   test('installs and tests the released executable through the formula', () {
-    expect(render(), contains('bin.install "keybay"'));
+    expect(render(), contains('bin.install_symlink libexec/"keybay"'));
     expect(render(), contains('shell_output("#{bin}/keybay --version")'));
   });
 

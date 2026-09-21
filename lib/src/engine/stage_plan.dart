@@ -22,6 +22,8 @@ class DartCompilerIdentity {
     required String executable,
     required String version,
     required String sha256,
+    this.runtimeSha256,
+    this.runtimeLicenseSha256,
   })  : executable = executable.trim(),
         version = version.trim(),
         sha256 = sha256.toLowerCase() {
@@ -34,25 +36,45 @@ class DartCompilerIdentity {
     if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(this.sha256)) {
       throw ArgumentError('the Dart compiler digest is invalid');
     }
+    if (runtimeLicenseSha256 != null &&
+        !RegExp(r'^[0-9a-f]{64}$').hasMatch(runtimeLicenseSha256!)) {
+      throw ArgumentError('the Dart runtime license digest is invalid');
+    }
+    if (runtimeSha256 != null &&
+        !RegExp(r'^[0-9a-f]{64}$').hasMatch(runtimeSha256!)) {
+      throw ArgumentError('the Dart runtime digest is invalid');
+    }
   }
 
   factory DartCompilerIdentity.fromJson(Object? value) {
     if (value is! Map ||
-        value.keys.toSet().difference(
-            const {'command', 'executable', 'sha256', 'version'}).isNotEmpty ||
+        value.keys.toSet().difference(const {
+          'command',
+          'executable',
+          'sha256',
+          'version',
+          'runtime_sha256',
+          'runtime_license_sha256'
+        }).isNotEmpty ||
         const {'command', 'executable', 'sha256', 'version'}
             .difference(value.keys.toSet())
             .isNotEmpty ||
         value['command'] != 'dart' ||
         value['executable'] is! String ||
         value['sha256'] is! String ||
-        value['version'] is! String) {
+        value['version'] is! String ||
+        (value.containsKey('runtime_license_sha256') &&
+            value['runtime_license_sha256'] is! String) ||
+        (value.containsKey('runtime_sha256') &&
+            value['runtime_sha256'] is! String)) {
       throw const FormatException('invalid Dart compiler identity');
     }
     return DartCompilerIdentity.recorded(
       executable: value['executable'] as String,
       version: value['version'] as String,
       sha256: value['sha256'] as String,
+      runtimeSha256: value['runtime_sha256'] as String?,
+      runtimeLicenseSha256: value['runtime_license_sha256'] as String?,
     );
   }
 
@@ -67,7 +89,7 @@ class DartCompilerIdentity {
   /// the executable digest distinguishes different resolved installations
   /// without depending on the SDK's private on-disk layout.
   factory DartCompilerIdentity.readResolved(String selectedExecutable) {
-    final executable = _canonicalFile(selectedExecutable);
+    final executable = _dartSdkExecutable(_canonicalFile(selectedExecutable));
     final ProcessResult result;
     try {
       result = Process.runSync(executable, const ['--version']);
@@ -106,6 +128,8 @@ class DartCompilerIdentity {
       executable: executable,
       version: version,
       sha256: sha256,
+      runtimeSha256: _runtimeDigest(executable),
+      runtimeLicenseSha256: _runtimeLicenseDigest(executable),
     );
     final after = _compilerExecutableFingerprint(executable);
     if (before != after) {
@@ -123,28 +147,39 @@ class DartCompilerIdentity {
   final String executable;
   final String version;
   final String sha256;
+  final String? runtimeSha256;
+  final String? runtimeLicenseSha256;
 
   Map<String, Object?> toJson() => {
         'command': 'dart',
         'executable': executable,
         'sha256': sha256,
         'version': version,
+        if (runtimeSha256 != null) 'runtime_sha256': runtimeSha256,
+        if (runtimeLicenseSha256 != null)
+          'runtime_license_sha256': runtimeLicenseSha256,
       };
 
   Map<String, Object?> toPlanJson() => {
         'command': 'dart',
         'sha256': sha256,
         'version': version,
+        if (runtimeSha256 != null) 'runtime_sha256': runtimeSha256,
+        if (runtimeLicenseSha256 != null)
+          'runtime_license_sha256': runtimeLicenseSha256,
       };
 
   @override
   bool operator ==(Object other) =>
       other is DartCompilerIdentity &&
       other.version == version &&
-      other.sha256 == sha256;
+      other.sha256 == sha256 &&
+      other.runtimeSha256 == runtimeSha256 &&
+      other.runtimeLicenseSha256 == runtimeLicenseSha256;
 
   @override
-  int get hashCode => Object.hash(version, sha256);
+  int get hashCode =>
+      Object.hash(version, sha256, runtimeSha256, runtimeLicenseSha256);
 }
 
 /// The rk implementation whose producer semantics interpret the release plan.
@@ -205,7 +240,15 @@ String _compilerExecutableFingerprint(String executable) {
     'mode': stat.mode,
     'modified': stat.modified.microsecondsSinceEpoch,
     'size': stat.size,
+    'runtime': _runtimeFingerprint(executable),
+    'runtime_license': _fileFingerprint(
+        File('${File(executable).parent.parent.path}/LICENSE')),
   })));
+}
+
+String? _runtimeDigest(String compiler) {
+  final runtime = File('${File(compiler).parent.path}/dartaotruntime');
+  return runtime.existsSync() ? Sha256.hex(runtime.readAsBytesSync()) : null;
 }
 
 class DartCompilerUnavailable implements Exception {
@@ -235,6 +278,7 @@ Map<String, Object?> stagePlanFor(
   required DartCompilerIdentity compiler,
   required RkImplementationIdentity rk,
   Map<String, String>? environment,
+  Map<String, Object?>? launcherCompiler,
 }) =>
     {
       'unit': {
@@ -257,6 +301,7 @@ Map<String, Object?> stagePlanFor(
             'version': project.version.canonical,
             'path': project.pubspec.directory,
             'executable': project.executable,
+            'dart_defines': project.dartDefines,
             'targets':
                 project.publish.map((target) => target.configName).toList()
                   ..sort(),
@@ -269,6 +314,7 @@ Map<String, Object?> stagePlanFor(
       ],
       'toolchain': {
         'dart': compiler.toPlanJson(),
+        if (launcherCompiler != null) 'launcher': launcherCompiler,
         'host_os': Platform.operatingSystem,
         'host_abi': Abi.current().toString(),
         'rk': rk.toJson(),
@@ -434,4 +480,45 @@ Directory? _releaseKitSourceRoot(File script) {
     directory = parent;
   }
   return null;
+}
+
+String _runtimeFingerprint(String compiler) {
+  return _fileFingerprint(File('${File(compiler).parent.path}/dartaotruntime'));
+}
+
+/// Flutter and version managers can put a script on PATH instead of the SDK's
+/// Dart executable. Ask that command which VM it runs, in a private, standalone
+/// probe, before choosing the compiler/runtime pair. No package is resolved.
+String _dartSdkExecutable(String selected) {
+  if (File('${File(selected).parent.path}/dartaotruntime').existsSync()) {
+    return selected;
+  }
+  final probe = Directory.systemTemp.createTempSync('rk-dart-sdk-');
+  try {
+    final script = File('${probe.path}/sdk.dart')
+      ..writeAsStringSync(
+          "import 'dart:io'; void main() => print(Platform.resolvedExecutable);\n");
+    final result =
+        Process.runSync(selected, [script.path], workingDirectory: probe.path);
+    if (result.exitCode != 0) return selected;
+    final path = '${result.stdout}'.trim().split('\n').last;
+    if (!File(path).isAbsolute ||
+        !File(path).existsSync() ||
+        !File('${File(path).parent.path}/dartaotruntime').existsSync()) {
+      return selected;
+    }
+    return _canonicalFile(path);
+  } finally {
+    probe.deleteSync(recursive: true);
+  }
+}
+
+String? _runtimeLicenseDigest(String compiler) {
+  final license = File('${File(compiler).parent.parent.path}/LICENSE');
+  return license.existsSync() ? Sha256.hex(license.readAsBytesSync()) : null;
+}
+
+String _fileFingerprint(File file) {
+  final stat = file.statSync();
+  return '${stat.type}:${stat.changed.microsecondsSinceEpoch}:${stat.modified.microsecondsSinceEpoch}:${stat.size}:${stat.mode}';
 }

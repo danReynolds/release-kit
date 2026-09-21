@@ -168,6 +168,9 @@ void main() {
   });
 
   group('builds', () {
+    late Directory buildRoot;
+    setUp(() => buildRoot = Directory.systemTemp.createTempSync('rk-builder-'));
+    tearDown(() => buildRoot.deleteSync(recursive: true));
     final capabilities = HostCapabilities(
       hostPlatform: 'macos-arm64',
       containerRuntime: 'docker',
@@ -176,7 +179,7 @@ void main() {
 
     test('a native build passes the target flags nowhere', () async {
       final tools = _TimeoutRecordingTools(results: {
-        'build/keybay --version': ToolResult(
+        '${buildRoot.path}/keybay --version': ToolResult(
           exitCode: 0,
           stdout: 'keybay 0.2.0\n',
           stderr: '',
@@ -189,13 +192,14 @@ void main() {
       ).build(
         platform: 'macos-arm64',
         entryPoint: 'bin/keybay.dart',
-        output: 'build/keybay',
+        output: '${buildRoot.path}/keybay',
         workingDirectory: '/repo',
         expectedVersion: '0.2.0',
       );
 
       expect(outcome.ok, isTrue, reason: outcome.problem);
-      expect(tools.calls.first, startsWith('/sdk/bin/dart compile exe'));
+      expect(
+          tools.calls.first, startsWith('/sdk/bin/dart compile aot-snapshot'));
       expect(tools.calls.first, isNot(contains('--target-os')));
       expect(tools.timeouts.last, const Duration(minutes: 2));
     });
@@ -203,7 +207,7 @@ void main() {
     test('a cross build names the target and checks it in a container',
         () async {
       final tools = _TimeoutRecordingTools(results: {
-        'docker run --rm --platform linux/amd64 -v build:/w:ro '
+        'docker run --rm --platform linux/amd64 -v ${buildRoot.path}:/w:ro '
             'debian:bookworm-slim /w/keybay --version': ToolResult(
           exitCode: 0,
           stdout: 'keybay 0.2.0\n',
@@ -216,7 +220,7 @@ void main() {
       ).build(
         platform: 'linux-x64',
         entryPoint: 'bin/keybay.dart',
-        output: 'build/keybay',
+        output: '${buildRoot.path}/keybay',
         workingDirectory: '/repo',
         expectedVersion: '0.2.0',
       );
@@ -230,7 +234,7 @@ void main() {
 
     test('a binary reporting the wrong version is not accepted', () async {
       final tools = RecordingTools(results: {
-        'build/keybay --version': ToolResult(
+        '${buildRoot.path}/keybay --version': ToolResult(
           exitCode: 0,
           stdout: 'keybay 0.1.0\n',
           stderr: '',
@@ -242,7 +246,7 @@ void main() {
       ).build(
         platform: 'macos-arm64',
         entryPoint: 'bin/keybay.dart',
-        output: 'build/keybay',
+        output: '${buildRoot.path}/keybay',
         workingDirectory: '/repo',
         expectedVersion: '0.2.0',
       );

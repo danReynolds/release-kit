@@ -1184,6 +1184,9 @@ final class ReleaseStageCoordinator {
       repositoryRoot: repositoryRoot,
       capabilities: capabilities,
       compilerExecutable: stage.compiler?.executable ?? 'dart',
+      runtimeSha256: stage.compiler?.runtimeSha256,
+      runtimeLicenseSha256: stage.compiler?.runtimeLicenseSha256,
+      launcherCompiler: stage.launcherCompiler,
     );
   }
 

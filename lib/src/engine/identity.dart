@@ -1,4 +1,7 @@
 import 'dart:convert';
+import 'dart:io';
+
+import 'stage_archive.dart';
 
 import '../transforms/macos.dart';
 import 'tools.dart';
@@ -182,6 +185,13 @@ class PublishedIdentity {
       );
     }
 
+    // Asset metadata is remote input, including the downloaded filename.
+    if (assetName.contains('/') ||
+        assetName.contains(r'\') ||
+        assetName.contains('\u0000')) {
+      return const IdentityReading.unreadable(
+          'the published asset has an unsafe name');
+    }
     final downloaded = await tools.run(
       'gh',
       [
@@ -210,30 +220,36 @@ class PublishedIdentity {
     // that exact path avoids a shell/glob over a repository-derived directory
     // and cannot accidentally select a stale second archive.
     final archive = '$into/$assetName';
-    final extracted = await tools.run(
-      'tar',
-      ['-xzf', archive, '-C', into],
-      workingDirectory: workingDirectory,
-    );
-    if (!extracted.ok) {
+    Directory? extracted;
+    try {
+      final contents =
+          StageArchiveInventory.decode(File(archive).readAsBytesSync());
+      if (contents.artifact.entryPoint != executable) {
+        return const IdentityReading.unreadable(
+            'the published archive names a different executable');
+      }
+      extracted = Directory.systemTemp.createTempSync('rk-published-identity-');
+      contents.extractTo(extracted);
+      final signer = MacOsSigner(tools: tools);
+      for (final file in contents.artifact.signedFiles) {
+        if (!(await signer.verifies('${extracted.path}/${file.path}')).ok) {
+          return const IdentityReading.unreadable(
+              'the published binary signature is not valid for its bytes');
+        }
+      }
+      final requirement = await signer.designatedRequirement(
+          '${extracted.path}/${contents.artifact.identityFile}');
+      if (requirement == null) {
+        return const IdentityReading.unreadable(
+            'the published binary carries no signature rk could read');
+      }
+      return IdentityReading.found(requirement);
+    } on Object catch (error) {
       return IdentityReading.unreadable(
-        'the published archive could not be opened: ${extracted.summary}',
-      );
+          'the published archive could not be opened: $error');
+    } finally {
+      extracted?.deleteSync(recursive: true);
     }
-
-    final signer = MacOsSigner(tools: tools);
-    if (!(await signer.verifies('$into/$executable')).ok) {
-      return const IdentityReading.unreadable(
-        'the published binary signature is not valid for its bytes',
-      );
-    }
-    final requirement = await signer.designatedRequirement('$into/$executable');
-    if (requirement == null) {
-      return const IdentityReading.unreadable(
-        'the published binary carries no signature rk could read',
-      );
-    }
-    return IdentityReading.found(requirement);
   }
 }
 

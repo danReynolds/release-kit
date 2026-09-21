@@ -130,7 +130,8 @@ class HomebrewFormula {
 
     buffer
       ..writeln('  def install')
-      ..writeln('    bin.install "${_escape(executable)}"')
+      ..writeln('    libexec.install Dir["*"]')
+      ..writeln('    bin.install_symlink libexec/"${_escape(executable)}"')
       ..writeln('  end')
       ..writeln()
       ..writeln('  test do')

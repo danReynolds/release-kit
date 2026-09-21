@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import '../builds/binary_artifact.dart';
+import 'canonical_json.dart';
 import '../transforms/digest.dart';
 import 'release_manifest.dart';
 import 'producers.dart';
@@ -358,7 +360,7 @@ class StageInspector {
     // false claim into a trusted input on the next run.
     for (final step in receipt.steps) {
       if (isMacosBuildReceipt(step.name)) {
-        _inspectSignature(step, issues);
+        _inspectSignature(stage, step, issues);
       }
       if (step.name.startsWith('archive:')) {
         for (final output in step.outputs.where(
@@ -553,9 +555,9 @@ class StageInspector {
     List<StageIssue> issues,
   ) {
     try {
-      final actual = StageArchiveInventory.parse(
-        File(stage.resolve(path)).readAsBytesSync(),
-      );
+      final contents = StageArchiveInventory.decode(
+          File(stage.resolve(path)).readAsBytesSync());
+      final actual = contents.inventory;
       if (producer == null || !producer.name.startsWith('archive:')) {
         throw const FormatException(
           'archive has no archive producer in the receipt',
@@ -565,11 +567,32 @@ class StageInspector {
         producer.evidence['inventory'],
       );
       StageArchiveInventory.requireSame(expected, actual);
+      if (contents.artifact.isBundle) {
+        final parts = producer.name.split(':');
+        final root = 'producers/${parts[1]}/${parts[2]}';
+        for (final file in contents.artifact.files) {
+          final input = producer.inputs
+              .where((input) => input.name == '$root/${file.path}')
+              .firstOrNull;
+          final entry = actual.singleWhere((entry) => entry.name == file.path);
+          if (input == null || input.sha256 != entry.sha256) {
+            throw FormatException(
+                'archived ${file.path} differs from its producer input');
+          }
+        }
+      }
       if (isMacosArchiveReceipt(producer.name)) {
         final signature = producer.evidence['signature'];
         if (signature is! Map ||
             signature['status'] != 'valid' ||
-            signature['scope'] != 'archive-extracted') {
+            signature['scope'] != 'archive-extracted' ||
+            (contents.artifact.isBundle &&
+                (signature['smoke'] != 'passed' ||
+                    CanonicalJson.encode(signature['files']) !=
+                        CanonicalJson.encode([
+                          for (final file in contents.artifact.signedFiles)
+                            file.path
+                        ])))) {
           throw const FormatException(
             'macOS archive has no final signature verification evidence',
           );
@@ -585,14 +608,52 @@ class StageInspector {
   }
 
   static void _inspectSignature(
+    StageDirectory stage,
     StageStep producer,
     List<StageIssue> issues,
   ) {
     final signature = producer.evidence['signature'];
-    final binary = producer.outputs.length == 1 &&
-            producer.outputs.single.type == 'executable'
-        ? producer.outputs.single
-        : null;
+    BinaryArtifact? artifact;
+    String? root;
+    try {
+      if (producer.evidence.containsKey('artifact')) {
+        artifact = BinaryArtifact.fromJson(producer.evidence['artifact']);
+        final parts = producer.name.split(':');
+        root = 'producers/${parts[1]}/${parts[2]}';
+        final expected = {
+          for (final file in artifact.files) '$root/${file.path}': file
+        };
+        if (producer.outputs.length != expected.length ||
+            producer.outputs.any((output) =>
+                expected[output.path]?.mode != output.mode ||
+                expected[output.path]?.type != output.type)) {
+          throw const FormatException(
+              'signed build has an incomplete artifact inventory');
+        }
+        if (artifact.isBundle) {
+          final manifest = CanonicalJson.decodeDocument(
+              File(stage.resolve('$root/${BinaryArtifact.manifestName}'))
+                  .readAsStringSync());
+          if (CanonicalJson.encode(manifest) !=
+              CanonicalJson.encode(artifact.toJson())) {
+            throw const FormatException(
+                'signed build manifest differs from its receipt');
+          }
+        }
+      }
+    } on Object catch (error) {
+      issues.add(StageIssue(StageIssueKind.invalidStructure, '$error',
+          path: 'stage.json'));
+      return;
+    }
+    final binary = artifact != null
+        ? producer.outputs
+            .where((output) => output.path == '$root/${artifact!.identityFile}')
+            .firstOrNull
+        : producer.outputs.length == 1 &&
+                producer.outputs.single.type == 'executable'
+            ? producer.outputs.single
+            : null;
     String? problem;
     if (binary == null) {
       problem = 'signed build does not produce exactly one executable';
@@ -641,6 +702,37 @@ class StageInspector {
         problem = 'signature evidence is not bound to the signed bytes';
       } else if (verifiedAfterSmoke != true) {
         problem = 'signature was not verified after the signed smoke test';
+      }
+    }
+    if (problem == null && artifact != null) {
+      final signatures = producer.evidence['signatures'];
+      if (signatures is! Map ||
+          signatures.length != artifact.signedFiles.length ||
+          CanonicalJson.encode(signatures[artifact.identityFile]) !=
+              CanonicalJson.encode(signature)) {
+        problem = 'signed build has no complete per-file signature evidence';
+      } else {
+        for (final file in artifact.signedFiles) {
+          final record = signatures[file.path];
+          final output = producer.outputs
+              .singleWhere((output) => output.path == '$root/${file.path}');
+          if (record is! Map ||
+              signature is! Map ||
+              record['code_id'] !=
+                  '${signature['code_id']}${file.codeSuffix}' ||
+              record['certificate'] != signature['certificate'] ||
+              record['certificate_sha256'] != signature['certificate_sha256'] ||
+              record['designated_requirement'] is! String ||
+              (record['designated_requirement'] as String).trim().isEmpty ||
+              record['unsigned_sha256'] is! String ||
+              !_sha256.hasMatch(record['unsigned_sha256'] as String) ||
+              record['signed_sha256'] != output.sha256 ||
+              record['verified_after_smoke'] != true) {
+            problem =
+                'signature evidence for ${file.path} is missing or not bound to its bytes and identity';
+            break;
+          }
+        }
       }
     }
     if (problem != null) {

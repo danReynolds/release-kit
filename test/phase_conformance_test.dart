@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'bundle_tools.dart';
 
 import 'dart:convert';
 
@@ -1307,7 +1308,7 @@ executables:
     String certificateSha1(int index) => '${index + 1}' * 40;
     String certificateSha256(int index) =>
         String.fromCharCode('a'.codeUnitAt(0) + index) * 64;
-    final tools = RecordingTools(
+    final tools = BundleRecordingTools(
       probe: (key, workingDirectory) {
         if (key == 'git push' && workingDirectory != null) {
           final formula = File('$workingDirectory/Formula/tool.rb');
@@ -1317,6 +1318,15 @@ executables:
         }
       },
       onRun: (key) {
+        if (key.startsWith('gh release download ') &&
+            key.contains('--pattern tool-0.9.0-macos-arm64.tar.gz')) {
+          final into = key.split(' --dir ').last.split(' ').first;
+          File('$into/tool-0.9.0-macos-arm64.tar.gz')
+            ..parent.createSync(recursive: true)
+            ..writeAsBytesSync(ArchiveBuilder.gzip(ArchiveBuilder.tar([
+              ArchiveEntry(name: 'tool', bytes: [1, 2, 3], executable: true)
+            ])));
+        }
         if (key.startsWith('git push origin ')) {
           final refspec = key.substring('git push origin '.length);
           const marker = ':refs/tags/';
@@ -1347,7 +1357,7 @@ executables:
             ..parent.createSync(recursive: true)
             ..writeAsBytesSync(stagedPublicAsset(name).readAsBytesSync());
         }
-        if (key.startsWith('dart compile exe')) {
+        if (key.startsWith('dart compile')) {
           final out = key.split(' -o ').last.split(' ').first;
           File(out)
             ..parent.createSync(recursive: true)
@@ -1756,7 +1766,7 @@ executables:
       // Every stage of the chain acted, separately, in checklist order.
       final order = [
         'xcrun notarytool history',
-        'dart compile exe',
+        'dart compile',
         'codesign --force',
         'ditto',
         'xcrun notarytool submit',
@@ -1800,7 +1810,7 @@ executables:
         contains('RK-NOTARY-004'),
       );
       expect(
-        run.calls.where((call) => call.startsWith('dart compile exe')),
+        run.calls.where((call) => call.startsWith('dart compile')),
         isEmpty,
       );
       expect(
@@ -1876,7 +1886,7 @@ executables:
 
       expect(run.code, 0, reason: run.text);
       for (final local in [
-        'dart compile exe',
+        'dart compile',
         'codesign --force',
         'ditto',
         'xcrun notarytool submit',
@@ -1913,7 +1923,7 @@ executables:
       );
       expect(run.code, 0, reason: run.text);
       expect(
-        run.calls.where((c) => c.startsWith('dart compile exe')).length,
+        run.calls.where((c) => c.startsWith('dart compile')).length,
         3,
       );
       for (final public in [
@@ -2002,14 +2012,13 @@ executables:
 
       // Three builds, two of them cross-compiled for linux.
       expect(
-        run.calls.where((c) => c.startsWith('dart compile exe')).length,
+        run.calls.where((c) => c.startsWith('dart compile')).length,
         3,
       );
       expect(
         run.calls
             .where((c) =>
-                c.startsWith('dart compile exe') &&
-                c.contains('--target-os=linux'))
+                c.startsWith('dart compile') && c.contains('--target-os=linux'))
             .length,
         2,
       );
@@ -2155,7 +2164,7 @@ executables:
       expect(run.code, 0, reason: run.text);
       expect(
         run.calls.where((call) => call.startsWith('codesign --force')),
-        hasLength(1),
+        hasLength(3),
         reason: 'the release invocation reuses the staged signed bytes',
       );
       expect(

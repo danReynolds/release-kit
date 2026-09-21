@@ -21,10 +21,21 @@ class Pubspec {
     required this.workspace,
     required this.nameLine,
     required this.versionLine,
-  });
+    YamlMap? nativeFields,
+  }) : _nativeFields = nativeFields;
 
   /// Repository-relative path of the manifest itself.
   final String path;
+  final YamlMap? _nativeFields;
+
+  String? stringAt(String path) {
+    final parts = path.split('.');
+    var map = _nativeFields;
+    for (final part in parts.take(parts.length - 1)) {
+      map = map?.map(part);
+    }
+    return map?.string(parts.last);
+  }
 
   final String name;
 
@@ -106,6 +117,7 @@ class Pubspec {
 
     return Pubspec(
       path: path,
+      nativeFields: doc,
       name: name,
       version: version,
       publishTo: doc.string('publish_to'),
