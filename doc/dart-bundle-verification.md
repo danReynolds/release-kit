@@ -47,9 +47,11 @@ These are container execution results, not native Linux desktop qualification.
 
 ## Remaining external checks
 
-Apple notarization was **not run**. Preflight found no Keychain credential
-profile named `rk-notary`; no new credentials were created. Tests exercise
-complete-payload submission, Accepted/log receipt binding and failure handling.
+Apple notarization of the new bundle was **not run**. An initial credential
+lookup failed, but a subsequent elevated `notarytool history` check succeeded
+with the existing `rk-notary` profile and returned accepted rk and Keybay
+submissions. No new credentials are needed. Tests exercise complete-payload
+submission, Accepted/log receipt binding and failure handling.
 Live Apple acceptance and installed Keybay upgrade/security qualification still
 belong to release preparation. No package, GitHub release or Homebrew tap was
 published during these checks. Hosted CI and independent PR review have not run
