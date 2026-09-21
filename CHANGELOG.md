@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.12
 
 - macOS Dart CLIs now ship as a signed launcher, matching runtime and AOT
   module, without executable-memory exceptions. Linux retains single-file
