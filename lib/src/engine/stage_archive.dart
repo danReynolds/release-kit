@@ -2,6 +2,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../transforms/digest.dart';
+import '../builds/binary_artifact.dart';
+import 'file_mode.dart';
+import 'canonical_json.dart';
 
 /// The safe, regular-file inventory inside one staged release archive.
 class StageArchiveEntry {
@@ -70,19 +73,38 @@ class StageArchiveEntry {
 
 /// The checked contents of one release archive.
 ///
-/// The executable bytes come from the compressed archive itself. This lets a
+/// The artifact bytes come from the compressed archive itself. This lets a
 /// producer verify exactly what a consumer will extract without trusting the
 /// source file that was handed to the archive builder.
 class StageArchiveContents {
   const StageArchiveContents._({
     required this.inventory,
-    required this.executable,
-    required this.executableBytes,
+    required this.artifact,
+    required this.files,
   });
 
   final List<StageArchiveEntry> inventory;
-  final StageArchiveEntry executable;
-  final List<int> executableBytes;
+  final BinaryArtifact artifact;
+  final Map<String, List<int>> files;
+  StageArchiveEntry get executable =>
+      inventory.singleWhere((entry) => entry.name == artifact.entryPoint);
+  List<int> get executableBytes => files[artifact.entryPoint]!;
+
+  /// Extract only validated regular files, into a new empty private directory.
+  void extractTo(Directory directory) {
+    if (directory.listSync().isNotEmpty) {
+      throw ArgumentError('archive extraction requires an empty directory');
+    }
+    for (final entry in inventory) {
+      final file = File('${directory.path}/${entry.name}');
+      file.parent.createSync(recursive: true);
+      file.writeAsBytesSync(files[entry.name]!, flush: true);
+    }
+    setFileModes({
+      for (final entry in inventory)
+        '${directory.path}/${entry.name}': entry.mode
+    });
+  }
 }
 
 /// Parses the deterministic gzip/ustar bytes rk itself produces.
@@ -95,7 +117,7 @@ abstract final class StageArchiveInventory {
   static List<StageArchiveEntry> parse(List<int> archive) =>
       decode(archive).inventory;
 
-  /// Decodes and validates [archive], retaining its one executable payload.
+  /// Decodes and validates [archive], retaining all of its artifact payloads.
   static StageArchiveContents decode(List<int> archive) {
     final List<int> tar;
     try {
@@ -105,7 +127,7 @@ abstract final class StageArchiveInventory {
     }
 
     final entries = <StageArchiveEntry>[];
-    List<int>? executableBytes;
+    final files = <String, List<int>>{};
     final names = <String>{};
     var offset = 0;
     var zeroBlocks = 0;
@@ -161,7 +183,7 @@ abstract final class StageArchiveInventory {
         size: size,
         sha256: Sha256.hex(bytes),
       ));
-      if (modeValue == 0x1ed) executableBytes = bytes;
+      files[name] = List.unmodifiable(bytes);
     }
 
     if (zeroBlocks != 2) {
@@ -174,15 +196,42 @@ abstract final class StageArchiveInventory {
       throw const FormatException('archive contains no files');
     }
     final executables = entries.where((entry) => entry.executable).toList();
-    if (executables.length != 1 || executableBytes == null) {
+    final metadata = files[BinaryArtifact.manifestName];
+    final BinaryArtifact artifact;
+    if (metadata != null) {
+      artifact = BinaryArtifact.fromJson(
+          CanonicalJson.decodeDocument(utf8.decode(metadata)));
+    } else if (executables.length == 1) {
+      artifact = BinaryArtifact.single(executables.single.name);
+    } else {
       throw const FormatException(
         'archive must contain exactly one executable file',
       );
     }
+    for (final file in artifact.files) {
+      final entry =
+          entries.where((entry) => entry.name == file.path).firstOrNull;
+      if (entry == null || entry.mode != file.mode) {
+        throw FormatException(
+            'archive is missing ${file.path} with mode ${file.mode}');
+      }
+    }
+    final allowed = {
+      for (final file in artifact.files) file.path,
+      'LICENSE',
+      'README.md'
+    };
+    for (final entry in entries) {
+      if (!allowed.contains(entry.name) ||
+          ((entry.name == 'LICENSE' || entry.name == 'README.md') &&
+              entry.executable)) {
+        throw FormatException('unexpected artifact file: ${entry.name}');
+      }
+    }
     return StageArchiveContents._(
       inventory: List<StageArchiveEntry>.unmodifiable(entries),
-      executable: executables.single,
-      executableBytes: List<int>.unmodifiable(executableBytes),
+      artifact: artifact,
+      files: Map.unmodifiable(files),
     );
   }
 

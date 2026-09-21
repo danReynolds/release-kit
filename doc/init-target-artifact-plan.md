@@ -206,7 +206,7 @@ free-form receipt evidence.
 The Homebrew project produces one Formula from its standalone archive
 contract. The Formula is the command-line installation surface: it selects the
 released archive for the host OS and architecture, verifies its digest, and
-installs the executable with `bin.install`. It is a private stage output
+installs the artifact under `libexec` and links its command with `bin.install_symlink`. It is a private stage output
 published only to `Formula/<token>.rb` in the selected tap. Its token and Ruby
 class are derived from the executable name (`_` becomes `-`).
 

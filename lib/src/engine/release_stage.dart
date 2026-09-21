@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:math';
 
+import '../builds/launcher_compiler.dart';
 import '../transforms/digest.dart';
 import 'file_mode.dart';
 import 'release_asset.dart';
@@ -83,9 +84,15 @@ class ReleaseStages {
     DartCompilerIdentity compiler,
     RkImplementationIdentity rk,
   ) {
+    final launcher = Platform.isMacOS &&
+            unit.projects.any((project) => project.binaryPlatforms
+                .any((platform) => platform.startsWith('macos-')))
+        ? LauncherCompiler.read()
+        : null;
     final plan = stagePlanFor(
       unit,
       currentGit,
+      launcherCompiler: launcher?.identity,
       compiler: compiler,
       rk: rk,
       environment: _environment(),
@@ -108,6 +115,7 @@ class ReleaseStages {
       unit: unit,
       source: source,
       compiler: compiler,
+      launcherCompiler: launcher,
       repository: currentGit.originUrl,
       enforceUnitContract: true,
       directory: directory,
@@ -150,6 +158,7 @@ class ReleaseStage {
     required this.source,
     required this.directory,
     this.compiler,
+    this.launcherCompiler,
     this.repository,
     this.enforceUnitContract = false,
     Iterable<StageContributionContract> targetContributions = const [],
@@ -160,6 +169,7 @@ class ReleaseStage {
   final SourceTree source;
   final StageDirectory directory;
   final DartCompilerIdentity? compiler;
+  final LauncherCompiler? launcherCompiler;
   final String? repository;
   final List<StageContributionContract> targetContributions;
 

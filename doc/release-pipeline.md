@@ -127,3 +127,11 @@ that form one transaction stay behind `TargetModule.publish`; derived private
 inputs stay behind `TargetModule.stageInput`. The intended N+1 change is a
 vertical target slice plus catalog/checklist registration, not another release
 coordinator branch.
+
+## Standalone CLI payloads
+
+The binary chain uses one [artifact description](cli-artifacts.md) for Linux
+executables and macOS Dart bundles. Companion files are build outputs and
+explicit inputs to notarization and archiving, so stage reuse cannot adopt an
+unrecorded runtime or module. The process identity stays on the Dart runtime
+when upgrading from a single macOS executable.

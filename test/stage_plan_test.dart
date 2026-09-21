@@ -111,6 +111,26 @@ void main() {
       );
     });
 
+    test('the bundled module participates even when invoked from its directory',
+        () {
+      final runtime = File('${scratch.path}/lib/rk/dartaotruntime')
+        ..parent.createSync(recursive: true)
+        ..writeAsStringSync('RUNTIME');
+      final module = File('${runtime.parent.path}/app.aot')
+        ..writeAsStringSync('RK MODULE');
+      final expected = rkProgramDigest(module, runtime);
+      final previousDirectory = Directory.current;
+      try {
+        Directory.current = module.parent;
+        expect(rkProgramDigest(module, runtime), expected,
+            reason: 'the installed bundle identity cannot depend on cwd');
+        module.writeAsStringSync('DIFFERENT RK MODULE');
+        expect(rkProgramDigest(module, runtime), isNot(expected));
+      } finally {
+        Directory.current = previousDirectory;
+      }
+    });
+
     test('an unreadable neighbour is skipped, not thrown at', () {
       final locked = File('${scratch.path}/rk-locked')
         ..writeAsBytesSync(utf8.encode('LOCKED'));

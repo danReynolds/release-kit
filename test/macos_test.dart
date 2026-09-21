@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/transforms/macos.dart';
 import 'package:test/test.dart';
@@ -115,6 +117,15 @@ RecordingTools _tools({
   bool signatureVerifies = true,
 }) =>
     RecordingTools(
+      onRun: (key) {
+        if (key.startsWith('codesign --force')) {
+          final path =
+              key.split(' --entitlements ').last.split(' --identifier ').first;
+          final entitlements = File(path).readAsStringSync();
+          expect(entitlements, contains('<dict>'));
+          expect(entitlements, isNot(contains('<key>')));
+        }
+      },
       answers: (key) {
         if (key == 'security find-identity -v -p codesigning') {
           return ToolResult(

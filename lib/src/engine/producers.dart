@@ -53,22 +53,23 @@ List<StageStepContract> localProducerContracts(ResolvedUnit unit) => [
 StageStepContract contractFor(ResolvedUnit unit, Step step) {
   final project = unit.project(step.project!);
   final platform = step.platform;
-  final binary =
-      platform == null ? null : ReleaseAssets.binaryPath(project, platform);
+  final binaries = platform == null
+      ? <String, String>{}
+      : ReleaseAssets.binaryOutputs(project, platform);
 
   switch (step.kind) {
     case StepKind.build:
       return StageStepContract(
         receiptNameFor(step),
         inputs: const {'step:source-snapshot'},
-        outputs: {binary!: 'executable'},
+        outputs: binaries,
         validate: _buildEvidence,
       );
 
     case StepKind.notarize:
       return StageStepContract(
         receiptNameFor(step),
-        inputs: {binary!},
+        inputs: binaries.keys.toSet(),
         outputs: {
           ReleaseAssets.notaryResultPath(project, platform!): 'notary',
           ReleaseAssets.notaryLogPath(project, platform): 'notary',
@@ -81,7 +82,7 @@ StageStepContract contractFor(ResolvedUnit unit, Step step) {
       return StageStepContract(
         receiptNameFor(step),
         inputs: {
-          binary!,
+          ...binaries.keys,
           if (platform!.startsWith('macos-'))
             'step:notarize:${project.name}:$platform',
         },

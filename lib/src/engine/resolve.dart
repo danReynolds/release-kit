@@ -262,7 +262,21 @@ class Resolution {
       return null;
     }
 
+    final defines = <String, String>{};
+    for (final field in declared.dartDefinesFromPubspec) {
+      final value = pubspec.stringAt(field);
+      if (value == null || value.trim().isEmpty || value.contains('\u0000')) {
+        diagnostics.add(
+            'RK-RES-015', '$field must be non-empty text in $manifestPath',
+            source: declared.location,
+            remedy:
+                'define the native metadata in pubspec.yaml or remove its compile-time projection');
+        return null;
+      }
+      defines[field] = value;
+    }
     return ResolvedProject(
+      dartDefines: Map.unmodifiable(defines),
       unitName: unit.name,
       config: declared,
       pubspec: pubspec,
@@ -431,11 +445,13 @@ class ResolvedProject {
     required this.unitName,
     required this.config,
     required this.pubspec,
+    this.dartDefines = const {},
   });
 
   final String unitName;
   final ProjectConfig config;
   final Pubspec pubspec;
+  final Map<String, String> dartDefines;
 
   String get name => pubspec.name;
   Version get version => pubspec.version!;

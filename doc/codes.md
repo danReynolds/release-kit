@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-152 codes across 26 families.
+154 codes across 26 families.
 
 
 ## RK-AUTH — Authorization
@@ -109,6 +109,7 @@ fails, and the count below is checked against the rows.
 | `RK-CONF-038` | a target is declared at the wrong unit or project scope | `lib/src/engine/config.dart` |
 | `RK-CONF-039` | a unit declares a tag without selecting git-tag | `lib/src/engine/config.dart` |
 | `RK-CONF-040` | homebrew_tap is not a GitHub owner/repository coordinate | `lib/src/engine/config.dart` |
+| `RK-CONF-041` | dart_defines_from_pubspec must select unique dotted metadata fields on a binary project | `lib/src/engine/config.dart` |
 
 ## RK-DEST — Effective publication destinations
 
@@ -244,6 +245,7 @@ meanings and are not reused.
 | `RK-RES-010` | the units "${first.name}" and "${unit.name}" would share the tag  "${unit.tagPattern}" | `lib/src/engine/resolve.dart` |
 | `RK-RES-012` | a tagged unit needs an explicit tag pattern when several units tag | `lib/src/engine/resolve.dart` |
 | `RK-RES-014` | a package names a custom package registry but is asked to publish to pub.dev | `lib/src/engine/resolve.dart` |
+| `RK-RES-015` | a selected compile-time pubspec field is missing, empty or structured | `lib/src/engine/resolve.dart` |
 
 ## RK-SIGN — Signing identity
 

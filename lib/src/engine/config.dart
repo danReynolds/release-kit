@@ -67,6 +67,7 @@ class ProjectConfig {
     required this.path,
     required this.publish,
     required this.binaryPlatforms,
+    this.dartDefinesFromPubspec = const [],
     required this.location,
   });
 
@@ -77,6 +78,9 @@ class ProjectConfig {
 
   /// Empty unless standalone Dart CLI archives were explicitly requested.
   final List<String> binaryPlatforms;
+
+  /// Native manifest fields to project into Dart compile-time environment.
+  final List<String> dartDefinesFromPubspec;
 
   final SourceLocation location;
 
@@ -219,6 +223,7 @@ class _Reader {
       'path',
       'publish',
       'binary_platforms',
+      'dart_defines_from_pubspec',
       'project',
       'homebrew_tap',
     };
@@ -235,7 +240,10 @@ class _Reader {
     final rows = value['project'];
     final hasRows = rows != null;
 
-    if (hasRows && (value.has('path') || value.has('binary_platforms'))) {
+    if (hasRows &&
+        (value.has('path') ||
+            value.has('binary_platforms') ||
+            value.has('dart_defines_from_pubspec'))) {
       _diagnostics.add(
         'RK-CONF-009',
         'unit "$name" declares a project inline and also as rows',
@@ -481,7 +489,12 @@ class _Reader {
     required bool inline,
     Set<PublishTarget> inlinePublish = const {},
   }) {
-    const known = {'path', 'publish', 'binary_platforms'};
+    const known = {
+      'path',
+      'publish',
+      'binary_platforms',
+      'dart_defines_from_pubspec'
+    };
     const unitLevel = {'tag', 'project', 'homebrew_tap'};
     for (final key in table.keys) {
       if (known.contains(key)) continue;
@@ -522,8 +535,22 @@ class _Reader {
     final platforms = _platforms(unit, table, location);
     if (platforms == null) return null;
 
+    final defines = table['dart_defines_from_pubspec'] ?? <String>[];
+    if (defines is! List ||
+        defines.any((value) =>
+            value is! String ||
+            !RegExp(r'^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$')
+                .hasMatch(value)) ||
+        defines.toSet().length != defines.length ||
+        (defines.isNotEmpty && platforms.isEmpty)) {
+      _diagnostics.add('RK-CONF-041',
+          'dart_defines_from_pubspec must contain unique dotted field names for a binary project',
+          source: table.locationOf('dart_defines_from_pubspec'));
+      return null;
+    }
     return ProjectConfig(
       path: path,
+      dartDefinesFromPubspec: List.unmodifiable(defines.cast<String>()),
       publish: Set.unmodifiable(projectPublish),
       binaryPlatforms: platforms,
       location: location,

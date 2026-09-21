@@ -1,3 +1,4 @@
+import '../builds/binary_artifact.dart';
 import 'release_asset.dart';
 import 'resolve.dart';
 
@@ -39,11 +40,25 @@ abstract final class ReleaseAssets {
   ) =>
       '${producerRoot(project)}/$platform/${project.executable}';
 
+  static BinaryArtifact binaryArtifact(
+          ResolvedProject project, String platform) =>
+      BinaryArtifact.forPlatform(project.executable!, platform);
+
+  static String binaryRoot(ResolvedProject project, String platform) =>
+      '${producerRoot(project)}/$platform';
+
+  static Map<String, String> binaryOutputs(
+          ResolvedProject project, String platform) =>
+      {
+        for (final file in binaryArtifact(project, platform).files)
+          '${binaryRoot(project, platform)}/${file.path}': file.type,
+      };
+
   static String notaryInputPath(
     ResolvedProject project,
     String platform,
   ) =>
-      '${producerRoot(project)}/$platform/${project.executable}.zip';
+      '${producerRoot(project)}/notary/$platform/${project.executable}.zip';
 
   static String archivePath(
     ResolvedProject project,

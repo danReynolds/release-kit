@@ -24,9 +24,10 @@ of a release script.
   already signed, makes a signature required rather than incidental — and
   rk reads it back off the tag it created instead of trusting the config.
   A signature it cannot verify is refused, not reported as signed.
-- **Final bytes checked.** Signed macOS executables are smoke-tested, verified
-  again after execution, archived, then decoded and verified once more from
-  the exact archive that release targets consume.
+- **Final bytes checked.** Linux executables and macOS Dart bundles use one
+  artifact contract. Every macOS code file is signed; the installed command
+  is tested before and after archiving. See [CLI artifacts](doc/cli-artifacts.md)
+  for layouts, signing and compile-time metadata.
 - **Monorepos.** Cross-unit version constraints are checked before
   anything acts.
 
