@@ -6,7 +6,8 @@ not a Keybay release qualification or an Apple notarization receipt.
 
 ## Automated checks
 
-- Full suite: **1,080 tests passed** on macOS 26.2 (25C56), ARM64, Dart 3.13.4.
+- Full suite after review fixes: **1,081 tests passed** on macOS 26.2 (25C56),
+  ARM64, Dart 3.13.4.
 - `dart analyze`: no issues.
 - `dart format --output=none --set-exit-if-changed .`: unchanged.
 - `git diff --check` and the diagnostic-code index check: passed.
@@ -19,6 +20,9 @@ not a Keybay release qualification or an Apple notarization receipt.
   certificates. Published-identity tests cover single executables and bundles.
 - A wrapper test and a local check using Flutter's `bin/dart` both resolve the
   actual SDK compiler/runtime pair.
+- Review regressions cover a stable bundle implementation identity even when
+  invoked from its module directory, and selecting the Dart SDK rather than
+  RK's own executable for the pub.dev availability check.
 
 ## Local signed macOS check
 
@@ -50,9 +54,15 @@ These are container execution results, not native Linux desktop qualification.
 Apple notarization of the new bundle was **not run**. An initial credential
 lookup failed, but a subsequent elevated `notarytool history` check succeeded
 with the existing `rk-notary` profile and returned accepted rk and Keybay
-submissions. No new credentials are needed. Tests exercise complete-payload
-submission, Accepted/log receipt binding and failure handling.
+submissions. During PR review, a live bundle submission and direct history
+checks could no longer access that same profile, including an explicit login
+Keychain lookup. The cause is unresolved; this is not evidence that credentials
+need recreating. No bundle was accepted by Apple during this verification.
+Tests exercise complete-payload submission, Accepted/log receipt binding and
+failure handling.
 Live Apple acceptance and installed Keybay upgrade/security qualification still
 belong to release preparation. No package, GitHub release or Homebrew tap was
-published during these checks. Hosted CI and independent PR review have not run
-for this change.
+published during these checks. Initial PR CI passed format/analysis and the
+test suite on both Ubuntu and macOS; the cleanup commit must pass the same
+checks before merge. A GitHub Codex review was requested on PR #77; no review
+response had arrived when this report was updated.

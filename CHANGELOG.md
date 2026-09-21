@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- macOS Dart CLIs now ship as a signed launcher, matching runtime and AOT
+  module, without executable-memory exceptions. Linux retains single-file
+  executables; both use the same artifact, verification and Homebrew pipeline.
+- Binary projects can project public pubspec fields through
+  `dart_defines_from_pubspec` without duplicating their values in release config.
+- Bundled RK keeps a stable stage identity when run from its module directory,
+  and installed RK uses the Dart SDK for pub.dev availability checks.
 - `rk init` now selects every binary platform the release host can produce;
   macOS proposes its native archive plus both pure-Dart Linux cross-builds.
 - Cross-built Linux artifacts always receive explicit Dart target flags, even

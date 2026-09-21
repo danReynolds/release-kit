@@ -835,6 +835,13 @@ void main() {
     expect(released.text, contains('released'));
     expect(released.warningCodes, contains('RK-PUB-013'));
     expect(
+      harness.tools.invocations
+          .where((call) => _starts(call.arguments, ['pub', 'cache', 'add']))
+          .map((call) => call.executable),
+      everyElement('dart'),
+      reason: 'an installed RK executable or AOT runtime is not the Dart SDK',
+    );
+    expect(
       released.text,
       contains('do not upload the version again'),
     );

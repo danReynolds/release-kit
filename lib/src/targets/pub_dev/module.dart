@@ -349,7 +349,9 @@ final class PubDevTargetModule extends TargetModule {
     final cache = Directory.systemTemp.createTempSync('rk-pub-availability-');
     try {
       final result = await context.tools.run(
-        Platform.resolvedExecutable,
+        // RK may itself be a native executable or an AOT bundle. The running
+        // process is not necessarily an SDK capable of executing Pub commands.
+        'dart',
         [
           'pub',
           'cache',

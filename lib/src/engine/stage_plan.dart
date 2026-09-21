@@ -422,6 +422,13 @@ String rkProgramDigest(File? script, File executable) {
   const artifacts = {'.dart', '.snapshot', '.dill', '.aot', '.jit'};
   final seen = <String>{};
   final inventory = <String, String>{};
+  final executablePath = _realPath(executable);
+  // The bundle launcher passes its adjacent module by absolute path. Unlike
+  // a compile-exe argv[0] phantom, it remains the program when cwd is lib/rk.
+  final bundledModule = executablePath != null &&
+          executablePath.endsWith('${Platform.pathSeparator}dartaotruntime')
+      ? '${File(executablePath).parent.path}${Platform.pathSeparator}app.aot'
+      : null;
   for (final file in [if (script != null) script, executable]) {
     final path = _realPath(file);
     if (path == null) continue;
@@ -429,9 +436,10 @@ String rkProgramDigest(File? script, File executable) {
     final phantom = path ==
             '$cwd${Platform.pathSeparator}'
                 '${path.split(Platform.pathSeparator).last}' &&
-        path != _realPath(executable);
+        path != executablePath &&
+        path != bundledModule;
     final isProgram = identical(file, executable) ||
-        path == _realPath(executable) ||
+        path == executablePath ||
         (!phantom && artifacts.any(path.endsWith));
     if (!isProgram) continue;
     if (!seen.add(path)) continue;
