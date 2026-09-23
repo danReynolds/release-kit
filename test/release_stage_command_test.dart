@@ -182,21 +182,18 @@ void main() {
         run.text,
         contains('producers/tool/archives/tool-1.2.3-linux-x64.tar.gz'),
       );
-      expect(run.text, contains('Written to'));
-      final displayedPath = local.stage.directory.repositoryRelativePath;
-      final separator = displayedPath.lastIndexOf(Platform.pathSeparator);
-      expect(run.text, contains(displayedPath.substring(0, separator + 1)));
-      expect(run.text, contains(displayedPath.substring(separator + 1)));
-      final identityLine = run.text.split('\n').singleWhere(
-            (line) => line.contains(local.stage.directory.identity.id),
-          );
       expect(
-        identityLine.runes.length,
-        lessThanOrEqualTo(80),
-        reason: 'the content-addressed id must stay on one narrow-terminal '
-            'line',
-      );
+          run.text.trimRight(), endsWith('✓ tool 1.2.3 staged successfully.'));
+      expect(run.text, isNot(contains('Written to')));
+      expect(run.text, isNot(contains('Ready to publish')));
+      expect(run.text, isNot(contains(local.stage.directory.identity.id)));
       expect(run.text, isNot(contains(local.stage.directory.path)));
+      final completed = ((run.report['units'] as List).single['steps'] as List)
+          .singleWhere((step) => step['kind'] == 'completeStage');
+      expect(completed['evidence'], {
+        'stage id': local.stage.directory.identity.id,
+        'stage path': local.stage.directory.repositoryRelativePath,
+      });
       expect(run.report['next'], isEmpty);
       expect(local.stage.inspect().reusable, isTrue);
     }
@@ -683,6 +680,10 @@ void main() {
       confirm: (_) async => fail('stage mode must not authorize'),
     );
     expect(first.code, ExitCodes.ok, reason: first.text);
+    expect(first.text, contains('✓ tool 1.2.3 staged successfully.'));
+    expect(
+        first.text.trimRight(), endsWith('Ready to publish: rk release tool'));
+    expect(first.report['next'], ['rk release tool']);
     final receipt =
         File(harness.stage.directory.resolve('stage.json')).readAsBytesSync();
 
@@ -692,6 +693,21 @@ void main() {
     );
 
     expect(second.code, ExitCodes.ok, reason: second.text);
+    expect(
+        second.text, contains('✓ tool 1.2.3 is already staged and verified.'));
+    expect(
+        second.text.trimRight(), endsWith('Ready to publish: rk release tool'));
+    expect(second.report['next'], ['rk release tool']);
+    for (final run in [first, second]) {
+      expect(run.text, isNot(contains('Written to')));
+      expect(run.text, isNot(contains(harness.stage.directory.identity.id)));
+      final completed = ((run.report['units'] as List).single['steps'] as List)
+          .singleWhere((step) => step['kind'] == 'completeStage');
+      expect(completed['evidence'], {
+        'stage id': harness.stage.directory.identity.id,
+        'stage path': harness.stage.directory.repositoryRelativePath,
+      });
+    }
     expect(
       second.keys.where((key) =>
           key.startsWith('dart compile exe') ||

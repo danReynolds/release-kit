@@ -515,6 +515,7 @@ class ReleaseCommand {
     );
     if (endpointBaselines == null) return ExitCodes.refused;
 
+    final reusedStage = stageInspection.reusable;
     final PreparedRelease prepared;
     if (recoversWithoutStage) {
       prepared = PreparedRelease(
@@ -567,36 +568,36 @@ class ReleaseCommand {
     }
 
     if (stageOnly || localOnly) {
-      output.blank();
-      output.line(
-        'Written to',
-        depth: 1,
-        role: VisualRole.localWork,
-        strong: true,
+      output.step(
+        checklist.steps.singleWhere(
+          (step) => step.kind == StepKind.completeStage,
+        ),
+        verdict: Verdict.exact,
+        detail: 'staged and validated',
+        evidence: {
+          'stage id': stage.directory.identity.id,
+          'stage path': stage.directory.repositoryRelativePath,
+        },
+        show: false,
       );
-      final stagePath = stage.directory.repositoryRelativePath;
-      final separator = stagePath.lastIndexOf(Platform.pathSeparator);
-      if (separator < 0) {
-        output.line(stagePath, depth: 2, role: VisualRole.secondary);
-      } else {
-        output.line(
-          stagePath.substring(0, separator + 1),
-          depth: 2,
-          role: VisualRole.secondary,
-        );
-        output.line(
-          stagePath.substring(separator + 1),
-          depth: 3,
-          role: VisualRole.secondary,
-        );
-      }
       _sayStageClaims(
         prepared.claims,
         localOnly ? null : prepared.signing,
       );
-      // The next command is data for whoever is driving; the operator who
-      // just staged does not need to be told what staging is for.
-      if (!localOnly) output.report.next('rk release ${unit.name}');
+      output.blank();
+      output.line(
+        '${unit.name} ${unit.version} '
+        '${reusedStage ? 'is already staged and verified.' : 'staged successfully.'}',
+        mark: Mark.done,
+        strong: true,
+      );
+      if (!localOnly) {
+        final command = 'rk release ${unit.name}';
+        output.report.next(command);
+        output.blank();
+        output.line('Ready to publish: $command',
+            depth: 1, role: VisualRole.operatorAction);
+      }
       return ExitCodes.ok;
     }
 

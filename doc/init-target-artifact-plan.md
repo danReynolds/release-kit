@@ -233,7 +233,7 @@ advance. A recognizable rk-generated lower-version formula may move forward unde
 compare-and-swap; same-version differences, newer values, and unrecognized
 content block.
 
-The private stage path stays only in the terminal receipt. A public tap path
+The private stage path stays in JSON stage evidence. A public tap path
 may be owned by exactly one project.
 
 ## GitHub Release
