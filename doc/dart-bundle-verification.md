@@ -65,8 +65,13 @@ PR #77 merged after final-commit format/analysis and test CI passed on Ubuntu
 and macOS. Local review fixed two installed-CLI regressions. The requested
 GitHub Codex review did not return a response.
 
-## Remaining release checks
+## Qualification boundary
 
-The actual RK candidate still needs its own complete private stage, and Keybay
-still needs installed upgrade/security qualification. No package, GitHub
-release or Homebrew tap was published during these checks.
+No package, GitHub release or Homebrew tap was published during the synthetic
+checks recorded here. Each real release needs its own stage and installation
+checks; this report does not qualify Keybay's installed upgrade or security
+behavior.
+
+RK [0.1.12](https://github.com/danReynolds/release-kit/releases/tag/v0.1.12)
+was subsequently published on 2026-09-23. That later release is separate from
+the synthetic evidence above.
