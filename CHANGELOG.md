@@ -1,9 +1,12 @@
 # Changelog
 
-## 0.1.12
+## Unreleased
 
 - Staging ends with a success summary and the publish command. Verified reruns
   say the release is already staged; storage paths remain in JSON evidence.
+
+## 0.1.12
+
 - macOS Dart CLIs now ship as a signed launcher, matching runtime and AOT
   module, without executable-memory exceptions. Linux retains single-file
   executables; both use the same artifact, verification and Homebrew pipeline.
