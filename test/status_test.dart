@@ -631,12 +631,10 @@ void main() {
       contains('version already released; current source differs'),
     );
     expect(run.text, contains('released from ddddddd'));
-    expect(
-        run.text,
-        contains('current source still declares released '
-            'version 0.2.0'));
-    expect(run.text, contains('bump the version and changelog'));
-    expect(run.text, contains('Do not move v0.2.0'));
+    expect(run.text,
+        contains('version 0.2.0 is already released from different source'));
+    expect(run.text, contains('bump the version and add its changelog entry'));
+    expect(run.text, contains('rk release core --stage'));
     expect(run.text, isNot(contains('Not staged')));
     expect(_targetLine(run.text, 'Git tag').trimLeft(), isNot(startsWith('✗')));
 

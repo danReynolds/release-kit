@@ -401,7 +401,12 @@ class ReleaseCommand {
       return Inspector.blocks(step, state);
     }).firstOrNull;
     if (initialBlock != null) {
-      _publication.haltForState(initialBlock, states[initialBlock.id]!);
+      _publication.haltForState(
+        unit,
+        initialBlock,
+        states[initialBlock.id]!,
+        target: targetByStep[initialBlock.id],
+      );
       return ExitCodes.refused;
     }
 

@@ -95,6 +95,76 @@ void main() {
   setUp(() => harness = _Harness());
   tearDown(() => harness.close());
 
+  for (final stageOnly in [true, false]) {
+    test('a released source conflict gives recovery advice (stage: $stageOnly)',
+        () async {
+      harness.tools
+        ..remoteTags.add('v1.2.3')
+        ..remoteSourceCommit = _otherHead
+        ..tagManifestSha256 = 'a' * 64;
+
+      final run = await harness.run(
+        stageOnly: stageOnly,
+        confirm: (_) async => fail('a source conflict must not authorize'),
+      );
+
+      expect(run.code, ExitCodes.refused);
+      expect(run.publicMutations, isEmpty);
+      expect(run.text,
+          contains('version 1.2.3 is already released from different source'));
+      expect(run.text, contains('packages/tool/pubspec.yaml:3'));
+      expect(
+          run.text, contains('bump the version and add its changelog entry'));
+      expect(run.text, contains('rk release tool --stage'));
+      expect(run.text, contains('No public targets changed'));
+      expect(run.text, isNot(contains(_otherHead)));
+      expect(run.text, isNot(contains('manifest sha256')));
+      expect(run.report['rerun_helps'], isFalse);
+      expect((run.report['problems'] as List).cast<Map>().single['code'],
+          'RK-MONO-004');
+      final steps =
+          ((run.report['units'] as List).single as Map)['steps'] as List;
+      final tag =
+          steps.cast<Map>().singleWhere((step) => step['kind'] == 'tag');
+      expect(tag['verdict'], 'conflict');
+      expect(
+          tag['evidence'], containsPair('released source commit', _otherHead));
+      expect(tag['evidence'], containsPair('current source commit', _head));
+      expect(tag['evidence'], containsPair('manifest sha256', 'a' * 64));
+      expect(
+          run.keys, isNot(contains('dart pub publish --to-archive <archive>')));
+    });
+  }
+
+  test('a conflict discovered at the public gate has the same recovery advice',
+      () async {
+    var reads = 0;
+    final run = await harness.run(
+      stageOnly: false,
+      confirm: (_) async => fail('the refreshed conflict must not authorize'),
+      onInvocation: (call) {
+        if (call.executable == 'git' &&
+            call.arguments.firstOrNull == 'ls-remote' &&
+            call.arguments.contains('refs/tags/v1.2.3') &&
+            ++reads == 2) {
+          harness.tools
+            ..remoteTags.add('v1.2.3')
+            ..remoteSourceCommit = _otherHead
+            ..tagManifestSha256 = 'a' * 64;
+        }
+      },
+    );
+
+    expect(run.code, ExitCodes.refused, reason: run.text);
+    expect(run.publicMutations, isEmpty);
+    expect(run.text, contains('bump the version and add its changelog entry'));
+    expect(run.text, contains('rk release tool --stage'));
+    expect((run.report['problems'] as List).cast<Map>().single['code'],
+        'RK-MONO-004');
+    expect(harness.stage.inspect().reusable, isTrue,
+        reason: 'the conflict appeared after private work completed');
+  });
+
   test('a non-Git one-shot release binds bytes but claims no revision',
       () async {
     final unbound = _Harness(unbound: true);
@@ -2742,6 +2812,7 @@ class _WorldTools implements Tools {
   final bool nativePubArchive;
   final List<_Invocation> invocations = [];
   final Set<String> remoteTags = {};
+  String remoteSourceCommit = _head;
   final Map<String, List<int>> uploadedAssets = {};
   void Function(_Invocation call)? onInvocation;
 
@@ -2906,7 +2977,7 @@ class _WorldTools implements Tools {
         stdout: [
           for (final tag in remoteTags) ...[
             '$_tagObject\trefs/tags/$tag',
-            '$_head\trefs/tags/$tag^{}',
+            '$remoteSourceCommit\trefs/tags/$tag^{}',
           ],
         ].join('\n'),
       );
@@ -2924,7 +2995,7 @@ class _WorldTools implements Tools {
       if (!remoteTags.contains(tag)) return _ok();
       final direct = '$_tagObject\trefs/tags/$tag';
       if (arguments.length == 3) return _ok(stdout: '$direct\n');
-      return _ok(stdout: '$direct\n$_head\trefs/tags/$tag^{}\n');
+      return _ok(stdout: '$direct\n$remoteSourceCommit\trefs/tags/$tag^{}\n');
     }
     if (executable == 'git' &&
         arguments.length == 3 &&
@@ -2950,7 +3021,7 @@ class _WorldTools implements Tools {
                   )
                   .sha256;
       return _ok(
-        stdout: 'object $_head\n'
+        stdout: 'object $remoteSourceCommit\n'
             'type commit\n'
             'tag v1.2.3\n'
             'tagger Release Kit <rk@example.invalid> 0 +0000\n'

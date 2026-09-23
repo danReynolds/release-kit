@@ -796,6 +796,9 @@ class Output {
     if (kind == HaltKind.beforeActing && previousUnitActed) {
       kind = HaltKind.stoppedPartway;
     }
+    if (kind == HaltKind.unfixableByRerun && previousUnitActed) {
+      kind = HaltKind.actedAndUnfixable;
+    }
     final sentence = switch (kind) {
       HaltKind.beforeActing =>
         'rk stopped. no public target changed. safe to re-run.',
@@ -804,7 +807,7 @@ class Output {
       HaltKind.lostTrack => 'rk acted, then lost sight of the result. '
           'an effect may exist. still safe to re-run.',
       HaltKind.unfixableByRerun =>
-        'rk did not act. this cannot be fixed by re-running.',
+        'No public targets changed. Resolve the conflict before retrying.',
       HaltKind.actedAndUnfixable =>
         'rk acted, and what it read back cannot be fixed by re-running.',
     };

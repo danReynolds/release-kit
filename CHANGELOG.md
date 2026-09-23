@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Release conflicts explain how to recover, with source and artifact evidence
+  retained in JSON. Released-version conflicts point to the version and changelog.
 - Staging ends with a success summary and the publish command. Verified reruns
   say the release is already staged; storage paths remain in JSON evidence.
 
