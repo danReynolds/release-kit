@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:rk/src/engine/config.dart';
+import 'package:rk/src/engine/canonical_json.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/assets.dart';
@@ -12,6 +13,7 @@ import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/engine/stage_archive.dart';
 import 'package:rk/src/engine/stage_plan.dart';
 import 'package:rk/src/engine/stage_receipt.dart';
+import 'package:rk/src/engine/stage_history.dart';
 import 'package:rk/src/transforms/archive.dart';
 import 'package:rk/src/targets/catalog.dart';
 import 'package:test/test.dart';
@@ -205,6 +207,117 @@ executables:
 
   tearDown(() {
     if (repository.existsSync()) repository.deleteSync(recursive: true);
+  });
+
+  ReleaseStage historyStage({
+    String commit = _head,
+    String dartDigest = 'a',
+    String rkDigest = 'b',
+    String origin = 'example/tool',
+    bool signing = false,
+  }) =>
+      ReleaseStages(
+        source: source,
+        git: GitState(
+          root: repository.path,
+          head: commit,
+          headTree: _tree,
+          branch: 'main',
+          isClean: true,
+          uncommitted: const [],
+          headIsPushed: true,
+          tags: const [],
+          signingConfigured: signing,
+          originUrl: origin,
+        ),
+        stageContracts:
+            TargetCatalog.builtIn().stageContractResolver(resolution),
+        compilerIdentity: () => DartCompilerIdentity.recorded(
+          executable: '/sdk/dart',
+          version: 'fixture',
+          sha256: dartDigest * 64,
+        ),
+        rkIdentity: () => RkImplementationIdentity.recorded(
+          version: '0.1.0',
+          stageSchema: stageSchemaVersion,
+          sha256: rkDigest * 64,
+        ),
+      )(unit);
+
+  test('history explains a changed commit without inspecting old artifacts',
+      () async {
+    final first = historyStage();
+    await _complete(first);
+    File(first.directory.resolve(
+            ReleaseAssets.binaryPath(unit.projects.single, 'linux-x64')))
+        .writeAsStringSync('tampered');
+    final current = historyStage(commit: '3' * 40);
+    expect(StageHistory.rebuildReasons(current),
+        ['source commit changed (1111111 → 3333333)']);
+    expect(current.inspect().reusable, isFalse);
+    expect(first.inspect().reusable, isFalse,
+        reason: 'the advisory comparison cannot authorize damaged bytes');
+  });
+
+  test('history distinguishes SDK, RK, signing and configuration changes',
+      () async {
+    await _complete(historyStage());
+    expect(StageHistory.rebuildReasons(historyStage(dartDigest: 'c')),
+        ['Dart SDK changed']);
+    expect(StageHistory.rebuildReasons(historyStage(rkDigest: 'c')),
+        ['RK executable changed']);
+    expect(StageHistory.rebuildReasons(historyStage(signing: true)),
+        ['tag-signing policy changed']);
+    expect(StageHistory.rebuildReasons(historyStage(origin: 'another/tool')),
+        ['release configuration changed']);
+    expect(StageHistory.rebuildReasons(historyStage()), isEmpty);
+  });
+
+  test('history uses the newest matching completed stage', () async {
+    final older = historyStage();
+    await _complete(older);
+    final recent = historyStage(commit: '3' * 40);
+    await _complete(recent);
+    File(older.directory.resolve('stage.json'))
+        .setLastModifiedSync(DateTime(2020));
+    File(recent.directory.resolve('stage.json'))
+        .setLastModifiedSync(DateTime(2021));
+    expect(StageHistory.rebuildReasons(historyStage(commit: '4' * 40)),
+        ['source commit changed (3333333 → 4444444)']);
+  });
+
+  test('legacy receipts explain source and SDK changes with bounded metadata',
+      () async {
+    final first = historyStage();
+    await _complete(first);
+    final file = File(first.directory.resolve('stage.json'));
+    final json = jsonDecode(file.readAsStringSync()) as Map;
+    ((json['steps'] as List).last['evidence'] as Map).remove('release_plan');
+    file.writeAsStringSync('${CanonicalJson.encode(json)}\n');
+    expect(first.inspect().reusable, isTrue);
+    expect(StageHistory.rebuildReasons(historyStage(commit: '3' * 40)),
+        ['source commit changed (1111111 → 3333333)']);
+    expect(StageHistory.rebuildReasons(historyStage(dartDigest: 'c')),
+        ['Dart SDK changed']);
+  });
+
+  test('corrupt plans and symlinked receipts do not supply rebuild advice',
+      () async {
+    final first = historyStage();
+    await _complete(first);
+    final file = File(first.directory.resolve('stage.json'));
+    final original = file.readAsStringSync();
+    final json = jsonDecode(original) as Map;
+    (json['steps'] as List).last['evidence']['release_plan']['toolchain']['rk']
+        ['sha256'] = 'f' * 64;
+    file.writeAsStringSync('${CanonicalJson.encode(json)}\n');
+    final current = historyStage(commit: '3' * 40);
+    expect(StageHistory.rebuildReasons(current), isEmpty);
+    file.deleteSync();
+    final outside = File('${repository.path}/outside.json')
+      ..writeAsStringSync(original);
+    Link(file.path).createSync(outside.path);
+    expect(StageHistory.rebuildReasons(current), isEmpty);
   });
 
   test('the exact compiler bytes key and are recorded by the stage', () async {
@@ -477,7 +590,10 @@ Future<void> _complete(ReleaseStage stage) async {
       StageInput.plan(stage.directory.identity),
     ],
     outputs: await stage.materializeSource(),
-    evidence: const {'commit': _head, 'tree': _tree},
+    evidence: {
+      'commit': stage.directory.identity.headCommit,
+      'tree': stage.directory.identity.headTree
+    },
   );
 
   stage.directory.writeBytesAtomically('release-notes.md', const []);

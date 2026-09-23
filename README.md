@@ -124,6 +124,19 @@ release-kit · main@888444b
 The release itself — ordered, staged, disclosed, one yes per unit — is
 shown in [Two packages, one release](#two-packages-one-release).
 
+`rk release --stage` opens with the project version and checkout it will use:
+
+```console
+$ rk release rk --stage
+Staging rk 0.1.12
+  release-kit · main@888444b
+```
+
+A stage belongs to an exact commit and release plan. A new commit, SDK, RK
+installation, or release configuration can require a new stage. When recent
+stage metadata explains the change, RK tells you why it is rebuilding. A
+verified stage is reused; interrupted staging resumes from verified work.
+
 ## Install
 
 With Dart 3.10 or newer, install a native executable:

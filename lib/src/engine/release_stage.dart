@@ -119,6 +119,7 @@ class ReleaseStages {
       repository: currentGit.originUrl,
       enforceUnitContract: true,
       directory: directory,
+      resolvedPlan: plan,
       targetContributions: stageContracts(
         unit: unit,
         repository: currentGit.originUrl,
@@ -161,6 +162,7 @@ class ReleaseStage {
     this.launcherCompiler,
     this.repository,
     this.enforceUnitContract = false,
+    this.resolvedPlan,
     Iterable<StageContributionContract> targetContributions = const [],
   }) : targetContributions =
             List<StageContributionContract>.unmodifiable(targetContributions);
@@ -171,6 +173,10 @@ class ReleaseStage {
   final DartCompilerIdentity? compiler;
   final LauncherCompiler? launcherCompiler;
   final String? repository;
+
+  /// Recorded for explaining future rebuilds, never for authorizing reuse.
+  /// The stage identity already binds the digest of this exact plan.
+  final Map<String, Object?>? resolvedPlan;
   final List<StageContributionContract> targetContributions;
 
   /// Direct construction is used by low-level receipt/atomicity tests whose
@@ -736,6 +742,7 @@ class ReleaseStage {
             },
             'homebrew_binding': homebrewBinding?.toEvidence(),
             if (compiler != null) 'dart_compiler': compiler!.toJson(),
+            if (resolvedPlan != null) 'release_plan': resolvedPlan,
           },
         ),
       ],

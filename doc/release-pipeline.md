@@ -83,6 +83,15 @@ coordinators. `release_preparation.dart` contains the small typed handoff from
 private preparation to public authorization: first claims and signing
 identity. Neither file decides policy.
 
+`StageHistory` provides optional rebuild explanations from at most 32 recent
+receipts for the same unit and version. New completed receipts include the
+resolved plan in their extensible evidence; its digest must match the stage
+identity before it is used for comparison. Older receipts can still explain
+source and Dart SDK changes through their recorded manifest and compiler.
+History reads are bounded to small metadata files and never inspect or adopt
+old build artifacts. Missing, corrupt, or unsupported history suppresses the
+hint; the existing stage inspector remains the authority for reuse.
+
 ## Handoffs
 
 There are two deliberate cross-subsystem values:

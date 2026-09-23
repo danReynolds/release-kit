@@ -176,6 +176,9 @@ void main() {
     );
 
     expect(run.code, ExitCodes.ok, reason: run.text);
+    expect(run.text, startsWith('Releasing tool 1.2.3\n'));
+    expect(run.text, contains('worktree · working tree'));
+    expect(run.text, isNot(contains('main@')));
     expect(
       run.publicMutations.map((call) => call.publicKind),
       ['pub.dev'],
@@ -751,6 +754,8 @@ void main() {
     );
     expect(first.code, ExitCodes.ok, reason: first.text);
     expect(first.text, contains('✓ tool 1.2.3 staged successfully.'));
+    expect(first.text, startsWith('Staging tool 1.2.3\n'));
+    expect(first.text, contains('worktree · main@1111111'));
     expect(
         first.text.trimRight(), endsWith('Ready to publish: rk release tool'));
     expect(first.report['next'], ['rk release tool']);
@@ -763,6 +768,7 @@ void main() {
     );
 
     expect(second.code, ExitCodes.ok, reason: second.text);
+    expect(second.text, isNot(contains('Rebuilding:')));
     expect(
         second.text, contains('✓ tool 1.2.3 is already staged and verified.'));
     expect(

@@ -270,6 +270,26 @@ class ReleaseCommand {
       tag: unit.tag,
     );
 
+    final willPublish = !stageOnly &&
+        (unit.publish.isNotEmpty ||
+            unit.projects.any((project) => project.publish.isNotEmpty));
+    output.heading(
+      '${willPublish ? 'Releasing' : 'Staging'} ${unit.name} ${unit.version}',
+    );
+    output.line(
+      [
+        tree.description.split('/').last,
+        if (git.hasCommit)
+          '${git.branch ?? 'detached'}@${git.shortHead}'
+        else
+          'working tree',
+        if (repositoryGit.uncommitted.isNotEmpty)
+          '${repositoryGit.uncommitted.length} uncommitted',
+      ].join(' · '),
+      role: VisualRole.secondary,
+    );
+    output.blank();
+
     if (sourceWarning != null && !_sourceWarningShown) {
       _sourceWarningShown = true;
       output.heading('Warnings');
