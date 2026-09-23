@@ -2,7 +2,8 @@
 
 Local verification of `codex/dart-artifact-bundles`, based on rk commit
 `2ecabe0`. This covers the generic rk producer and synthetic programs. It is
-not a Keybay release qualification or an Apple notarization receipt.
+not a Keybay release qualification. The live Apple receipt below covers the
+synthetic bundle submitted with the merged RK implementation.
 
 ## Automated checks
 
@@ -49,20 +50,28 @@ and `linux-arm64`. Each ran and reported the expected version through Docker
 29.6.1 using `debian:bookworm-slim` and the corresponding container platform.
 These are container execution results, not native Linux desktop qualification.
 
-## Remaining external checks
+## Live Apple notarization
 
-Apple notarization of the new bundle was **not run**. An initial credential
-lookup failed, but a subsequent elevated `notarytool history` check succeeded
-with the existing `rk-notary` profile and returned accepted rk and Keybay
-submissions. During PR review, a live bundle submission and direct history
-checks could no longer access that same profile, including an explicit login
-Keychain lookup. The cause is unresolved; this is not evidence that credentials
-need recreating. No bundle was accepted by Apple during this verification.
-Tests exercise complete-payload submission, Accepted/log receipt binding and
-failure handling.
-Live Apple acceptance and installed Keybay upgrade/security qualification still
-belong to release preparation. No package, GitHub release or Homebrew tap was
-published during these checks. Initial PR CI passed format/analysis and the
-test suite on both Ubuntu and macOS; the cleanup commit must pass the same
-checks before merge. A GitHub Codex review was requested on PR #77; no review
-response had arrived when this report was updated.
+After the earlier inconsistent Keychain lookups, an elevated retry succeeded
+with the existing `rk-notary` profile. The merged RK notarization step submitted
+the complete signed synthetic bundle, received **Accepted**, and retained both
+Apple's result and log. No credentials were created or changed.
+
+- Submission: `016edcfc-2e91-4b21-b3ee-63be3687b492`.
+- Result SHA-256: `edd13d0ff9a744dbeb88d0985a730cd7cec0fe99aaf80800511f560f47cab2cc`.
+- Log SHA-256: `f87cc1fb4b08248d7994d2b6897bf54029fad0185572c60c16edad06373aaf6c`.
+
+PR #77 merged after final-commit format/analysis and test CI passed on Ubuntu
+and macOS. Local review fixed two installed-CLI regressions. The requested
+GitHub Codex review did not return a response.
+
+## Qualification boundary
+
+No package, GitHub release or Homebrew tap was published during the synthetic
+checks recorded here. Each real release needs its own stage and installation
+checks; this report does not qualify Keybay's installed upgrade or security
+behavior.
+
+RK [0.1.12](https://github.com/danReynolds/release-kit/releases/tag/v0.1.12)
+was subsequently published on 2026-09-23. That later release is separate from
+the synthetic evidence above.

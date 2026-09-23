@@ -195,14 +195,14 @@ final class GitTagTargetModule extends TargetModule {
       final project = unit.projects.first;
       return Diagnostic(
         code: 'RK-MONO-004',
-        message: 'current source still declares released version '
-            '${unit.version}',
+        message: 'version ${unit.version} is already released from '
+            'different source',
         source: SourceLocation(
           project.pubspec.path,
           project.pubspec.versionLine,
         ),
-        remedy: 'bump the version and changelog for the next release. '
-            'Do not move ${target.coordinate}',
+        remedy: 'To release these changes, bump the version and add its '
+            'changelog entry, then run rk release ${unit.name} --stage.',
       );
     }
     return Diagnostic(

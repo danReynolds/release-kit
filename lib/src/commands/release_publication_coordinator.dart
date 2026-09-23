@@ -295,18 +295,35 @@ final class ReleasePublicationCoordinator {
     }
   }
 
-  void haltForState(Step step, Inspection state, {bool afterAct = false}) {
-    output.problem(Diagnostic(
-      code: afterAct ? 'RK-REL-003' : 'RK-REL-001',
-      message: '${step.summary}: ${state.detail ?? state.verdict.name}',
-      remedy: state.evidence.isEmpty
-          ? (state.verdict == Verdict.unknown
-              ? 'the target could not be proven; fix the read and re-run'
-              : null)
-          : state.evidence.entries
-              .map((entry) => '${entry.key}: ${entry.value}')
-              .join('\n'),
-    ));
+  void haltForState(
+    ResolvedUnit unit,
+    Step step,
+    Inspection state, {
+    TargetPlan? target,
+    bool afterAct = false,
+  }) {
+    // Targets own their recovery advice. The observed bytes remain in the
+    // step's JSON evidence, rather than taking the place of an action.
+    final diagnostic = state.verdict == Verdict.conflict &&
+            target != null &&
+            !afterAct
+        ? inspector.targets.moduleForTarget(target).diagnoseConflict(
+              unit,
+              target,
+              state,
+            )
+        : Diagnostic(
+            code: afterAct ? 'RK-REL-003' : 'RK-REL-001',
+            message: '${step.summary}: ${state.detail ?? state.verdict.name}',
+            remedy: state.evidence.isEmpty
+                ? (state.verdict == Verdict.unknown
+                    ? 'the target could not be proven; fix the read and re-run'
+                    : null)
+                : state.evidence.entries
+                    .map((entry) => '${entry.key}: ${entry.value}')
+                    .join('\n'),
+          );
+    output.problem(diagnostic, unit: unit.name);
     output.halt(
       state.verdict == Verdict.conflict
           ? (afterAct ? HaltKind.actedAndUnfixable : HaltKind.unfixableByRerun)
@@ -1198,7 +1215,13 @@ final class ReleasePublicationCoordinator {
 
     final blocked = snapshot.blocked;
     if (blocked != null) {
-      haltForState(blocked, snapshot.states[blocked.id]!);
+      haltForState(
+        unit,
+        blocked,
+        snapshot.states[blocked.id]!,
+        target:
+            targets.where((target) => target.step.id == blocked.id).firstOrNull,
+      );
       showActions(targets, actions);
       return null;
     }

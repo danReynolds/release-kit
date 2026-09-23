@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Release commands identify the project version and source checkout before work
+  begins. Staging explains source, tooling, and configuration changes when a
+  recent receipt can account for a rebuild, and names interrupted work it resumes.
+- Release conflicts explain how to recover, with source and artifact evidence
+  retained in JSON. Released-version conflicts point to the version and changelog.
+- Staging ends with a success summary and the publish command. Verified reruns
+  say the release is already staged; storage paths remain in JSON evidence.
+
+## 0.1.12
+
 - macOS Dart CLIs now ship as a signed launcher, matching runtime and AOT
   module, without executable-memory exceptions. Linux retains single-file
   executables; both use the same artifact, verification and Homebrew pipeline.

@@ -16,6 +16,7 @@ import '../engine/resolve.dart';
 import '../engine/stage.dart';
 import '../engine/stage_board.dart';
 import '../engine/stage_inspection.dart';
+import '../engine/stage_history.dart';
 import '../engine/stage_receipt.dart';
 import '../engine/targets.dart';
 import '../engine/tools.dart';
@@ -284,6 +285,23 @@ final class ReleaseStageCoordinator {
       output.problem(stageProblem, unit: unit.name);
       output.halt(HaltKind.beforeActing);
       return null;
+    }
+
+    if (inspected.validProgress) {
+      output.say('Resuming interrupted staging.', role: VisualRole.secondary);
+    } else if (!stage.directory.identity.isGitBound) {
+      output.say(
+          'Staging a temporary source snapshot; each run starts a new stage.',
+          role: VisualRole.secondary);
+    } else if (inspected.claimsCompletion) {
+      output.say('Rebuilding: the recorded stage no longer verifies.',
+          role: VisualRole.secondary);
+    } else {
+      final reasons = StageHistory.rebuildReasons(stage);
+      if (reasons.isNotEmpty) {
+        output.say('Rebuilding: ${reasons.join('; ')}.',
+            role: VisualRole.secondary);
+      }
     }
 
     final progress = <StageStep>[];

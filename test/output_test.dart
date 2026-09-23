@@ -582,7 +582,21 @@ void main() {
     test('re-running will not help', () {
       final (out, captured) = make();
       out.halt(HaltKind.unfixableByRerun);
-      expect(captured.text, contains('cannot be fixed by re-running'));
+      expect(captured.text, contains('No public targets changed'));
+      expect(captured.text, contains('Resolve the conflict before retrying'));
+      expect(out.report.rerunHelps, isFalse);
+    });
+
+    test('a conflict after an earlier unit published acknowledges that act',
+        () {
+      final (out, captured) = make();
+      out.previousUnitActed = true;
+      out.halt(HaltKind.unfixableByRerun);
+      expect(captured.text, isNot(contains('No public targets changed')));
+      expect(captured.text, contains('rk acted'));
+      final report = jsonDecode(out.report.encode(exit: 1)) as Map;
+      expect((report['halt'] as Map)['kind'], 'actedAndUnfixable');
+      expect(report['rerun_helps'], isFalse);
     });
   });
 

@@ -124,11 +124,38 @@ release-kit · main@888444b
 The release itself — ordered, staged, disclosed, one yes per unit — is
 shown in [Two packages, one release](#two-packages-one-release).
 
+`rk release --stage` opens with the project version and checkout it will use:
+
+```console
+$ rk release rk --stage
+Staging rk 0.1.12
+  release-kit · main@888444b
+```
+
+A stage belongs to an exact commit and release plan. A new commit, SDK, RK
+installation, or release configuration can require a new stage. When recent
+stage metadata explains the change, RK tells you why it is rebuilding. A
+verified stage is reused; interrupted staging resumes from verified work.
+
 ## Install
+
+With Dart 3.10 or newer, install a native executable:
+
+```console
+$ dart install rk
+```
+
+[`dart install`](https://dart.dev/tools/dart-install) builds once at installation.
+Running `rk` starts the installed command directly, without resolving package
+dependencies. Run the install command again to upgrade.
+
+For older Dart SDKs, Pub global activation is also supported:
 
 ```console
 $ dart pub global activate rk
 ```
+
+For the signed and notarized macOS release, use Homebrew:
 
 ```console
 $ brew install danreynolds/tap/rk
@@ -140,6 +167,24 @@ The same CLI ships from pub.dev, Homebrew, and GitHub Releases —
 The maintained [production release protocol](doc/production-alpha-plan.md)
 and [0.1.4 canary receipt](doc/production-alpha-receipt.md) show the proof
 required before calling those channels released.
+
+### Try a local checkout
+
+From the release-kit checkout, install the current code:
+
+```console
+$ dart install "rk@{path: '$PWD'}"
+$ rk --version
+```
+
+This installs a snapshot of the checkout; repeat the install after editing it.
+Use an absolute path: `$PWD` supplies it in fish, zsh, and bash.
+Run `rk` from the project you want to release: its version and configuration
+come from that project, independently of the installed RK version.
+
+`dart pub global activate --source path .` remains useful for development that
+follows source edits. Dart Pub may resolve dependencies or rebuild its snapshot
+before launching RK, so that route can print package-manager output at startup.
 
 ## Targets
 
