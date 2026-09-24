@@ -38,6 +38,19 @@ final class BinaryArtifact {
   Iterable<BinaryArtifactFile> get signedFiles =>
       files.where((file) => file.codeSuffix != null);
 
+  /// Signed code the identity process loads rather than executes: a Dart
+  /// bundle's AOT module. The identity file's signature pins their final code
+  /// hashes, so [signingOrder] signs them first.
+  Iterable<BinaryArtifactFile> get libraries =>
+      signedFiles.where((file) => !file.executable);
+
+  /// Libraries, then executables in layout order. The published file order is
+  /// unchanged; only signing needs the libraries' hashes first.
+  List<BinaryArtifactFile> get signingOrder => [
+        ...libraries,
+        ...signedFiles.where((file) => file.executable),
+      ];
+
   Map<String, Object?> toJson() => {
         'schema': 1,
         'layout': isBundle ? 'dart-aot' : 'single',

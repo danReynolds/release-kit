@@ -230,10 +230,17 @@ class BinaryChain {
     }
     final signer = MacOsSigner(tools: tools);
     final signatures = <String, Map<String, Object?>>{};
+    // Library validation admits any library signed by the same team, so the
+    // runtime's signature also admits only the modules this bundle ships.
+    // Those are signed first and their final code hashes go into it.
+    final shipped = <String>{};
     String? fingerprint = signing.certificateSha256;
-    for (final file in artifact.signedFiles) {
+    for (final file in artifact.signingOrder) {
       final name = '$root/${file.path}';
       final codeId = '${signing.codeId}${file.codeSuffix}';
+      final pins = file.path == artifact.identityFile
+          ? (shipped.toList()..sort())
+          : const <String>[];
       final unsigned = Sha256.hex(workspace.readBytes(name)!);
       final signed = await signer.sign(
         binary: workspace.pathOf(name),
@@ -241,6 +248,7 @@ class BinaryChain {
         codeId: codeId,
         selectedIdentity: signing.identity,
         expectedCertificateSha256: fingerprint,
+        pinnedLibraries: pins,
       );
       if (!signed.ok) {
         return fail('RK-SIGN-002', signed.problem ?? 'signing failed',
@@ -273,7 +281,7 @@ class BinaryChain {
                 ? HaltKind.actedAndUnfixable
                 : HaltKind.unfixableByRerun);
       }
-      signatures[file.path] = {
+      final record = <String, Object?>{
         'first_identity': published == null,
         'published_requirement':
             file.path == artifact.identityFile ? published : null,
@@ -284,6 +292,29 @@ class BinaryChain {
         'unsigned_sha256': unsigned,
         'signed_sha256': Sha256.hex(workspace.readBytes(name)!),
       };
+      if (!file.executable) {
+        final hashes = await signer.codeDirectoryHashes(workspace.pathOf(name));
+        if (hashes == null) {
+          return fail(
+              'RK-SIGN-017', 'the code hash of ${file.path} could not be read');
+        }
+        shipped.addAll(hashes);
+        record['cdhashes'] = hashes;
+      }
+      if (file.path == artifact.identityFile && artifact.libraries.isNotEmpty) {
+        // Read back rather than trusted: a constraint that admits more than
+        // the shipped modules would still launch and pass every other check.
+        final admitted = await signer.admittedLibraries(workspace.pathOf(name));
+        if (pins.isEmpty ||
+            admitted == null ||
+            admitted.length != pins.length ||
+            !admitted.containsAll(pins)) {
+          return fail('RK-SIGN-018',
+              'the runtime does not admit exactly the module it ships with');
+        }
+        record['pinned_library_cdhashes'] = pins;
+      }
+      signatures[file.path] = record;
     }
     final signedSmoke = await tools.run(
         workspace.pathOf('$root/${artifact.entryPoint}'), const ['--version'],

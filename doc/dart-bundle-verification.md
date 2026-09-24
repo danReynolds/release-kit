@@ -65,6 +65,32 @@ PR #77 merged after final-commit format/analysis and test CI passed on Ubuntu
 and macOS. Local review fixed two installed-CLI regressions. The requested
 GitHub Codex review did not return a response.
 
+## Module pinning — 2026-09-24
+
+Branch `pin-macos-module`. Without a pin, `dartaotruntime` loaded any module
+that library validation admitted. A signed runtime could therefore run a
+different module signed by the same team, with the program's Keychain identity.
+
+An ad-hoc experiment on macOS 26.2 (25C56) with Dart 3.12.2 signed a copy of
+`dartaotruntime` with a library load constraint naming one module's code hash.
+The pinned runtime ran that module and refused a second one with exit code
+`255` ("Library violates process' library load constraint"). The unpinned copy
+ran both. `codesign -dvvvvvv` displays the embedded constraint, which is how rk
+reads it back.
+
+`test/dart_bundle_pin_test.dart` repeats this with a real rk bundle on every
+macOS test run: the pinned launcher runs its own module, refuses a swapped one,
+and runs the swap once the constraint is removed.
+
+A single-file `dart compile exe` binary signed with the hardened runtime is
+killed at launch (`CODESIGNING`, `Invalid Page`) on Dart 3.12.2 and 3.13.4. It
+runs only with the `allow-unsigned-executable-memory` exception, which is why
+macOS keeps the bundle layout.
+
+Not yet checked: the same bundle signed with a Developer ID certificate, where
+library validation and the constraint both apply, and Apple notarization of a
+runtime that carries a constraint. Ad-hoc signatures cannot exercise either.
+
 ## Qualification boundary
 
 No package, GitHub release or Homebrew tap was published during the synthetic

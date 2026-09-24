@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- macOS Dart bundles pin their AOT module. rk signs the module first, then
+  signs the runtime with a library load constraint that admits only that
+  module's code hash, reads the constraint back, and records both in the stage
+  receipt. The signed runtime no longer runs another module signed by the same
+  team. The stage schema is now 12, so older stages are rebuilt.
 - Release commands identify the project version and source checkout before work
   begins. Staging explains source, tooling, and configuration changes when a
   recent receipt can account for a rebuild, and names interrupted work it resumes.

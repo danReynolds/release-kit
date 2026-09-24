@@ -45,6 +45,17 @@ runtime retains the existing program identifier and designated requirement,
 since it becomes the process that accesses OS services such as Keychain.
 Previous single-file rk archives remain readable as the signing baseline.
 
+Library validation admits any library signed by the same team, so a signed
+runtime would otherwise run any module signed with that team's certificates.
+rk signs the module first, then signs the runtime with a library load
+constraint that admits only the module's code directory hash. macOS's own
+libraries are exempt. rk reads the constraint back before continuing, the
+signed smoke test proves the module still loads, and the receipt records both
+hashes. Each release pins its own module, so this does not stop someone running
+an older complete release. rk still compares the runtime's designated
+requirement with the published one, so a signing change that altered the
+program identity would stop the release.
+
 rk checks the signed command, verifies every signature again, notarizes the
 whole payload, and verifies and runs the extracted final archive. Receipts bind
 all companion files and their signatures. The stage key includes the matching
