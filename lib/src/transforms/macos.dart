@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import '../engine/tools.dart';
@@ -16,6 +17,41 @@ const String _emptyEntitlements = '''<?xml version="1.0" encoding="UTF-8"?>
 </dict>
 </plist>
 ''';
+
+/// A code directory hash as the kernel compares it: 20 bytes, in hex.
+final RegExp _cdhash = RegExp(r'^[0-9a-f]{40}$');
+
+/// A library load constraint that admits only [cdhashes].
+///
+/// macOS exempts its own libraries from these constraints, so the runtime can
+/// still load the system. Any other library is refused, including one signed
+/// by the same team: library validation compares teams, and this compares the
+/// exact code.
+String libraryConstraintPlist(Iterable<String> cdhashes) {
+  final data = [
+    for (final hash in cdhashes)
+      '      <data>${base64.encode(_bytesOfHex(hash))}</data>',
+  ].join('\n');
+  return '''<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>cdhash</key>
+  <dict>
+    <key>\$in</key>
+    <array>
+$data
+    </array>
+  </dict>
+</dict>
+</plist>
+''';
+}
+
+List<int> _bytesOfHex(String hex) => [
+      for (var index = 0; index < hex.length; index += 2)
+        int.parse(hex.substring(index, index + 2), radix: 16),
+    ];
 
 class MacOsSigner {
   MacOsSigner({required this.tools});
@@ -99,13 +135,21 @@ class MacOsSigner {
   /// release names one; without it the certificate is discovered, because
   /// capabilities are discovered and never declared — and a machine with
   /// one Developer ID has nothing to declare.
+  ///
+  /// [pinnedLibraries] are the code hashes of the only non-system libraries
+  /// [binary] may load. A non-empty list embeds a library load constraint
+  /// admitting exactly them.
   Future<SignOutcome> sign({
     required String binary,
     required String? team,
     required String codeId,
     SigningIdentity? selectedIdentity,
     String? expectedCertificateSha256,
+    List<String> pinnedLibraries = const [],
   }) async {
+    if (pinnedLibraries.any((hash) => !_cdhash.hasMatch(hash))) {
+      return SignOutcome.failed('a pinned library code hash is malformed');
+    }
     final identities = await availableIdentities();
     if (identities == null) {
       return SignOutcome.failed('the login keychain could not be read');
@@ -174,8 +218,12 @@ class MacOsSigner {
           'the entitlements could not be written: $error');
     }
 
+    final constraint = File('$binary.library-constraint.plist');
     final ToolResult signed;
     try {
+      if (pinnedLibraries.isNotEmpty) {
+        constraint.writeAsStringSync(libraryConstraintPlist(pinnedLibraries));
+      }
       signed = await tools.run('codesign', [
         '--force',
         '--timestamp',
@@ -184,6 +232,13 @@ class MacOsSigner {
         entitlements.path,
         '--identifier',
         codeId,
+        // Refuse a constraint this macOS cannot evaluate rather than sign one
+        // it would ignore.
+        if (pinnedLibraries.isNotEmpty) ...[
+          '--enforce-constraint-validity',
+          '--library-constraint',
+          constraint.path,
+        ],
         '--sign',
         // Names are display labels and need not be unique. The SHA-1 identity
         // token is the exact keychain selector emitted by find-identity; the
@@ -191,10 +246,14 @@ class MacOsSigner {
         selected.sha1,
         binary,
       ]);
+    } on FileSystemException catch (error) {
+      return SignOutcome.failed(
+          'the library constraint could not be written: $error');
     } finally {
-      // An input to codesign, never an artifact: it must not survive into the
+      // Inputs to codesign, never artifacts: they must not survive into the
       // staged workspace even when signing throws.
       if (entitlements.existsSync()) entitlements.deleteSync();
+      if (constraint.existsSync()) constraint.deleteSync();
     }
     if (!signed.ok) {
       return SignOutcome.failed(signed.summary, transcript: signed.transcript);
@@ -246,6 +305,53 @@ class MacOsSigner {
   /// account — which resource was sealed wrong — is the whole diagnosis.
   Future<ToolResult> verifies(String binary) =>
       tools.run('codesign', ['--verify', '--strict', binary]);
+
+  /// The code directory hashes of a signed binary, one per hash algorithm its
+  /// signature carries, each truncated to the 20 bytes the kernel compares.
+  /// Null when codesign cannot say.
+  Future<List<String>?> codeDirectoryHashes(String binary) async {
+    final result = await tools.run('codesign', ['-dvvv', binary]);
+    if (!result.ok) return null;
+    final hashes = {
+      for (final match
+          in RegExp(r'^CandidateCDHash \w+=(\S+)$', multiLine: true)
+              .allMatches('${result.stdout}\n${result.stderr}'))
+        match.group(1)!.toLowerCase(),
+    };
+    if (hashes.isEmpty || hashes.any((hash) => !_cdhash.hasMatch(hash))) {
+      return null;
+    }
+    return hashes.toList()..sort();
+  }
+
+  /// The code hashes the library load constraint in [binary]'s signature
+  /// admits: empty without a constraint, and null when codesign cannot be
+  /// read or the constraint states anything beyond a list of code hashes.
+  ///
+  /// codesign displays a constraint only as a nested dump at its highest
+  /// verbosity. A constraint rk did not write — another fact, another
+  /// operator — answers null rather than a subset that looks like a pin.
+  Future<Set<String>?> admittedLibraries(String binary) async {
+    final result = await tools.run('codesign', ['-dvvvvvv', binary]);
+    if (!result.ok) return null;
+    final text = '${result.stdout}\n${result.stderr}';
+    if (!text.contains('Has Library Load Constraints')) return {};
+    const structure = {'ccat', 'comp', 'reqs', 'vers', 'cdhash', r'$in'};
+    final keys = RegExp(r'^\s*\[Key\] (.*?)\s*$', multiLine: true)
+        .allMatches(text)
+        .map((match) => match.group(1)!);
+    final data = [
+      for (final match in RegExp(r'^\s*\[Data\] (.*?)\s*$', multiLine: true)
+          .allMatches(text))
+        match.group(1)!.toLowerCase(),
+    ];
+    if (keys.any((key) => !structure.contains(key)) ||
+        data.isEmpty ||
+        data.any((hash) => !_cdhash.hasMatch(hash))) {
+      return null;
+    }
+    return data.toSet();
+  }
 }
 
 class SigningIdentity {
