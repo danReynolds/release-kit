@@ -21,10 +21,8 @@ final class GithubReleaseTargetModule extends TargetModule {
   PublishTarget get target => PublishTarget.githubRelease;
 
   @override
-  ProgressActivity get publishActivity => ProgressActivity(
-        running: 'drafting',
-        failed: 'draft failed',
-      );
+  ProgressActivity get publishActivity =>
+      ProgressActivity(running: 'drafting', failed: 'draft failed');
 
   @override
   TargetSessionProvider get authentication => const _GithubSession();
@@ -33,8 +31,7 @@ final class GithubReleaseTargetModule extends TargetModule {
   Future<TargetReadinessOutcome> checkReadiness(
     TargetReadinessContext context,
     ResolvedUnit unit,
-  ) async =>
-      const TargetReady();
+  ) async => const TargetReady();
 
   @override
   TargetPlan plan({
@@ -44,8 +41,9 @@ final class GithubReleaseTargetModule extends TargetModule {
   }) {
     final tag = requiredTargetTag(unit, PublishTarget.githubRelease);
     final artifacts = ReleaseAssets.expectedForUnit(unit).toList()..sort();
-    final coordinate =
-        repository == null ? tag : '$repository/releases/tag/$tag';
+    final coordinate = repository == null
+        ? tag
+        : '$repository/releases/tag/$tag';
     return TargetPlan(
       label: repository == null
           ? 'GitHub Release'
@@ -54,7 +52,8 @@ final class GithubReleaseTargetModule extends TargetModule {
       // Without an origin there is no repository to name, and echoing the
       // tag here would print the Git tag row's identity twice.
       identity: repository ?? 'no origin remote',
-      planNote: '${artifacts.length} asset${artifacts.length == 1 ? '' : 's'} '
+      planNote:
+          '${artifacts.length} asset${artifacts.length == 1 ? '' : 's'} '
           'to $coordinate',
       coordinate: coordinate,
       targetVersion: unit.version.canonical,
@@ -94,8 +93,10 @@ final class GithubReleaseTargetModule extends TargetModule {
     }
 
     final resolvedBundle = ReleaseBundle.resolve(stage, unit);
-    if (resolvedBundle
-        case ReleaseBundleInvalid(:final message, :final evidence)) {
+    if (resolvedBundle case ReleaseBundleInvalid(
+      :final message,
+      :final evidence,
+    )) {
       return Inspection.conflict(message, evidence: evidence);
     }
     final bundle = (resolvedBundle as ReleaseBundleAvailable).bundle;
@@ -126,9 +127,7 @@ final class GithubReleaseTargetModule extends TargetModule {
     final tools = context.tools;
     if (tools == null) {
       return TargetHistory.versioned(
-        inspection: const Inspection.unknown(
-          'no tools to read the forge with',
-        ),
+        inspection: const Inspection.unknown('no tools to read the forge with'),
         target: target,
       );
     }
@@ -139,13 +138,14 @@ final class GithubReleaseTargetModule extends TargetModule {
         target: target,
       );
     }
-    final inspection = await GithubRelease(
-      tools: tools,
-      repository: repository,
-      workingDirectory: context.git.root,
-    ).inspectLatestVersion(
-      requiredTargetTagPattern(unit, PublishTarget.githubRelease),
-    );
+    final inspection =
+        await GithubRelease(
+          tools: tools,
+          repository: repository,
+          workingDirectory: context.git.root,
+        ).inspectLatestVersion(
+          requiredTargetTagPattern(unit, PublishTarget.githubRelease),
+        );
     return TargetHistory.versioned(inspection: inspection, target: target);
   }
 
@@ -154,15 +154,16 @@ final class GithubReleaseTargetModule extends TargetModule {
     ResolvedUnit unit,
     TargetPlan target,
     Inspection conflict,
-  ) =>
-      Diagnostic(
-        code: 'RK-REL-001',
-        message: '${target.label}: '
-            '${conflict.detail ?? 'the published release does not match'}',
-        remedy: 'compare the published release with the source named by its '
-            'tag. If they are not the intended release, bump the version '
-            'and changelog; rk will not replace conflicting public bytes',
-      );
+  ) => Diagnostic(
+    code: 'RK-REL-001',
+    message:
+        '${target.label}: '
+        '${conflict.detail ?? 'the published release does not match'}',
+    remedy:
+        'compare the published release with the source named by its '
+        'tag. If they are not the intended release, bump the version '
+        'and changelog; rk will not replace conflicting public bytes',
+  );
 
   @override
   Future<TargetActOutcome> publish(
@@ -178,17 +179,21 @@ final class GithubReleaseTargetModule extends TargetModule {
         ok: false,
         diagnostic: Diagnostic(
           code: 'RK-GIT-002',
-          message: 'github-release needs an origin remote, and this '
+          message:
+              'github-release needs an origin remote, and this '
               'repository has none',
-          remedy: 'rk publishes what others can fetch, and reads back what it '
+          remedy:
+              'rk publishes what others can fetch, and reads back what it '
               'published. git remote add origin <url>, then git push -u '
               'origin ${context.git.branch ?? 'main'}',
         ),
       );
     }
     final resolvedBundle = ReleaseBundle.resolve(context.stage, unit);
-    if (resolvedBundle
-        case ReleaseBundleInvalid(:final message, :final producer)) {
+    if (resolvedBundle case ReleaseBundleInvalid(
+      :final message,
+      :final producer,
+    )) {
       return TargetActOutcome(
         ok: false,
         diagnostic: Diagnostic(
@@ -215,7 +220,8 @@ final class GithubReleaseTargetModule extends TargetModule {
         diagnostic: Diagnostic(
           code: 'RK-CHG-003',
           message: 'the release body was not prepared',
-          remedy: 'this is a bug in rk: the preflight prepares it whenever '
+          remedy:
+              'this is a bug in rk: the preflight prepares it whenever '
               'a github-release step remains',
         ),
       );
@@ -238,18 +244,12 @@ final class GithubReleaseTargetModule extends TargetModule {
             context.progress.begin(publishActivity);
           case GithubPublishEvent.uploading:
             context.progress.begin(
-              ProgressActivity(
-                running: 'uploading',
-                failed: 'upload failed',
-              ),
+              ProgressActivity(running: 'uploading', failed: 'upload failed'),
               detail: '$current/$total',
             );
           case GithubPublishEvent.publishing:
             context.progress.begin(
-              ProgressActivity(
-                running: 'publishing',
-                failed: 'publish failed',
-              ),
+              ProgressActivity(running: 'publishing', failed: 'publish failed'),
             );
         }
       },
@@ -281,8 +281,7 @@ final class GithubReleaseTargetModule extends TargetModule {
   TargetStage stageInput({
     required ResolvedUnit unit,
     required TargetPlan target,
-  }) =>
-      githubReleaseNotesStage(unit: unit, target: target);
+  }) => githubReleaseNotesStage(unit: unit, target: target);
 }
 
 final class _GithubSession extends TargetSessionProvider {
@@ -302,11 +301,13 @@ final class _GithubSession extends TargetSessionProvider {
   ) async {
     ToolResult status;
     try {
-      status = await context.tools.run(
-        'gh',
-        const ['auth', 'status', '--active', '--hostname', 'github.com'],
-        workingDirectory: context.git.root,
-      );
+      status = await context.tools.run('gh', const [
+        'auth',
+        'status',
+        '--active',
+        '--hostname',
+        'github.com',
+      ], workingDirectory: context.git.root);
     } on ProcessException {
       status = ToolResult(exitCode: -1, stdout: '', stderr: '');
     }
@@ -315,7 +316,8 @@ final class _GithubSession extends TargetSessionProvider {
       Diagnostic(
         code: 'RK-GITHUB-010',
         message: 'the GitHub CLI has no usable session',
-        remedy: 'Run gh auth login from a terminal, then re-run rk release '
+        remedy:
+            'Run gh auth login from a terminal, then re-run rk release '
             '${unit.name}. Authentication does not prove write permission; '
             'the exact publish and read-back remain authoritative.',
       ),

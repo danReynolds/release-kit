@@ -17,10 +17,7 @@ class Captured {
       text.split('\n').where((l) => l.isNotEmpty).toList();
 }
 
-(Output, Captured) make({
-  bool isTerminal = false,
-  int? terminalWidth,
-}) {
+(Output, Captured) make({bool isTerminal = false, int? terminalWidth}) {
   final captured = Captured();
   final output = Output(
     sink: captured.buffer.write,
@@ -75,10 +72,9 @@ void main() {
       label: 'Local binary',
       coordinate: 'macos-arm64',
     );
-    row.handle.begin(ProgressActivity(
-      running: 'building',
-      failed: 'build failed',
-    ));
+    row.handle.begin(
+      ProgressActivity(running: 'building', failed: 'build failed'),
+    );
     output.problem(
       Diagnostic(
         code: 'RK-BUILD-001',
@@ -118,10 +114,9 @@ void main() {
     out.line('cli', depth: 0);
     out.line('pub.dev', depth: 1);
     expect(
-        captured.lines[0].indexOf('cli'),
-        lessThan(
-          captured.lines[1].indexOf('pub.dev'),
-        ));
+      captured.lines[0].indexOf('cli'),
+      lessThan(captured.lines[1].indexOf('pub.dev')),
+    );
   });
 
   group('non-terminal output is append-only', () {
@@ -178,30 +173,25 @@ void main() {
 
     for (final width in [52, 36]) {
       test('target rows fit and erase exactly at $width columns', () async {
-        final (out, captured) = make(
-          isTerminal: true,
-          terminalWidth: width,
-        );
+        final (out, captured) = make(isTerminal: true, terminalWidth: width);
         final checks = out.targetChecks(delay: Duration.zero);
         checks
           ..add('tag', 'Git tag')
           ..add('pub', 'pub.dev · rk')
-          ..add(
-            'github',
-            'GitHub Release · danReynolds/release-kit',
-          );
+          ..add('github', 'GitHub Release · danReynolds/release-kit');
         await Future<void>.delayed(const Duration(milliseconds: 1));
 
         checks.finish('github', Verdict.exact);
         checks.close();
 
-        final visibleLines = withoutControls(captured.text)
-            .split('\n')
-            .where((line) => line.isNotEmpty);
+        final visibleLines = withoutControls(
+          captured.text,
+        ).split('\n').where((line) => line.isNotEmpty);
         expect(
           visibleLines.every((line) => line.runes.length <= width),
           isTrue,
-          reason: 'a transient logical row must not wrap into two physical '
+          reason:
+              'a transient logical row must not wrap into two physical '
               'rows or cursor-up will leave a stale fragment',
         );
         expect(withoutControls(captured.text), contains('…'));
@@ -351,10 +341,7 @@ void main() {
       expect(problem['message'], message);
       expect(problem['remedy'], remedy);
       expect(problem['evidence'], 'tool-output/1-RK-TEST-001.txt');
-      expect(
-        (document['attachments'] as Map)[problem['evidence']],
-        evidence,
-      );
+      expect((document['attachments'] as Map)[problem['evidence']], evidence);
     });
 
     test('verdicts map to the shared runtime states', () {
@@ -366,11 +353,7 @@ void main() {
 
     test('bold is an emphasis layered onto the semantic color', () {
       expect(
-        colored.paint(
-          'release',
-          role: VisualRole.releaseTarget,
-          strong: true,
-        ),
+        colored.paint('release', role: VisualRole.releaseTarget, strong: true),
         '\x1b[1;36mrelease\x1b[0m',
       );
       expect(colored.paint('heading', strong: true), '\x1b[1mheading\x1b[0m');
@@ -436,42 +419,46 @@ void main() {
       );
     });
 
-    test('help styling preserves every plain byte with or without final LF',
-        () {
-      const document = 'rk — a release tool\n'
-          '\n'
-          'Usage\n'
-          '  rk plan [unit]    show the configured release graph\n'
-          '\n'
-          'Flags\n'
-          '  --json            print the machine document\n'
-          '\n'
-          'Marks: ✓ done,  ✗ problem\n'
-          '       → your next move,  unmarked pending\n';
+    test(
+      'help styling preserves every plain byte with or without final LF',
+      () {
+        const document =
+            'rk — a release tool\n'
+            '\n'
+            'Usage\n'
+            '  rk plan [unit]    show the configured release graph\n'
+            '\n'
+            'Flags\n'
+            '  --json            print the machine document\n'
+            '\n'
+            'Marks: ✓ done,  ✗ problem\n'
+            '       → your next move,  unmarked pending\n';
 
-      String render(String text, {required bool useColor}) {
-        final captured = Captured();
-        Output(
-          sink: captured.buffer.write,
-          isTerminal: true,
-          useColor: useColor,
-        ).help(text);
-        return captured.text;
-      }
+        String render(String text, {required bool useColor}) {
+          final captured = Captured();
+          Output(
+            sink: captured.buffer.write,
+            isTerminal: true,
+            useColor: useColor,
+          ).help(text);
+          return captured.text;
+        }
 
-      for (final help in [
-        document,
-        document.substring(0, document.length - 1)
-      ]) {
-        final plainText = render(help, useColor: false);
-        final coloredText = render(help, useColor: true);
-        expect(plainText, help);
-        expect(coloredText.replaceAll(ansi, ''), help);
-      }
-    });
+        for (final help in [
+          document,
+          document.substring(0, document.length - 1),
+        ]) {
+          final plainText = render(help, useColor: false);
+          final coloredText = render(help, useColor: true);
+          expect(plainText, help);
+          expect(coloredText.replaceAll(ansi, ''), help);
+        }
+      },
+    );
 
     test('help styles structure and invocations, never outcomes', () {
-      const document = 'rk — a release tool\n'
+      const document =
+          'rk — a release tool\n'
           '\n'
           'Usage\n'
           '  rk plan [unit]    show the configured release graph\n'
@@ -492,8 +479,11 @@ void main() {
       expect(text, contains('  \x1b[36m--json\x1b[0m'));
       expect(text, contains('\x1b[1mMarks:\x1b[0m ✓ done'));
       for (final outcomeCode in ['31', '32', '33']) {
-        expect(text, isNot(contains('\x1b[${outcomeCode}m')),
-            reason: 'help describes actions; it has no runtime outcome');
+        expect(
+          text,
+          isNot(contains('\x1b[${outcomeCode}m')),
+          reason: 'help describes actions; it has no runtime outcome',
+        );
       }
     });
 
@@ -511,59 +501,67 @@ void main() {
     });
   });
 
-  test('settled rows use readable hanging indentation on a narrow terminal',
-      () {
-    final captured = Captured();
-    final out = Output(
-      sink: captured.buffer.write,
-      isTerminal: true,
-      useColor: true,
-      terminalWidth: 36,
-    );
+  test(
+    'settled rows use readable hanging indentation on a narrow terminal',
+    () {
+      final captured = Captured();
+      final out = Output(
+        sink: captured.buffer.write,
+        isTerminal: true,
+        useColor: true,
+        terminalWidth: 36,
+      );
 
-    out.line(
-      'GitHub Release',
-      mark: Mark.blocked,
-      note: '0.1.0 › 0.2.0 · public history could not be read',
-      depth: 2,
-      state: RuntimeState.failure,
-      noteState: RuntimeState.attention,
-    );
+      out.line(
+        'GitHub Release',
+        mark: Mark.blocked,
+        note: '0.1.0 › 0.2.0 · public history could not be read',
+        depth: 2,
+        state: RuntimeState.failure,
+        noteState: RuntimeState.attention,
+      );
 
-    final visible = withoutControls(captured.text)
-        .split('\n')
-        .where((line) => line.isNotEmpty)
-        .toList();
-    expect(visible.every((line) => line.runes.length <= 36), isTrue);
-    expect(visible.first, startsWith('✗     GitHub Release'));
-    expect(
-        visible.skip(1).every((line) => line.startsWith('        ')), isTrue);
-    expect(
-      visible.join(' ').replaceAll('✗', '').split(RegExp(r'\s+')).where(
-            (word) => word.isNotEmpty,
-          ),
-      [
-        'GitHub',
-        'Release',
-        '0.1.0',
-        '›',
-        '0.2.0',
-        '·',
-        'public',
-        'history',
-        'could',
-        'not',
-        'be',
-        'read',
-      ],
-      reason: 'wrapping may move words, never omit or reorder them',
-    );
-    for (final line
-        in captured.text.split('\n').where((line) => line.isNotEmpty)) {
-      expect(line, endsWith('\x1b[0m'),
-          reason: 'each painted physical row closes its ANSI span');
-    }
-  });
+      final visible = withoutControls(
+        captured.text,
+      ).split('\n').where((line) => line.isNotEmpty).toList();
+      expect(visible.every((line) => line.runes.length <= 36), isTrue);
+      expect(visible.first, startsWith('✗     GitHub Release'));
+      expect(
+        visible.skip(1).every((line) => line.startsWith('        ')),
+        isTrue,
+      );
+      expect(
+        visible
+            .join(' ')
+            .replaceAll('✗', '')
+            .split(RegExp(r'\s+'))
+            .where((word) => word.isNotEmpty),
+        [
+          'GitHub',
+          'Release',
+          '0.1.0',
+          '›',
+          '0.2.0',
+          '·',
+          'public',
+          'history',
+          'could',
+          'not',
+          'be',
+          'read',
+        ],
+        reason: 'wrapping may move words, never omit or reorder them',
+      );
+      for (final line
+          in captured.text.split('\n').where((line) => line.isNotEmpty)) {
+        expect(
+          line,
+          endsWith('\x1b[0m'),
+          reason: 'each painted physical row closes its ANSI span',
+        );
+      }
+    },
+  );
 
   group('halts open with the sentence, not the noun', () {
     test('no public target changed', () {
@@ -587,17 +585,19 @@ void main() {
       expect(out.report.rerunHelps, isFalse);
     });
 
-    test('a conflict after an earlier unit published acknowledges that act',
-        () {
-      final (out, captured) = make();
-      out.previousUnitActed = true;
-      out.halt(HaltKind.unfixableByRerun);
-      expect(captured.text, isNot(contains('No public targets changed')));
-      expect(captured.text, contains('rk acted'));
-      final report = jsonDecode(out.report.encode(exit: 1)) as Map;
-      expect((report['halt'] as Map)['kind'], 'actedAndUnfixable');
-      expect(report['rerun_helps'], isFalse);
-    });
+    test(
+      'a conflict after an earlier unit published acknowledges that act',
+      () {
+        final (out, captured) = make();
+        out.previousUnitActed = true;
+        out.halt(HaltKind.unfixableByRerun);
+        expect(captured.text, isNot(contains('No public targets changed')));
+        expect(captured.text, contains('rk acted'));
+        final report = jsonDecode(out.report.encode(exit: 1)) as Map;
+        expect((report['halt'] as Map)['kind'], 'actedAndUnfixable');
+        expect(report['rerun_helps'], isFalse);
+      },
+    );
   });
 
   group('problems', () {
@@ -636,10 +636,12 @@ void main() {
 
   test('warnings use a distinct nonblocking mark and machine collection', () {
     final (out, captured) = make();
-    out.warning(const Diagnostic(
-      code: 'RK-GIT-001',
-      message: '1 uncommitted path will be included',
-    ));
+    out.warning(
+      const Diagnostic(
+        code: 'RK-GIT-001',
+        message: '1 uncommitted path will be included',
+      ),
+    );
     expect(captured.lines.single, '! 1 uncommitted path will be included');
     expect(captured.text, isNot(contains('RK-GIT-001')));
     final json = jsonDecode(out.report.encode(exit: 0)) as Map;

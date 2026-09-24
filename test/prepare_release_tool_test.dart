@@ -39,10 +39,12 @@ const rkVersion = '1.2.3';
 
   test('refuses disagreement before changing either file', () {
     _write(repository, 'lib/src/version.dart', "const rkVersion = '1.2.2';\n");
-    final beforePubspec =
-        File('${repository.path}/pubspec.yaml').readAsStringSync();
-    final beforeEmbedded =
-        File('${repository.path}/lib/src/version.dart').readAsStringSync();
+    final beforePubspec = File(
+      '${repository.path}/pubspec.yaml',
+    ).readAsStringSync();
+    final beforeEmbedded = File(
+      '${repository.path}/lib/src/version.dart',
+    ).readAsStringSync();
 
     expect(
       () => prepareReleaseVersion(repository, '1.3.0'),

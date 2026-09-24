@@ -5,10 +5,8 @@ import 'stage.dart';
 import 'stage_inspection.dart';
 import 'stage_receipt.dart';
 
-typedef StageStepContractValidator = Iterable<StageIssue> Function(
-  StageContractContext context,
-  StageStep step,
-);
+typedef StageStepContractValidator =
+    Iterable<StageIssue> Function(StageContractContext context, StageStep step);
 
 final class StageStepContract {
   const StageStepContract(
@@ -59,8 +57,10 @@ List<T> orderStageContributions<T>(
       outputs[output] = name;
     }
   }
-  entries.sort((left, right) =>
-      contractOf(left).step.name.compareTo(contractOf(right).step.name));
+  entries.sort(
+    (left, right) =>
+        contractOf(left).step.name.compareTo(contractOf(right).step.name),
+  );
   return List<T>.unmodifiable(entries);
 }
 
@@ -80,11 +80,12 @@ final class StageContractContext {
   final StageReceipt receipt;
 }
 
-typedef StageContractResolver = List<StageContributionContract> Function({
-  required ResolvedUnit unit,
-  required String? repository,
-  required String sourceRoot,
-});
+typedef StageContractResolver =
+    List<StageContributionContract> Function({
+      required ResolvedUnit unit,
+      required String? repository,
+      required String sourceRoot,
+    });
 
 /// The canonical private producer graph for one configured release unit.
 ///
@@ -96,8 +97,8 @@ final class StageProducerGraph {
   StageProducerGraph._({
     required List<StageStepContract> steps,
     required Map<String, Set<String>> dependencies,
-  })  : steps = List<StageStepContract>.unmodifiable(steps),
-        _dependencies = Map<String, Set<String>>.unmodifiable(dependencies);
+  }) : steps = List<StageStepContract>.unmodifiable(steps),
+       _dependencies = Map<String, Set<String>>.unmodifiable(dependencies);
 
   factory StageProducerGraph.forUnit({
     required Iterable<StageContributionContract> targetContributions,
@@ -189,8 +190,8 @@ class StageReceiptContract {
     required this.sourceRoot,
     required List<StageStepContract> steps,
     required Map<String, Set<String>> dependencies,
-  })  : _steps = List<StageStepContract>.unmodifiable(steps),
-        _dependencies = Map<String, Set<String>>.unmodifiable(dependencies);
+  }) : _steps = List<StageStepContract>.unmodifiable(steps),
+       _dependencies = Map<String, Set<String>>.unmodifiable(dependencies);
 
   factory StageReceiptContract.forUnit({
     required ResolvedUnit unit,
@@ -239,7 +240,9 @@ class StageReceiptContract {
     final sequenceOk = receipt.complete
         ? _sameList(names, expected)
         : _isOrderedSubsequence(
-            names, expected.take(expected.length - 1).toList());
+            names,
+            expected.take(expected.length - 1).toList(),
+          );
     if (!sequenceOk) {
       _issue(
         issues,
@@ -280,30 +283,31 @@ class StageReceiptContract {
   static bool _outputsMatch(StageStep step, StageStepContract contract) {
     if (step.name == 'source-snapshot') return true;
     final actual = {
-      for (final output in step.outputs) output.path: output.type
+      for (final output in step.outputs) output.path: output.type,
     };
     if (!contract.outputs.entries.every(
       (entry) => actual[entry.key] == entry.value,
     )) {
       return false;
     }
-    return actual.entries
-        .every((entry) => contract.outputs[entry.key] == entry.value);
+    return actual.entries.every(
+      (entry) => contract.outputs[entry.key] == entry.value,
+    );
   }
 
   static void _issue(List<StageIssue> issues, String message) {
-    issues.add(StageIssue(
-      StageIssueKind.invalidStructure,
-      message,
-      path: 'stage.json',
-    ));
+    issues.add(
+      StageIssue(StageIssueKind.invalidStructure, message, path: 'stage.json'),
+    );
   }
 }
 
 bool _isPrefix(List<String> prefix, List<String> whole) =>
     prefix.length <= whole.length &&
-    List.generate(prefix.length, (index) => prefix[index] == whole[index])
-        .every((same) => same);
+    List.generate(
+      prefix.length,
+      (index) => prefix[index] == whole[index],
+    ).every((same) => same);
 
 /// Gaps are safe because every real step chains through declared inputs:
 /// a recorded step whose producer is missing fails the inspector's causal

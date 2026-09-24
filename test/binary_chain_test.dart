@@ -59,10 +59,14 @@ void main() {
         hasNativeAssets: false,
       );
       final resolved = noRuntime.resolve('macos-arm64');
-      expect(resolved.canProve, isTrue,
-          reason: 'the host runs its own binaries for free, and that check '
-              'catches the commonest failure — a stale artifact reporting '
-              'the wrong version');
+      expect(
+        resolved.canProve,
+        isTrue,
+        reason:
+            'the host runs its own binaries for free, and that check '
+            'catches the commonest failure — a stale artifact reporting '
+            'the wrong version',
+      );
     });
 
     test('native assets block cross-compilation, naming why', () {
@@ -82,49 +86,54 @@ void main() {
       expect(resolved.reason, contains('host'));
     });
 
-    test('optional runtime probes are bounded and failure stays optional',
-        () async {
-      final tools = _TimeoutRecordingTools(results: {
-        'docker info': ToolResult(
-          exitCode: 124,
-          stdout: '',
-          stderr: 'timed out',
-        ),
-        'podman info': ToolResult(
-          exitCode: 1,
-          stdout: '',
-          stderr: 'not running',
-        ),
-      });
+    test(
+      'optional runtime probes are bounded and failure stays optional',
+      () async {
+        final tools = _TimeoutRecordingTools(
+          results: {
+            'docker info': ToolResult(
+              exitCode: 124,
+              stdout: '',
+              stderr: 'timed out',
+            ),
+            'podman info': ToolResult(
+              exitCode: 1,
+              stdout: '',
+              stderr: 'not running',
+            ),
+          },
+        );
 
-      final detected = await HostCapabilities.detect(
-        tools: tools,
-        runtimeProbeTimeout: const Duration(milliseconds: 125),
-      );
+        final detected = await HostCapabilities.detect(
+          tools: tools,
+          runtimeProbeTimeout: const Duration(milliseconds: 125),
+        );
 
-      expect(detected.containerRuntime, isNull);
-      expect(tools.calls, ['docker info', 'podman info']);
-      expect(
-        tools.timeouts,
-        everyElement(const Duration(milliseconds: 125)),
-      );
-    });
+        expect(detected.containerRuntime, isNull);
+        expect(tools.calls, ['docker info', 'podman info']);
+        expect(tools.timeouts, everyElement(const Duration(milliseconds: 125)));
+      },
+    );
 
-    test('detection returns the optional runtime that actually answered',
-        () async {
-      final detected = await HostCapabilities.detect(
-        tools: RecordingTools(results: {
-          'docker info': ToolResult(
-            exitCode: 1,
-            stdout: '',
-            stderr: 'not running',
+    test(
+      'detection returns the optional runtime that actually answered',
+      () async {
+        final detected = await HostCapabilities.detect(
+          tools: RecordingTools(
+            results: {
+              'docker info': ToolResult(
+                exitCode: 1,
+                stdout: '',
+                stderr: 'not running',
+              ),
+              'podman info': ToolResult(exitCode: 0, stdout: 'ok', stderr: ''),
+            },
           ),
-          'podman info': ToolResult(exitCode: 0, stdout: 'ok', stderr: ''),
-        }),
-      );
+        );
 
-      expect(detected.containerRuntime, 'podman');
-    });
+        expect(detected.containerRuntime, 'podman');
+      },
+    );
   });
 
   group('the published identity is read back', () {
@@ -178,107 +187,121 @@ void main() {
     );
 
     test('a native build passes the target flags nowhere', () async {
-      final tools = _TimeoutRecordingTools(results: {
-        '${buildRoot.path}/keybay --version': ToolResult(
-          exitCode: 0,
-          stdout: 'keybay 0.2.0\n',
-          stderr: '',
-        ),
-      });
-      final outcome = await DartCliBuilder(
-        tools: tools,
-        capabilities: capabilities,
-        compilerExecutable: '/sdk/bin/dart',
-      ).build(
-        platform: 'macos-arm64',
-        entryPoint: 'bin/keybay.dart',
-        output: '${buildRoot.path}/keybay',
-        workingDirectory: '/repo',
-        expectedVersion: '0.2.0',
+      final tools = _TimeoutRecordingTools(
+        results: {
+          '${buildRoot.path}/keybay --version': ToolResult(
+            exitCode: 0,
+            stdout: 'keybay 0.2.0\n',
+            stderr: '',
+          ),
+        },
       );
+      final outcome =
+          await DartCliBuilder(
+            tools: tools,
+            capabilities: capabilities,
+            compilerExecutable: '/sdk/bin/dart',
+          ).build(
+            platform: 'macos-arm64',
+            entryPoint: 'bin/keybay.dart',
+            output: '${buildRoot.path}/keybay',
+            workingDirectory: '/repo',
+            expectedVersion: '0.2.0',
+          );
 
       expect(outcome.ok, isTrue, reason: outcome.problem);
       expect(
-          tools.calls.first, startsWith('/sdk/bin/dart compile aot-snapshot'));
+        tools.calls.first,
+        startsWith('/sdk/bin/dart compile aot-snapshot'),
+      );
       expect(tools.calls.first, isNot(contains('--target-os')));
       expect(tools.timeouts.last, const Duration(minutes: 2));
     });
 
-    test('a cross build names the target and checks it in a container',
-        () async {
-      final tools = _TimeoutRecordingTools(results: {
-        'docker run --rm --platform linux/amd64 -v ${buildRoot.path}:/w:ro '
-            'debian:bookworm-slim /w/keybay --version': ToolResult(
-          exitCode: 0,
-          stdout: 'keybay 0.2.0\n',
-          stderr: '',
-        ),
-      });
-      final outcome = await DartCliBuilder(
-        tools: tools,
-        capabilities: capabilities,
-      ).build(
-        platform: 'linux-x64',
-        entryPoint: 'bin/keybay.dart',
-        output: '${buildRoot.path}/keybay',
-        workingDirectory: '/repo',
-        expectedVersion: '0.2.0',
-      );
+    test(
+      'a cross build names the target and checks it in a container',
+      () async {
+        final tools = _TimeoutRecordingTools(
+          results: {
+            'docker run --rm --platform linux/amd64 -v ${buildRoot.path}:/w:ro '
+                'debian:bookworm-slim /w/keybay --version': ToolResult(
+              exitCode: 0,
+              stdout: 'keybay 0.2.0\n',
+              stderr: '',
+            ),
+          },
+        );
+        final outcome =
+            await DartCliBuilder(
+              tools: tools,
+              capabilities: capabilities,
+            ).build(
+              platform: 'linux-x64',
+              entryPoint: 'bin/keybay.dart',
+              output: '${buildRoot.path}/keybay',
+              workingDirectory: '/repo',
+              expectedVersion: '0.2.0',
+            );
 
-      expect(outcome.ok, isTrue, reason: outcome.problem);
-      expect(tools.calls.first, contains('--target-os=linux'));
-      expect(tools.calls.first, contains('--target-arch=x64'));
-      expect(tools.calls.last, contains('docker run'));
-      expect(tools.timeouts.last, const Duration(minutes: 2));
-    });
+        expect(outcome.ok, isTrue, reason: outcome.problem);
+        expect(tools.calls.first, contains('--target-os=linux'));
+        expect(tools.calls.first, contains('--target-arch=x64'));
+        expect(tools.calls.last, contains('docker run'));
+        expect(tools.timeouts.last, const Duration(minutes: 2));
+      },
+    );
 
     test('a binary reporting the wrong version is not accepted', () async {
-      final tools = RecordingTools(results: {
-        '${buildRoot.path}/keybay --version': ToolResult(
-          exitCode: 0,
-          stdout: 'keybay 0.1.0\n',
-          stderr: '',
-        ),
-      });
-      final outcome = await DartCliBuilder(
-        tools: tools,
-        capabilities: capabilities,
-      ).build(
-        platform: 'macos-arm64',
-        entryPoint: 'bin/keybay.dart',
-        output: '${buildRoot.path}/keybay',
-        workingDirectory: '/repo',
-        expectedVersion: '0.2.0',
+      final tools = RecordingTools(
+        results: {
+          '${buildRoot.path}/keybay --version': ToolResult(
+            exitCode: 0,
+            stdout: 'keybay 0.1.0\n',
+            stderr: '',
+          ),
+        },
       );
+      final outcome =
+          await DartCliBuilder(tools: tools, capabilities: capabilities).build(
+            platform: 'macos-arm64',
+            entryPoint: 'bin/keybay.dart',
+            output: '${buildRoot.path}/keybay',
+            workingDirectory: '/repo',
+            expectedVersion: '0.2.0',
+          );
 
       expect(outcome.ok, isFalse);
       expect(outcome.problem, contains('0.1.0'));
     });
 
-    test('a platform this host cannot produce never reaches the builder',
-        () async {
-      // The guard lives at the caller, which refuses with RK-HOST-001 and a
-      // reason. The builder used to re-check and return a `blocked` outcome
-      // nothing read — two guards for one decision, the inner one
-      // unreachable.
-      expect(capabilities.resolve('macos-x64').canProduce, isFalse);
-      expect(
-        capabilities.resolve('macos-x64').reason,
-        contains('needs a macos-x64 host'),
-      );
-    });
+    test(
+      'a platform this host cannot produce never reaches the builder',
+      () async {
+        // The guard lives at the caller, which refuses with RK-HOST-001 and a
+        // reason. The builder used to re-check and return a `blocked` outcome
+        // nothing read — two guards for one decision, the inner one
+        // unreachable.
+        expect(capabilities.resolve('macos-x64').canProduce, isFalse);
+        expect(
+          capabilities.resolve('macos-x64').reason,
+          contains('needs a macos-x64 host'),
+        );
+      },
+    );
   });
 
   group('archives are byte-reproducible', () {
-    List<int> build() => ArchiveBuilder.gzip(ArchiveBuilder.tar([
-          ArchiveEntry(
-            name: 'keybay',
-            bytes: utf8.encode('binary'),
-            executable: true,
-          ),
-          ArchiveEntry(name: 'LICENSE', bytes: utf8.encode('MIT')),
-          ArchiveEntry(name: 'README.md', bytes: utf8.encode('# keybay')),
-        ]));
+    List<int> build() => ArchiveBuilder.gzip(
+      ArchiveBuilder.tar([
+        ArchiveEntry(
+          name: 'keybay',
+          bytes: utf8.encode('binary'),
+          executable: true,
+        ),
+        ArchiveEntry(name: 'LICENSE', bytes: utf8.encode('MIT')),
+        ArchiveEntry(name: 'README.md', bytes: utf8.encode('# keybay')),
+      ]),
+    );
 
     test('the same inputs produce the same bytes', () {
       expect(build(), build());
@@ -323,10 +346,11 @@ void main() {
         reason: 'entries keep the order they were given',
       );
 
-      final extracted = await Process.run(
-        'tar',
-        ['-xzOf', file.path, 'LICENSE'],
-      );
+      final extracted = await Process.run('tar', [
+        '-xzOf',
+        file.path,
+        'LICENSE',
+      ]);
       expect((extracted.stdout as String).trim(), 'MIT');
     });
   });
@@ -341,20 +365,21 @@ void main() {
           ? ToolResult(exitCode: 0, stdout: '2.0.0', stderr: '')
           : null,
     );
-    final outcome = await DartCliBuilder(
-      tools: tools,
-      capabilities: HostCapabilities(
-        hostPlatform: 'macos-arm64',
-        containerRuntime: 'podman',
-        hasNativeAssets: false,
-      ),
-    ).build(
-      platform: 'linux-x64',
-      entryPoint: 'bin/tool.dart',
-      output: '/w/tool',
-      workingDirectory: '/repo',
-      expectedVersion: '2.0.0',
-    );
+    final outcome =
+        await DartCliBuilder(
+          tools: tools,
+          capabilities: HostCapabilities(
+            hostPlatform: 'macos-arm64',
+            containerRuntime: 'podman',
+            hasNativeAssets: false,
+          ),
+        ).build(
+          platform: 'linux-x64',
+          entryPoint: 'bin/tool.dart',
+          output: '/w/tool',
+          workingDirectory: '/repo',
+          expectedVersion: '2.0.0',
+        );
 
     expect(outcome.ok, isTrue, reason: outcome.problem ?? '');
     expect(
@@ -365,34 +390,37 @@ void main() {
     expect(tools.calls.any((c) => c.startsWith('docker run')), isFalse);
   });
 
-  test('a target nothing can run is built, and says it was not executed',
-      () async {
-    final tools = RecordingTools();
-    final outcome = await DartCliBuilder(
-      tools: tools,
-      capabilities: HostCapabilities(
-        hostPlatform: 'macos-arm64',
-        containerRuntime: null,
-        hasNativeAssets: false,
-      ),
-    ).build(
-      platform: 'linux-x64',
-      entryPoint: 'bin/tool.dart',
-      output: '/w/tool',
-      workingDirectory: '/repo',
-      expectedVersion: '2.0.0',
-    );
+  test(
+    'a target nothing can run is built, and says it was not executed',
+    () async {
+      final tools = RecordingTools();
+      final outcome =
+          await DartCliBuilder(
+            tools: tools,
+            capabilities: HostCapabilities(
+              hostPlatform: 'macos-arm64',
+              containerRuntime: null,
+              hasNativeAssets: false,
+            ),
+          ).build(
+            platform: 'linux-x64',
+            entryPoint: 'bin/tool.dart',
+            output: '/w/tool',
+            workingDirectory: '/repo',
+            expectedVersion: '2.0.0',
+          );
 
-    expect(outcome.ok, isTrue, reason: outcome.problem ?? '');
-    expect(outcome.unproven, contains('container runtime'));
-    expect(tools.calls.first, contains('--target-os=linux'));
-    expect(tools.calls.first, contains('--target-arch=x64'));
-    expect(
-      tools.calls.any((c) => c.contains('--version')),
-      isFalse,
-      reason: 'nothing here could run it, so nothing pretended to',
-    );
-  });
+      expect(outcome.ok, isTrue, reason: outcome.problem ?? '');
+      expect(outcome.unproven, contains('container runtime'));
+      expect(tools.calls.first, contains('--target-os=linux'));
+      expect(tools.calls.first, contains('--target-arch=x64'));
+      expect(
+        tools.calls.any((c) => c.contains('--version')),
+        isFalse,
+        reason: 'nothing here could run it, so nothing pretended to',
+      );
+    },
+  );
 }
 
 class _TimeoutRecordingTools extends RecordingTools {

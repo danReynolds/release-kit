@@ -89,11 +89,11 @@ void main() {
   });
 
   test('another process holding the store lock excludes cleanup', () async {
-    final process = await Process.start(
-      Platform.resolvedExecutable,
-      ['run', 'test/stage_store_lock_process.dart', repository.path],
-      workingDirectory: Directory.current.path,
-    );
+    final process = await Process.start(Platform.resolvedExecutable, [
+      'run',
+      'test/stage_store_lock_process.dart',
+      repository.path,
+    ], workingDirectory: Directory.current.path);
     final ready = await process.stdout
         .transform(utf8.decoder)
         .transform(const LineSplitter())
@@ -103,10 +103,7 @@ void main() {
       process.kill();
     });
 
-    expect(
-      store.acquireForMutation,
-      throwsA(isA<StageStoreBusy>()),
-    );
+    expect(store.acquireForMutation, throwsA(isA<StageStoreBusy>()));
 
     process.stdin.writeln('done');
     await process.stdin.close();

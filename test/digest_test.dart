@@ -13,10 +13,11 @@ void main() {
           '248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1',
     }.entries) {
       test(
-          '"${entry.key.length > 20 ? '${entry.key.substring(0, 20)}…' : entry.key}"',
-          () {
-        expect(Sha256.hex(utf8.encode(entry.key)), entry.value);
-      });
+        '"${entry.key.length > 20 ? '${entry.key.substring(0, 20)}…' : entry.key}"',
+        () {
+          expect(Sha256.hex(utf8.encode(entry.key)), entry.value);
+        },
+      );
     }
 
     test('a million a\'s', () {

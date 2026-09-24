@@ -39,8 +39,9 @@ abstract final class StageHistory {
       });
       for (final candidate in candidates.take(32)) {
         try {
-          final receipt =
-              StageReceipt.parse(candidate.receipt.readAsStringSync());
+          final receipt = StageReceipt.parse(
+            candidate.receipt.readAsStringSync(),
+          );
           if (!receipt.complete) continue;
           final directory = StageDirectory(
             repositoryRoot: current.directory.repositoryRoot,
@@ -113,9 +114,11 @@ abstract final class StageHistory {
     if (before.isGitBound != after.isGitBound || !before.isGitBound) {
       reasons.add('the previous source snapshot was limited to one run');
     } else if (before.headCommit != after.headCommit) {
-      reasons.add('source commit changed '
-          '(${before.headCommit!.substring(0, 7)} → '
-          '${after.headCommit!.substring(0, 7)})');
+      reasons.add(
+        'source commit changed '
+        '(${before.headCommit!.substring(0, 7)} → '
+        '${after.headCommit!.substring(0, 7)})',
+      );
     } else if (before.headTree != after.headTree) {
       reasons.add('source tree changed');
     }
@@ -152,8 +155,10 @@ abstract final class StageHistory {
       final oldCompiler = previous.steps.last.evidence['dart_compiler'];
       if (oldCompiler is Map &&
           current.compiler != null &&
-          !_same((Map.of(oldCompiler)..remove('executable')),
-              (Map.of(current.compiler!.toJson())..remove('executable')))) {
+          !_same(
+            (Map.of(oldCompiler)..remove('executable')),
+            (Map.of(current.compiler!.toJson())..remove('executable')),
+          )) {
         reasons.add('Dart SDK changed');
       } else if (before.planSha256 != after.planSha256) {
         reasons.add('release settings or tooling changed');

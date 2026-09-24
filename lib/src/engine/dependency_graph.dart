@@ -8,8 +8,8 @@ final class DependencyGraph<T> {
     Iterable<T> values, {
     required String Function(T value) idOf,
     required Iterable<String> Function(T value) dependenciesOf,
-  })  : _values = List<T>.unmodifiable(values),
-        _idOf = idOf {
+  }) : _values = List<T>.unmodifiable(values),
+       _idOf = idOf {
     for (final value in _values) {
       final id = idOf(value);
       if (id.isEmpty) throw StateError('a dependency node has an empty id');
@@ -58,19 +58,18 @@ final class DependencyGraph<T> {
   List<T> ready({
     required Set<String> completed,
     Set<String> active = const {},
-  }) =>
-      [
-        for (final value in _values)
-          if (!completed.contains(_idOf(value)) &&
-              !active.contains(_idOf(value)) &&
-              _needs[_idOf(value)]!.every(completed.contains))
-            value,
-      ];
+  }) => [
+    for (final value in _values)
+      if (!completed.contains(_idOf(value)) &&
+          !active.contains(_idOf(value)) &&
+          _needs[_idOf(value)]!.every(completed.contains))
+        value,
+  ];
 
   /// The direct prerequisites still preventing [value] from starting.
   Set<String> unmet(T value, Set<String> completed) => Set.unmodifiable(
-        _needs[_idOf(value)]!.where((id) => !completed.contains(id)).toSet(),
-      );
+    _needs[_idOf(value)]!.where((id) => !completed.contains(id)).toSet(),
+  );
 
   /// One canonical dependencies-first order.
   List<T> ordered() {

@@ -51,11 +51,12 @@ class PublishedIdentity {
         'the release tag pattern has no single {version} coordinate',
       );
     }
-    final listed = await tools.run(
-      'gh',
-      ['api', '--paginate', '--slurp', 'repos/$repository/releases'],
-      workingDirectory: workingDirectory,
-    );
+    final listed = await tools.run('gh', [
+      'api',
+      '--paginate',
+      '--slurp',
+      'repos/$repository/releases',
+    ], workingDirectory: workingDirectory);
     if (!listed.ok) {
       return PublishedReleaseTags.unreadable(
         'the published release history could not be read: ${listed.summary}',
@@ -127,11 +128,10 @@ class PublishedIdentity {
     // error line carries the HTTP status — the porcelain download said the
     // same words for a missing release and an unreachable one, and absence
     // used to hang on matching them.
-    final viewed = await tools.run(
-      'gh',
-      ['api', 'repos/$repository/releases/tags/$tag'],
-      workingDirectory: workingDirectory,
-    );
+    final viewed = await tools.run('gh', [
+      'api',
+      'repos/$repository/releases/tags/$tag',
+    ], workingDirectory: workingDirectory);
     if (!viewed.ok) {
       if (viewed.summary.contains('(HTTP 404)')) {
         if (expectedPublished) {
@@ -143,11 +143,13 @@ class PublishedIdentity {
         // GitHub answers 404 for a repository the token cannot see, so a
         // 404 becomes "nothing is published" only once the repository has
         // answered for itself.
-        final readable = await tools.run(
-          'gh',
-          ['repo', 'view', repository, '--json', 'name'],
-          workingDirectory: workingDirectory,
-        );
+        final readable = await tools.run('gh', [
+          'repo',
+          'view',
+          repository,
+          '--json',
+          'name',
+        ], workingDirectory: workingDirectory);
         return readable.ok
             ? const IdentityReading.none('no release is published at that tag')
             : IdentityReading.unreadable(
@@ -167,13 +169,15 @@ class PublishedIdentity {
       assetName = assets is! List
           ? null
           : assets
-              .whereType<Map>()
-              .map((a) => a['name'])
-              .whereType<String>()
-              .where((name) =>
-                  name.startsWith('$executable-') &&
-                  name.endsWith('-$platform.tar.gz'))
-              .firstOrNull;
+                .whereType<Map>()
+                .map((a) => a['name'])
+                .whereType<String>()
+                .where(
+                  (name) =>
+                      name.startsWith('$executable-') &&
+                      name.endsWith('-$platform.tar.gz'),
+                )
+                .firstOrNull;
     } on Object catch (error) {
       return IdentityReading.unreadable(
         'the release at $tag answered something unreadable: $error',
@@ -190,24 +194,21 @@ class PublishedIdentity {
         assetName.contains(r'\') ||
         assetName.contains('\u0000')) {
       return const IdentityReading.unreadable(
-          'the published asset has an unsafe name');
+        'the published asset has an unsafe name',
+      );
     }
-    final downloaded = await tools.run(
-      'gh',
-      [
-        'release',
-        'download',
-        tag,
-        '--repo',
-        repository,
-        '--pattern',
-        assetName,
-        '--dir',
-        into,
-        '--clobber',
-      ],
-      workingDirectory: workingDirectory,
-    );
+    final downloaded = await tools.run('gh', [
+      'release',
+      'download',
+      tag,
+      '--repo',
+      repository,
+      '--pattern',
+      assetName,
+      '--dir',
+      into,
+      '--clobber',
+    ], workingDirectory: workingDirectory);
     if (!downloaded.ok) {
       // The asset is known to exist — rk just read it in the list — so a
       // failed download is never absence.
@@ -222,11 +223,13 @@ class PublishedIdentity {
     final archive = '$into/$assetName';
     Directory? extracted;
     try {
-      final contents =
-          StageArchiveInventory.decode(File(archive).readAsBytesSync());
+      final contents = StageArchiveInventory.decode(
+        File(archive).readAsBytesSync(),
+      );
       if (contents.artifact.entryPoint != executable) {
         return const IdentityReading.unreadable(
-            'the published archive names a different executable');
+          'the published archive names a different executable',
+        );
       }
       extracted = Directory.systemTemp.createTempSync('rk-published-identity-');
       contents.extractTo(extracted);
@@ -234,19 +237,23 @@ class PublishedIdentity {
       for (final file in contents.artifact.signedFiles) {
         if (!(await signer.verifies('${extracted.path}/${file.path}')).ok) {
           return const IdentityReading.unreadable(
-              'the published binary signature is not valid for its bytes');
+            'the published binary signature is not valid for its bytes',
+          );
         }
       }
       final requirement = await signer.designatedRequirement(
-          '${extracted.path}/${contents.artifact.identityFile}');
+        '${extracted.path}/${contents.artifact.identityFile}',
+      );
       if (requirement == null) {
         return const IdentityReading.unreadable(
-            'the published binary carries no signature rk could read');
+          'the published binary carries no signature rk could read',
+        );
       }
       return IdentityReading.found(requirement);
     } on Object catch (error) {
       return IdentityReading.unreadable(
-          'the published archive could not be opened: $error');
+        'the published archive could not be opened: $error',
+      );
     } finally {
       extracted?.deleteSync(recursive: true);
     }
@@ -285,15 +292,15 @@ class IdentityReading {
   const IdentityReading._(this.answer, this.requirement, this.why);
 
   const IdentityReading.found(String requirement)
-      : this._(IdentityAnswer.found, requirement, null);
+    : this._(IdentityAnswer.found, requirement, null);
 
   /// Nothing is published to compare against — the honest state before a
   /// first signed release.
   const IdentityReading.none(String why)
-      : this._(IdentityAnswer.none, null, why);
+    : this._(IdentityAnswer.none, null, why);
 
   const IdentityReading.unreadable(String why)
-      : this._(IdentityAnswer.unreadable, null, why);
+    : this._(IdentityAnswer.unreadable, null, why);
 
   /// Which of the three it is, as data. The two null-requirement cases were
   /// distinguishable only by their prose, which is an invitation to

@@ -63,7 +63,8 @@ Usage
       output.blank();
       output.line(
         'remove',
-        note: '$found ${found == 1 ? 'stage' : 'stages'} · '
+        note:
+            '$found ${found == 1 ? 'stage' : 'stages'} · '
             '.rk/work/stages',
         depth: 1,
         labelWidth: 10,
@@ -79,21 +80,26 @@ Usage
         noteRole: VisualRole.secondary,
       );
       output.blank();
-      output.warning(const Diagnostic(
-        code: 'RK-CLEAN-005',
-        message: 'a partially completed release may need these exact staged '
-            'bytes to resume',
-      ));
+      output.warning(
+        const Diagnostic(
+          code: 'RK-CLEAN-005',
+          message:
+              'a partially completed release may need these exact staged '
+              'bytes to resume',
+        ),
+      );
 
       if (!yes) {
         final ask = confirm;
         if (ask == null) {
           output.blank();
-          output.problem(const Diagnostic(
-            code: 'RK-CLEAN-004',
-            message: 'nobody is here to authorize cleanup',
-            remedy: 'review the staged work above, then run rk clean --yes',
-          ));
+          output.problem(
+            const Diagnostic(
+              code: 'RK-CLEAN-004',
+              message: 'nobody is here to authorize cleanup',
+              remedy: 'review the staged work above, then run rk clean --yes',
+            ),
+          );
           output.report.next('rk clean --yes');
           return ExitCodes.refused;
         }
@@ -111,12 +117,15 @@ Usage
       final current = store.inventory();
       if (!_sameEntries(inventory, current)) {
         output.blank();
-        output.problem(const Diagnostic(
-          code: 'RK-CLEAN-003',
-          message: 'staged work changed while cleanup was being reviewed',
-          remedy: 'nothing was removed; run rk clean again to review the '
-              'current staged work',
-        ));
+        output.problem(
+          const Diagnostic(
+            code: 'RK-CLEAN-003',
+            message: 'staged work changed while cleanup was being reviewed',
+            remedy:
+                'nothing was removed; run rk clean again to review the '
+                'current staged work',
+          ),
+        );
         return ExitCodes.refused;
       }
 
@@ -134,13 +143,16 @@ Usage
       }
       if (removed != found) {
         output.blank();
-        output.problem(Diagnostic(
-          code: 'RK-CLEAN-003',
-          message: 'staged work changed while cleanup was running',
-          remedy: '$removed ${removed == 1 ? 'stage was' : 'stages were'} '
-              'removed; the changed entries were left alone. Run rk clean '
-              'again to review what remains.',
-        ));
+        output.problem(
+          Diagnostic(
+            code: 'RK-CLEAN-003',
+            message: 'staged work changed while cleanup was running',
+            remedy:
+                '$removed ${removed == 1 ? 'stage was' : 'stages were'} '
+                'removed; the changed entries were left alone. Run rk clean '
+                'again to review what remains.',
+          ),
+        );
         return ExitCodes.refused;
       }
 
@@ -152,25 +164,31 @@ Usage
       );
       return ExitCodes.ok;
     } on StageStoreBusy {
-      output.problem(const Diagnostic(
-        code: 'RK-CLEAN-002',
-        message: 'another rk command is using staged work',
-        remedy: 'let that command finish, then run rk clean again',
-      ));
+      output.problem(
+        const Diagnostic(
+          code: 'RK-CLEAN-002',
+          message: 'another rk command is using staged work',
+          remedy: 'let that command finish, then run rk clean again',
+        ),
+      );
       return ExitCodes.refused;
     } on StageStoreUnsafe catch (error) {
-      output.problem(Diagnostic(
-        code: 'RK-CLEAN-001',
-        message: 'the local stage path is not safe to clean',
-        remedy: '$error\nRK did not follow or remove the unexpected path.',
-      ));
+      output.problem(
+        Diagnostic(
+          code: 'RK-CLEAN-001',
+          message: 'the local stage path is not safe to clean',
+          remedy: '$error\nRK did not follow or remove the unexpected path.',
+        ),
+      );
       return ExitCodes.refused;
     } on FileSystemException catch (error) {
-      output.problem(Diagnostic(
-        code: 'RK-CLEAN-003',
-        message: 'local staged work could not be completely removed',
-        remedy: '$error\nReview .rk/work/stages, then run rk clean again.',
-      ));
+      output.problem(
+        Diagnostic(
+          code: 'RK-CLEAN-003',
+          message: 'local staged work could not be completely removed',
+          remedy: '$error\nReview .rk/work/stages, then run rk clean again.',
+        ),
+      );
       return ExitCodes.refused;
     } finally {
       lock?.close();
@@ -180,8 +198,12 @@ Usage
   void _heading() {
     final separator = Platform.pathSeparator;
     final parts = store.repositoryRoot.split(separator);
-    output.heading(parts.lastWhere((part) => part.isNotEmpty,
-        orElse: () => store.repositoryRoot));
+    output.heading(
+      parts.lastWhere(
+        (part) => part.isNotEmpty,
+        orElse: () => store.repositoryRoot,
+      ),
+    );
   }
 
   static bool _sameEntries(List<StageEntry> left, List<StageEntry> right) {

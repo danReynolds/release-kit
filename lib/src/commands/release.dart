@@ -53,25 +53,30 @@ class ReleaseCommand {
     Map<String, String> Function()? refreshEnvironment,
     Future<void> Function(Duration)? wait,
     required this.capabilities,
-  })  : repositoryGit = repositoryGit ?? git,
-        _wait = wait ?? _sleep,
-        _stageFor = stageFor ??
-            ReleaseStages(
-              source: tree,
-              git: git,
-              stageContracts:
-                  inspector.targets.stageContractResolver(resolution),
-            ).call,
-        _refreshStage = refreshStage ??
-            ((unit, currentGit) => ReleaseStages(
-                  source: tree,
-                  git: currentGit,
-                  stageContracts:
-                      inspector.targets.stageContractResolver(resolution),
-                ).call(unit)),
-        _refreshGit = refreshGit ?? (() async => git),
-        _refreshEnvironment = refreshEnvironment ??
-            (() => Map<String, String>.of(Platform.environment));
+  }) : repositoryGit = repositoryGit ?? git,
+       _wait = wait ?? _sleep,
+       _stageFor =
+           stageFor ??
+           ReleaseStages(
+             source: tree,
+             git: git,
+             stageContracts: inspector.targets.stageContractResolver(
+               resolution,
+             ),
+           ).call,
+       _refreshStage =
+           refreshStage ??
+           ((unit, currentGit) => ReleaseStages(
+             source: tree,
+             git: currentGit,
+             stageContracts: inspector.targets.stageContractResolver(
+               resolution,
+             ),
+           ).call(unit)),
+       _refreshGit = refreshGit ?? (() async => git),
+       _refreshEnvironment =
+           refreshEnvironment ??
+           (() => Map<String, String>.of(Platform.environment));
 
   static Future<void> _sleep(Duration duration) =>
       Future<void>.delayed(duration);
@@ -143,19 +148,19 @@ class ReleaseCommand {
 
   late final ReleasePublicationCoordinator _publication =
       ReleasePublicationCoordinator(
-    inspector: inspector,
-    initialGit: git,
-    tools: tools,
-    output: output,
-    stages: _stages,
-    refreshGit: _refreshGit,
-    refreshEnvironment: _refreshEnvironment,
-    wait: _wait,
-    confirm: confirm,
-    allowInteractiveTools: allowInteractiveTools,
-    confirmDeadline: confirmDeadline,
-    confirmInterval: confirmInterval,
-  );
+        inspector: inspector,
+        initialGit: git,
+        tools: tools,
+        output: output,
+        stages: _stages,
+        refreshGit: _refreshGit,
+        refreshEnvironment: _refreshEnvironment,
+        wait: _wait,
+        confirm: confirm,
+        allowInteractiveTools: allowInteractiveTools,
+        confirmDeadline: confirmDeadline,
+        confirmInterval: confirmInterval,
+      );
 
   Future<int> run({String? only}) async {
     try {
@@ -187,7 +192,8 @@ class ReleaseCommand {
           Diagnostic(
             code: 'RK-CLI-003',
             message: 'no unit named "$only"',
-            remedy: 'this repository releases: '
+            remedy:
+                'this repository releases: '
                 '${resolution.units.map((u) => u.name).join(', ')}',
           ),
         );
@@ -201,7 +207,8 @@ class ReleaseCommand {
         Diagnostic(
           code: 'RK-CLI-004',
           message: 'name the unit to stage',
-          remedy: 'a dependent package may need its sibling version to be '
+          remedy:
+              'a dependent package may need its sibling version to be '
               'public before its native package staging can pass. Stage one '
               'unit explicitly: rk release <unit> --stage',
         ),
@@ -228,7 +235,8 @@ class ReleaseCommand {
     if (!_validateRepositoryScope(ordered)) return ExitCodes.refused;
     if (ordered.length > 1) {
       output.heading(
-          'Release order: ${ordered.map((unit) => '${unit.name} ${unit.version}').join(' -> ')}');
+        'Release order: ${ordered.map((unit) => '${unit.name} ${unit.version}').join(' -> ')}',
+      );
       output.blank();
     }
     for (final unit in ordered) {
@@ -249,7 +257,8 @@ class ReleaseCommand {
       _validate(unit, problems);
       Checklist.derive(unit, resolution, problems);
       for (final problem in problems.found) {
-        final key = '${problem.code}\u0000${problem.message}\u0000'
+        final key =
+            '${problem.code}\u0000${problem.message}\u0000'
             '${problem.source ?? ''}';
         unique.putIfAbsent(key, () => problem);
       }
@@ -270,7 +279,8 @@ class ReleaseCommand {
       tag: unit.tag,
     );
 
-    final willPublish = !stageOnly &&
+    final willPublish =
+        !stageOnly &&
         (unit.publish.isNotEmpty ||
             unit.projects.any((project) => project.publish.isNotEmpty));
     output.heading(
@@ -318,7 +328,8 @@ class ReleaseCommand {
         Diagnostic(
           code: 'RK-SRC-002',
           message: 'an unbound stage cannot be authorized by a later run',
-          remedy: 'without Git, build, authorize, and begin publication in '
+          remedy:
+              'without Git, build, authorize, and begin publication in '
               'one invocation: rk release ${unit.name}',
         ),
         unit: unit.name,
@@ -331,9 +342,7 @@ class ReleaseCommand {
       checklist,
       repository: inspector.repository,
     );
-    final targetByStep = {
-      for (final target in targets) target.step.id: target,
-    };
+    final targetByStep = {for (final target in targets) target.step.id: target};
     final initialProgress = TargetReleaseProgress(
       output,
       title: '${unit.name} ${unit.version} · preparing release',
@@ -344,11 +353,13 @@ class ReleaseCommand {
     try {
       stage = _stageFor(unit);
     } on Object catch (error) {
-      output.problem(Diagnostic(
-        code: 'RK-STAGE-001',
-        message: 'the release stage identity could not be resolved',
-        remedy: '$error',
-      ));
+      output.problem(
+        Diagnostic(
+          code: 'RK-STAGE-001',
+          message: 'the release stage identity could not be resolved',
+          remedy: '$error',
+        ),
+      );
       output.halt(HaltKind.beforeActing);
       return ExitCodes.refused;
     }
@@ -362,10 +373,7 @@ class ReleaseCommand {
     for (final step in checklist.steps) {
       final target = targetByStep[step.id];
       if (target == null) continue;
-      initialProgress.begin(
-        target,
-        CommonProgressActivities.checking,
-      );
+      initialProgress.begin(target, CommonProgressActivities.checking);
     }
     final observed = await Future.wait([
       for (final step in checklist.steps)
@@ -388,15 +396,18 @@ class ReleaseCommand {
         evidence: state.evidence,
         action: step.isPublic
             ? (state.isExact
-                ? ReleaseAction.alreadyPublished.wire
-                : ReleaseAction.notAttempted.wire)
+                  ? ReleaseAction.alreadyPublished.wire
+                  : ReleaseAction.notAttempted.wire)
             : null,
         show: false,
       );
     }
 
-    final releaseHistory =
-        await inspector.releaseMonotonicity(unit, targets, problems);
+    final releaseHistory = await inspector.releaseMonotonicity(
+      unit,
+      targets,
+      problems,
+    );
     inspector.tagGuards(unit, checklist, states).forEach(problems.report);
     initialProgress.discard();
     if (problems.isNotEmpty) {
@@ -409,7 +420,8 @@ class ReleaseCommand {
     // The sole deferral is target-independent: once a binary publication is
     // exact and its stage is gone, the recovery check below owns the clearer
     // RK-STAGE-005 refusal for every remaining target.
-    final partialBinaryStageLoss = unit.shipsBinaries &&
+    final partialBinaryStageLoss =
+        unit.shipsBinaries &&
         !stageInspection.reusable &&
         publicSteps.any((step) => states[step.id]!.isExact);
     final initialBlock = checklist.steps.where((step) {
@@ -443,10 +455,7 @@ class ReleaseCommand {
         mark: Mark.satisfied,
         note: 'already released',
       );
-      await _publication.verifyAvailability(
-        unit: unit,
-        targets: targets,
-      );
+      await _publication.verifyAvailability(unit: unit, targets: targets);
       return ExitCodes.ok;
     }
 
@@ -458,7 +467,8 @@ class ReleaseCommand {
       for (final step in publicSteps)
         if (!states[step.id]!.isExact) targetByStep[step.id]!,
     ];
-    final recoversWithoutStage = !stageOnly &&
+    final recoversWithoutStage =
+        !stageOnly &&
         !localOnly &&
         !stageInspection.reusable &&
         unfinishedTargets.isNotEmpty &&
@@ -475,7 +485,8 @@ class ReleaseCommand {
     // recovery-critical until every other target is also proved exact. An
     // unread forge or tap cannot be treated as permission to rebuild: it may
     // already contain the bytes bound by the public tag.
-    final partialBinaryRelease = unit.shipsBinaries &&
+    final partialBinaryRelease =
+        unit.shipsBinaries &&
         !stageInspection.reusable &&
         !recoversWithoutStage &&
         publicSteps.any((step) => states[step.id]!.isExact) &&
@@ -485,13 +496,16 @@ class ReleaseCommand {
         });
     if (partialBinaryRelease) {
       output.halt(HaltKind.unfixableByRerun);
-      output.problem(Diagnostic(
-        code: 'RK-STAGE-005',
-        message: 'the partial binary release needs its exact stage',
-        remedy: 'restore ${stage.directory.path} from the machine that '
-            'staged this release. Signed or notarized bytes cannot be '
-            'recreated byte-for-byte after a public target has bound them.',
-      ));
+      output.problem(
+        Diagnostic(
+          code: 'RK-STAGE-005',
+          message: 'the partial binary release needs its exact stage',
+          remedy:
+              'restore ${stage.directory.path} from the machine that '
+              'staged this release. Signed or notarized bytes cannot be '
+              'recreated byte-for-byte after a public target has bound them.',
+        ),
+      );
       if (!stageOnly) _publication.showActions(targets, publicActions);
       return ExitCodes.refused;
     }
@@ -543,10 +557,7 @@ class ReleaseCommand {
     final reusedStage = stageInspection.reusable;
     final PreparedRelease prepared;
     if (recoversWithoutStage) {
-      prepared = PreparedRelease(
-        claims: const [],
-        signing: null,
-      );
+      prepared = PreparedRelease(claims: const [], signing: null);
     } else {
       final targetStages = inspector.targets.stages(
         unit: unit,
@@ -568,11 +579,13 @@ class ReleaseCommand {
       prepared = result;
       stageInspection = stage.inspect();
       if (!stageInspection.reusable) {
-        output.problem(Diagnostic(
-          code: 'RK-STAGE-003',
-          message: 'the release stage did not remain valid',
-          remedy: stageInspection.issues.join('\n'),
-        ));
+        output.problem(
+          Diagnostic(
+            code: 'RK-STAGE-003',
+            message: 'the release stage did not remain valid',
+            remedy: stageInspection.issues.join('\n'),
+          ),
+        );
         output.halt(HaltKind.beforeActing);
         if (!stageOnly) _publication.showActions(targets, publicActions);
         return ExitCodes.refused;
@@ -605,10 +618,7 @@ class ReleaseCommand {
         },
         show: false,
       );
-      _sayStageClaims(
-        prepared.claims,
-        localOnly ? null : prepared.signing,
-      );
+      _sayStageClaims(prepared.claims, localOnly ? null : prepared.signing);
       output.blank();
       output.line(
         '${unit.name} ${unit.version} '
@@ -620,8 +630,11 @@ class ReleaseCommand {
         final command = 'rk release ${unit.name}';
         output.report.next(command);
         output.blank();
-        output.line('Ready to publish: $command',
-            depth: 1, role: VisualRole.operatorAction);
+        output.line(
+          'Ready to publish: $command',
+          depth: 1,
+          role: VisualRole.operatorAction,
+        );
       }
       return ExitCodes.ok;
     }
@@ -680,7 +693,9 @@ class ReleaseCommand {
         if (!resolved.canProduce) {
           byReason
               .putIfAbsent(
-                  resolved.reason ?? 'it needs a different host', () => [])
+                resolved.reason ?? 'it needs a different host',
+                () => [],
+              )
               .add(platform);
         }
       }
@@ -692,9 +707,11 @@ class ReleaseCommand {
 
     return Diagnostic(
       code: 'RK-HOST-001',
-      message: '${unit.name}: this machine cannot produce every platform '
+      message:
+          '${unit.name}: this machine cannot produce every platform '
           'it ships',
-      remedy: 'starting anyway would build and sign for minutes and then '
+      remedy:
+          'starting anyway would build and sign for minutes and then '
           'stop before publishing anything:\n'
           '  ${folded.join('\n  ')}',
     );

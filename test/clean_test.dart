@@ -20,8 +20,9 @@ void main() {
   test('authorized cleanup removes only local stages and keeps diagnoses', () {
     final repo = Rk.repository(scratch, 'clean-authorized', {});
     Directory('${repo.root}/.rk/work/stages/first').createSync(recursive: true);
-    Directory('${repo.root}/.rk/work/stages/second')
-        .createSync(recursive: true);
+    Directory(
+      '${repo.root}/.rk/work/stages/second',
+    ).createSync(recursive: true);
     final diagnosis = File('${repo.root}/.rk/diagnosis/run/evidence.txt')
       ..createSync(recursive: true)
       ..writeAsStringSync('keep me');
@@ -89,37 +90,40 @@ void main() {
     expect(Directory('${store.path}/only').existsSync(), isFalse);
   });
 
-  test('the authorized preview excludes release mutation through the prompt',
-      () async {
-    final repository = Directory('${scratch.path}/clean-locked-preview')
-      ..createSync();
-    final store = StageStore(repository.path);
-    Directory('${store.path}/only').createSync(recursive: true);
-    final output = Output(
-      sink: (_) {},
-      isTerminal: false,
-      report: Report('clean'),
-    );
+  test(
+    'the authorized preview excludes release mutation through the prompt',
+    () async {
+      final repository = Directory('${scratch.path}/clean-locked-preview')
+        ..createSync();
+      final store = StageStore(repository.path);
+      Directory('${store.path}/only').createSync(recursive: true);
+      final output = Output(
+        sink: (_) {},
+        isTerminal: false,
+        report: Report('clean'),
+      );
 
-    final code = await CleanCommand(
-      store: store,
-      output: output,
-      yes: false,
-      confirm: (_) async {
-        final probe = await Process.run(
-          Platform.resolvedExecutable,
-          ['run', 'test/stage_store_lock_process.dart', repository.path, 'try'],
-          workingDirectory: Directory.current.path,
-        );
-        expect(probe.exitCode, 0, reason: '${probe.stdout}\n${probe.stderr}');
-        expect((probe.stdout as String).trim(), 'busy');
-        return 'no';
-      },
-    ).run();
+      final code = await CleanCommand(
+        store: store,
+        output: output,
+        yes: false,
+        confirm: (_) async {
+          final probe = await Process.run(Platform.resolvedExecutable, [
+            'run',
+            'test/stage_store_lock_process.dart',
+            repository.path,
+            'try',
+          ], workingDirectory: Directory.current.path);
+          expect(probe.exitCode, 0, reason: '${probe.stdout}\n${probe.stderr}');
+          expect((probe.stdout as String).trim(), 'busy');
+          return 'no';
+        },
+      ).run();
 
-    expect(code, 1);
-    expect(Directory('${store.path}/only').existsSync(), isTrue);
-  });
+      expect(code, 1);
+      expect(Directory('${store.path}/only').existsSync(), isTrue);
+    },
+  );
 
   test('review-time drift refuses before deleting the frozen set', () async {
     final repository = Directory('${scratch.path}/clean-partial')..createSync();

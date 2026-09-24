@@ -15,10 +15,7 @@ void main(List<String> arguments) {
   }
 
   try {
-    final update = prepareReleaseVersion(
-      Directory.current,
-      arguments.single,
-    );
+    final update = prepareReleaseVersion(Directory.current, arguments.single);
     stdout.writeln('rk ${update.previous} → ${update.next}');
     stdout.writeln('Updated pubspec.yaml and lib/src/version.dart.');
     stdout.writeln(
@@ -50,9 +47,7 @@ ReleaseVersionUpdate prepareReleaseVersion(
   final pubspec = File('${repository.path}/pubspec.yaml');
   final embedded = File('${repository.path}/lib/src/version.dart');
   if (!pubspec.existsSync() || !embedded.existsSync()) {
-    throw StateError(
-      'run this command from the release-kit repository root',
-    );
+    throw StateError('run this command from the release-kit repository root');
   }
 
   final pubspecSource = pubspec.readAsStringSync();
@@ -102,17 +97,10 @@ ReleaseVersionUpdate prepareReleaseVersion(
     ),
   );
 
-  return ReleaseVersionUpdate(
-    previous: pubspecVersion,
-    next: next,
-  );
+  return ReleaseVersionUpdate(previous: pubspecVersion, next: next);
 }
 
-RegExpMatch _singleMatch(
-  RegExp pattern,
-  String source,
-  String description,
-) {
+RegExpMatch _singleMatch(RegExp pattern, String source, String description) {
   final matches = pattern.allMatches(source).toList();
   if (matches.length != 1) {
     throw StateError('expected exactly one $description declaration');
@@ -121,10 +109,7 @@ RegExpMatch _singleMatch(
 }
 
 class ReleaseVersionUpdate {
-  const ReleaseVersionUpdate({
-    required this.previous,
-    required this.next,
-  });
+  const ReleaseVersionUpdate({required this.previous, required this.next});
 
   final Version previous;
   final Version next;

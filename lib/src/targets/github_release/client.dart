@@ -60,11 +60,12 @@ class GithubRelease {
         'the release tag pattern has no single {version} coordinate',
       );
     }
-    final result = await tools.run(
-      'gh',
-      ['api', '--paginate', '--slurp', 'repos/$repository/releases'],
-      workingDirectory: workingDirectory,
-    );
+    final result = await tools.run('gh', [
+      'api',
+      '--paginate',
+      '--slurp',
+      'repos/$repository/releases',
+    ], workingDirectory: workingDirectory);
     if (!result.ok) {
       return Inspection.unknown(
         'GitHub releases could not be read: ${result.summary}',
@@ -229,7 +230,8 @@ class GithubRelease {
     if (!_isSha256(expectedSha256)) {
       return GithubBoundAssetRead._(
         Inspection.unknown(
-            'the authenticated digest for $asset is not SHA-256'),
+          'the authenticated digest for $asset is not SHA-256',
+        ),
         null,
       );
     }
@@ -436,9 +438,7 @@ class GithubRelease {
         for (final entry in reads.entries)
           entry.value.then((value) => (name: entry.key, value: value)),
       ]);
-      final downloaded = {
-        for (final item in completed) item.name: item.value,
-      };
+      final downloaded = {for (final item in completed) item.name: item.value};
 
       final publishedDigests = <String, String>{};
       final unreadable = <String, String>{};
@@ -490,10 +490,9 @@ class GithubRelease {
     final raw = release?.assetMetadata?[name]?.digest;
     return raw == null
         ? null
-        : RegExp(r'^sha256:([0-9a-fA-F]{64})$')
-            .firstMatch(raw)
-            ?.group(1)
-            ?.toLowerCase();
+        : RegExp(
+            r'^sha256:([0-9a-fA-F]{64})$',
+          ).firstMatch(raw)?.group(1)?.toLowerCase();
   }
 
   /// Proves the bytes on one exact private release response.
@@ -535,10 +534,9 @@ class GithubRelease {
         mismatches[name] = 'state ${asset.state}, expected uploaded';
         continue;
       }
-      final serverDigest = RegExp(r'^sha256:([0-9a-fA-F]{64})$')
-          .firstMatch(asset.digest!)
-          ?.group(1)
-          ?.toLowerCase();
+      final serverDigest = RegExp(
+        r'^sha256:([0-9a-fA-F]{64})$',
+      ).firstMatch(asset.digest!)?.group(1)?.toLowerCase();
       if (serverDigest == null) {
         return Inspection.unknown(
           'the private draft digest for $name is not SHA-256',
@@ -547,7 +545,8 @@ class GithubRelease {
       final expectedDigest = expectedDigests[name]!.toLowerCase();
       final expectedSize = expectedSizes[name]!;
       if (asset.size != expectedSize || serverDigest != expectedDigest) {
-        mismatches[name] = 'size ${asset.size}, sha256 $serverDigest; expected '
+        mismatches[name] =
+            'size ${asset.size}, sha256 $serverDigest; expected '
             'size $expectedSize, sha256 $expectedDigest';
       }
     }
@@ -584,21 +583,17 @@ class GithubRelease {
       // avoiding path traversal, this makes existence an unambiguous receipt
       // for this one command in an otherwise empty directory.
       final outputPath = '${scratch.path}/asset';
-      final downloaded = await tools.run(
-        'gh',
-        [
-          'release',
-          'download',
-          tag,
-          '--repo',
-          repository,
-          '--pattern',
-          name,
-          '--output',
-          outputPath,
-        ],
-        workingDirectory: workingDirectory,
-      );
+      final downloaded = await tools.run('gh', [
+        'release',
+        'download',
+        tag,
+        '--repo',
+        repository,
+        '--pattern',
+        name,
+        '--output',
+        outputPath,
+      ], workingDirectory: workingDirectory);
       if (!downloaded.ok) {
         return (
           bytes: null,
@@ -714,26 +709,24 @@ class GithubRelease {
         missing = reconciliation.missing;
       } else {
         final createInput = File('${scratch.path}/create.json');
-        await createInput.writeAsString(jsonEncode({
-          'tag_name': tag,
-          'name': title,
-          'body': notes,
-          'draft': true,
-          'prerelease': prerelease,
-        }));
-        draftEffect = DraftEffect.uncertain;
-        final created = await tools.run(
-          'gh',
-          [
-            'api',
-            '-X',
-            'POST',
-            'repos/$repository/releases',
-            '--input',
-            createInput.path,
-          ],
-          workingDirectory: workingDirectory,
+        await createInput.writeAsString(
+          jsonEncode({
+            'tag_name': tag,
+            'name': title,
+            'body': notes,
+            'draft': true,
+            'prerelease': prerelease,
+          }),
         );
+        draftEffect = DraftEffect.uncertain;
+        final created = await tools.run('gh', [
+          'api',
+          '-X',
+          'POST',
+          'repos/$repository/releases',
+          '--input',
+          createInput.path,
+        ], workingDirectory: workingDirectory);
 
         final createdId = _releaseIdIn(created.stdout);
         if (createdId == null) {
@@ -757,7 +750,8 @@ class GithubRelease {
         final observed = await _viewById(draftId);
         if (observed is! _Found) {
           return failed(
-              'private draft $draftId could not be read after create');
+            'private draft $draftId could not be read after create',
+          );
         }
         final reconciliation = _inspectDraftSubset(
           observed.release,
@@ -785,26 +779,22 @@ class GithubRelease {
         );
         final name = asset.publicName;
         draftEffect = DraftEffect.uncertain;
-        final uploaded = await tools.run(
-          'gh',
-          [
-            'api',
-            '-X',
-            'POST',
-            '-H',
-            'Content-Type: application/octet-stream',
-            '--input',
-            asset.stagedPath,
-            // An absolute upload endpoint keeps github.com as gh's auth
-            // authority. Selecting uploads.github.com with --hostname instead
-            // asks gh for a separate host login and builds an Enterprise-style
-            // /api/v3 URL, neither of which is the GitHub upload API.
-            'https://uploads.github.com/repos/$repository/releases/'
-                '$draftId/assets?name='
-                '${Uri.encodeQueryComponent(name)}',
-          ],
-          workingDirectory: workingDirectory,
-        );
+        final uploaded = await tools.run('gh', [
+          'api',
+          '-X',
+          'POST',
+          '-H',
+          'Content-Type: application/octet-stream',
+          '--input',
+          asset.stagedPath,
+          // An absolute upload endpoint keeps github.com as gh's auth
+          // authority. Selecting uploads.github.com with --hostname instead
+          // asks gh for a separate host login and builds an Enterprise-style
+          // /api/v3 URL, neither of which is the GitHub upload API.
+          'https://uploads.github.com/repos/$repository/releases/'
+              '$draftId/assets?name='
+              '${Uri.encodeQueryComponent(name)}',
+        ], workingDirectory: workingDirectory);
         if (!uploaded.ok) {
           final observed = await _viewById(draftId);
           if (observed is _Found && !observed.release.isDraft) {
@@ -817,7 +807,8 @@ class GithubRelease {
               transcript: uploaded.transcript,
             );
           }
-          final named = observed is _Found &&
+          final named =
+              observed is _Found &&
               observed.release.isDraft &&
               observed.release.assets?.contains(name) == true;
           if (!named) {
@@ -843,8 +834,9 @@ class GithubRelease {
             prerelease: prerelease,
           );
           if (!reconciliation.inspection.isExact ||
-              reconciliation.missing
-                  .any((missing) => missing.publicName == name)) {
+              reconciliation.missing.any(
+                (missing) => missing.publicName == name,
+              )) {
             return failed(
               'uploading $name to private draft $draftId could not be '
               'reconciled by bytes: '
@@ -888,11 +880,7 @@ class GithubRelease {
           '${surface.detail ?? surface.verdict.name}',
         );
       }
-      final draftBytes = _inspectDraftAssets(
-        draft,
-        assetSha256,
-        assetSizes,
-      );
+      final draftBytes = _inspectDraftAssets(draft, assetSha256, assetSizes);
       if (!draftBytes.isExact) {
         return failed(
           'private draft $draftId does not contain the staged bytes: '
@@ -901,24 +889,22 @@ class GithubRelease {
       }
 
       onProgress?.call(
-          GithubPublishEvent.publishing, ordered.length, ordered.length);
-      final publishInput = File('${scratch.path}/publish.json');
-      await publishInput.writeAsString(jsonEncode({
-        'draft': false,
-        'prerelease': prerelease,
-      }));
-      final published = await tools.run(
-        'gh',
-        [
-          'api',
-          '-X',
-          'PATCH',
-          'repos/$repository/releases/$draftId',
-          '--input',
-          publishInput.path,
-        ],
-        workingDirectory: workingDirectory,
+        GithubPublishEvent.publishing,
+        ordered.length,
+        ordered.length,
       );
+      final publishInput = File('${scratch.path}/publish.json');
+      await publishInput.writeAsString(
+        jsonEncode({'draft': false, 'prerelease': prerelease}),
+      );
+      final published = await tools.run('gh', [
+        'api',
+        '-X',
+        'PATCH',
+        'repos/$repository/releases/$draftId',
+        '--input',
+        publishInput.path,
+      ], workingDirectory: workingDirectory);
 
       // A failed client response is ambiguous. Read by immutable release id:
       // public+complete reconciles to success, still-draft is a private failure,
@@ -953,7 +939,7 @@ class GithubRelease {
         published.ok
             ? 'the complete draft was published but could not be read back'
             : 'publishing the complete draft did not return successfully: '
-                '${published.summary}',
+                  '${published.summary}',
         url: url,
         draftEffect: DraftEffect.uncertain,
         transcript: published.ok ? null : published.transcript,
@@ -970,7 +956,7 @@ class GithubRelease {
   }
 
   ({String? problem, String? notes, List<GithubReleaseAssetUpload>? assets})
-      _validateUploadRequest({
+  _validateUploadRequest({
     required String tag,
     required String title,
     required String notesPath,
@@ -980,7 +966,7 @@ class GithubRelease {
       return (
         problem: 'the release tag or title is empty',
         notes: null,
-        assets: null
+        assets: null,
       );
     }
     final notesType = FileSystemEntity.typeSync(notesPath, followLinks: false);
@@ -998,7 +984,7 @@ class GithubRelease {
       return (
         problem: 'the staged release notes could not be read: $error',
         notes: null,
-        assets: null
+        assets: null,
       );
     }
 
@@ -1012,28 +998,28 @@ class GithubRelease {
         return (
           problem: 'two staged assets have the same public filename',
           notes: null,
-          assets: null
+          assets: null,
         );
       }
       if (!paths.add(asset.stagedPath)) {
         return (
           problem: 'two public assets refer to the same staged file',
           notes: null,
-          assets: null
+          assets: null,
         );
       }
       if (!_isPublicAssetName(asset.publicName)) {
         return (
           problem: 'invalid public asset filename: ${asset.publicName}',
           notes: null,
-          assets: null
+          assets: null,
         );
       }
       if (!_isSha256(asset.sha256) || asset.size < 0) {
         return (
           problem: 'invalid size or SHA-256 for ${asset.publicName}',
           notes: null,
-          assets: null
+          assets: null,
         );
       }
       if (FileSystemEntity.typeSync(asset.stagedPath, followLinks: false) !=
@@ -1041,7 +1027,7 @@ class GithubRelease {
         return (
           problem: '${asset.publicName} is missing or not a regular file',
           notes: null,
-          assets: null
+          assets: null,
         );
       }
       try {
@@ -1050,14 +1036,14 @@ class GithubRelease {
           return (
             problem: '${asset.publicName} differs from its staged receipt',
             notes: null,
-            assets: null
+            assets: null,
           );
         }
       } on Object catch (error) {
         return (
           problem: '${asset.publicName} could not be read: $error',
           notes: null,
-          assets: null
+          assets: null,
         );
       }
     }
@@ -1065,7 +1051,7 @@ class GithubRelease {
   }
 
   ({Inspection inspection, List<GithubReleaseAssetUpload> missing})
-      _inspectDraftSubset(
+  _inspectDraftSubset(
     _Release draft, {
     required String tag,
     required String title,
@@ -1075,15 +1061,17 @@ class GithubRelease {
   }) {
     if (!draft.isDraft) {
       return (
-        inspection:
-            const Inspection.conflict('the candidate release is not private'),
+        inspection: const Inspection.conflict(
+          'the candidate release is not private',
+        ),
         missing: const [],
       );
     }
     if (!draft.titleReadable || !draft.bodyReadable || draft.assets == null) {
       return (
         inspection: const Inspection.unknown(
-            'the private draft metadata or inventory is unreadable'),
+          'the private draft metadata or inventory is unreadable',
+        ),
         missing: const [],
       );
     }
@@ -1112,8 +1100,9 @@ class GithubRelease {
     if (differences.isNotEmpty) {
       return (
         inspection: Inspection.conflict(
-            'private draft differs from the frozen release',
-            evidence: differences),
+          'private draft differs from the frozen release',
+          evidence: differences,
+        ),
         missing: missing,
       );
     }
@@ -1131,11 +1120,10 @@ class GithubRelease {
   Future<_Lookup> _viewById(String id) async {
     final ToolResult result;
     try {
-      result = await tools.run(
-        'gh',
-        ['api', 'repos/$repository/releases/$id'],
-        workingDirectory: workingDirectory,
-      );
+      result = await tools.run('gh', [
+        'api',
+        'repos/$repository/releases/$id',
+      ], workingDirectory: workingDirectory);
     } on Object catch (error) {
       return _Unreadable('GitHub could not read release $id: $error');
     }
@@ -1163,11 +1151,10 @@ class GithubRelease {
   Future<_Lookup> _view(String tag) async {
     final ToolResult result;
     try {
-      result = await tools.run(
-        'gh',
-        ['api', 'repos/$repository/releases/tags/$tag'],
-        workingDirectory: workingDirectory,
-      );
+      result = await tools.run('gh', [
+        'api',
+        'repos/$repository/releases/tags/$tag',
+      ], workingDirectory: workingDirectory);
     } on Object catch (error) {
       return _Unreadable('GitHub could not be read: $error');
     }
@@ -1232,22 +1219,22 @@ class GithubRelease {
       final hasBody = decoded.containsKey('body');
       if ((hasTitle && decoded['name'] != null && decoded['name'] is! String) ||
           (hasBody && decoded['body'] != null && decoded['body'] is! String)) {
-        return const _Unreadable(
-          'GitHub returned malformed release metadata',
-        );
+        return const _Unreadable('GitHub returned malformed release metadata');
       }
-      return _Found(_Release(
-        tag: decoded['tag_name'] as String,
-        isDraft: decoded['draft'] as bool,
-        isPrerelease: decoded['prerelease'] as bool,
-        id: '${decoded['id']}',
-        assets: assetNames,
-        assetMetadata: assetMetadata,
-        title: hasTitle ? decoded['name'] as String? : null,
-        body: hasBody ? decoded['body'] as String? : null,
-        titleReadable: hasTitle,
-        bodyReadable: hasBody,
-      ));
+      return _Found(
+        _Release(
+          tag: decoded['tag_name'] as String,
+          isDraft: decoded['draft'] as bool,
+          isPrerelease: decoded['prerelease'] as bool,
+          id: '${decoded['id']}',
+          assets: assetNames,
+          assetMetadata: assetMetadata,
+          title: hasTitle ? decoded['name'] as String? : null,
+          body: hasBody ? decoded['body'] as String? : null,
+          titleReadable: hasTitle,
+          bodyReadable: hasBody,
+        ),
+      );
     } on Object catch (error) {
       return _Unreadable('GitHub answered something unreadable: $error');
     }
@@ -1256,11 +1243,13 @@ class GithubRelease {
   /// Whether the forge will tell rk about the repository at all.
   Future<bool> _repositoryIsReadable() async {
     try {
-      final result = await tools.run(
-        'gh',
-        ['repo', 'view', repository, '--json', 'name'],
-        workingDirectory: workingDirectory,
-      );
+      final result = await tools.run('gh', [
+        'repo',
+        'view',
+        repository,
+        '--json',
+        'name',
+      ], workingDirectory: workingDirectory);
       return result.ok;
     } on Object {
       return false;
@@ -1274,11 +1263,12 @@ class GithubRelease {
   /// `--limit 100`, a silent cap: draft number 101 survived the sweep and
   /// blocked the create it existed to unblock.
   Future<List<_Release>?> _drafts(String tag) async {
-    final result = await tools.run(
-      'gh',
-      ['api', '--paginate', '--slurp', 'repos/$repository/releases'],
-      workingDirectory: workingDirectory,
-    );
+    final result = await tools.run('gh', [
+      'api',
+      '--paginate',
+      '--slurp',
+      'repos/$repository/releases',
+    ], workingDirectory: workingDirectory);
     if (!result.ok) return null;
 
     try {
@@ -1302,14 +1292,16 @@ class GithubRelease {
             return null;
           }
           if (entry['tag_name'] == tag && entry['draft'] == true) {
-            drafts.add(_Release(
-              tag: tag,
-              isDraft: true,
-              isPrerelease: entry['prerelease'] as bool,
-              id: '${entry['id']}',
-              assets: null,
-              assetMetadata: null,
-            ));
+            drafts.add(
+              _Release(
+                tag: tag,
+                isDraft: true,
+                isPrerelease: entry['prerelease'] as bool,
+                id: '${entry['id']}',
+                assets: null,
+                assetMetadata: null,
+              ),
+            );
           }
         }
       }
@@ -1431,7 +1423,7 @@ class GithubReleaseExpectation {
 /// Public GitHub asset digests exposed only after release inventory checks.
 class GithubAssetDigestRead {
   GithubAssetDigestRead._(this.inspection, Map<String, String> digests)
-      : digests = Map.unmodifiable(digests);
+    : digests = Map.unmodifiable(digests);
 
   final Inspection inspection;
   final Map<String, String> digests;
@@ -1440,7 +1432,7 @@ class GithubAssetDigestRead {
 /// One public GitHub asset whose downloaded bytes match an external digest.
 class GithubBoundAssetRead {
   GithubBoundAssetRead._(this.inspection, List<int>? bytes)
-      : bytes = bytes == null ? null : List.unmodifiable(bytes);
+    : bytes = bytes == null ? null : List.unmodifiable(bytes);
 
   final Inspection inspection;
   final List<int>? bytes;
@@ -1451,10 +1443,10 @@ class _ReleaseObservation {
   const _ReleaseObservation._(this.inspection, this.release);
 
   const _ReleaseObservation.failed(Inspection inspection)
-      : this._(inspection, null);
+    : this._(inspection, null);
 
   _ReleaseObservation.exact(_Release release)
-      : this._(const Inspection.exact(detail: 'published'), release);
+    : this._(const Inspection.exact(detail: 'published'), release);
 
   final Inspection inspection;
   final _Release? release;
@@ -1511,8 +1503,13 @@ class PublishOutcome {
     String problem, {
     DraftEffect draftEffect = DraftEffect.none,
     String? transcript,
-  }) : this._(null, problem, false,
-            draftEffect: draftEffect, transcript: transcript);
+  }) : this._(
+         null,
+         problem,
+         false,
+         draftEffect: draftEffect,
+         transcript: transcript,
+       );
 
   /// Something may exist that rk could not read back, so the next run must
   /// inspect rather than assume.
@@ -1521,8 +1518,13 @@ class PublishOutcome {
     String? url,
     DraftEffect draftEffect = DraftEffect.none,
     String? transcript,
-  }) : this._(url, problem, false,
-            draftEffect: draftEffect, transcript: transcript);
+  }) : this._(
+         url,
+         problem,
+         false,
+         draftEffect: draftEffect,
+         transcript: transcript,
+       );
 
   /// rk read back what it did and it is wrong, and it cannot be taken back.
   const PublishOutcome.terminal(
@@ -1531,12 +1533,12 @@ class PublishOutcome {
     required String permanent,
     DraftEffect draftEffect = DraftEffect.none,
   }) : this._(
-          url,
-          problem,
-          false,
-          permanent: permanent,
-          draftEffect: draftEffect,
-        );
+         url,
+         problem,
+         false,
+         permanent: permanent,
+         draftEffect: draftEffect,
+       );
 
   final String? url;
   final String? problem;

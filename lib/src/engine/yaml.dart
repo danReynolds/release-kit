@@ -68,7 +68,7 @@ YamlMap? parseYaml(String source, String path, Diagnostics diagnostics) {
 
 class _Parser {
   _Parser(String source, this._path, this._diagnostics)
-      : _lines = source.split('\n');
+    : _lines = source.split('\n');
 
   final List<String> _lines;
   final String _path;

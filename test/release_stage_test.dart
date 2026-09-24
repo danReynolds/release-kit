@@ -74,114 +74,125 @@ void main() {
 
   tearDown(() => repository.deleteSync(recursive: true));
 
-  test('materializes every tracked source byte in deterministic order',
-      () async {
-    final captured = await release.materializeSource();
+  test(
+    'materializes every tracked source byte in deterministic order',
+    () async {
+      final captured = await release.materializeSource();
 
-    expect(
-      captured.map((artifact) => artifact.path),
-      [
+      expect(captured.map((artifact) => artifact.path), [
         'source/README.md',
         'source/bin/tool.dart',
         'source/pubspec.yaml',
         'source/release.toml',
-      ],
-    );
-    for (final entry in source.files.entries) {
+      ]);
+      for (final entry in source.files.entries) {
+        expect(
+          File(
+            release.directory.resolve('source/${entry.key}'),
+          ).readAsBytesSync(),
+          utf8.encode(entry.value),
+          reason: entry.key,
+        );
+      }
+
+      source.files['bin/tool.dart'] = 'void main() => print("changed");\n';
       expect(
-        File(release.directory.resolve('source/${entry.key}'))
-            .readAsBytesSync(),
-        utf8.encode(entry.value),
-        reason: entry.key,
+        File(
+          release.directory.resolve('source/bin/tool.dart'),
+        ).readAsStringSync(),
+        contains('hello'),
+        reason: 'the staged snapshot no longer reads the mutable source tree',
       );
-    }
+    },
+  );
 
-    source.files['bin/tool.dart'] = 'void main() => print("changed");\n';
-    expect(
-      File(release.directory.resolve('source/bin/tool.dart'))
-          .readAsStringSync(),
-      contains('hello'),
-      reason: 'the staged snapshot no longer reads the mutable source tree',
-    );
-  });
+  test(
+    'release bundle exposes the exact public names and receipt artifacts',
+    () async {
+      final project = unit.binaryProject!;
+      final stagedPath = ReleaseAssets.archivePath(project, 'macos-arm64');
+      final publicName = ReleaseAssets.archiveName(
+        'tool',
+        '1.2.3',
+        'macos-arm64',
+      );
+      await _recordArchives(release, {stagedPath: 'archive'});
+      release.finalize(releaseAssets: ReleaseAssets.bundleFor(unit));
 
-  test('release bundle exposes the exact public names and receipt artifacts',
-      () async {
-    final project = unit.binaryProject!;
-    final stagedPath = ReleaseAssets.archivePath(project, 'macos-arm64');
-    final publicName =
-        ReleaseAssets.archiveName('tool', '1.2.3', 'macos-arm64');
-    await _recordArchives(release, {stagedPath: 'archive'});
-    release.finalize(releaseAssets: ReleaseAssets.bundleFor(unit));
+      final resolved = ReleaseBundle.resolve(release, unit);
 
-    final resolved = ReleaseBundle.resolve(release, unit);
+      expect(resolved, isA<ReleaseBundleAvailable>());
+      final bundle = (resolved as ReleaseBundleAvailable).bundle;
+      expect(bundle.publicNames, {publicName, ReleaseAssets.manifest});
+      expect(bundle.assets.map((asset) => asset.publicName), [
+        publicName,
+        ReleaseAssets.manifest,
+      ]);
+      expect(
+        bundle.assets
+            .singleWhere((asset) => asset.publicName == publicName)
+            .artifact
+            .path,
+        stagedPath,
+      );
+      expect(bundle.sha256ByPublicName.keys, {
+        publicName,
+        ReleaseAssets.manifest,
+      });
+    },
+  );
 
-    expect(resolved, isA<ReleaseBundleAvailable>());
-    final bundle = (resolved as ReleaseBundleAvailable).bundle;
-    expect(bundle.publicNames, {publicName, ReleaseAssets.manifest});
-    expect(bundle.assets.map((asset) => asset.publicName), [
-      publicName,
-      ReleaseAssets.manifest,
-    ]);
-    expect(
-      bundle.assets
-          .singleWhere((asset) => asset.publicName == publicName)
-          .artifact
-          .path,
-      stagedPath,
-    );
-    expect(
-      bundle.sha256ByPublicName.keys,
-      {publicName, ReleaseAssets.manifest},
-    );
-  });
+  test(
+    'release bundle refuses a completed stage with another inventory',
+    () async {
+      await _recordArchives(release, const {});
+      release.finalize(releaseAssets: const []);
 
-  test('release bundle refuses a completed stage with another inventory',
-      () async {
-    await _recordArchives(release, const {});
-    release.finalize(releaseAssets: const []);
+      final resolved = ReleaseBundle.resolve(release, unit);
 
-    final resolved = ReleaseBundle.resolve(release, unit);
+      expect(resolved, isA<ReleaseBundleInvalid>());
+      final invalid = resolved as ReleaseBundleInvalid;
+      expect(invalid.message, contains('different release-asset inventory'));
+      expect(invalid.evidence[_asset], 'missing from stage');
+    },
+  );
 
-    expect(resolved, isA<ReleaseBundleInvalid>());
-    final invalid = resolved as ReleaseBundleInvalid;
-    expect(invalid.message, contains('different release-asset inventory'));
-    expect(invalid.evidence[_asset], 'missing from stage');
-  });
-
-  test('unbound source is byte-bound locally without inventing a revision',
-      () async {
-    final unbound = ReleaseStage(
-      unit: unit,
-      source: source,
-      directory: StageDirectory(
-        repositoryRoot: repository.path,
-        identity: StageIdentity.forUnboundPlan(
-          runId: 'one-invocation',
-          resolvedPlan: {'unit': unit.name},
+  test(
+    'unbound source is byte-bound locally without inventing a revision',
+    () async {
+      final unbound = ReleaseStage(
+        unit: unit,
+        source: source,
+        directory: StageDirectory(
+          repositoryRoot: repository.path,
+          identity: StageIdentity.forUnboundPlan(
+            runId: 'one-invocation',
+            resolvedPlan: {'unit': unit.name},
+          ),
         ),
-      ),
-    );
-    final outputs = await unbound.materializeSource();
-    unbound.writeProgress([
-      StageStep(
-        name: 'source-snapshot',
-        inputs: [StageInput.plan(unbound.directory.identity)],
-        outputs: outputs,
-        evidence: const {'source_binding': 'unbound'},
-      ),
-    ]);
+      );
+      final outputs = await unbound.materializeSource();
+      unbound.writeProgress([
+        StageStep(
+          name: 'source-snapshot',
+          inputs: [StageInput.plan(unbound.directory.identity)],
+          outputs: outputs,
+          evidence: const {'source_binding': 'unbound'},
+        ),
+      ]);
 
-    final inspected = unbound.inspect();
-    expect(inspected.validProgress, isTrue, reason: '${inspected.issues}');
-    expect(unbound.unboundSourceProblem(), isNull);
-    source.files['bin/tool.dart'] = 'void main() => print("changed");\n';
-    expect(unbound.unboundSourceProblem(), 'bin/tool.dart changed');
-  });
+      final inspected = unbound.inspect();
+      expect(inspected.validProgress, isTrue, reason: '${inspected.issues}');
+      expect(unbound.unboundSourceProblem(), isNull);
+      source.files['bin/tool.dart'] = 'void main() => print("changed");\n';
+      expect(unbound.unboundSourceProblem(), 'bin/tool.dart changed');
+    },
+  );
 
   test('materializes the committed tree, not later worktree bytes', () async {
-    final sourceRepository =
-        Directory.systemTemp.createTempSync('rk-release-source-');
+    final sourceRepository = Directory.systemTemp.createTempSync(
+      'rk-release-source-',
+    );
     addTearDown(() => sourceRepository.deleteSync(recursive: true));
     _git(sourceRepository, ['init', '-q']);
     _git(sourceRepository, ['config', 'user.email', 'test@example.com']);
@@ -191,8 +202,9 @@ void main() {
         ..createSync(recursive: true)
         ..writeAsStringSync(entry.value);
     }
-    File('${sourceRepository.path}/README.md')
-        .writeAsStringSync('# Original\n');
+    File(
+      '${sourceRepository.path}/README.md',
+    ).writeAsStringSync('# Original\n');
     _git(sourceRepository, ['add', '-A']);
     _git(sourceRepository, ['commit', '-qm', 'release source']);
     final head = _git(sourceRepository, ['rev-parse', 'HEAD']);
@@ -217,56 +229,61 @@ void main() {
     await committedRelease.materializeSource();
 
     expect(
-      File(committedRelease.directory.resolve('source/README.md'))
-          .readAsStringSync(),
+      File(
+        committedRelease.directory.resolve('source/README.md'),
+      ).readAsStringSync(),
       '# Original\n',
     );
   });
 
-  test('preserves regular and executable Git modes in the staged source',
-      () async {
-    final sourceRepository = _gitRepository(_source());
-    addTearDown(() => sourceRepository.deleteSync(recursive: true));
-    final executable = File('${sourceRepository.path}/tool.sh')
-      ..writeAsStringSync('#!/bin/sh\nexit 0\n');
-    _git(sourceRepository, ['add', 'tool.sh']);
-    _git(sourceRepository, ['update-index', '--chmod=+x', 'tool.sh']);
-    _git(sourceRepository, ['commit', '-qm', 'add executable']);
+  test(
+    'preserves regular and executable Git modes in the staged source',
+    () async {
+      final sourceRepository = _gitRepository(_source());
+      addTearDown(() => sourceRepository.deleteSync(recursive: true));
+      final executable = File('${sourceRepository.path}/tool.sh')
+        ..writeAsStringSync('#!/bin/sh\nexit 0\n');
+      _git(sourceRepository, ['add', 'tool.sh']);
+      _git(sourceRepository, ['update-index', '--chmod=+x', 'tool.sh']);
+      _git(sourceRepository, ['commit', '-qm', 'add executable']);
 
-    final staged = _gitRelease(sourceRepository, repository);
-    final artifacts = await staged.materializeSource();
-    final regular = artifacts.singleWhere(
-      (artifact) => artifact.path == 'source/README.md',
-    );
-    final script = artifacts.singleWhere(
-      (artifact) => artifact.path == 'source/tool.sh',
-    );
+      final staged = _gitRelease(sourceRepository, repository);
+      final artifacts = await staged.materializeSource();
+      final regular = artifacts.singleWhere(
+        (artifact) => artifact.path == 'source/README.md',
+      );
+      final script = artifacts.singleWhere(
+        (artifact) => artifact.path == 'source/tool.sh',
+      );
 
-    expect(regular.mode, '0644');
-    expect(script.mode, '0755');
-    expect(executable.existsSync(), isTrue);
-  });
+      expect(regular.mode, '0644');
+      expect(script.mode, '0755');
+      expect(executable.existsSync(), isTrue);
+    },
+  );
 
-  test('refuses a tracked symbolic link instead of changing its type',
-      () async {
-    final sourceRepository = _gitRepository(_source());
-    addTearDown(() => sourceRepository.deleteSync(recursive: true));
-    Link('${sourceRepository.path}/README-link').createSync('README.md');
-    _git(sourceRepository, ['add', 'README-link']);
-    _git(sourceRepository, ['commit', '-qm', 'add link']);
+  test(
+    'refuses a tracked symbolic link instead of changing its type',
+    () async {
+      final sourceRepository = _gitRepository(_source());
+      addTearDown(() => sourceRepository.deleteSync(recursive: true));
+      Link('${sourceRepository.path}/README-link').createSync('README.md');
+      _git(sourceRepository, ['add', 'README-link']);
+      _git(sourceRepository, ['commit', '-qm', 'add link']);
 
-    final staged = _gitRelease(sourceRepository, repository);
-    await expectLater(
-      staged.materializeSource(),
-      throwsA(
-        isA<StateError>().having(
-          (error) => '$error',
-          'message',
-          allOf(contains('README-link'), contains('symbolic link')),
+      final staged = _gitRelease(sourceRepository, repository);
+      await expectLater(
+        staged.materializeSource(),
+        throwsA(
+          isA<StateError>().having(
+            (error) => '$error',
+            'message',
+            allOf(contains('README-link'), contains('symbolic link')),
+          ),
         ),
-      ),
-    );
-  });
+      );
+    },
+  );
 
   test('refuses a tracked gitlink instead of writing its object id', () async {
     final sourceRepository = _gitRepository(_source());
@@ -301,154 +318,157 @@ void main() {
     );
   });
 
-  test('complete receipt and public manifest are reusable as exact bytes',
-      () async {
-    await _recordArchives(release, {_asset: 'archive'});
+  test(
+    'complete receipt and public manifest are reusable as exact bytes',
+    () async {
+      await _recordArchives(release, {_asset: 'archive'});
 
-    final receipt = release.finalize(
-      releaseAssets: _fixtureReleaseAssets({_asset}),
-      evidence: {
-        'smoke': {'status': 'passed'},
-      },
-    );
-    final manifest = ReleaseManifest.parse(
-      File(release.directory.resolve('release-manifest.json'))
-          .readAsStringSync(),
-    );
-    final resumed = ReleaseStage(
-      unit: unit,
-      source: _source(),
-      directory: release.directory,
-    );
+      final receipt = release.finalize(
+        releaseAssets: _fixtureReleaseAssets({_asset}),
+        evidence: {
+          'smoke': {'status': 'passed'},
+        },
+      );
+      final manifest = ReleaseManifest.parse(
+        File(
+          release.directory.resolve('release-manifest.json'),
+        ).readAsStringSync(),
+      );
+      final resumed = ReleaseStage(
+        unit: unit,
+        source: _source(),
+        directory: release.directory,
+      );
 
-    expect(receipt.complete, isTrue);
-    expect(
-      receipt.artifacts.map((artifact) => artifact.path),
-      containsAll([
-        'source/pubspec.yaml',
-        _asset,
-        'release-manifest.json',
-      ]),
-    );
-    expect(manifest.commit, identity.headCommit);
-    expect(manifest.artifacts.map((artifact) => artifact.name), [_asset]);
-    expect(manifest.encode(), isNot(contains(repository.path)));
-    expect(resumed.inspect().reusable, isTrue);
-    expect(resumed.requireReceipt().identity.id, identity.id);
-  });
+      expect(receipt.complete, isTrue);
+      expect(
+        receipt.artifacts.map((artifact) => artifact.path),
+        containsAll(['source/pubspec.yaml', _asset, 'release-manifest.json']),
+      );
+      expect(manifest.commit, identity.headCommit);
+      expect(manifest.artifacts.map((artifact) => artifact.name), [_asset]);
+      expect(manifest.encode(), isNot(contains(repository.path)));
+      expect(resumed.inspect().reusable, isTrue);
+      expect(resumed.requireReceipt().identity.id, identity.id);
+    },
+  );
 
-  test('finalization binds a private formula only to its tap destination',
-      () async {
-    final homebrewSource = MemorySourceTree({...source.files});
-    homebrewSource.files['release.toml'] = _homebrewConfig;
-    final homebrewUnit = _resolveUnit(
-      homebrewSource,
-      configDocument: _homebrewConfig,
-    );
-    final homebrewStage = ReleaseStage(
-      unit: homebrewUnit,
-      source: homebrewSource,
-      repository: 'owner/repo',
-      directory: StageDirectory(
-        repositoryRoot: repository.path,
-        identity: identity,
-      ),
-    );
-    await _recordArchives(homebrewStage, {_asset: 'archive'});
-    final progress = StageReceiptStore(homebrewStage.directory).read()!;
-    final project = homebrewUnit.project('tool');
-    final formulaPath = ReleaseAssets.formulaPath(project);
-    homebrewStage.directory.writeBytesAtomically(
-      formulaPath,
-      utf8.encode('class Tool < Formula\nend\n'),
-    );
-    final formula = StageArtifact.capture(
-      stage: homebrewStage.directory,
-      path: formulaPath,
-      type: 'formula',
-    );
-    homebrewStage.writeProgress([
-      ...progress.steps,
-      StageStep(
-        name: 'homebrew-formula:tool',
-        inputs: [StageInput.artifact(progress.artifacts.last)],
-        outputs: [formula],
-      ),
-    ]);
+  test(
+    'finalization binds a private formula only to its tap destination',
+    () async {
+      final homebrewSource = MemorySourceTree({...source.files});
+      homebrewSource.files['release.toml'] = _homebrewConfig;
+      final homebrewUnit = _resolveUnit(
+        homebrewSource,
+        configDocument: _homebrewConfig,
+      );
+      final homebrewStage = ReleaseStage(
+        unit: homebrewUnit,
+        source: homebrewSource,
+        repository: 'owner/repo',
+        directory: StageDirectory(
+          repositoryRoot: repository.path,
+          identity: identity,
+        ),
+      );
+      await _recordArchives(homebrewStage, {_asset: 'archive'});
+      final progress = StageReceiptStore(homebrewStage.directory).read()!;
+      final project = homebrewUnit.project('tool');
+      final formulaPath = ReleaseAssets.formulaPath(project);
+      homebrewStage.directory.writeBytesAtomically(
+        formulaPath,
+        utf8.encode('class Tool < Formula\nend\n'),
+      );
+      final formula = StageArtifact.capture(
+        stage: homebrewStage.directory,
+        path: formulaPath,
+        type: 'formula',
+      );
+      homebrewStage.writeProgress([
+        ...progress.steps,
+        StageStep(
+          name: 'homebrew-formula:tool',
+          inputs: [StageInput.artifact(progress.artifacts.last)],
+          outputs: [formula],
+        ),
+      ]);
 
-    final receipt = homebrewStage.finalize(
-      releaseAssets: _fixtureReleaseAssets({_asset}),
-    );
-    final manifest = ReleaseManifest.parse(
-      File(homebrewStage.directory.resolve(ReleaseAssets.manifest))
-          .readAsStringSync(),
-    );
-    final homebrewBinding = manifest.homebrew!;
+      final receipt = homebrewStage.finalize(
+        releaseAssets: _fixtureReleaseAssets({_asset}),
+      );
+      final manifest = ReleaseManifest.parse(
+        File(
+          homebrewStage.directory.resolve(ReleaseAssets.manifest),
+        ).readAsStringSync(),
+      );
+      final homebrewBinding = manifest.homebrew!;
 
-    expect(manifest.artifacts.map((artifact) => artifact.name), [_asset]);
-    expect(homebrewBinding.project, 'tool');
-    expect(homebrewBinding.tap, 'owner/homebrew-tap');
-    expect(homebrewBinding.path, 'Formula/tool.rb');
-    expect(homebrewBinding.sha256, formula.sha256);
-    expect(manifest.encode(), isNot(contains(formulaPath)));
-    expect(
-      receipt.steps.last.inputs.map((input) => input.name),
-      contains(formulaPath),
-    );
-    expect(homebrewStage.releaseAssets(), isNot(contains(formulaPath)));
-    expect(homebrewStage.inspect().reusable, isTrue);
-  });
+      expect(manifest.artifacts.map((artifact) => artifact.name), [_asset]);
+      expect(homebrewBinding.project, 'tool');
+      expect(homebrewBinding.tap, 'owner/homebrew-tap');
+      expect(homebrewBinding.path, 'Formula/tool.rb');
+      expect(homebrewBinding.sha256, formula.sha256);
+      expect(manifest.encode(), isNot(contains(formulaPath)));
+      expect(
+        receipt.steps.last.inputs.map((input) => input.name),
+        contains(formulaPath),
+      );
+      expect(homebrewStage.releaseAssets(), isNot(contains(formulaPath)));
+      expect(homebrewStage.inspect().reusable, isTrue);
+    },
+  );
 
-  test('a prerelease manifest carries archives without a Homebrew formula',
-      () async {
-    final prereleaseSource = MemorySourceTree({...source.files});
-    prereleaseSource.files['release.toml'] = _homebrewConfig;
-    prereleaseSource.files['pubspec.yaml'] = '''
+  test(
+    'a prerelease manifest carries archives without a Homebrew formula',
+    () async {
+      final prereleaseSource = MemorySourceTree({...source.files});
+      prereleaseSource.files['release.toml'] = _homebrewConfig;
+      prereleaseSource.files['pubspec.yaml'] = '''
 name: tool
 version: 1.3.0-beta.1
 executables:
   tool: tool
 ''';
-    final prereleaseUnit = _resolveUnit(
-      prereleaseSource,
-      configDocument: _homebrewConfig,
-    );
-    final prereleaseIdentity = StageIdentity.forPlan(
-      headCommit: _commit,
-      headTree: _tree,
-      resolvedPlan: {
-        'unit': prereleaseUnit.name,
-        'version': prereleaseUnit.version.canonical,
-      },
-    );
-    final prereleaseStage = ReleaseStage(
-      unit: prereleaseUnit,
-      source: prereleaseSource,
-      repository: 'owner/repo',
-      directory: StageDirectory(
-        repositoryRoot: repository.path,
-        identity: prereleaseIdentity,
-      ),
-    );
-    final project = prereleaseUnit.project('tool');
-    final archive = ReleaseAssets.archiveName(
-      project.executable!,
-      project.version.canonical,
-      'macos-arm64',
-    );
-    await _recordArchives(prereleaseStage, {archive: 'archive'});
+      final prereleaseUnit = _resolveUnit(
+        prereleaseSource,
+        configDocument: _homebrewConfig,
+      );
+      final prereleaseIdentity = StageIdentity.forPlan(
+        headCommit: _commit,
+        headTree: _tree,
+        resolvedPlan: {
+          'unit': prereleaseUnit.name,
+          'version': prereleaseUnit.version.canonical,
+        },
+      );
+      final prereleaseStage = ReleaseStage(
+        unit: prereleaseUnit,
+        source: prereleaseSource,
+        repository: 'owner/repo',
+        directory: StageDirectory(
+          repositoryRoot: repository.path,
+          identity: prereleaseIdentity,
+        ),
+      );
+      final project = prereleaseUnit.project('tool');
+      final archive = ReleaseAssets.archiveName(
+        project.executable!,
+        project.version.canonical,
+        'macos-arm64',
+      );
+      await _recordArchives(prereleaseStage, {archive: 'archive'});
 
-    prereleaseStage.finalize(
-      releaseAssets: _fixtureReleaseAssets({archive}),
-    );
-    final manifest = ReleaseManifest.parse(
-      File(prereleaseStage.directory.resolve(ReleaseAssets.manifest))
-          .readAsStringSync(),
-    );
+      prereleaseStage.finalize(releaseAssets: _fixtureReleaseAssets({archive}));
+      final manifest = ReleaseManifest.parse(
+        File(
+          prereleaseStage.directory.resolve(ReleaseAssets.manifest),
+        ).readAsStringSync(),
+      );
 
-    expect(manifest.artifacts.map((artifact) => artifact.name), [archive]);
-    expect(manifest.homebrew, isNull);
-  });
+      expect(manifest.artifacts.map((artifact) => artifact.name), [archive]);
+      expect(manifest.homebrew, isNull);
+    },
+  );
 
   test('completed manifest coordinates must match the resolved unit', () async {
     await _complete(release);
@@ -465,23 +485,19 @@ executables:
       String? name,
       String? tagPattern,
       List<ResolvedProject>? projects,
-    }) =>
-        ResolvedUnit(
-          name: name ?? unit.name,
-          publish: unit.publish,
-          tagPattern: tagPattern,
-          tagWasDeclared: true,
-          projects: projects ?? unit.projects,
-          location: unit.location,
-          homebrewTap: unit.homebrewTap,
-        );
+    }) => ResolvedUnit(
+      name: name ?? unit.name,
+      publish: unit.publish,
+      tagPattern: tagPattern,
+      tagWasDeclared: true,
+      projects: projects ?? unit.projects,
+      location: unit.location,
+      homebrewTap: unit.homebrewTap,
+    );
 
     final mismatches = <String, ResolvedUnit>{
       'unit': changed(name: 'other', tagPattern: unit.tagPattern),
-      'version': changed(
-        tagPattern: unit.tag,
-        projects: nextVersion.projects,
-      ),
+      'version': changed(tagPattern: unit.tag, projects: nextVersion.projects),
       'tag': changed(tagPattern: 'release-{version}'),
       'nullable tag': changed(tagPattern: null),
     };
@@ -537,8 +553,8 @@ executables:
     final document = jsonDecode(receiptFile.readAsStringSync()) as Map;
     final steps = document['steps'] as List;
     final build = steps.cast<Map>().singleWhere(
-          (step) => step['name'] == 'build:tool:macos-arm64',
-        );
+      (step) => step['name'] == 'build:tool:macos-arm64',
+    );
     final evidence = build['evidence'] as Map;
     final signature = evidence['signature'] as Map;
     signature['designated_requirement'] = 42;
@@ -555,84 +571,85 @@ executables:
     );
   });
 
-  test('a remembered inspection never outlives the bytes it described',
-      () async {
-    await _complete(release);
-    // Warm the memo with a good answer, which is the state a run is in
-    // every time it asks again.
-    expect(release.inspect().reusable, isTrue);
+  test(
+    'a remembered inspection never outlives the bytes it described',
+    () async {
+      await _complete(release);
+      // Warm the memo with a good answer, which is the state a run is in
+      // every time it asks again.
+      expect(release.inspect().reusable, isTrue);
 
-    // Same length, so size alone cannot notice. Only the timestamps
-    // separate this from the bytes that were verified.
-    final asset = File(release.directory.resolve(_asset));
-    final swapped = asset.readAsBytesSync();
-    swapped[0] = swapped[0] ^ 0xff;
-    asset.writeAsBytesSync(swapped);
+      // Same length, so size alone cannot notice. Only the timestamps
+      // separate this from the bytes that were verified.
+      final asset = File(release.directory.resolve(_asset));
+      final swapped = asset.readAsBytesSync();
+      swapped[0] = swapped[0] ^ 0xff;
+      asset.writeAsBytesSync(swapped);
 
-    final after = release.inspect();
-    expect(
-      after.reusable,
-      isFalse,
-      reason: 'a cheap check that misses this is a stage that verifies once '
-          'and trusts forever',
-    );
-    expect(
-      after.issues.map((issue) => issue.kind),
-      contains(StageIssueKind.changedArtifact),
-    );
-  });
+      final after = release.inspect();
+      expect(
+        after.reusable,
+        isFalse,
+        reason:
+            'a cheap check that misses this is a stage that verifies once '
+            'and trusts forever',
+      );
+      expect(
+        after.issues.map((issue) => issue.kind),
+        contains(StageIssueKind.changedArtifact),
+      );
+    },
+  );
 
   test('a complete filesystem fixture records every artifact type', () async {
     final receipt = await _completeEveryArtifactType(release);
 
-    expect(
-      receipt.artifacts.map((artifact) => artifact.type).toSet(),
-      {
-        'source',
-        'executable',
-        'notary-input',
-        'notary',
-        'archive',
-        'notes',
-        'formula',
-        'manifest',
-      },
-    );
+    expect(receipt.artifacts.map((artifact) => artifact.type).toSet(), {
+      'source',
+      'executable',
+      'notary-input',
+      'notary',
+      'archive',
+      'notes',
+      'formula',
+      'manifest',
+    });
     expect(release.inspect().reusable, isTrue);
   });
 
-  test('every recorded artifact is bound to its exact filesystem bytes',
-      () async {
-    final receipt = await _completeEveryArtifactType(release);
-
-    for (final artifact in receipt.artifacts) {
-      final file = File(release.directory.resolve(artifact.path));
-      final original = file.readAsBytesSync();
-      file.writeAsBytesSync([...original, 0x7f], flush: true);
-
-      final inspected = release.inspect();
-      expect(inspected.reusable, isFalse, reason: artifact.path);
-      expect(
-        inspected.issues.where(
-          (issue) =>
-              issue.kind == StageIssueKind.changedArtifact &&
-              issue.path == artifact.path,
-        ),
-        isNotEmpty,
-        reason: artifact.path,
-      );
-
-      file.writeAsBytesSync(original, flush: true);
-      expect(
-        release.inspect().reusable,
-        isTrue,
-        reason: '${artifact.path} must be reusable again only at exact bytes',
-      );
-    }
-  });
-
   test(
-      'each producer output stays untrusted until the receipt replacement '
+    'every recorded artifact is bound to its exact filesystem bytes',
+    () async {
+      final receipt = await _completeEveryArtifactType(release);
+
+      for (final artifact in receipt.artifacts) {
+        final file = File(release.directory.resolve(artifact.path));
+        final original = file.readAsBytesSync();
+        file.writeAsBytesSync([...original, 0x7f], flush: true);
+
+        final inspected = release.inspect();
+        expect(inspected.reusable, isFalse, reason: artifact.path);
+        expect(
+          inspected.issues.where(
+            (issue) =>
+                issue.kind == StageIssueKind.changedArtifact &&
+                issue.path == artifact.path,
+          ),
+          isNotEmpty,
+          reason: artifact.path,
+        );
+
+        file.writeAsBytesSync(original, flush: true);
+        expect(
+          release.inspect().reusable,
+          isTrue,
+          reason: '${artifact.path} must be reusable again only at exact bytes',
+        );
+      }
+    },
+  );
+
+  test('each producer output stays untrusted until the receipt replacement '
       'names its exact bytes', () async {
     for (final nextName in [
       'build:tool:macos-arm64',
@@ -652,8 +669,9 @@ executables:
       final next = complete.steps[nextIndex];
       final originalBytes = {
         for (final artifact in next.outputs)
-          artifact.path:
-              File(release.directory.resolve(artifact.path)).readAsBytesSync(),
+          artifact.path: File(
+            release.directory.resolve(artifact.path),
+          ).readAsBytesSync(),
       };
       final retained = prefix
           .expand((step) => step.outputs)
@@ -664,12 +682,12 @@ executables:
         final file = File(release.directory.resolve(artifact.path));
         if (file.existsSync()) file.deleteSync();
       }
-      StageReceiptStore(release.directory).write(StageReceipt(
-        identity: complete.identity,
-        steps: prefix,
-      ));
-      final prefixReceipt =
-          File(release.directory.resolve('stage.json')).readAsBytesSync();
+      StageReceiptStore(
+        release.directory,
+      ).write(StageReceipt(identity: complete.identity, steps: prefix));
+      final prefixReceipt = File(
+        release.directory.resolve('stage.json'),
+      ).readAsBytesSync();
 
       for (final artifact in next.outputs) {
         release.directory.writeBytesAtomically(
@@ -707,7 +725,8 @@ executables:
             ? inspected.reusable
             : inspected.validProgress,
         isTrue,
-        reason: '$nextName resumes only after its exact bytes are restored: '
+        reason:
+            '$nextName resumes only after its exact bytes are restored: '
             '${inspected.issues.join('; ')}',
       );
       expect(
@@ -738,17 +757,20 @@ executables:
     _CrashBoundary(
       'truncated receipt',
       StageIssueKind.invalidReceipt,
-      (release, _) => File(release.directory.resolve('stage.json'))
-          .writeAsStringSync('{"schema":1', flush: true),
+      (release, _) => File(
+        release.directory.resolve('stage.json'),
+      ).writeAsStringSync('{"schema":1', flush: true),
     ),
     _CrashBoundary(
       'receipt ahead of artifact bytes',
       StageIssueKind.missingArtifact,
-      (release, receipt) => File(release.directory.resolve(
-        receipt.artifacts
-            .singleWhere((artifact) => artifact.type == 'archive')
-            .path,
-      )).deleteSync(),
+      (release, receipt) => File(
+        release.directory.resolve(
+          receipt.artifacts
+              .singleWhere((artifact) => artifact.type == 'archive')
+              .path,
+        ),
+      ).deleteSync(),
     ),
   ]) {
     test('crash boundary never reuses ${crash.name}', () async {
@@ -787,9 +809,7 @@ executables:
     );
 
     expect(
-      () => release.finalize(
-        releaseAssets: _fixtureReleaseAssets({_asset}),
-      ),
+      () => release.finalize(releaseAssets: _fixtureReleaseAssets({_asset})),
       throwsStateError,
     );
     expect(
@@ -799,48 +819,51 @@ executables:
     );
   });
 
-  test('missing public artifact is refused before manifest or receipt writes',
-      () async {
-    await _recordArchives(release, const {});
+  test(
+    'missing public artifact is refused before manifest or receipt writes',
+    () async {
+      await _recordArchives(release, const {});
 
-    expect(
-      () => release.finalize(
-        releaseAssets: _fixtureReleaseAssets({_asset}),
-      ),
-      throwsStateError,
-    );
-    expect(
-      File(release.directory.resolve('release-manifest.json')).existsSync(),
-      isFalse,
-    );
-    expect(StageReceiptStore(release.directory).read()!.complete, isFalse);
-  });
+      expect(
+        () => release.finalize(releaseAssets: _fixtureReleaseAssets({_asset})),
+        throwsStateError,
+      );
+      expect(
+        File(release.directory.resolve('release-manifest.json')).existsSync(),
+        isFalse,
+      );
+      expect(StageReceiptStore(release.directory).read()!.complete, isFalse);
+    },
+  );
 
-  test('reset deletes only this stage and never follows artifact symlinks',
-      () async {
-    await release.materializeSource();
-    final siblingIdentity = StageIdentity.forPlan(
-      headCommit: _commit,
-      headTree: _tree,
-      resolvedPlan: {'unit': 'sibling'},
-    );
-    final sibling = StageDirectory(
-      repositoryRoot: repository.path,
-      identity: siblingIdentity,
-    )..writeBytesAtomically('keep.txt', utf8.encode('keep'));
-    final outside = Directory.systemTemp.createTempSync('rk-reset-outside-');
-    addTearDown(() => outside.deleteSync(recursive: true));
-    final outsideFile = File('${outside.path}/keep.txt')
-      ..writeAsStringSync('outside');
-    Link(release.directory.resolve('outside-link'))
-        .createSync(outsideFile.path);
+  test(
+    'reset deletes only this stage and never follows artifact symlinks',
+    () async {
+      await release.materializeSource();
+      final siblingIdentity = StageIdentity.forPlan(
+        headCommit: _commit,
+        headTree: _tree,
+        resolvedPlan: {'unit': 'sibling'},
+      );
+      final sibling = StageDirectory(
+        repositoryRoot: repository.path,
+        identity: siblingIdentity,
+      )..writeBytesAtomically('keep.txt', utf8.encode('keep'));
+      final outside = Directory.systemTemp.createTempSync('rk-reset-outside-');
+      addTearDown(() => outside.deleteSync(recursive: true));
+      final outsideFile = File('${outside.path}/keep.txt')
+        ..writeAsStringSync('outside');
+      Link(
+        release.directory.resolve('outside-link'),
+      ).createSync(outsideFile.path);
 
-    release.reset();
+      release.reset();
 
-    expect(Directory(release.directory.path).existsSync(), isFalse);
-    expect(File(sibling.resolve('keep.txt')).readAsStringSync(), 'keep');
-    expect(outsideFile.readAsStringSync(), 'outside');
-  });
+      expect(Directory(release.directory.path).existsSync(), isFalse);
+      expect(File(sibling.resolve('keep.txt')).readAsStringSync(), 'keep');
+      expect(outsideFile.readAsStringSync(), 'outside');
+    },
+  );
 
   test('reset refuses a symlinked fixed stage path', () {
     final outside = Directory.systemTemp.createTempSync('rk-reset-fixed-');
@@ -856,92 +879,104 @@ executables:
     expect(sentinel.readAsStringSync(), 'keep');
   });
 
-  test('public manifest inventory is deterministic across insertion order',
-      () async {
-    await _recordArchives(release, {'z.tar.gz': 'z', 'a.tar.gz': 'a'});
-    release.finalize(
-      releaseAssets: _fixtureReleaseAssets({'z.tar.gz', 'a.tar.gz'}),
-    );
-    final first = File(release.directory.resolve('release-manifest.json'))
-        .readAsStringSync();
+  test(
+    'public manifest inventory is deterministic across insertion order',
+    () async {
+      await _recordArchives(release, {'z.tar.gz': 'z', 'a.tar.gz': 'a'});
+      release.finalize(
+        releaseAssets: _fixtureReleaseAssets({'z.tar.gz', 'a.tar.gz'}),
+      );
+      final first = File(
+        release.directory.resolve('release-manifest.json'),
+      ).readAsStringSync();
 
-    release.finalize(
-      releaseAssets: _fixtureReleaseAssets({'a.tar.gz', 'z.tar.gz'}),
-    );
-    final second = File(release.directory.resolve('release-manifest.json'))
-        .readAsStringSync();
-    final manifest = ReleaseManifest.parse(second);
+      release.finalize(
+        releaseAssets: _fixtureReleaseAssets({'a.tar.gz', 'z.tar.gz'}),
+      );
+      final second = File(
+        release.directory.resolve('release-manifest.json'),
+      ).readAsStringSync();
+      final manifest = ReleaseManifest.parse(second);
 
-    expect(second, first);
-    expect(
-      manifest.artifacts.map((artifact) => artifact.name),
-      ['a.tar.gz', 'z.tar.gz'],
-    );
-  });
+      expect(second, first);
+      expect(manifest.artifacts.map((artifact) => artifact.name), [
+        'a.tar.gz',
+        'z.tar.gz',
+      ]);
+    },
+  );
 
-  test('an input digest cannot be detached from its earlier producer',
-      () async {
-    await _recordArchives(release, {_asset: 'archive'});
-    final receipt = StageReceiptStore(release.directory).read()!;
-    final archive = receipt.steps.singleWhere(
-      (step) => step.name == 'archive:$_asset',
-    );
-    final detached = StageStep(
-      name: archive.name,
-      inputs: [
-        StageInput(name: archive.inputs.single.name, sha256: 'f' * 64),
-      ],
-      outputs: archive.outputs,
-      evidence: archive.evidence,
-    );
-    StageReceiptStore(release.directory).write(StageReceipt(
-      identity: identity,
-      steps: [
-        for (final step in receipt.steps)
-          if (step.name == archive.name) detached else step,
-      ],
-    ));
+  test(
+    'an input digest cannot be detached from its earlier producer',
+    () async {
+      await _recordArchives(release, {_asset: 'archive'});
+      final receipt = StageReceiptStore(release.directory).read()!;
+      final archive = receipt.steps.singleWhere(
+        (step) => step.name == 'archive:$_asset',
+      );
+      final detached = StageStep(
+        name: archive.name,
+        inputs: [
+          StageInput(name: archive.inputs.single.name, sha256: 'f' * 64),
+        ],
+        outputs: archive.outputs,
+        evidence: archive.evidence,
+      );
+      StageReceiptStore(release.directory).write(
+        StageReceipt(
+          identity: identity,
+          steps: [
+            for (final step in receipt.steps)
+              if (step.name == archive.name) detached else step,
+          ],
+        ),
+      );
 
-    final inspected = release.inspect();
-    expect(inspected.validProgress, isFalse);
-    expect(
-      inspected.issues.map((issue) => issue.kind),
-      contains(StageIssueKind.invalidStructure),
-    );
-  });
+      final inspected = release.inspect();
+      expect(inspected.validProgress, isFalse);
+      expect(
+        inspected.issues.map((issue) => issue.kind),
+        contains(StageIssueKind.invalidStructure),
+      );
+    },
+  );
 
-  test('archive inventory evidence is re-derived from the archive bytes',
-      () async {
-    await _recordArchives(release, {_asset: 'archive'});
-    final receipt = StageReceiptStore(release.directory).read()!;
-    final archive = receipt.steps.singleWhere(
-      (step) => step.name == 'archive:$_asset',
-    );
-    final inventory = (archive.evidence['inventory'] as List)
-        .map((entry) => Map<String, Object?>.from(entry as Map))
-        .toList();
-    inventory.single['sha256'] = 'f' * 64;
-    final falseClaim = StageStep(
-      name: archive.name,
-      inputs: archive.inputs,
-      outputs: archive.outputs,
-      evidence: {'inventory': inventory},
-    );
-    StageReceiptStore(release.directory).write(StageReceipt(
-      identity: identity,
-      steps: [
-        for (final step in receipt.steps)
-          if (step.name == archive.name) falseClaim else step,
-      ],
-    ));
+  test(
+    'archive inventory evidence is re-derived from the archive bytes',
+    () async {
+      await _recordArchives(release, {_asset: 'archive'});
+      final receipt = StageReceiptStore(release.directory).read()!;
+      final archive = receipt.steps.singleWhere(
+        (step) => step.name == 'archive:$_asset',
+      );
+      final inventory = (archive.evidence['inventory'] as List)
+          .map((entry) => Map<String, Object?>.from(entry as Map))
+          .toList();
+      inventory.single['sha256'] = 'f' * 64;
+      final falseClaim = StageStep(
+        name: archive.name,
+        inputs: archive.inputs,
+        outputs: archive.outputs,
+        evidence: {'inventory': inventory},
+      );
+      StageReceiptStore(release.directory).write(
+        StageReceipt(
+          identity: identity,
+          steps: [
+            for (final step in receipt.steps)
+              if (step.name == archive.name) falseClaim else step,
+          ],
+        ),
+      );
 
-    final inspected = release.inspect();
-    expect(inspected.validProgress, isFalse);
-    expect(
-      inspected.issues.map((issue) => issue.kind),
-      contains(StageIssueKind.invalidArchive),
-    );
-  });
+      final inspected = release.inspect();
+      expect(inspected.validProgress, isFalse);
+      expect(
+        inspected.issues.map((issue) => issue.kind),
+        contains(StageIssueKind.invalidArchive),
+      );
+    },
+  );
 
   test('manifest metadata is checked against the producer relation', () async {
     await _recordArchives(release, {_asset: 'archive'});
@@ -966,17 +1001,19 @@ executables:
       path: 'release-manifest.json',
       type: 'manifest',
     );
-    StageReceiptStore(release.directory).write(StageReceipt(
-      identity: identity,
-      steps: [
-        ...progress.steps,
-        StageStep(
-          name: 'complete-stage',
-          inputs: [StageInput.artifact(archive)],
-          outputs: [manifest],
-        ),
-      ],
-    ));
+    StageReceiptStore(release.directory).write(
+      StageReceipt(
+        identity: identity,
+        steps: [
+          ...progress.steps,
+          StageStep(
+            name: 'complete-stage',
+            inputs: [StageInput.artifact(archive)],
+            outputs: [manifest],
+          ),
+        ],
+      ),
+    );
 
     expect(
       release.inspect().issues.map((issue) => issue.kind),
@@ -986,16 +1023,16 @@ executables:
 }
 
 MemorySourceTree _source() => MemorySourceTree({
-      'release.toml': _config,
-      'pubspec.yaml': '''
+  'release.toml': _config,
+  'pubspec.yaml': '''
 name: tool
 version: 1.2.3
 executables:
   tool: tool
 ''',
-      'bin/tool.dart': 'void main() => print("hello");\n',
-      'README.md': '# Tool\n',
-    });
+  'bin/tool.dart': 'void main() => print("hello");\n',
+  'README.md': '# Tool\n',
+});
 
 ResolvedUnit _resolveUnit(
   SourceTree source, {
@@ -1110,9 +1147,11 @@ Future<StageReceipt> _completeEveryArtifactType(ReleaseStage release) async {
     },
   );
 
-  final archiveBytes = ArchiveBuilder.gzip(ArchiveBuilder.tar([
-    ArchiveEntry(name: 'tool', bytes: binaryBytes, executable: true),
-  ]));
+  final archiveBytes = ArchiveBuilder.gzip(
+    ArchiveBuilder.tar([
+      ArchiveEntry(name: 'tool', bytes: binaryBytes, executable: true),
+    ]),
+  );
   release.directory.writeBytesAtomically(_asset, archiveBytes);
   final archive = StageArtifact.capture(
     stage: release.directory,
@@ -1162,14 +1201,7 @@ Future<StageReceipt> _completeEveryArtifactType(ReleaseStage release) async {
     ],
   );
 
-  release.writeProgress([
-    source,
-    sign,
-    notarize,
-    archiveStep,
-    notes,
-    formula,
-  ]);
+  release.writeProgress([source, sign, notarize, archiveStep, notes, formula]);
   return release.finalize(
     releaseAssets: _fixtureReleaseAssets({
       _asset,
@@ -1181,12 +1213,14 @@ Future<StageReceipt> _completeEveryArtifactType(ReleaseStage release) async {
 }
 
 List<ReleaseAssetSpec> _fixtureReleaseAssets(Iterable<String> paths) => [
-      for (final path in paths)
-        ReleaseAssetSpec(stagedPath: path, publicName: path),
-    ];
+  for (final path in paths)
+    ReleaseAssetSpec(stagedPath: path, publicName: path),
+];
 
 Future<void> _recordArchives(
-    ReleaseStage release, Map<String, String> archives) async {
+  ReleaseStage release,
+  Map<String, String> archives,
+) async {
   final sourceArtifacts = await release.materializeSource();
   final source = StageStep(
     name: 'source-snapshot',
@@ -1232,29 +1266,33 @@ Future<void> _recordArchives(
   );
   final steps = <StageStep>[source, build];
   for (final entry in archives.entries) {
-    final bytes = ArchiveBuilder.gzip(ArchiveBuilder.tar([
-      ArchiveEntry(
-        name: 'tool',
-        bytes: utf8.encode(entry.value),
-        executable: true,
-      ),
-    ]));
+    final bytes = ArchiveBuilder.gzip(
+      ArchiveBuilder.tar([
+        ArchiveEntry(
+          name: 'tool',
+          bytes: utf8.encode(entry.value),
+          executable: true,
+        ),
+      ]),
+    );
     release.directory.writeBytesAtomically(entry.key, bytes);
     final artifact = StageArtifact.capture(
       stage: release.directory,
       path: entry.key,
       type: 'archive',
     );
-    steps.add(StageStep(
-      name: 'archive:${entry.key}',
-      inputs: [StageInput.artifact(binary)],
-      outputs: [artifact],
-      evidence: {
-        'inventory': StageArchiveInventory.evidence(
-          StageArchiveInventory.parse(bytes),
-        ),
-      },
-    ));
+    steps.add(
+      StageStep(
+        name: 'archive:${entry.key}',
+        inputs: [StageInput.artifact(binary)],
+        outputs: [artifact],
+        evidence: {
+          'inventory': StageArchiveInventory.evidence(
+            StageArchiveInventory.parse(bytes),
+          ),
+        },
+      ),
+    );
   }
   release.writeProgress(steps);
 }

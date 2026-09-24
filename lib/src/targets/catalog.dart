@@ -17,22 +17,25 @@ import 'target_module.dart';
 /// until exactly one built-in module owns it.
 final class TargetCatalog {
   TargetCatalog._()
-      : modules = const [
-          GitTagTargetModule(),
-          PubDevTargetModule(),
-          GithubReleaseTargetModule(),
-          HomebrewTargetModule(),
-        ] {
+    : modules = const [
+        GitTagTargetModule(),
+        PubDevTargetModule(),
+        GithubReleaseTargetModule(),
+        HomebrewTargetModule(),
+      ] {
     final byTarget = <PublishTarget, TargetModule>{};
     for (final module in modules) {
       if (byTarget[module.target] != null) {
-        throw StateError('two target modules handle '
-            '${module.target.configName}');
+        throw StateError(
+          'two target modules handle '
+          '${module.target.configName}',
+        );
       }
       byTarget[module.target] = module;
     }
-    final missing =
-        PublishTarget.values.toSet().difference(byTarget.keys.toSet());
+    final missing = PublishTarget.values.toSet().difference(
+      byTarget.keys.toSet(),
+    );
     if (missing.isNotEmpty) {
       throw StateError(
         'missing target modules: '
@@ -67,7 +70,8 @@ final class TargetCatalog {
       if (module == null) {
         if (step.isPublic) {
           throw StateError(
-              'public step ${step.kind.name} has no target module');
+            'public step ${step.kind.name} has no target module',
+          );
         }
         continue;
       }
@@ -104,7 +108,8 @@ final class TargetCatalog {
     return orderStageContributions(stages, (stage) => stage.contract);
   }
 
-  StageContractResolver stageContractResolver(Resolution resolution) => ({
+  StageContractResolver stageContractResolver(Resolution resolution) =>
+      ({
         required ResolvedUnit unit,
         required String? repository,
         required String sourceRoot,

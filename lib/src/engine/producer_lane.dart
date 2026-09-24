@@ -19,10 +19,8 @@ import 'stage_receipt.dart';
 /// the ordinary stage-store cleanup inventories the sibling and the next run
 /// replaces the exact lane directory before using it.
 final class ProducerLaneSource {
-  ProducerLaneSource({
-    required this.stage,
-    required String lane,
-  }) : _laneId = Sha256.hex(utf8.encode(lane));
+  ProducerLaneSource({required this.stage, required String lane})
+    : _laneId = Sha256.hex(utf8.encode(lane));
 
   final StageDirectory stage;
   final String _laneId;

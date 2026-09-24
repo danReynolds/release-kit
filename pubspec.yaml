@@ -4,7 +4,7 @@ version: 0.1.12
 repository: https://github.com/danReynolds/release-kit
 
 environment:
-  sdk: ^3.5.0
+  sdk: ^3.10.4
 
 executables:
   # The package is searchable; the command is short. Same split keybay_cli

@@ -28,7 +28,8 @@ final class PlanCommand {
         Diagnostic(
           code: 'RK-CLI-003',
           message: 'no unit named "$only"',
-          remedy: 'this repository releases: '
+          remedy:
+              'this repository releases: '
               '${resolution.units.map((unit) => unit.name).join(', ')}',
         ),
       );

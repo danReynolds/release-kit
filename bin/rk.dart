@@ -81,15 +81,7 @@ Future<void> main(List<String> args) async {
     return;
   }
 
-  const known = {
-    '-h',
-    '--help',
-    '--stage',
-    '--json',
-    '-y',
-    '--yes',
-    '--write',
-  };
+  const known = {'-h', '--help', '--stage', '--json', '-y', '--yes', '--write'};
   final flags = args.where((argument) => argument.startsWith('-')).toSet();
   final positional = args.where((a) => !a.startsWith('-')).toList();
   final json = flags.contains('--json');
@@ -175,7 +167,8 @@ Future<void> main(List<String> args) async {
       Diagnostic(
         code: 'RK-CLI-005',
         message: 'rk release --stage does not have --yes',
-        remedy: 'staging publishes nothing, so it takes no authorization. '
+        remedy:
+            'staging publishes nothing, so it takes no authorization. '
             'Stage first, then rk release <unit> --yes',
       ),
     );
@@ -194,13 +187,13 @@ Future<void> main(List<String> args) async {
         code: 'RK-CLI-007',
         message:
             (command == 'init' || command == 'clean') && positional.length <= 2
-                ? 'rk $command takes no unit — it applies to the whole '
-                    'repository, and got "$target"'
-                : command == 'target'
-                    ? 'rk target takes "list" or one release choice name, and '
-                        'got "${positional.skip(1).join(' ')}"'
-                    : 'rk takes a verb and a unit, and got '
-                        '"${positional.join(' ')}"',
+            ? 'rk $command takes no unit — it applies to the whole '
+                  'repository, and got "$target"'
+            : command == 'target'
+            ? 'rk target takes "list" or one release choice name, and '
+                  'got "${positional.skip(1).join(' ')}"'
+            : 'rk takes a verb and a unit, and got '
+                  '"${positional.join(' ')}"',
         remedy: _usage.trim(),
       ),
     );
@@ -231,22 +224,22 @@ Future<void> main(List<String> args) async {
   try {
     code = switch (command) {
       'release' => await _release(
-          output,
-          target,
-          stageOnly: flags.contains('--stage'),
-          interactive: !json,
-          yes: flags.contains('--yes') || flags.contains('-y'),
-        ),
+        output,
+        target,
+        stageOnly: flags.contains('--stage'),
+        interactive: !json,
+        yes: flags.contains('--yes') || flags.contains('-y'),
+      ),
       'init' => await _init(
-          output,
-          interactive: !json,
-          write: flags.contains('--write'),
-        ),
+        output,
+        interactive: !json,
+        write: flags.contains('--write'),
+      ),
       'clean' => await _clean(
-          output,
-          yes: flags.contains('--yes') || flags.contains('-y'),
-          interactive: !json,
-        ),
+        output,
+        yes: flags.contains('--yes') || flags.contains('-y'),
+        interactive: !json,
+      ),
       'target' => TargetCommand(output: output).run(target),
       'plan' => await _plan(output, target),
       _ => await _status(output, target),
@@ -276,10 +269,10 @@ Future<void> main(List<String> args) async {
         message: 'rk failed in a way it does not have a message for: $error',
         remedy: recordsDiagnosis
             ? 'this is a bug in rk. The run\'s evidence is written beside '
-                'this message, and re-running will inspect what is really '
-                'there.'
+                  'this message, and re-running will inspect what is really '
+                  'there.'
             : 'this is a bug in rk. rk plan is read-only, so it did not '
-                'write a diagnosis. Re-run with --json and report the error.',
+                  'write a diagnosis. Re-run with --json and report the error.',
       ),
     );
   } finally {
@@ -315,7 +308,8 @@ void _recordDiagnosis(Output output, int code, {String? crash}) {
   )) {
     return;
   }
-  final root = GitSourceTree.findRoot(Directory.current.path) ??
+  final root =
+      GitSourceTree.findRoot(Directory.current.path) ??
       Directory.current.absolute.path;
   if (!File('$root/release.toml').existsSync()) return;
 
@@ -343,8 +337,9 @@ Future<int> _init(
   final tree = gitRoot == null
       ? FileSystemSourceTree(root)
       : GitSourceTree(gitRoot) as SourceTree;
-  final git =
-      gitRoot == null ? GitState.unbound(root) : await GitState.read(root);
+  final git = gitRoot == null
+      ? GitState.unbound(root)
+      : await GitState.read(root);
   final selectorEnabled = interactive && !write && _usableInitTerminal();
 
   return InitCommand(
@@ -388,7 +383,8 @@ Future<int> _clean(
   required bool yes,
   required bool interactive,
 }) {
-  final root = GitSourceTree.findRoot(Directory.current.path) ??
+  final root =
+      GitSourceTree.findRoot(Directory.current.path) ??
       Directory.current.absolute.path;
   return CleanCommand(
     store: StageStore(root),
@@ -408,8 +404,9 @@ void _ensureRkIgnored(String root) {
     final current = file.readAsStringSync();
     if (current.split('\n').any((line) => line.trim() == '.rk/')) return;
     handle.writeStringSync(
-        '${current.isEmpty || current.endsWith('\n') ? '' : '\n'}'
-        '.rk/\n');
+      '${current.isEmpty || current.endsWith('\n') ? '' : '\n'}'
+      '.rk/\n',
+    );
     handle.flushSync();
   } finally {
     try {
@@ -552,8 +549,8 @@ Future<int> _release(
       confirm: yes
           ? (_) async => 'yes'
           : interactive && stdin.hasTerminal && stdout.hasTerminal
-              ? (prompt) => _promptOnTerminal(output, prompt)
-              : null,
+          ? (prompt) => _promptOnTerminal(output, prompt)
+          : null,
       allowInteractiveTools:
           interactive && stdin.hasTerminal && stdout.hasTerminal,
       stageOnly: stageOnly,
@@ -588,9 +585,7 @@ Future<String?> _promptOnTerminal(Output output, String prompt) async {
 /// see a fault for every repository that simply does not use rk.
 class _Prepared {
   _Prepared.ready(this.resolution, this.context) : code = null;
-  _Prepared.stopped(this.code)
-      : resolution = null,
-        context = null;
+  _Prepared.stopped(this.code) : resolution = null, context = null;
 
   final Resolution? resolution;
   final SourceContext? context;
@@ -602,10 +597,12 @@ class _Prepared {
 Future<_Prepared> _prepare(Output output) async {
   final gitRoot = GitSourceTree.findRoot(Directory.current.path);
   final root = gitRoot ?? Directory.current.absolute.path;
-  SourceTree tree =
-      gitRoot == null ? FileSystemSourceTree(root) : GitSourceTree(gitRoot);
-  final git =
-      gitRoot == null ? GitState.unbound(root) : await GitState.read(root);
+  SourceTree tree = gitRoot == null
+      ? FileSystemSourceTree(root)
+      : GitSourceTree(gitRoot);
+  final git = gitRoot == null
+      ? GitState.unbound(root)
+      : await GitState.read(root);
   if (git.isClean && git.hasCommit) {
     tree = GitCommitSourceTree(root, git.head);
   }
@@ -620,7 +617,8 @@ Future<_Prepared> _prepare(Output output) async {
           : Diagnostic(
               code: 'RK-SRC-003',
               message: 'the selected source could not be read',
-              remedy: '${error.path}: ${error.reason}\n'
+              remedy:
+                  '${error.path}: ${error.reason}\n'
                   'Repair the repository source, then run rk again.',
             ),
     );
@@ -643,8 +641,9 @@ Future<_Prepared> _prepare(Output output) async {
   Resolution? resolution;
   try {
     config = ReleaseConfig.parse(source, 'release.toml', diagnostics);
-    resolution =
-        config == null ? null : Resolution.resolve(config, tree, diagnostics);
+    resolution = config == null
+        ? null
+        : Resolution.resolve(config, tree, diagnostics);
 
     if (resolution != null && !git.isBound) {
       tree = FileSystemSourceTree(
@@ -661,7 +660,8 @@ Future<_Prepared> _prepare(Output output) async {
     diagnostics.add(
       'RK-SRC-003',
       'the source snapshot could not be read',
-      remedy: '${error.path}: ${error.reason}\n'
+      remedy:
+          '${error.path}: ${error.reason}\n'
           'Make that path a readable repository-local regular file or '
           'directory, then run rk again.',
     );
@@ -681,7 +681,8 @@ Future<_Prepared> _prepare(Output output) async {
       diagnostics.add(
         'RK-SRC-001',
         '${unit.name} selects targets that require Git',
-        remedy: 'initialize a Git repository, or remove '
+        remedy:
+            'initialize a Git repository, or remove '
             '${names.join(', ')} from this unit',
       );
     }
@@ -694,16 +695,10 @@ Future<_Prepared> _prepare(Output output) async {
     return _Prepared.stopped(ExitCodes.refused);
   }
 
-  return _Prepared.ready(
-    resolution,
-    SourceContext(tree: tree, git: git),
-  );
+  return _Prepared.ready(resolution, SourceContext(tree: tree, git: git));
 }
 
-Set<String> _filesystemSourceRoots(
-  SourceTree tree,
-  Resolution resolution,
-) {
+Set<String> _filesystemSourceRoots(SourceTree tree, Resolution resolution) {
   final roots = <String>{
     'release.toml',
     ...DartWorkspaceDiscovery(tree).sourceRoots,
@@ -744,10 +739,7 @@ ReleaseSource? _selectReleaseSource(
   return null;
 }
 
-Future<int> _plan(
-  Output output,
-  String? unit,
-) async {
+Future<int> _plan(Output output, String? unit) async {
   final gitRoot = GitSourceTree.findRoot(Directory.current.path);
   final root = gitRoot ?? Directory.current.absolute.path;
   final initial = SourceContext(
@@ -786,7 +778,8 @@ Future<_Prepared> _selectPlanSource(
           Diagnostic(
             code: 'RK-GIT-008',
             message: 'the worktree state could not be read',
-            remedy: '${initialGit.worktreeStatusError}\n'
+            remedy:
+                '${initialGit.worktreeStatusError}\n'
                 '`git status --porcelain` must succeed before rk can select '
                 'the source for this plan.',
           ),
@@ -799,8 +792,8 @@ Future<_Prepared> _selectPlanSource(
     selected = !initialGit.isBound
         ? _captureUnboundPlanSource(context.root)
         : initialGit.isClean && initialGit.head.isNotEmpty
-            ? GitCommitSourceTree(context.root, initialGit.head)
-            : FrozenSourceTree.capture(GitWorktreeSourceTree(context.root));
+        ? GitCommitSourceTree(context.root, initialGit.head)
+        : FrozenSourceTree.capture(GitWorktreeSourceTree(context.root));
   } on SourceUnreadable catch (error) {
     _showPlanSourceProblem(
       output,
@@ -811,7 +804,8 @@ Future<_Prepared> _selectPlanSource(
           : Diagnostic(
               code: 'RK-SRC-003',
               message: 'the source snapshot could not be selected',
-              remedy: '${error.path}: ${error.reason}\n'
+              remedy:
+                  '${error.path}: ${error.reason}\n'
                   'Stop concurrent edits, then run rk plan again.',
             ),
     );
@@ -842,7 +836,8 @@ Future<_Prepared> _selectPlanSource(
       diagnostics.add(
         'RK-SRC-003',
         'the selected source could not be read',
-        remedy: '${error.path}: ${error.reason}\n'
+        remedy:
+            '${error.path}: ${error.reason}\n'
             'Repair the repository, then run rk plan again.',
       );
     }
@@ -858,7 +853,8 @@ Future<_Prepared> _selectPlanSource(
             Diagnostic(
               code: 'RK-GIT-008',
               message: 'the worktree state could not be re-read',
-              remedy: '${selectedGit.worktreeStatusError}\n'
+              remedy:
+                  '${selectedGit.worktreeStatusError}\n'
                   '`git status --porcelain` must remain readable while rk '
                   'selects the source for this plan.',
             ),
@@ -872,7 +868,8 @@ Future<_Prepared> _selectPlanSource(
         const Diagnostic(
           code: 'RK-SRC-003',
           message: 'Git changed while the release plan was being captured',
-          remedy: 'Stop concurrent edits or checkouts, then run rk plan '
+          remedy:
+              'Stop concurrent edits or checkouts, then run rk plan '
               'again.',
         ),
       );
@@ -944,11 +941,7 @@ FrozenSourceTree _captureUnboundPlanSource(String root) {
       }
     }
     final frozen = FrozenSourceTree.capture(
-      FileSystemSourceTree(
-        root,
-        roots: roots,
-        rootsAreFiles: true,
-      ),
+      FileSystemSourceTree(root, roots: roots, rootsAreFiles: true),
       preservePaths: projectPaths,
     );
     if (frozen.read('release.toml') == source) return frozen;
@@ -982,11 +975,11 @@ void _showNoReleaseConfig(Output output, String root) {
 }
 
 Diagnostic _wrongReleaseConfigProblem(String reason) => Diagnostic(
-      code: 'RK-CONF-034',
-      message: 'release.toml is there and rk could not read it',
-      source: const SourceLocation('release.toml', 1),
-      remedy: reason,
-    );
+  code: 'RK-CONF-034',
+  message: 'release.toml is there and rk could not read it',
+  source: const SourceLocation('release.toml', 1),
+  remedy: reason,
+);
 
 void _showPlanSourceProblem(
   Output output,
@@ -1008,10 +1001,7 @@ void _showPlanSourceProblem(
   output.problem(problem);
 }
 
-Future<int> _status(
-  Output output,
-  String? unit,
-) async {
+Future<int> _status(Output output, String? unit) async {
   final prepared = await _prepare(output);
   if (!prepared.isReady) return prepared.code!;
   final source = _selectReleaseSource(prepared, unit, output);
@@ -1051,11 +1041,11 @@ Future<int> _status(
 }
 
 Diagnostic _stageStoreProblem(Object error) => Diagnostic(
-      code: 'RK-STAGE-006',
-      message: error is StageStoreBusy
-          ? 'another rk command is using staged work'
-          : 'the local stage path is not safe to use',
-      remedy: error is StageStoreBusy
-          ? 'let that command finish, then run rk again'
-          : '$error\nRK did not follow or change the unexpected path.',
-    );
+  code: 'RK-STAGE-006',
+  message: error is StageStoreBusy
+      ? 'another rk command is using staged work'
+      : 'the local stage path is not safe to use',
+  remedy: error is StageStoreBusy
+      ? 'let that command finish, then run rk again'
+      : '$error\nRK did not follow or change the unexpected path.',
+);

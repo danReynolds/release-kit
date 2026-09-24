@@ -36,30 +36,30 @@ final class InitCandidate {
   String get unit => InitPlan.unitName(name);
 
   InitCandidate copyWith({Set<ReleaseChoice>? selected}) => InitCandidate(
-        name: name,
-        path: path,
-        version: version,
-        executables: executables,
-        vetoesRegistry: vetoesRegistry,
-        availability: availability,
-        selected: selected ?? this.selected,
-      );
+    name: name,
+    path: path,
+    version: version,
+    executables: executables,
+    vetoesRegistry: vetoesRegistry,
+    availability: availability,
+    selected: selected ?? this.selected,
+  );
 
   Map<String, Object?> toJson() => {
-        'unit': unit,
-        'project': name,
-        'path': path,
-        'version': version,
-        'executables': executables,
-        'options': {
-          for (final option in ReleaseChoice.values)
-            option.id: {
-              ...availability[option]!.toJson(),
-              'selected': selected.contains(option),
-              'effects': option.requires.map((effect) => effect.id).toList(),
-            },
+    'unit': unit,
+    'project': name,
+    'path': path,
+    'version': version,
+    'executables': executables,
+    'options': {
+      for (final option in ReleaseChoice.values)
+        option.id: {
+          ...availability[option]!.toJson(),
+          'selected': selected.contains(option),
+          'effects': option.requires.map((effect) => effect.id).toList(),
         },
-      };
+    },
+  };
 }
 
 final class InitToggleResult {
@@ -77,9 +77,9 @@ final class InitPlan {
     required this.gitBound,
     required this.hasRemote,
     required this.githubRepository,
-  })  : candidates = List.unmodifiable(candidates),
-        notices = List.unmodifiable(notices),
-        platformCapabilities = List.unmodifiable(platformCapabilities);
+  }) : candidates = List.unmodifiable(candidates),
+       notices = List.unmodifiable(notices),
+       platformCapabilities = List.unmodifiable(platformCapabilities);
 
   factory InitPlan.discover({
     required SourceTree tree,
@@ -115,7 +115,8 @@ final class InitPlan {
       final packageUsable = !project.isGroupingRoot && project.version != null;
       final repositoryPubDev =
           project.publishTo == null || isPubDevDestination(project.publishTo!);
-      final ambientPubDev = project.publishTo != null ||
+      final ambientPubDev =
+          project.publishTo != null ||
           ambientPubHostedUrl == null ||
           isPubDevDestination(ambientPubHostedUrl);
       final registryAvailable = registryAvailableFor(project);
@@ -137,14 +138,14 @@ final class InitPlan {
                 project.isGroupingRoot
                     ? 'workspace root — select its packages instead'
                     : project.version == null
-                        ? 'the native manifest declares no version'
-                        : project.vetoesRegistry
-                            ? 'publish_to: none vetoes registry publication'
-                            : !repositoryPubDev
-                                ? 'publish_to names a custom registry; this build has no matching target'
-                                : !ambientPubDev
-                                    ? 'PUB_HOSTED_URL redirects the default registry; declare publish_to in the pubspec first'
-                                    : 'a package version is required',
+                    ? 'the native manifest declares no version'
+                    : project.vetoesRegistry
+                    ? 'publish_to: none vetoes registry publication'
+                    : !repositoryPubDev
+                    ? 'publish_to names a custom registry; this build has no matching target'
+                    : !ambientPubDev
+                    ? 'PUB_HOSTED_URL redirects the default registry; declare publish_to in the pubspec first'
+                    : 'a package version is required',
               ),
         ReleaseChoice.gitTag: tagAvailable
             ? InitAvailability.available(
@@ -156,8 +157,8 @@ final class InitPlan {
                 !gitBound
                     ? 'Git is not available for this source'
                     : !hasRemote
-                        ? 'add a Git remote first'
-                        : 'a package version is required',
+                    ? 'add a Git remote first'
+                    : 'a package version is required',
               ),
         ReleaseChoice.githubRelease: githubAvailable
             ? const InitAvailability.available(
@@ -167,8 +168,8 @@ final class InitPlan {
                 !gitBound
                     ? 'GitHub Release requires Git'
                     : githubRepository == null
-                        ? 'origin is not a recognized GitHub repository'
-                        : 'a package version is required',
+                    ? 'origin is not a recognized GitHub repository'
+                    : 'a package version is required',
               ),
         ReleaseChoice.binary: binaryAvailable
             ? InitAvailability.available(
@@ -179,10 +180,10 @@ final class InitPlan {
                 defaultBinaryPlatforms.isEmpty
                     ? 'this host cannot produce a supported binary platform'
                     : !oneExecutable
-                        ? project.executables.isEmpty
-                            ? 'no executable is declared'
-                            : 'several executables need a hand-authored decision'
-                        : 'a package version is required',
+                    ? project.executables.isEmpty
+                          ? 'no executable is declared'
+                          : 'several executables need a hand-authored decision'
+                    : 'a package version is required',
               ),
         ReleaseChoice.homebrew: homebrewAvailable
             ? const InitAvailability.available(
@@ -343,36 +344,35 @@ final class InitPlan {
   }
 
   Map<String, Object?> toJson() => {
-        'source': {
-          'binding': gitBound ? 'gitCommit' : 'unbound',
-          'git_remote': hasRemote,
-          'github_repository': githubRepository,
+    'source': {
+      'binding': gitBound ? 'gitCommit' : 'unbound',
+      'git_remote': hasRemote,
+      'github_repository': githubRepository,
+    },
+    'candidates': candidates.map((candidate) => candidate.toJson()).toList(),
+    'binary_platforms': [
+      for (final platform in platformCapabilities)
+        {
+          'name': platform.platform,
+          'selected_by_default': platform.canProduce,
+          'can_execute_here': platform.canProve,
+          if (platform.reason != null) 'reason': platform.reason,
         },
-        'candidates':
-            candidates.map((candidate) => candidate.toJson()).toList(),
-        'binary_platforms': [
-          for (final platform in platformCapabilities)
-            {
-              'name': platform.platform,
-              'selected_by_default': platform.canProduce,
-              'can_execute_here': platform.canProve,
-              if (platform.reason != null) 'reason': platform.reason,
-            },
-        ],
-        'notices': notices,
-      };
+    ],
+    'notices': notices,
+  };
 
   InitPlan _replace(int index, InitCandidate replacement) => InitPlan(
-        candidates: [
-          for (var i = 0; i < candidates.length; i++)
-            i == index ? replacement : candidates[i],
-        ],
-        notices: notices,
-        platformCapabilities: platformCapabilities,
-        gitBound: gitBound,
-        hasRemote: hasRemote,
-        githubRepository: githubRepository,
-      );
+    candidates: [
+      for (var i = 0; i < candidates.length; i++)
+        i == index ? replacement : candidates[i],
+    ],
+    notices: notices,
+    platformCapabilities: platformCapabilities,
+    gitBound: gitBound,
+    hasRemote: hasRemote,
+    githubRepository: githubRepository,
+  );
 
   static String unitName(String package) {
     final cleaned = package.toLowerCase().replaceAll(RegExp('[^a-z0-9_-]'), '');
@@ -381,12 +381,11 @@ final class InitPlan {
 
   static List<String> _defaultBinaryPlatformsFor(
     Iterable<PlatformCapability> platforms,
-  ) =>
-      [
-        for (final platform in platforms)
-          if (platform.capability == Capability.native) platform.platform,
-        for (final platform in platforms)
-          if (platform.capability != Capability.native && platform.canProduce)
-            platform.platform,
-      ];
+  ) => [
+    for (final platform in platforms)
+      if (platform.capability == Capability.native) platform.platform,
+    for (final platform in platforms)
+      if (platform.capability != Capability.native && platform.canProduce)
+        platform.platform,
+  ];
 }

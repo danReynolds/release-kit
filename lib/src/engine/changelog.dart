@@ -39,7 +39,8 @@ class Changelog {
         'RK-CHG-001',
         '"$packageName" has no changelog',
         source: SourceLocation(path),
-        remedy: 'add $path with an entry for $version — it is the only place '
+        remedy:
+            'add $path with an entry for $version — it is the only place '
             'a user finds out what changed',
       );
       return;
@@ -83,7 +84,14 @@ class Changelog {
   }
 
   static bool _looksLikeVersionHeading(String heading) {
-    final cleaned = heading.replaceFirst(RegExp(r'^[\[\("' "'" r']+'), '');
+    final cleaned = heading.replaceFirst(
+      RegExp(
+        r'^[\[\("'
+        "'"
+        r']+',
+      ),
+      '',
+    );
     return RegExp(r'^\d+\.\d+\.\d+').hasMatch(cleaned);
   }
 
@@ -100,7 +108,14 @@ class Changelog {
   /// Whether [heading] opens with [version], allowing the punctuation people
   /// decorate a heading with — brackets, quotes, or a following dash.
   static bool _beginsWithVersion(String heading, String version) {
-    final cleaned = heading.replaceFirst(RegExp(r'^[\[\("' "'" r']+'), '');
+    final cleaned = heading.replaceFirst(
+      RegExp(
+        r'^[\[\("'
+        "'"
+        r']+',
+      ),
+      '',
+    );
     if (!cleaned.startsWith(version)) return false;
     if (cleaned.length == version.length) return true;
     // The character after the version must end it, so 0.1.0 does not match a

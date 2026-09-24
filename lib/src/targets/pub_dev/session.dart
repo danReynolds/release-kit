@@ -50,11 +50,10 @@ final class PubDevSession extends TargetSessionProvider {
 
     int code;
     try {
-      code = await runInteractive(
-        'dart',
-        const ['pub', 'login'],
-        workingDirectory: context.git.root,
-      );
+      code = await runInteractive('dart', const [
+        'pub',
+        'login',
+      ], workingDirectory: context.git.root);
     } on ProcessException {
       code = -1;
     }
@@ -63,7 +62,8 @@ final class PubDevSession extends TargetSessionProvider {
       Diagnostic(
         code: 'RK-PUB-007',
         message: 'dart pub login did not complete',
-        remedy: 'Run dart pub login from a terminal, then re-run rk release '
+        remedy:
+            'Run dart pub login from a terminal, then re-run rk release '
             '${unit.name}. A successful login confirms a current session, '
             'not permission to publish every package.',
       ),
@@ -72,24 +72,25 @@ final class PubDevSession extends TargetSessionProvider {
   }
 
   static TargetNotReady _terminalRequired(ResolvedUnit unit) => TargetNotReady(
-        Diagnostic(
-          code: 'RK-PUB-007',
-          message: 'dart pub login requires an attached terminal',
-          remedy: 'Run dart pub login from a terminal, then re-run rk release '
-              '${unit.name}. Machine and redirected releases require an '
-              'existing token or session.',
-        ),
-        unit: unit.name,
-      );
+    Diagnostic(
+      code: 'RK-PUB-007',
+      message: 'dart pub login requires an attached terminal',
+      remedy:
+          'Run dart pub login from a terminal, then re-run rk release '
+          '${unit.name}. Machine and redirected releases require an '
+          'existing token or session.',
+    ),
+    unit: unit.name,
+  );
 
   /// Whether pub already has a token for pub.dev in this repository.
   Future<bool> _tokenConfigured(TargetReadinessContext context) async {
     try {
-      final tokens = await context.tools.run(
-        'dart',
-        const ['pub', 'token', 'list'],
-        workingDirectory: context.git.root,
-      );
+      final tokens = await context.tools.run('dart', const [
+        'pub',
+        'token',
+        'list',
+      ], workingDirectory: context.git.root);
       if (!tokens.ok) return false;
       return tokens.stdout
           .split('\n')
@@ -120,11 +121,10 @@ final class PubDevSession extends TargetSessionProvider {
 
   @override
   Future<String?> restore(TargetReadinessContext context) async {
-    final out = await context.tools.run(
-      'dart',
-      const ['pub', 'logout'],
-      workingDirectory: context.git.root,
-    );
+    final out = await context.tools.run('dart', const [
+      'pub',
+      'logout',
+    ], workingDirectory: context.git.root);
     return out.ok
         ? 'pub session cleared — it did not exist before this release'
         : 'pub session could not be cleared: ${out.summary}';

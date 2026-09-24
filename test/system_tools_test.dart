@@ -4,21 +4,23 @@ import 'package:rk/src/engine/tools.dart';
 import 'package:test/test.dart';
 
 void main() {
-  test('tool summaries keep the actionable error instead of a trailing hint',
-      () {
-    final result = ToolResult(
-      exitCode: 128,
-      stdout: '',
-      stderr: '''
+  test(
+    'tool summaries keep the actionable error instead of a trailing hint',
+    () {
+      final result = ToolResult(
+        exitCode: 128,
+        stdout: '',
+        stderr: '''
 ssh: Could not resolve hostname github.com: name or service not known
 fatal: Could not read from remote repository.
 Please make sure you have the correct access rights
 and the repository exists.
 ''',
-    );
+      );
 
-    expect(result.summary, startsWith('ssh: Could not resolve hostname'));
-  });
+      expect(result.summary, startsWith('ssh: Could not resolve hostname'));
+    },
+  );
 
   test('a bounded provider subprocess is terminated at its deadline', () async {
     if (Platform.isWindows) return;
@@ -33,24 +35,26 @@ and the repository exists.
     expect(stopwatch.elapsed, lessThan(const Duration(seconds: 3)));
   });
 
-  test('a bounded run gives its child a closed stdin, not a silent pipe',
-      () async {
-    if (Platform.isWindows) return;
+  test(
+    'a bounded run gives its child a closed stdin, not a silent pipe',
+    () async {
+      if (Platform.isWindows) return;
 
-    // `cat` with no argument reads stdin until EOF. Left open, it would sit
-    // on the pipe for the whole bound and come back as a timeout — rk
-    // reporting "this timed out" for a tool that was only ever waiting to be
-    // told there was nothing to read. The bound is deliberately generous:
-    // exit 0 is the whole assertion, and a tight one would only measure how
-    // loaded the machine was while a suite that shells out to real compiles
-    // runs beside it. Fixed, this returns in milliseconds; broken, it takes
-    // the bound and comes back 124.
-    final result = await const SystemTools(
-      timeout: Duration(seconds: 10),
-    ).run('cat', const []);
+      // `cat` with no argument reads stdin until EOF. Left open, it would sit
+      // on the pipe for the whole bound and come back as a timeout — rk
+      // reporting "this timed out" for a tool that was only ever waiting to be
+      // told there was nothing to read. The bound is deliberately generous:
+      // exit 0 is the whole assertion, and a tight one would only measure how
+      // loaded the machine was while a suite that shells out to real compiles
+      // runs beside it. Fixed, this returns in milliseconds; broken, it takes
+      // the bound and comes back 124.
+      final result = await const SystemTools(
+        timeout: Duration(seconds: 10),
+      ).run('cat', const []);
 
-    expect(result.exitCode, 0);
-  });
+      expect(result.exitCode, 0);
+    },
+  );
 
   test('a bound holds even when the child leaves something behind', () async {
     if (Platform.isWindows) return;
@@ -61,12 +65,12 @@ and the repository exists.
     // unconditionally waits on a process rk never knew about — verified to
     // hang indefinitely before this. A bound that can be outlived is not a
     // bound.
-    final result = await const SystemTools(
-      timeout: Duration(milliseconds: 300),
-    ).run('sh', const ['-c', 'sleep 2 & sleep 2']).timeout(
-      const Duration(seconds: 20),
-      onTimeout: () => fail('the bounded run never returned'),
-    );
+    final result = await const SystemTools(timeout: Duration(milliseconds: 300))
+        .run('sh', const ['-c', 'sleep 2 & sleep 2'])
+        .timeout(
+          const Duration(seconds: 20),
+          onTimeout: () => fail('the bounded run never returned'),
+        );
 
     expect(result.exitCode, 124);
     expect(result.summary, contains('timed out'));
@@ -81,12 +85,13 @@ and the repository exists.
     // stdout and stderr open. Waiting only on the shell's exit code therefore
     // declares success and then hangs while joining the streams. The process
     // and both pipes are one operation and share one deadline.
-    final result = await const SystemTools(
-      timeout: Duration(milliseconds: 100),
-    ).run('sh', const ['-c', 'sleep 2 &']).timeout(
-      const Duration(seconds: 3),
-      onTimeout: () => fail('the inherited process pipes outlived the bound'),
-    );
+    final result = await const SystemTools(timeout: Duration(milliseconds: 100))
+        .run('sh', const ['-c', 'sleep 2 &'])
+        .timeout(
+          const Duration(seconds: 3),
+          onTimeout: () =>
+              fail('the inherited process pipes outlived the bound'),
+        );
 
     expect(result.exitCode, 124);
     expect(result.summary, contains('timed out'));
@@ -103,13 +108,10 @@ and the repository exists.
       SystemTools(),
       SystemTools(timeout: Duration(seconds: 10)),
     ]) {
-      final result = await tools.run(
-        'sh',
-        const [
-          '-c',
-          r'printf "out\377put"; printf "before\377\376after" >&2; exit 3',
-        ],
-      );
+      final result = await tools.run('sh', const [
+        '-c',
+        r'printf "out\377put"; printf "before\377\376after" >&2; exit 3',
+      ]);
 
       expect(result.exitCode, 3);
       expect(result.stdout, contains('out'));
@@ -125,8 +127,9 @@ and the repository exists.
     // A bound is rk saying nobody will be waiting this long. git's credential
     // prompt goes to /dev/tty, which closing stdin does not reach, so the
     // read would burn its whole bound and be killed.
-    final bounded = await const SystemTools(timeout: Duration(seconds: 10))
-        .run('sh', const ['-c', 'echo "\$GIT_TERMINAL_PROMPT"']);
+    final bounded = await const SystemTools(
+      timeout: Duration(seconds: 10),
+    ).run('sh', const ['-c', 'echo "\$GIT_TERMINAL_PROMPT"']);
 
     expect(bounded.stdout.trim(), '0');
   });
@@ -136,8 +139,10 @@ and the repository exists.
 
     // The acts run unbounded, with the operator at the terminal the prompt
     // reaches. Suppressing it there turns an answerable push into a refusal.
-    final act = await const SystemTools()
-        .run('sh', const ['-c', 'echo "[\$GIT_TERMINAL_PROMPT]"']);
+    final act = await const SystemTools().run('sh', const [
+      '-c',
+      'echo "[\$GIT_TERMINAL_PROMPT]"',
+    ]);
 
     expect(act.stdout.trim(), '[]');
   });
@@ -160,7 +165,8 @@ and the repository exists.
     final result = ToolResult(
       exitCode: 1,
       stdout: 'compiling...',
-      stderr: 'lib/a.dart:3:5: Error: undefined name\n'
+      stderr:
+          'lib/a.dart:3:5: Error: undefined name\n'
           'lib/a.dart:9:1: Error: expected a declaration',
     );
 

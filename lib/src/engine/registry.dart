@@ -151,10 +151,7 @@ class Registry implements RegistryReader {
   }
 
   @override
-  Future<PublishedVersion?> lookupVersion(
-    String name,
-    Version version,
-  ) async {
+  Future<PublishedVersion?> lookupVersion(String name, Version version) async {
     final coordinate = '$name ${version.canonical}';
     final decoded = await _read(
       '/api/packages/$name/versions/${version.canonical}',

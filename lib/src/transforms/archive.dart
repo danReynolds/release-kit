@@ -81,11 +81,11 @@ class ArchiveBuilder {
   }
 
   static List<int> _le32(int value) => [
-        value & 0xff,
-        (value >> 8) & 0xff,
-        (value >> 16) & 0xff,
-        (value >> 24) & 0xff,
-      ];
+    value & 0xff,
+    (value >> 8) & 0xff,
+    (value >> 16) & 0xff,
+    (value >> 24) & 0xff,
+  ];
 
   static final _crcTable = () {
     final table = List<int>.filled(256, 0);

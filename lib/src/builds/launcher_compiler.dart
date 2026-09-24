@@ -17,15 +17,18 @@ final class LauncherCompiler {
       final result = Process.runSync('/usr/bin/xcrun', args);
       if (result.exitCode != 0 || '${result.stdout}'.trim().isEmpty) {
         throw StateError(
-            'the macOS launcher needs Xcode command-line tools: ${result.stderr}');
+          'the macOS launcher needs Xcode command-line tools: ${result.stderr}',
+        );
       }
       return '${result.stdout}'.trim();
     }
 
-    final executable =
-        File(xcrun(['--find', 'clang'])).resolveSymbolicLinksSync();
-    final sdk =
-        Directory(xcrun(['--show-sdk-path'])).resolveSymbolicLinksSync();
+    final executable = File(
+      xcrun(['--find', 'clang']),
+    ).resolveSymbolicLinksSync();
+    final sdk = Directory(
+      xcrun(['--show-sdk-path']),
+    ).resolveSymbolicLinksSync();
     final settings = File('$sdk/SDKSettings.json');
     final fingerprint =
         '$executable:${_stat(File(executable))}:$sdk:${_stat(settings)}';
@@ -35,17 +38,18 @@ final class LauncherCompiler {
       throw StateError('clang --version failed: ${version.stderr}');
     }
     final compiler = LauncherCompiler._(
-        executable,
-        sdk,
-        Map.unmodifiable({
-          'clang_sha256': Sha256.hex(File(executable).readAsBytesSync()),
-          'clang_version': '${version.stdout}'
-              .trim()
-              .split('\n')
-              .where((line) => !line.startsWith('InstalledDir:'))
-              .join('\n'),
-          'sdk_sha256': Sha256.hex(settings.readAsBytesSync()),
-        }));
+      executable,
+      sdk,
+      Map.unmodifiable({
+        'clang_sha256': Sha256.hex(File(executable).readAsBytesSync()),
+        'clang_version': '${version.stdout}'
+            .trim()
+            .split('\n')
+            .where((line) => !line.startsWith('InstalledDir:'))
+            .join('\n'),
+        'sdk_sha256': Sha256.hex(settings.readAsBytesSync()),
+      }),
+    );
     _cachedKey = fingerprint;
     return _cached = compiler;
   }

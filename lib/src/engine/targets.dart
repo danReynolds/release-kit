@@ -56,11 +56,7 @@ class TargetPlan {
   final String? uses;
 }
 
-enum ArtifactStatus {
-  notStaged,
-  staged,
-  invalid,
-}
+enum ArtifactStatus { notStaged, staged, invalid }
 
 /// What the exact stage inspection established about one expected filename.
 class ArtifactObservation {
@@ -85,8 +81,8 @@ class TargetObservation {
     this.currentDetail,
     Iterable<Diagnostic> historyProblems = const [],
     required Iterable<ArtifactObservation> artifacts,
-  })  : historyProblems = List<Diagnostic>.unmodifiable(historyProblems),
-        artifacts = List<ArtifactObservation>.unmodifiable(artifacts);
+  }) : historyProblems = List<Diagnostic>.unmodifiable(historyProblems),
+       artifacts = List<ArtifactObservation>.unmodifiable(artifacts);
 
   final TargetPlan expectation;
   final Inspection inspection;
@@ -128,11 +124,11 @@ class StatusIssue {
   final Map<String, String> evidence;
 
   String get deduplicationKey => [
-        unit ?? '',
-        target ?? '',
-        diagnostic.code,
-        diagnostic.source?.toString() ?? '',
-        diagnostic.message,
-        diagnostic.remedy ?? '',
-      ].join('\u0000');
+    unit ?? '',
+    target ?? '',
+    diagnostic.code,
+    diagnostic.source?.toString() ?? '',
+    diagnostic.message,
+    diagnostic.remedy ?? '',
+  ].join('\u0000');
 }

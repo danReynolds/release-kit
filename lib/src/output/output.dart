@@ -64,12 +64,12 @@ enum Mark {
   /// the line a person reads and the document a caller keys on end up
   /// disagreeing about severity.
   static Mark of(Verdict verdict) => switch (verdict) {
-        Verdict.exact => satisfied,
-        Verdict.conflict => blocked,
-        // Absent is work to do and unknown is work rk could not rule out.
-        // Neither earns a glyph; the words separate them.
-        Verdict.absent || Verdict.unknown => none,
-      };
+    Verdict.exact => satisfied,
+    Verdict.conflict => blocked,
+    // Absent is work to do and unknown is work rk could not rule out.
+    // Neither earns a glyph; the words separate them.
+    Verdict.absent || Verdict.unknown => none,
+  };
 }
 
 /// What a subject represents before rk has observed an outcome for it.
@@ -102,11 +102,11 @@ enum RuntimeState {
   failure;
 
   static RuntimeState of(Verdict verdict) => switch (verdict) {
-        Verdict.exact => satisfied,
-        Verdict.conflict => failure,
-        Verdict.unknown => attention,
-        Verdict.absent => neutral,
-      };
+    Verdict.exact => satisfied,
+    Verdict.conflict => failure,
+    Verdict.unknown => attention,
+    Verdict.absent => neutral,
+  };
 }
 
 /// One styled fragment whose unstyled [text] remains the output contract.
@@ -144,13 +144,13 @@ final class OutputTheme {
     if (!useColor || safe.isEmpty) return safe;
     final color = switch (state) {
       RuntimeState.neutral => switch (role) {
-          VisualRole.primary => null,
-          VisualRole.secondary => '90', // grey
-          VisualRole.localWork => '34', // blue
-          VisualRole.checkpoint => '35', // violet/magenta
-          VisualRole.requirement => '33', // amber/yellow
-          VisualRole.releaseTarget || VisualRole.operatorAction => '36', // cyan
-        },
+        VisualRole.primary => null,
+        VisualRole.secondary => '90', // grey
+        VisualRole.localWork => '34', // blue
+        VisualRole.checkpoint => '35', // violet/magenta
+        VisualRole.requirement => '33', // amber/yellow
+        VisualRole.releaseTarget || VisualRole.operatorAction => '36', // cyan
+      },
       RuntimeState.active => '36', // cyan
       RuntimeState.satisfied => '90', // grey
       RuntimeState.success => '32', // green
@@ -189,11 +189,11 @@ class Output {
     int? Function()? terminalWidthReader,
     Report? report,
     Elapsed Function()? clock,
-  })  : useColor = isTerminal && useColor,
-        _terminalWidth = terminalWidth,
-        _terminalWidthReader = terminalWidthReader,
-        report = report ?? Report('rk'),
-        _clock = clock ?? _wallClock;
+  }) : useColor = isTerminal && useColor,
+       _terminalWidth = terminalWidth,
+       _terminalWidthReader = terminalWidthReader,
+       report = report ?? Report('rk'),
+       _clock = clock ?? _wallClock;
 
   /// Writes to stdout, detecting a terminal and honouring `NO_COLOR`.
   ///
@@ -280,10 +280,7 @@ class Output {
       // by its owner — the same bug [close] guards. Say so loudly in
       // checked mode; reap it regardless, so two boards can never paint
       // one terminal.
-      assert(
-        false,
-        'a live progress board was never resolved by its owner',
-      );
+      assert(false, 'a live progress board was never resolved by its owner');
       previous.discard();
     }
     _yieldToProse();
@@ -303,8 +300,9 @@ class Output {
   /// Nothing is emitted for a pipe. On a terminal the region appears only
   /// after a short delay, so fast reads do not flicker, and [TargetChecks]
   /// erases it completely before the deterministic report is rendered.
-  TargetChecks targetChecks(
-      {Duration delay = const Duration(milliseconds: 80)}) {
+  TargetChecks targetChecks({
+    Duration delay = const Duration(milliseconds: 80),
+  }) {
     return TargetChecks._(this, delay);
   }
 
@@ -383,15 +381,17 @@ class Output {
       sourceBinding: sourceBinding,
       sourceComparison: sourceComparison,
     );
-    heading([
-      name,
-      // The commit rides beside the branch for a reader; the document keeps
-      // them apart, because `branch` promises a branch name.
-      if (branch != null && commit != null) '$branch@$commit',
-      if (branch != null && commit == null) branch,
-      if (branch == null && commit != null) commit,
-      if (uncommitted != null && uncommitted > 0) '$uncommitted uncommitted',
-    ].join(' · '));
+    heading(
+      [
+        name,
+        // The commit rides beside the branch for a reader; the document keeps
+        // them apart, because `branch` promises a branch name.
+        if (branch != null && commit != null) '$branch@$commit',
+        if (branch != null && commit == null) branch,
+        if (branch == null && commit != null) commit,
+        if (uncommitted != null && uncommitted > 0) '$uncommitted uncommitted',
+      ].join(' · '),
+    );
   }
 
   /// Opens a unit. Steps printed after this belong to it.
@@ -409,7 +409,8 @@ class Output {
     // caught it moonlighting.
     line(
       name,
-      note: display ??
+      note:
+          display ??
           (state == null ? '$version › $tag' : '$version › $tag · $state'),
       // The unit's own line is a sentence, not a column: what follows the
       // name belongs beside it, not at the note column the rows below
@@ -469,14 +470,12 @@ class Output {
         StepKind.prerequisite => VisualRole.requirement,
         StepKind.build ||
         StepKind.notarize ||
-        StepKind.archive =>
-          VisualRole.localWork,
+        StepKind.archive => VisualRole.localWork,
         StepKind.completeStage => VisualRole.checkpoint,
         StepKind.tag ||
         StepKind.publishRegistry ||
         StepKind.publishRelease ||
-        StepKind.publishHomebrew =>
-          VisualRole.releaseTarget,
+        StepKind.publishHomebrew => VisualRole.releaseTarget,
       },
       state: RuntimeState.of(verdict),
       noteState: step.isPermanent ? RuntimeState.attention : null,
@@ -505,10 +504,7 @@ class Output {
       // Every board's owner must resolve it — settle, conclude, or discard.
       // A board alive at close is an owner bug; say so loudly in checked
       // mode, and still reap its timers so a release build cannot hang.
-      assert(
-        false,
-        'a live progress board was never resolved by its owner',
-      );
+      assert(false, 'a live progress board was never resolved by its owner');
       board.discard();
     }
     _yieldToProse();
@@ -556,8 +552,8 @@ class Output {
     final plain = note == null
         ? '$plainGlyph $indented'
         : indentedWidth >= labelWidth
-            ? '$plainGlyph $indented $note'
-            : '$plainGlyph ${_padToWidth(indented, labelWidth)} $note';
+        ? '$plainGlyph $indented $note'
+        : '$plainGlyph ${_padToWidth(indented, labelWidth)} $note';
     final width = terminalWidth;
     if (width != null && displayWidth(plain) > width) {
       final firstPrefix = '$plainGlyph ${'  ' * depth}';
@@ -587,8 +583,10 @@ class Output {
 
     final glyph = paintedGlyph;
     if (note == null) {
-      sink('$glyph '
-          '${_style(indented, role: role, state: effectiveState, strong: strong)}\n');
+      sink(
+        '$glyph '
+        '${_style(indented, role: role, state: effectiveState, strong: strong)}\n',
+      );
       return;
     }
     if (indentedWidth >= labelWidth) {
@@ -616,8 +614,7 @@ class Output {
     VisualRole role = VisualRole.primary,
     RuntimeState state = RuntimeState.neutral,
     bool strong = false,
-  }) =>
-      theme.paint(text, role: role, state: state, strong: strong);
+  }) => theme.paint(text, role: role, state: state, strong: strong);
 
   /// Writes one pre-laid-out line made of semantic spans.
   ///
@@ -631,15 +628,13 @@ class Output {
     sink('${theme.render(values)}\n');
   }
 
-  static int plainWidth(Iterable<OutputSpan> spans) => spans.fold(
-        0,
-        (width, span) => width + displayWidth(span.text),
-      );
+  static int plainWidth(Iterable<OutputSpan> spans) =>
+      spans.fold(0, (width, span) => width + displayWidth(span.text));
 
   /// Terminal columns occupied by inert human text.
-  static int displayWidth(String text) => terminalSafeText(text)
-      .runes
-      .fold(0, (width, rune) => width + _terminalRuneWidth(rune));
+  static int displayWidth(String text) => terminalSafeText(
+    text,
+  ).runes.fold(0, (width, rune) => width + _terminalRuneWidth(rune));
 
   static String _padToWidth(String text, int width) {
     final missing = width - displayWidth(text);
@@ -698,9 +693,11 @@ class Output {
     final width = terminalWidth;
     if (width == null ||
         displayWidth(firstPrefix) + displayWidth(text) <= width) {
-      sink('${paintedFirstPrefix ?? firstPrefix}'
-          '${_style(text, role: role, state: state, strong: strong)}'
-          '${endWithNewline ? '\n' : ''}');
+      sink(
+        '${paintedFirstPrefix ?? firstPrefix}'
+        '${_style(text, role: role, state: state, strong: strong)}'
+        '${endWithNewline ? '\n' : ''}',
+      );
       return;
     }
 
@@ -711,12 +708,15 @@ class Output {
     );
     for (final (index, fragment) in fragments.indexed) {
       final first = index == 0;
-      final prefix =
-          first ? paintedFirstPrefix ?? firstPrefix : continuationPrefix;
+      final prefix = first
+          ? paintedFirstPrefix ?? firstPrefix
+          : continuationPrefix;
       final newline = index < fragments.length - 1 || endWithNewline;
-      sink('$prefix'
-          '${_style(fragment, role: role, state: state, strong: strong)}'
-          '${newline ? '\n' : ''}');
+      sink(
+        '$prefix'
+        '${_style(fragment, role: role, state: state, strong: strong)}'
+        '${newline ? '\n' : ''}',
+      );
     }
   }
 
@@ -751,7 +751,8 @@ class Output {
         }
         final remaining = String.fromCharCodes(runes.skip(offset));
         if (displayWidth(remaining) <= available) {
-          current = '$current${separator == 0 ? '' : ' '}'
+          current =
+              '$current${separator == 0 ? '' : ' '}'
               '$remaining';
           offset = runes.length;
           continue;
@@ -802,10 +803,12 @@ class Output {
     final sentence = switch (kind) {
       HaltKind.beforeActing =>
         'rk stopped. no public target changed. safe to re-run.',
-      HaltKind.stoppedPartway => 'rk stopped partway. everything already '
-          'done is real and stays done; re-running resumes after it.',
-      HaltKind.lostTrack => 'rk acted, then lost sight of the result. '
-          'an effect may exist. still safe to re-run.',
+      HaltKind.stoppedPartway =>
+        'rk stopped partway. everything already '
+            'done is real and stays done; re-running resumes after it.',
+      HaltKind.lostTrack =>
+        'rk acted, then lost sight of the result. '
+            'an effect may exist. still safe to re-run.',
       HaltKind.unfixableByRerun =>
         'No public targets changed. Resolve the conflict before retrying.',
       HaltKind.actedAndUnfixable =>
@@ -814,7 +817,8 @@ class Output {
     report.halt(
       kind.name,
       sentence,
-      helps: kind != HaltKind.unfixableByRerun &&
+      helps:
+          kind != HaltKind.unfixableByRerun &&
           kind != HaltKind.actedAndUnfixable,
     );
     blank();
@@ -896,13 +900,13 @@ class Output {
       _style(mark.glyph, state: state);
 
   static RuntimeState _stateForMark(Mark mark) => switch (mark) {
-        Mark.done => RuntimeState.success,
-        Mark.satisfied => RuntimeState.satisfied,
-        Mark.blocked => RuntimeState.failure,
-        Mark.next => RuntimeState.active,
-        Mark.warning => RuntimeState.attention,
-        Mark.none => RuntimeState.neutral,
-      };
+    Mark.done => RuntimeState.success,
+    Mark.satisfied => RuntimeState.satisfied,
+    Mark.blocked => RuntimeState.failure,
+    Mark.next => RuntimeState.active,
+    Mark.warning => RuntimeState.attention,
+    Mark.none => RuntimeState.neutral,
+  };
 }
 
 /// One live fixed-height progress surface.
@@ -1024,10 +1028,7 @@ final class LiveProgress {
     _ticker?.cancel();
     _visible = true;
     if (!_draw()) return;
-    _ticker = Timer.periodic(
-      const Duration(milliseconds: 120),
-      (_) => _draw(),
-    );
+    _ticker = Timer.periodic(const Duration(milliseconds: 120), (_) => _draw());
   }
 
   bool _draw() {
@@ -1053,11 +1054,13 @@ final class LiveProgress {
     ];
     final grouped = model.groups.isNotEmpty;
     for (final group in model.groups) {
-      lines.add(_output._style(
-        _fit('  $group', available),
-        role: VisualRole.secondary,
-        strong: true,
-      ));
+      lines.add(
+        _output._style(
+          _fit('  $group', available),
+          role: VisualRole.secondary,
+          strong: true,
+        ),
+      );
       for (final row in model.rows.where((row) => row.group == group)) {
         lines.add(_transientRow(row, available, depth: 2));
       }
@@ -1069,8 +1072,10 @@ final class LiveProgress {
   }
 
   String _transientRow(ProgressRow row, int? available, {required int depth}) {
-    final (glyph, rawStatus, glyphState, textState) =
-        _rowPresentation(row, active: true);
+    final (glyph, rawStatus, glyphState, textState) = _rowPresentation(
+      row,
+      active: true,
+    );
     final status = terminalSafeText(rawStatus);
     final indent = '  ' * depth;
     final left = terminalSafeText(
@@ -1105,51 +1110,51 @@ final class LiveProgress {
   }) {
     return switch (row.state) {
       ProgressRowState.pending => (
-          '…',
-          row.note ?? 'queued',
-          RuntimeState.satisfied,
-          RuntimeState.satisfied,
-        ),
+        '…',
+        row.note ?? 'queued',
+        RuntimeState.satisfied,
+        RuntimeState.satisfied,
+      ),
       ProgressRowState.active => (
-          active ? _frames[_spin % _frames.length] : '…',
-          [
-            row.activity!.running,
-            if (row.detail != null) row.detail!,
-            if (active && showElapsed) formatDuration(row.elapsed),
-          ].join(' · '),
-          RuntimeState.active,
-          RuntimeState.active,
-        ),
+        active ? _frames[_spin % _frames.length] : '…',
+        [
+          row.activity!.running,
+          if (row.detail != null) row.detail!,
+          if (active && showElapsed) formatDuration(row.elapsed),
+        ].join(' · '),
+        RuntimeState.active,
+        RuntimeState.active,
+      ),
       ProgressRowState.complete => (
-          switch (row.mark) {
-            ProgressRowMark.done => Mark.done.glyph,
-            ProgressRowMark.satisfied => Mark.satisfied.glyph,
-            ProgressRowMark.none => Mark.none.glyph,
-          },
-          row.note!,
-          switch (row.mark) {
-            ProgressRowMark.done => RuntimeState.success,
-            ProgressRowMark.satisfied => RuntimeState.satisfied,
-            ProgressRowMark.none => RuntimeState.neutral,
-          },
-          switch (row.emphasis) {
-            ProgressRowEmphasis.plain => RuntimeState.neutral,
-            ProgressRowEmphasis.muted => RuntimeState.satisfied,
-            ProgressRowEmphasis.attention => RuntimeState.attention,
-          },
-        ),
+        switch (row.mark) {
+          ProgressRowMark.done => Mark.done.glyph,
+          ProgressRowMark.satisfied => Mark.satisfied.glyph,
+          ProgressRowMark.none => Mark.none.glyph,
+        },
+        row.note!,
+        switch (row.mark) {
+          ProgressRowMark.done => RuntimeState.success,
+          ProgressRowMark.satisfied => RuntimeState.satisfied,
+          ProgressRowMark.none => RuntimeState.neutral,
+        },
+        switch (row.emphasis) {
+          ProgressRowEmphasis.plain => RuntimeState.neutral,
+          ProgressRowEmphasis.muted => RuntimeState.satisfied,
+          ProgressRowEmphasis.attention => RuntimeState.attention,
+        },
+      ),
       ProgressRowState.failed => (
-          Mark.blocked.glyph,
-          row.note!,
-          RuntimeState.failure,
-          RuntimeState.failure,
-        ),
+        Mark.blocked.glyph,
+        row.note!,
+        RuntimeState.failure,
+        RuntimeState.failure,
+      ),
       ProgressRowState.notAttempted => (
-          '—',
-          row.note!,
-          RuntimeState.satisfied,
-          RuntimeState.satisfied,
-        ),
+        '—',
+        row.note!,
+        RuntimeState.satisfied,
+        RuntimeState.satisfied,
+      ),
     };
   }
 
@@ -1189,11 +1194,13 @@ final class LiveProgress {
     if (_closed) return;
     final printedRows = !_output.isTerminal && emitSlowToNonTerminal
         ? model.rows
-            .where((row) =>
-                _nonTerminalPrinted.containsKey(row.id) &&
-                row.state != ProgressRowState.pending &&
-                row.state != ProgressRowState.active)
-            .toList()
+              .where(
+                (row) =>
+                    _nonTerminalPrinted.containsKey(row.id) &&
+                    row.state != ProgressRowState.pending &&
+                    row.state != ProgressRowState.active,
+              )
+              .toList()
         : const <ProgressRow>[];
     _closeTimers();
     _erase();
@@ -1228,12 +1235,7 @@ final class LiveProgress {
     }
     _output.heading(title ?? model.title);
     for (final group in model.groups) {
-      _output.line(
-        group,
-        depth: 1,
-        role: VisualRole.secondary,
-        strong: true,
-      );
+      _output.line(group, depth: 1, role: VisualRole.secondary, strong: true);
       for (final row in model.rows.where((row) => row.group == group)) {
         _writeDurableRow(row, depth: 2);
       }
@@ -1267,21 +1269,21 @@ final class LiveProgress {
     settle();
   }
 
-  void _writeDurableRow(
-    ProgressRow row, {
-    int depth = 1,
-    bool active = false,
-  }) {
-    final (glyph, status, glyphState, textState) =
-        _rowPresentation(row, active: active);
+  void _writeDurableRow(ProgressRow row, {int depth = 1, bool active = false}) {
+    final (glyph, status, glyphState, textState) = _rowPresentation(
+      row,
+      active: active,
+    );
     final mark = switch (glyph) {
       '✓' => Mark.done,
       '·' => Mark.satisfied,
       '✗' => Mark.blocked,
       _ => Mark.none,
     };
-    final subject =
-        [row.label, if (row.coordinate != null) row.coordinate!].join(' · ');
+    final subject = [
+      row.label,
+      if (row.coordinate != null) row.coordinate!,
+    ].join(' · ');
     final label = glyph == '—' || glyph == '…' ? '$glyph $subject' : subject;
     _output.line(
       label,
@@ -1369,11 +1371,11 @@ int _terminalRuneWidth(int rune) {
 /// status's existing add/finish API and fully transient behavior.
 final class TargetChecks {
   TargetChecks._(Output output, Duration delay)
-      : _board = output.progressBoard(
-          'Release targets',
-          delay: delay,
-          showElapsed: false,
-        );
+    : _board = output.progressBoard(
+        'Release targets',
+        delay: delay,
+        showElapsed: false,
+      );
 
   final LiveProgress _board;
   final Map<String, ProgressRowController> _rows = {};
@@ -1392,10 +1394,7 @@ final class TargetChecks {
     if (row == null) return;
     switch (verdict) {
       case Verdict.exact:
-        row.complete(
-          note: 'checked',
-          mark: ProgressRowMark.satisfied,
-        );
+        row.complete(note: 'checked', mark: ProgressRowMark.satisfied);
       case Verdict.absent:
         row.complete(note: 'checked', mark: ProgressRowMark.none);
       case Verdict.conflict:

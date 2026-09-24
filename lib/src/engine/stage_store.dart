@@ -7,7 +7,7 @@ import 'dart:io';
 /// interpreting release state belongs to status and release, not the store.
 final class StageStore {
   StageStore(String repositoryRoot)
-      : repositoryRoot = Directory(repositoryRoot).absolute.path;
+    : repositoryRoot = Directory(repositoryRoot).absolute.path;
 
   final String repositoryRoot;
 
@@ -48,20 +48,24 @@ final class StageStore {
   /// No receipt is required. A broken stage and a child symlink are still
   /// local residue an explicitly authorized clean must be able to remove.
   List<StageEntry> inventory() {
-    final stages = _fixedDirectory(
-      const ['.rk', 'work', 'stages'],
-      create: false,
-    );
+    final stages = _fixedDirectory(const [
+      '.rk',
+      'work',
+      'stages',
+    ], create: false);
     if (stages == null) return const [];
 
     final entries = <StageEntry>[];
-    for (final entity
-        in Directory(stages).listSync(followLinks: false, recursive: false)) {
+    for (final entity in Directory(
+      stages,
+    ).listSync(followLinks: false, recursive: false)) {
       final name = _directName(stages, entity.path);
-      entries.add(StageEntry(
-        name: name,
-        type: FileSystemEntity.typeSync(entity.path, followLinks: false),
-      ));
+      entries.add(
+        StageEntry(
+          name: name,
+          type: FileSystemEntity.typeSync(entity.path, followLinks: false),
+        ),
+      );
     }
     entries.sort((left, right) => left.name.compareTo(right.name));
     return List<StageEntry>.unmodifiable(entries);
@@ -75,10 +79,11 @@ final class StageStore {
   /// recursive deletion does not follow child links.
   bool deleteEntry(StageEntry entry) {
     _requireDirectName(entry.name);
-    final stages = _fixedDirectory(
-      const ['.rk', 'work', 'stages'],
-      create: false,
-    );
+    final stages = _fixedDirectory(const [
+      '.rk',
+      'work',
+      'stages',
+    ], create: false);
     if (stages == null) return false;
     final target = _join(stages, entry.name);
     final current = FileSystemEntity.typeSync(target, followLinks: false);

@@ -153,7 +153,8 @@ class _Parser {
     if (path.isEmpty || path.any((s) => !_bareKey.hasMatch(s))) {
       _fail(
         'table names must be dot-separated bare keys',
-        remedy: 'use letters, digits, hyphens and underscores, as in '
+        remedy:
+            'use letters, digits, hyphens and underscores, as in '
             '[release.cli]',
       );
       return null;
@@ -181,10 +182,7 @@ class _Parser {
           return null;
         }
         table.values[key] = array;
-        table.keyLocations.putIfAbsent(
-          key,
-          () => SourceLocation(_path, _line),
-        );
+        table.keyLocations.putIfAbsent(key, () => SourceLocation(_path, _line));
         final element = TomlTable(SourceLocation(_path, _line));
         array.tables.add(element);
         return element;

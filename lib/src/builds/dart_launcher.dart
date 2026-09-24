@@ -1,6 +1,7 @@
 /// A native launcher follows its installed location (including a Homebrew
 /// symlink), never PATH or cwd. execv preserves signals and exit status.
-String dartLauncherSource(String executable) => '''
+String dartLauncherSource(String executable) =>
+    '''
 #include <mach-o/dyld.h>
 #include <limits.h>
 #include <stdio.h>

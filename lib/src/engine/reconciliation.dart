@@ -46,7 +46,8 @@ abstract final class PublicReconciliation {
       );
     }
 
-    final comparedAll = expected.isNotEmpty &&
+    final comparedAll =
+        expected.isNotEmpty &&
         expected.every(
           (name) =>
               expectedProofs[name] != null && publishedProofs[name] != null,
@@ -99,7 +100,8 @@ abstract final class PublicReconciliation {
     }
     if (publishedVersion < intendedVersion) {
       return Inspection.absent(
-        detail: '$label points at earlier version '
+        detail:
+            '$label points at earlier version '
             '${publishedVersion.canonical}',
         evidence: {
           'version': publishedVersion.canonical,

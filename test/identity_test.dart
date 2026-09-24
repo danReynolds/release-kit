@@ -12,10 +12,13 @@ void main() {
   late Directory scratch;
   setUp(() {
     scratch = Directory.systemTemp.createTempSync('rk-identity-test-');
-    File('${scratch.path}/example-2.1.0-macos-arm64.tar.gz')
-        .writeAsBytesSync(ArchiveBuilder.gzip(ArchiveBuilder.tar([
-      ArchiveEntry(name: 'example', bytes: [1, 2, 3], executable: true),
-    ])));
+    File('${scratch.path}/example-2.1.0-macos-arm64.tar.gz').writeAsBytesSync(
+      ArchiveBuilder.gzip(
+        ArchiveBuilder.tar([
+          ArchiveEntry(name: 'example', bytes: [1, 2, 3], executable: true),
+        ]),
+      ),
+    );
   });
   tearDown(() => scratch.deleteSync(recursive: true));
   PublishedIdentity identity(Map<String, ToolResult> answers) =>
@@ -26,10 +29,12 @@ void main() {
       );
 
   group('public signing history', () {
-    test('is complete, public-only, and newest first in a shallow checkout',
-        () async {
-      final history = await identity({
-        'gh': ok('''[[
+    test(
+      'is complete, public-only, and newest first in a shallow checkout',
+      () async {
+        final history =
+            await identity({
+              'gh': ok('''[[
           {"tag_name":"v0.7.0","draft":false},
           {"tag_name":"v0.9.0","draft":false},
           {"tag_name":"v0.8.0","draft":true},
@@ -37,57 +42,67 @@ void main() {
         ],[
           {"tag_name":"v1.0.0","draft":false}
         ]]'''),
-      }).priorReleaseTags(
-        tagPattern: 'v{version}',
-        before: Version.tryParse('1.0.0')!,
-      );
+            }).priorReleaseTags(
+              tagPattern: 'v{version}',
+              before: Version.tryParse('1.0.0')!,
+            );
 
-      expect(history.readable, isTrue, reason: history.why);
-      expect(history.tags, ['v0.9.0', 'v0.7.0']);
-    });
+        expect(history.readable, isTrue, reason: history.why);
+        expect(history.tags, ['v0.9.0', 'v0.7.0']);
+      },
+    );
 
-    test('an unreadable or malformed public history never means first release',
-        () async {
-      final unreachable = await identity({
-        'gh': failed('could not resolve host'),
-      }).priorReleaseTags(
-        tagPattern: 'v{version}',
-        before: Version.tryParse('1.0.0')!,
-      );
-      final malformed = await identity({
-        'gh': ok('[[{"tag_name":"v0.9.0"}]]'),
-      }).priorReleaseTags(
-        tagPattern: 'v{version}',
-        before: Version.tryParse('1.0.0')!,
-      );
+    test(
+      'an unreadable or malformed public history never means first release',
+      () async {
+        final unreachable =
+            await identity({
+              'gh': failed('could not resolve host'),
+            }).priorReleaseTags(
+              tagPattern: 'v{version}',
+              before: Version.tryParse('1.0.0')!,
+            );
+        final malformed =
+            await identity({
+              'gh': ok('[[{"tag_name":"v0.9.0"}]]'),
+            }).priorReleaseTags(
+              tagPattern: 'v{version}',
+              before: Version.tryParse('1.0.0')!,
+            );
 
-      expect(unreachable.readable, isFalse);
-      expect(malformed.readable, isFalse);
-    });
+        expect(unreachable.readable, isFalse);
+        expect(malformed.readable, isFalse);
+      },
+    );
 
-    test('a listed release disappearing during identity read is unreadable',
-        () async {
-      final reading = await PublishedIdentity(
-        tools: SequencedTools([failed('gh: Not Found (HTTP 404)')]),
-        repository: 'example/tool',
-        workingDirectory: '/repo',
-      ).read(
-        tag: 'v0.9.0',
-        executable: 'example',
-        into: scratch.path,
-        expectedPublished: true,
-      );
+    test(
+      'a listed release disappearing during identity read is unreadable',
+      () async {
+        final reading =
+            await PublishedIdentity(
+              tools: SequencedTools([failed('gh: Not Found (HTTP 404)')]),
+              repository: 'example/tool',
+              workingDirectory: '/repo',
+            ).read(
+              tag: 'v0.9.0',
+              executable: 'example',
+              into: scratch.path,
+              expectedPublished: true,
+            );
 
-      expect(reading.answer, IdentityAnswer.unreadable);
-      expect(reading.why, contains('disappeared'));
-    });
+        expect(reading.answer, IdentityAnswer.unreadable);
+        expect(reading.why, contains('disappeared'));
+      },
+    );
   });
 
   test('reads the requirement from the published binary', () async {
     final reading = await identity({
       'gh': ok('{"assets":[{"name":"example-2.1.0-macos-arm64.tar.gz"}]}'),
-      'codesign': ok('designated => identifier "com.example.tool" and '
-          'certificate leaf[subject.OU] = "ABCDE12345"'),
+      'codesign': ok(
+        'designated => identifier "com.example.tool" and '
+        'certificate leaf[subject.OU] = "ABCDE12345"',
+      ),
     }).read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
 
     expect(reading.isKnown, isTrue, reason: reading.why);
@@ -95,39 +110,49 @@ void main() {
   });
 
   test(
-      'a published bundle verifies every code file and reads the runtime identity',
-      () async {
-    final bundle = BinaryArtifact.dartBundle('example');
-    File('${scratch.path}/example-2.1.0-macos-arm64.tar.gz')
-        .writeAsBytesSync(ArchiveBuilder.gzip(ArchiveBuilder.tar([
-      for (final file in bundle.files)
-        ArchiveEntry(
-            name: file.path,
-            bytes: file.path == BinaryArtifact.manifestName
-                ? bundle.manifest.codeUnits
-                : [1, 2, 3],
-            executable: file.executable),
-    ])));
-    final tools = ScriptedTools({
-      'gh': ok('{"assets":[{"name":"example-2.1.0-macos-arm64.tar.gz"}]}'),
-      'codesign': ok('designated => identifier "io.example.tool"'),
-    });
-    final reading = await PublishedIdentity(
-            tools: tools, repository: 'example/tool', workingDirectory: '/repo')
-        .read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
-    expect(reading.isKnown, isTrue, reason: reading.why);
-    final verifications = tools.calls
-        .where((call) => call.first == 'codesign' && call.contains('--verify'));
-    expect(verifications, hasLength(3));
-    expect(tools.calls.last, contains('-r-'));
-    expect(tools.calls.last.last, endsWith('/lib/example/dartaotruntime'));
-    expect(
-        tools.calls
-            .where((call) => call.first != 'gh' && call.first != 'codesign'),
+    'a published bundle verifies every code file and reads the runtime identity',
+    () async {
+      final bundle = BinaryArtifact.dartBundle('example');
+      File('${scratch.path}/example-2.1.0-macos-arm64.tar.gz').writeAsBytesSync(
+        ArchiveBuilder.gzip(
+          ArchiveBuilder.tar([
+            for (final file in bundle.files)
+              ArchiveEntry(
+                name: file.path,
+                bytes: file.path == BinaryArtifact.manifestName
+                    ? bundle.manifest.codeUnits
+                    : [1, 2, 3],
+                executable: file.executable,
+              ),
+          ]),
+        ),
+      );
+      final tools = ScriptedTools({
+        'gh': ok('{"assets":[{"name":"example-2.1.0-macos-arm64.tar.gz"}]}'),
+        'codesign': ok('designated => identifier "io.example.tool"'),
+      });
+      final reading = await PublishedIdentity(
+        tools: tools,
+        repository: 'example/tool',
+        workingDirectory: '/repo',
+      ).read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
+      expect(reading.isKnown, isTrue, reason: reading.why);
+      final verifications = tools.calls.where(
+        (call) => call.first == 'codesign' && call.contains('--verify'),
+      );
+      expect(verifications, hasLength(3));
+      expect(tools.calls.last, contains('-r-'));
+      expect(tools.calls.last.last, endsWith('/lib/example/dartaotruntime'));
+      expect(
+        tools.calls.where(
+          (call) => call.first != 'gh' && call.first != 'codesign',
+        ),
         isEmpty,
         reason:
-            'reading published identity never executes the downloaded program');
-  });
+            'reading published identity never executes the downloaded program',
+      );
+    },
+  );
 
   test('runs the steps in the order that makes them meaningful', () async {
     final tools = ScriptedTools({
@@ -143,7 +168,8 @@ void main() {
     expect(
       tools.calls.map((c) => c.first).toList(),
       ['gh', 'gh', 'codesign', 'codesign'],
-      reason: 'ask the release, download, open the named asset, then read the '
+      reason:
+          'ask the release, download, open the named asset, then read the '
           'verified signature',
     );
     expect(
@@ -155,46 +181,52 @@ void main() {
     expect(
       tools.calls[1],
       contains('example-2.1.0-macos-arm64.tar.gz'),
-      reason: 'the asset is named from the release\'s own list, not guessed '
+      reason:
+          'the asset is named from the release\'s own list, not guessed '
           'at with a glob',
     );
   });
 
   group('nothing published and nothing readable are different answers', () {
-    test('no matching asset is an absence, read from the list itself',
-        () async {
-      // The release exists and its own asset list has nothing for this
-      // executable and platform — absence as data, not as matched prose.
-      final reading = await PublishedIdentity(
-        tools: SequencedTools([
-          ok('{"assets":[{"name":"other-2.1.0-linux-x64.tar.gz"}]}'),
-        ]),
-        repository: 'example/tool',
-        workingDirectory: '/repo',
-      ).read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
+    test(
+      'no matching asset is an absence, read from the list itself',
+      () async {
+        // The release exists and its own asset list has nothing for this
+        // executable and platform — absence as data, not as matched prose.
+        final reading = await PublishedIdentity(
+          tools: SequencedTools([
+            ok('{"assets":[{"name":"other-2.1.0-linux-x64.tar.gz"}]}'),
+          ]),
+          repository: 'example/tool',
+          workingDirectory: '/repo',
+        ).read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
 
-      expect(reading.isKnown, isFalse);
-      expect(
-        reading.answer,
-        IdentityAnswer.none,
-        reason: 'the honest state before a first signed release — and data, '
-            'so no caller has to string-match the prose',
-      );
-    });
+        expect(reading.isKnown, isFalse);
+        expect(
+          reading.answer,
+          IdentityAnswer.none,
+          reason:
+              'the honest state before a first signed release — and data, '
+              'so no caller has to string-match the prose',
+        );
+      },
+    );
 
-    test('no release at the tag is an absence, once the repo has answered',
-        () async {
-      final reading = await PublishedIdentity(
-        tools: SequencedTools([
-          failed('gh: Not Found (HTTP 404)'),
-          ok('{"name":"tool"}'),
-        ]),
-        repository: 'example/tool',
-        workingDirectory: '/repo',
-      ).read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
+    test(
+      'no release at the tag is an absence, once the repo has answered',
+      () async {
+        final reading = await PublishedIdentity(
+          tools: SequencedTools([
+            failed('gh: Not Found (HTTP 404)'),
+            ok('{"name":"tool"}'),
+          ]),
+          repository: 'example/tool',
+          workingDirectory: '/repo',
+        ).read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
 
-      expect(reading.answer, IdentityAnswer.none);
-    });
+        expect(reading.answer, IdentityAnswer.none);
+      },
+    );
 
     test('a repository rk cannot see is not an absence', () async {
       // gh says "release not found" for a repository that does not exist and
@@ -222,14 +254,16 @@ void main() {
       expect(
         reading.answer,
         IdentityAnswer.unreadable,
-        reason: 'read as "nothing is published", an unreachable forge would '
+        reason:
+            'read as "nothing is published", an unreachable forge would '
             'let a release sign itself against no identity at all',
       );
     });
 
     test('an archive that will not open is not an absence', () async {
-      File('${scratch.path}/example-2.1.0-macos-arm64.tar.gz')
-          .writeAsStringSync('invalid gzip');
+      File(
+        '${scratch.path}/example-2.1.0-macos-arm64.tar.gz',
+      ).writeAsStringSync('invalid gzip');
       final reading = await identity({
         'gh': ok('{"assets":[{"name":"example-2.1.0-macos-arm64.tar.gz"}]}'),
       }).read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
@@ -248,58 +282,63 @@ void main() {
       expect(reading.why, contains('signature is not valid'));
     });
 
-    test('a displayed requirement from invalid bytes is not a baseline',
-        () async {
-      final tools = RecordingTools(
-        answers: (key) {
-          if (key.startsWith('gh api ')) {
-            return ok(
-              '{"assets":[{'
-              '"name":"example-2.1.0-macos-arm64.tar.gz"}]}',
-            );
-          }
-          if (key.startsWith('gh release download')) return ok();
-          if (key.startsWith('codesign --verify')) {
-            return failed('code object is not signed at all');
-          }
-          if (key.startsWith('codesign -d -r-')) {
-            return ok('designated => identifier "forged"');
-          }
-          return null;
-        },
-      );
-      final reading = await PublishedIdentity(
+    test(
+      'a displayed requirement from invalid bytes is not a baseline',
+      () async {
+        final tools = RecordingTools(
+          answers: (key) {
+            if (key.startsWith('gh api ')) {
+              return ok(
+                '{"assets":[{'
+                '"name":"example-2.1.0-macos-arm64.tar.gz"}]}',
+              );
+            }
+            if (key.startsWith('gh release download')) return ok();
+            if (key.startsWith('codesign --verify')) {
+              return failed('code object is not signed at all');
+            }
+            if (key.startsWith('codesign -d -r-')) {
+              return ok('designated => identifier "forged"');
+            }
+            return null;
+          },
+        );
+        final reading = await PublishedIdentity(
+          tools: tools,
+          repository: 'example/tool',
+          workingDirectory: '/repo',
+        ).read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
+
+        expect(reading.answer, IdentityAnswer.unreadable);
+        expect(reading.why, contains('not valid for its bytes'));
+        expect(
+          tools.calls.where((call) => call.startsWith('codesign -d -r-')),
+          isEmpty,
+        );
+      },
+    );
+  });
+
+  test(
+    'the identity comes from the published binary, never the keychain',
+    () async {
+      final tools = ScriptedTools({
+        'gh': ok('{"assets":[{"name":"example-2.1.0-macos-arm64.tar.gz"}]}'),
+        'codesign': ok('designated => identifier "x"'),
+      });
+      await PublishedIdentity(
         tools: tools,
         repository: 'example/tool',
         workingDirectory: '/repo',
       ).read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
 
-      expect(reading.answer, IdentityAnswer.unreadable);
-      expect(reading.why, contains('not valid for its bytes'));
       expect(
-        tools.calls.where((call) => call.startsWith('codesign -d -r-')),
-        isEmpty,
+        tools.calls.any((c) => c.first == 'security'),
+        isFalse,
+        reason:
+            'asking the certificate that is about to sign what it will sign '
+            'with is a tautology — it agrees with itself whatever it is',
       );
-    });
-  });
-
-  test('the identity comes from the published binary, never the keychain',
-      () async {
-    final tools = ScriptedTools({
-      'gh': ok('{"assets":[{"name":"example-2.1.0-macos-arm64.tar.gz"}]}'),
-      'codesign': ok('designated => identifier "x"'),
-    });
-    await PublishedIdentity(
-      tools: tools,
-      repository: 'example/tool',
-      workingDirectory: '/repo',
-    ).read(tag: 'v2.1.0', executable: 'example', into: scratch.path);
-
-    expect(
-      tools.calls.any((c) => c.first == 'security'),
-      isFalse,
-      reason: 'asking the certificate that is about to sign what it will sign '
-          'with is a tautology — it agrees with itself whatever it is',
-    );
-  });
+    },
+  );
 }

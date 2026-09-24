@@ -11,21 +11,24 @@ final class DartWorkspaceDiscovery {
     required Iterable<String> sourceRoots,
     required Iterable<String> notices,
     required Iterable<DartProjectDiscovery> projects,
-  })  : sourceRoots = Set.unmodifiable(sourceRoots),
-        notices = List.unmodifiable(notices),
-        projects = List.unmodifiable(projects);
+  }) : sourceRoots = Set.unmodifiable(sourceRoots),
+       notices = List.unmodifiable(notices),
+       projects = List.unmodifiable(projects);
 
   factory DartWorkspaceDiscovery(
     SourceTree tree, {
     bool trackedManifests = false,
   }) {
     if (trackedManifests) {
-      final manifests = tree
-          .trackedFiles()
-          .where((path) =>
-              path == 'pubspec.yaml' || path.endsWith('/pubspec.yaml'))
-          .toList()
-        ..sort();
+      final manifests =
+          tree
+              .trackedFiles()
+              .where(
+                (path) =>
+                    path == 'pubspec.yaml' || path.endsWith('/pubspec.yaml'),
+              )
+              .toList()
+            ..sort();
       return _dartResult(
         tree,
         manifests: manifests,
@@ -132,20 +135,24 @@ DartWorkspaceDiscovery _dartResult(
     final diagnostics = Diagnostics();
     final pubspec = Pubspec.parse(source, path, diagnostics);
     if (pubspec == null) {
-      allNotices.add('$path could not be parsed: '
-          '${diagnostics.found.map((item) => item.message).join('; ')}');
+      allNotices.add(
+        '$path could not be parsed: '
+        '${diagnostics.found.map((item) => item.message).join('; ')}',
+      );
       continue;
     }
-    projects.add(DartProjectDiscovery(
-      name: pubspec.name,
-      path: pubspec.directory,
-      version: pubspec.version?.canonical,
-      executables: List.unmodifiable(pubspec.executables),
-      isGroupingRoot: pubspec.isWorkspaceRoot,
-      vetoesRegistry: pubspec.vetoesRegistry,
-      publishTo: pubspec.publishTo,
-      isExampleOrFixture: _isExampleOrFixture(pubspec.directory),
-    ));
+    projects.add(
+      DartProjectDiscovery(
+        name: pubspec.name,
+        path: pubspec.directory,
+        version: pubspec.version?.canonical,
+        executables: List.unmodifiable(pubspec.executables),
+        isGroupingRoot: pubspec.isWorkspaceRoot,
+        vetoesRegistry: pubspec.vetoesRegistry,
+        publishTo: pubspec.publishTo,
+        isExampleOrFixture: _isExampleOrFixture(pubspec.directory),
+      ),
+    );
   }
   return DartWorkspaceDiscovery._(
     sourceRoots: sourceRoots,

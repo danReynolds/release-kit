@@ -27,8 +27,7 @@ class ScriptedTools implements Tools {
     String executable,
     List<String> arguments, {
     String? workingDirectory,
-  }) async =>
-      0;
+  }) async => 0;
 }
 
 /// Tools that answer in order, for the paths where rk asks twice.
@@ -45,18 +44,16 @@ class SequencedTools implements Tools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
-  }) async =>
-      _at < _answers.length
-          ? _answers[_at++]
-          : ToolResult(exitCode: 127, stdout: '', stderr: 'unscripted');
+  }) async => _at < _answers.length
+      ? _answers[_at++]
+      : ToolResult(exitCode: 127, stdout: '', stderr: 'unscripted');
 
   @override
   Future<int> runInteractive(
     String executable,
     List<String> arguments, {
     String? workingDirectory,
-  }) async =>
-      0;
+  }) async => 0;
 }
 
 ToolResult ok([String stdout = '']) =>

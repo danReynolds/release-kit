@@ -23,9 +23,9 @@ final class PublicReleaseGate {
     // Destinations are independent; their reads happen together, the same
     // way status checks them. The slowest read, not the sum, is the wait.
     final stepList = steps.toList();
-    final inspections = await Future.wait(
-      [for (final step in stepList) inspector.inspect(step, unit)],
-    );
+    final inspections = await Future.wait([
+      for (final step in stepList) inspector.inspect(step, unit),
+    ]);
     final states = <String, Inspection>{
       for (final (index, step) in stepList.indexed) step.id: inspections[index],
     };
@@ -51,9 +51,9 @@ final class PublicReleaseSnapshot {
     required Map<String, Inspection> states,
     required Iterable<Diagnostic> monotonicityProblems,
     required Iterable<Step> steps,
-  })  : states = Map.unmodifiable(states),
-        monotonicityProblems = List.unmodifiable(monotonicityProblems),
-        _steps = List.unmodifiable(steps);
+  }) : states = Map.unmodifiable(states),
+       monotonicityProblems = List.unmodifiable(monotonicityProblems),
+       _steps = List.unmodifiable(steps);
 
   final Map<String, Inspection> states;
   final List<Diagnostic> monotonicityProblems;

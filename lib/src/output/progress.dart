@@ -6,8 +6,8 @@
 /// a definite failure of that operation reads.
 final class ProgressActivity {
   ProgressActivity({required String running, required String failed})
-      : running = _label('running activity', running),
-        failed = _label('failed activity', failed);
+    : running = _label('running activity', running),
+      failed = _label('failed activity', failed);
 
   final String running;
   final String failed;
@@ -86,9 +86,9 @@ final class ProgressHandle {
   ProgressHandle._(ProgressRow row) : _rows = [row];
 
   ProgressHandle.combine(Iterable<ProgressHandle> handles)
-      : _rows = List.unmodifiable([
-          for (final handle in handles) ...handle._rows,
-        ]);
+    : _rows = List.unmodifiable([
+        for (final handle in handles) ...handle._rows,
+      ]);
 
   final List<ProgressRow> _rows;
 
@@ -155,12 +155,12 @@ final class ProgressRow {
     required this.group,
     required ProgressElapsed Function() clock,
     required void Function(ProgressRow row) changed,
-  })  : label = _text('progress label', label, max: 120),
-        coordinate = coordinate == null
-            ? null
-            : _text('progress coordinate', coordinate, max: 160),
-        _clock = clock,
-        _changed = changed;
+  }) : label = _text('progress label', label, max: 120),
+       coordinate = coordinate == null
+           ? null
+           : _text('progress coordinate', coordinate, max: 160),
+       _clock = clock,
+       _changed = changed;
 
   final String id;
   final String label;
@@ -199,8 +199,9 @@ final class ProgressRow {
         _state == ProgressRowState.notAttempted) {
       throw StateError('settled progress row $id cannot become active');
     }
-    final safeDetail =
-        detail == null ? null : _text('progress detail', detail, max: 120);
+    final safeDetail = detail == null
+        ? null
+        : _text('progress detail', detail, max: 120);
     if (_activity != next) _elapsed = _clock();
     _activity = next;
     _detail = safeDetail;
@@ -265,8 +266,10 @@ final class ProgressRow {
     // row's artifact was never attempted — the receipt keeps what did run.
     if (_state != ProgressRowState.pending &&
         _state != ProgressRowState.active) {
-      throw StateError('only pending or active progress row $id can be '
-          'not attempted');
+      throw StateError(
+        'only pending or active progress row $id can be '
+        'not attempted',
+      );
     }
     _note = _text('progress skipped result', result, max: 120);
     _state = ProgressRowState.notAttempted;
@@ -295,9 +298,9 @@ final class ProgressModel {
     required String title,
     required ProgressElapsed Function() clock,
     required void Function(ProgressRow row) changed,
-  })  : title = ProgressRow._text('progress title', title, max: 120),
-        _clock = clock,
-        _changed = changed;
+  }) : title = ProgressRow._text('progress title', title, max: 120),
+       _clock = clock,
+       _changed = changed;
 
   final String title;
   final ProgressElapsed Function() _clock;

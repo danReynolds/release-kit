@@ -94,7 +94,8 @@ class HostCapabilities {
       return PlatformCapability(
         platform,
         Capability.blocked,
-        reason: 'it can be built neither natively here nor by '
+        reason:
+            'it can be built neither natively here nor by '
             'cross-compilation — it needs a $platform host',
       );
     }
@@ -103,7 +104,8 @@ class HostCapabilities {
       return PlatformCapability(
         platform,
         Capability.blocked,
-        reason: 'this project compiles native code, and the SDK ships no C '
+        reason:
+            'this project compiles native code, and the SDK ships no C '
             'toolchain for another target',
       );
     }
@@ -112,7 +114,8 @@ class HostCapabilities {
       return PlatformCapability(
         platform,
         Capability.buildableUnproven,
-        reason: 'no container runtime here to run it in — start Docker or '
+        reason:
+            'no container runtime here to run it in — start Docker or '
             'colima to have rk prove it runs',
       );
     }
@@ -157,8 +160,8 @@ class HostCapabilities {
     final os = Platform.isMacOS
         ? 'macos'
         : Platform.isLinux
-            ? 'linux'
-            : 'unsupported';
+        ? 'linux'
+        : 'unsupported';
 
     // Dart reports the architecture through its own version banner, which is
     // the only place it is exposed without a package.
@@ -175,11 +178,9 @@ class HostCapabilities {
   ) async {
     for (final runtime in const ['docker', 'podman']) {
       try {
-        final result = await tools.run(
-          runtime,
-          const ['info'],
-          timeout: timeout,
-        );
+        final result = await tools.run(runtime, const [
+          'info',
+        ], timeout: timeout);
         if (result.ok) return runtime;
       } on Object {
         continue; // not installed

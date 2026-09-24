@@ -16,13 +16,14 @@ void main() {
 
     expect(graph.ready(completed: {}), hasLength(1));
     expect(graph.ready(completed: {}).single.id, 'tag');
+    expect(graph.ready(completed: {'tag'}).map((node) => node.id), [
+      'pub',
+      'github',
+    ]);
     expect(
-      graph.ready(completed: {'tag'}).map((node) => node.id),
-      ['pub', 'github'],
-    );
-    expect(
-      graph.ready(
-          completed: {'tag', 'github'}, active: {'pub'}).map((node) => node.id),
+      graph
+          .ready(completed: {'tag', 'github'}, active: {'pub'})
+          .map((node) => node.id),
       ['homebrew'],
     );
     expect(graph.unmet(graph['homebrew'], {'tag'}), {'github'});
@@ -40,28 +41,32 @@ void main() {
       dependenciesOf: (node) => node.needs,
     );
 
-    expect(
-      graph.ordered().map((node) => node.id),
-      ['source', 'left', 'right', 'complete'],
-    );
+    expect(graph.ordered().map((node) => node.id), [
+      'source',
+      'left',
+      'right',
+      'complete',
+    ]);
   });
 
   test('missing nodes, duplicate edges, and actual cycles are rejected', () {
     DependencyGraph<_Node> graph(List<_Node> nodes) => DependencyGraph(
-          nodes,
-          idOf: (node) => node.id,
-          dependenciesOf: (node) => node.needs,
-        );
+      nodes,
+      idOf: (node) => node.id,
+      dependenciesOf: (node) => node.needs,
+    );
 
     expect(
       () => graph(const [
-        _Node('a', {'missing'})
+        _Node('a', {'missing'}),
       ]),
-      throwsA(isA<StateError>().having(
-        (error) => error.message,
-        'message',
-        contains('needs missing node "missing"'),
-      )),
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          contains('needs missing node "missing"'),
+        ),
+      ),
     );
     expect(
       () => DependencyGraph<_Node>(
@@ -69,11 +74,13 @@ void main() {
         idOf: (node) => node.id,
         dependenciesOf: (_) => ['a', 'a'],
       ),
-      throwsA(isA<StateError>().having(
-        (error) => error.message,
-        'message',
-        contains('names "a" twice'),
-      )),
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          contains('names "a" twice'),
+        ),
+      ),
     );
     expect(
       () => graph(const [
@@ -81,11 +88,13 @@ void main() {
         _Node('b', {'c'}),
         _Node('c', {'b'}),
       ]),
-      throwsA(isA<StateError>().having(
-        (error) => error.message,
-        'message',
-        contains('b -> c -> b'),
-      )),
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          contains('b -> c -> b'),
+        ),
+      ),
     );
   });
 }

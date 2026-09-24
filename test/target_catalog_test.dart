@@ -36,7 +36,8 @@ void main() {
   test('built-in modules preserve target identity, artifacts, and order', () {
     final catalog = TargetCatalog.builtIn();
     final diagnostics = Diagnostics();
-    final config = ReleaseConfig.parse('''
+    final config = ReleaseConfig.parse(
+      '''
 schema = 2
 
 [release.cli]
@@ -44,7 +45,10 @@ tag = "v{version}"
 homebrew_tap = "example/homebrew-tools"
 publish = ["git-tag", "pub.dev", "github-release", "homebrew"]
 binary_platforms = ["linux-x64"]
-''', 'release.toml', diagnostics)!;
+''',
+      'release.toml',
+      diagnostics,
+    )!;
     final resolution = Resolution.resolve(
       config,
       MemorySourceTree({
@@ -61,17 +65,10 @@ executables:
     final unit = resolution!.unit('cli')!;
     final checklist = Checklist.derive(unit, resolution, diagnostics);
 
-    final targets = catalog.derive(
-      unit,
-      checklist,
-      repository: 'example/tool',
-    );
+    final targets = catalog.derive(unit, checklist, repository: 'example/tool');
 
     expect(
-      {
-        ...unit.publish,
-        ...unit.projects.expand((project) => project.publish),
-      },
+      {...unit.publish, ...unit.projects.expand((project) => project.publish)},
       PublishTarget.values.toSet(),
       reason: 'the fixture must exercise every accepted publish target',
     );
@@ -89,7 +86,9 @@ executables:
         catalog.moduleForStep(target.step),
         same(catalog.moduleForTarget(target)),
       );
-      final conflict = catalog.moduleForTarget(target).diagnoseConflict(
+      final conflict = catalog
+          .moduleForTarget(target)
+          .diagnoseConflict(
             unit,
             target,
             const Inspection.conflict('provider state differs'),
@@ -102,10 +101,7 @@ executables:
     expect(
       [
         for (final target in targets)
-          (
-            target.step.isPermanent,
-            target.permanenceNotice != null,
-          ),
+          (target.step.isPermanent, target.permanenceNotice != null),
       ],
       const [(false, false), (true, true), (false, false), (false, false)],
     );
@@ -152,7 +148,8 @@ executables:
           label: 'GitHub Release · example/tool',
           coordinate: 'example/tool/releases/tag/v1.2.3',
           version: '1.2.3',
-          artifacts: 'release-manifest.json,'
+          artifacts:
+              'release-manifest.json,'
               'tool-1.2.3-linux-x64.tar.gz',
           uses: null,
           planNote: '2 assets to example/tool/releases/tag/v1.2.3',
@@ -170,19 +167,18 @@ executables:
       ],
     );
 
-    final contributions = catalog.stages(
-      unit: unit,
-      targets: targets,
-    );
+    final contributions = catalog.stages(unit: unit, targets: targets);
     expect(
       contributions
-          .map((binding) => (
-                binding.contract.step.name,
-                binding.contract.step.inputs.join(','),
-                binding.contract.step.outputs.entries
-                    .map((entry) => '${entry.key}:${entry.value}')
-                    .join(','),
-              ))
+          .map(
+            (binding) => (
+              binding.contract.step.name,
+              binding.contract.step.inputs.join(','),
+              binding.contract.step.outputs.entries
+                  .map((entry) => '${entry.key}:${entry.value}')
+                  .join(','),
+            ),
+          )
           .toList(),
       [
         (
@@ -195,11 +191,7 @@ executables:
           'step:source-snapshot',
           'producers/example_tool/pub/example_tool-1.2.3.tar.gz:pub-archive',
         ),
-        (
-          'release-notes',
-          'step:source-snapshot',
-          'release-notes.md:notes',
-        ),
+        ('release-notes', 'step:source-snapshot', 'release-notes.md:notes'),
       ],
     );
 
@@ -223,10 +215,12 @@ executables:
     );
   });
 
-  test('Homebrew verifies historical renderer bytes from the bound manifest',
-      () async {
-    final diagnostics = Diagnostics();
-    final config = ReleaseConfig.parse('''
+  test(
+    'Homebrew verifies historical renderer bytes from the bound manifest',
+    () async {
+      final diagnostics = Diagnostics();
+      final config = ReleaseConfig.parse(
+        '''
 schema = 2
 
 [release.cli]
@@ -234,108 +228,116 @@ tag = "v{version}"
 homebrew_tap = "example/homebrew-tools"
 publish = ["git-tag", "github-release", "homebrew"]
 binary_platforms = ["linux-x64"]
-''', 'release.toml', diagnostics)!;
-    final resolution = Resolution.resolve(
-      config,
-      MemorySourceTree({
-        'pubspec.yaml': '''
+''',
+        'release.toml',
+        diagnostics,
+      )!;
+      final resolution = Resolution.resolve(
+        config,
+        MemorySourceTree({
+          'pubspec.yaml': '''
 name: example_tool
 version: 1.2.3
 executables:
   tool: tool
 ''',
-      }),
-      diagnostics,
-    )!;
-    final unit = resolution.unit('cli')!;
-    final project = unit.project('example_tool');
-    final archive = ReleaseAssets.archiveName('tool', '1.2.3', 'linux-x64');
-    final historicalFormula = utf8.encode('''
+        }),
+        diagnostics,
+      )!;
+      final unit = resolution.unit('cli')!;
+      final project = unit.project('example_tool');
+      final archive = ReleaseAssets.archiveName('tool', '1.2.3', 'linux-x64');
+      final historicalFormula = utf8.encode('''
 # Generated by rk. Do not edit by hand.
 class Tool < Formula
   version "1.2.3"
 end
 ''');
-    const releasedCommit = '1111111111111111111111111111111111111111';
-    const currentCommit = '2222222222222222222222222222222222222222';
-    const tagObject = '3333333333333333333333333333333333333333';
-    final manifest = ReleaseManifest(
-      unit: unit.name,
-      version: unit.version.canonical,
-      tag: 'v1.2.3',
-      commit: releasedCommit,
-      artifacts: [
-        ReleaseManifestArtifact(
-          name: archive,
-          type: 'archive',
-          size: 7,
-          sha256: 'a' * 64,
-        ),
-      ],
-      homebrew: ReleaseManifestHomebrew(
-        project: project.name,
-        tap: 'example/homebrew-tools',
-        path: 'Formula/tool.rb',
-        size: historicalFormula.length,
-        sha256: Sha256.hex(historicalFormula),
-      ),
-    );
-    final manifestBytes = utf8.encode(manifest.encode());
-    final tools = _HistoricalFormulaTools(
-      formulaBytes: historicalFormula,
-      manifestBytes: manifestBytes,
-      archive: archive,
-      tagObject: tagObject,
-      releasedCommit: releasedCommit,
-    );
-    final catalog = TargetCatalog.builtIn();
-    final target = catalog
-        .derive(
-          unit,
-          Checklist.derive(unit, resolution, diagnostics),
-          repository: 'example/tool',
-        )
-        .singleWhere((target) => target.target == PublishTarget.homebrew);
-
-    final inspected = await catalog.moduleForTarget(target).inspectCandidate(
-          TargetReadContext(
-            registry: null,
-            pubDev: null,
-            git: GitState(
-              root: '/repo',
-              head: currentCommit,
-              branch: 'main',
-              isClean: true,
-              uncommitted: const [],
-              headIsPushed: true,
-              tags: const ['v1.2.3'],
-              tagObjects: const {'v1.2.3': tagObject},
-              tagTargets: const {'v1.2.3': releasedCommit},
-              signingConfigured: false,
-              originUrl: 'example/tool',
-            ),
-            tools: tools,
-            repository: 'example/tool',
-            stageFor: null,
+      const releasedCommit = '1111111111111111111111111111111111111111';
+      const currentCommit = '2222222222222222222222222222222222222222';
+      const tagObject = '3333333333333333333333333333333333333333';
+      final manifest = ReleaseManifest(
+        unit: unit.name,
+        version: unit.version.canonical,
+        tag: 'v1.2.3',
+        commit: releasedCommit,
+        artifacts: [
+          ReleaseManifestArtifact(
+            name: archive,
+            type: 'archive',
+            size: 7,
+            sha256: 'a' * 64,
           ),
-          unit,
-          target,
-        );
+        ],
+        homebrew: ReleaseManifestHomebrew(
+          project: project.name,
+          tap: 'example/homebrew-tools',
+          path: 'Formula/tool.rb',
+          size: historicalFormula.length,
+          sha256: Sha256.hex(historicalFormula),
+        ),
+      );
+      final manifestBytes = utf8.encode(manifest.encode());
+      final tools = _HistoricalFormulaTools(
+        formulaBytes: historicalFormula,
+        manifestBytes: manifestBytes,
+        archive: archive,
+        tagObject: tagObject,
+        releasedCommit: releasedCommit,
+      );
+      final catalog = TargetCatalog.builtIn();
+      final target = catalog
+          .derive(
+            unit,
+            Checklist.derive(unit, resolution, diagnostics),
+            repository: 'example/tool',
+          )
+          .singleWhere((target) => target.target == PublishTarget.homebrew);
 
-    expect(inspected.verdict, Verdict.exact, reason: inspected.detail);
-    expect(tools.manifestDownloads, 1);
-    expect(
-      tools.archiveDownloads,
-      0,
-      reason: 'an already-published Formula is checked against historical '
-          'manifest evidence, not reconstructed by the current renderer',
-    );
-  });
+      final inspected = await catalog
+          .moduleForTarget(target)
+          .inspectCandidate(
+            TargetReadContext(
+              registry: null,
+              pubDev: null,
+              git: GitState(
+                root: '/repo',
+                head: currentCommit,
+                branch: 'main',
+                isClean: true,
+                uncommitted: const [],
+                headIsPushed: true,
+                tags: const ['v1.2.3'],
+                tagObjects: const {'v1.2.3': tagObject},
+                tagTargets: const {'v1.2.3': releasedCommit},
+                signingConfigured: false,
+                originUrl: 'example/tool',
+              ),
+              tools: tools,
+              repository: 'example/tool',
+              stageFor: null,
+            ),
+            unit,
+            target,
+          );
+
+      expect(inspected.verdict, Verdict.exact, reason: inspected.detail);
+      expect(tools.manifestDownloads, 1);
+      expect(
+        tools.archiveDownloads,
+        0,
+        reason:
+            'an already-published Formula is checked against historical '
+            'manifest evidence, not reconstructed by the current renderer',
+      );
+    },
+  );
 
   test('pub staging follows the receipt contract, not dependency order', () {
     final catalog = TargetCatalog.builtIn();
     final diagnostics = Diagnostics();
-    final config = ReleaseConfig.parse('''
+    final config = ReleaseConfig.parse(
+      '''
 schema = 2
 
 [release.apps]
@@ -349,7 +351,10 @@ publish = ["pub.dev"]
 [[release.apps.project]]
 path = "packages/z_core"
 publish = ["pub.dev"]
-''', 'release.toml', diagnostics)!;
+''',
+      'release.toml',
+      diagnostics,
+    )!;
     final resolution = Resolution.resolve(
       config,
       MemorySourceTree({
@@ -380,10 +385,7 @@ version: 1.2.3
       reason: 'the release graph keeps dependency order',
     );
 
-    final staged = catalog.stages(
-      unit: unit,
-      targets: pubTargets,
-    );
+    final staged = catalog.stages(unit: unit, targets: pubTargets);
 
     expect(
       staged.map((binding) => binding.target.coordinate),
@@ -395,91 +397,77 @@ version: 1.2.3
   test('a pub-only graph derives no Git tag target', () {
     final catalog = TargetCatalog.builtIn();
     final diagnostics = Diagnostics();
-    final config = ReleaseConfig.parse('''
+    final config = ReleaseConfig.parse(
+      '''
 schema = 2
 
 [release.core]
 publish = ["pub.dev"]
-''', 'release.toml', diagnostics)!;
+''',
+      'release.toml',
+      diagnostics,
+    )!;
     final resolution = Resolution.resolve(
       config,
-      MemorySourceTree({
-        'pubspec.yaml': 'name: example\nversion: 1.2.3\n',
-      }),
+      MemorySourceTree({'pubspec.yaml': 'name: example\nversion: 1.2.3\n'}),
       diagnostics,
     );
     expect(resolution, isNotNull, reason: diagnostics.found.join('\n'));
     final unit = resolution!.unit('core')!;
     final checklist = Checklist.derive(unit, resolution, diagnostics);
 
-    expect(
-      catalog.derive(unit, checklist).map((target) => target.kind),
-      ['pubDev'],
-    );
+    expect(catalog.derive(unit, checklist).map((target) => target.kind), [
+      'pubDev',
+    ]);
   });
 
   test('stage contributions have simple stable order and unique claims', () {
-    const z = StageContributionContract(
-      step: StageStepContract('z-before'),
-    );
-    const a = StageContributionContract(
-      step: StageStepContract('a-before'),
-    );
-    const after = StageContributionContract(
-      step: StageStepContract('after'),
-    );
+    const z = StageContributionContract(step: StageStepContract('z-before'));
+    const a = StageContributionContract(step: StageStepContract('a-before'));
+    const after = StageContributionContract(step: StageStepContract('after'));
     expect(
-      orderStageContributions(
-        const [after, z, a],
-        (contract) => contract,
-      ).map((contract) => contract.step.name),
+      orderStageContributions(const [
+        after,
+        z,
+        a,
+      ], (contract) => contract).map((contract) => contract.step.name),
       const ['a-before', 'after', 'z-before'],
     );
 
     const duplicateOutputA = StageContributionContract(
-      step: StageStepContract(
-        'first',
-        outputs: {'same.txt': 'test'},
-      ),
+      step: StageStepContract('first', outputs: {'same.txt': 'test'}),
     );
     const duplicateOutputB = StageContributionContract(
-      step: StageStepContract(
-        'second',
-        outputs: {'same.txt': 'test'},
-      ),
+      step: StageStepContract('second', outputs: {'same.txt': 'test'}),
     );
     expect(
-      () => orderStageContributions(
-        const [duplicateOutputA, duplicateOutputB],
-        (contract) => contract,
-      ),
+      () => orderStageContributions(const [
+        duplicateOutputA,
+        duplicateOutputB,
+      ], (contract) => contract),
       throwsStateError,
     );
 
     const producer = StageContributionContract(
-      step: StageStepContract(
-        'producer',
-        outputs: {'shared.txt': 'test'},
-      ),
+      step: StageStepContract('producer', outputs: {'shared.txt': 'test'}),
     );
     const consumer = StageContributionContract(
-      step: StageStepContract(
-        'consumer',
-        inputs: {'shared.txt'},
-      ),
+      step: StageStepContract('consumer', inputs: {'shared.txt'}),
     );
     final diagnostics = Diagnostics();
-    final config = ReleaseConfig.parse('''
+    final config = ReleaseConfig.parse(
+      '''
 schema = 2
 
 [release.example]
 publish = ["pub.dev"]
-''', 'release.toml', diagnostics)!;
+''',
+      'release.toml',
+      diagnostics,
+    )!;
     final resolution = Resolution.resolve(
       config,
-      MemorySourceTree({
-        'pubspec.yaml': 'name: example\nversion: 1.0.0\n',
-      }),
+      MemorySourceTree({'pubspec.yaml': 'name: example\nversion: 1.0.0\n'}),
       diagnostics,
     )!;
     final contract = StageReceiptContract.forUnit(
@@ -496,10 +484,7 @@ publish = ["pub.dev"]
     );
 
     const missingInput = StageContributionContract(
-      step: StageStepContract(
-        'broken-consumer',
-        inputs: {'missing.txt'},
-      ),
+      step: StageStepContract('broken-consumer', inputs: {'missing.txt'}),
     );
     expect(
       () => StageReceiptContract.forUnit(
@@ -543,8 +528,9 @@ publish = ["pub.dev"]
     expect(chain, isNot(contains("import 'destinations/")));
     expect(chain, isNot(contains('publishRelease(')));
     expect(chain, isNot(contains('updateFormula(')));
-    final contract =
-        File('lib/src/engine/stage_contract.dart').readAsStringSync();
+    final contract = File(
+      'lib/src/engine/stage_contract.dart',
+    ).readAsStringSync();
     expect(contract, isNot(contains("../destinations/")));
     expect(contract, isNot(contains("'pub.dev'")));
     expect(contract, isNot(contains("'github-release'")));
@@ -583,31 +569,37 @@ final class _HistoricalFormulaTools implements Tools {
       return _ok(jsonEncode({'content': base64Encode(formulaBytes)}));
     }
     if (executable == 'git' && arguments.first == 'ls-remote') {
-      return _ok('$tagObject refs/tags/v1.2.3\n'
-          '$releasedCommit refs/tags/v1.2.3^{}\n');
+      return _ok(
+        '$tagObject refs/tags/v1.2.3\n'
+        '$releasedCommit refs/tags/v1.2.3^{}\n',
+      );
     }
     if (executable == 'git' && arguments.first == 'cat-file') {
-      return _ok('object $releasedCommit\n'
-          'type commit\n'
-          'tag v1.2.3\n\n'
-          'cli 1.2.3\n\n'
-          'release-manifest-sha256: ${Sha256.hex(manifestBytes)}\n');
+      return _ok(
+        'object $releasedCommit\n'
+        'type commit\n'
+        'tag v1.2.3\n\n'
+        'cli 1.2.3\n\n'
+        'release-manifest-sha256: ${Sha256.hex(manifestBytes)}\n',
+      );
     }
     if (executable == 'gh' &&
         arguments.join(' ') == 'api repos/example/tool/releases/tags/v1.2.3') {
-      return _ok(jsonEncode({
-        'tag_name': 'v1.2.3',
-        'draft': false,
-        'prerelease': false,
-        'id': 7,
-        'assets': [
-          {'name': archive, 'digest': 'sha256:${'a' * 64}'},
-          {
-            'name': ReleaseAssets.manifest,
-            'digest': 'sha256:${Sha256.hex(manifestBytes)}',
-          },
-        ],
-      }));
+      return _ok(
+        jsonEncode({
+          'tag_name': 'v1.2.3',
+          'draft': false,
+          'prerelease': false,
+          'id': 7,
+          'assets': [
+            {'name': archive, 'digest': 'sha256:${'a' * 64}'},
+            {
+              'name': ReleaseAssets.manifest,
+              'digest': 'sha256:${Sha256.hex(manifestBytes)}',
+            },
+          ],
+        }),
+      );
     }
     if (executable == 'gh' &&
         arguments.length >= 2 &&
@@ -635,8 +627,7 @@ final class _HistoricalFormulaTools implements Tools {
     String executable,
     List<String> arguments, {
     String? workingDirectory,
-  }) async =>
-      0;
+  }) async => 0;
 
   ToolResult _ok(String stdout) =>
       ToolResult(exitCode: 0, stdout: stdout, stderr: '');

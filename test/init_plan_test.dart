@@ -12,7 +12,8 @@ InitPlan discover(
   String? githubRepository = 'owner/repo',
   HostCapabilities? capabilities,
 }) {
-  final host = capabilities ??
+  final host =
+      capabilities ??
       HostCapabilities(
         hostPlatform: 'macos-arm64',
         containerRuntime: 'docker',
@@ -23,8 +24,9 @@ InitPlan discover(
     gitBound: gitBound,
     hasRemote: hasRemote,
     githubRepository: githubRepository,
-    platformCapabilities:
-        ReleaseConfig.supportedPlatformsList.map(host.resolve),
+    platformCapabilities: ReleaseConfig.supportedPlatformsList.map(
+      host.resolve,
+    ),
   );
 }
 
@@ -108,9 +110,7 @@ executables:
     expect(proposal, isNot(contains('"macos-arm64"')));
     expect(
       plan.binaryPlatformNotices,
-      contains(
-        startsWith('macos-arm64 was not selected:'),
-      ),
+      contains(startsWith('macos-arm64 was not selected:')),
     );
   });
 
@@ -162,10 +162,7 @@ executables:
 
     plan = plan.toggle(0, ReleaseChoice.binary).plan;
 
-    expect(
-      plan.renderToml(),
-      contains('binary_platforms = ["linux-x64"]'),
-    );
+    expect(plan.renderToml(), contains('binary_platforms = ["linux-x64"]'));
     expect(plan.binaryPlatformNotices, hasLength(2));
   });
 
@@ -181,10 +178,11 @@ executables:
 
     plan = plan.toggle(0, ReleaseChoice.githubRelease).plan;
 
-    expect(
-      plan.candidates.single.selected,
-      {ReleaseChoice.gitTag, ReleaseChoice.pubDev, ReleaseChoice.githubRelease},
-    );
+    expect(plan.candidates.single.selected, {
+      ReleaseChoice.gitTag,
+      ReleaseChoice.pubDev,
+      ReleaseChoice.githubRelease,
+    });
     expect(plan.renderToml(), isNot(contains('binary_platforms')));
   });
 
@@ -219,8 +217,10 @@ executables:
     final candidate = plan.candidates.single;
     expect(candidate.selected, isEmpty);
     expect(candidate.availability[ReleaseChoice.binary]!.available, isTrue);
-    expect(candidate.availability[ReleaseChoice.githubRelease]!.available,
-        isFalse);
+    expect(
+      candidate.availability[ReleaseChoice.githubRelease]!.available,
+      isFalse,
+    );
 
     plan = plan.toggle(0, ReleaseChoice.binary).plan;
     expect(plan.candidates.single.selected, {ReleaseChoice.binary});
@@ -265,8 +265,10 @@ workspace:
       githubRepository: null,
     );
 
-    expect(plan.candidates.map((candidate) => candidate.name),
-        unorderedEquals(['root', 'a']));
+    expect(
+      plan.candidates.map((candidate) => candidate.name),
+      unorderedEquals(['root', 'a']),
+    );
     final a = plan.candidates.singleWhere((candidate) => candidate.name == 'a');
     expect(a.selected, {ReleaseChoice.pubDev});
     expect(a.availability[ReleaseChoice.gitTag]!.available, isFalse);
@@ -284,8 +286,10 @@ workspace:
     });
     final internal = plan.candidates.single;
     expect(internal.selected, isEmpty);
-    expect(internal.availability[ReleaseChoice.pubDev]!.reason,
-        contains('vetoes'));
+    expect(
+      internal.availability[ReleaseChoice.pubDev]!.reason,
+      contains('vetoes'),
+    );
 
     plan = plan.toggle(0, ReleaseChoice.gitTag).plan;
     expect(plan.candidates.single.selected, {ReleaseChoice.gitTag});
@@ -302,8 +306,9 @@ workspace:
       plan.candidates.singleWhere((item) => item.name == 'public').selected,
       {ReleaseChoice.pubDev, ReleaseChoice.gitTag},
     );
-    final internal =
-        plan.candidates.singleWhere((item) => item.name == 'internal');
+    final internal = plan.candidates.singleWhere(
+      (item) => item.name == 'internal',
+    );
     expect(internal.selected, isEmpty);
     expect(plan.renderToml(), isNot(contains('[release.internal]')));
   });
@@ -318,12 +323,14 @@ publish_to: https://token@packages.example.invalid
     });
     expect(declared.candidates.single.selected, isEmpty);
     expect(
-        declared.candidates.single.availability[ReleaseChoice.pubDev]!.reason,
-        contains('custom registry'));
+      declared.candidates.single.availability[ReleaseChoice.pubDev]!.reason,
+      contains('custom registry'),
+    );
 
     final mixed = discover({
       'public/pubspec.yaml': 'name: public\nversion: 1.0.0\n',
-      'private/pubspec.yaml': 'name: private\nversion: 1.0.0\n'
+      'private/pubspec.yaml':
+          'name: private\nversion: 1.0.0\n'
           'publish_to: https://packages.example.invalid\n',
     });
     expect(

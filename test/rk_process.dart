@@ -79,11 +79,10 @@ class Rk {
   static final _bin = File('bin/rk.dart').absolute.path;
 
   Run call(List<String> args) {
-    final result = Process.runSync(
-      Platform.resolvedExecutable,
-      [_bin, ...args],
-      workingDirectory: root,
-    );
+    final result = Process.runSync(Platform.resolvedExecutable, [
+      _bin,
+      ...args,
+    ], workingDirectory: root);
     return Run(
       code: result.exitCode,
       stdout: result.stdout as String,
@@ -133,7 +132,8 @@ class Run {
   List<Map<String, Object?>> targetsOf(String unit) => units
       .where((u) => u['name'] == unit)
       .expand(
-          (u) => ((u['targets'] as List?) ?? []).cast<Map<String, Object?>>())
+        (u) => ((u['targets'] as List?) ?? []).cast<Map<String, Object?>>(),
+      )
       .toList();
 
   List<Map<String, Object?>> get problems =>

@@ -27,14 +27,11 @@ final class HomebrewTargetModule extends TargetModule {
   Future<TargetReadinessOutcome> checkReadiness(
     TargetReadinessContext context,
     ResolvedUnit unit,
-  ) async =>
-      const TargetReady();
+  ) async => const TargetReady();
 
   @override
-  ProgressActivity get publishActivity => ProgressActivity(
-        running: 'updating',
-        failed: 'update failed',
-      );
+  ProgressActivity get publishActivity =>
+      ProgressActivity(running: 'updating', failed: 'update failed');
 
   @override
   TargetPlan plan({
@@ -56,7 +53,8 @@ final class HomebrewTargetModule extends TargetModule {
       step: step,
       project: project,
       artifacts: [ReleaseAssets.formulaName(project.executable!)],
-      uses: '${ReleaseAssets.formulaName(project.executable!)} bound in the '
+      uses:
+          '${ReleaseAssets.formulaName(project.executable!)} bound in the '
           'release manifest',
     );
   }
@@ -129,11 +127,7 @@ final class HomebrewTargetModule extends TargetModule {
       );
     }
 
-    final current = await _publishedFormula(
-      context,
-      unit,
-      project: project,
-    );
+    final current = await _publishedFormula(context, unit, project: project);
     if (!current.inspection.isExact) {
       if (current.inspection.isAbsent ||
           publicFormula.evidence['public formula'] == 'absent') {
@@ -152,7 +146,7 @@ final class HomebrewTargetModule extends TargetModule {
   }
 
   Future<({Inspection inspection, String? formulaSha256})>
-      _historicalFormulaIdentity(
+  _historicalFormulaIdentity(
     TargetReadContext context,
     ResolvedUnit unit, {
     required ResolvedProject project,
@@ -171,14 +165,12 @@ final class HomebrewTargetModule extends TargetModule {
         formulaSha256: null,
       );
     }
-    final binding = await GitTag(
-      tools: context.tools!,
-      root: context.git.root,
-    ).manifestBinding(
-      tag: tag,
-      expectedObject: tagObject,
-      expectedCommit: tagCommit,
-    );
+    final binding = await GitTag(tools: context.tools!, root: context.git.root)
+        .manifestBinding(
+          tag: tag,
+          expectedObject: tagObject,
+          expectedCommit: tagCommit,
+        );
     final manifestSha256 = binding.sha256;
     if (manifestSha256 == null) {
       return (
@@ -187,17 +179,18 @@ final class HomebrewTargetModule extends TargetModule {
       );
     }
 
-    final read = await GithubRelease(
-      tools: context.tools!,
-      repository: context.repository!,
-      workingDirectory: context.git.root,
-    ).readBoundAsset(
-      tag: tag,
-      expectedAssets: ReleaseAssets.expectedForUnit(unit).toSet(),
-      asset: ReleaseAssets.manifest,
-      expectedSha256: manifestSha256,
-      prerelease: unit.version.isPrerelease,
-    );
+    final read =
+        await GithubRelease(
+          tools: context.tools!,
+          repository: context.repository!,
+          workingDirectory: context.git.root,
+        ).readBoundAsset(
+          tag: tag,
+          expectedAssets: ReleaseAssets.expectedForUnit(unit).toSet(),
+          asset: ReleaseAssets.manifest,
+          expectedSha256: manifestSha256,
+          prerelease: unit.version.isPrerelease,
+        );
     if (!read.inspection.isExact) {
       return (inspection: read.inspection, formulaSha256: null);
     }
@@ -242,11 +235,7 @@ final class HomebrewTargetModule extends TargetModule {
 
     final homebrew = manifest.homebrew;
     if (homebrew == null ||
-        !homebrew.names(
-          project: project.name,
-          tap: tap,
-          path: formulaPath,
-        )) {
+        !homebrew.names(project: project.name, tap: tap, path: formulaPath)) {
       return (
         inspection: Inspection.conflict(
           'the authenticated release manifest does not bind '
@@ -257,7 +246,8 @@ final class HomebrewTargetModule extends TargetModule {
     }
     return (
       inspection: const Inspection.exact(
-        detail: 'published formula identity read from the authenticated '
+        detail:
+            'published formula identity read from the authenticated '
             'release manifest',
       ),
       formulaSha256: homebrew.sha256,
@@ -267,15 +257,16 @@ final class HomebrewTargetModule extends TargetModule {
   Inspection _manifestBindingFailure(TagManifestBinding binding) =>
       switch (binding) {
         TagManifestUnreadable(:final why) => Inspection.unknown(why),
-        TagManifestConflict(:final why, :final evidence) =>
-          Inspection.conflict(why, evidence: evidence),
+        TagManifestConflict(:final why, :final evidence) => Inspection.conflict(
+          why,
+          evidence: evidence,
+        ),
         TagManifestAbsent(:final why) ||
         TagManifestMissing(:final why) ||
         TagManifestMalformed(:final why) ||
-        TagManifestUnbound(:final why) =>
-          Inspection.conflict(
-            'the published formula cannot be authenticated: $why',
-          ),
+        TagManifestUnbound(:final why) => Inspection.conflict(
+          'the published formula cannot be authenticated: $why',
+        ),
         TagManifestBound() => throw StateError('bound manifest has no digest'),
       };
 
@@ -295,16 +286,17 @@ final class HomebrewTargetModule extends TargetModule {
           platform,
         ),
     };
-    final read = await GithubRelease(
-      tools: context.tools!,
-      repository: repository,
-      workingDirectory: context.git.root,
-    ).readAssetDigests(
-      tag: tag,
-      expectedAssets: ReleaseAssets.expectedForUnit(unit).toSet(),
-      requestedAssets: archiveNames,
-      prerelease: unit.version.isPrerelease,
-    );
+    final read =
+        await GithubRelease(
+          tools: context.tools!,
+          repository: repository,
+          workingDirectory: context.git.root,
+        ).readAssetDigests(
+          tag: tag,
+          expectedAssets: ReleaseAssets.expectedForUnit(unit).toSet(),
+          requestedAssets: archiveNames,
+          prerelease: unit.version.isPrerelease,
+        );
     if (!read.inspection.isExact) {
       return (inspection: read.inspection, bytes: null);
     }
@@ -328,14 +320,16 @@ final class HomebrewTargetModule extends TargetModule {
     }
     return (
       inspection: read.inspection,
-      bytes: utf8.encode(HomebrewFormula.renderRelease(
-        className: ReleaseAssets.formulaClass(executable),
-        version: project.version.canonical,
-        repository: repository,
-        tag: tag,
-        assets: assets,
-        executable: executable,
-      )),
+      bytes: utf8.encode(
+        HomebrewFormula.renderRelease(
+          className: ReleaseAssets.formulaClass(executable),
+          version: project.version.canonical,
+          repository: repository,
+          tag: tag,
+          assets: assets,
+          executable: executable,
+        ),
+      ),
     );
   }
 
@@ -351,15 +345,16 @@ final class HomebrewTargetModule extends TargetModule {
     ResolvedUnit unit,
     TargetPlan target,
     Inspection conflict,
-  ) =>
-      Diagnostic(
-        code: 'RK-REL-001',
-        message: '${target.label}: '
-            '${conflict.detail ?? 'the published formula does not match'}',
-        remedy: 'restore the formula to the exact release bytes it is meant to '
-            'reference, or advance the source version intentionally; then '
-            'run rk status ${unit.name} again',
-      );
+  ) => Diagnostic(
+    code: 'RK-REL-001',
+    message:
+        '${target.label}: '
+        '${conflict.detail ?? 'the published formula does not match'}',
+    remedy:
+        'restore the formula to the exact release bytes it is meant to '
+        'reference, or advance the source version intentionally; then '
+        'run rk status ${unit.name} again',
+  );
 
   @override
   Future<TargetActOutcome> publish(
@@ -374,9 +369,11 @@ final class HomebrewTargetModule extends TargetModule {
         ok: false,
         diagnostic: Diagnostic(
           code: 'RK-GIT-002',
-          message: 'homebrew needs an origin remote, and this repository '
+          message:
+              'homebrew needs an origin remote, and this repository '
               'has none',
-          remedy: 'rk publishes what others can fetch, and reads back what it '
+          remedy:
+              'rk publishes what others can fetch, and reads back what it '
               'published. git remote add origin <url>, then git push -u '
               'origin ${context.git.branch ?? 'main'}',
         ),
@@ -386,7 +383,8 @@ final class HomebrewTargetModule extends TargetModule {
     if (authority is! HomebrewUpdateAuthority) {
       return const TargetActOutcome(
         ok: false,
-        problem: 'the formula update has no exact public base; re-run so rk '
+        problem:
+            'the formula update has no exact public base; re-run so rk '
             'can inspect the tap before updating it',
       );
     }
@@ -394,12 +392,14 @@ final class HomebrewTargetModule extends TargetModule {
     final executable = project.executable!;
     // A recovered payload is authenticated public input. A non-reusable stage
     // may still contain stale files, so it must never outrank that authority.
-    final formula = authority.replacement ??
+    final formula =
+        authority.replacement ??
         context.workspace.readBytes(ReleaseAssets.formulaPath(project));
     if (formula == null) {
       return TargetActOutcome(
         ok: false,
-        problem: 'the workspace has no '
+        problem:
+            'the workspace has no '
             '${ReleaseAssets.formulaName(executable)}; the staging phase '
             'renders it — re-running runs it',
       );
@@ -413,16 +413,17 @@ final class HomebrewTargetModule extends TargetModule {
         problem: 'a temporary checkout could not be created: $error',
       );
     }
-    final outcome = await HomebrewTap(
-      tools: context.tools,
-      tap: unit.tapFor(repository),
-      checkout: '${scratch.path}/tap',
-    ).update(
-      formulaPath: 'Formula/${ReleaseAssets.formulaName(executable)}',
-      contents: utf8.decode(formula),
-      message: '$executable ${project.version}',
-      authority: authority,
-    );
+    final outcome =
+        await HomebrewTap(
+          tools: context.tools,
+          tap: unit.tapFor(repository),
+          checkout: '${scratch.path}/tap',
+        ).update(
+          formulaPath: 'Formula/${ReleaseAssets.formulaName(executable)}',
+          contents: utf8.decode(formula),
+          message: '$executable ${project.version}',
+          authority: authority,
+        );
     try {
       scratch.deleteSync(recursive: true);
     } on FileSystemException {
@@ -464,17 +465,17 @@ final class HomebrewTargetModule extends TargetModule {
     final halt = state.verdict == Verdict.conflict
         ? HaltKind.stoppedPartway
         : act.mayHaveActed || state.verdict == Verdict.unknown
-            ? HaltKind.lostTrack
-            : actedBefore
-                ? HaltKind.stoppedPartway
-                : HaltKind.beforeActing;
+        ? HaltKind.lostTrack
+        : actedBefore
+        ? HaltKind.stoppedPartway
+        : HaltKind.beforeActing;
     return TargetFailure(
       diagnostic: Diagnostic(
         code: code,
         message: message,
         remedy: details.isEmpty
             ? 're-run; the shared destination inspection will classify the '
-                'public target before any retry'
+                  'public target before any retry'
             : details.join('\n'),
         evidence: act.evidence ?? act.diagnostic?.evidence,
       ),
@@ -486,6 +487,5 @@ final class HomebrewTargetModule extends TargetModule {
   TargetStage stageInput({
     required ResolvedUnit unit,
     required TargetPlan target,
-  }) =>
-      homebrewFormulaStage(unit: unit, target: target);
+  }) => homebrewFormulaStage(unit: unit, target: target);
 }

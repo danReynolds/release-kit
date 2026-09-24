@@ -97,7 +97,8 @@ class Sha256 {
   static void _compress(Uint8List data, int at, Uint32List w, Uint32List h) {
     for (var i = 0; i < 16; i++) {
       final j = at + i * 4;
-      w[i] = (data[j] << 24) |
+      w[i] =
+          (data[j] << 24) |
           (data[j + 1] << 16) |
           (data[j + 2] << 8) |
           data[j + 3];

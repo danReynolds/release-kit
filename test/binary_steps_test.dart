@@ -40,14 +40,18 @@ void main() {
 
   final resolution = () {
     final diagnostics = Diagnostics();
-    final config = ReleaseConfig.parse('''
+    final config = ReleaseConfig.parse(
+      '''
 schema = 2
 
 [release.cli]
 path = "packages/tool"
 publish = ["git-tag", "github-release", "homebrew"]
 binary_platforms = ["macos-arm64"]
-''', 'release.toml', diagnostics)!;
+''',
+      'release.toml',
+      diagnostics,
+    )!;
     return Resolution.resolve(
       config,
       MemorySourceTree({
@@ -71,16 +75,16 @@ executables:
   /// A fresh chain per call — deliberately. Sharing one would let state ride
   /// along in memory, which is exactly what must be impossible.
   BinaryChain chain(Tools tools) => BinaryChain(
-        tools: tools,
-        output: output,
-        workspace: workspace,
-        repositoryRoot: scratch.path,
-        capabilities: HostCapabilities(
-          hostPlatform: 'macos-arm64',
-          containerRuntime: null,
-          hasNativeAssets: false,
-        ),
-      );
+    tools: tools,
+    output: output,
+    workspace: workspace,
+    repositoryRoot: scratch.path,
+    capabilities: HostCapabilities(
+      hostPlatform: 'macos-arm64',
+      containerRuntime: null,
+      hasNativeAssets: false,
+    ),
+  );
 
   /// Tools that answer by prefix and write the artifacts a real tool would.
   RecordingTools scripted({
@@ -113,7 +117,8 @@ executables:
         if (key.startsWith('security find-identity')) {
           return ToolResult(
             exitCode: 0,
-            stdout: '1) $_certificateSha1 '
+            stdout:
+                '1) $_certificateSha1 '
                 '"Developer ID Application: Dan (TEAM123456)"',
             stderr: '',
           );
@@ -121,7 +126,8 @@ executables:
         if (key.startsWith('security find-certificate')) {
           return ToolResult(
             exitCode: 0,
-            stdout: 'SHA-256 hash: $_certificateSha256\n'
+            stdout:
+                'SHA-256 hash: $_certificateSha256\n'
                 'SHA-1 hash: $_certificateSha1\n',
             stderr: '',
           );
@@ -142,30 +148,37 @@ executables:
         // The compiler and ditto write files; the script writes what they
         // would, where the workspace said to.
         if (key.startsWith('dart compile exe')) {
-          File(workspace
-              .pathOf(BinaryChain.binaryName('tool', 'macos-arm64', 'tool')))
+          File(
+              workspace.pathOf(
+                BinaryChain.binaryName('tool', 'macos-arm64', 'tool'),
+              ),
+            )
             ..parent.createSync(recursive: true)
             ..writeAsBytesSync(utf8.encode('BINARY 1.0.0'));
         }
         if (key.startsWith('ditto')) {
           final payload = Directory(key.split(' ')[3]);
-          final files = payload
-              .listSync(recursive: true)
-              .whereType<File>()
-              .map((file) => file.path.substring(payload.path.length + 1))
-              .toList()
-            ..sort();
-          expect(
-              files,
-              (ReleaseAssets.binaryArtifact(project, 'macos-arm64')
-                  .files
-                  .map((file) => file.path)
+          final files =
+              payload
+                  .listSync(recursive: true)
+                  .whereType<File>()
+                  .map((file) => file.path.substring(payload.path.length + 1))
                   .toList()
-                ..sort()),
-              reason:
-                  'notarization submits every companion, including the app module');
-          File(workspace
-              .pathOf(BinaryChain.zipName('tool', 'macos-arm64', 'tool')))
+                ..sort();
+          expect(
+            files,
+            (ReleaseAssets.binaryArtifact(
+              project,
+              'macos-arm64',
+            ).files.map((file) => file.path).toList()..sort()),
+            reason:
+                'notarization submits every companion, including the app module',
+          );
+          File(
+              workspace.pathOf(
+                BinaryChain.zipName('tool', 'macos-arm64', 'tool'),
+              ),
+            )
             ..parent.createSync(recursive: true)
             ..writeAsBytesSync(utf8.encode('ZIP'));
         }
@@ -173,8 +186,7 @@ executables:
     );
   }
 
-  test(
-      'each step reads and writes the workspace by name — no chain object '
+  test('each step reads and writes the workspace by name — no chain object '
       'survives between them', () async {
     final tools = scripted();
 
@@ -187,14 +199,13 @@ executables:
       ),
     );
     expect(built.ok, isTrue, reason: built.problem ?? buffer.toString());
-    expect(
-      built.outputs.map((output) => (output.path, output.type)),
-      [
-        for (final entry
-            in ReleaseAssets.binaryOutputs(project, 'macos-arm64').entries)
-          (entry.key, entry.value)
-      ],
-    );
+    expect(built.outputs.map((output) => (output.path, output.type)), [
+      for (final entry in ReleaseAssets.binaryOutputs(
+        project,
+        'macos-arm64',
+      ).entries)
+        (entry.key, entry.value),
+    ]);
     expect(built.evidence['smoke'], {'status': 'passed'});
     expect(
       workspace.exists(ReleaseAssets.binaryPath(project, 'macos-arm64')),
@@ -204,41 +215,46 @@ executables:
     final signature = built.evidence['signature']! as Map;
     expect(signature['first_identity'], isTrue);
     expect(signature['published_requirement'], isNull);
-    expect(signature['designated_requirement'],
-        'designated => identifier "com.example.tool" and leaf "A"');
+    expect(
+      signature['designated_requirement'],
+      'designated => identifier "com.example.tool" and leaf "A"',
+    );
     expect(signature['code_id'], 'com.example.tool');
     expect(
-        signature['certificate'], 'Developer ID Application: Dan (TEAM123456)');
+      signature['certificate'],
+      'Developer ID Application: Dan (TEAM123456)',
+    );
     expect(signature['certificate_sha256'], _certificateSha256);
     expect(signature['unsigned_sha256'], hasLength(64));
     expect(signature['signed_sha256'], hasLength(64));
     expect(signature['verified_after_smoke'], isTrue);
 
-    final notarized =
-        await chain(tools).notarizeStep(step(StepKind.notarize), project);
-    expect(notarized.ok, isTrue,
-        reason: notarized.problem ?? buffer.toString());
+    final notarized = await chain(
+      tools,
+    ).notarizeStep(step(StepKind.notarize), project);
     expect(
-      notarized.outputs.map((output) => (output.path, output.type)),
-      [
-        (ReleaseAssets.notaryInputPath(project, 'macos-arm64'), 'notary-input'),
-        (ReleaseAssets.notaryResultPath(project, 'macos-arm64'), 'notary'),
-        (ReleaseAssets.notaryLogPath(project, 'macos-arm64'), 'notary'),
-      ],
+      notarized.ok,
+      isTrue,
+      reason: notarized.problem ?? buffer.toString(),
     );
+    expect(notarized.outputs.map((output) => (output.path, output.type)), [
+      (ReleaseAssets.notaryInputPath(project, 'macos-arm64'), 'notary-input'),
+      (ReleaseAssets.notaryResultPath(project, 'macos-arm64'), 'notary'),
+      (ReleaseAssets.notaryLogPath(project, 'macos-arm64'), 'notary'),
+    ]);
     final notary = notarized.evidence['notary']! as Map;
     expect(notary['status'], 'Accepted');
     expect(notary['submission_id'], 'abc-123');
     expect(notary['result_sha256'], hasLength(64));
     expect(notary['log_sha256'], hasLength(64));
 
-    final archived =
-        await chain(tools).archiveStep(step(StepKind.archive), project);
+    final archived = await chain(
+      tools,
+    ).archiveStep(step(StepKind.archive), project);
     expect(archived.ok, isTrue, reason: archived.problem);
-    expect(
-      archived.outputs.map((output) => (output.path, output.type)),
-      [(ReleaseAssets.archivePath(project, 'macos-arm64'), 'archive')],
-    );
+    expect(archived.outputs.map((output) => (output.path, output.type)), [
+      (ReleaseAssets.archivePath(project, 'macos-arm64'), 'archive'),
+    ]);
     final inventory = archived.evidence['inventory']! as List;
     expect(inventory, hasLength(5));
     expect((inventory.first as Map)['name'], 'tool');
@@ -252,11 +268,14 @@ executables:
     expect(
       tools.calls.where((call) => call.startsWith('codesign --verify')),
       hasLength(9),
-      reason: 'the signature is checked after signing, after the signed '
+      reason:
+          'the signature is checked after signing, after the signed '
           'smoke test, and on the final archive payload',
     );
-    expect(workspace.exists(ReleaseAssets.archivePath(project, 'macos-arm64')),
-        isTrue);
+    expect(
+      workspace.exists(ReleaseAssets.archivePath(project, 'macos-arm64')),
+      isTrue,
+    );
   });
 
   test('a signature invalidated by the signed smoke test is refused', () async {
@@ -286,29 +305,36 @@ executables:
       ),
     );
     expect(built.ok, isTrue, reason: built.problem ?? buffer.toString());
-    final notarized =
-        await chain(tools).notarizeStep(step(StepKind.notarize), project);
-    expect(notarized.ok, isTrue,
-        reason: notarized.problem ?? buffer.toString());
+    final notarized = await chain(
+      tools,
+    ).notarizeStep(step(StepKind.notarize), project);
+    expect(
+      notarized.ok,
+      isTrue,
+      reason: notarized.problem ?? buffer.toString(),
+    );
 
-    final archived =
-        await chain(tools).archiveStep(step(StepKind.archive), project);
+    final archived = await chain(
+      tools,
+    ).archiveStep(step(StepKind.archive), project);
 
     expect(archived.ok, isFalse);
     expect(buffer.toString(), contains('in the final archive'));
   });
 
-  test('a later step with an empty workspace refuses, naming the producer',
-      () async {
-    final ok =
-        await chain(scripted()).archiveStep(step(StepKind.archive), project);
-    expect(ok.ok, isFalse);
-    expect(buffer.toString(), contains('the workspace has no'));
-    expect(buffer.toString(), contains('the build step produces it'));
-  });
-
   test(
-      'a signature that does not match the published identity is refused '
+    'a later step with an empty workspace refuses, naming the producer',
+    () async {
+      final ok = await chain(
+        scripted(),
+      ).archiveStep(step(StepKind.archive), project);
+      expect(ok.ok, isFalse);
+      expect(buffer.toString(), contains('the workspace has no'));
+      expect(buffer.toString(), contains('the build step produces it'));
+    },
+  );
+
+  test('a signature that does not match the published identity is refused '
       'with both requirements as evidence', () async {
     final tools = scripted(designatedRequirement: 'designated => leaf "NEW"');
     final ok = await chain(tools).buildStep(
@@ -326,40 +352,43 @@ executables:
     expect(
       buffer.toString(),
       contains('does not match the identity users already installed'),
-      reason: 'a new certificate passes every local check and fails only on '
+      reason:
+          'a new certificate passes every local check and fails only on '
           'users\' machines — it must fail here instead',
     );
     expect(buffer.toString(), contains('leaf "OLD"'));
     expect(
       ok.halt,
       HaltKind.unfixableByRerun,
-      reason: 'the producer states the verdict; the coordinator speaks the '
+      reason:
+          'the producer states the verdict; the coordinator speaks the '
           'halt once, after every lane has rested',
     );
     expect(buffer.toString(), contains('leaf "NEW"'));
   });
 
-  test('the team is derived from the published requirement, not declared',
-      () async {
-    final tools = scripted(
-      designatedRequirement:
-          'designated => identifier "com.example.tool" and certificate leaf[subject.OU] = "TEAM123456"',
-    );
-    final ok = await chain(tools).buildStep(
-      step(StepKind.build),
-      project,
-      signing: const MacSigning(
-        // Nothing declared: derivation must carry the team.
-        publishedRequirement:
-            'designated => identifier "com.example.tool" and certificate leaf[subject.OU] = "TEAM123456"',
-        codeId: 'com.example.tool',
-      ),
-    );
-    expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
-  });
-
   test(
-      'a first release discovers the one certificate, and names the '
+    'the team is derived from the published requirement, not declared',
+    () async {
+      final tools = scripted(
+        designatedRequirement:
+            'designated => identifier "com.example.tool" and certificate leaf[subject.OU] = "TEAM123456"',
+      );
+      final ok = await chain(tools).buildStep(
+        step(StepKind.build),
+        project,
+        signing: const MacSigning(
+          // Nothing declared: derivation must carry the team.
+          publishedRequirement:
+              'designated => identifier "com.example.tool" and certificate leaf[subject.OU] = "TEAM123456"',
+          codeId: 'com.example.tool',
+        ),
+      );
+      expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
+    },
+  );
+
+  test('a first release discovers the one certificate, and names the '
       'identity it just made permanent', () async {
     // Nothing to declare: capabilities are discovered, and a machine with
     // one Developer ID has exactly one answer. What rk owes the operator is
@@ -388,63 +417,67 @@ executables:
     // step above had already written into the same buffer, so the whole
     // assertion held with the identifier mutated to 'zz.mutation' — and this
     // is the value that becomes the permanent designated requirement.
-    final sign =
-        tools.calls.firstWhere((c) => c.startsWith('codesign --force'));
+    final sign = tools.calls.firstWhere(
+      (c) => c.startsWith('codesign --force'),
+    );
     expect(
       sign,
       contains('--identifier io.github.example.tool'),
-      reason: 'the caller resolved it and this step signs exactly that — '
+      reason:
+          'the caller resolved it and this step signs exactly that — '
           'the step no longer has a fallback of its own to reach for',
     );
   });
 
-  test('several certificates and nothing published is a refusal, not a guess',
-      () async {
-    final tools = BundleRecordingTools(
-      answers: (key) {
-        if (key.startsWith('dart compile exe')) {
-          return ToolResult(exitCode: 0, stdout: '', stderr: '');
-        }
-        if (key.contains('--version')) {
-          return ToolResult(exitCode: 0, stdout: '1.0.0', stderr: '');
-        }
-        if (key.startsWith('security find-identity')) {
-          return ToolResult(
-            exitCode: 0,
-            stdout: '1) $_certificateSha1 '
-                '"Developer ID Application: One (TEAM111111)"\n'
-                '2) $_otherCertificateSha1 '
-                '"Developer ID Application: Two (TEAM222222)"',
-            stderr: '',
-          );
-        }
-        return null;
-      },
-      onRun: (key) {
-        if (key.startsWith('dart compile exe')) {
-          File(workspace
-              .pathOf(BinaryChain.binaryName('tool', 'macos-arm64', 'tool')))
-            ..parent.createSync(recursive: true)
-            ..writeAsBytesSync(utf8.encode('BINARY 1.0.0'));
-        }
-      },
-    );
-
-    final ok = await chain(tools).buildStep(
-      step(StepKind.build),
-      project,
-      signing: const MacSigning(
-        publishedRequirement: null,
-        codeId: 'tool',
-      ),
-    );
-    expect(ok.ok, isFalse);
-    expect(buffer.toString(), contains('TEAM111111'));
-    expect(buffer.toString(), contains('TEAM222222'));
-  });
-
   test(
-      'the team is read from an unquoted OU — codesign only quotes teams '
+    'several certificates and nothing published is a refusal, not a guess',
+    () async {
+      final tools = BundleRecordingTools(
+        answers: (key) {
+          if (key.startsWith('dart compile exe')) {
+            return ToolResult(exitCode: 0, stdout: '', stderr: '');
+          }
+          if (key.contains('--version')) {
+            return ToolResult(exitCode: 0, stdout: '1.0.0', stderr: '');
+          }
+          if (key.startsWith('security find-identity')) {
+            return ToolResult(
+              exitCode: 0,
+              stdout:
+                  '1) $_certificateSha1 '
+                  '"Developer ID Application: One (TEAM111111)"\n'
+                  '2) $_otherCertificateSha1 '
+                  '"Developer ID Application: Two (TEAM222222)"',
+              stderr: '',
+            );
+          }
+          return null;
+        },
+        onRun: (key) {
+          if (key.startsWith('dart compile exe')) {
+            File(
+                workspace.pathOf(
+                  BinaryChain.binaryName('tool', 'macos-arm64', 'tool'),
+                ),
+              )
+              ..parent.createSync(recursive: true)
+              ..writeAsBytesSync(utf8.encode('BINARY 1.0.0'));
+          }
+        },
+      );
+
+      final ok = await chain(tools).buildStep(
+        step(StepKind.build),
+        project,
+        signing: const MacSigning(publishedRequirement: null, codeId: 'tool'),
+      );
+      expect(ok.ok, isFalse);
+      expect(buffer.toString(), contains('TEAM111111'));
+      expect(buffer.toString(), contains('TEAM222222'));
+    },
+  );
+
+  test('the team is read from an unquoted OU — codesign only quotes teams '
       'that need it', () async {
     // Live evidence: letter-leading team ids print bare
     // (leaf[subject.OU] = Q6L2SF6YDW), digit-leading print quoted
@@ -465,7 +498,8 @@ executables:
           // certificate at all. Only anchoring on subject.OU finds the team.
           return ToolResult(
             exitCode: 0,
-            stdout: 'designated => identifier "TOOL" and certificate '
+            stdout:
+                'designated => identifier "TOOL" and certificate '
                 'leaf[subject.OU] = Q6L2SF6YDW',
             stderr: '',
           );
@@ -473,7 +507,8 @@ executables:
         if (key.startsWith('security find-identity')) {
           return ToolResult(
             exitCode: 0,
-            stdout: '1) $_certificateSha1 '
+            stdout:
+                '1) $_certificateSha1 '
                 '"Developer ID Application: Dan (Q6L2SF6YDW)"',
             stderr: '',
           );
@@ -481,7 +516,8 @@ executables:
         if (key.startsWith('security find-certificate')) {
           return ToolResult(
             exitCode: 0,
-            stdout: 'SHA-256 hash: $_certificateSha256\n'
+            stdout:
+                'SHA-256 hash: $_certificateSha256\n'
                 'SHA-1 hash: $_certificateSha1\n',
             stderr: '',
           );
@@ -490,8 +526,11 @@ executables:
       },
       onRun: (key) {
         if (key.startsWith('dart compile exe')) {
-          File(workspace
-              .pathOf(BinaryChain.binaryName('tool', 'macos-arm64', 'tool')))
+          File(
+              workspace.pathOf(
+                BinaryChain.binaryName('tool', 'macos-arm64', 'tool'),
+              ),
+            )
             ..parent.createSync(recursive: true)
             ..writeAsBytesSync(utf8.encode('BINARY 1.0.0'));
         }
@@ -502,7 +541,8 @@ executables:
       project,
       // Derivation must carry the unquoted team.
       signing: const MacSigning(
-        publishedRequirement: 'designated => identifier "TOOL" and '
+        publishedRequirement:
+            'designated => identifier "TOOL" and '
             'certificate leaf[subject.OU] = Q6L2SF6YDW',
         codeId: 'TOOL',
       ),
@@ -515,13 +555,13 @@ executables:
             c.contains('--sign $_certificateSha1'),
       ),
       isTrue,
-      reason: 'the exact certificate token for the derived team signs; its '
+      reason:
+          'the exact certificate token for the derived team signs; its '
           'display name is not a unique keychain selector',
     );
   });
 
-  test(
-      'a produced requirement that merely extends the published one is '
+  test('a produced requirement that merely extends the published one is '
       'still a mismatch', () async {
     // Equality, not prefix: a requirement with extra clauses appended is a
     // different identity — Gatekeeper evaluates the whole expression — and
@@ -550,7 +590,8 @@ executables:
     // The published 0.1.0 binary carries a reverse-DNS identifier; signing
     // with the project-name default would produce a different designated
     // requirement and fail continuity only after the tag was public.
-    const published = 'designated => identifier "io.github.example.tool" '
+    const published =
+        'designated => identifier "io.github.example.tool" '
         'and certificate leaf[subject.OU] = "TEAM123456"';
     final tools = scripted(designatedRequirement: published);
     final ok = await chain(tools).buildStep(
@@ -563,53 +604,66 @@ executables:
       ),
     );
     expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
-    final sign =
-        tools.calls.firstWhere((c) => c.startsWith('codesign --force'));
+    final sign = tools.calls.firstWhere(
+      (c) => c.startsWith('codesign --force'),
+    );
     expect(
       sign,
       contains('--identifier io.github.example.tool'),
-      reason: 'identity facts are derived from the release users already '
+      reason:
+          'identity facts are derived from the release users already '
           'installed; the declaration only fills what no release states',
     );
   });
 
-  test('an accepted submission whose log cannot be fetched fails the step',
-      () async {
-    // The log is a published asset; proceeding without it would ship a
-    // release missing one of its expected files — and the fake-log
-    // alternative would publish evidence nobody issued.
-    final tools = BundleRecordingTools(
-      answers: (key) {
-        if (key.startsWith('xcrun notarytool submit')) {
-          return ToolResult(
-            exitCode: 0,
-            stdout: '{"id": "s-9", "status": "Accepted"}',
-            stderr: '',
-          );
-        }
-        if (key.startsWith('xcrun notarytool log')) {
-          return ToolResult(
-              exitCode: 1, stdout: '', stderr: 'log not available yet');
-        }
-        return null;
-      },
-      onRun: (key) {
-        if (key.startsWith('ditto')) {
-          File(workspace
-              .pathOf(BinaryChain.zipName('tool', 'macos-arm64', 'tool')))
-            ..parent.createSync(recursive: true)
-            ..writeAsBytesSync(utf8.encode('ZIP'));
-        }
-      },
-    );
-    for (final file
-        in ReleaseAssets.binaryOutputs(project, 'macos-arm64').keys) {
-      workspace.write(file, utf8.encode('BINARY'));
-    }
+  test(
+    'an accepted submission whose log cannot be fetched fails the step',
+    () async {
+      // The log is a published asset; proceeding without it would ship a
+      // release missing one of its expected files — and the fake-log
+      // alternative would publish evidence nobody issued.
+      final tools = BundleRecordingTools(
+        answers: (key) {
+          if (key.startsWith('xcrun notarytool submit')) {
+            return ToolResult(
+              exitCode: 0,
+              stdout: '{"id": "s-9", "status": "Accepted"}',
+              stderr: '',
+            );
+          }
+          if (key.startsWith('xcrun notarytool log')) {
+            return ToolResult(
+              exitCode: 1,
+              stdout: '',
+              stderr: 'log not available yet',
+            );
+          }
+          return null;
+        },
+        onRun: (key) {
+          if (key.startsWith('ditto')) {
+            File(
+                workspace.pathOf(
+                  BinaryChain.zipName('tool', 'macos-arm64', 'tool'),
+                ),
+              )
+              ..parent.createSync(recursive: true)
+              ..writeAsBytesSync(utf8.encode('ZIP'));
+          }
+        },
+      );
+      for (final file in ReleaseAssets.binaryOutputs(
+        project,
+        'macos-arm64',
+      ).keys) {
+        workspace.write(file, utf8.encode('BINARY'));
+      }
 
-    final ok =
-        await chain(tools).notarizeStep(step(StepKind.notarize), project);
-    expect(ok.ok, isFalse);
-    expect(buffer.toString(), contains('the log could not be fetched'));
-  });
+      final ok = await chain(
+        tools,
+      ).notarizeStep(step(StepKind.notarize), project);
+      expect(ok.ok, isFalse);
+      expect(buffer.toString(), contains('the log could not be fetched'));
+    },
+  );
 }

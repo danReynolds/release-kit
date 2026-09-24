@@ -66,12 +66,16 @@ void main() {
       secure: false,
     );
     final diagnostics = Diagnostics();
-    final config = ReleaseConfig.parse('''
+    final config = ReleaseConfig.parse(
+      '''
 schema = 2
 
 [release.keybay]
 publish = ["pub.dev"]
-''', 'release.toml', diagnostics)!;
+''',
+      'release.toml',
+      diagnostics,
+    )!;
     final resolution = Resolution.resolve(
       config,
       MemorySourceTree({
@@ -106,34 +110,38 @@ publish = ["pub.dev"]
   });
 
   group('everything else is unknown, never absent', () {
-    test('an unreadable exact coordinate is not hidden by readable history',
-        () async {
-      versionStatus = 500;
-      body = '{"versions": [{"version": "0.9.0"}]}';
+    test(
+      'an unreadable exact coordinate is not hidden by readable history',
+      () async {
+        versionStatus = 500;
+        body = '{"versions": [{"version": "0.9.0"}]}';
 
-      final inspection = await inspect();
+        final inspection = await inspect();
 
-      expect(inspection.verdict, Verdict.unknown);
-      expect(inspection.detail, contains('500'));
-      expect(requestUris, hasLength(1));
-    });
+        expect(inspection.verdict, Verdict.unknown);
+        expect(inspection.detail, contains('500'));
+        expect(requestUris, hasLength(1));
+      },
+    );
 
-    test('a provider that does not answer is bounded and stays unknown',
-        () async {
-      registry.close();
-      registry = Registry(
-        host: '${server.address.host}:${server.port}',
-        secure: false,
-        responseTimeout: const Duration(milliseconds: 20),
-      );
-      delay = const Duration(seconds: 1);
+    test(
+      'a provider that does not answer is bounded and stays unknown',
+      () async {
+        registry.close();
+        registry = Registry(
+          host: '${server.address.host}:${server.port}',
+          secure: false,
+          responseTimeout: const Duration(milliseconds: 20),
+        );
+        delay = const Duration(seconds: 1);
 
-      final stopwatch = Stopwatch()..start();
-      final inspection = await inspect();
+        final stopwatch = Stopwatch()..start();
+        final inspection = await inspect();
 
-      expect(inspection.verdict, Verdict.unknown);
-      expect(stopwatch.elapsed, lessThan(const Duration(milliseconds: 500)));
-    });
+        expect(inspection.verdict, Verdict.unknown);
+        expect(stopwatch.elapsed, lessThan(const Duration(milliseconds: 500)));
+      },
+    );
 
     test('a 500', () async {
       status = 500;
@@ -183,23 +191,25 @@ publish = ["pub.dev"]
   });
 
   group('what is there is reported as what is there', () {
-    test('the exact coordinate can confirm before package history catches up',
-        () async {
-      versionStatus = 200;
-      versionBody = '{"version": "1.0.0", '
-          '"archive_sha256": "AB12cd"}';
-      body = '{"versions": [{"version": "0.9.0"}]}';
+    test(
+      'the exact coordinate can confirm before package history catches up',
+      () async {
+        versionStatus = 200;
+        versionBody =
+            '{"version": "1.0.0", '
+            '"archive_sha256": "AB12cd"}';
+        body = '{"versions": [{"version": "0.9.0"}]}';
 
-      final inspection = await PubDevTarget(registry: registry).inspectProject(
-        project,
-        expectedArchiveSha256: 'AB12cd',
-      );
+        final inspection = await PubDevTarget(
+          registry: registry,
+        ).inspectProject(project, expectedArchiveSha256: 'AB12cd');
 
-      expect(inspection.verdict, Verdict.exact);
-      expect(inspection.evidence['archive'], 'sha256:ab12cd');
-      expect(requestUris, hasLength(1));
-      expect(requestUris.single.path, endsWith('/versions/1.0.0'));
-    });
+        expect(inspection.verdict, Verdict.exact);
+        expect(inspection.evidence['archive'], 'sha256:ab12cd');
+        expect(requestUris, hasLength(1));
+        expect(requestUris.single.path, endsWith('/versions/1.0.0'));
+      },
+    );
 
     test('an exact match', () async {
       body = '{"versions": [{"version": "1.0.0"}]}';
@@ -208,7 +218,8 @@ publish = ["pub.dev"]
     });
 
     test('a published date is carried into the detail', () async {
-      body = '{"versions": [{"version": "1.0.0", '
+      body =
+          '{"versions": [{"version": "1.0.0", '
           '"published": "2020-01-01T00:00:00Z"}]}';
       expect((await inspect()).detail, contains('years ago'));
     });
@@ -218,7 +229,8 @@ publish = ["pub.dev"]
       expect(
         (await inspect()).detail,
         contains('does not exist yet'),
-        reason: 'the first publish is interactive, which is a fact about the '
+        reason:
+            'the first publish is interactive, which is a fact about the '
             'ceremony rather than about the version',
       );
     });
@@ -243,18 +255,21 @@ publish = ["pub.dev"]
       expect(await registry.lookup('keybay'), isNull);
     });
 
-    test('throws rather than returning null when it could not find out',
-        () async {
-      status = 500;
-      expect(
-        () => registry.lookup('keybay'),
-        throwsA(isA<RegistryUnavailable>()),
-        reason: 'a null would be indistinguishable from "never published"',
-      );
-    });
+    test(
+      'throws rather than returning null when it could not find out',
+      () async {
+        status = 500;
+        expect(
+          () => registry.lookup('keybay'),
+          throwsA(isA<RegistryUnavailable>()),
+          reason: 'a null would be indistinguishable from "never published"',
+        );
+      },
+    );
 
     test('a version rk cannot parse is skipped, not fatal', () async {
-      body = '{"versions": [{"version": "not-a-version"}, '
+      body =
+          '{"versions": [{"version": "not-a-version"}, '
           '{"version": "1.0.0"}]}';
       final package = await registry.lookup('keybay');
       expect(package!.versions.map((v) => v.version.canonical), ['1.0.0']);
@@ -264,14 +279,16 @@ publish = ["pub.dev"]
       // The digest proof is only as real as the field that feeds it: with
       // archive_sha256 never parsed, the proof never runs and nothing else
       // notices — a mutation demonstrated exactly that.
-      body = '{"versions": [{"version": "1.0.0", '
+      body =
+          '{"versions": [{"version": "1.0.0", '
           '"archive_sha256": "AB12cd"}]}';
       final package = await registry.lookup('keybay');
       expect(package!.versions.single.archiveSha256, 'AB12cd');
     });
 
     test('the repository is read from each published pubspec', () async {
-      body = '{"versions": [{"version": "1.0.0", "pubspec": {'
+      body =
+          '{"versions": [{"version": "1.0.0", "pubspec": {'
           '"repository": "https://github.com/example/keybay"}}]}';
       final package = await registry.lookup('keybay');
       expect(
@@ -287,7 +304,8 @@ publish = ["pub.dev"]
     });
 
     test('the newest version is by precedence, not by position', () async {
-      body = '{"versions": [{"version": "1.0.0"}, {"version": "0.9.0"}, '
+      body =
+          '{"versions": [{"version": "1.0.0"}, {"version": "0.9.0"}, '
           '{"version": "1.0.0-beta"}]}';
       final package = await registry.lookup('keybay');
       expect(package!.latest!.version.canonical, '1.0.0');
@@ -308,7 +326,8 @@ publish = ["pub.dev"]
       expect(
         (await registry.lookup('keybay'))!.versions,
         hasLength(1),
-        reason: 'after rk acts on the package, its own knowledge is stale by '
+        reason:
+            'after rk acts on the package, its own knowledge is stale by '
             'its own hand — a post-act verification that reads the memo the '
             'pre-act inspection wrote is a verification that cannot fire',
       );

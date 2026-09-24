@@ -14,9 +14,9 @@ import 'version.dart';
 /// decide what work remains after this plan.
 final class ReleaseDependencyPlan {
   ReleaseDependencyPlan(this.resolution)
-      : _firstParty = {
-          for (final project in resolution.allProjects) project.name: project,
-        };
+    : _firstParty = {
+        for (final project in resolution.allProjects) project.name: project,
+      };
 
   final Resolution resolution;
   final Map<String, ResolvedProject> _firstParty;
@@ -24,10 +24,7 @@ final class ReleaseDependencyPlan {
   /// Within [unit], a project that another depends on publishes first, so
   /// the dependent resolves for consumers the moment it lands. Both
   /// dependency kinds order publication.
-  List<ResolvedProject> projects(
-    ResolvedUnit unit,
-    Diagnostics diagnostics,
-  ) {
+  List<ResolvedProject> projects(ResolvedUnit unit, Diagnostics diagnostics) {
     assert(
       resolution.units.contains(unit),
       'the unit must belong to this plan\'s resolution',
@@ -51,10 +48,12 @@ final class ReleaseDependencyPlan {
       diagnostics,
       (cycle) => Diagnostic(
         code: 'RK-DEP-003',
-        message: 'the packages in "${unit.name}" depend on each other in '
+        message:
+            'the packages in "${unit.name}" depend on each other in '
             'a circle, so there is no order that publishes them',
         source: unit.location,
-        remedy: 'break the dependency cycle involving: '
+        remedy:
+            'break the dependency cycle involving: '
             '${cycle.map((project) => project.name).join(', ')}',
       ),
     );
@@ -103,7 +102,8 @@ final class ReleaseDependencyPlan {
                 '${sibling.version}: it requires '
                 '${dependency.describeRequirement()}',
             source: SourceLocation(project.pubspec.path, dependency.line),
-            remedy: 'first-party dependencies use an exact or caret version, '
+            remedy:
+                'first-party dependencies use an exact or caret version, '
                 'so rk can check the release against them',
           );
           return;
@@ -143,7 +143,8 @@ final class ReleaseDependencyPlan {
       (cycle) => Diagnostic(
         code: 'RK-DEP-004',
         message: 'the release units depend on each other in a circle',
-        remedy: 'break the first-party dependency cycle involving: '
+        remedy:
+            'break the first-party dependency cycle involving: '
             '${cycle.map((unit) => unit.name).join(', ')}',
       ),
     );
@@ -163,9 +164,11 @@ final class ReleaseDependencyPlan {
     final settled = <T>{};
     while (ordered.length < values.length) {
       final next = values
-          .where((value) =>
-              !settled.contains(value) &&
-              dependencies(value).every(settled.contains))
+          .where(
+            (value) =>
+                !settled.contains(value) &&
+                dependencies(value).every(settled.contains),
+          )
           .firstOrNull;
       if (next == null) {
         diagnostics.report(cycle(_cycle(values, dependencies, settled)));
@@ -193,8 +196,9 @@ final class ReleaseDependencyPlan {
     var value = values.firstWhere((value) => !settled.contains(value));
     while (!path.contains(value)) {
       path.add(value);
-      value = dependencies(value)
-          .firstWhere((dependency) => !settled.contains(dependency));
+      value = dependencies(
+        value,
+      ).firstWhere((dependency) => !settled.contains(dependency));
     }
     return path.sublist(path.indexOf(value));
   }

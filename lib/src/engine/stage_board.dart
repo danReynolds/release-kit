@@ -93,7 +93,8 @@ class StageBoard {
         // so listing it first would put the last row to fill at the top, where
         // a pending mark reads as skipped rather than as not yet.
         rows.sort(
-            (left, right) => _rank(left.name).compareTo(_rank(right.name)));
+          (left, right) => _rank(left.name).compareTo(_rank(right.name)),
+        );
         groups.add(StageBoardGroup(target.label, rows));
       }
     }
@@ -111,10 +112,12 @@ class StageBoard {
           platform,
         );
         if (!publishedArtifacts.contains(publicName)) {
-          localRows.add(StageBoardRow(
-            'local/${binaryProject.name}/$platform',
-            ReleaseAssets.archivePath(binaryProject, platform),
-          ));
+          localRows.add(
+            StageBoardRow(
+              'local/${binaryProject.name}/$platform',
+              ReleaseAssets.archivePath(binaryProject, platform),
+            ),
+          );
         }
       }
       if (localRows.isNotEmpty) {
@@ -185,7 +188,7 @@ class StageBoard {
 
 class StageBoardGroup {
   StageBoardGroup(this.label, Iterable<StageBoardRow> rows)
-      : rows = List.unmodifiable(rows);
+    : rows = List.unmodifiable(rows);
 
   final String label;
   final List<StageBoardRow> rows;

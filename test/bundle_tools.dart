@@ -5,8 +5,12 @@ import 'package:rk/src/engine/tools.dart';
 /// Models compiler/copy/launcher outputs for release orchestration tests.
 /// No platform executable runs. Real launcher behavior has a separate test.
 class BundleRecordingTools extends RecordingTools {
-  BundleRecordingTools(
-      {super.results, super.answers, super.onRun, super.probe});
+  BundleRecordingTools({
+    super.results,
+    super.answers,
+    super.onRun,
+    super.probe,
+  });
   final _identifiers = <String, String>{};
 
   @override
@@ -17,10 +21,13 @@ class BundleRecordingTools extends RecordingTools {
     Map<String, String>? environment,
     Duration? timeout,
   }) async {
-    final result = await super.run(executable, arguments,
-        workingDirectory: workingDirectory,
-        environment: environment,
-        timeout: timeout);
+    final result = await super.run(
+      executable,
+      arguments,
+      workingDirectory: workingDirectory,
+      environment: environment,
+      timeout: timeout,
+    );
     if (!result.ok) return result;
     if (arguments.firstOrNull == 'compile') {
       final output = arguments[arguments.indexOf('-o') + 1];
@@ -42,16 +49,21 @@ class BundleRecordingTools extends RecordingTools {
         String identify(String value) {
           if (value.contains('identifier')) {
             return value.replaceFirst(
-                RegExp(r'identifier\s+(?:"[^"]+"|\S+)'), 'identifier "$id"');
+              RegExp(r'identifier\s+(?:"[^"]+"|\S+)'),
+              'identifier "$id"',
+            );
           }
           return value.replaceFirst(
-              'designated => ', 'designated => identifier "$id" and ');
+            'designated => ',
+            'designated => identifier "$id" and ',
+          );
         }
 
         return ToolResult(
-            exitCode: result.exitCode,
-            stdout: identify(result.stdout),
-            stderr: identify(result.stderr));
+          exitCode: result.exitCode,
+          stdout: identify(result.stdout),
+          stderr: identify(result.stderr),
+        );
       }
     }
     return result;

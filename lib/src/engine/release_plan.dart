@@ -32,8 +32,10 @@ final class RepositoryReleasePlan {
 
     final plans = <ReleaseUnitPlan>[];
     for (final unit in ordered) {
-      final prerequisites =
-          resolution.dependencyPlan.prerequisites(unit, diagnostics);
+      final prerequisites = resolution.dependencyPlan.prerequisites(
+        unit,
+        diagnostics,
+      );
       final checklist = Checklist.derive(unit, resolution, diagnostics);
       if (diagnostics.isNotEmpty) return null;
 
@@ -42,10 +44,7 @@ final class RepositoryReleasePlan {
         checklist,
         repository: repository,
       );
-      final targetStages = targets.stages(
-        unit: unit,
-        targets: publicTargets,
-      );
+      final targetStages = targets.stages(unit: unit, targets: publicTargets);
       plans.add(
         _deriveUnit(
           unit,
@@ -60,14 +59,14 @@ final class RepositoryReleasePlan {
   }
 
   RepositoryReleasePlan select(String unit) => RepositoryReleasePlan._(
-        List.unmodifiable(units.where((candidate) => candidate.name == unit)),
-      );
+    List.unmodifiable(units.where((candidate) => candidate.name == unit)),
+  );
 
   Map<String, Object?> toJson() => {
-        'source_only': true,
-        'destinations_inspected': false,
-        'units': [for (final unit in units) unit.toJson()],
-      };
+    'source_only': true,
+    'destinations_inspected': false,
+    'units': [for (final unit in units) unit.toJson()],
+  };
 
   static ReleaseUnitPlan _deriveUnit(
     ResolvedUnit unit,
@@ -136,14 +135,16 @@ final class RepositoryReleasePlan {
         'source-snapshot' => ReleasePlanNodeKind.sourceSnapshot,
         'complete-stage' => ReleasePlanNodeKind.completeStage,
         _ when local != null => switch (local.kind) {
-            StepKind.build => ReleasePlanNodeKind.build,
-            StepKind.notarize => ReleasePlanNodeKind.notarize,
-            StepKind.archive => ReleasePlanNodeKind.archive,
-            _ => throw StateError('unexpected local producer ${local.kind}'),
-          },
+          StepKind.build => ReleasePlanNodeKind.build,
+          StepKind.notarize => ReleasePlanNodeKind.notarize,
+          StepKind.archive => ReleasePlanNodeKind.archive,
+          _ => throw StateError('unexpected local producer ${local.kind}'),
+        },
         _ when targetStage != null => ReleasePlanNodeKind.targetStage,
-        _ => throw StateError('the stage graph has no plan metadata for '
-            '"$producer"'),
+        _ => throw StateError(
+          'the stage graph has no plan metadata for '
+          '"$producer"',
+        ),
       };
       nodes.add(
         ReleasePlanNode(
@@ -209,9 +210,7 @@ final class RepositoryReleasePlan {
       name: unit.name,
       version: unit.version.canonical,
       tag: unit.tag,
-      requiresUnits: [
-        for (final candidate in directUnits) candidate,
-      ],
+      requiresUnits: [for (final candidate in directUnits) candidate],
       nodes: canonical,
     );
   }
@@ -224,8 +223,8 @@ final class ReleaseUnitPlan {
     required this.tag,
     required List<String> requiresUnits,
     required List<ReleasePlanNode> nodes,
-  })  : requiresUnits = List.unmodifiable(requiresUnits),
-        nodes = List.unmodifiable(nodes);
+  }) : requiresUnits = List.unmodifiable(requiresUnits),
+       nodes = List.unmodifiable(nodes);
 
   final String name;
   final String version;
@@ -241,12 +240,12 @@ final class ReleaseUnitPlan {
       nodes.where((node) => node.phase == StepPhase.publish);
 
   Map<String, Object?> toJson() => {
-        'name': name,
-        'version': version,
-        'tag': tag,
-        'requires_units': requiresUnits,
-        'nodes': [for (final node in nodes) node.toJson()],
-      };
+    'name': name,
+    'version': version,
+    'tag': tag,
+    'requires_units': requiresUnits,
+    'nodes': [for (final node in nodes) node.toJson()],
+  };
 }
 
 enum ReleasePlanNodeKind {
@@ -293,17 +292,17 @@ final class ReleasePlanNode {
   final String? lane;
 
   Map<String, Object?> toJson() => {
-        'id': id,
-        'kind': kind.name,
-        'phase': phase.name,
-        'summary': summary,
-        'needs': needs,
-        if (producer != null) 'producer': producer,
-        if (project != null) 'project': project,
-        if (platform != null) 'platform': platform,
-        if (target != null) 'target': target!.wireName,
-        if (coordinate != null) 'coordinate': coordinate,
-        if (requiresUnit != null) 'requires_unit': requiresUnit,
-        if (lane != null) 'lane': lane,
-      };
+    'id': id,
+    'kind': kind.name,
+    'phase': phase.name,
+    'summary': summary,
+    'needs': needs,
+    if (producer != null) 'producer': producer,
+    if (project != null) 'project': project,
+    if (platform != null) 'platform': platform,
+    if (target != null) 'target': target!.wireName,
+    if (coordinate != null) 'coordinate': coordinate,
+    if (requiresUnit != null) 'requires_unit': requiresUnit,
+    if (lane != null) 'lane': lane,
+  };
 }

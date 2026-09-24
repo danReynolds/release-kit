@@ -23,8 +23,7 @@ class Diagnosis {
     required String command,
     required bool acted,
     required bool crashed,
-  }) =>
-      command != 'plan' && (acted || crashed);
+  }) => command != 'plan' && (acted || crashed);
 
   /// Writes [report] and [attachments] under `<root>/.rk/diagnosis/<stamp>/`,
   /// returning where they went so the operator can be told.

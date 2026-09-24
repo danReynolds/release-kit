@@ -26,10 +26,7 @@ void main() {
       ..writeAsBytesSync(utf8.encode('BINARY'));
 
     expect(workspace.exists('macos-arm64/tool'), isTrue);
-    expect(
-      utf8.decode(workspace.readBytes('macos-arm64/tool')!),
-      'BINARY',
-    );
+    expect(utf8.decode(workspace.readBytes('macos-arm64/tool')!), 'BINARY');
   });
 
   test('a name that escapes the workspace is refused everywhere', () {

@@ -34,50 +34,37 @@ abstract final class ReleaseAssets {
   static String producerRoot(ResolvedProject project) =>
       'producers/${project.name}';
 
-  static String binaryPath(
-    ResolvedProject project,
-    String platform,
-  ) =>
+  static String binaryPath(ResolvedProject project, String platform) =>
       '${producerRoot(project)}/$platform/${project.executable}';
 
   static BinaryArtifact binaryArtifact(
-          ResolvedProject project, String platform) =>
-      BinaryArtifact.forPlatform(project.executable!, platform);
+    ResolvedProject project,
+    String platform,
+  ) => BinaryArtifact.forPlatform(project.executable!, platform);
 
   static String binaryRoot(ResolvedProject project, String platform) =>
       '${producerRoot(project)}/$platform';
 
   static Map<String, String> binaryOutputs(
-          ResolvedProject project, String platform) =>
-      {
-        for (final file in binaryArtifact(project, platform).files)
-          '${binaryRoot(project, platform)}/${file.path}': file.type,
-      };
-
-  static String notaryInputPath(
     ResolvedProject project,
     String platform,
-  ) =>
+  ) => {
+    for (final file in binaryArtifact(project, platform).files)
+      '${binaryRoot(project, platform)}/${file.path}': file.type,
+  };
+
+  static String notaryInputPath(ResolvedProject project, String platform) =>
       '${producerRoot(project)}/notary/$platform/${project.executable}.zip';
 
-  static String archivePath(
-    ResolvedProject project,
-    String platform,
-  ) =>
+  static String archivePath(ResolvedProject project, String platform) =>
       '${producerRoot(project)}/archives/'
       '${archiveName(project.executable!, project.version.canonical, platform)}';
 
-  static String notaryResultPath(
-    ResolvedProject project,
-    String platform,
-  ) =>
+  static String notaryResultPath(ResolvedProject project, String platform) =>
       '${producerRoot(project)}/evidence/'
       '${notaryResultName(project.executable!, project.version.canonical, platform)}';
 
-  static String notaryLogPath(
-    ResolvedProject project,
-    String platform,
-  ) =>
+  static String notaryLogPath(ResolvedProject project, String platform) =>
       '${producerRoot(project)}/evidence/'
       '${notaryLogName(project.executable!, project.version.canonical, platform)}';
 
@@ -97,8 +84,7 @@ abstract final class ReleaseAssets {
     String executable,
     String version,
     String platform,
-  ) =>
-      standaloneArchiveName(executable, version, platform);
+  ) => standaloneArchiveName(executable, version, platform);
 
   /// Apple's verdict, verbatim — and its log, which says what the verdict
   /// covered. Stage evidence, not published assets: a consumer verifies the
@@ -109,15 +95,13 @@ abstract final class ReleaseAssets {
     String executable,
     String version,
     String platform,
-  ) =>
-      '$executable-$version-$platform.notary-result.json';
+  ) => '$executable-$version-$platform.notary-result.json';
 
   static String notaryLogName(
     String executable,
     String version,
     String platform,
-  ) =>
-      '$executable-$version-$platform.notary-log.json';
+  ) => '$executable-$version-$platform.notary-log.json';
 
   /// The formula's public filename inside its Homebrew tap.
   ///
@@ -168,7 +152,7 @@ abstract final class ReleaseAssets {
   }
 
   static Set<String> expectedForUnit(ResolvedUnit unit) => {
-        for (final asset in bundleFor(unit)) asset.publicName,
-        manifest,
-      };
+    for (final asset in bundleFor(unit)) asset.publicName,
+    manifest,
+  };
 }

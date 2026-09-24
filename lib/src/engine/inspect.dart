@@ -58,13 +58,13 @@ class Inspector {
 
   /// The read-only dependencies every target receives.
   TargetReadContext get targetReads => TargetReadContext(
-        registry: registry,
-        pubDev: pubDev,
-        git: git,
-        tools: tools,
-        repository: repository,
-        stageFor: stageFor,
-      );
+    registry: registry,
+    pubDev: pubDev,
+    git: git,
+    tools: tools,
+    repository: repository,
+    stageFor: stageFor,
+  );
 
   /// Whether this step's state lives somewhere rk can read without acting.
   ///
@@ -90,11 +90,11 @@ class Inspector {
   /// absence that blocks is a prerequisite: the other unit has not shipped,
   /// and publishing it and re-running is the fix.
   static bool blocks(Step step, Inspection state) => switch (state.verdict) {
-        Verdict.conflict => true,
-        Verdict.unknown => hasPublicState(step.kind),
-        Verdict.absent => step.kind == StepKind.prerequisite,
-        Verdict.exact => false,
-      };
+    Verdict.conflict => true,
+    Verdict.unknown => hasPublicState(step.kind),
+    Verdict.absent => step.kind == StepKind.prerequisite,
+    Verdict.exact => false,
+  };
 
   /// The asset names a release of [unit] is expected to carry.
   ///
@@ -137,13 +137,9 @@ class Inspector {
     TargetPlan target,
     ResolvedUnit unit, {
     bool fresh = false,
-  }) =>
-      targets.moduleForTarget(target).inspectHistory(
-            targetReads,
-            unit,
-            target,
-            fresh: fresh,
-          );
+  }) => targets
+      .moduleForTarget(target)
+      .inspectHistory(targetReads, unit, target, fresh: fresh);
 
   Inspection _stageInspection(ResolvedUnit unit) {
     final factory = stageFor;
@@ -220,11 +216,7 @@ class Inspector {
       for (final target in candidates)
         () async {
           try {
-            return await inspectHistory(
-              target,
-              unit,
-              fresh: refreshRegistry,
-            );
+            return await inspectHistory(target, unit, fresh: refreshRegistry);
           } on Object catch (error) {
             return TargetHistory(
               inspection: Inspection.unknown(
@@ -251,8 +243,9 @@ class Inspector {
           problems.add(
             'RK-REL-001',
             '${target.label}: ${inspection.detail ?? 'the latest public '
-                'version could not be read'}',
-            remedy: 'restore read access to ${target.label} and re-run; rk '
+                    'version could not be read'}',
+            remedy:
+                'restore read access to ${target.label} and re-run; rk '
                 'will not publish against an unknown public history',
           );
         }
@@ -264,7 +257,8 @@ class Inspector {
           'RK-REL-001',
           '${target.label}: the latest public version response carried no '
               'semantic version',
-          remedy: 'restore a readable version listing for ${target.label} '
+          remedy:
+              'restore a readable version listing for ${target.label} '
               'and re-run',
         );
         continue;
@@ -313,9 +307,11 @@ class Inspector {
       return [
         Diagnostic(
           code: 'RK-GIT-004',
-          message: '${unit.version} is already published, and the tag '
+          message:
+              '${unit.version} is already published, and the tag '
               '$tag does not exist',
-          remedy: 'rk will not mint it after the fact — that would bind the '
+          remedy:
+              'rk will not mint it after the fact — that would bind the '
               'published version to whatever HEAD is now, not to the commit '
               'that produced it. Tag it yourself, at that commit:\n'
               '  git tag $tag <the commit that released '
@@ -347,9 +343,11 @@ class Inspector {
       return [
         Diagnostic(
           code: 'RK-GIT-007',
-          message: 'the tag $tag exists, and rk could not read which '
+          message:
+              'the tag $tag exists, and rk could not read which '
               'commit it names',
-          remedy: 'rk proves the tag names the commit it is about to publish '
+          remedy:
+              'rk proves the tag names the commit it is about to publish '
               'from, and it cannot prove that here — so it will not publish. '
               'One unreachable tag object breaks the read for every tag:\n'
               '  git show-ref --tags -d   (must exit 0)\n'
@@ -365,9 +363,11 @@ class Inspector {
       return [
         Diagnostic(
           code: 'RK-GIT-005',
-          message: 'the tag $tag points at ${_short(target)}, and this '
+          message:
+              'the tag $tag points at ${_short(target)}, and this '
               'release would publish from ${_short(git.head)}',
-          remedy: 'check out ${_short(target)} if that is the intended '
+          remedy:
+              'check out ${_short(target)} if that is the intended '
               'release source. If $tag is already public, do not move it; '
               'bump the version and changelog. If it is local-only and '
               'mistaken, remove it locally before retrying',

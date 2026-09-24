@@ -36,38 +36,39 @@ class Inspection {
     Map<String, String> evidence = const {},
     Object? authority,
   }) : this(
-          Verdict.absent,
-          detail: detail,
-          evidence: evidence,
-          authority: authority,
-        );
+         Verdict.absent,
+         detail: detail,
+         evidence: evidence,
+         authority: authority,
+       );
 
   const Inspection.exact({
     String? detail,
     Map<String, String> evidence = const {},
     Object? authority,
   }) : this(
-          Verdict.exact,
-          detail: detail,
-          evidence: evidence,
-          authority: authority,
-        );
+         Verdict.exact,
+         detail: detail,
+         evidence: evidence,
+         authority: authority,
+       );
 
-  const Inspection.conflict(String detail,
-      {Map<String, String> evidence = const {},
-      Object? authority,
-      SourceBindingMismatch? sourceMismatch})
-      : this(
-          Verdict.conflict,
-          detail: detail,
-          evidence: evidence,
-          authority: authority,
-          sourceMismatch: sourceMismatch,
-        );
+  const Inspection.conflict(
+    String detail, {
+    Map<String, String> evidence = const {},
+    Object? authority,
+    SourceBindingMismatch? sourceMismatch,
+  }) : this(
+         Verdict.conflict,
+         detail: detail,
+         evidence: evidence,
+         authority: authority,
+         sourceMismatch: sourceMismatch,
+       );
 
   /// rk could not determine the state.
   const Inspection.unknown(String detail)
-      : this(Verdict.unknown, detail: detail);
+    : this(Verdict.unknown, detail: detail);
 
   final Verdict verdict;
 

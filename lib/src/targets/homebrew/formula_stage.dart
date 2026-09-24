@@ -55,8 +55,10 @@ TargetStage homebrewFormulaStage({
                 platform,
               ),
               sha256: context.receipt.steps
-                  .singleWhere((item) =>
-                      item.name == archiveReceiptName(project.name, platform))
+                  .singleWhere(
+                    (item) =>
+                        item.name == archiveReceiptName(project.name, platform),
+                  )
                   .outputs
                   .single
                   .sha256,
@@ -113,9 +115,11 @@ Future<TargetStageOutcome> _prepareStage(
     return TargetStageFailure(
       Diagnostic(
         code: 'RK-GIT-002',
-        message: 'homebrew needs an origin remote, and this repository '
+        message:
+            'homebrew needs an origin remote, and this repository '
             'has none',
-        remedy: 'rk publishes what others can fetch, and reads back what it '
+        remedy:
+            'rk publishes what others can fetch, and reads back what it '
             'published. git remote add origin <url>, then git push -u '
             'origin ${context.git.branch ?? 'main'}',
       ),
@@ -127,10 +131,12 @@ Future<TargetStageOutcome> _prepareStage(
   for (final platform in project.binaryPlatforms) {
     final record = context.priorSteps
         .where(
-            (step) => step.name == archiveReceiptName(project.name, platform))
+          (step) => step.name == archiveReceiptName(project.name, platform),
+        )
         .firstOrNull;
-    final artifact =
-        record?.outputs.where((output) => output.type == 'archive').firstOrNull;
+    final artifact = record?.outputs
+        .where((output) => output.type == 'archive')
+        .firstOrNull;
     if (artifact == null) {
       return TargetStageFailure(
         Diagnostic(
@@ -145,11 +151,10 @@ Future<TargetStageOutcome> _prepareStage(
   }
 
   final executable = project.executable!;
-  context.progress('formula').begin(
-        ProgressActivity(
-          running: 'rendering',
-          failed: 'rendering failed',
-        ),
+  context
+      .progress('formula')
+      .begin(
+        ProgressActivity(running: 'rendering', failed: 'rendering failed'),
       );
   final contents = HomebrewFormula.renderRelease(
     className: ReleaseAssets.formulaClass(executable),

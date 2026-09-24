@@ -15,8 +15,9 @@ void main() {
   late Rk rk;
 
   setUpAll(() {
-    outsideRepository =
-        Directory.systemTemp.createTempSync('rk-target-reference-');
+    outsideRepository = Directory.systemTemp.createTempSync(
+      'rk-target-reference-',
+    );
     rk = Rk(outsideRepository.path);
   });
   tearDownAll(() => outsideRepository.deleteSync(recursive: true));
@@ -63,8 +64,8 @@ void main() {
 
   test('JSON is the same static catalog with no local selection claims', () {
     final run = rk(['target', 'list', '--json']);
-    final choices =
-        (run.json['release_choices'] as List).cast<Map<String, Object?>>();
+    final choices = (run.json['release_choices'] as List)
+        .cast<Map<String, Object?>>();
 
     expect(run.code, 0, reason: run.all);
     expect(run.json['command'], 'target');
@@ -80,27 +81,24 @@ void main() {
 
   test('detail JSON keeps the catalog shape and filters to one choice', () {
     final run = rk(['target', 'homebrew', '--json']);
-    final choices =
-        (run.json['release_choices'] as List).cast<Map<String, Object?>>();
+    final choices = (run.json['release_choices'] as List)
+        .cast<Map<String, Object?>>();
 
     expect(run.code, 0, reason: run.all);
     expect(choices, hasLength(1));
     expect(choices.single['id'], 'homebrew');
-    expect(choices.single['requires'], [
-      'binary',
-      'git-tag',
-      'github-release',
-    ]);
-    final configuration =
-        (choices.single['configure'] as List).cast<String>().join('\n');
+    expect(choices.single['requires'], ['binary', 'git-tag', 'github-release']);
+    final configuration = (choices.single['configure'] as List)
+        .cast<String>()
+        .join('\n');
     expect(configuration, contains('homebrew_tap'));
     expect(configuration, contains('binary_platforms'));
   });
 
   test('every documented example is accepted by the config parser', () {
     final run = rk(['target', 'list', '--json']);
-    final choices =
-        (run.json['release_choices'] as List).cast<Map<String, Object?>>();
+    final choices = (run.json['release_choices'] as List)
+        .cast<Map<String, Object?>>();
 
     for (final choice in choices) {
       final diagnostics = Diagnostics();
@@ -113,7 +111,8 @@ void main() {
       expect(
         parsed,
         isNotNull,
-        reason: '${choice['id']}: '
+        reason:
+            '${choice['id']}: '
             '${diagnostics.found.map((item) => item.toString()).join('; ')}',
       );
     }
@@ -122,7 +121,8 @@ void main() {
   test('the shared choice vocabulary covers every public target once', () {
     final publicChoices = ReleaseChoice.values
         .where(
-            (choice) => choice.category == ReleaseChoiceCategory.releaseTarget)
+          (choice) => choice.category == ReleaseChoiceCategory.releaseTarget,
+        )
         .map((choice) => choice.id)
         .toSet();
     expect(
@@ -131,17 +131,19 @@ void main() {
     );
   });
 
-  test('unknown and missing names are usage errors with discovery remedies',
-      () {
-    final unknown = rk(['target', 'npm', '--json']);
-    expect(unknown.code, 2, reason: unknown.all);
-    expect(unknown.problems.single['code'], 'RK-CLI-009');
-    expect(unknown.problems.single['message'], contains('"npm"'));
-    expect(unknown.problems.single['remedy'], contains('rk target list'));
+  test(
+    'unknown and missing names are usage errors with discovery remedies',
+    () {
+      final unknown = rk(['target', 'npm', '--json']);
+      expect(unknown.code, 2, reason: unknown.all);
+      expect(unknown.problems.single['code'], 'RK-CLI-009');
+      expect(unknown.problems.single['message'], contains('"npm"'));
+      expect(unknown.problems.single['remedy'], contains('rk target list'));
 
-    final missing = rk(['target', '--json']);
-    expect(missing.code, 2, reason: missing.all);
-    expect(missing.problems.single['code'], 'RK-CLI-009');
-    expect(missing.problems.single['remedy'], contains('rk target <name>'));
-  });
+      final missing = rk(['target', '--json']);
+      expect(missing.code, 2, reason: missing.all);
+      expect(missing.problems.single['code'], 'RK-CLI-009');
+      expect(missing.problems.single['remedy'], contains('rk target <name>'));
+    },
+  );
 }

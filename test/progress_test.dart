@@ -76,11 +76,13 @@ void main() {
       // concurrent lanes are mid-flight must not fail, settle, or discard
       // anything — only the owner marks rows and concludes.
       failing.fail();
-      harness.output.problem(Diagnostic(
-        code: 'RK-STAGE-003',
-        message: 'one lane failed while another was mid-build',
-        remedy: 'drain, then conclude',
-      ));
+      harness.output.problem(
+        Diagnostic(
+          code: 'RK-STAGE-003',
+          message: 'one lane failed while another was mid-build',
+          remedy: 'drain, then conclude',
+        ),
+      );
       expect(surviving.state, ProgressRowState.active);
 
       surviving.complete(note: 'staged');
@@ -96,7 +98,8 @@ void main() {
       expect(
         harness.text.indexOf('Staging'),
         greaterThan(harness.text.indexOf('one lane failed')),
-        reason: 'diagnostics stream as they happen; the owner concludes '
+        reason:
+            'diagnostics stream as they happen; the owner concludes '
             'the board afterwards:\n${harness.text}',
       );
     });
@@ -177,76 +180,89 @@ void main() {
   });
 
   group('rendering lifecycle', () {
-    test('active and completed work use runtime colors, not target colors',
-        () async {
-      final harness = _Harness(terminal: true, useColor: true);
-      final board = harness.output.progressBoard(
-        'Staging',
-        delay: Duration.zero,
-        showElapsed: false,
-      );
-      final row = board.addRow(
-        id: 'archive',
-        label: 'package archive',
-        group: 'Local artifacts',
-      );
-      row.handle.begin(CommonProgressActivities.checking);
+    test(
+      'active and completed work use runtime colors, not target colors',
+      () async {
+        final harness = _Harness(terminal: true, useColor: true);
+        final board = harness.output.progressBoard(
+          'Staging',
+          delay: Duration.zero,
+          showElapsed: false,
+        );
+        final row = board.addRow(
+          id: 'archive',
+          label: 'package archive',
+          group: 'Local artifacts',
+        );
+        row.handle.begin(CommonProgressActivities.checking);
 
-      await Future<void>.delayed(const Duration(milliseconds: 5));
-      expect(harness.text, contains('\x1b[1mStaging\x1b[0m'));
-      expect(
-        harness.text,
-        contains('\x1b[1;90m  Local artifacts\x1b[0m'),
-      );
-      expect(harness.text, contains('\x1b[36mpackage archive'),
-          reason: 'the active subject, not just its spinner, is cyan');
-      expect(harness.text, contains('\x1b[36mchecking\x1b[0m'),
-          reason: 'active activity is cyan');
-      expect(harness.text, isNot(contains('\x1b[33m')),
-          reason: 'active is not an attention or warning state');
-      expect(
-        harness.text.replaceAll(RegExp(r'\x1b\[[0-9;]*[A-Za-z]'), ''),
-        contains('checking'),
-      );
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+        expect(harness.text, contains('\x1b[1mStaging\x1b[0m'));
+        expect(harness.text, contains('\x1b[1;90m  Local artifacts\x1b[0m'));
+        expect(
+          harness.text,
+          contains('\x1b[36mpackage archive'),
+          reason: 'the active subject, not just its spinner, is cyan',
+        );
+        expect(
+          harness.text,
+          contains('\x1b[36mchecking\x1b[0m'),
+          reason: 'active activity is cyan',
+        );
+        expect(
+          harness.text,
+          isNot(contains('\x1b[33m')),
+          reason: 'active is not an attention or warning state',
+        );
+        expect(
+          harness.text.replaceAll(RegExp(r'\x1b\[[0-9;]*[A-Za-z]'), ''),
+          contains('checking'),
+        );
 
-      final beforeSettle = harness.text.length;
-      row.complete(note: 'staged');
-      board.settle();
-      final settled = harness.text.substring(beforeSettle);
-      expect(settled, contains('\x1b[32m✓\x1b[0m'));
-      expect(settled, matches(RegExp(r'\x1b\[32m +package archive')));
-      expect(settled, isNot(contains('\x1b[34m')),
-          reason: 'a successful runtime state overrides local-work topology');
-    });
+        final beforeSettle = harness.text.length;
+        row.complete(note: 'staged');
+        board.settle();
+        final settled = harness.text.substring(beforeSettle);
+        expect(settled, contains('\x1b[32m✓\x1b[0m'));
+        expect(settled, matches(RegExp(r'\x1b\[32m +package archive')));
+        expect(
+          settled,
+          isNot(contains('\x1b[34m')),
+          reason: 'a successful runtime state overrides local-work topology',
+        );
+      },
+    );
 
-    test('a slow non-terminal operation emits once, then settles once',
-        () async {
-      final harness = _Harness(terminal: false);
-      final board = harness.output.progressBoard(
-        'Preparing release',
-        delay: const Duration(milliseconds: 5),
-        emitSlowToNonTerminal: true,
-      );
-      final row = board.addRow(
-        id: 'pub',
-        label: 'pub.dev',
-        coordinate: 'rk 1.0.0',
-      );
-      row.handle.begin(CommonProgressActivities.checkingSignIn);
+    test(
+      'a slow non-terminal operation emits once, then settles once',
+      () async {
+        final harness = _Harness(terminal: false);
+        final board = harness.output.progressBoard(
+          'Preparing release',
+          delay: const Duration(milliseconds: 5),
+          emitSlowToNonTerminal: true,
+        );
+        final row = board.addRow(
+          id: 'pub',
+          label: 'pub.dev',
+          coordinate: 'rk 1.0.0',
+        );
+        row.handle.begin(CommonProgressActivities.checkingSignIn);
 
-      await Future<void>.delayed(const Duration(milliseconds: 15));
-      expect(
-        RegExp('checking sign-in').allMatches(harness.text),
-        hasLength(1),
-      );
-      row.complete(note: 'not published', mark: ProgressRowMark.none);
-      board.settle();
+        await Future<void>.delayed(const Duration(milliseconds: 15));
+        expect(
+          RegExp('checking sign-in').allMatches(harness.text),
+          hasLength(1),
+        );
+        row.complete(note: 'not published', mark: ProgressRowMark.none);
+        board.settle();
 
-      expect(harness.text, contains('Preparing release'));
-      expect(harness.text, contains('not published'));
-      expect(harness.text, isNot(contains('\x1b')));
-      expect(harness.text, isNot(contains('\r')));
-    });
+        expect(harness.text, contains('Preparing release'));
+        expect(harness.text, contains('not published'));
+        expect(harness.text, isNot(contains('\x1b')));
+        expect(harness.text, isNot(contains('\r')));
+      },
+    );
 
     test('a fast non-terminal operation collapses to its result', () async {
       final harness = _Harness(terminal: false);
@@ -265,66 +281,72 @@ void main() {
       expect(harness.text, contains('checked'));
     });
 
-    test('discard closes a printed non-terminal activity with its result',
-        () async {
-      final harness = _Harness(terminal: false);
-      final board = harness.output.progressBoard(
-        'Preparing release',
-        delay: const Duration(milliseconds: 2),
-        emitSlowToNonTerminal: true,
-      );
-      final row = board.addRow(id: 'pub', label: 'pub.dev');
-      row.handle.begin(CommonProgressActivities.checkingSignIn);
-      await Future<void>.delayed(const Duration(milliseconds: 5));
-      row.complete(note: 'signed in');
-      board.discard();
+    test(
+      'discard closes a printed non-terminal activity with its result',
+      () async {
+        final harness = _Harness(terminal: false);
+        final board = harness.output.progressBoard(
+          'Preparing release',
+          delay: const Duration(milliseconds: 2),
+          emitSlowToNonTerminal: true,
+        );
+        final row = board.addRow(id: 'pub', label: 'pub.dev');
+        row.handle.begin(CommonProgressActivities.checkingSignIn);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+        row.complete(note: 'signed in');
+        board.discard();
 
-      expect(harness.text, contains('checking sign-in'));
-      expect(harness.text, contains('signed in'));
-    });
+        expect(harness.text, contains('checking sign-in'));
+        expect(harness.text, contains('signed in'));
+      },
+    );
 
-    test('detail updates do not postpone slow non-terminal visibility',
-        () async {
-      final harness = _Harness(terminal: false);
-      final board = harness.output.progressBoard(
-        'Releasing',
-        delay: const Duration(milliseconds: 20),
-        emitSlowToNonTerminal: true,
-      );
-      final row = board.addRow(id: 'github', label: 'GitHub Release');
-      final uploading = ProgressActivity(
-        running: 'uploading',
-        failed: 'upload failed',
-      );
-      row.handle.begin(uploading, detail: '1/4');
-      await Future<void>.delayed(const Duration(milliseconds: 8));
-      row.handle.begin(uploading, detail: '2/4');
-      await Future<void>.delayed(const Duration(milliseconds: 8));
-      row.handle.begin(uploading, detail: '3/4');
-      await Future<void>.delayed(const Duration(milliseconds: 12));
+    test(
+      'detail updates do not postpone slow non-terminal visibility',
+      () async {
+        final harness = _Harness(terminal: false);
+        final board = harness.output.progressBoard(
+          'Releasing',
+          delay: const Duration(milliseconds: 20),
+          emitSlowToNonTerminal: true,
+        );
+        final row = board.addRow(id: 'github', label: 'GitHub Release');
+        final uploading = ProgressActivity(
+          running: 'uploading',
+          failed: 'upload failed',
+        );
+        row.handle.begin(uploading, detail: '1/4');
+        await Future<void>.delayed(const Duration(milliseconds: 8));
+        row.handle.begin(uploading, detail: '2/4');
+        await Future<void>.delayed(const Duration(milliseconds: 8));
+        row.handle.begin(uploading, detail: '3/4');
+        await Future<void>.delayed(const Duration(milliseconds: 12));
 
-      expect(RegExp('uploading').allMatches(harness.text), hasLength(1));
-      row.complete(note: 'published');
-      board.settle();
-    });
+        expect(RegExp('uploading').allMatches(harness.text), hasLength(1));
+        row.complete(note: 'published');
+        board.settle();
+      },
+    );
 
-    test('a row added after the initial delay still starts the terminal board',
-        () async {
-      final harness = _Harness(terminal: true);
-      final board = harness.output.progressBoard(
-        'Preparing release',
-        delay: const Duration(milliseconds: 5),
-      );
-      await Future<void>.delayed(const Duration(milliseconds: 10));
-      board
-          .addRow(id: 'late', label: 'pub.dev')
-          .handle
-          .begin(CommonProgressActivities.checking);
-      await Future<void>.delayed(const Duration(milliseconds: 2));
+    test(
+      'a row added after the initial delay still starts the terminal board',
+      () async {
+        final harness = _Harness(terminal: true);
+        final board = harness.output.progressBoard(
+          'Preparing release',
+          delay: const Duration(milliseconds: 5),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        board
+            .addRow(id: 'late', label: 'pub.dev')
+            .handle
+            .begin(CommonProgressActivities.checking);
+        await Future<void>.delayed(const Duration(milliseconds: 2));
 
-      expect(harness.text, contains('Preparing release'));
-      board.discard();
-    });
+        expect(harness.text, contains('Preparing release'));
+        board.discard();
+      },
+    );
 
     test('terminal rows remain one physical line when narrow', () async {
       final harness = _Harness(terminal: true, width: 36);
@@ -395,10 +417,7 @@ void main() {
         delay: Duration.zero,
       );
       board
-          .addRow(
-            id: 'github',
-            label: 'GitHub Release with a long name',
-          )
+          .addRow(id: 'github', label: 'GitHub Release with a long name')
           .handle
           .begin(CommonProgressActivities.checking);
       await Future<void>.delayed(const Duration(milliseconds: 2));
@@ -411,49 +430,50 @@ void main() {
       expect(visible.every((line) => line.runes.length <= 24), isTrue);
     });
 
-    test('wide and combining characters are fitted by display columns',
-        () async {
-      final harness = _Harness(terminal: true, width: 30);
-      final board = harness.output.progressBoard(
-        'Preparing release',
-        delay: Duration.zero,
-      );
-      board
-          .addRow(
-            id: 'unicode',
-            label: 'npm 漢字 e\u0301 🚀 package',
-            coordinate: 'scope/name',
-          )
-          .handle
-          .begin(CommonProgressActivities.checkingSignIn);
-      await Future<void>.delayed(const Duration(milliseconds: 2));
-      board.discard();
-      expect(harness.text, contains('npm'));
-      expect(harness.text, contains('…'));
-    });
+    test(
+      'wide and combining characters are fitted by display columns',
+      () async {
+        final harness = _Harness(terminal: true, width: 30);
+        final board = harness.output.progressBoard(
+          'Preparing release',
+          delay: Duration.zero,
+        );
+        board
+            .addRow(
+              id: 'unicode',
+              label: 'npm 漢字 e\u0301 🚀 package',
+              coordinate: 'scope/name',
+            )
+            .handle
+            .begin(CommonProgressActivities.checkingSignIn);
+        await Future<void>.delayed(const Duration(milliseconds: 2));
+        board.discard();
+        expect(harness.text, contains('npm'));
+        expect(harness.text, contains('…'));
+      },
+    );
 
-    test('a resize to an unsafe width clears and disables the live board',
-        () async {
-      var width = 40;
-      final harness = _Harness(
-        terminal: true,
-        widthReader: () => width,
-      );
-      final board = harness.output.progressBoard(
-        'Preparing release',
-        delay: Duration.zero,
-      );
-      final row = board.addRow(id: 'tag', label: 'Git tag');
-      row.handle.begin(CommonProgressActivities.checking);
-      await Future<void>.delayed(const Duration(milliseconds: 2));
-      final before = harness.text.length;
-      width = 8;
-      row.handle.begin(CommonProgressActivities.checking, detail: 'again');
-      await Future<void>.delayed(const Duration(milliseconds: 2));
-      board.discard();
+    test(
+      'a resize to an unsafe width clears and disables the live board',
+      () async {
+        var width = 40;
+        final harness = _Harness(terminal: true, widthReader: () => width);
+        final board = harness.output.progressBoard(
+          'Preparing release',
+          delay: Duration.zero,
+        );
+        final row = board.addRow(id: 'tag', label: 'Git tag');
+        row.handle.begin(CommonProgressActivities.checking);
+        await Future<void>.delayed(const Duration(milliseconds: 2));
+        final before = harness.text.length;
+        width = 8;
+        row.handle.begin(CommonProgressActivities.checking, detail: 'again');
+        await Future<void>.delayed(const Duration(milliseconds: 2));
+        board.discard();
 
-      expect(harness.text.substring(before), contains('\x1b[1A'));
-    });
+        expect(harness.text.substring(before), contains('\x1b[1A'));
+      },
+    );
 
     test('suspension leaves a durable handoff above native output', () async {
       final harness = _Harness(terminal: true);
@@ -550,59 +570,65 @@ void main() {
       expect(harness.text, isEmpty);
     });
 
-    test('prose yields to a live terminal board, which repaints after',
-        () async {
-      final harness = _Harness(terminal: true);
-      final board = harness.output.progressBoard(
-        'Staging',
-        delay: Duration.zero,
-      );
-      final row = board.addRow(id: 'build', label: 'linux-x64');
-      row.handle.begin(CommonProgressActivities.checking);
-      await Future<void>.delayed(const Duration(milliseconds: 10));
-      expect(harness.text, contains('Staging'));
+    test(
+      'prose yields to a live terminal board, which repaints after',
+      () async {
+        final harness = _Harness(terminal: true);
+        final board = harness.output.progressBoard(
+          'Staging',
+          delay: Duration.zero,
+        );
+        final row = board.addRow(id: 'build', label: 'linux-x64');
+        row.handle.begin(CommonProgressActivities.checking);
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        expect(harness.text, contains('Staging'));
 
-      final beforeProse = harness.text.length;
-      harness.output.problem(Diagnostic(
-        code: 'RK-BUILD-001',
-        message: 'a diagnostic lands mid-flight',
-        remedy: 'the board yields and repaints',
-      ));
-      // The board survived the prose and repaints beneath it a frame later.
-      // Generous margin over the 40ms repaint timer, for a busy CI host.
-      await Future<void>.delayed(const Duration(milliseconds: 200));
-      final afterProse = harness.text.substring(beforeProse);
-      expect(afterProse, contains('a diagnostic lands mid-flight'));
-      expect(
-        afterProse.indexOf('Staging'),
-        greaterThan(afterProse.indexOf('a diagnostic lands mid-flight')),
-        reason: 'the repaint follows the prose:\n$afterProse',
-      );
+        final beforeProse = harness.text.length;
+        harness.output.problem(
+          Diagnostic(
+            code: 'RK-BUILD-001',
+            message: 'a diagnostic lands mid-flight',
+            remedy: 'the board yields and repaints',
+          ),
+        );
+        // The board survived the prose and repaints beneath it a frame later.
+        // Generous margin over the 40ms repaint timer, for a busy CI host.
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        final afterProse = harness.text.substring(beforeProse);
+        expect(afterProse, contains('a diagnostic lands mid-flight'));
+        expect(
+          afterProse.indexOf('Staging'),
+          greaterThan(afterProse.indexOf('a diagnostic lands mid-flight')),
+          reason: 'the repaint follows the prose:\n$afterProse',
+        );
 
-      row.complete(note: 'staged');
-      board.settle();
-      // A settled board is silent: no timer paints after the owner ends it.
-      final settled = harness.text.length;
-      await Future<void>.delayed(const Duration(milliseconds: 120));
-      expect(harness.text.length, settled);
-      harness.output.close();
-    });
+        row.complete(note: 'staged');
+        board.settle();
+        // A settled board is silent: no timer paints after the owner ends it.
+        final settled = harness.text.length;
+        await Future<void>.delayed(const Duration(milliseconds: 120));
+        expect(harness.text.length, settled);
+        harness.output.close();
+      },
+    );
 
-    test('replacing an unresolved board is the same owner bug as leaking it',
-        () {
-      final harness = _Harness(terminal: false);
-      final first = harness.output.progressBoard('First');
-      first
-          .addRow(id: 'row', label: 'row')
-          .handle
-          .begin(CommonProgressActivities.checking);
-      // A successor board must never find its predecessor alive: two boards
-      // painting one terminal render interleaved garbage.
-      expect(
-        () => harness.output.progressBoard('Second'),
-        throwsA(isA<AssertionError>()),
-      );
-    });
+    test(
+      'replacing an unresolved board is the same owner bug as leaking it',
+      () {
+        final harness = _Harness(terminal: false);
+        final first = harness.output.progressBoard('First');
+        first
+            .addRow(id: 'row', label: 'row')
+            .handle
+            .begin(CommonProgressActivities.checking);
+        // A successor board must never find its predecessor alive: two boards
+        // painting one terminal render interleaved garbage.
+        expect(
+          () => harness.output.progressBoard('Second'),
+          throwsA(isA<AssertionError>()),
+        );
+      },
+    );
 
     test('a board alive at close is an owner bug, said loudly', () {
       final harness = _Harness(terminal: true);

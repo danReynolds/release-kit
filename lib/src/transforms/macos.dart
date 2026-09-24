@@ -34,10 +34,12 @@ class MacOsSigner {
   /// and collapsing them is the same mistake as an absent verdict for a
   /// destination nobody asked.
   Future<List<SigningIdentity>?> availableIdentities() async {
-    final result = await tools.run(
-      'security',
-      const ['find-identity', '-v', '-p', 'codesigning'],
-    );
+    final result = await tools.run('security', const [
+      'find-identity',
+      '-v',
+      '-p',
+      'codesigning',
+    ]);
     if (!result.ok) return null;
 
     final identities = <SigningIdentity>[];
@@ -49,14 +51,11 @@ class MacOsSigner {
       if (parsed == null) return null;
       final sha1 = parsed.group(1)!.toLowerCase();
       final name = parsed.group(2);
-      final team =
-          RegExp(r'\(([A-Z0-9]{10})\)$').firstMatch(name ?? '')?.group(1);
+      final team = RegExp(
+        r'\(([A-Z0-9]{10})\)$',
+      ).firstMatch(name ?? '')?.group(1);
       if (name != null && team != null) {
-        identities.add(SigningIdentity(
-          name: name,
-          team: team,
-          sha1: sha1,
-        ));
+        identities.add(SigningIdentity(name: name, team: team, sha1: sha1));
       }
     }
     return identities;
@@ -118,11 +117,11 @@ class MacOsSigner {
 
     final matching = selectedIdentity == null
         ? (team == null
-            ? identities
-            : identities.where((i) => i.team == team).toList())
+              ? identities
+              : identities.where((i) => i.team == team).toList())
         : identities
-            .where((identity) => identity.sha1 == selectedIdentity.sha1)
-            .toList();
+              .where((identity) => identity.sha1 == selectedIdentity.sha1)
+              .toList();
 
     if (matching.isEmpty) {
       return SignOutcome.failed(
@@ -134,11 +133,11 @@ class MacOsSigner {
       return SignOutcome.failed(
         team == null
             ? 'this machine has ${matching.length} Developer ID certificates '
-                '(${matching.map((i) => i.team).join(', ')}) and nothing '
-                'published says which one distributes this — release once '
-                'from a machine with one, and every release after derives it'
+                  '(${matching.map((i) => i.team).join(', ')}) and nothing '
+                  'published says which one distributes this — release once '
+                  'from a machine with one, and every release after derives it'
             : '${matching.length} certificates for team $team — rk will not '
-                'guess which one distributes this',
+                  'guess which one distributes this',
       );
     }
 
@@ -171,7 +170,8 @@ class MacOsSigner {
       entitlements.writeAsStringSync(_emptyEntitlements);
     } on FileSystemException catch (error) {
       return SignOutcome.failed(
-          'the entitlements could not be written: $error');
+        'the entitlements could not be written: $error',
+      );
     }
 
     final ToolResult signed;
@@ -278,13 +278,13 @@ class SignOutcome {
     String? certificate,
     String? certificateSha256,
   }) : this._(
-          requirement,
-          null,
-          certificate: certificate,
-          certificateSha256: certificateSha256,
-        );
+         requirement,
+         null,
+         certificate: certificate,
+         certificateSha256: certificateSha256,
+       );
   const SignOutcome.failed(String problem, {String? transcript})
-      : this._(null, problem, transcript: transcript);
+    : this._(null, problem, transcript: transcript);
 
   /// The designated requirement the signature produced.
   final String? requirement;
@@ -328,22 +328,19 @@ class MacOsNotarizer {
   Future<NotaryPreflightOutcome> preflight() async {
     final ToolResult result;
     try {
-      result = await tools.run(
-        'xcrun',
-        [
-          'notarytool',
-          'history',
-          '--keychain-profile',
-          profile,
-          '--output-format',
-          'json',
-        ],
-        timeout: const Duration(seconds: 45),
-      );
+      result = await tools.run('xcrun', [
+        'notarytool',
+        'history',
+        '--keychain-profile',
+        profile,
+        '--output-format',
+        'json',
+      ], timeout: const Duration(seconds: 45));
     } on Object catch (error) {
       return NotaryPreflightOutcome.failed(
         'notarytool could not be started',
-        remedy: 'install the Xcode command-line tools and verify the '
+        remedy:
+            'install the Xcode command-line tools and verify the '
             '$profile credential with: xcrun notarytool history '
             '--keychain-profile $profile',
         transcript: '$error',
@@ -352,17 +349,18 @@ class MacOsNotarizer {
     if (result.ok) return const NotaryPreflightOutcome.ready();
 
     final account = '${result.stdout}\n${result.stderr}'.toLowerCase();
-    final missing = account.contains('profile') ||
+    final missing =
+        account.contains('profile') ||
         account.contains('keychain') ||
         account.contains('credentials');
     return NotaryPreflightOutcome.failed(
       result.summary,
       remedy: missing
           ? 'store or replace the credential once: xcrun notarytool '
-              'store-credentials $profile'
+                'store-credentials $profile'
           : 'restore access to Apple\'s notarization service and verify the '
-              '$profile credential with: xcrun notarytool history '
-              '--keychain-profile $profile',
+                '$profile credential with: xcrun notarytool history '
+                '--keychain-profile $profile',
       transcript: result.transcript,
     );
   }
@@ -380,13 +378,14 @@ class MacOsNotarizer {
     ]);
 
     if (!result.ok) {
-      final missing = result.summary.contains('profile') ||
+      final missing =
+          result.summary.contains('profile') ||
           result.summary.contains('keychain');
       return NotarizeOutcome.failed(
         result.summary,
         remedy: missing
             ? 'store the credential once: xcrun notarytool '
-                'store-credentials $profile'
+                  'store-credentials $profile'
             : null,
         transcript: result.transcript,
       );
@@ -394,9 +393,11 @@ class MacOsNotarizer {
 
     // The submission id is what a later run correlates against, so it is
     // reported even on success.
-    final id =
-        RegExp(r'"id"\s*:\s*"([^"]+)"').firstMatch(result.stdout)?.group(1);
-    final accepted = result.stdout.contains('"status":"Accepted"') ||
+    final id = RegExp(
+      r'"id"\s*:\s*"([^"]+)"',
+    ).firstMatch(result.stdout)?.group(1);
+    final accepted =
+        result.stdout.contains('"status":"Accepted"') ||
         result.stdout.contains('"status": "Accepted"');
 
     if (!accepted) {
@@ -410,7 +411,7 @@ class MacOsNotarizer {
         remedy: id == null
             ? null
             : 'the reason is in the log: xcrun notarytool log $id '
-                '--keychain-profile $profile',
+                  '--keychain-profile $profile',
         transcript: [
           result.transcript,
           if (reason != null && reason.ok) ...[
@@ -429,12 +430,12 @@ class MacOsNotarizer {
   /// that claim covered, and a user who trusts neither can ask Apple with
   /// the id inside them.
   Future<ToolResult> log(String submissionId) => tools.run('xcrun', [
-        'notarytool',
-        'log',
-        submissionId,
-        '--keychain-profile',
-        profile,
-      ]);
+    'notarytool',
+    'log',
+    submissionId,
+    '--keychain-profile',
+    profile,
+  ]);
 }
 
 class NotaryPreflightOutcome {
@@ -454,13 +455,20 @@ class NotaryPreflightOutcome {
 }
 
 class NotarizeOutcome {
-  const NotarizeOutcome._(this.submissionId, this.problem, this.remedy,
-      {this.raw, this.transcript});
+  const NotarizeOutcome._(
+    this.submissionId,
+    this.problem,
+    this.remedy, {
+    this.raw,
+    this.transcript,
+  });
   const NotarizeOutcome.accepted(String? id, {String? raw})
-      : this._(id, null, null, raw: raw);
-  const NotarizeOutcome.failed(String problem,
-      {String? remedy, String? transcript})
-      : this._(null, problem, remedy, transcript: transcript);
+    : this._(id, null, null, raw: raw);
+  const NotarizeOutcome.failed(
+    String problem, {
+    String? remedy,
+    String? transcript,
+  }) : this._(null, problem, remedy, transcript: transcript);
 
   final String? submissionId;
   final String? problem;

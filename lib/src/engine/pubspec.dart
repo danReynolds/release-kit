@@ -83,11 +83,7 @@ class Pubspec {
     return cut < 0 ? '.' : path.substring(0, cut);
   }
 
-  static Pubspec? parse(
-    String source,
-    String path,
-    Diagnostics diagnostics,
-  ) {
+  static Pubspec? parse(String source, String path, Diagnostics diagnostics) {
     final doc = parseYaml(source, path, diagnostics);
     if (doc == null) return null;
 
@@ -201,10 +197,10 @@ class Dependency {
   const Dependency._(this.kind, this.constraint, this.location, this.line);
 
   const Dependency.hosted(String constraint, int line)
-      : this._(DependencyKind.hosted, constraint, null, line);
+    : this._(DependencyKind.hosted, constraint, null, line);
 
   const Dependency.path(String location, int line)
-      : this._(DependencyKind.path, null, location, line);
+    : this._(DependencyKind.path, null, location, line);
 
   const Dependency.git(int line) : this._(DependencyKind.git, null, null, line);
 
@@ -225,10 +221,10 @@ class Dependency {
 
   /// How the requirement reads, for a message about it.
   String describeRequirement() => switch (kind) {
-        DependencyKind.hosted => constraint ?? 'any version',
-        DependencyKind.path => 'a directory at $location',
-        DependencyKind.git => 'a git repository',
-      };
+    DependencyKind.hosted => constraint ?? 'any version',
+    DependencyKind.path => 'a directory at $location',
+    DependencyKind.git => 'a git repository',
+  };
 
   /// Whether [version] satisfies this dependency's constraint.
   ///

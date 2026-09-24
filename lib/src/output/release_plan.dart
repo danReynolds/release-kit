@@ -27,7 +27,8 @@ final class ReleasePlanRenderer {
       uncommitted: uncommitted,
     );
     final width = output.terminalWidth;
-    final graphFits = output.isTerminal &&
+    final graphFits =
+        output.isTerminal &&
         width != null &&
         width >= 72 &&
         lines.every((line) => Output.plainWidth(line) <= width);
@@ -54,12 +55,7 @@ final class ReleasePlanRenderer {
     required int? uncommitted,
   }) {
     final lines = <List<OutputSpan>>[
-      [
-        OutputSpan(
-          '${repository.toUpperCase()} RELEASE PLAN',
-          strong: true,
-        ),
-      ],
+      [OutputSpan('${repository.toUpperCase()} RELEASE PLAN', strong: true)],
       [
         OutputSpan(
           _sourceLine(branch, commit, uncommitted),
@@ -74,10 +70,7 @@ final class ReleasePlanRenderer {
       final rail = lastUnit ? '  ' : '│ ';
       lines.add([
         OutputSpan('$trunk ', role: VisualRole.secondary),
-        OutputSpan(
-          '${index + 1} · ${unit.name} ${unit.version}',
-          strong: true,
-        ),
+        OutputSpan('${index + 1} · ${unit.name} ${unit.version}', strong: true),
       ]);
       lines.add([OutputSpan('$rail │', role: VisualRole.secondary)]);
 
@@ -132,9 +125,11 @@ final class ReleasePlanRenderer {
       (node) => node.kind == ReleasePlanNodeKind.completeStage,
     );
     final work = nodes
-        .where((node) =>
-            node.kind != ReleasePlanNodeKind.sourceSnapshot &&
-            node.kind != ReleasePlanNodeKind.completeStage)
+        .where(
+          (node) =>
+              node.kind != ReleasePlanNodeKind.sourceSnapshot &&
+              node.kind != ReleasePlanNodeKind.completeStage,
+        )
         .toList();
     final lines = <List<OutputSpan>>[
       [
@@ -158,8 +153,9 @@ final class ReleasePlanRenderer {
         if (node.project != null) node.project!,
     };
     final targetLanes = _laneCounts(targetWork);
-    final sourceBranches =
-        targetWork.where((node) => !dependentTargetWork.contains(node));
+    final sourceBranches = targetWork.where(
+      (node) => !dependentTargetWork.contains(node),
+    );
     for (final node in sourceBranches) {
       lines.add([
         OutputSpan('$rail │     ├─▶ ', role: VisualRole.secondary),
@@ -235,8 +231,10 @@ final class ReleasePlanRenderer {
     final lines = <List<OutputSpan>>[];
     void draw(ReleasePlanNode node, String indent, bool last) {
       lines.add([
-        OutputSpan('$indent${last ? '└─▶' : '├─▶'} ',
-            role: VisualRole.secondary),
+        OutputSpan(
+          '$indent${last ? '└─▶' : '├─▶'} ',
+          role: VisualRole.secondary,
+        ),
         _node(node, VisualRole.releaseTarget, publicLabel: true),
         if (extraNeeds[node.id] case final additional?)
           OutputSpan(
@@ -337,10 +335,7 @@ final class ReleasePlanRenderer {
     );
   }
 
-  static List<OutputSpan> _chain(
-    List<ReleasePlanNode> nodes,
-    VisualRole role,
-  ) {
+  static List<OutputSpan> _chain(List<ReleasePlanNode> nodes, VisualRole role) {
     final spans = <OutputSpan>[];
     for (final (index, node) in nodes.indexed) {
       if (index > 0) {
@@ -360,8 +355,8 @@ final class ReleasePlanRenderer {
     final label = publicLabel
         ? _publicIdentity(node)
         : qualifyProject
-            ? _qualifiedSummary(node)
-            : _graphSummary(node);
+        ? _qualifiedSummary(node)
+        : _graphSummary(node);
     return OutputSpan('[$label]', role: role, strong: true);
   }
 
@@ -372,32 +367,33 @@ final class ReleasePlanRenderer {
   }
 
   static String _graphSummary(ReleasePlanNode node) => switch (node.kind) {
-        ReleasePlanNodeKind.build
-            when node.platform?.startsWith('macos-') == true =>
-          'build + sign',
-        ReleasePlanNodeKind.build => 'build',
-        ReleasePlanNodeKind.notarize => 'notarize',
-        ReleasePlanNodeKind.archive => 'archive',
-        _ => _humanSummary(node),
-      };
+    ReleasePlanNodeKind.build
+        when node.platform?.startsWith('macos-') == true =>
+      'build + sign',
+    ReleasePlanNodeKind.build => 'build',
+    ReleasePlanNodeKind.notarize => 'notarize',
+    ReleasePlanNodeKind.archive => 'archive',
+    _ => _humanSummary(node),
+  };
 
   static String _humanSummary(ReleasePlanNode node) => switch (node.kind) {
-        ReleasePlanNodeKind.completeStage => 'finalize stage',
-        _ => node.summary,
-      };
+    ReleasePlanNodeKind.completeStage => 'finalize stage',
+    _ => node.summary,
+  };
 
   static String _publicIdentity(ReleasePlanNode node) => switch (node.target) {
-        PublishTarget.gitTag => node.summary,
-        PublishTarget.pubDev => 'pub.dev ${node.coordinate}',
-        PublishTarget.githubRelease => _githubReleaseIdentity(node),
-        PublishTarget.homebrew =>
-          'Homebrew · ${node.coordinate?.split('/').last ?? 'formula'}',
-        null => node.summary,
-      };
+    PublishTarget.gitTag => node.summary,
+    PublishTarget.pubDev => 'pub.dev ${node.coordinate}',
+    PublishTarget.githubRelease => _githubReleaseIdentity(node),
+    PublishTarget.homebrew =>
+      'Homebrew · ${node.coordinate?.split('/').last ?? 'formula'}',
+    null => node.summary,
+  };
 
   static String _githubReleaseIdentity(ReleasePlanNode node) {
-    final match =
-        RegExp(r'^publish (\d+) (asset|assets) to ').firstMatch(node.summary);
+    final match = RegExp(
+      r'^publish (\d+) (asset|assets) to ',
+    ).firstMatch(node.summary);
     return match == null
         ? 'GitHub Release'
         : 'GitHub Release · ${match.group(1)} ${match.group(2)}';
@@ -429,8 +425,9 @@ final class ReleasePlanRenderer {
           dependency.platform ?? dependency.summary,
     ];
     if (labels.isNotEmpty &&
-        node.needs
-            .every((id) => byId[id]?.kind == ReleasePlanNodeKind.archive)) {
+        node.needs.every(
+          (id) => byId[id]?.kind == ReleasePlanNodeKind.archive,
+        )) {
       return 'archives';
     }
     return labels.isEmpty ? 'its inputs' : labels.join(', ');
@@ -467,10 +464,7 @@ final class ReleasePlanRenderer {
     Iterable<ReleasePlanNode> nodes,
   ) {
     final need = _outlineNeed(node, nodes);
-    final facts = [
-      if (need != null) 'needs $need',
-      if (lane != null) lane,
-    ];
+    final facts = [if (need != null) 'needs $need', if (lane != null) lane];
     return facts.isEmpty ? null : facts.join(' · ');
   }
 
@@ -501,31 +495,26 @@ final class ReleasePlanRenderer {
         ReleasePlanNodeKind.sourceSnapshot => 'source snapshot',
         ReleasePlanNodeKind.completeStage => 'finalize stage',
         ReleasePlanNodeKind.build => [
-            if (node.platform != null) node.platform!,
-            'build',
-          ].join(' '),
+          if (node.platform != null) node.platform!,
+          'build',
+        ].join(' '),
         ReleasePlanNodeKind.notarize => [
-            if (node.platform != null) node.platform!,
-            'notarization',
-          ].join(' '),
+          if (node.platform != null) node.platform!,
+          'notarization',
+        ].join(' '),
         ReleasePlanNodeKind.archive => [
-            if (node.platform != null) node.platform!,
-            'archive',
-          ].join(' '),
+          if (node.platform != null) node.platform!,
+          'archive',
+        ].join(' '),
         ReleasePlanNodeKind.targetStage => _qualifiedSummary(node),
         ReleasePlanNodeKind.prerequisite => _requirementIdentity(node),
         ReleasePlanNodeKind.tag ||
         ReleasePlanNodeKind.publishRegistry ||
         ReleasePlanNodeKind.publishRelease ||
-        ReleasePlanNodeKind.publishHomebrew =>
-          _publicIdentity(node),
+        ReleasePlanNodeKind.publishHomebrew => _publicIdentity(node),
       };
 
-  static String _sourceLine(
-    String? branch,
-    String? commit,
-    int? uncommitted,
-  ) {
+  static String _sourceLine(String? branch, String? commit, int? uncommitted) {
     final identity = [
       if (branch != null && commit != null) '$branch@$commit',
       if (branch != null && commit == null) branch,

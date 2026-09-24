@@ -66,10 +66,10 @@ class ToolResult {
   /// compiler output". Kept for the diagnosis, where an operator goes when
   /// the one line was not enough.
   String get transcript => [
-        'exit $exitCode',
-        if (stdout.trim().isNotEmpty) ...['--- stdout ---', stdout.trimRight()],
-        if (stderr.trim().isNotEmpty) ...['--- stderr ---', stderr.trimRight()],
-      ].join('\n');
+    'exit $exitCode',
+    if (stdout.trim().isNotEmpty) ...['--- stdout ---', stdout.trimRight()],
+    if (stderr.trim().isNotEmpty) ...['--- stderr ---', stderr.trimRight()],
+  ].join('\n');
 }
 
 /// UTF-8 that survives a byte sequence it cannot make sense of.
@@ -238,10 +238,10 @@ class SystemTools implements Tools {
     _CapturedOutput stderr,
   ) async {
     try {
-      await Future.wait([stdout.cancel(), stderr.cancel()]).timeout(
-        const Duration(seconds: 1),
-        onTimeout: () => <void>[],
-      );
+      await Future.wait([
+        stdout.cancel(),
+        stderr.cancel(),
+      ]).timeout(const Duration(seconds: 1), onTimeout: () => <void>[]);
     } on Object {
       // Capture cancellation is best-effort housekeeping after the result is
       // already known. It must not turn a timeout into another unbounded wait
@@ -274,8 +274,12 @@ class SystemTools implements Tools {
 
 /// Records what would have been run, for tests and for a dry run.
 class RecordingTools implements Tools {
-  RecordingTools(
-      {this.results = const {}, this.onRun, this.answers, this.probe});
+  RecordingTools({
+    this.results = const {},
+    this.onRun,
+    this.answers,
+    this.probe,
+  });
 
   /// Keyed by `executable arg1 arg2`, so a test can decide an outcome.
   final Map<String, ToolResult> results;

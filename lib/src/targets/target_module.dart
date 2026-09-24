@@ -39,8 +39,8 @@ String requiredTargetTagPattern(ResolvedUnit unit, PublishTarget target) {
 
 bool _selects(ResolvedUnit unit, PublishTarget target) =>
     target.scope == TargetScope.unit
-        ? unit.publish.contains(target)
-        : unit.projects.any((project) => project.publish.contains(target));
+    ? unit.publish.contains(target)
+    : unit.projects.any((project) => project.publish.contains(target));
 
 /// One built-in public target and the manifest-derived identity it reports.
 ///
@@ -75,8 +75,7 @@ abstract base class TargetModule {
     ResolvedUnit unit,
     TargetPlan target, {
     bool fresh = false,
-  }) async =>
-      null;
+  }) async => null;
 
   /// Explains one conflicting public observation in this target's terms.
   ///
@@ -135,8 +134,7 @@ abstract base class TargetModule {
     TargetReleaseContext context,
     ResolvedUnit unit,
     TargetPlan target,
-  ) =>
-      inspectCandidate(context.reads, unit, target);
+  ) => inspectCandidate(context.reads, unit, target);
 
   /// Checks whether an exact publication is usable through its consumer path.
   ///
@@ -148,8 +146,7 @@ abstract base class TargetModule {
     TargetAvailabilityContext context,
     ResolvedUnit unit,
     TargetPlan target,
-  ) async =>
-      null;
+  ) async => null;
 
   /// Classifies a provider operation that did not settle exact.
   ///
@@ -184,21 +181,22 @@ abstract base class TargetModule {
     final halt = act.permanent != null || immutableConflict
         ? HaltKind.actedAndUnfixable
         : act.mayHaveActed ||
-                act.privateEffect == TargetPrivateEffect.uncertain ||
-                state.verdict == Verdict.unknown
-            ? HaltKind.lostTrack
-            : act.privateEffect == TargetPrivateEffect.changed || actedBefore
-                ? HaltKind.stoppedPartway
-                : HaltKind.beforeActing;
+              act.privateEffect == TargetPrivateEffect.uncertain ||
+              state.verdict == Verdict.unknown
+        ? HaltKind.lostTrack
+        : act.privateEffect == TargetPrivateEffect.changed || actedBefore
+        ? HaltKind.stoppedPartway
+        : HaltKind.beforeActing;
     return TargetFailure(
       diagnostic: Diagnostic(
         code: act.diagnostic?.code ?? 'RK-REL-003',
-        message: act.diagnostic?.message ??
+        message:
+            act.diagnostic?.message ??
             '${target.step.summary}: '
                 '${act.problem ?? state.detail ?? 'the public result could not be confirmed'}',
         remedy: details.isEmpty
             ? 're-run; the shared destination inspection will classify the '
-                'public target before any retry'
+                  'public target before any retry'
             : details.join('\n'),
         evidence: act.evidence ?? act.diagnostic?.evidence,
       ),
@@ -209,8 +207,7 @@ abstract base class TargetModule {
   TargetStage? stageInput({
     required ResolvedUnit unit,
     required TargetPlan target,
-  }) =>
-      null;
+  }) => null;
 
   /// Stable, non-secret identity of the public inputs authorizing recovery.
   ///
@@ -231,8 +228,8 @@ final class TargetHistory {
     this.version,
     Iterable<Diagnostic> problems = const [],
     Iterable<TargetClaim> claims = const [],
-  })  : problems = List.unmodifiable(problems),
-        claims = List.unmodifiable(claims);
+  }) : problems = List.unmodifiable(problems),
+       claims = List.unmodifiable(claims);
 
   factory TargetHistory.versioned({
     required Inspection inspection,
@@ -250,7 +247,8 @@ final class TargetHistory {
         regressionDiagnostic?.call(version) ??
             Diagnostic(
               code: 'RK-MONO-003',
-              message: '${target.label} is already at $version, ahead of the '
+              message:
+                  '${target.label} is already at $version, ahead of the '
                   'target ${target.targetVersion}',
               remedy: 'a release moves forward — bump past $version',
             ),
@@ -310,9 +308,9 @@ final class TargetStageContext {
     required this.sourceStep,
     required Iterable<StageStep> priorSteps,
     required Map<String, ProgressHandle> progress,
-  })  : priorSteps = List<StageStep>.unmodifiable(priorSteps),
-        _attach = attach,
-        _progress = Map.unmodifiable(progress);
+  }) : priorSteps = List<StageStep>.unmodifiable(priorSteps),
+       _attach = attach,
+       _progress = Map.unmodifiable(progress);
 
   final StageContributionContract contract;
   final Tools tools;
@@ -330,9 +328,8 @@ final class TargetStageContext {
       _progress[id] ?? (throw StateError('undeclared progress row "$id"'));
 }
 
-typedef TargetStageProducer = Future<TargetStageOutcome> Function(
-  TargetStageContext context,
-);
+typedef TargetStageProducer =
+    Future<TargetStageOutcome> Function(TargetStageContext context);
 
 sealed class TargetStageOutcome {
   const TargetStageOutcome();
@@ -341,11 +338,9 @@ sealed class TargetStageOutcome {
 }
 
 final class TargetStageSuccess extends TargetStageOutcome {
-  TargetStageSuccess(
-    StageStep step, {
-    Iterable<Diagnostic> warnings = const [],
-  })  : warnings = List.unmodifiable(warnings),
-        step = _recordTargetStageWarnings(step, warnings);
+  TargetStageSuccess(StageStep step, {Iterable<Diagnostic> warnings = const []})
+    : warnings = List.unmodifiable(warnings),
+      step = _recordTargetStageWarnings(step, warnings);
 
   final StageStep step;
   @override
@@ -417,8 +412,8 @@ final class TargetStage {
     required String planLabel,
     Iterable<TargetStageProgress> progress = const [],
     required this.prepare,
-  })  : planLabel = _planLabel(planLabel),
-        progress = List.unmodifiable(progress) {
+  }) : planLabel = _planLabel(planLabel),
+       progress = List.unmodifiable(progress) {
     final ids = <String>{};
     final outputs = <String>{};
     for (final view in this.progress) {
@@ -461,22 +456,20 @@ final class TargetStage {
 /// [label] instead. Unbound outputs remain receipt-validated but do not invent
 /// rows for private intermediates.
 final class TargetStageProgress {
-  const TargetStageProgress.row({
-    required this.id,
-    required this.label,
-  })  : artifact = null,
-        output = null,
-        assert(id != ''),
-        assert(label != '');
+  const TargetStageProgress.row({required this.id, required this.label})
+    : artifact = null,
+      output = null,
+      assert(id != ''),
+      assert(label != '');
 
   const TargetStageProgress.output({
     required this.id,
     required this.output,
     required this.artifact,
-  })  : label = null,
-        assert(id != ''),
-        assert(output != ''),
-        assert(artifact != '');
+  }) : label = null,
+       assert(id != ''),
+       assert(output != ''),
+       assert(artifact != '');
 
   final String id;
   final String? label;
@@ -584,11 +577,12 @@ final class TargetNotReady extends TargetReadinessOutcome {
   final String? unit;
 }
 
-typedef ProgressInteractiveRunner = Future<int> Function(
-  String executable,
-  List<String> arguments, {
-  String? workingDirectory,
-});
+typedef ProgressInteractiveRunner =
+    Future<int> Function(
+      String executable,
+      List<String> arguments, {
+      String? workingDirectory,
+    });
 
 abstract base class TargetSessionProvider {
   const TargetSessionProvider();

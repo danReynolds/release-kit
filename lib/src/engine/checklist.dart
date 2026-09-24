@@ -49,7 +49,8 @@ class Checklist {
           kind: StepKind.prerequisite,
           unit: unit.name,
           coordinate: prerequisite.coordinate,
-          summary: '${prerequisite.package} ${prerequisite.version} must be '
+          summary:
+              '${prerequisite.package} ${prerequisite.version} must be '
               'live on pub.dev',
           needs: const [],
         ),
@@ -131,12 +132,10 @@ class Checklist {
         kind: StepKind.publishRelease,
         target: PublishTarget.githubRelease,
         unit: unit.name,
-        summary: 'publish ${ReleaseAssets.expectedForUnit(unit).length} assets '
+        summary:
+            'publish ${ReleaseAssets.expectedForUnit(unit).length} assets '
             'to the ${unit.tag!} release',
-        needs: _targetPrerequisiteIds(
-          steps,
-          PublishTarget.githubRelease,
-        ),
+        needs: _targetPrerequisiteIds(steps, PublishTarget.githubRelease),
       );
       steps.add(release);
 
@@ -149,17 +148,15 @@ class Checklist {
       )) {
         steps.add(
           Step(
-            id: '${unit.name}/homebrew/${homebrewProject.name}/'
+            id:
+                '${unit.name}/homebrew/${homebrewProject.name}/'
                 '${homebrewProject.executable}',
             kind: StepKind.publishHomebrew,
             target: PublishTarget.homebrew,
             unit: unit.name,
             project: homebrewProject.name,
             summary: 'update the ${homebrewProject.executable} formula',
-            needs: _targetPrerequisiteIds(
-              steps,
-              PublishTarget.homebrew,
-            ),
+            needs: _targetPrerequisiteIds(steps, PublishTarget.homebrew),
           ),
         );
       }
@@ -211,8 +208,10 @@ class Checklist {
     var phase = StepPhase.inspect;
     for (final step in steps) {
       if (step.phase.index < phase.index) {
-        throw StateError('"${step.id}" moves from the ${phase.name} phase '
-            'back to ${step.phase.name}');
+        throw StateError(
+          '"${step.id}" moves from the ${phase.name} phase '
+          'back to ${step.phase.name}',
+        );
       }
       phase = step.phase;
     }
@@ -317,25 +316,23 @@ enum StepPhase { inspect, stage, publish }
 
 extension StepKindFacts on StepKind {
   StepPhase get phase => switch (this) {
-        StepKind.prerequisite => StepPhase.inspect,
-        StepKind.build ||
-        StepKind.notarize ||
-        StepKind.archive ||
-        StepKind.completeStage =>
-          StepPhase.stage,
-        StepKind.tag ||
-        StepKind.publishRegistry ||
-        StepKind.publishRelease ||
-        StepKind.publishHomebrew =>
-          StepPhase.publish,
-      };
+    StepKind.prerequisite => StepPhase.inspect,
+    StepKind.build ||
+    StepKind.notarize ||
+    StepKind.archive ||
+    StepKind.completeStage => StepPhase.stage,
+    StepKind.tag ||
+    StepKind.publishRegistry ||
+    StepKind.publishRelease ||
+    StepKind.publishHomebrew => StepPhase.publish,
+  };
 
   bool get isPublic => phase == StepPhase.publish;
 
   bool get isPermanent => switch (this) {
-        StepKind.publishRegistry => true,
-        _ => false,
-      };
+    StepKind.publishRegistry => true,
+    _ => false,
+  };
 }
 
 /// One entry in a checklist, executable in isolation from its id, the
@@ -365,16 +362,16 @@ class Step {
   /// The same step, waiting on [needs]. Steps are built before their edges are
   /// known, so an edge is added by rebuilding rather than by mutation.
   Step withNeeds(List<String> needs) => Step(
-        id: id,
-        kind: kind,
-        unit: unit,
-        summary: summary,
-        needs: needs,
-        project: project,
-        platform: platform,
-        coordinate: coordinate,
-        target: target,
-      );
+    id: id,
+    kind: kind,
+    unit: unit,
+    summary: summary,
+    needs: needs,
+    project: project,
+    platform: platform,
+    coordinate: coordinate,
+    target: target,
+  );
 
   /// `<unit>/<adapter>/<coordinate>`, stable across runs.
   final String id;

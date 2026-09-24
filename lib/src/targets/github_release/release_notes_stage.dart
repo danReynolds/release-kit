@@ -64,10 +64,12 @@ Future<TargetStageOutcome> _prepareReleaseNotes(
     return TargetStageFailure(
       Diagnostic(
         code: 'RK-CHG-003',
-        message: 'the changelog entries for ${context.stage.unit.version} '
+        message:
+            'the changelog entries for ${context.stage.unit.version} '
             'could not be extracted',
         source: context.stage.unit.location,
-        remedy: 'validation saw a heading for it; the file changed since, '
+        remedy:
+            'validation saw a heading for it; the file changed since, '
             'or this is a bug in rk',
       ),
     );
@@ -76,10 +78,12 @@ Future<TargetStageOutcome> _prepareReleaseNotes(
     return TargetStageFailure(
       Diagnostic(
         code: 'RK-CHG-004',
-        message: 'the changelog entries for ${context.stage.unit.version} '
+        message:
+            'the changelog entries for ${context.stage.unit.version} '
             'are empty',
         source: context.stage.unit.location,
-        remedy: 'the release body is this entry — write what changed '
+        remedy:
+            'the release body is this entry — write what changed '
             'under each ${context.stage.unit.version} heading',
       ),
     );
@@ -105,8 +109,9 @@ String? _releaseNotes(ResolvedUnit unit, SourceTree source) {
   final entries = <({String project, String body})>[];
   for (final project in unit.projects) {
     final contents = source.read(project.fileAt('CHANGELOG.md'));
-    final body =
-        contents == null ? null : Changelog.entry(contents, project.version);
+    final body = contents == null
+        ? null
+        : Changelog.entry(contents, project.version);
     if (body == null) return null;
     entries.add((project: project.name, body: body));
   }
