@@ -219,7 +219,7 @@ executables:
       final run = repo(['plan', '--json']);
 
       expect(run.code, 0, reason: run.all);
-      expect(run.json['rk'], 10);
+      expect(run.json['rk'], 11);
       expect(run.json['command'], 'plan');
       expect(
         run.units,

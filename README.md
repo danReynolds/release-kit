@@ -31,28 +31,29 @@ of a release script.
 - **Monorepos.** Cross-unit version constraints are checked before
   anything acts.
 
-## Getting Started
+## Dogfood your commands
 
-`rk init` reads the repository and proposes a configuration.
-
-```console
-$ rk init
-Select release outputs
-
-                         Produce              Publish
-  Unit                    Binary   Git tag   pub.dev   GitHub   Homebrew
-› rk                      [ ]      [x]       [x]       [ ]      [ ]
-
-Binary — standalone rk archives for macos-arm64
-
-↑↓ unit   ←→ option   space toggle   enter review   q cancel
-
+```sh
+rk use                     # select Local, Homebrew, Pub or GitHub in the matrix
+rk use local               # bind this checkout; edits work on the next run
+rk install pub             # prepare without switching
+rk use --list              # sources, installation state and PATH resolution
 ```
 
-The selector keeps workspace grouping roots out of the way and hides
-`publish_to: none` packages by default. If one of those packages intentionally
-ships through tags, binaries, GitHub, or Homebrew, press `a` to show it. JSON
-output still reports every discovered candidate.
+Run inside the configured project. With multiple executable packages, select
+one in the matrix or add `-p package_name`. Every command in a package switches
+together; SDK dependencies follow that installation. See [installation management](doc/installations.md).
+
+## Getting Started
+
+`rk init` opens a Fleury matrix of packages and release outputs. Select the
+cells you want, then choose **Review configuration** to see the exact
+`release.toml` before creating it. Selected cells say **Added**, and prerequisites
+such as GitHub's Git tag are added together.
+
+Arrow keys move; Space or Enter selects. **Show private packages** reveals
+`publish_to: none` packages that can still ship through other outputs. Without
+a terminal, RK prints its proposal; `rk init --write` explicitly accepts it.
 
 That proposal is the whole configuration. Targets are opt-in —
 release-kit's own file says yes to all of them. `rk plan` draws the configured
@@ -253,7 +254,10 @@ Release core 0.3.0? [y/N]
 
 | | |
 |---|---|
-| `rk init` | propose a `release.toml` |
+| `rk init` | choose outputs and review `release.toml` |
+| `rk use [source] [-p project]` | install if needed, then select command source |
+| `rk install [source] [-p project]` | prepare a source without switching |
+| `rk uninstall [source] [-p project]` | remove a confirmed inactive installation |
 | `rk plan [unit]` | show the configured source-only release graph |
 | `rk status` | inspect this repository |
 | `rk release` | publish unfinished units |

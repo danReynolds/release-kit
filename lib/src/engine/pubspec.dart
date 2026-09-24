@@ -54,6 +54,31 @@ class Pubspec {
   /// the package wants a signed binary shipped.
   final List<String> executables;
 
+  /// Native command-to-bin-script mapping. A null value means the same name.
+  Map<String, String> get executableScripts {
+    final result = <String, String>{};
+    for (final command in executables) {
+      final node = _nativeFields?.map('executables')?[command];
+      final value = node is YamlScalar ? node.value : null;
+      if (node != null &&
+          node is! YamlScalar &&
+          !(node is YamlMap && node.entries.isEmpty)) {
+        throw FormatException(
+          'Executable $command must name a bin script or be null.',
+        );
+      }
+      result[command] =
+          value == null ||
+              value.isEmpty ||
+              (node is YamlScalar &&
+                  !node.quoted &&
+                  const {'null', 'Null', 'NULL', '~'}.contains(value))
+          ? command
+          : value;
+    }
+    return result;
+  }
+
   /// Dependency name to how it is required.
   final Map<String, Dependency> dependencies;
   final Map<String, Dependency> devDependencies;

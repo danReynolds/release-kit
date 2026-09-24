@@ -1,0 +1,7 @@
+# Development pin until Fleury 0.1.0 is published. Not part of the pub archive.
+dependency_overrides:
+  fleury:
+    git:
+      url: https://github.com/danReynolds/fleury.git
+      ref: f25f47d90ed653bc38b36bc913a1d79f24d92da5
+      path: packages/fleury

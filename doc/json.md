@@ -31,7 +31,7 @@ that run.
 
 | key | meaning |
 |---|---|
-| `rk` | schema version (currently `10`) |
+| `rk` | schema version (currently `11`) |
 | `command` | the verb that ran |
 | `mode` | present only where the run has one: `{stage}` on `release` |
 | `observed_at` | UTC ISO 8601 — when rk read the world |
@@ -196,3 +196,18 @@ Exit codes (also in `-h`): `0` a successful report or completed command;
 `1` refused or failed; `2` usage; `3` rk itself crashed. A requested JSON run
 still writes one final report on exit `3`, including the diagnosis pointer when
 rk may have acted; the diagnosis directory holds the detailed evidence.
+
+## Installation management (schema 11)
+
+`rk use`, `rk install`, and `rk uninstall` add an `installations` object with
+`root`, `managed_bin`, `projects[]`, and `outcomes[]`. Each project has its native
+`project` name, complete `commands[]`, nullable RK `selected` source,
+`resolved_commands` (command to PATH-resolved filename or null), `current_sources`
+(command to known provider or null), `routing_problems[]`, and a `sources` map.
+A source records `installed` and nullable `problem`; installed sources also carry
+`version`, `location`, `managed`, native `exported_paths`, and launcher `commands`.
+Unknown or unusable metadata is a problem, never proof of absence.
+
+`--json` never opens a TUI. No source means inventory only. Explicit source
+arguments perform the requested operation; noninteractive uninstall requires
+`--yes`. Existing release/status/plan fields retain their meanings.

@@ -2,9 +2,8 @@ import 'dart:typed_data';
 
 /// SHA-256, written rather than imported.
 ///
-/// rk has no runtime dependencies, which keeps third-party code away from the
-/// signing path — and a digest is the one primitive every identity decision
-/// rests on, so it is the last thing that should come from somewhere else.
+/// Release identity uses this small, independently tested implementation.
+/// UI and archive dependencies do not supply the signing-path digest.
 class Sha256 {
   static final _k = Uint32List.fromList(const <int>[
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, //

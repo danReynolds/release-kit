@@ -384,15 +384,8 @@ void main() {
     setUpAll(() => scratch = Directory.systemTemp.createTempSync('rk-phase3-'));
     tearDownAll(() => scratch.deleteSync(recursive: true));
 
-    test('pub.dev client with no dependencies', () {
+    test('third-party imports stay at the UI boundary', () {
       expect(fileExists('lib/src/engine/registry.dart'), isTrue);
-      expect(
-        File('pubspec.yaml').readAsStringSync(),
-        isNot(contains('\ndependencies:')),
-        reason: 'zero runtime dependencies',
-      );
-      // The RFC promises this held by a test over the import graph, not the
-      // pubspec alone: a dependency can arrive as a path or git import too.
       final foreign = <String>[];
       for (final entity in Directory('lib').listSync(recursive: true)) {
         if (entity is! File || !entity.path.endsWith('.dart')) continue;
@@ -403,10 +396,19 @@ void main() {
           if (target.startsWith('dart:')) continue;
           if (target.startsWith('package:rk/')) continue;
           if (!target.contains(':')) continue; // relative
+          if (entity.path.startsWith('lib/src/tui/') &&
+              target.startsWith('package:fleury/')) {
+            continue;
+          }
           foreign.add('${entity.path}: $target');
         }
       }
-      expect(foreign, isEmpty, reason: 'imports outside dart: and rk');
+      expect(
+        foreign,
+        isEmpty,
+        reason:
+            'release and signing code must not import UI or archive packages',
+      );
     });
 
     test('git state is read from a real repository, not a fake', () {

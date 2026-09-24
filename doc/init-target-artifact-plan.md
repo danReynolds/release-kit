@@ -150,8 +150,9 @@ on/off choices:
 Binary  Git tag  pub.dev  GitHub  Homebrew
 ```
 
-Arrow keys move, Space toggles, `a` shows or hides non-registry packages, Enter
-reviews, and Ctrl-C or EOF cancels.
+The Fleury matrix uses arrow keys to move and Space or Enter to toggle.
+Show private packages reveals non-registry packages. Review configuration opens
+the exact proposed file; Escape goes back or cancels, and Ctrl-C cancels.
 The selector bounds itself to terminal height, truncates long display names,
 and restores cursor and terminal modes on every exit.
 

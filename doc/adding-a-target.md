@@ -201,3 +201,13 @@ A target is ready to serve as an example when:
 
 All four built-in targets meet this bar. Repetition that remains after clean
 targets is evidence for a shared abstraction; a hypothetical target is not.
+
+## Optional executable installation capability
+
+Installation is a separate `InstallationProvider` beside a target module,
+currently `targets/{homebrew,pub_dev,github_release}/installation.dart`.
+It implements inspect, install and uninstall for an `ExecutableProject`; it
+returns a complete command map rather than changing PATH itself. The shared
+manager owns capability checks, locking, cancellation and switching. Local has
+its own adapter because a checkout is not a publication target. SDK publication
+targets do not acquire an installation UI just by existing.

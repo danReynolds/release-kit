@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-154 codes across 26 families.
+156 codes across 27 families.
 
 
 ## RK-AUTH — Authorization
@@ -315,3 +315,10 @@ meanings and are not reused.
 | code | says | declared in |
 |---|---|---|
 | `RK-YAML-001` | — | `lib/src/engine/yaml.dart` |
+
+## Executable installations
+
+| Code | Meaning | Source |
+| --- | --- | --- |
+| `RK-USE-001` | an installation operation was refused or failed | `bin/installations.dart` |
+| `RK-USE-002` | installation files or metadata could not be read | `bin/installations.dart` |

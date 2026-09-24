@@ -43,7 +43,8 @@ class InitCommand {
   final Future<InitPlan?> Function(InitPlan plan)? select;
 
   /// Optional final review prompt with a path back to [select].
-  final Future<InitReviewDecision> Function(String prompt)? review;
+  final Future<InitReviewDecision> Function(String proposal, bool needsIgnore)?
+  review;
 
   /// Merge-safe filesystem update used by the real command. Tests may omit
   /// it and observe the complete proposed file through [write].
@@ -169,27 +170,29 @@ class InitCommand {
         return ExitCodes.ok;
       }
 
-      output.blank();
-      output.line(
-        '${plan.included.length} selected '
-        '${plan.included.length == 1 ? 'unit' : 'units'}',
-        role: VisualRole.checkpoint,
-        strong: true,
-      );
-      for (final candidate in plan.included) {
+      if (review == null) {
+        output.blank();
         output.line(
-          candidate.unit,
-          depth: 1,
-          labelWidth: 22,
-          note:
-              '${candidate.version} · path ${candidate.path}'
-              '${candidate.executables.isEmpty ? '' : ' · executable '
-                        '${candidate.executables.join(', ')}'}',
-          noteRole: VisualRole.secondary,
+          '${plan.included.length} selected '
+          '${plan.included.length == 1 ? 'unit' : 'units'}',
+          role: VisualRole.checkpoint,
+          strong: true,
         );
-      }
-      for (final reason in reasons) {
-        output.say(reason, depth: 1, role: VisualRole.secondary);
+        for (final candidate in plan.included) {
+          output.line(
+            candidate.unit,
+            depth: 1,
+            labelWidth: 22,
+            note:
+                '${candidate.version} · path ${candidate.path}'
+                '${candidate.executables.isEmpty ? '' : ' · executable '
+                          '${candidate.executables.join(', ')}'}',
+            noteRole: VisualRole.secondary,
+          );
+        }
+        for (final reason in reasons) {
+          output.say(reason, depth: 1, role: VisualRole.secondary);
+        }
       }
 
       final proposal = plan.renderToml();
@@ -217,12 +220,14 @@ class InitCommand {
       }
 
       output.report.attach('release.toml', proposal);
-      output.blank();
-      for (final line in proposal.split('\n')) {
-        output.say(line, depth: 1, role: VisualRole.secondary);
-      }
-      if (needsIgnore) {
-        output.say('and add .rk/ to .gitignore', depth: 1);
+      if (review == null) {
+        output.blank();
+        for (final line in proposal.split('\n')) {
+          output.say(line, depth: 1, role: VisualRole.secondary);
+        }
+        if (needsIgnore) {
+          output.say('and add .rk/ to .gitignore', depth: 1);
+        }
       }
 
       if (confirm == null && review == null) {
@@ -239,7 +244,7 @@ class InitCommand {
           ? await confirm!(prompt)
                 ? InitReviewDecision.write
                 : InitReviewDecision.cancel
-          : await review!(prompt);
+          : await review!(proposal, needsIgnore);
       if (decision == InitReviewDecision.back && selector != null) continue;
       if (decision != InitReviewDecision.write) {
         output.say('nothing was written.');

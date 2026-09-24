@@ -1,16 +1,15 @@
 /// rk's entry point, and its composition root.
 ///
-/// Everything a run needs is built here and nowhere else: this file finds the
+/// The release command composition root: this file finds the
 /// git root, reads and parses `release.toml`, resolves it against the
 /// repository, and constructs the `Registry`, `SystemTools`, and `Output` the
 /// operational verbs are handed. It also dispatches the repository-independent
 /// target reference and, on a run that failed after acting, writes the
 /// diagnosis.
 ///
-/// So the answer to "where does rk read release.toml?" is `_prepare` below,
-/// not a file under `lib/`. Reading files and deciding exit codes is
-/// composition-root work; pushing it down would put `dart:io` in the layer
-/// `engine/source_tree.dart` exists to keep testable.
+/// Release commands read config through `_prepare`; installation commands
+/// compose their working-tree view in `installations.dart`. Both hand resolved
+/// models to the engine, keeping source discovery outside its policy layer.
 library;
 
 import 'dart:io';
@@ -18,7 +17,8 @@ import 'dart:io';
 import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/commands/clean.dart';
 import 'package:rk/src/commands/init.dart';
-import 'package:rk/src/commands/init_selector.dart';
+import 'package:rk/src/tui/init_picker.dart' deferred as init_ui;
+import 'installations.dart' deferred as installations;
 import 'package:rk/src/commands/plan.dart';
 import 'package:rk/src/commands/release.dart';
 import 'package:rk/src/commands/status.dart';
@@ -29,7 +29,6 @@ import 'package:rk/src/output/diagnosis.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
-import 'package:rk/src/engine/init_plan.dart';
 import 'package:rk/src/engine/dart_workspace.dart';
 import 'package:rk/src/engine/publish_target.dart';
 import 'package:rk/src/output/output.dart';
@@ -52,7 +51,10 @@ Usage
   rk --version                    print this binary's version
   rk status [unit]                status all units or one
   rk plan [unit]                  show the configured release graph; read-only
-  rk init                         propose release.toml; write only on a yes
+  rk init                         choose outputs and review release.toml
+  rk use [source] [-p project]     choose the source of your commands
+  rk install [source] [-p project] prepare an installation without switching
+  rk uninstall [source] [-p project] remove an inactive installation
   rk clean                        remove this repository's staged release work
   rk target list                  list every release choice this rk supports
   rk target <name>                explain one choice and its configuration
@@ -88,6 +90,11 @@ Future<void> main(List<String> args) async {
 
   const verbs = {'status', 'plan', 'release', 'init', 'clean', 'target'};
   final first = positional.isEmpty ? null : positional.first;
+  if (const {'use', 'install', 'uninstall'}.contains(first)) {
+    await installations.loadLibrary();
+    await installations.installationMain(args, first!);
+    return;
+  }
   final command = first ?? 'status';
   final target = positional.length > 1 ? positional[1] : null;
 
@@ -342,40 +349,59 @@ Future<int> _init(
       : await GitState.read(root);
   final selectorEnabled = interactive && !write && _usableInitTerminal();
 
-  return InitCommand(
-    tree: tree,
-    output: output,
-    capabilities: HostCapabilities.inspect(),
-    origin: git.originUrl,
-    gitBound: git.isBound,
-    hasRemote: git.hasRemote,
-    ambientPubHostedUrl: Platform.environment['PUB_HOSTED_URL'],
-    select: selectorEnabled ? _selectInitPlan : null,
-    review: selectorEnabled
-        ? (prompt) async {
-            output.prompt(prompt);
-            return InitCommand.reviewed(stdin.readLineSync());
-          }
-        : null,
-    updateGitignore: git.isBound ? () => _ensureRkIgnored(root) : null,
-    write: (path, contents) {
-      if (path == 'release.toml') {
-        final file = File('$root/$path')..createSync(exclusive: true);
-        file.writeAsStringSync(contents, flush: true);
-      } else {
-        File('$root/$path').writeAsStringSync(contents);
+  if (selectorEnabled) await init_ui.loadLibrary();
+  final interaction = selectorEnabled ? init_ui.InitInteraction() : null;
+  final transcript = StringBuffer();
+  // Keep command diagnostics and the final result outside the alternate screen.
+  final commandOutput = interaction == null
+      ? output
+      : Output(
+          sink: transcript.write,
+          isTerminal: output.isTerminal,
+          useColor: output.useColor,
+          terminalWidth: output.terminalWidth,
+          report: output.report,
+        );
+  try {
+    return await InitCommand(
+      tree: tree,
+      output: commandOutput,
+      capabilities: HostCapabilities.inspect(),
+      origin: git.originUrl,
+      gitBound: git.isBound,
+      hasRemote: git.hasRemote,
+      ambientPubHostedUrl: Platform.environment['PUB_HOSTED_URL'],
+      select: interaction?.select,
+      review: interaction?.review,
+      updateGitignore: git.isBound ? () => _ensureRkIgnored(root) : null,
+      write: (path, contents) {
+        if (path == 'release.toml') {
+          final file = File('$root/$path')..createSync(exclusive: true);
+          file.writeAsStringSync(contents, flush: true);
+        } else {
+          File('$root/$path').writeAsStringSync(contents);
+        }
+      },
+      // A prompt would be written straight to stdout, past the sink that --json
+      // silences, so asking is not an option when a caller is parsing the
+      // answer. init already refuses when nobody can confirm. The answer is
+      // parsed by InitCommand.consented, where EOF is a decline — hasTerminal
+      // alone does not guard that, because macOS reports a terminal for
+      // `rk init < /dev/null`.
+      // --write is the typed yes, carried as a flag: the door for scripts and
+      // agents, named in the refusal a terminal-less run prints.
+      confirm: write ? (_) async => true : null,
+    ).run();
+  } finally {
+    try {
+      await interaction?.close();
+    } finally {
+      if (interaction != null) {
+        commandOutput.close();
+        output.sink(transcript.toString());
       }
-    },
-    // A prompt would be written straight to stdout, past the sink that --json
-    // silences, so asking is not an option when a caller is parsing the
-    // answer. init already refuses when nobody can confirm. The answer is
-    // parsed by InitCommand.consented, where EOF is a decline — hasTerminal
-    // alone does not guard that, because macOS reports a terminal for
-    // `rk init < /dev/null`.
-    // --write is the typed yes, carried as a flag: the door for scripts and
-    // agents, named in the refusal a terminal-less run prints.
-    confirm: write ? (_) async => true : null,
-  ).run();
+    }
+  }
 }
 
 Future<int> _clean(
@@ -428,61 +454,6 @@ bool _usableInitTerminal() {
   } on Object {
     return false;
   }
-}
-
-Future<InitPlan?> _selectInitPlan(InitPlan plan) async {
-  var interrupted = false;
-  final signals = ProcessSignal.sigint.watch().listen((_) {
-    interrupted = true;
-  });
-  try {
-    return await runInitSelector(
-      plan,
-      const _StdioInitTerminal(),
-      interrupted: () => interrupted,
-    );
-  } finally {
-    await signals.cancel();
-  }
-}
-
-final class _StdioInitTerminal implements InitTerminal {
-  const _StdioInitTerminal();
-
-  @override
-  bool get lineMode => stdin.lineMode;
-  @override
-  set lineMode(bool value) => stdin.lineMode = value;
-
-  @override
-  bool get echoMode => stdin.echoMode;
-  @override
-  set echoMode(bool value) => stdin.echoMode = value;
-
-  @override
-  bool get echoNewlineMode => stdin.echoNewlineMode;
-  @override
-  set echoNewlineMode(bool value) => stdin.echoNewlineMode = value;
-
-  @override
-  int get width => stdout.terminalColumns;
-
-  @override
-  int get height => stdout.terminalLines;
-
-  @override
-  bool get useColor =>
-      !Platform.environment.containsKey('NO_COLOR') &&
-      (Platform.environment['TERM'] ?? '').toLowerCase() != 'dumb';
-
-  @override
-  int readByte() => stdin.readByteSync();
-
-  @override
-  void write(String value) => stdout.write(value);
-
-  @override
-  Future<void> flush() => stdout.flush();
 }
 
 Future<int> _release(

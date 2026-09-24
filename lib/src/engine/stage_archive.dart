@@ -126,6 +126,12 @@ abstract final class StageArchiveInventory {
       throw FormatException('archive is not valid gzip: $error');
     }
 
+    return decodeTar(tar);
+  }
+
+  /// Validate an already expanded archive. Download consumers can enforce a
+  /// streaming decompression limit before sharing the release inventory rules.
+  static StageArchiveContents decodeTar(List<int> tar) {
     final entries = <StageArchiveEntry>[];
     final files = <String, List<int>>{};
     final names = <String>{};
