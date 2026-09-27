@@ -72,6 +72,7 @@ void main() {
         await interaction.close();
       }
       expect(driver.restoreCallCount, 1);
+      expect(driver.currentMode?.isInline, isTrue);
     },
   );
   test(
@@ -107,7 +108,7 @@ void main() {
         InitPlan? result;
         final model = InitPicker(plan(), (value) {
           result = value;
-          requestExit();
+          exitApp();
         });
         final driver = FakeTerminalDriver(size: CellSize(width, 28));
         final done = runMatrixScreen(
@@ -160,7 +161,7 @@ void main() {
     InitPlan? result;
     final model = InitPicker(plan(), (value) {
       result = value;
-      requestExit();
+      exitApp();
     });
     final driver = FakeTerminalDriver(size: const CellSize(132, 30));
     final done = runMatrixScreen(
@@ -179,7 +180,7 @@ void main() {
       await done.timeout(const Duration(seconds: 3));
       expect(result, isNotNull);
     } finally {
-      requestExit();
+      exitApp();
       await done;
       model.dispose();
     }
@@ -205,7 +206,7 @@ void main() {
         refresh: () async => states,
         close: () {
           closed = true;
-          requestExit();
+          exitApp();
         },
         operate: (p, s, progress, cancel) async {
           operations++;
@@ -239,13 +240,58 @@ void main() {
         reason: 'Busy controls cannot trigger a second installer.',
       );
       pending.complete();
-      await done.timeout(const Duration(seconds: 3));
+      expect(await done.timeout(const Duration(seconds: 3)), 130);
       expect(closed, isTrue);
       expect(selected, isFalse);
       expect(driver.restoreCallCount, 1);
       model.dispose();
     },
   );
+
+  for (final (signal, code) in [
+    (AppSignal.interrupt, 130),
+    (AppSignal.terminate, 143),
+    (AppSignal.hangup, 129),
+  ]) {
+    test(
+      'init cancels without a proposal and preserves ${signal.name}',
+      () async {
+        final driver = FakeTerminalDriver(size: const CellSize(100, 20));
+        final interaction = InitInteraction(driver: driver);
+        final selecting = interaction.select(plan());
+        await settle();
+        driver.enqueue(SignalEvent(signal));
+        expect(await selecting.timeout(const Duration(seconds: 3)), isNull);
+        await interaction.close();
+        expect(interaction.signalExitCode, code);
+        expect(driver.restoreCallCount, 1);
+      },
+    );
+  }
+
+  test('an interrupted init review cannot authorize a write', () async {
+    final driver = FakeTerminalDriver(size: const CellSize(100, 20));
+    final interaction = InitInteraction(driver: driver);
+    final selecting = interaction.select(plan());
+    await settle();
+    driver.enqueue(const KeyEvent(KeyCode.tab, modifiers: {KeyModifier.shift}));
+    await settle();
+    driver.enqueue(const KeyEvent(KeyCode.tab, modifiers: {KeyModifier.shift}));
+    await settle();
+    driver.enqueue(const KeyEvent(KeyCode.enter));
+    final selected = await selecting.timeout(const Duration(seconds: 3));
+    final reviewing = interaction.review(selected!.renderToml(), false);
+    await settle();
+    driver.enqueue(
+      const KeyEvent(KeyCode.char('c'), modifiers: {KeyModifier.ctrl}),
+    );
+    expect(
+      await reviewing.timeout(const Duration(seconds: 3)),
+      InitReviewDecision.cancel,
+    );
+    await interaction.close();
+    expect(interaction.signalExitCode, 130);
+  });
 
   test('removal requires a separate confirmation; Escape cancels it', () async {
     final scratch = Directory.systemTemp.createTempSync('rk-remove-test-');

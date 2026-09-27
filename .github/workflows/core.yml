@@ -45,3 +45,9 @@ jobs:
           sdk: stable
       - run: dart pub get
       - run: dart test
+      - name: Qualify inline command flows
+        run: |
+          python3 -m venv .dart_tool/pty-env
+          .dart_tool/pty-env/bin/pip install -r tool/tui-requirements.txt
+          dart compile exe bin/rk.dart -o .dart_tool/rk-inline-check
+          .dart_tool/pty-env/bin/python tool/check_installation_tui.py .dart_tool/rk-inline-check

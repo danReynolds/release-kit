@@ -1,5 +1,45 @@
 # Installation and TUI implementation receipt
 
+## Inline integration — September 27, 2026
+
+Qualified on macOS arm64 with Dart 3.12.2. The four interactive commands now
+use `TerminalMode.inline(rows: 20)` and `exitApp()`. They inherit terminal
+foreground/background colors and print results after the region is cleared.
+
+- 107 focused installation/init/CLI checks pass, including the compiled CLI
+  test rerun outside a sandbox that blocked Dart's telemetry file. The final
+  11 TUI tests pass after the focus correction.
+- The compiled executable passed 16 real PTY sessions: install without routing,
+  use Local and execute its command, uninstall confirmation/cancel/removal,
+  init review/Back/Create, all four commands at 40×18 with resize, and use/init
+  with Ctrl+C, SIGINT, SIGTERM, and SIGHUP. The emulator supplies actual cursor
+  reports and checks visible content and retained shell history.
+- Every session verifies terminal modes and input blocking flags are restored,
+  the inline frame is cleared, no alternate screen or whole-screen clear is
+  used, and no fixed background color is painted. Signal exits retain 130/143/129.
+- Cancelling removal now restores keyboard focus to the source matrix.
+- Analysis and AOT compilation pass. CI now runs the same PTY script on macOS
+  and Linux; a local macOS pass is not evidence of a Linux pass.
+
+This integration exposed an upstream native-output bug: an explicitly injected
+Fleury driver could fail with `EAGAIN` when its output queue filled. Fleury
+[PR #278](https://github.com/danReynolds/fleury/pull/278) fixes it using the
+existing stdio sink. RK's development override pins that fix at `8a239ea3`,
+ahead of upstream merge/hosted publication. Two upstream PTY regressions fail
+before the fix and pass afterward, alongside 90 existing lifecycle tests.
+
+The commands above use disposable homes, installation roots, and fixture
+projects. No personal installations or shell configuration were switched.
+
+Reproduce with a Python environment containing `tool/tui-requirements.txt`:
+
+```sh
+dart compile exe bin/rk.dart -o /tmp/rk-inline-check
+python3 tool/check_installation_tui.py /tmp/rk-inline-check
+```
+
+## Earlier installation qualification
+
 Checked on macOS arm64, September 23, 2026, using Dart 3.12.2 and fish 3.3.1.
 This is a development qualification, not a cross-platform release certificate.
 

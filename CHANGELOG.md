@@ -4,11 +4,14 @@
 
 - Add project-scoped `use`, `install`, and `uninstall` commands for executable
   packages, with Local, Homebrew, Pub, and public GitHub release sources.
-  Bare commands open a Fleury matrix; explicit sources and JSON support scripts.
+  Bare commands open an inline Fleury matrix; explicit sources and JSON support scripts.
   Local commands follow checkout edits, grouped commands switch together, and
   installation listings distinguish RK selection from effective PATH resolution.
 - Replace init's terminal selector with the Fleury output matrix and a validated
   configuration review. Selected outputs read “Added”. Require Dart 3.10.4 or newer.
+- Inline matrices inherit terminal colors, leave shell history intact, and
+  restore the prompt before reporting results. Ctrl+C and termination signals
+  preserve their exit status while cancellation waits for in-progress work.
 - Release commands identify the project version and source checkout before work
   begins. Staging explains source, tooling, and configuration changes when a
   recent receipt can account for a rebuild, and names interrupted work it resumes.

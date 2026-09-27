@@ -1,30 +1,10 @@
 import 'package:fleury/fleury_core.dart';
 import '../output/output.dart' show terminalSafeText;
 
-const background = RgbColor(17, 22, 29);
-const surface = RgbColor(24, 31, 40);
-const ink = RgbColor(224, 232, 241);
-const muted = RgbColor(144, 159, 177);
-const accent = RgbColor(157, 221, 184);
-const selectedFill = RgbColor(29, 58, 49);
-const focusFill = RgbColor(41, 61, 85);
-const warning = RgbColor(239, 193, 119);
-const mutedText = CellStyle(foreground: muted);
-const matrixTheme = ThemeData(
-  textStyle: CellStyle(foreground: ink, background: background),
-  mutedStyle: mutedText,
-  selectionStyle: CellStyle(background: focusFill, bold: true),
-  focusedStyle: CellStyle(background: focusFill, bold: true),
-  colorScheme: ColorScheme(
-    foreground: ink,
-    background: background,
-    surface: surface,
-    primary: accent,
-    focus: accent,
-    success: accent,
-    warning: warning,
-  ),
-);
+// Inline matrices inherit the terminal palette, including light backgrounds.
+// Focus and selection remain legible without color.
+const mutedText = CellStyle(dim: true);
+const matrixTheme = ThemeData();
 
 class MatrixCell extends StatelessWidget {
   const MatrixCell({
@@ -46,13 +26,9 @@ class MatrixCell extends StatelessWidget {
     appearance: ButtonAppearance.plain,
     onPressed: onPressed,
     style: CellStyle.interactive(
-      base: CellStyle(
-        foreground: selected ? accent : ink,
-        background: selected ? selectedFill : surface,
-        bold: selected,
-      ),
-      hovered: const CellStyle(background: focusFill, underline: false),
-      focused: const CellStyle(background: focusFill, bold: true),
+      base: CellStyle(bold: selected),
+      hovered: const CellStyle(underline: true),
+      focused: const CellStyle(inverse: true, bold: true),
     ),
     child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 1),
@@ -181,7 +157,7 @@ class MatrixShell extends StatelessWidget {
       builder: (_, constraints) => Padding(
         padding: EdgeInsets.symmetric(
           horizontal: (constraints.maxCols ?? 100) < 70 ? 1 : 3,
-          vertical: 1,
+          vertical: 0,
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -189,26 +165,23 @@ class MatrixShell extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: Text(
-                    command,
-                    style: const CellStyle(foreground: accent, bold: true),
-                  ),
+                  child: Text(command, style: const CellStyle(bold: true)),
                 ),
                 Text(count, style: mutedText),
               ],
             ),
-            const SizedBox(height: 1),
-            Text(subtitle),
-            const SizedBox(height: 1),
+            Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+            if ((constraints.maxRows ?? 20) >= 16) const SizedBox(height: 1),
             const Rule(),
-            const SizedBox(height: 1),
             Expanded(child: ScrollView(child: child)),
             const Rule(),
             if (message.isNotEmpty) ...[
               const SizedBox(height: 1),
               Text(
                 message.split('\n').map(terminalSafeText).join('\n'),
-                style: CellStyle(foreground: failed ? warning : accent),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: CellStyle(bold: failed),
               ),
             ],
             const SizedBox(height: 1),
@@ -224,9 +197,6 @@ class Rule extends StatelessWidget {
   const Rule({super.key});
   @override
   Widget build(BuildContext context) => LayoutBuilder(
-    builder: (_, c) => Text(
-      '─' * (c.maxCols ?? 30),
-      style: const CellStyle(foreground: RgbColor(52, 64, 79)),
-    ),
+    builder: (_, c) => Text('─' * (c.maxCols ?? 30), style: mutedText),
   );
 }

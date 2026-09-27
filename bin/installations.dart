@@ -316,6 +316,7 @@ Future<int> _run(
     for (final message in outcomes) {
       _result(output, message);
     }
+    if (result.exitCode != 0) return result.exitCode;
     if (result.failed) throw InstallationFailure(result.message);
     if (outcomes.isEmpty) output.say('No installations changed.');
   } else if (source == null) {

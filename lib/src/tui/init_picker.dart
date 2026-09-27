@@ -42,7 +42,8 @@ class InitInteraction extends Notifier {
   InitPicker? _picker;
   Completer<InitPlan?>? _selection;
   Completer<InitReviewDecision>? _review;
-  Future<void>? _running;
+  Future<int>? _running;
+  int? signalExitCode;
   bool _cancelled = false;
 
   Future<InitPlan?> select(InitPlan plan) {
@@ -105,8 +106,9 @@ class InitInteraction extends Notifier {
     cancel();
     try {
       if (_running != null) {
-        requestExit();
-        await _running;
+        exitApp();
+        final code = await _running!;
+        if (code != 0) signalExitCode = code;
       }
     } finally {
       _picker?.dispose();
@@ -133,7 +135,8 @@ class InitScreen extends StatelessWidget {
     context.listen(model);
     return MatrixShell(
       command: 'rk init',
-      count: '${model.visible.length} packages',
+      count:
+          '${model.visible.length} ${model.visible.length == 1 ? 'package' : 'packages'}',
       subtitle: 'Choose the outputs for each package.',
       message: model.message,
       onEscape: () => model.finish(null),

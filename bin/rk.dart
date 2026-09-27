@@ -352,7 +352,7 @@ Future<int> _init(
   if (selectorEnabled) await init_ui.loadLibrary();
   final interaction = selectorEnabled ? init_ui.InitInteraction() : null;
   final transcript = StringBuffer();
-  // Keep command diagnostics and the final result outside the alternate screen.
+  // Print command diagnostics and the result after clearing the inline region.
   final commandOutput = interaction == null
       ? output
       : Output(
@@ -362,8 +362,9 @@ Future<int> _init(
           terminalWidth: output.terminalWidth,
           report: output.report,
         );
+  late final int code;
   try {
-    return await InitCommand(
+    code = await InitCommand(
       tree: tree,
       output: commandOutput,
       capabilities: HostCapabilities.inspect(),
@@ -398,10 +399,13 @@ Future<int> _init(
     } finally {
       if (interaction != null) {
         commandOutput.close();
-        output.sink(transcript.toString());
+        if (interaction.signalExitCode == null) {
+          output.sink(transcript.toString());
+        }
       }
     }
   }
+  return interaction?.signalExitCode ?? code;
 }
 
 Future<int> _clean(

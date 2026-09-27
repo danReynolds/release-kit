@@ -11,6 +11,10 @@ rk use homebrew                 # select it; install first if missing
 rk uninstall pub                # confirm removal of an inactive installation
 ```
 
+The matrix opens inline beneath your prompt, inherits your terminal colors, and
+clears on exit. Results stay in shell history. Use Tab or arrow keys to navigate,
+Enter to choose, or Escape to finish.
+
 The matrix shows each executable package and its configured sources. Click a
 cell or use the arrow keys and Enter. **Using** means the commands resolve to
 that source on the process's PATH. **Selected** means RK has saved the selection,
@@ -115,7 +119,7 @@ provide input and presentation and call the same coordinator as explicit CLI
 commands. Publication modules do not import the installation adapters.
 
 The TUI dependency raises RK's minimum SDK to Dart 3.10.4. During development,
-`pubspec_overrides.yaml` pins the same Fleury revision used by the approved prototypes.
+`pubspec_overrides.yaml` pins Fleury’s inline-mode API plus the native output fix from Fleury #278.
 Replace this development pin with a qualified hosted Fleury dependency before
 publishing RK to pub.dev. Fleury is confined to UI imports. The GitHub adapter
 limits download and decompression sizes, then reuses the release engine’s exact

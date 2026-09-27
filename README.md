@@ -41,12 +41,12 @@ rk use --list              # sources, installation state and PATH resolution
 ```
 
 Run inside the configured project. With multiple executable packages, select
-one in the matrix or add `-p package_name`. Every command in a package switches
-together; SDK dependencies follow that installation. See [installation management](doc/installations.md).
+one in the inline matrix or add `-p package_name`. Every command in a package
+switches together; SDK dependencies follow that installation. See [installation management](doc/installations.md).
 
 ## Getting Started
 
-`rk init` opens a Fleury matrix of packages and release outputs. Select the
+`rk init` opens an inline Fleury matrix of packages and release outputs. Select the
 cells you want, then choose **Review configuration** to see the exact
 `release.toml` before creating it. Selected cells say **Added**, and prerequisites
 such as GitHub's Git tag are added together.

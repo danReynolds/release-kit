@@ -1,7 +1,7 @@
-# Development pin until Fleury 0.1.0 is published. Not part of the pub archive.
+# Inline mode plus native output fix (Fleury #278); replace with hosted Fleury before publication. Not part of the pub archive.
 dependency_overrides:
   fleury:
     git:
       url: https://github.com/danReynolds/fleury.git
-      ref: f25f47d90ed653bc38b36bc913a1d79f24d92da5
+      ref: 8a239ea36b5c2d2c7db96bfe2b0f6ad78d391b34
       path: packages/fleury

@@ -129,9 +129,10 @@ class InstallationPicker extends Notifier {
 }
 
 class InstallationPickerResult {
-  InstallationPickerResult(this.failed, this.message);
+  InstallationPickerResult(this.failed, this.message, this.exitCode);
   final bool failed;
   final String message;
+  final int exitCode;
 }
 
 Future<InstallationPickerResult> runInstallationPicker({
@@ -145,14 +146,14 @@ Future<InstallationPickerResult> runInstallationPicker({
     states: states,
     refresh: refresh,
     operate: operate,
-    close: requestExit,
+    close: exitApp,
   );
   try {
-    await runMatrixScreen(
+    final code = await runMatrixScreen(
       InstallationScreen(model),
       interrupt: model.interrupt,
     );
-    return InstallationPickerResult(model.failed, model.message);
+    return InstallationPickerResult(model.failed, model.message, code);
   } finally {
     model.dispose();
   }
@@ -171,6 +172,7 @@ class InstallationScreen extends StatelessWidget {
           .sources[source]!
           .installation!;
       return MatrixShell(
+        key: const ValueKey('removal'),
         command: 'rk uninstall',
         subtitle: 'Remove ${project.label} from ${source.label}?',
         onEscape: model.exit,
@@ -202,8 +204,10 @@ class InstallationScreen extends StatelessWidget {
         .where((s) => model.states.any((p) => p.sources.containsKey(s)))
         .toList();
     return MatrixShell(
+      key: const ValueKey('sources'),
       command: 'rk ${model.action.name}',
-      count: '${model.states.length} projects',
+      count:
+          '${model.states.length} ${model.states.length == 1 ? 'project' : 'projects'}',
       onEscape: model.exit,
       subtitle: switch (model.action) {
         InstallationAction.use => 'Choose where your commands come from.',
