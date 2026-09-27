@@ -117,8 +117,8 @@ packages:
     dependency: "direct main"
     description:
       path: "packages/fleury"
-      ref: "8a239ea36b5c2d2c7db96bfe2b0f6ad78d391b34"
-      resolved-ref: "8a239ea36b5c2d2c7db96bfe2b0f6ad78d391b34"
+      ref: c4d91f469a60e10249d83306efbfd1efd2c1f697
+      resolved-ref: c4d91f469a60e10249d83306efbfd1efd2c1f697
       url: "https://github.com/danReynolds/fleury.git"
     source: git
     version: "0.1.0"

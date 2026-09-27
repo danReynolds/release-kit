@@ -35,11 +35,16 @@ class Terminal:
         self.raw = b''
         self.decoder = codecs.getincrementaldecoder('utf-8')('replace')
         self.keyboard_tail = ''
+        self.hold_replies = False
+        self.held_replies = []
         owner = self
 
         class Screen(pyte.HistoryScreen):
             def write_process_input(self, data):
-                os.write(owner.master, data.encode())
+                if owner.hold_replies:
+                    owner.held_replies.append(data.encode())
+                else:
+                    os.write(owner.master, data.encode())
 
         self.screen = Screen(cols, rows, history=2000)
         self.stream = pyte.Stream(self.screen)
@@ -235,9 +240,8 @@ def main():
                 terminal.wait(f'rk {command}')
                 terminal.wait('Esc')
                 terminal.resize(90, 24)
-                # Esc already exists in the old frame. Wait for the layout at
-                # the new width before testing cleanup of that region. Fleury
-                # deliberately leaves uncertain rows on an unobserved resize.
+                # Esc already exists in the old frame. Observe the new layout
+                # for this flow; pending-resize exit is a separate regression.
                 terminal.wait_layout(
                     (lambda lines: any('Binary' in line and 'Git tag' in line for line in lines))
                     if command == 'init' else

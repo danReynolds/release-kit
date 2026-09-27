@@ -262,6 +262,24 @@ def main():
                 terminal.finish()
         print('PASS all four commands complete at 40×12 with actions reachable', flush=True)
 
+        for command in ['use', 'init']:
+            home = root / f'resize-exit-{command}'
+            project = fixture(home, command != 'init')
+            with Terminal(executable, command, project, home, rows=24) as terminal:
+                terminal.wait('Esc')
+                settle(terminal)
+                terminal.hold_replies = True
+                start = len(terminal.raw)
+                terminal.resize(90, 24)
+                terminal.wait_layout(lambda _: b'\x1b[6n' in terminal.raw[start:])
+                terminal.send(b'\x1b')
+                terminal.hold_replies = False
+                for reply in terminal.held_replies:
+                    os.write(terminal.master, reply)
+                terminal.held_replies.clear()
+                terminal.finish()
+        print('PASS use/init exit during a pending resize clears the old region', flush=True)
+
 
 if __name__ == '__main__':
     main()

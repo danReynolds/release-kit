@@ -127,7 +127,7 @@ provide input and presentation and call the same coordinator as explicit CLI
 commands. Publication modules do not import the installation adapters.
 
 The TUI dependency raises RK's minimum SDK to Dart 3.10.4. During development,
-`pubspec_overrides.yaml` pins Fleury’s inline-mode API plus the native output fix from Fleury #278.
+`pubspec_overrides.yaml` pins Fleury’s inline-mode API plus the native output and shutdown fixes from Fleury #278.
 Replace this development pin with a qualified hosted Fleury dependency before
 publishing RK to pub.dev. Fleury is confined to UI imports. The GitHub adapter
 limits download and decompression sizes, then reuses the release engine’s exact

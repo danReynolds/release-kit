@@ -16,11 +16,12 @@ the terminal. Larger content scrolls; short terminals compact their footer.
   command, uninstall confirmation/cancel/removal, init review/Back/Create, all
   four commands at 40×18 with resize, and use/init with Ctrl+C, SIGINT, SIGTERM,
   and SIGHUP.
-- `check_installation_ux.py` adds 13 native sessions: active/hover/keyboard states,
+- `check_installation_ux.py` adds 15 native sessions: active/hover/keyboard states,
   unavailable reasons, `NO_COLOR`, multiple projects and `-p`, install/uninstall
   including empty inventories and the first usable row, multi-package init, and
   completing every command
-  at 40×12. Each session checks restoration and retained shell history.
+  at 40×12. Two further cases exit use/init while a resize query is pending.
+  Each session checks restoration and retained shell history.
 - Terminal-buffer frames were inspected on dark and light rendering backgrounds.
   The page keeps the terminal background; active choices use a green cell fill
   and navigation uses blue. Hover moves focus without activation or underlines.
@@ -33,8 +34,10 @@ the terminal. Larger content scrolls; short terminals compact their footer.
   restored, the inline frame is cleared, no alternate screen or whole-screen
   clear is used, and mouse capture is disabled. Signal exits retain 130/143/129.
 - Analysis, formatting, and AOT compilation pass. CI runs both PTY scripts on
-  macOS and Linux. The preceding commit passed both OS test jobs; this receipt's
-  new visual-interaction evidence is local macOS until the updated CI runs.
+  macOS and Linux. The preceding integration passed both OS test jobs; this receipt's
+  latest RK interaction evidence is local macOS until the updated CI runs.
+  Fleury's exact pinned revision passed native inline CI on Linux and macOS,
+  including Linux on the minimum supported Dart 3.10.4 SDK.
   Formatting uses Dart 3.12.2 consistently; functional CI tests use stable Dart.
 
 The terminal harness now drains output written for the old viewport before
@@ -42,19 +45,21 @@ applying a new size. Without that ordering it could replay an old row
 reservation at a new height and falsely report lost shell history. After the
 correction, 100 resize stress runs passed with shell history and modes restored.
 
-A separate resize/exit race remains a Fleury limitation: if the terminal size
-changes and exit arrives before the new region is anchored, Fleury leaves the
-uncertain old rows rather than risk clearing unrelated shell history. We saw
-this once during the rapid-resize probe. The normal resize test now waits for
-the new layout, rather than mistaking the old frame's Escape label for a redraw.
-This pass does not claim clean frame removal in that unobserved-resize case.
+The resize/exit defect is fixed upstream in Fleury
+[PR #278](https://github.com/danReynolds/fleury/pull/278). Shutdown now keeps input
+available long enough to settle the pending exchange and obtain a fresh cursor
+report, clears the evidenced surviving rows without allocating another region,
+then restores modes and releases input. The native regression fails against the
+old revision and passes after the fix at 70×18 and 90×24. Stale replies, a second
+resize, missing/invalid replies, and continuous resize are covered. A one-second
+budget bounds the fresh ownership check; an unresponsive terminal still gets
+mode restoration without a guessed clear.
 
-This integration exposed an upstream native-output bug: an explicitly injected
-Fleury driver could fail with `EAGAIN` when its output queue filled. Fleury
-[PR #278](https://github.com/danReynolds/fleury/pull/278) fixes it using the
-existing stdio sink. RK's development override pins that fix at `8a239ea3`,
-ahead of upstream merge/hosted publication. Two upstream PTY regressions fail
-before the fix and pass afterward, alongside 90 existing lifecycle tests.
+The same upstream PR fixes an explicit native driver's `EAGAIN` crash on a full
+output queue. RK pins both fixes at `c4d91f46`, ahead of upstream merge/hosted
+publication. Fleury passed 141 lifecycle/query regressions and its full
+10-session native inline suite; both native before/after reproductions are
+recorded in the upstream PR.
 
 The commands above use disposable homes, installation roots, and fixture
 projects. No personal installations or shell configuration were switched.

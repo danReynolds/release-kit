@@ -1,7 +1,7 @@
-# Inline mode plus native output fix (Fleury #278); replace with hosted Fleury before publication. Not part of the pub archive.
+# Inline mode plus native output/shutdown fixes (Fleury #278); replace with hosted Fleury before publication. Not part of the pub archive.
 dependency_overrides:
   fleury:
     git:
       url: https://github.com/danReynolds/fleury.git
-      ref: 8a239ea36b5c2d2c7db96bfe2b0f6ad78d391b34
+      ref: c4d91f469a60e10249d83306efbfd1efd2c1f697
       path: packages/fleury
