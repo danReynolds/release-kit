@@ -12,6 +12,7 @@ import 'stage_receipt.dart';
 import 'verdict.dart';
 
 final _sha256 = RegExp(r'^[0-9a-f]{64}$');
+final _cdhash = RegExp(r'^[0-9a-f]{40}$');
 
 enum StageIssueKind {
   missingReceipt,
@@ -733,6 +734,9 @@ class StageInspector {
             break;
           }
         }
+        if (problem == null && artifact.libraries.isNotEmpty) {
+          problem = _pinProblem(artifact, signatures);
+        }
       }
     }
     if (problem != null) {
@@ -742,6 +746,29 @@ class StageInspector {
         path: 'stage.json',
       ));
     }
+  }
+
+  /// Why a bundle's receipt does not show its runtime admitting exactly the
+  /// modules it ships, or null when it does. Without the pin, the signed
+  /// runtime would run any module signed by the same team.
+  static String? _pinProblem(BinaryArtifact artifact, Map signatures) {
+    final shipped = <String>{};
+    for (final file in artifact.libraries) {
+      final hashes = (signatures[file.path] as Map)['cdhashes'];
+      if (hashes is! List ||
+          hashes.isEmpty ||
+          hashes.any((hash) => hash is! String || !_cdhash.hasMatch(hash))) {
+        return 'signature evidence for ${file.path} records no code hash';
+      }
+      shipped.addAll(hashes.cast<String>());
+    }
+    final pinned =
+        (signatures[artifact.identityFile] as Map)['pinned_library_cdhashes'];
+    if (CanonicalJson.encode(pinned) !=
+        CanonicalJson.encode(shipped.toList()..sort())) {
+      return 'signed runtime does not pin exactly the modules it ships with';
+    }
+    return null;
   }
 
   static void _inspectInventory(
