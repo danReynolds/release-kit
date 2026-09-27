@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:fleury/fleury.dart';
 import 'matrix.dart';
 
@@ -19,14 +20,16 @@ Future<int> runMatrixScreen(
     FleuryApp(
       title: 'rk',
       theme: matrixTheme,
-      home: KeyBindings(
-        bindings: [
-          KeyBinding(
-            KeySequence.ctrl.c,
-            onTrigger: (_) => stop(AppSignal.interrupt),
-          ),
-        ],
-        child: screen,
+      home: _MatrixHost(
+        child: KeyBindings(
+          bindings: [
+            KeyBinding(
+              KeySequence.ctrl.c,
+              onTrigger: (_) => stop(AppSignal.interrupt),
+            ),
+          ],
+          child: screen,
+        ),
       ),
     ),
     // An explicit native driver avoids development supervisors/remote hosts
@@ -37,7 +40,7 @@ Future<int> runMatrixScreen(
           suspendOnCtrlZ: false,
           signalGrace: const Duration(minutes: 11),
         ),
-    mode: const TerminalMode.inline(rows: 20, mouse: true, mouseMotion: true),
+    mode: const TerminalMode.inline(rows: 12, mouse: true, mouseMotion: true),
     enableHotReload: false,
     debug: const DebugConfig(enabled: false),
     onEvent: (event) {
@@ -54,4 +57,28 @@ Future<int> runMatrixScreen(
     AppSignal.terminate => 143,
     AppSignal.hangup => 129,
   };
+}
+
+class _MatrixHost extends StatefulWidget {
+  const _MatrixHost({required this.child});
+  final Widget child;
+  @override
+  State<_MatrixHost> createState() => _MatrixHostState();
+}
+
+class _MatrixHostState extends State<_MatrixHost> {
+  int _rows = 12;
+  @override
+  Widget build(BuildContext context) {
+    final session = context.scope<TerminalSession>();
+    return Scope<MatrixRegion>(
+      MatrixRegion((naturalRows) {
+        final rows = naturalRows.clamp(8, 24);
+        if (!session.isInline || rows == _rows || !mounted) return;
+        _rows = rows;
+        unawaited(session.resizeInline(rows));
+      }),
+      child: widget.child,
+    );
+  }
 }

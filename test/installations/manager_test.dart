@@ -344,7 +344,7 @@ void main(List<String> args) {
         const SystemTools(),
         env,
       ).ensure(project);
-      expect(message, contains('Fish PATH updated'));
+      expect(message, equals('Ready at the next prompt.'));
       final resolved = await Process.run(fish, [
         '-c',
         'command -s orbit; orbit',

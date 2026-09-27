@@ -123,7 +123,7 @@ class InstallationPicker extends Notifier {
       busy = false;
       pending = null;
       notify();
-      if (closing) close();
+      if (closing || (!failed && states.length == 1)) close();
     }
   }
 }
@@ -191,8 +191,8 @@ class InstallationScreen extends StatelessWidget {
           ],
         ),
         actions: [
-          Button(text: 'Cancel', autofocus: true, onPressed: model.exit),
-          Button(
+          MatrixButton(text: 'Cancel', autofocus: true, onPressed: model.exit),
+          MatrixButton(
             text: 'Remove installation',
             variant: ButtonVariant.error,
             onPressed: () => unawaited(model.apply(project, source)),
@@ -203,6 +203,9 @@ class InstallationScreen extends StatelessWidget {
     final sources = InstallationSource.values
         .where((s) => model.states.any((p) => p.sources.containsKey(s)))
         .toList();
+    final initialState = model.states
+        .where((state) => _initialSource(state) != null)
+        .firstOrNull;
     return MatrixShell(
       key: const ValueKey('sources'),
       command: 'rk ${model.action.name}',
@@ -217,34 +220,86 @@ class InstallationScreen extends StatelessWidget {
       },
       message: model.message.isNotEmpty
           ? model.message
-          : model.states.expand((s) => s.routing).join('\n'),
-      failed: model.failed,
+          : model.states.any((s) => s.routing.isNotEmpty)
+          ? model.action == InstallationAction.use
+                ? 'Selection is not active on PATH. Choose a source to set it up.'
+                : 'Selection is not active on PATH. Run rk use to set it up.'
+          : '',
+      failed:
+          model.failed ||
+          (model.message.isEmpty &&
+              model.states.any((s) => s.routing.isNotEmpty)),
+      positive:
+          !model.busy &&
+          !model.failed &&
+          model.outcomes.isNotEmpty &&
+          model.message == model.outcomes.last,
+      hint: '↑↓←→ move · Enter choose',
       child: ChoiceMatrix(
         columns: sources.map((s) => s.label).toList(),
         rows: [
           for (final state in model.states)
-            MatrixRow(state.project.name, state.project.label, [
-              for (final source in sources)
-                if (!state.sources.containsKey(source))
-                  null
-                else
-                  _cell(
-                    state,
-                    source,
-                    model.states.first == state && sources.first == source,
-                  ),
-            ]),
+            MatrixRow(
+              state.project.name,
+              state.project.label == state.project.name
+                  ? ''
+                  : 'Commands: ${state.project.label}',
+              [
+                for (final source in sources)
+                  if (!state.sources.containsKey(source))
+                    null
+                  else
+                    _cell(
+                      state,
+                      source,
+                      initialState == state && _initialSource(state) == source,
+                    ),
+              ],
+            ),
         ],
       ),
       actions: [
-        const Text('↑↓←→ move · Enter choose', style: mutedText),
-        Button(
-          text: model.busy ? 'Esc Cancel' : 'Esc Done',
+        MatrixButton(
+          autofocus: initialState == null,
+          text:
+              model.busy || (model.states.length == 1 && model.outcomes.isEmpty)
+              ? 'Esc Cancel'
+              : 'Esc Done',
           appearance: ButtonAppearance.plain,
           onPressed: model.exit,
         ),
       ],
     );
+  }
+
+  InstallationSource? _initialSource(ProjectInstallations state) {
+    if (model.isRemoval) {
+      final installed = state.sources.entries.where(
+        (e) => e.value.installation != null,
+      );
+      return installed
+              .where(
+                (e) =>
+                    state.selected != e.key &&
+                    !state.currentSources.values.contains(e.key),
+              )
+              .firstOrNull
+              ?.key ??
+          installed.firstOrNull?.key ??
+          state.sources.entries
+              .where((e) => e.value.problem != null)
+              .firstOrNull
+              ?.key;
+    }
+    final preferred = state.selected ?? state.currentSource;
+    if (preferred != null && state.sources.containsKey(preferred)) {
+      return preferred;
+    }
+    return state.sources.entries
+            .where((e) => e.value.problem == null)
+            .firstOrNull
+            ?.key ??
+        state.sources.keys.firstOrNull;
   }
 
   Widget _cell(
@@ -288,9 +343,17 @@ class InstallationScreen extends StatelessWidget {
           : installed?.version ??
                 (inspection.problem != null ? 'View reason' : 'Latest release'),
       semanticLabel: '${state.project.label}, ${source.label}: $title',
-      selected: selected || state.currentSource == source,
+      selected: model.action == InstallationAction.install
+          ? installed != null
+          : selected || state.currentSource == source,
+      unavailable:
+          inspection.problem != null || (model.isRemoval && installed == null),
       autofocus: autofocus,
-      onPressed: model.busy
+      onPressed:
+          model.busy ||
+              (model.isRemoval &&
+                  installed == null &&
+                  inspection.problem == null)
           ? null
           : () => unawaited(model.choose(state, source)),
     );

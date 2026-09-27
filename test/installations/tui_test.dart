@@ -32,6 +32,72 @@ InitPlan plan() => InitPlan.discover(
 );
 
 void main() {
+  for (final action in InstallationAction.values) {
+    test(
+      '${action.name} closes on single-project success, stays for multiple or failure',
+      () async {
+        final scratch = Directory.systemTemp.createTempSync(
+          'rk-completion-test-',
+        );
+        addTearDown(() => scratch.deleteSync(recursive: true));
+        final projects = [fixture(scratch), fixture(scratch, name: 'second')];
+        for (final count in [1, 2]) {
+          for (final fails in [false, true]) {
+            var closed = false;
+            final states = [
+              for (final project in projects.take(count))
+                ProjectInstallations(project, {
+                  InstallationSource.local: const SourceInspection(),
+                }),
+            ];
+            final model = InstallationPicker(
+              action: action,
+              states: states,
+              refresh: () async => states,
+              close: () => closed = true,
+              operate: (_, _, _, _) async {
+                if (fails) {
+                  throw const InstallationFailure(
+                    'Could not prepare',
+                    'Try again.',
+                  );
+                }
+                return 'Completed';
+              },
+            );
+            await model.apply(projects.first, InstallationSource.local);
+            expect(closed, count == 1 && !fails);
+            expect(model.failed, fails);
+            expect(model.busy, isFalse);
+            if (fails) expect(model.message, 'Could not prepare Try again.');
+            model.dispose();
+          }
+        }
+      },
+    );
+  }
+
+  test(
+    'an unavailable init choice reports a problem without changing the plan',
+    () {
+      final model = InitPicker(plan(), (_) {});
+      final sdkPlan = InitPlan.discover(
+        tree: MemorySourceTree({'pubspec.yaml': 'name: sdk\nversion: 1.0.0\n'}),
+        gitBound: false,
+        hasRemote: false,
+        githubRepository: null,
+        platformCapabilities: const [],
+      );
+      model.plan = sdkPlan;
+      model.toggle(0, ReleaseChoice.binary);
+      expect(model.plan, same(sdkPlan));
+      expect(model.failed, isTrue);
+      model.toggle(0, ReleaseChoice.pubDev);
+      expect(model.failed, isFalse);
+      model.dispose();
+    },
+  );
+
   test(
     'selection, review, Back, and create share one terminal session',
     () async {

@@ -27,7 +27,7 @@ import pyte
 
 
 class Terminal:
-    def __init__(self, executable, command, project, home, *, cols=132, rows=32):
+    def __init__(self, executable, command, project, home, *, cols=132, rows=32, arguments=(), environment=None):
         self.master, self.slave = pty.openpty()
         self.set_size(cols, rows)
         self.before = termios.tcgetattr(self.slave)
@@ -45,11 +45,12 @@ class Terminal:
         self.stream = pyte.Stream(self.screen)
         os.write(self.slave, f'Shell history stays here\r\n$ rk {command}\r\n'.encode())
         self.process = subprocess.Popen(
-            [str(executable), command], cwd=project,
-            env={**os.environ, 'TERM': 'xterm-256color', 'COLORTERM': 'truecolor',
+            [str(executable), command, *arguments], cwd=project,
+            env={**{k: v for k, v in os.environ.items() if k not in ('NO_COLOR', 'FORCE_COLOR')},
+                 'TERM': 'xterm-256color', 'COLORTERM': 'truecolor',
                  'SHELL': '/bin/sh', 'HOME': str(home), 'FLEURY_SYNC_OUTPUT': '0',
                  'PUB_CACHE': str(home / 'cache'), 'XDG_DATA_HOME': str(home / 'data'),
-                 'XDG_CONFIG_HOME': str(home / 'config')},
+                 'XDG_CONFIG_HOME': str(home / 'config'), **(environment or {})},
             stdin=self.slave, stdout=self.slave, stderr=self.slave,
         )
 
@@ -71,6 +72,11 @@ class Terminal:
         fcntl.ioctl(self.master, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
 
     def resize(self, cols, rows):
+        # Apply bytes already written for the old size before changing the
+        # emulator geometry. Otherwise an old-size row reservation is replayed
+        # at the new height and the harness invents a scrollback-loss failure.
+        while select.select([self.master], [], [], 0)[0]:
+            self.read()
         y = max(0, self.screen.cursor.y - max(0, self.screen.lines - rows))
         self.screen.resize(lines=rows, columns=cols)
         self.screen.cursor.y = min(y, rows - 1)
@@ -108,6 +114,14 @@ class Terminal:
                 break
         raise AssertionError(f'Missing {text!r}; exit={self.process.poll()}\n{self.text()}\n{self.raw[-2500:]!r}')
 
+    def wait_layout(self, predicate, timeout=10):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and self.process.poll() is None:
+            self.read()
+            if predicate(self.screen.display):
+                return
+        raise AssertionError(f'Layout did not settle after resize:\n{self.text()}')
+
     def send(self, keys):
         os.write(self.master, keys)
         time.sleep(.15)
@@ -142,15 +156,6 @@ class Terminal:
             assert title not in self.text(), f'Inline frame survived exit: {self.text()}'
         assert b'\x1b[?25h' in self.raw, 'cursor hidden after exit'
         assert b'\x1b[?1006l' in self.raw, 'mouse capture left enabled'
-        # No fixed color fills: default background (49), inverse (7), and
-        # foreground colors are fine. Skip RGB parameters when parsing SGR.
-        for sgr in re.findall(rb'\x1b\[([0-9;]*)m', self.raw):
-            codes = [int(v or 0) for v in sgr.split(b';')]
-            i = 0
-            while i < len(codes):
-                code = codes[i]
-                assert code != 48 and not 40 <= code <= 47 and not 100 <= code <= 107, sgr
-                i += (5 if codes[i+1:i+2] == [2] else 3) if code == 38 else 1
 
 
 def fixture(home, configured):
@@ -178,7 +183,6 @@ def main():
             terminal.wait('Install a source.')
             terminal.send(b'\r')
             terminal.wait('installed from Local', timeout=60)
-            terminal.send(b'\x1b')
             terminal.finish()
         assert not (home / 'data/rk/bin/orbit').exists(), 'install changed routing'
         print('install: prepared without switching; inline restored', flush=True)
@@ -192,7 +196,6 @@ def main():
             terminal.wait('Remove orbit from Local?')
             terminal.click('Remove installation')
             terminal.wait('removed from Local')
-            terminal.send(b'\x1b')
             terminal.finish()
         assert (project / 'bin/orbit.dart').exists(), 'local uninstall removed checkout'
         print('uninstall: confirmation, cancellation, removal; inline restored', flush=True)
@@ -202,10 +205,9 @@ def main():
         with Terminal(executable, 'use', project, home) as terminal:
             terminal.wait('Choose where your commands come from.')
             terminal.click('Install & use')
-            terminal.wait('now selects Local', timeout=60)
-            terminal.send(b'\x1b')
+            terminal.wait('→ Local', timeout=60)
             terminal.finish()
-            assert 'now selects Local' in terminal.text(), 'result not retained after exit'
+            assert '→ Local' in terminal.text(), 'result not retained after exit'
         result = subprocess.check_output([str(home / 'data/rk/bin/orbit')], text=True)
         assert result.strip() == 'local dogfood'
         print('use: selected command runs; result retained; inline restored', flush=True)
@@ -233,7 +235,13 @@ def main():
                 terminal.wait(f'rk {command}')
                 terminal.wait('Esc')
                 terminal.resize(90, 24)
-                terminal.wait('Esc')
+                # Esc already exists in the old frame. Wait for the layout at
+                # the new width before testing cleanup of that region. Fleury
+                # deliberately leaves uncertain rows on an unobserved resize.
+                terminal.wait_layout(
+                    (lambda lines: any('Binary' in line and 'Git tag' in line for line in lines))
+                    if command == 'init' else
+                    (lambda lines: any('PROJECT' in line for line in lines)))
                 terminal.send(b'\x1b')
                 terminal.finish()
             if command == 'init':

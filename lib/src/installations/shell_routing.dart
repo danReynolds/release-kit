@@ -22,7 +22,7 @@ class ShellRouting {
           r'fish_add_path --universal --move --prepend -- $argv[1]',
           store.bin,
         ], environment: environment);
-        return 'Fish PATH updated for the next prompt. Shell aliases and functions still take precedence.';
+        return 'Ready at the next prompt.';
       } on InstallationFailure catch (error) {
         return 'Selected, but fish PATH setup failed: ${error.message}. Run: fish_add_path --move --prepend ${shellQuote(store.bin)}';
       }

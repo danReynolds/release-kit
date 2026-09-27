@@ -157,7 +157,7 @@ class InstallationManager {
         generation,
         beforeCommit: cancellation?.check,
       );
-      return '${project.name} now selects ${source.label} · ${installation.version}';
+      return '${project.name} → ${source.label} · ${installation.version}';
     } finally {
       lock.unlockSync();
       lock.closeSync();

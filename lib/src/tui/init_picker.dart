@@ -11,8 +11,9 @@ class InitPicker extends Notifier {
   InitPicker(this.plan, this.finish);
   InitPlan plan;
   final void Function(InitPlan?) finish;
-  String message = 'Review your choices before creating release.toml.';
+  String message = '';
   bool showPrivate = false;
+  bool failed = false;
   List<int> get visible => [
     for (var i = 0; i < plan.candidates.length; i++)
       if (showPrivate ||
@@ -27,6 +28,7 @@ class InitPicker extends Notifier {
 
   void toggle(int index, ReleaseChoice choice) {
     final result = plan.toggle(index, choice);
+    failed = identical(result.plan, plan);
     plan = result.plan;
     message = result.message;
     notify();
@@ -139,24 +141,26 @@ class InitScreen extends StatelessWidget {
           '${model.visible.length} ${model.visible.length == 1 ? 'package' : 'packages'}',
       subtitle: 'Choose the outputs for each package.',
       message: model.message,
+      failed: model.failed,
+      hint: '↑↓←→ move · Space toggle',
       onEscape: () => model.finish(null),
       child: ChoiceMatrix(
         columns: ReleaseChoice.values.map((c) => c.selectorLabel).toList(),
         rows: [for (final i in model.visible) _row(i)],
       ),
       actions: [
-        const Text('↑↓←→ move · Space toggle', style: mutedText),
         if (model.plan.candidates.any((c) => c.vetoesRegistry))
-          Button(
+          MatrixButton(
             text: model.showPrivate
                 ? 'Hide private packages'
                 : 'Show private packages',
             autofocus: model.visible.isEmpty,
             onPressed: model.togglePrivate,
           ),
-        Button(text: 'Esc Cancel', onPressed: () => model.finish(null)),
-        Button(
+        MatrixButton(text: 'Esc Cancel', onPressed: () => model.finish(null)),
+        MatrixButton(
           text: 'Review configuration →',
+          variant: ButtonVariant.primary,
           onPressed: model.plan.included.isEmpty
               ? null
               : () => model.finish(model.plan),
@@ -184,6 +188,7 @@ class InitScreen extends StatelessWidget {
             semanticLabel:
                 '${package.name}, ${choice.selectorLabel}: ${package.selected.contains(choice) ? 'Added' : package.availability[choice]!.reason}',
             selected: package.selected.contains(choice),
+            unavailable: !package.availability[choice]!.available,
             autofocus:
                 index == model.visible.first &&
                 choice == ReleaseChoice.values.first,
@@ -230,17 +235,17 @@ class InitReviewScreen extends StatelessWidget {
         ? 'Also adds .rk/ to .gitignore. Nothing is published.'
         : 'Nothing is published.',
     actions: [
-      Button(
+      MatrixButton(
         text: '← Back',
         autofocus: true,
         onPressed: () => finish(InitReviewDecision.back),
       ),
-      Button(
+      MatrixButton(
         text: 'Create release.toml',
         variant: ButtonVariant.success,
         onPressed: () => finish(InitReviewDecision.write),
       ),
-      Button(
+      MatrixButton(
         text: 'Cancel',
         onPressed: () => finish(InitReviewDecision.cancel),
       ),

@@ -2,24 +2,52 @@
 
 ## Inline integration — September 27, 2026
 
-Qualified on macOS arm64 with Dart 3.12.2. The four interactive commands now
-use `TerminalMode.inline(rows: 20)` and `exitApp()`. They inherit terminal
-foreground/background colors and print results after the region is cleared.
+Qualified on macOS arm64 with Dart 3.12.2. All four interactive commands use
+`TerminalMode.inline` and `exitApp()`. The native host measures the matrix's
+content after layout and adjusts the region between 8 and 24 rows, bounded by
+the terminal. Larger content scrolls; short terminals compact their footer.
 
-- 107 focused installation/init/CLI checks pass, including the compiled CLI
-  test rerun outside a sandbox that blocked Dart's telemetry file. The final
-  11 TUI tests pass after the focus correction.
-- The compiled executable passed 16 real PTY sessions: install without routing,
-  use Local and execute its command, uninstall confirmation/cancel/removal,
-  init review/Back/Create, all four commands at 40×18 with resize, and use/init
-  with Ctrl+C, SIGINT, SIGTERM, and SIGHUP. The emulator supplies actual cursor
-  reports and checks visible content and retained shell history.
-- Every session verifies terminal modes and input blocking flags are restored,
-  the inline frame is cleared, no alternate screen or whole-screen clear is
-  used, and no fixed background color is painted. Signal exits retain 130/143/129.
-- Cancelling removal now restores keyboard focus to the source matrix.
-- Analysis and AOT compilation pass. CI now runs the same PTY script on macOS
-  and Linux; a local macOS pass is not evidence of a Linux pass.
+- The current pass has 67 passing installation/init/CLI regression tests,
+  including single-project completion, multi-project continuation, failed
+  operations, cancellation, and init's unavailable choices. An earlier broader
+  installation/init/CLI pass had 107 passing checks.
+- The compiled executable passed 16 native PTY sessions in
+  `check_installation_tui.py`: install without routing, use Local and execute its
+  command, uninstall confirmation/cancel/removal, init review/Back/Create, all
+  four commands at 40×18 with resize, and use/init with Ctrl+C, SIGINT, SIGTERM,
+  and SIGHUP.
+- `check_installation_ux.py` adds 13 native sessions: active/hover/keyboard states,
+  unavailable reasons, `NO_COLOR`, multiple projects and `-p`, install/uninstall
+  including empty inventories and the first usable row, multi-package init, and
+  completing every command
+  at 40×12. Each session checks restoration and retained shell history.
+- Terminal-buffer frames were inspected on dark and light rendering backgrounds.
+  The page keeps the terminal background; active choices use a green cell fill
+  and navigation uses blue. Hover moves focus without activation or underlines.
+  Reverse video and checkmarks preserve meaning without color. These renders
+  are not screenshots of a physical terminal emulator.
+- Dogfooding found and fixed lost keyboard focus after multi-project operations,
+  success styling on unavailable choices, and init's footer crowding its choices
+  out of a short terminal. Native assertions retain coverage for those failures.
+- Every native session verifies terminal modes and input blocking flags are
+  restored, the inline frame is cleared, no alternate screen or whole-screen
+  clear is used, and mouse capture is disabled. Signal exits retain 130/143/129.
+- Analysis, formatting, and AOT compilation pass. CI runs both PTY scripts on
+  macOS and Linux. The preceding commit passed both OS test jobs; this receipt's
+  new visual-interaction evidence is local macOS until the updated CI runs.
+  Formatting uses Dart 3.12.2 consistently; functional CI tests use stable Dart.
+
+The terminal harness now drains output written for the old viewport before
+applying a new size. Without that ordering it could replay an old row
+reservation at a new height and falsely report lost shell history. After the
+correction, 100 resize stress runs passed with shell history and modes restored.
+
+A separate resize/exit race remains a Fleury limitation: if the terminal size
+changes and exit arrives before the new region is anchored, Fleury leaves the
+uncertain old rows rather than risk clearing unrelated shell history. We saw
+this once during the rapid-resize probe. The normal resize test now waits for
+the new layout, rather than mistaking the old frame's Escape label for a redraw.
+This pass does not claim clean frame removal in that unobserved-resize case.
 
 This integration exposed an upstream native-output bug: an explicitly injected
 Fleury driver could fail with `EAGAIN` when its output queue filled. Fleury
@@ -36,6 +64,7 @@ Reproduce with a Python environment containing `tool/tui-requirements.txt`:
 ```sh
 dart compile exe bin/rk.dart -o /tmp/rk-inline-check
 python3 tool/check_installation_tui.py /tmp/rk-inline-check
+python3 tool/check_installation_ux.py /tmp/rk-inline-check
 ```
 
 ## Earlier installation qualification
@@ -104,9 +133,10 @@ validator instead of maintaining a second layout parser.
   adapter contracts were checked, including exact tap identity, no linking during
   install, and no implicit upgrades. A real install/removal was not performed
   against the operator's shared Homebrew prefix.
-- **Linux native behavior.** Platform selection and archive behavior have fixture
-  coverage; native terminal, shell, and package-manager qualification in this pass
-  is macOS only.
+- **Linux native behavior.** The preceding inline integration passed the Linux
+  CI test job, including its 16 native PTY sessions. The added visual-interaction
+  suite still needs the updated CI result. Real Linux shell and package-manager
+  installation/removal qualification remains separate.
 - Custom Pub registries, private GitHub downloads, Windows, and shell aliases or
   functions overriding command names are outside this first implementation.
   POSIX shells receive a PATH command; automatic persistent setup is fish-only.

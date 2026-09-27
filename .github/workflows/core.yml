@@ -23,7 +23,8 @@ jobs:
           persist-credentials: false
       - uses: dart-lang/setup-dart@v1
         with:
-          sdk: stable
+          # Keep formatter output stable; functional tests use the current SDK.
+          sdk: 3.12.2
       - run: dart pub get
       - run: dart format --output=none --set-exit-if-changed .
       - run: dart analyze
@@ -51,3 +52,4 @@ jobs:
           .dart_tool/pty-env/bin/pip install -r tool/tui-requirements.txt
           dart compile exe bin/rk.dart -o .dart_tool/rk-inline-check
           .dart_tool/pty-env/bin/python tool/check_installation_tui.py .dart_tool/rk-inline-check
+          .dart_tool/pty-env/bin/python tool/check_installation_ux.py .dart_tool/rk-inline-check

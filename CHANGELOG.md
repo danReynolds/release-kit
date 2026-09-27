@@ -9,8 +9,13 @@
   installation listings distinguish RK selection from effective PATH resolution.
 - Replace init's terminal selector with the Fleury output matrix and a validated
   configuration review. Selected outputs read “Added”. Require Dart 3.10.4 or newer.
-- Inline matrices inherit terminal colors, leave shell history intact, and
-  restore the prompt before reporting results. Ctrl+C and termination signals
+- Inline matrices keep the terminal background, use distinct active and focus
+  colors, fit their content, and omit duplicate command labels. Hover and keyboard
+  navigation share one highlight. Single-project actions close on success;
+  multi-project matrices keep focus and stay open until Done. Init retains its
+  configuration review, and unavailable choices explain why they cannot be used.
+- Inline commands leave shell history intact and restore the prompt before
+  reporting results. Ctrl+C and termination signals
   preserve their exit status while cancellation waits for in-progress work.
 - Release commands identify the project version and source checkout before work
   begins. Staging explains source, tooling, and configuration changes when a

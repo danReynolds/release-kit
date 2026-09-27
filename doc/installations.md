@@ -11,9 +11,17 @@ rk use homebrew                 # select it; install first if missing
 rk uninstall pub                # confirm removal of an inactive installation
 ```
 
-The matrix opens inline beneath your prompt, inherits your terminal colors, and
-clears on exit. Results stay in shell history. Use Tab or arrow keys to navigate,
-Enter to choose, or Escape to finish.
+The matrix opens inline beneath your prompt and grows to fit its content, up to
+24 rows. Your terminal keeps its background; green marks the current choice and
+a blue fill marks mouse or keyboard focus. Checkmarks and reverse video preserve
+those distinctions with `NO_COLOR`. Use Tab or arrow keys to navigate and Enter
+to choose. Hover moves focus without changing your selection.
+
+A successful action for one project closes the matrix and leaves its result in
+shell history. With several projects, the matrix stays open so you can change
+another row; choose Done or press Escape when finished. `-p` limits it to one
+project and restores single-action completion. Errors stay open for inspection
+and retry. Uninstall asks for confirmation before removing an installation.
 
 The matrix shows each executable package and its configured sources. Click a
 cell or use the arrow keys and Enter. **Using** means the commands resolve to
