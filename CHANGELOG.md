@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Homebrew installs keep macOS bundles intact. Homebrew rewrote the AOT
+  module's install name and re-signed it ad hoc, so the installed command
+  failed to start. The module now has an `@rpath/app.aot` install name and the
+  formula declares `preserve_rpath`, so Homebrew leaves the signed files
+  alone. Formulas need Homebrew 4.6.17 or later. A macOS CI test installs a
+  real bundle through Homebrew and requires its signed files to be unchanged.
 - macOS Dart bundles pin their AOT module. rk signs the module first, then
   signs the runtime with a library load constraint that admits only that
   module's code hash, reads the constraint back, and records both in the stage

@@ -96,6 +96,21 @@ Not yet checked: the same bundle signed with a Developer ID certificate, where
 library validation and the constraint both apply, and Apple notarization of a
 runtime that carries a constraint. Ad-hoc signatures cannot exercise either.
 
+## Homebrew relocation — 2026-09-27
+
+A Homebrew install of the rk 0.1.12 formula rewrote `app.aot`'s install name
+from `app.aot` to `/opt/homebrew/opt/rk/libexec/lib/rk/app.aot` and re-signed
+it ad hoc (`Keg#fix_dynamic_linkage`), so the Developer ID runtime refused to
+load it and `rk --version` exited 255. This was reproduced by running
+Homebrew's own relocation code on a scratch keg, without installing anything.
+
+With the fix, the same relocation left a pinned bundle byte-identical and the
+command ran. The control, an `@rpath` install name without `preserve_rpath`,
+was rewritten and re-signed, and the pinned runtime refused it with exit code
+`255`. `test/homebrew_install_test.dart` now performs a real `brew install` of
+a bundle on CI's macOS runner and requires the installed launcher, runtime and
+module to match the staged bytes.
+
 ## Qualification boundary
 
 No package, GitHub release or Homebrew tap was published during the synthetic

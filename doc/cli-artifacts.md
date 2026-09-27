@@ -29,6 +29,13 @@ extracted directory together when installing manually. Homebrew installs the
 archive under `libexec` and links the command into `bin`; the same installation
 rule works for Linux's single executable.
 
+Homebrew rewrites each library's install name to its keg path and re-signs the
+library ad hoc, which the signed runtime would refuse. The module therefore has
+an `@rpath/app.aot` install name, and the generated formula declares
+`preserve_rpath`, which keeps such names. Both are needed; this requires
+Homebrew 4.6.17 or later. The formula has no bottle, so Homebrew installs it as
+a source build and needs the Xcode Command Line Tools.
+
 ## One release contract
 
 `BinaryArtifact` describes the entry point, relative paths, modes and files that

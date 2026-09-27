@@ -31,7 +31,7 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -45,3 +45,7 @@ jobs:
           sdk: stable
       - run: dart pub get
       - run: dart test
+        env:
+          # The Homebrew install test changes the host's Homebrew, so it runs
+          # only on CI's disposable macOS runners.
+          RK_BREW_INSTALL_TEST: ${{ matrix.os == 'macos-latest' && '1' || '' }}

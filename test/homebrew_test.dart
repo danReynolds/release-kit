@@ -104,6 +104,17 @@ void main() {
     );
   });
 
+  test("a macOS formula keeps the module's @rpath install name", () {
+    expect(render(), contains('\n  preserve_rpath\n'));
+    expect(render(assets: {'macos-arm64': _assets['macos-arm64']!}),
+        contains('\n  preserve_rpath\n'));
+  });
+
+  test('a Linux-only formula has no module to preserve', () {
+    expect(render(assets: {'linux-x64': _assets['linux-x64']!}),
+        isNot(contains('preserve_rpath')));
+  });
+
   test('refuses an archive outside the closed platform contract', () {
     expect(
       () => render(
