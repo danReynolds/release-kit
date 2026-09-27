@@ -281,7 +281,14 @@ void main() {
       final tools = TestTools((exe, args, cwd, env) async {
         calls.add(args);
         expect(env!['HOMEBREW_NO_INSTALL_UPGRADE'], '1');
+        if (args.first == 'list') {
+          expect(args, ['list', '--formula', '--full-name', '-1']);
+          return ok(
+            'someone/else/orbit\n${installed ? project.formula : ''}\n',
+          );
+        }
         if (args.first == 'info') {
+          expect(args, ['info', '--json=v2', '--formula', project.formula]);
           return ok(
             jsonEncode({
               'formulae': [
@@ -294,6 +301,7 @@ void main() {
                 if (installed)
                   {
                     'full_name': project.formula,
+                    'name': 'orbit',
                     'linked_keg': '1.2.0',
                     'installed': [
                       {'version': '1.2.0'},
@@ -303,7 +311,10 @@ void main() {
             }),
           );
         }
-        if (args.first == '--cellar') return ok(cellar);
+        if (args.first == '--cellar') {
+          expect(args, ['--cellar']);
+          return ok('${scratch.path}/Cellar');
+        }
         if (args.first == '--prefix') return ok('${scratch.path}/brew');
         if (args.first == 'install') {
           installed = true;
@@ -313,6 +324,14 @@ void main() {
       });
       final provider = HomebrewInstallationProvider(tools, '/brew');
       expect((await provider.inspect(project)).installation, isNull);
+      expect(
+        calls,
+        [
+          ['list', '--formula', '--full-name', '-1'],
+        ],
+        reason:
+            'A different tap is not our installation or a reason to query it.',
+      );
       final result = await provider.install(project, (_) {});
       expect(result.commands['orbit']!.executable, '$cellar/1.2.0/bin/orbit');
       expect(calls.where((c) => c.first == 'install').single, [

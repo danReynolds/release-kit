@@ -245,11 +245,16 @@ class MatrixShell extends StatefulWidget {
     this.count = '',
     this.failed = false,
     this.positive = false,
+    this.focusBody = false,
     this.hint = '',
   });
   final String command, subtitle, message, count, hint;
   final Widget child;
   final bool failed, positive;
+
+  /// A text-only review needs a keyboard stop for scrolling. Matrices navigate
+  /// their controls directly, without an invisible stop on the viewport.
+  final bool focusBody;
   final void Function() onEscape;
   final List<Widget> actions;
   @override
@@ -261,6 +266,13 @@ class _MatrixShellState extends State<MatrixShell> {
   final _body = GlobalKey();
   final _footer = GlobalKey();
   bool _measuring = false;
+  final _scrollFocus = FocusNode(skipTraversal: true);
+
+  @override
+  void dispose() {
+    _scrollFocus.dispose();
+    super.dispose();
+  }
 
   void _measure(TuiBinding binding, MatrixRegion? region) {
     if (_measuring || region == null) return;
@@ -280,6 +292,7 @@ class _MatrixShellState extends State<MatrixShell> {
 
   @override
   Widget build(BuildContext context) {
+    _scrollFocus.skipTraversal = !widget.focusBody;
     final region = context.scope<MatrixRegion?>();
     final binding = TuiBinding.of(context);
     return KeyBindings(
@@ -328,6 +341,7 @@ class _MatrixShellState extends State<MatrixShell> {
                 ),
                 Expanded(
                   child: ScrollView(
+                    focusNode: _scrollFocus,
                     child: Column(
                       key: _body,
                       mainAxisSize: MainAxisSize.min,

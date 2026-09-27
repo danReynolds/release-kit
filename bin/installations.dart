@@ -192,10 +192,9 @@ Future<int> _run(
     output.problems(diagnostics.found);
     return ExitCodes.refused;
   }
-  final gitRoot = GitSourceTree.findRoot(root);
-  final repository = gitRoot == null
-      ? null
-      : (await GitState.read(gitRoot)).originUrl;
+  // Installation discovery needs only the origin, not release preflight's
+  // worktree status, tags, signing configuration or branch ancestry.
+  final repository = await GitState.readOrigin(root);
   final discovered = executableProjects(
     resolution,
     root,
@@ -304,7 +303,7 @@ Future<int> _run(
       stdin.hasTerminal &&
       stdout.hasTerminal &&
       environment['TERM'] != 'dumb';
-  var states = await refresh();
+  final states = await refresh();
   if (source == null && !list && interactive) {
     final result = await runInstallationPicker(
       action: action,
@@ -312,7 +311,8 @@ Future<int> _run(
       refresh: refresh,
       operate: operate,
     );
-    states = await refresh();
+    // The picker refreshes after operations. Dismissing it is not another
+    // inspection: a Homebrew subprocess here delayed even an idle Ctrl+C.
     for (final message in outcomes) {
       _result(output, message);
     }

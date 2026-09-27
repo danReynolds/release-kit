@@ -107,12 +107,10 @@ void main() {
         var selecting = interaction.select(plan());
         await settle();
         for (var round = 0; round < 2; round++) {
-          for (var i = 0; i < 2; i++) {
-            driver.enqueue(
-              const KeyEvent(KeyCode.tab, modifiers: {KeyModifier.shift}),
-            );
-            await settle();
-          }
+          driver.enqueue(
+            const KeyEvent(KeyCode.tab, modifiers: {KeyModifier.shift}),
+          );
+          await settle();
           driver.enqueue(const KeyEvent(KeyCode.enter));
           final selected = await selecting.timeout(const Duration(seconds: 3));
           expect(selected, isNotNull);
@@ -186,6 +184,8 @@ void main() {
         expect(driver.output, contains('rk init'));
         expect(driver.output, contains('Added'));
         expect(driver.output, isNot(contains('Included')));
+        driver.enqueue(const KeyEvent(KeyCode.tab));
+        await settle();
         driver.enqueue(const TextInputEvent(' '));
         await settle();
         expect(
@@ -236,9 +236,7 @@ void main() {
       driver: driver,
     );
     await settle();
-    // The scroll viewport precedes its first cell in reading order.
-    driver.enqueue(const KeyEvent(KeyCode.tab, modifiers: {KeyModifier.shift}));
-    await settle();
+    // With no initial focus, Shift+Tab starts at the last action.
     driver.enqueue(const KeyEvent(KeyCode.tab, modifiers: {KeyModifier.shift}));
     await settle();
     driver.enqueue(const KeyEvent(KeyCode.enter));
@@ -291,6 +289,11 @@ void main() {
       await settle();
       driver.enqueue(const KeyEvent(KeyCode.enter));
       await settle();
+      expect(operations, 0, reason: 'Opening has no hidden focus.');
+      driver.enqueue(const KeyEvent(KeyCode.tab));
+      await settle();
+      driver.enqueue(const KeyEvent(KeyCode.enter));
+      await settle();
       expect(operations, 1);
       driver.enqueue(
         const KeyEvent(KeyCode.char('c'), modifiers: {KeyModifier.ctrl}),
@@ -339,8 +342,6 @@ void main() {
     final driver = FakeTerminalDriver(size: const CellSize(100, 20));
     final interaction = InitInteraction(driver: driver);
     final selecting = interaction.select(plan());
-    await settle();
-    driver.enqueue(const KeyEvent(KeyCode.tab, modifiers: {KeyModifier.shift}));
     await settle();
     driver.enqueue(const KeyEvent(KeyCode.tab, modifiers: {KeyModifier.shift}));
     await settle();

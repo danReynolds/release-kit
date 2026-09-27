@@ -203,9 +203,6 @@ class InstallationScreen extends StatelessWidget {
     final sources = InstallationSource.values
         .where((s) => model.states.any((p) => p.sources.containsKey(s)))
         .toList();
-    final initialState = model.states
-        .where((state) => _initialSource(state) != null)
-        .firstOrNull;
     return MatrixShell(
       key: const ValueKey('sources'),
       command: 'rk ${model.action.name}',
@@ -249,18 +246,13 @@ class InstallationScreen extends StatelessWidget {
                   if (!state.sources.containsKey(source))
                     null
                   else
-                    _cell(
-                      state,
-                      source,
-                      initialState == state && _initialSource(state) == source,
-                    ),
+                    _cell(state, source),
               ],
             ),
         ],
       ),
       actions: [
         MatrixButton(
-          autofocus: initialState == null,
           text:
               model.busy || (model.states.length == 1 && model.outcomes.isEmpty)
               ? 'Esc Cancel'
@@ -272,41 +264,7 @@ class InstallationScreen extends StatelessWidget {
     );
   }
 
-  InstallationSource? _initialSource(ProjectInstallations state) {
-    if (model.isRemoval) {
-      final installed = state.sources.entries.where(
-        (e) => e.value.installation != null,
-      );
-      return installed
-              .where(
-                (e) =>
-                    state.selected != e.key &&
-                    !state.currentSources.values.contains(e.key),
-              )
-              .firstOrNull
-              ?.key ??
-          installed.firstOrNull?.key ??
-          state.sources.entries
-              .where((e) => e.value.problem != null)
-              .firstOrNull
-              ?.key;
-    }
-    final preferred = state.selected ?? state.currentSource;
-    if (preferred != null && state.sources.containsKey(preferred)) {
-      return preferred;
-    }
-    return state.sources.entries
-            .where((e) => e.value.problem == null)
-            .firstOrNull
-            ?.key ??
-        state.sources.keys.firstOrNull;
-  }
-
-  Widget _cell(
-    ProjectInstallations state,
-    InstallationSource source,
-    bool autofocus,
-  ) {
+  Widget _cell(ProjectInstallations state, InstallationSource source) {
     final inspection = state.sources[source]!;
     final installed = inspection.installation;
     final selected = state.selected == source;
@@ -348,7 +306,6 @@ class InstallationScreen extends StatelessWidget {
           : selected || state.currentSource == source,
       unavailable:
           inspection.problem != null || (model.isRemoval && installed == null),
-      autofocus: autofocus,
       onPressed:
           model.busy ||
               (model.isRemoval &&

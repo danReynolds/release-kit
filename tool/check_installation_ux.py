@@ -105,7 +105,13 @@ def main():
             settle(terminal)
             row, col = locate(terminal, '✓ Selected')
             selected = terminal.screen.buffer[row][col]
-            assert selected.bg == '2a4c6c', selected  # initial focus is the active source
+            assert selected.bg == '183729', selected  # selection is visible before navigation
+            assert not any(cell.bg == '2a4c6c' for line in terminal.screen.buffer.values()
+                           for cell in line.values()), 'opening must have no focus'
+            terminal.send(b'\r')
+            settle(terminal)
+            assert terminal.process.poll() is None, 'unfocused Enter activated a source'
+            assert 'Preparing' not in terminal.text()
             assert sum(line[:25].strip() == 'orbit' for line in terminal.screen.display) == 1
             assert 'Commands: orbit' not in terminal.text()
             assert all(terminal.screen.buffer[y][0].bg == 'default' for y in range(32))
@@ -115,12 +121,12 @@ def main():
             active = terminal.screen.buffer[row][col]
             hovered = terminal.screen.buffer[hover_row][hover_col]
             assert active.bg == '183729', active  # active selection retains its green tint
-            assert hovered.bg == selected.bg and not hovered.underscore, hovered
+            assert hovered.bg == '2a4c6c' and not hovered.underscore, hovered
             assert terminal.process.poll() is None, 'hover activated an option'
             shot(terminal, 'use-hover')
             terminal.send(b'\x1b[D')
             settle(terminal)
-            assert terminal.screen.buffer[row][col].bg == selected.bg
+            assert terminal.screen.buffer[row][col].bg == '2a4c6c'
             assert terminal.screen.buffer[hover_row][hover_col].bg == 'default', 'stale hover retained a second highlight'
             terminal.click('Unavailable')
             terminal.wait('Repair it with dart pub global activate')
@@ -135,7 +141,10 @@ def main():
             terminal.wait('Esc Cancel')
             settle(terminal)
             row, col = locate(terminal, '✓ Selected')
-            assert terminal.screen.buffer[row][col].reverse, 'NO_COLOR lost focus'
+            assert not terminal.screen.buffer[row][col].reverse, 'NO_COLOR opened focused'
+            terminal.send(b'\t')
+            settle(terminal)
+            assert terminal.screen.buffer[row][col].reverse, 'Tab did not focus the first cell'
             hover_row, hover_col = hover(terminal, 'Unavailable')
             assert terminal.screen.buffer[hover_row][hover_col].reverse
             assert not terminal.screen.buffer[row][col].reverse
@@ -170,7 +179,7 @@ def main():
         # Restricting a multi-project configuration to one row restores auto-close.
         with Terminal(executable, 'use', project, home, arguments=('-p', 'orbit')) as terminal:
             terminal.wait('1 project')
-            terminal.send(b'\r')
+            terminal.send(b'\t\r')
             terminal.finish()
         print('PASS multi-project stays open; explicit -p completes in one selection', flush=True)
 
@@ -180,13 +189,13 @@ def main():
             terminal.wait('Esc Cancel')
             settle(terminal)
             shot(terminal, 'install')
-            terminal.send(b'\r')
+            terminal.send(b'\x1b[B\r')
             terminal.finish()
         with Terminal(executable, 'uninstall', project, home) as terminal:
             terminal.wait('Remove a source')
             settle(terminal)
             shot(terminal, 'uninstall')
-            terminal.send(b'\r')
+            terminal.send(b'\t\r')
             terminal.wait('Remove orbit from Local?')
             settle(terminal)
             shot(terminal, 'uninstall-confirm')
@@ -196,10 +205,13 @@ def main():
             terminal.wait('Not installed')
             settle(terminal)
             row, col = locate(terminal, 'Esc Cancel')
-            assert terminal.screen.buffer[row][col].bg == '2a4c6c', 'empty uninstall must focus its exit'
+            assert terminal.screen.buffer[row][col].bg == 'default', 'empty uninstall opened focused'
+            terminal.send(b'\t')
+            settle(terminal)
+            assert terminal.screen.buffer[row][col].bg == '2a4c6c', 'Tab did not reach the exit'
             terminal.send(b'\r')
             terminal.finish()
-        print('PASS install/uninstall states and empty uninstall exit focus', flush=True)
+        print('PASS install/uninstall states and empty uninstall keyboard entry', flush=True)
 
         home = root / 'partial'
         project = workspace(home)
@@ -207,13 +219,41 @@ def main():
         with Terminal(executable, 'uninstall', project, home) as terminal:
             terminal.wait('Remove a source')
             settle(terminal)
-            terminal.send(b'\r')
+            terminal.send(b'\t\r')
             terminal.wait('Remove orbit_admin from Local?')
             terminal.click('Remove installation')
             terminal.wait('removed from Local')
             terminal.click('Esc Done')
             terminal.finish()
-        print('PASS uninstall starts on a usable row when the first project has no installations', flush=True)
+        print('PASS uninstall navigation starts on a usable row when the first project has no installations', flush=True)
+
+        # Spy on a provider at the CLI boundary. Closing an idle picker must
+        # not start a second inspection, irrespective of subprocess speed.
+        home = root / 'idle-close'
+        project = fixture(home, True)
+        (project / 'release.toml').write_text(
+            'schema = 2\n[release.demo]\n'
+            'publish = ["git-tag", "github-release", "homebrew"]\n'
+            'binary_platforms = ["macos-arm64", "linux-x64"]\n')
+        subprocess.run(['git', 'init', '-q'], cwd=project, check=True)
+        subprocess.run(['git', 'remote', 'add', 'origin',
+                        'https://github.com/example/orbit.git'], cwd=project, check=True)
+        tools = home / 'tools'
+        tools.mkdir()
+        calls = home / 'brew-calls'
+        brew = tools / 'brew'
+        brew.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$RK_BREW_CALLS"\n')
+        brew.chmod(0o755)
+        with Terminal(executable, 'use', project, home,
+                      environment={'PATH': str(tools) + ':' + os.environ['PATH'],
+                                   'RK_BREW_CALLS': str(calls)}) as terminal:
+            terminal.wait('Esc Cancel')
+            before = calls.read_text()
+            terminal.send(b'\x03')
+            terminal.finish(130)
+            assert calls.read_text() == before, 'Ctrl+C rescanned providers'
+            assert before.splitlines() == ['list --formula --full-name -1'], before
+        print('PASS Ctrl+C returns without another provider inspection', flush=True)
 
         home = root / 'init'
         project = workspace(home, configured=False)
@@ -246,7 +286,7 @@ def main():
                 shot(terminal, f'{command}-short')
                 if command == 'init':
                     assert 'Local build' in terminal.text(), 'footer crowded out init choices'
-                    terminal.send(b' ')
+                    terminal.send(b'\t ')
                     terminal.wait('✓ Added')
                     assert 'Local build' in terminal.text(), 'feedback pushed the focused choice offscreen'
                     shot(terminal, 'init-short-toggled')
@@ -254,11 +294,11 @@ def main():
                     terminal.wait('Review release.toml')
                     terminal.click('Create release.toml')
                 elif command == 'uninstall':
-                    terminal.send(b'\r')
+                    terminal.send(b'\t\r')
                     terminal.wait('Remove installation')
                     terminal.click('Remove installation')
                 else:
-                    terminal.send(b'\r')
+                    terminal.send(b'\t\r')
                 terminal.finish()
         print('PASS all four commands complete at 40×12 with actions reachable', flush=True)
 

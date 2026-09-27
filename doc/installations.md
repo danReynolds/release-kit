@@ -13,7 +13,8 @@ rk uninstall pub                # confirm removal of an inactive installation
 
 The matrix opens inline beneath your prompt and grows to fit its content, up to
 24 rows. Your terminal keeps its background; green marks the current choice and
-a blue fill marks mouse or keyboard focus. Checkmarks and reverse video preserve
+a blue fill marks mouse or keyboard focus. It opens without focus, so the saved
+selection stays green until you navigate. Checkmarks and reverse video preserve
 those distinctions with `NO_COLOR`. Use Tab or arrow keys to navigate and Enter
 to choose. Hover moves focus without changing your selection.
 

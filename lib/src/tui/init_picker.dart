@@ -154,7 +154,6 @@ class InitScreen extends StatelessWidget {
             text: model.showPrivate
                 ? 'Hide private packages'
                 : 'Show private packages',
-            autofocus: model.visible.isEmpty,
             onPressed: model.togglePrivate,
           ),
         MatrixButton(text: 'Esc Cancel', onPressed: () => model.finish(null)),
@@ -189,9 +188,6 @@ class InitScreen extends StatelessWidget {
                 '${package.name}, ${choice.selectorLabel}: ${package.selected.contains(choice) ? 'Added' : package.availability[choice]!.reason}',
             selected: package.selected.contains(choice),
             unavailable: !package.availability[choice]!.available,
-            autofocus:
-                index == model.visible.first &&
-                choice == ReleaseChoice.values.first,
             onPressed: () => model.toggle(index, choice),
           ),
       ],
@@ -229,6 +225,7 @@ class InitReviewScreen extends StatelessWidget {
   Widget build(BuildContext context) => MatrixShell(
     command: 'rk init',
     subtitle: 'Review release.toml',
+    focusBody: true,
     onEscape: () => finish(InitReviewDecision.back),
     child: Text(proposal),
     message: needsIgnore

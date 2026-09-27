@@ -27,10 +27,27 @@ class HomebrewInstallationProvider implements InstallationProvider {
         problem: 'Install Homebrew to use this source.',
       );
     }
+    // Read the small installed-name inventory before asking for one formula's
+    // metadata. `info --installed` evaluates every formula and cask on the host.
+    // The exact tap-qualified match also avoids querying an uninstalled tap.
+    final identity = project.formula;
+    final inventory = await checked(tools, brew!, [
+      'list',
+      '--formula',
+      '--full-name',
+      '-1',
+    ], environment: _environment);
+    if (!inventory.stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .contains(identity)) {
+      return const SourceInspection();
+    }
     final result = await checked(tools, brew!, [
       'info',
       '--json=v2',
-      '--installed',
+      '--formula',
+      identity,
     ], environment: _environment);
     final formulae = (jsonDecode(result.stdout) as Map)['formulae'] as List;
     final matches = formulae
@@ -57,14 +74,21 @@ class HomebrewInstallationProvider implements InstallationProvider {
         problem: 'Homebrew returned an unsupported version directory.',
       );
     }
+    // The JSON already resolved the formula's canonical rack name. Asking
+    // `--cellar <formula>` would boot Homebrew's resolver a second time.
+    final rack = formula['name'];
+    if (rack is! String || !safeCommandName(rack)) {
+      return const SourceInspection(
+        problem: 'Homebrew returned an unsupported formula directory.',
+      );
+    }
     final cellar = (await checked(tools, brew!, [
       '--cellar',
-      project.formula,
     ], environment: _environment)).stdout.trim();
     if (!cellar.startsWith('/')) {
       throw const InstallationFailure('Homebrew returned a relative cellar.');
     }
-    final prefix = '$cellar/$version';
+    final prefix = '$cellar/$rack/$version';
     final globalPrefix = (await checked(tools, brew!, [
       '--prefix',
     ], environment: _environment)).stdout.trim();

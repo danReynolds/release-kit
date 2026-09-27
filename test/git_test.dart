@@ -44,6 +44,33 @@ void main() {
     Process.runSync('git', ['commit', '-qm', 'x'], workingDirectory: root.path);
   }
 
+  test(
+    'origin lookup works without a commit and ignores a broken index',
+    () async {
+      expect(await GitState.readOrigin(root.path), isNull);
+      for (final url in [
+        'git@github.com:owner/repo.git',
+        'https://github.com/owner/repo.git',
+      ]) {
+        Process.runSync('git', [
+          'remote',
+          'remove',
+          'origin',
+        ], workingDirectory: root.path);
+        Process.runSync('git', [
+          'remote',
+          'add',
+          'origin',
+          url,
+        ], workingDirectory: root.path);
+        File('${root.path}/.git/index').writeAsBytesSync([0, 1, 2, 3]);
+        final nested = Directory('${root.path}/nested')..createSync();
+        expect(await GitState.readOrigin(nested.path), 'owner/repo');
+        nested.deleteSync();
+      }
+    },
+  );
+
   test('a committed tree is clean', () async {
     write('a.txt', 'one\n');
     commit();

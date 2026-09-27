@@ -7,24 +7,27 @@ Qualified on macOS arm64 with Dart 3.12.2. All four interactive commands use
 content after layout and adjusts the region between 8 and 24 rows, bounded by
 the terminal. Larger content scrolls; short terminals compact their footer.
 
-- The current pass has 67 passing installation/init/CLI regression tests,
-  including single-project completion, multi-project continuation, failed
-  operations, cancellation, and init's unavailable choices. An earlier broader
-  installation/init/CLI pass had 107 passing checks.
+- The current pass has 118 passing installation/init/CLI/Git regression tests.
+  Provider and UI tests were rerun after the final Homebrew path refinement
+  (20 passing). Coverage includes single-project completion, multi-project
+  continuation, failed operations, cancellation, and init's unavailable choices.
 - The compiled executable passed 16 native PTY sessions in
   `check_installation_tui.py`: install without routing, use Local and execute its
   command, uninstall confirmation/cancel/removal, init review/Back/Create, all
   four commands at 40×18 with resize, and use/init with Ctrl+C, SIGINT, SIGTERM,
   and SIGHUP.
-- `check_installation_ux.py` adds 15 native sessions: active/hover/keyboard states,
+- `check_installation_ux.py` adds 16 native sessions: active/hover/keyboard states,
   unavailable reasons, `NO_COLOR`, multiple projects and `-p`, install/uninstall
   including empty inventories and the first usable row, multi-package init, and
-  completing every command
-  at 40×12. Two further cases exit use/init while a resize query is pending.
+  completing every command at 40×12, and a provider-call spy proving idle
+  Ctrl+C does not reinspect installations. Two further cases exit use/init while a resize query is pending.
   Each session checks restoration and retained shell history.
 - Terminal-buffer frames were inspected on dark and light rendering backgrounds.
   The page keeps the terminal background; active choices use a green cell fill
-  and navigation uses blue. Hover moves focus without activation or underlines.
+  and navigation uses blue. Opening has no focused control; Enter cannot act
+  until navigation or a click establishes focus. Hover moves focus without
+  activation or underlines. Matrices skip the invisible scroll-viewport stop;
+  text-only configuration review retains keyboard scrolling.
   Reverse video and checkmarks preserve meaning without color. These renders
   are not screenshots of a physical terminal emulator.
 - Dogfooding found and fixed lost keyboard focus after multi-project operations,
@@ -56,10 +59,39 @@ budget bounds the fresh ownership check; an unresponsive terminal still gets
 mode restoration without a guessed clear.
 
 The same upstream PR fixes an explicit native driver's `EAGAIN` crash on a full
-output queue. RK pins both fixes at `c4d91f46`, ahead of upstream merge/hosted
-publication. Fleury passed 141 lifecycle/query regressions and its full
+output queue, and lets arrow navigation enter an unfocused group while respecting
+reading order, skipped controls and focus traps. RK pins these fixes at
+`12c60000`, ahead of upstream merge/hosted publication. The additional focus,
+modal, navigator and button regression pass has 164 passing tests. Fleury passed 141 lifecycle/query regressions and its full
 10-session native inline suite; both native before/after reproductions are
 recorded in the upstream PR.
+
+### Startup and dismissal measurements
+
+A native PTY timed the first usable matrix and process exit after an idle
+Ctrl+C. Three runs on this Mac, using the existing Homebrew cache and a
+disposable RK installation root, measured:
+
+| Launch | Open, median | Idle Ctrl+C, median |
+| --- | --- | --- |
+| Compiled RK | 0.92 s | 4 ms |
+| `dart run bin/rk.dart` | 3.17 s | 42 ms |
+
+Before this pass, idle Ctrl+C took 611 ms in the same native setup because the
+CLI rescanned providers after the picker returned. That redundant scan is gone;
+operations still refresh their results and wait for safe cancellation. A simple
+fixture without Homebrew opens in about 130 ms compiled. These are local
+measurements, not latency guarantees; fresh temporary Homebrew homes add cache
+initialization work.
+
+Startup reads just the Git origin instead of twelve release-preflight queries.
+Homebrew inspection now checks exact installed tap names, reads only the matching
+formula, and uses its canonical name with the cheap cellar-root query. The broad
+`info --installed` query omitted this host's unlinked RK keg in the isolated-home
+check; targeted inspection reports version 0.1.9 correctly. Opening time should
+not be presented as a before/after speedup across that change: the inventory now
+includes the installation it previously missed. Source execution adds roughly
+2.25 seconds here; changing Local to a cached native build is separate work.
 
 The commands above use disposable homes, installation roots, and fixture
 projects. No personal installations or shell configuration were switched.

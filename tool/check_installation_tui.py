@@ -186,18 +186,18 @@ def main():
         project = fixture(home, True)
         with Terminal(executable, 'install', project, home) as terminal:
             terminal.wait('Install a source.')
-            terminal.send(b'\r')
+            terminal.send(b'\t\r')
             terminal.wait('installed from Local', timeout=60)
             terminal.finish()
         assert not (home / 'data/rk/bin/orbit').exists(), 'install changed routing'
         print('install: prepared without switching; inline restored', flush=True)
         with Terminal(executable, 'uninstall', project, home) as terminal:
             terminal.wait('Remove a source')
-            terminal.send(b'\r')
+            terminal.send(b'\t\r')
             terminal.wait('Remove orbit from Local?')
             terminal.send(b'\x1b')
             terminal.wait('Remove a source')
-            terminal.send(b'\r')
+            terminal.send(b'\t\r')
             terminal.wait('Remove orbit from Local?')
             terminal.click('Remove installation')
             terminal.wait('removed from Local')

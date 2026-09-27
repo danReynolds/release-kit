@@ -290,6 +290,17 @@ class GitState {
     );
   }
 
+  /// Reads only the origin identity for commands that do not need release
+  /// preflight. This also works in an uncommitted repository or a subdirectory.
+  static Future<String?> readOrigin(String root) async {
+    final result = await Process.run('git', const [
+      'remote',
+      'get-url',
+      'origin',
+    ], workingDirectory: root);
+    return result.exitCode == 0 ? _originSlug(result.stdout as String) : null;
+  }
+
   /// Reads the repository's state.
   ///
   /// The eleven questions git is asked are independent — only "which remote
