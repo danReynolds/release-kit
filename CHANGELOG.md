@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.13
+
 - Homebrew installs keep macOS bundles intact. Homebrew rewrote the AOT
   module's install name and re-signed it ad hoc, so the installed command
   failed to start. The module now has an `@rpath/app.aot` install name and the
