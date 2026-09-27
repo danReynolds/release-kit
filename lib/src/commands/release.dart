@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import '../builds/capability.dart';
+import '../engine/assets.dart';
 import '../engine/changelog.dart';
 import '../engine/checklist.dart';
 import '../engine/diagnostic.dart';
@@ -619,6 +620,17 @@ class ReleaseCommand {
         show: false,
       );
       _sayStageClaims(prepared.claims, localOnly ? null : prepared.signing);
+      if (unit.binaryProject case final project? when localOnly) {
+        output.blank();
+        output.line(
+          'Archives',
+          note:
+              '${stage.directory.repositoryRelativePath}/'
+              '${ReleaseAssets.producerRoot(project)}/archives',
+          role: VisualRole.secondary,
+          noteRole: VisualRole.secondary,
+        );
+      }
       output.blank();
       output.line(
         '${unit.name} ${unit.version} '

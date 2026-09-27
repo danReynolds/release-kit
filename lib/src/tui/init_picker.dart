@@ -14,6 +14,8 @@ class InitPicker extends Notifier {
   String message = '';
   bool showPrivate = false;
   bool failed = false;
+  List<String> get notes => [...plan.notices, ...plan.binaryPlatformNotices];
+
   List<int> get visible => [
     for (var i = 0; i < plan.candidates.length; i++)
       if (showPrivate ||
@@ -89,7 +91,7 @@ class InitInteraction extends Notifier {
     _review = answer;
     page = InitReviewScreen(proposal, needsIgnore, (value) {
       if (!answer.isCompleted) answer.complete(value);
-    });
+    }, notes: _picker?.notes ?? const []);
     notify();
     return answer.future;
   }
@@ -129,12 +131,62 @@ class _InitInteractionScreen extends StatelessWidget {
   }
 }
 
-class InitScreen extends StatelessWidget {
+class InitScreen extends StatefulWidget {
   const InitScreen(this.model, {super.key});
   final InitPicker model;
+
+  @override
+  State<InitScreen> createState() => _InitScreenState();
+}
+
+class _InitScreenState extends State<InitScreen> {
+  final _scroll = ScrollController();
+  final _notesFocus = FocusNode();
+  final _cells = <(int, ReleaseChoice), FocusNode>{};
+  ({String title, String body, FocusNode origin})? _reason;
+  bool _showingNotes = false;
+  InitPicker get model => widget.model;
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    _notesFocus.dispose();
+    for (final node in _cells.values) {
+      node.dispose();
+    }
+    super.dispose();
+  }
+
+  void _backFromDetails(FocusNode origin) {
+    setState(() {
+      _showingNotes = false;
+      _reason = null;
+    });
+    TuiBinding.of(context).addPostFrameCallback((_) {
+      if (mounted) origin.requestFocus();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     context.listen(model);
+    final notes = model.notes;
+    if (_showingNotes) {
+      return MatrixDetails(
+        command: 'rk init',
+        title: 'Discovery notes',
+        body: notes.join('\n\n'),
+        onBack: () => _backFromDetails(_notesFocus),
+      );
+    }
+    if (_reason case final reason?) {
+      return MatrixDetails(
+        command: 'rk init',
+        title: reason.title,
+        body: reason.body,
+        onBack: () => _backFromDetails(reason.origin),
+      );
+    }
     return MatrixShell(
       command: 'rk init',
       count:
@@ -142,6 +194,7 @@ class InitScreen extends StatelessWidget {
       subtitle: 'Choose the outputs for each package.',
       message: model.message,
       failed: model.failed,
+      scrollController: _scroll,
       hint: '↑↓←→ move · Space toggle',
       onEscape: () => model.finish(null),
       child: ChoiceMatrix(
@@ -149,6 +202,12 @@ class InitScreen extends StatelessWidget {
         rows: [for (final i in model.visible) _row(i)],
       ),
       actions: [
+        if (notes.isNotEmpty)
+          MatrixButton(
+            text: 'Discovery notes (${notes.length})',
+            focusNode: _notesFocus,
+            onPressed: () => setState(() => _showingNotes = true),
+          ),
         if (model.plan.candidates.any((c) => c.vetoesRegistry))
           MatrixButton(
             text: model.showPrivate
@@ -176,6 +235,7 @@ class InitScreen extends StatelessWidget {
       [
         for (final choice in ReleaseChoice.values)
           MatrixCell(
+            focusNode: _cells.putIfAbsent((index, choice), FocusNode.new),
             title: package.availability[choice]!.available
                 ? package.selected.contains(choice)
                       ? '✓ Added'
@@ -188,7 +248,20 @@ class InitScreen extends StatelessWidget {
                 '${package.name}, ${choice.selectorLabel}: ${package.selected.contains(choice) ? 'Added' : package.availability[choice]!.reason}',
             selected: package.selected.contains(choice),
             unavailable: !package.availability[choice]!.available,
-            onPressed: () => model.toggle(index, choice),
+            onPressed: () {
+              final availability = package.availability[choice]!;
+              if (availability.available) {
+                model.toggle(index, choice);
+              } else {
+                setState(
+                  () => _reason = (
+                    title: '${package.name} · ${choice.selectorLabel}',
+                    body: availability.reason,
+                    origin: _cells[(index, choice)]!,
+                  ),
+                );
+              }
+            },
           ),
       ],
     );
@@ -210,42 +283,88 @@ class InitScreen extends StatelessWidget {
   }
 }
 
-class InitReviewScreen extends StatelessWidget {
+class InitReviewScreen extends StatefulWidget {
   const InitReviewScreen(
     this.proposal,
     this.needsIgnore,
     this.finish, {
+    this.notes = const [],
     super.key,
   });
   final String proposal;
   final bool needsIgnore;
   final void Function(InitReviewDecision) finish;
+  final List<String> notes;
 
   @override
-  Widget build(BuildContext context) => MatrixShell(
-    command: 'rk init',
-    subtitle: 'Review release.toml',
-    focusBody: true,
-    onEscape: () => finish(InitReviewDecision.back),
-    child: Text(proposal),
-    message: needsIgnore
-        ? 'Also adds .rk/ to .gitignore. Nothing is published.'
-        : 'Nothing is published.',
-    actions: [
-      MatrixButton(
-        text: '← Back',
-        autofocus: true,
-        onPressed: () => finish(InitReviewDecision.back),
-      ),
-      MatrixButton(
-        text: 'Create release.toml',
-        variant: ButtonVariant.success,
-        onPressed: () => finish(InitReviewDecision.write),
-      ),
-      MatrixButton(
-        text: 'Cancel',
-        onPressed: () => finish(InitReviewDecision.cancel),
-      ),
-    ],
-  );
+  State<InitReviewScreen> createState() => _InitReviewScreenState();
+}
+
+class _InitReviewScreenState extends State<InitReviewScreen> {
+  final _scroll = ScrollController();
+  final _notesFocus = FocusNode();
+  bool _showingNotes = false;
+  bool _visitedNotes = false;
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    _notesFocus.dispose();
+    super.dispose();
+  }
+
+  void _backFromNotes() {
+    setState(() => _showingNotes = false);
+    TuiBinding.of(context).addPostFrameCallback((_) {
+      if (mounted) _notesFocus.requestFocus();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_showingNotes) {
+      return MatrixDetails(
+        command: 'rk init',
+        title: 'Discovery notes',
+        body: widget.notes.join('\n\n'),
+        onBack: _backFromNotes,
+      );
+    }
+    return MatrixShell(
+      command: 'rk init',
+      subtitle: 'Review release.toml',
+      scrollFromActions: true,
+      scrollController: _scroll,
+      onEscape: () => widget.finish(InitReviewDecision.back),
+      child: Text(widget.proposal),
+      message: widget.needsIgnore
+          ? 'Also adds .rk/ to .gitignore. Nothing is published.'
+          : 'Nothing is published.',
+      actions: [
+        MatrixButton(
+          text: '← Back',
+          autofocus: !_visitedNotes,
+          onPressed: () => widget.finish(InitReviewDecision.back),
+        ),
+        MatrixButton(
+          text: 'Create release.toml',
+          variant: ButtonVariant.success,
+          onPressed: () => widget.finish(InitReviewDecision.write),
+        ),
+        MatrixButton(
+          text: 'Cancel',
+          onPressed: () => widget.finish(InitReviewDecision.cancel),
+        ),
+        if (widget.notes.isNotEmpty)
+          MatrixButton(
+            text: 'Discovery notes (${widget.notes.length})',
+            focusNode: _notesFocus,
+            onPressed: () => setState(() {
+              _visitedNotes = true;
+              _showingNotes = true;
+            }),
+          ),
+      ],
+    );
+  }
 }

@@ -1,5 +1,52 @@
 # Installation and TUI implementation receipt
 
+## Core command UX review — September 27, 2026
+
+Three separate reviews covered first-time setup, native keyboard/pointer
+interaction, and release operations. Findings were reproduced with disposable
+projects and terminal sessions before implementation.
+
+- **Navigation and recovery:** arrows reveal the next matrix control rather
+  than scrolling away from the old focus. This is an upstream Fleury fix.
+  Unavailable sources open a complete, scrollable explanation with a concrete
+  repair command; inspecting one does not make the command fail. Cancelling
+  removal restores the originating cell and scroll position.
+- **Long reviews:** overflow is visible, and PageUp/PageDown or Home/End work
+  from the safe Back action. Scrollbars disappear when content fits without
+  remounting controls. Init discovery notes remain available through selection
+  and review, including why an untracked package was omitted.
+- **Setup and CLI guidance:** cancelling a reviewed proposal suggests `rk init`,
+  not `--write` with potentially different defaults. Init, status, plan, and
+  release have focused help. Status shows one next command only when exactly
+  one unfinished unit is unblocked.
+- **Release reporting:** cancellation names the current unit instead of
+  claiming nothing was published across an entire workspace. Local-only builds
+  expose the archive directory before their final success line. Clean identifies
+  each stage using bounded, local receipt metadata before confirmation; it does
+  not treat that metadata as proof that the stage is safe to delete.
+- **Independent follow-up review:** successful installation followed by failed
+  refresh is reported as an inspection failure and retains the success result.
+  Framework review also exercises clipped and nested scroll panes so arrow
+  navigation cannot silently leave focus on an unreachable control.
+
+The retained UX script adds compact reason/paging/Back checks and ten-project
+confirmation/review flows. The native baseline expects cancellation to restore
+focus. Both scripts use isolated homes and fixture installations; publication
+and cleanup tests simulate effects. Terminal-buffer renders were inspected on
+dark and light backgrounds, including 40×12 details and long reviews.
+
+This pass updates the existing RK and Fleury review branches. Hosted Fleury,
+live Homebrew mutation, and real Linux package-manager qualification remain
+separate release work.
+
+The full RK suite passed 1,129 tests, with formatting and analysis clean.
+The exact development dependency is Fleury `45142d13`. Its full core suite
+passed 3,943 tests (two skipped), and the embedded browser-client freshness
+check passed. Five independently written public-widget probes also passed after
+hardening fixed clipping, scroll limits, nested reveal, hidden focus recovery,
+and containment. The final compiled RK binary passed all 35 retained native
+sessions on macOS; Linux validation for the updated PRs remains with CI.
+
 ## Inline integration — September 27, 2026
 
 Qualified on macOS arm64 with Dart 3.12.2. All four interactive commands use

@@ -66,13 +66,97 @@ Flags
   --json      the machine surface (doc/json.md)
   --stage     release: build, sign, and notarize exact artifacts; publish nothing
   -y, --yes   release or clean: answer yes without an interactive prompt
-  --write     init: accept the proposal without a prompt
+  --write     init: write the default configuration without a prompt
 
 Marks: ✓ done,  · already satisfied,  ✗ problem or conflict,  ! warning,
        → your next move,  unmarked pending
 Exit:  0 successful report or completed command, 1 refused or failed,
        2 usage, 3 rk itself crashed — --json mirrors it in "exit"
 ''';
+
+const _unitHelp = '''
+A unit is named by [release.<unit>] in release.toml and groups packages
+released together. Package names come from pubspec.yaml; rk use -p uses those.
+''';
+
+const _initUsage = '''
+rk init [--write] [--json]
+
+Discover Dart packages, choose release outputs, and review release.toml.
+Creates the file after confirmation; existing configurations are left alone.
+In a Git repository, also adds .rk/ to .gitignore. Nothing is published.
+
+--write   write the default configuration without opening the selector
+--json    show the default proposal as JSON; combine with --write to save it
+
+Without a terminal, rk init shows the default proposal and writes nothing.
+To choose different outputs, run rk init in a terminal.
+
+Example: rk init
+''';
+
+const _statusUsage =
+    '''
+rk status [unit] [--json]
+
+Check configured release destinations and local staged artifacts.
+Reports what is released, what remains, and any issues that prevent release.
+May read the network; does not build or publish. Bare rk also runs status.
+
+$_unitHelp
+Omit the unit to check every release unit.
+--json    emit one structured report
+
+Example: rk status tools
+See rk plan tools for the configured steps without destination checks.
+''';
+
+const _planUsage =
+    '''
+rk plan [unit] [--json]
+
+Show the configured release steps and their dependencies.
+Reads source configuration only: no destination checks, builds, or changes.
+Use rk status to check which steps are already complete.
+
+$_unitHelp
+Omit the unit to show every release unit.
+--json    emit the complete graph as one structured report
+
+Example: rk plan tools
+''';
+
+const _releaseUsage =
+    '''
+rk release [unit] [--yes] [--json]
+rk release [unit] --stage [--json]
+
+Prepare configured artifacts, then publish unfinished release targets.
+Existing releases are checked before work proceeds. Public changes require
+confirmation in a terminal, or --yes when that confirmation is intentional.
+
+$_unitHelp
+Omit the unit to release every unfinished unit in dependency order.
+With --stage, name a unit if the configuration contains more than one.
+
+--stage   build, sign, and prepare artifacts locally; publish nothing
+-y, --yes answer yes to the publication prompt; checks still run
+--json    emit one structured report; does not prompt
+
+Example: rk release tools --stage
+Then:    rk release tools
+Use rk plan tools to see the configured work before running it.
+''';
+
+String _usageFor(String? command) => switch (command) {
+  'init' => _initUsage,
+  'status' => _statusUsage,
+  'plan' => _planUsage,
+  'release' => _releaseUsage,
+  'target' => TargetCommand.usage,
+  'clean' => CleanCommand.usage,
+  _ => _usage,
+};
 
 Future<void> main(List<String> args) async {
   // This is deliberately self-contained: smoke tests, Homebrew, and a user
@@ -110,7 +194,7 @@ Future<void> main(List<String> args) async {
       Diagnostic(
         code: 'RK-CLI-008',
         message: 'rk has no command named "$command"',
-        remedy: _usage.trim(),
+        remedy: _usageFor(first).trim(),
       ),
     );
     exitCode = ExitCodes.usage;
@@ -140,7 +224,7 @@ Future<void> main(List<String> args) async {
       Diagnostic(
         code: 'RK-CLI-001',
         message: 'rk does not have ${unknown.join(', ')}',
-        remedy: _usage.trim(),
+        remedy: _usageFor(first).trim(),
       ),
     );
     exitCode = ExitCodes.usage;
@@ -155,7 +239,7 @@ Future<void> main(List<String> args) async {
       Diagnostic(
         code: 'RK-CLI-005',
         message: 'rk $command does not have ${inapplicable.join(', ')}',
-        remedy: _usage.trim(),
+        remedy: _usageFor(first).trim(),
       ),
     );
     exitCode = ExitCodes.usage;
@@ -201,7 +285,7 @@ Future<void> main(List<String> args) async {
                   'got "${positional.skip(1).join(' ')}"'
             : 'rk takes a verb and a unit, and got '
                   '"${positional.join(' ')}"',
-        remedy: _usage.trim(),
+        remedy: _usageFor(first).trim(),
       ),
     );
     exitCode = ExitCodes.usage;
@@ -210,11 +294,7 @@ Future<void> main(List<String> args) async {
   }
 
   if (flags.contains('-h') || flags.contains('--help')) {
-    final usage = switch (command) {
-      'target' => TargetCommand.usage,
-      'clean' => CleanCommand.usage,
-      _ => _usage,
-    };
+    final usage = _usageFor(first);
     // Under --json stdout carries the document and nothing else, so the usage
     // travels inside it rather than beside it.
     if (json) {
@@ -946,7 +1026,7 @@ void _showNoReleaseConfig(Output output, String root) {
   output.repository(name: root.split('/').last);
   output.blank();
   output.line('no release.toml', mark: Mark.none);
-  output.say('rk init writes one, and changes nothing else.');
+  output.next('rk init');
 }
 
 Diagnostic _wrongReleaseConfigProblem(String reason) => Diagnostic(

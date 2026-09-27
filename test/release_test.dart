@@ -232,6 +232,7 @@ Future<Ran> release({
   Map<String, String> Function()? refreshEnvironment,
   RegistryReader? registry,
   String? typed = 'yes',
+  String? Function(String prompt)? answerPrompt,
   bool dryRun = false,
   Map<String, ToolResult> results = const {},
   void Function(String key)? onRun,
@@ -430,11 +431,11 @@ Future<Ran> release({
     wait: (_) => Future<void>.delayed(Duration.zero),
     output: Output(sink: buffer.write, isTerminal: false, useColor: false),
     allowInteractiveTools: allowInteractiveTools,
-    confirm: typed == null
+    confirm: typed == null && answerPrompt == null
         ? null
-        : (_) async {
+        : (prompt) async {
             onConfirm?.call();
-            return typed;
+            return answerPrompt == null ? typed : answerPrompt(prompt);
           },
     stageOnly: dryRun,
     stageFor: stageFor,
@@ -660,16 +661,21 @@ dependencies:
     },
   );
 
-  test('a provider settles before its dependant stages, and a later refusal '
-      'is repository-partial', () async {
-    final registry = FakeRegistry({
-      'core': ['1.0.0'],
-      'cli': ['2.0.0'],
-    });
-    var providerPublished = false;
-    final ran = await release(
-      only: null,
-      config: '''
+  for (final decline in [false, true]) {
+    test(
+      'a provider settles before its dependant stages, and a later '
+      '${decline ? 'decline' : 'staging failure'} is repository-partial',
+      () async {
+        final registry = FakeRegistry({
+          'core': ['1.0.0'],
+          'cli': ['2.0.0'],
+        });
+        var providerPublished = false;
+        final ran = await release(
+          only: null,
+          answerPrompt: (prompt) =>
+              decline && prompt == 'Release cli 3.0.0? [y/N] ' ? 'no' : 'yes',
+          config: '''
 schema = 2
 
 [release.cli]
@@ -680,63 +686,90 @@ publish = ["pub.dev"]
 path = "packages/core"
 publish = ["pub.dev"]
 ''',
-      source: MemorySourceTree({
-        'packages/cli/pubspec.yaml': '''
+          source: MemorySourceTree({
+            'packages/cli/pubspec.yaml': '''
 name: cli
 version: 3.0.0
 dependencies:
   core: ^2.0.0
 ''',
-        'packages/cli/CHANGELOG.md': '## 3.0.0\n',
-        'packages/core/pubspec.yaml': 'name: core\nversion: 2.0.0\n',
-        'packages/core/CHANGELOG.md': '## 2.0.0\n',
-      }, description: '/repo/stack'),
-      registry: registry,
-      onRun: (key) {
-        if (key == 'dart pub publish --from-archive <archive> --force' &&
-            !providerPublished) {
-          providerPublished = true;
-          registry.published['core']!.add('2.0.0');
-          registry.archives['core@2.0.0'] = ArchiveBuilder.gzip(
-            ArchiveBuilder.tar([
-              ArchiveEntry(
-                name: 'pubspec.yaml',
-                bytes: 'name: core\nversion: 2.0.0\n'.codeUnits,
-              ),
-              ArchiveEntry(name: 'CHANGELOG.md', bytes: '## 2.0.0\n'.codeUnits),
-            ]),
-          );
-          registry.forget('core');
-        }
-      },
-      answers: (key) {
-        if (key == 'dart pub publish --to-archive <archive>' &&
-            providerPublished) {
-          return ToolResult(
-            exitCode: 1,
-            stdout: '',
-            stderr: 'dependent validation failed',
-          );
-        }
-        return null;
-      },
-    );
+            'packages/cli/CHANGELOG.md': '## 3.0.0\n',
+            'packages/core/pubspec.yaml': 'name: core\nversion: 2.0.0\n',
+            'packages/core/CHANGELOG.md': '## 2.0.0\n',
+          }, description: '/repo/stack'),
+          registry: registry,
+          onRun: (key) {
+            if (key == 'dart pub publish --from-archive <archive> --force' &&
+                !providerPublished) {
+              providerPublished = true;
+              registry.published['core']!.add('2.0.0');
+              registry.archives['core@2.0.0'] = ArchiveBuilder.gzip(
+                ArchiveBuilder.tar([
+                  ArchiveEntry(
+                    name: 'pubspec.yaml',
+                    bytes: 'name: core\nversion: 2.0.0\n'.codeUnits,
+                  ),
+                  ArchiveEntry(
+                    name: 'CHANGELOG.md',
+                    bytes: '## 2.0.0\n'.codeUnits,
+                  ),
+                ]),
+              );
+              registry.forget('core');
+            }
+          },
+          answers: (key) {
+            if (!decline &&
+                key == 'dart pub publish --to-archive <archive>' &&
+                providerPublished) {
+              return ToolResult(
+                exitCode: 1,
+                stdout: '',
+                stderr: 'dependent validation failed',
+              );
+            }
+            return null;
+          },
+        );
 
-    expect(ran.exitCode, ExitCodes.refused);
-    expect(providerPublished, isTrue);
-    final publish = ran.calls.indexOf(
-      'dart pub publish --from-archive <archive> --force',
+        expect(ran.exitCode, ExitCodes.refused);
+        expect(providerPublished, isTrue);
+        final publish = ran.calls.indexOf(
+          'dart pub publish --from-archive <archive> --force',
+        );
+        final dependantDryRun = ran.calls.lastIndexOf(
+          'dart pub publish --to-archive <archive>',
+        );
+        expect(dependantDryRun, greaterThan(publish));
+        expect((ran.report['halt'] as Map)['kind'], 'stoppedPartway');
+        expect(
+          ran.problems.map((problem) => problem['code']),
+          contains(decline ? 'RK-AUTH-002' : 'RK-PUB-001'),
+        );
+        if (decline) {
+          expect(ran.text, contains('Cancelled release of cli 3.0.0.'));
+          expect(
+            ran.text,
+            contains('Its remaining targets were not published.'),
+          );
+          expect(ran.text, isNot(contains('nothing was published')));
+          expect(ran.text, contains('rk stopped partway'));
+          expect(ran.text, contains('→ rk release cli'));
+          expect(ran.report['next'], ['rk release cli']);
+          expect(
+            ran.calls.where(
+              (call) =>
+                  call == 'dart pub publish --from-archive <archive> --force',
+            ),
+            hasLength(1),
+            reason: 'only the provider was authorized and published',
+          );
+          expect(registry.published['core'], contains('2.0.0'));
+          expect(registry.published['cli'], isNot(contains('3.0.0')));
+        }
+      },
     );
-    final dependantDryRun = ran.calls.lastIndexOf(
-      'dart pub publish --to-archive <archive>',
-    );
-    expect(dependantDryRun, greaterThan(publish));
-    expect((ran.report['halt'] as Map)['kind'], 'stoppedPartway');
-    expect(
-      ran.problems.map((problem) => problem['code']),
-      contains('RK-PUB-001'),
-    );
-  });
+  }
 
   test(
     'a later unit source refusal is found before the first unit acts',
@@ -1214,7 +1247,10 @@ void main() {
   test('a declined release publishes nothing, and says so as data', () async {
     final ran = await release(typed: 'no');
     expect(ran.exitCode, ExitCodes.refused);
-    expect(ran.text, contains('nothing was published'));
+    expect(ran.text, contains('Cancelled release of core 0.2.0.'));
+    expect(ran.text, contains('Its remaining targets were not published.'));
+    expect(ran.text, contains('→ rk release core'));
+    expect(ran.report['next'], ['rk release core']);
     expect(
       ran.problems.map((p) => p['code']),
       contains('RK-AUTH-002'),

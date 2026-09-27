@@ -125,12 +125,6 @@ class StatusCommand {
     }
     if (uniqueIssues.isNotEmpty) _renderIssues(uniqueIssues);
 
-    // Only a refusal concludes. rk does not congratulate itself: success is
-    // the absence of an issue, the rows already say what is published and
-    // what is staged, and exit 0 says it to anything parsing. The next
-    // command stays in the document (`next[]`), where an agent reads it,
-    // and off the report, where it was telling an operator what they had
-    // just decided to do.
     if (uniqueIssues.isNotEmpty) {
       final count = uniqueIssues.length;
       output.blank();
@@ -144,7 +138,8 @@ class StatusCommand {
     final unfinished = snapshots.where(_workRemains).toList();
     if (uniqueIssues.isEmpty && unfinished.length == 1) {
       final snapshot = unfinished.single;
-      output.report.next(
+      output.blank();
+      output.next(
         _isLocalOnlyOutput(snapshot)
             ? 'rk release ${snapshot.unit.name}'
             : !git.isBound

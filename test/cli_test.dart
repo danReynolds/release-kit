@@ -21,6 +21,65 @@ void main() {
   setUpAll(() => scratch = Directory.systemTemp.createTempSync('rk-cli-'));
   tearDownAll(() => scratch.deleteSync(recursive: true));
 
+  group('focused command help before repository discovery', () {
+    late Rk loose;
+    setUpAll(() {
+      final directory = Directory('${scratch.path}/help-only')..createSync();
+      loose = Rk(directory.path);
+    });
+
+    test('bare --help remains the command index', () {
+      final run = loose(['--help']);
+      expect(run.code, 0, reason: run.all);
+      expect(run.all, contains('rk use [source]'));
+      expect(run.all, contains('rk init'));
+      expect(run.all, contains('rk plan [unit]'));
+    });
+
+    for (final (command, explanation) in [
+      ('init', 'write the default configuration without opening the selector'),
+      (
+        'status',
+        'Check configured release destinations and local staged artifacts.',
+      ),
+      ('plan', 'no destination checks, builds, or changes.'),
+      ('release', 'Public changes require'),
+    ]) {
+      test('$command help explains its scope without the global index', () {
+        final run = loose([command, '--help']);
+        expect(run.code, 0, reason: run.all);
+        expect(run.all, contains('rk $command'));
+        expect(run.all, contains(explanation));
+        expect(run.all, contains('Example: rk $command'));
+        expect(run.all, isNot(contains('rk uninstall [source]')));
+        expect(run.all, isNot(contains('no release.toml')));
+        if (command != 'init') {
+          expect(run.all, contains('[release.<unit>]'));
+          expect(run.all, contains('pubspec.yaml'));
+        }
+        final machine = loose([command, '--help', '--json']);
+        expect(machine.code, 0, reason: machine.all);
+        expect((machine.json['next'] as List).single, run.stdout.trim());
+      });
+    }
+
+    test('usage errors explain only the command that was attempted', () {
+      for (final args in [
+        ['init', 'tool'],
+        ['init', '--yes'],
+        ['init', '--unknown'],
+      ]) {
+        final run = loose([...args, '--json']);
+        expect(run.code, 2, reason: run.all);
+        final remedy = run.problems.single['remedy'] as String;
+        expect(remedy, contains('rk init [--write] [--json]'));
+        expect(remedy, isNot(contains('rk release [unit]')));
+      }
+      expect(Directory('${loose.root}/.rk').existsSync(), isFalse);
+      expect(File('${loose.root}/release.toml').existsSync(), isFalse);
+    });
+  });
+
   group('a release the repository cannot build is refused at resolve', () {
     late Run run;
     setUpAll(() => run = Rk.example(scratch, 'escapes-repository')(['status']));

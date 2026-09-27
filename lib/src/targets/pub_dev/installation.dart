@@ -41,13 +41,13 @@ class PubInstallationProvider implements InstallationProvider {
       );
     }
     final root = '$cache/global_packages/${project.name}';
+    final repair =
+        'The Pub activation is incomplete.\n\nRepair it with:\n'
+        'dart pub global activate --no-executables ${project.name}';
     final lock = File('$root/pubspec.lock');
     if (!lock.existsSync()) {
       return Directory(root).existsSync()
-          ? const SourceInspection(
-              problem:
-                  'The pub activation is incomplete. Repair it with dart pub global activate.',
-            )
+          ? SourceInspection(problem: repair)
           : const SourceInspection();
     }
     final diagnostics = Diagnostics();
@@ -66,10 +66,7 @@ class PubInstallationProvider implements InstallationProvider {
     }
     final config = File('$root/.dart_tool/package_config.json');
     if (!config.existsSync()) {
-      return const SourceInspection(
-        problem:
-            'The pub activation is incomplete. Repair it with dart pub global activate.',
-      );
+      return SourceInspection(problem: repair);
     }
     final decoded = jsonDecode(config.readAsStringSync());
     if (decoded is! Map || decoded['packages'] is! List) {

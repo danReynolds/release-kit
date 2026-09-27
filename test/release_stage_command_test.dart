@@ -282,7 +282,18 @@ void main() {
         );
         expect(run.text, isNot(contains('Written to')));
         expect(run.text, isNot(contains('Ready to publish')));
-        expect(run.text, isNot(contains(local.stage.directory.identity.id)));
+        final archiveDirectory =
+            '${local.stage.directory.repositoryRelativePath}/'
+            'producers/tool/archives';
+        expect(run.text, contains('Archives'));
+        expect(run.text, contains(archiveDirectory));
+        expect(
+          File(
+            '${local.root.path}/$archiveDirectory/tool-1.2.3-linux-x64.tar.gz',
+          ).existsSync(),
+          isTrue,
+          reason: 'the displayed location leads to the completed archive',
+        );
         expect(run.text, isNot(contains(local.stage.directory.path)));
         final completed =
             ((run.report['units'] as List).single['steps'] as List).singleWhere(

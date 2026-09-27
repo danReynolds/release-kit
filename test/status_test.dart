@@ -698,6 +698,7 @@ publish = ["pub.dev"]
     expect(text, isNot(contains('prevent')));
     expect(text, contains('0.1.0 › 0.2.0'));
     expect(text, isNot(contains('ready')));
+    expect(text.trimRight(), endsWith('→ rk release core --stage'));
     expect(
       run.report['next'],
       ['rk release core --stage'],
@@ -1317,7 +1318,7 @@ publish = ["pub.dev"]
     expect(text, matches(RegExp(r'pub\.dev\s+keybay')));
     expect(text, contains('0.1.0 › 0.2.0'));
     expect(text, isNot(contains('prevent')));
-    expect(text, isNot(contains('→')));
+    expect(text, contains('→ rk release core --stage'));
     expect(
       _targetLine(text, 'pub.dev ').trimLeft(),
       startsWith('pub.dev'),
@@ -1808,7 +1809,12 @@ publish = ["pub.dev"]
       );
       final settledNotStaged = _afterLastTransientErase(notStaged.text);
       expect(settledNotStaged, isNot(contains('\x1b[34m')));
-      expect(settledNotStaged, isNot(contains('\x1b[36m')));
+      _expectStyledSubject(
+        notStaged.text,
+        'rk release cli --stage',
+        code: '36',
+        after: 'Not staged',
+      );
 
       final root = Directory.systemTemp.createTempSync(
         'rk-status-colour-stage-',
@@ -1957,10 +1963,8 @@ publish = ["pub.dev"]
       expect(run.report['next'], ['rk release cli']);
       expect(
         run.text,
-        isNot(contains('→')),
-        reason:
-            'the next command is data for an agent, not a prompt for the '
-            'operator who just chose it',
+        contains('→ rk release cli'),
+        reason: 'the same safe resume command is visible to the operator',
       );
       expect(run.text, isNot(contains('Issues')));
       expect(run.text, isNot(contains('issue prevents release')));
@@ -2582,6 +2586,37 @@ void statusReviewRegressions() {
     );
     expect(text, contains('uncommitted'));
   });
+
+  test(
+    'several unfinished units do not suggest one arbitrary next command',
+    () async {
+      final run = await statusRun(
+        withConfig: '''
+schema = 2
+
+[release.core]
+path = "packages/core"
+publish = ["pub.dev"]
+
+[release.cli]
+path = "packages/cli"
+publish = ["pub.dev"]
+''',
+        source: MemorySourceTree({
+          'packages/core/pubspec.yaml': 'name: core\nversion: 1.0.0\n',
+          'packages/core/CHANGELOG.md': '## 1.0.0\n',
+          'packages/cli/pubspec.yaml': 'name: cli\nversion: 1.0.0\n',
+          'packages/cli/CHANGELOG.md': '## 1.0.0\n',
+        }, description: '/repo/stack'),
+        state: git(),
+        registry: FakeRegistry({}),
+      );
+
+      expect(run.report['problems'], isEmpty);
+      expect(run.report['next'], isEmpty);
+      expect(run.text, isNot(contains('→ rk release')));
+    },
+  );
 
   test(
     'the summary never concludes "not published" from a failed read',

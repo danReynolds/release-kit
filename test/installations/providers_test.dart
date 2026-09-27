@@ -251,6 +251,10 @@ void main() {
       });
       expect((await provider.inspect(project)).installation, isNull);
       expect((await provider.inspect(project)).problem, contains('incomplete'));
+      expect(
+        (await provider.inspect(project)).problem,
+        contains('dart pub global activate --no-executables ${project.name}'),
+      );
       final installed = await provider.install(project, (_) {});
       expect(calls.single, contains('--no-executables'));
       expect(

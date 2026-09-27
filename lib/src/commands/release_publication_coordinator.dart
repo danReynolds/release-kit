@@ -1433,9 +1433,10 @@ final class ReleasePublicationCoordinator {
       output.blank();
       output.say(
         answer == null
-            ? 'no terminal to answer on — stopped; nothing was published.'
-            : 'stopped. nothing was published.',
+            ? 'No confirmation received for ${unit.name} ${unit.version}.'
+            : 'Cancelled release of ${unit.name} ${unit.version}.',
       );
+      output.say('Its remaining targets were not published.');
       output.problem(
         Diagnostic(
           code: 'RK-AUTH-002',
@@ -1447,6 +1448,7 @@ final class ReleasePublicationCoordinator {
         unit: unit.name,
       );
       output.halt(HaltKind.beforeActing);
+      output.next('rk release ${unit.name}');
       return false;
     }
     return true;

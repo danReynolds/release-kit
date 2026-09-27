@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:rk/src/commands/clean.dart';
+import 'package:rk/src/engine/stage.dart';
+import 'package:rk/src/engine/stage_receipt.dart';
 import 'package:rk/src/engine/stage_store.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/output/report.dart';
@@ -88,6 +90,85 @@ void main() {
     expect(text.toString(), contains('partially completed release'));
     expect(prompt, 'Remove staged release work? [y/N] ');
     expect(Directory('${store.path}/only').existsSync(), isFalse);
+  });
+
+  test(
+    'cleanup identifies recorded stages before asking and keeps a declined inventory',
+    () async {
+      final repository = Directory('${scratch.path}/clean-inventory')
+        ..createSync();
+      final store = StageStore(repository.path);
+      final completed = _writeReceipt(store, complete: true);
+      final incomplete = _writeReceipt(store, complete: false);
+      final orphan = Directory('${store.path}/orphan')..createSync();
+      final broken = Directory('${store.path}/broken')..createSync();
+      File('${broken.path}/stage.json').writeAsStringSync('not json');
+      final text = StringBuffer();
+      final output = Output(
+        sink: text.write,
+        isTerminal: false,
+        report: Report('clean'),
+      );
+
+      final code = await CleanCommand(
+        store: store,
+        output: output,
+        yes: false,
+        confirm: (_) async {
+          final preview = text.toString();
+          expect(preview, contains(completed.name.substring(0, 12)));
+          expect(
+            preview,
+            contains('tool 1.2.3 · commit 1111111 · completion recorded'),
+          );
+          expect(preview, contains(incomplete.name.substring(0, 12)));
+          expect(preview, contains('commit 2222222 · incomplete stage'));
+          expect(preview, contains('orphan'));
+          expect(preview, contains('no stage receipt'));
+          expect(preview, contains('broken'));
+          expect(preview, contains('unreadable stage receipt'));
+          expect(preview, contains('partially completed release'));
+          expect(preview, isNot(contains('safe to delete')));
+          return 'no';
+        },
+      ).run();
+
+      expect(code, ExitCodes.refused);
+      expect(store.inventory(), hasLength(4));
+      expect(orphan.existsSync(), isTrue);
+      expect(broken.existsSync(), isTrue);
+      expect(output.report.acted, isFalse);
+    },
+  );
+
+  test('inventory does not follow stage or receipt symlinks', () async {
+    final repository = Directory('${scratch.path}/clean-links')..createSync();
+    final store = StageStore(repository.path);
+    Directory(store.path).createSync(recursive: true);
+    final outside = Directory('${scratch.path}/outside')..createSync();
+    final outsideReceipt = File('${outside.path}/stage.json')
+      ..writeAsStringSync('do not read or remove');
+    Link('${store.path}/linked-stage').createSync(outside.path);
+    final regular = Directory('${store.path}/regular-stage')..createSync();
+    Link('${regular.path}/stage.json').createSync(outsideReceipt.path);
+    final text = StringBuffer();
+
+    final code = await CleanCommand(
+      store: store,
+      output: Output(sink: text.write, isTerminal: false),
+      yes: false,
+      confirm: (_) async => 'no',
+    ).run();
+
+    expect(code, ExitCodes.refused);
+    expect(text.toString(), contains('symbolic link · not followed'));
+    expect(
+      text.toString(),
+      contains('stage receipt is not a regular file · not read'),
+    );
+    expect(text.toString(), isNot(contains('do not read or remove')));
+    expect(outsideReceipt.readAsStringSync(), 'do not read or remove');
+    expect(store.inventory(), hasLength(2));
   });
 
   test(
@@ -180,4 +261,33 @@ void main() {
     expect(run.problems.map((problem) => problem['code']), ['RK-CLI-007']);
     expect(run.all, contains('rk clean takes no unit'));
   });
+}
+
+StageEntry _writeReceipt(StageStore store, {required bool complete}) {
+  final plan = <String, Object?>{
+    'unit': {'name': 'tool', 'version': '1.2.3'},
+  };
+  final identity = StageIdentity.forPlan(
+    headCommit: complete
+        ? '1111111111111111111111111111111111111111'
+        : '2222222222222222222222222222222222222222',
+    headTree: '3333333333333333333333333333333333333333',
+    resolvedPlan: plan,
+  );
+  final directory = Directory('${store.path}/${identity.id}')
+    ..createSync(recursive: true);
+  final receipt = StageReceipt(
+    identity: identity,
+    steps: [
+      if (complete)
+        StageStep(
+          name: 'complete-stage',
+          inputs: const [],
+          outputs: const [],
+          evidence: {'release_plan': plan},
+        ),
+    ],
+  );
+  File('${directory.path}/stage.json').writeAsStringSync(receipt.encode());
+  return StageEntry(name: identity.id, type: FileSystemEntityType.directory);
 }

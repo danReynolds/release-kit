@@ -248,7 +248,9 @@ class InitCommand {
       if (decision == InitReviewDecision.back && selector != null) continue;
       if (decision != InitReviewDecision.write) {
         output.say('nothing was written.');
-        output.next('rk init --write');
+        // Selections belong to this review. A fresh --write accepts the
+        // defaults, which may be different from the proposal just declined.
+        output.next('rk init');
         return ExitCodes.ok;
       }
 

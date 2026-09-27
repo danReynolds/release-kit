@@ -133,6 +133,19 @@ class Terminal:
 
     def click(self, text):
         self.wait(text)
+        # Inline content measurement can move the footer after its first frame.
+        # Click the settled target, not coordinates from a frame still resizing.
+        deadline = time.monotonic() + 2
+        stable_since = time.monotonic()
+        previous = self.text()
+        while time.monotonic() < deadline:
+            self.read()
+            current = self.text()
+            if current != previous:
+                stable_since = time.monotonic()
+                previous = current
+            elif time.monotonic() - stable_since >= .2:
+                break
         row, line = next((i, line) for i, line in enumerate(self.screen.display) if text in line)
         col = line.index(text)
         self.send(f'\x1b[<0;{col+1};{row+1}M\x1b[<0;{col+1};{row+1}m'.encode())
@@ -197,7 +210,7 @@ def main():
             terminal.wait('Remove orbit from Local?')
             terminal.send(b'\x1b')
             terminal.wait('Remove a source')
-            terminal.send(b'\t\r')
+            terminal.send(b'\r')  # Cancellation restores the originating cell.
             terminal.wait('Remove orbit from Local?')
             terminal.click('Remove installation')
             terminal.wait('removed from Local')

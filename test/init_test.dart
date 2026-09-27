@@ -144,6 +144,53 @@ executables:
     expect(buffer.toString(), contains('nothing was written'));
   });
 
+  test(
+    'cancelling a customized review retries selection, not defaults',
+    () async {
+      final buffer = StringBuffer();
+      final written = <String, String>{};
+      final output = Output(
+        sink: buffer.write,
+        isTerminal: true,
+        useColor: false,
+      );
+      String? reviewed;
+      final code = await InitCommand(
+        tree: MemorySourceTree({
+          'pubspec.yaml':
+              'name: tool\nversion: 1.0.0\nexecutables:\n  tool: tool\n',
+        }),
+        gitBound: false,
+        capabilities: HostCapabilities(
+          hostPlatform: 'linux-x64',
+          containerRuntime: null,
+          hasNativeAssets: false,
+        ),
+        output: output,
+        select: (plan) async => plan
+            .toggle(0, ReleaseChoice.pubDev)
+            .plan
+            .toggle(0, ReleaseChoice.binary)
+            .plan,
+        review: (proposal, _) async {
+          reviewed = proposal;
+          return InitReviewDecision.cancel;
+        },
+        write: (path, contents) => written[path] = contents,
+        confirm: null,
+      ).run();
+
+      expect(code, ExitCodes.ok);
+      expect(reviewed, contains('binary_platforms'));
+      expect(reviewed, isNot(contains('pub.dev')));
+      expect(written, isEmpty);
+      final document = jsonDecode(output.report.encode(exit: code)) as Map;
+      expect(document['next'], ['rk init']);
+      expect(buffer.toString(), contains('→ rk init'));
+      expect(buffer.toString(), isNot(contains('--write')));
+    },
+  );
+
   test('a concurrent .gitignore edit is never overwritten', () async {
     final files = <String, String>{
       'pubspec.yaml': 'name: a\nversion: 1.0.0\n',

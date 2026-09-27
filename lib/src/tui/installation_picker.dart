@@ -31,15 +31,22 @@ class InstallationPicker extends Notifier {
   String message = '';
   bool busy = false, failed = false, closing = false;
   (ExecutableProject, InstallationSource)? removal;
+  ({String title, String body, bool failed})? details;
   InstallationCancellation? _cancellation;
   (String, InstallationSource)? pending;
 
   void interrupt() {
     removal = null;
+    details = null;
     exit();
   }
 
   void exit() {
+    if (details != null) {
+      details = null;
+      notify();
+      return;
+    }
     if (removal != null) {
       removal = null;
       notify();
@@ -65,8 +72,11 @@ class InstallationPicker extends Notifier {
     final inspection = state.sources[source]!;
     if (inspection.problem != null &&
         !(isRemoval && inspection.installation != null)) {
-      message = inspection.problem!;
-      failed = true;
+      details = (
+        title: '${state.project.label} · ${source.label}',
+        body: inspection.problem!,
+        failed: false,
+      );
       notify();
       return;
     }
@@ -74,8 +84,12 @@ class InstallationPicker extends Notifier {
       if (inspection.installation == null) return;
       if (state.selected == source ||
           state.currentSources.values.contains(source)) {
-        message = 'Choose another source before removing ${source.label}.';
-        failed = true;
+        details = (
+          title: '${source.label} is currently selected',
+          body:
+              'Choose another source with rk use before removing ${source.label}.',
+          failed: false,
+        );
         notify();
         return;
       }
@@ -92,12 +106,14 @@ class InstallationPicker extends Notifier {
   ) async {
     if (busy) return;
     removal = null;
+    details = null;
     busy = true;
     pending = (project.name, source);
     failed = false;
     _cancellation = InstallationCancellation();
     message = 'Preparing ${project.name}…';
     notify();
+    var failureTitle = 'Could not complete ${action.name}';
     try {
       message = await operate(project, source, (value) {
         if (!closing) message = value;
@@ -114,14 +130,24 @@ class InstallationPicker extends Notifier {
       try {
         states = await refresh();
       } on InstallationFailure catch (error) {
+        failureTitle = 'Could not refresh installations';
+        message =
+            '$message\n\n'
+                    '${error.message} ${error.remedy}'
+                .trim();
         failed = true;
-        message = error.message;
       } on Object catch (error) {
+        failureTitle = 'Could not refresh installations';
+        message =
+            '$message\n\n'
+            'Could not refresh installations: $error';
         failed = true;
-        message = 'Could not refresh installations: $error';
       }
       busy = false;
       pending = null;
+      if (failed && !closing) {
+        details = (title: failureTitle, body: message, failed: true);
+      }
       notify();
       if (closing || (!failed && states.length == 1)) close();
     }
@@ -159,12 +185,54 @@ Future<InstallationPickerResult> runInstallationPicker({
   }
 }
 
-class InstallationScreen extends StatelessWidget {
+class InstallationScreen extends StatefulWidget {
   const InstallationScreen(this.model, {super.key});
   final InstallationPicker model;
   @override
+  State<InstallationScreen> createState() => _InstallationScreenState();
+}
+
+class _InstallationScreenState extends State<InstallationScreen> {
+  InstallationPicker get model => widget.model;
+  final _scroll = ScrollController();
+  final _cells = <(String, InstallationSource), FocusNode>{};
+  FocusNode? _origin;
+  bool _overlay = false;
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    for (final node in _cells.values) {
+      node.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     context.listen(model);
+    final overlay = model.removal != null || model.details != null;
+    if (_overlay && !overlay) {
+      TuiBinding.of(context).addPostFrameCallback((_) {
+        if (mounted &&
+            model.removal == null &&
+            model.details == null &&
+            !model.busy) {
+          _origin?.requestFocus();
+        }
+      });
+    }
+    _overlay = overlay;
+    if (model.details case final details?) {
+      return MatrixDetails(
+        key: const ValueKey('details'),
+        command: 'rk ${model.action.name}',
+        title: details.title,
+        body: details.body,
+        failed: details.failed,
+        onBack: model.exit,
+      );
+    }
     if (model.removal case final request?) {
       final (project, source) = request;
       final installed = model.states
@@ -175,6 +243,7 @@ class InstallationScreen extends StatelessWidget {
         key: const ValueKey('removal'),
         command: 'rk uninstall',
         subtitle: 'Remove ${project.label} from ${source.label}?',
+        scrollFromActions: true,
         onEscape: model.exit,
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -205,6 +274,7 @@ class InstallationScreen extends StatelessWidget {
         .toList();
     return MatrixShell(
       key: const ValueKey('sources'),
+      scrollController: _scroll,
       command: 'rk ${model.action.name}',
       count:
           '${model.states.length} ${model.states.length == 1 ? 'project' : 'projects'}',
@@ -293,8 +363,15 @@ class InstallationScreen extends StatelessWidget {
                   : 'Remove',
           };
     return MatrixCell(
+      focusNode: _cells.putIfAbsent((
+        state.project.name,
+        source,
+      ), FocusNode.new),
       title: title,
-      detail: source == InstallationSource.local
+      detail:
+          inspection.problem != null && !(model.isRemoval && installed != null)
+          ? 'View reason'
+          : source == InstallationSource.local
           ? installed != null && installed.location != state.project.directory
                 ? 'Other checkout'
                 : 'This checkout'
@@ -312,7 +389,10 @@ class InstallationScreen extends StatelessWidget {
                   installed == null &&
                   inspection.problem == null)
           ? null
-          : () => unawaited(model.choose(state, source)),
+          : () {
+              _origin = _cells[(state.project.name, source)];
+              unawaited(model.choose(state, source));
+            },
     );
   }
 }

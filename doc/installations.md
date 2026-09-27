@@ -22,7 +22,15 @@ A successful action for one project closes the matrix and leaves its result in
 shell history. With several projects, the matrix stays open so you can change
 another row; choose Done or press Escape when finished. `-p` limits it to one
 project and restores single-action completion. Errors stay open for inspection
-and retry. Uninstall asks for confirmation before removing an installation.
+and retry. Unavailable choices open their full reason and repair command;
+reading one does not fail the command. Back restores the originating choice
+and scroll position. Uninstall asks for confirmation before removing an
+installation and restores your place when cancelled.
+
+Long configuration reviews and explanations show a scrollbar and accept
+PageUp/PageDown or Home/End from their footer actions. Discovery notes in
+`rk init` explain omitted packages and build-platform choices before you write
+the configuration.
 
 The matrix shows each executable package and its configured sources. Click a
 cell or use the arrow keys and Enter. **Using** means the commands resolve to

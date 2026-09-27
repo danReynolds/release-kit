@@ -58,11 +58,11 @@ def run(executable, project, home, *args):
     return result.stdout
 
 
-def workspace(home, configured=True):
+def workspace(home, configured=True, names=('orbit', 'orbit_admin')):
     project = home / 'project'
-    for name in ['orbit', 'orbit_admin']:
+    for name in names:
         package = project / name
-        (package / 'bin').mkdir(parents=True)
+        (package / 'bin').mkdir(parents=True, exist_ok=True)
         (package / 'pubspec.yaml').write_text(
             f'name: {name}\nversion: 1.0.0\nenvironment:\n  sdk: ^3.10.4\n'
             f'executables:\n  {name}: main\n')
@@ -70,12 +70,11 @@ def workspace(home, configured=True):
     if not configured:
         (project / 'pubspec.yaml').write_text(
             'name: orbit_workspace\npublish_to: none\nenvironment:\n  sdk: ^3.10.4\n'
-            'workspace:\n  - orbit\n  - orbit_admin\n')
+            'workspace:\n' + ''.join(f'  - {name}\n' for name in names))
     if configured:
         (project / 'release.toml').write_text(
             'schema = 2\n[release.apps]\npublish = []\n'
-            '[[release.apps.project]]\npath = "orbit"\npublish = ["pub.dev"]\n'
-            '[[release.apps.project]]\npath = "orbit_admin"\npublish = ["pub.dev"]\n')
+            + ''.join(f'[[release.apps.project]]\npath = "{name}"\npublish = ["pub.dev"]\n' for name in names))
     return project
 
 
@@ -129,12 +128,14 @@ def main():
             assert terminal.screen.buffer[row][col].bg == '2a4c6c'
             assert terminal.screen.buffer[hover_row][hover_col].bg == 'default', 'stale hover retained a second highlight'
             terminal.click('Unavailable')
-            terminal.wait('Repair it with dart pub global activate')
+            terminal.wait('dart pub global activate --no-executables orbit')
             settle(terminal)
             assert terminal.process.poll() is None, 'an unavailable option closed the picker'
             shot(terminal, 'use-unavailable')
             terminal.send(b'\x1b')
-            terminal.finish(1)  # a refused operation remains nonzero when dismissed
+            terminal.wait('Choose where your commands come from.')
+            terminal.send(b'\x1b')
+            terminal.finish()  # inspecting a reason is not a failed operation
         print('PASS active/hover/keyboard states, compact height, no duplicate command, unavailable reason', flush=True)
 
         with Terminal(executable, 'use', project, home, environment={'NO_COLOR': '1'}) as terminal:
@@ -151,6 +152,25 @@ def main():
             terminal.send(b'\x1b')
             terminal.finish()
         print('PASS NO_COLOR preserves navigation and selected checkmarks', flush=True)
+
+        with Terminal(executable, 'use', project, home, cols=40, rows=12) as terminal:
+            terminal.wait('Esc Cancel')
+            terminal.send(b'\t\x1b[B')
+            settle(terminal)
+            row, col = locate(terminal, 'Unavailable')
+            assert terminal.screen.buffer[row][col].bg == '2a4c6c', 'Down failed to move focus to Pub'
+            terminal.send(b'\r')
+            terminal.wait('Pub')
+            terminal.send(b'\x1b[F')  # End works from the safe Back action.
+            terminal.wait('global activate')
+            shot(terminal, 'use-compact-reason')
+            terminal.send(b'\r')
+            terminal.wait('Choose where')
+            terminal.send(b'\r')  # Back restores the originating cell.
+            terminal.wait('Pub')
+            terminal.send(b'\x03')
+            terminal.finish(130)
+        print('PASS compact arrow navigation, complete remedy, Back focus and Ctrl+C from details', flush=True)
 
         home = root / 'many'
         project = workspace(home)
@@ -226,6 +246,39 @@ def main():
             terminal.click('Esc Done')
             terminal.finish()
         print('PASS uninstall navigation starts on a usable row when the first project has no installations', flush=True)
+
+        names = [f'app_{i}' for i in range(10)]
+        home = root / 'long-workspace'
+        project = workspace(home, names=names)
+        for name in (names[0], names[-1]):
+            run(executable, project, home, 'install', 'local', '-p', name, '--json')
+        with Terminal(executable, 'uninstall', project, home, cols=90, rows=18) as terminal:
+            terminal.wait('Esc Done')
+            terminal.send(b'\t\t\r')
+            terminal.wait('Remove app_9')
+            terminal.send(b'\x1b')
+            terminal.wait('Remove a source')
+            terminal.wait('app_9')
+            shot(terminal, 'uninstall-return')
+            terminal.send(b'\r')
+            terminal.wait('Remove app_9')
+            terminal.send(b'\x03')
+            terminal.finish(130)
+        (project / 'release.toml').unlink()
+        project = workspace(home, configured=False, names=names)
+        with Terminal(executable, 'init', project, home) as terminal:
+            terminal.wait('Review configuration')
+            terminal.click('Review configuration')
+            terminal.wait('More below')
+            terminal.send(b'\x1b[F')
+            terminal.wait('app_9')
+            terminal.wait('End · PgUp/PgDn')
+            shot(terminal, 'init-long-review')
+            terminal.send(b'\r')  # Back stays focused while paging.
+            terminal.wait('Choose the outputs')
+            terminal.send(b'\x1b')
+            terminal.finish()
+        print('PASS long-workspace confirmation return and pageable configuration review', flush=True)
 
         # Spy on a provider at the CLI boundary. Closing an idle picker must
         # not start a second inspection, irrespective of subprocess speed.

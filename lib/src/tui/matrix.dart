@@ -36,6 +36,7 @@ class MatrixButton extends StatefulWidget {
     this.child,
     this.semanticLabel,
     this.autofocus = false,
+    this.focusNode,
     this.selected = false,
     this.unavailable = false,
     this.variant = ButtonVariant.normal,
@@ -45,6 +46,7 @@ class MatrixButton extends StatefulWidget {
   final String? text, semanticLabel;
   final Widget? child;
   final bool autofocus, selected, unavailable;
+  final FocusNode? focusNode;
   final ButtonVariant variant;
   final ButtonAppearance appearance;
   final void Function()? onPressed;
@@ -54,7 +56,8 @@ class MatrixButton extends StatefulWidget {
 }
 
 class _MatrixButtonState extends State<MatrixButton> {
-  final _focus = FocusNode();
+  final _ownedFocus = FocusNode();
+  FocusNode get _focus => widget.focusNode ?? _ownedFocus;
   bool _restoreFocus = false;
 
   @override
@@ -74,7 +77,7 @@ class _MatrixButtonState extends State<MatrixButton> {
 
   @override
   void dispose() {
-    _focus.dispose();
+    _ownedFocus.dispose();
     super.dispose();
   }
 
@@ -112,15 +115,18 @@ class MatrixCell extends StatelessWidget {
     this.selected = false,
     this.unavailable = false,
     this.autofocus = false,
+    this.focusNode,
     this.onPressed,
   });
   final String title, detail, semanticLabel;
   final bool selected, unavailable, autofocus;
+  final FocusNode? focusNode;
   final void Function()? onPressed;
   @override
   Widget build(BuildContext context) => MatrixButton(
     semanticLabel: terminalSafeText(semanticLabel),
     autofocus: autofocus,
+    focusNode: focusNode,
     selected: selected,
     unavailable: unavailable,
     appearance: ButtonAppearance.plain,
@@ -245,18 +251,20 @@ class MatrixShell extends StatefulWidget {
     this.count = '',
     this.failed = false,
     this.positive = false,
-    this.focusBody = false,
+    this.scrollFromActions = false,
     this.hint = '',
+    this.scrollController,
   });
   final String command, subtitle, message, count, hint;
   final Widget child;
   final bool failed, positive;
 
-  /// A text-only review needs a keyboard stop for scrolling. Matrices navigate
-  /// their controls directly, without an invisible stop on the viewport.
-  final bool focusBody;
+  /// Text reviews allow paging from their actions and show overflow guidance.
+  /// The viewport itself is not an invisible keyboard stop.
+  final bool scrollFromActions;
   final void Function() onEscape;
   final List<Widget> actions;
+  final ScrollController? scrollController;
   @override
   State<MatrixShell> createState() => _MatrixShellState();
 }
@@ -267,10 +275,13 @@ class _MatrixShellState extends State<MatrixShell> {
   final _footer = GlobalKey();
   bool _measuring = false;
   final _scrollFocus = FocusNode(skipTraversal: true);
+  final _ownedScroll = ScrollController();
+  ScrollController get _scroll => widget.scrollController ?? _ownedScroll;
 
   @override
   void dispose() {
     _scrollFocus.dispose();
+    _ownedScroll.dispose();
     super.dispose();
   }
 
@@ -292,12 +303,28 @@ class _MatrixShellState extends State<MatrixShell> {
 
   @override
   Widget build(BuildContext context) {
-    _scrollFocus.skipTraversal = !widget.focusBody;
     final region = context.scope<MatrixRegion?>();
     final binding = TuiBinding.of(context);
+    context.listen(_scroll);
     return KeyBindings(
       bindings: [
         KeyBinding(KeySequence.escape, onTrigger: (_) => widget.onEscape()),
+        // Reviews keep their safe Back action focused while paging the text.
+        if (widget.scrollFromActions) ...[
+          KeyBinding(
+            KeySequence.pageDown,
+            onTrigger: (_) => _scroll.scrollBy(_scroll.viewportExtent),
+          ),
+          KeyBinding(
+            KeySequence.pageUp,
+            onTrigger: (_) => _scroll.scrollBy(-_scroll.viewportExtent),
+          ),
+          KeyBinding(
+            KeySequence.home,
+            onTrigger: (_) => _scroll.scrollToStart(),
+          ),
+          KeyBinding(KeySequence.end, onTrigger: (_) => _scroll.scrollToEnd()),
+        ],
       ],
       child: LayoutBuilder(
         builder: (_, constraints) {
@@ -342,6 +369,9 @@ class _MatrixShellState extends State<MatrixShell> {
                 Expanded(
                   child: ScrollView(
                     focusNode: _scrollFocus,
+                    controller: _scroll,
+                    scrollbar: true,
+                    showScrollbarWhenFits: false,
                     child: Column(
                       key: _body,
                       mainAxisSize: MainAxisSize.min,
@@ -355,6 +385,11 @@ class _MatrixShellState extends State<MatrixShell> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    if (widget.scrollFromActions && _scroll.maxOffset > 0)
+                      Text(
+                        '${_scroll.atEnd ? "End" : "More below"} · PgUp/PgDn scroll',
+                        style: mutedText,
+                      ),
                     if (widget.message.isNotEmpty) ...[
                       if (!compact) const SizedBox(height: 1),
                       Text(
@@ -391,4 +426,33 @@ class _MatrixShellState extends State<MatrixShell> {
       ),
     );
   }
+}
+
+/// Full, scrollable explanations share the same safe return and paging controls
+/// as configuration reviews. Reading a reason is not a failed operation.
+class MatrixDetails extends StatelessWidget {
+  const MatrixDetails({
+    super.key,
+    required this.command,
+    required this.title,
+    required this.body,
+    required this.onBack,
+    this.failed = false,
+  });
+  final String command, title, body;
+  final void Function() onBack;
+  final bool failed;
+
+  @override
+  Widget build(BuildContext context) => MatrixShell(
+    command: command,
+    subtitle: title,
+    onEscape: onBack,
+    scrollFromActions: true,
+    child: Text(
+      body.split('\n').map(terminalSafeText).join('\n'),
+      style: failed ? const CellStyle(foreground: warning) : const CellStyle(),
+    ),
+    actions: [MatrixButton(text: 'Back', autofocus: true, onPressed: onBack)],
+  );
 }

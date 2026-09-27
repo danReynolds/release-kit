@@ -17,13 +17,20 @@
 - Inline commands leave shell history intact and restore the prompt before
   reporting results. Ctrl+C and termination signals
   preserve their exit status while cancellation waits for in-progress work.
+- Preserve the originating choice when returning from confirmation or details.
+  Long reviews and errors support paging from their actions; init exposes
+  discovery notes. Inspecting an unavailable source does not fail the command.
+- Add focused command help and one actionable next command for an unblocked
+  unfinished release. Cancelling a release describes the current unit accurately,
+  and cleanup lists recorded stage identities before confirmation.
 - Release commands identify the project version and source checkout before work
   begins. Staging explains source, tooling, and configuration changes when a
   recent receipt can account for a rebuild, and names interrupted work it resumes.
 - Release conflicts explain how to recover, with source and artifact evidence
   retained in JSON. Released-version conflicts point to the version and changelog.
 - Staging ends with a success summary and the publish command. Verified reruns
-  say the release is already staged; storage paths remain in JSON evidence.
+  say the release is already staged; receipt paths remain in JSON evidence.
+  Local-only builds show where their archives can be found.
 
 ## 0.1.12
 

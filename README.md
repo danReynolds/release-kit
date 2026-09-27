@@ -54,6 +54,8 @@ such as GitHub's Git tag are added together.
 Arrow keys move; Space or Enter selects. **Show private packages** reveals
 `publish_to: none` packages that can still ship through other outputs. Without
 a terminal, RK prints its proposal; `rk init --write` explicitly accepts it.
+**Discovery notes** explains omitted packages and available build platforms.
+Long reviews support PageUp/PageDown and Home/End from the footer actions.
 
 That proposal is the whole configuration. Targets are opt-in —
 release-kit's own file says yes to all of them. `rk plan` draws the configured
@@ -287,8 +289,8 @@ $ rk status --json | jq .problems
 ]
 ```
 
-Without a terminal, a needed answer stops the release — "no terminal
-to answer on — stopped; nothing was published." `--yes` is the
+Without a terminal, a needed answer stops the current unit before its remaining
+targets are published. Earlier completed units stay published. `--yes` is the
 unattended yes, and it skips no inspection. Exit codes: 0 report or
 completed command, 1 refused or failed, 2 usage, 3 rk itself crashed —
 `--json` mirrors it in `exit`.
@@ -298,7 +300,8 @@ completed command, 1 refused or failed, 2 usage, 3 rk itself crashed —
 Stages live under `.rk/work/stages`. Keep them while a binary release is
 partly public so the remaining targets receive the exact staged bytes
 the public ones already pinned; `rk clean` removes this repository's
-stages, and asks first.
+stages, lists their recorded identities, and asks first. Receipt metadata helps
+identify a stage; it does not prove that its bytes are no longer needed.
 
 Git-identified targets (`git-tag`, `github-release`, `homebrew`) need a
 clean working tree. A registry-only or local release may include
