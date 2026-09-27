@@ -4,6 +4,8 @@ import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/transforms/macos.dart';
 import 'package:test/test.dart';
 
+import 'bundle_tools.dart';
+
 const _name = 'Developer ID Application: Dan (TEAM123456)';
 final _sha1 = 'a' * 40;
 final _otherSha1 = 'b' * 40;
@@ -195,29 +197,37 @@ SHA-1 hash: $_sha1
       });
 
       expect(
-          await MacOsSigner(tools: tools).codeDirectoryHashes('/tmp/app.aot'),
+          (await MacOsSigner(tools: tools).codeDirectoryHashes('/tmp/app.aot'))
+              .hashes,
           [other, module]);
     });
 
-    test('a module whose code hash cannot be read answers null', () async {
+    test('a module whose code hash cannot be read answers null with codesign',
+        () async {
       final tools = _tools(certificateOutput: '', displays: {
         'codesign -dvvv /tmp/app.aot':
             ToolResult(exitCode: 1, stdout: '', stderr: 'not signed at all'),
       });
 
-      expect(
-          await MacOsSigner(tools: tools).codeDirectoryHashes('/tmp/app.aot'),
-          isNull);
+      final reading =
+          await MacOsSigner(tools: tools).codeDirectoryHashes('/tmp/app.aot');
+      expect(reading.hashes, isNull);
+      expect(reading.display.stderr, contains('not signed at all'),
+          reason: 'the failure must be able to show what codesign said');
     });
 
     test('the embedded constraint reads back as exactly its code hashes',
         () async {
       final tools = _tools(certificateOutput: '', displays: {
-        'codesign -dvvvvvv /tmp/runtime':
-            ToolResult(exitCode: 0, stdout: '', stderr: _constraint([module])),
+        'codesign -dvvvvvv /tmp/runtime': ToolResult(
+            exitCode: 0,
+            stdout: '',
+            stderr: constraintDisplay(pinConstraint([module]))),
       });
 
-      expect(await MacOsSigner(tools: tools).admittedLibraries('/tmp/runtime'),
+      expect(
+          (await MacOsSigner(tools: tools).admittedLibraries('/tmp/runtime'))
+              .admitted,
           {module});
     });
 
@@ -227,10 +237,15 @@ SHA-1 hash: $_sha1
         'codesign -dvvvvvv /tmp/runtime': ToolResult(
             exitCode: 0,
             stdout: '',
-            stderr: _constraint([module], extra: 'team-identifier')),
+            stderr: constraintDisplay({
+              'team-identifier': 'TEAM123456',
+              ...pinConstraint([module]),
+            })),
       });
 
-      expect(await MacOsSigner(tools: tools).admittedLibraries('/tmp/runtime'),
+      expect(
+          (await MacOsSigner(tools: tools).admittedLibraries('/tmp/runtime'))
+              .admitted,
           isNull);
     });
 
@@ -242,15 +257,22 @@ SHA-1 hash: $_sha1
             stderr: 'CDHash=$module\nSignature=adhoc\n'),
       });
 
-      expect(await MacOsSigner(tools: tools).admittedLibraries('/tmp/runtime'),
+      expect(
+          (await MacOsSigner(tools: tools).admittedLibraries('/tmp/runtime'))
+              .admitted,
           isEmpty);
+    });
+
+    test('the shared display fixture prints a pin as macOS 26 does', () {
+      expect(constraintDisplay(pinConstraint([module, other])),
+          _macos26Display([module, other]));
     });
   });
 }
 
-/// codesign's highest-verbosity display of a library load constraint, as
-/// macOS 26 prints it.
-String _constraint(List<String> hashes, {String? extra}) => [
+/// codesign's highest-verbosity display of rk's pin, copied from macOS 26
+/// (25C56) output. The shared fixture in bundle_tools.dart must match it.
+String _macos26Display(List<String> hashes) => [
       'Library Load Constraints:',
       '\tHas Library Load Constraints',
       'CDHash=${'1' * 40}',
@@ -266,11 +288,6 @@ String _constraint(List<String> hashes, {String? extra}) => [
       '\t\t[Key] reqs',
       '\t\t[Value]',
       '\t\t\t[Dict]',
-      if (extra != null) ...[
-        '\t\t\t\t[Key] $extra',
-        '\t\t\t\t[Value]',
-        '\t\t\t\t\t[String] TEAM123456',
-      ],
       '\t\t\t\t[Key] cdhash',
       '\t\t\t\t[Value]',
       '\t\t\t\t\t[Dict]',

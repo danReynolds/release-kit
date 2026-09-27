@@ -211,18 +211,17 @@ class MacOsSigner {
     // on the SDK runtime; no executable-memory or library-validation exception
     // is needed or inherited from the upstream Dart binary.
     final entitlements = File('$binary.entitlements.plist');
-    try {
-      entitlements.writeAsStringSync(_emptyEntitlements);
-    } on FileSystemException catch (error) {
-      return SignOutcome.failed(
-          'the entitlements could not be written: $error');
-    }
-
     final constraint = File('$binary.library-constraint.plist');
     final ToolResult signed;
     try {
-      if (pinnedLibraries.isNotEmpty) {
-        constraint.writeAsStringSync(libraryConstraintPlist(pinnedLibraries));
+      try {
+        entitlements.writeAsStringSync(_emptyEntitlements);
+        if (pinnedLibraries.isNotEmpty) {
+          constraint.writeAsStringSync(libraryConstraintPlist(pinnedLibraries));
+        }
+      } on FileSystemException catch (error) {
+        return SignOutcome.failed(
+            'the codesign inputs could not be written: $error');
       }
       signed = await tools.run('codesign', [
         '--force',
@@ -246,12 +245,9 @@ class MacOsSigner {
         selected.sha1,
         binary,
       ]);
-    } on FileSystemException catch (error) {
-      return SignOutcome.failed(
-          'the library constraint could not be written: $error');
     } finally {
       // Inputs to codesign, never artifacts: they must not survive into the
-      // staged workspace even when signing throws.
+      // staged workspace, even when writing them or signing fails.
       if (entitlements.existsSync()) entitlements.deleteSync();
       if (constraint.existsSync()) constraint.deleteSync();
     }
@@ -308,34 +304,40 @@ class MacOsSigner {
 
   /// The code directory hashes of a signed binary, one per hash algorithm its
   /// signature carries, each truncated to the 20 bytes the kernel compares.
-  /// Null when codesign cannot say.
-  Future<List<String>?> codeDirectoryHashes(String binary) async {
-    final result = await tools.run('codesign', ['-dvvv', binary]);
-    if (!result.ok) return null;
+  /// [hashes] is null when codesign cannot say; [display] is codesign's run
+  /// either way, so a failure can show what it said.
+  Future<({List<String>? hashes, ToolResult display})> codeDirectoryHashes(
+      String binary) async {
+    final display = await tools.run('codesign', ['-dvvv', binary]);
+    if (!display.ok) return (hashes: null, display: display);
     final hashes = {
       for (final match
           in RegExp(r'^CandidateCDHash \w+=(\S+)$', multiLine: true)
-              .allMatches('${result.stdout}\n${result.stderr}'))
+              .allMatches('${display.stdout}\n${display.stderr}'))
         match.group(1)!.toLowerCase(),
     };
     if (hashes.isEmpty || hashes.any((hash) => !_cdhash.hasMatch(hash))) {
-      return null;
+      return (hashes: null, display: display);
     }
-    return hashes.toList()..sort();
+    return (hashes: hashes.toList()..sort(), display: display);
   }
 
   /// The code hashes the library load constraint in [binary]'s signature
   /// admits: empty without a constraint, and null when codesign cannot be
   /// read or the constraint states anything beyond a list of code hashes.
+  /// [display] is codesign's run either way.
   ///
   /// codesign displays a constraint only as a nested dump at its highest
   /// verbosity. A constraint rk did not write — another fact, another
   /// operator — answers null rather than a subset that looks like a pin.
-  Future<Set<String>?> admittedLibraries(String binary) async {
-    final result = await tools.run('codesign', ['-dvvvvvv', binary]);
-    if (!result.ok) return null;
-    final text = '${result.stdout}\n${result.stderr}';
-    if (!text.contains('Has Library Load Constraints')) return {};
+  Future<({Set<String>? admitted, ToolResult display})> admittedLibraries(
+      String binary) async {
+    final display = await tools.run('codesign', ['-dvvvvvv', binary]);
+    if (!display.ok) return (admitted: null, display: display);
+    final text = '${display.stdout}\n${display.stderr}';
+    if (!text.contains('Has Library Load Constraints')) {
+      return (admitted: <String>{}, display: display);
+    }
     const structure = {'ccat', 'comp', 'reqs', 'vers', 'cdhash', r'$in'};
     final keys = RegExp(r'^\s*\[Key\] (.*?)\s*$', multiLine: true)
         .allMatches(text)
@@ -348,9 +350,9 @@ class MacOsSigner {
     if (keys.any((key) => !structure.contains(key)) ||
         data.isEmpty ||
         data.any((hash) => !_cdhash.hasMatch(hash))) {
-      return null;
+      return (admitted: null, display: display);
     }
-    return data.toSet();
+    return (admitted: data.toSet(), display: display);
   }
 }
 

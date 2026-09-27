@@ -76,7 +76,7 @@ void main() {
               .singleWhere((output) => output.path == '$prefix/${file.path}')
               .sha256,
           'verified_after_smoke': true,
-          if (!file.executable) 'cdhashes': [moduleHash],
+          if (file.loadedByIdentity) 'cdhashes': [moduleHash],
           if (file.path == artifact.identityFile)
             'pinned_library_cdhashes': [moduleHash],
         },

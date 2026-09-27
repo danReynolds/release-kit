@@ -82,6 +82,11 @@ reads it back.
 macOS test run: the pinned launcher runs its own module, refuses a swapped one,
 and runs the swap once the constraint is removed.
 
+The published rk 0.1.12 runtime has no pin. Given a different module signed
+by the same team, it mapped the module and failed only later, at the Dart
+snapshot lookup, because the two snapshot formats differ. An ad-hoc copy of its
+own module was refused by library validation.
+
 A single-file `dart compile exe` binary signed with the hardened runtime is
 killed at launch (`CODESIGNING`, `Invalid Page`) on Dart 3.12.2 and 3.13.4. It
 runs only with the `allow-unsigned-executable-memory` exception, which is why

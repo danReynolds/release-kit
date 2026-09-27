@@ -18,7 +18,8 @@ final class BinaryArtifact {
               executable: true, codeSuffix: '.launcher'),
           BinaryArtifactFile('lib/$executable/dartaotruntime',
               executable: true, codeSuffix: ''),
-          BinaryArtifactFile('lib/$executable/app.aot', codeSuffix: '.app'),
+          BinaryArtifactFile('lib/$executable/app.aot',
+              codeSuffix: '.app', loadedByIdentity: true),
           BinaryArtifactFile('lib/$executable/LICENSE.dart'),
           const BinaryArtifactFile(manifestName),
         ]);
@@ -39,16 +40,17 @@ final class BinaryArtifact {
       files.where((file) => file.codeSuffix != null);
 
   /// Signed code the identity process loads rather than executes: a Dart
-  /// bundle's AOT module. The identity file's signature pins their final code
-  /// hashes, so [signingOrder] signs them first.
+  /// bundle's AOT module. The layout declares these. The identity file's
+  /// signature pins their final code hashes, so [signingOrder] signs them
+  /// first.
   Iterable<BinaryArtifactFile> get libraries =>
-      signedFiles.where((file) => !file.executable);
+      signedFiles.where((file) => file.loadedByIdentity);
 
-  /// Libraries, then executables in layout order. The published file order is
-  /// unchanged; only signing needs the libraries' hashes first.
+  /// Libraries, then the other signed files in layout order. The published
+  /// file order is unchanged; only signing needs the libraries' hashes first.
   List<BinaryArtifactFile> get signingOrder => [
         ...libraries,
-        ...signedFiles.where((file) => file.executable),
+        ...signedFiles.where((file) => !file.loadedByIdentity),
       ];
 
   Map<String, Object?> toJson() => {
@@ -92,10 +94,16 @@ final class BinaryArtifact {
 
 final class BinaryArtifactFile {
   const BinaryArtifactFile(this.path,
-      {this.executable = false, this.codeSuffix});
+      {this.executable = false,
+      this.codeSuffix,
+      this.loadedByIdentity = false});
   final String path;
   final bool executable;
   final String? codeSuffix;
+
+  /// Whether the identity process loads this signed file as code. A property
+  /// of the layout, not of the published manifest.
+  final bool loadedByIdentity;
   String get mode => executable ? '0755' : '0644';
   String get type => codeSuffix != null
       ? 'executable'

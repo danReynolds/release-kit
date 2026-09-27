@@ -51,10 +51,12 @@ rk signs the module first, then signs the runtime with a library load
 constraint that admits only the module's code directory hash. macOS's own
 libraries are exempt. rk reads the constraint back before continuing, the
 signed smoke test proves the module still loads, and the receipt records both
-hashes. Each release pins its own module, so this does not stop someone running
-an older complete release. rk still compares the runtime's designated
-requirement with the published one, so a signing change that altered the
-program identity would stop the release.
+hashes. The pin protects runtimes signed from this change on. A runtime
+published earlier, such as rk 0.1.12's, is unpinned and still loads any module
+signed by the same team; only a change of program identity retires it. An older
+pinned release still runs only its own module. rk still compares the runtime's
+designated requirement with the published one, so a signing change that altered
+the program identity would stop the release.
 
 rk checks the signed command, verifies every signature again, notarizes the
 whole payload, and verifies and runs the extracted final archive. Receipts bind

@@ -1,4 +1,3 @@
-import 'dart:ffi';
 import 'dart:io';
 
 import 'package:rk/src/builds/capability.dart';
@@ -21,16 +20,13 @@ void main() {
         .writeAsStringSync("void main() => print('another module');\n");
     final compiler =
         DartCompilerIdentity.readResolved(Platform.resolvedExecutable);
-    final platform =
-        Abi.current() == Abi.macosArm64 ? 'macos-arm64' : 'macos-x64';
+    final capabilities = HostCapabilities.inspect();
+    final platform = capabilities.hostPlatform;
     final built = await DartCliBuilder(
             tools: const SystemTools(),
             compilerExecutable: compiler.executable,
             runtimeSha256: compiler.runtimeSha256,
-            capabilities: HostCapabilities(
-                hostPlatform: platform,
-                containerRuntime: null,
-                hasNativeAssets: false))
+            capabilities: capabilities)
         .build(
             platform: platform,
             entryPoint: 'main.dart',
@@ -56,17 +52,18 @@ void main() {
     }
 
     Future<void> adHoc(String path, [List<String> options = const []]) async {
-      File(path).copySync('$path.unsigned');
+      final fresh = '$path.signing';
+      File(path).copySync(fresh);
       final signed = await Process.run(
-          'codesign', ['--force', ...options, '--sign', '-', '$path.unsigned']);
+          'codesign', ['--force', ...options, '--sign', '-', fresh]);
       expect(signed.exitCode, 0, reason: '${signed.stderr}');
-      replace(path, '$path.unsigned');
+      File(fresh).renameSync(path);
     }
 
     await adHoc(module);
     await adHoc(other);
     final signer = MacOsSigner(tools: const SystemTools());
-    final hashes = await signer.codeDirectoryHashes(module);
+    final hashes = (await signer.codeDirectoryHashes(module)).hashes;
     expect(hashes, isNotEmpty);
     final constraint = File('${root.path}/constraint.plist')
       ..writeAsStringSync(libraryConstraintPlist(hashes!));
@@ -75,7 +72,7 @@ void main() {
       '--library-constraint',
       constraint.path,
     ]);
-    expect(await signer.admittedLibraries(runtime), hashes.toSet());
+    expect((await signer.admittedLibraries(runtime)).admitted, hashes.toSet());
 
     final own = await Process.run(launcher, ['--version']);
     expect(own.exitCode, 0, reason: '${own.stderr}');
@@ -91,7 +88,7 @@ void main() {
 
     // The refusal is the pin's: the same runtime without it runs the swap.
     await adHoc(runtime);
-    expect(await signer.admittedLibraries(runtime), isEmpty);
+    expect((await signer.admittedLibraries(runtime)).admitted, isEmpty);
     final unpinned = await Process.run(launcher, ['--version']);
     expect(unpinned.exitCode, 0, reason: '${unpinned.stderr}');
     expect(unpinned.stdout, contains('another module'));
