@@ -83,6 +83,11 @@ class Terminal:
         while select.select([self.master], [], [], 0)[0]:
             self.read()
         y = max(0, self.screen.cursor.y - max(0, self.screen.lines - rows))
+        # pyte.Screen.resize deletes clipped top rows rather than moving them
+        # into HistoryScreen's scrollback. Preserve those rows explicitly so
+        # a height reduction does not itself erase the shell-history sentinel.
+        for row in range(max(0, self.screen.lines - rows)):
+            self.screen.history.top.append(self.screen.buffer[row].copy())
         self.screen.resize(lines=rows, columns=cols)
         self.screen.cursor.y = min(y, rows - 1)
         self.screen.cursor.x = min(self.screen.cursor.x, cols - 1)

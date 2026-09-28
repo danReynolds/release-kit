@@ -502,7 +502,7 @@ class _UseScreenState extends State<UseScreen> {
         source: request.$2,
         installed: request.$1.sources[request.$2]!.installation!,
         command: 'rk use',
-        maxWidth: 104,
+        maxWidth: commandTableWidth,
         onCancel: model.exit,
         onConfirm: () => unawaited(model.confirmRemoval()),
       );
@@ -510,7 +510,7 @@ class _UseScreenState extends State<UseScreen> {
     if (model.details case final details?) {
       return MatrixDetails(
         command: 'rk use',
-        maxWidth: 104,
+        maxWidth: commandTableWidth,
         title: details.title,
         body: details.body,
         failed: model.failed,
@@ -521,7 +521,7 @@ class _UseScreenState extends State<UseScreen> {
       bindings: _navigation(),
       child: MatrixShell(
         command: 'rk use',
-        maxWidth: 104,
+        maxWidth: commandTableWidth,
         count: model.states.length == 1
             ? model.states.single.project.name
             : '${model.states.length} projects',
@@ -592,7 +592,7 @@ class _UseScreenState extends State<UseScreen> {
                           SizedBox(width: 15),
                         ],
                       ),
-                    _TableRule(),
+                    const MatrixRule(),
                     for (final source in state.sources.keys) ...[
                       _row(state, source, wide),
                       if (state.sources[source]?.problem case final problem?)
@@ -606,7 +606,7 @@ class _UseScreenState extends State<UseScreen> {
                             style: mutedText,
                           ),
                         ),
-                      _TableRule(),
+                      const MatrixRule(),
                     ],
                     for (final issue in state.routing)
                       Text(
@@ -783,12 +783,4 @@ class _UseScreenState extends State<UseScreen> {
       ),
     );
   }
-}
-
-class _TableRule extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    builder: (_, bounds) =>
-        Text('─' * (bounds.maxCols ?? 80), style: mutedText, softWrap: false),
-  );
 }

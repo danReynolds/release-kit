@@ -1,6 +1,10 @@
 import 'package:fleury/fleury_core.dart';
 import '../output/output.dart' show terminalSafeText;
 
+const commandTableWidth = 104;
+const positiveText = CellStyle(foreground: RgbColor(160, 230, 185));
+const attentionText = CellStyle(foreground: warning);
+
 const mutedText = CellStyle(dim: true);
 const accent = AnsiColor(6);
 const success = AnsiColor(2);
@@ -11,7 +15,7 @@ const selectedStyle = CellStyle(
   bold: true,
 );
 
-// The terminal still owns the page background. Only actionable cells are filled.
+// The terminal owns the page background; state and focused controls add fills.
 const matrixTheme = ThemeData(colorScheme: ColorScheme(primary: accent));
 
 CellStyle matrixFocusStyle(BuildContext context) =>
@@ -39,6 +43,7 @@ class MatrixButton extends StatefulWidget {
     this.focusNode,
     this.selected = false,
     this.unavailable = false,
+    this.baseStyle,
     this.variant = ButtonVariant.normal,
     this.appearance = ButtonAppearance.bracketed,
     required this.onPressed,
@@ -47,6 +52,7 @@ class MatrixButton extends StatefulWidget {
   final Widget? child;
   final bool autofocus, selected, unavailable;
   final FocusNode? focusNode;
+  final CellStyle? baseStyle;
   final ButtonVariant variant;
   final ButtonAppearance appearance;
   final void Function()? onPressed;
@@ -96,7 +102,7 @@ class _MatrixButtonState extends State<MatrixButton> {
       style: CellStyle.interactive(
         base: widget.selected
             ? selectedStyle
-            : CellStyle(dim: widget.unavailable),
+            : widget.baseStyle ?? CellStyle(dim: widget.unavailable),
         // Focus owns the highlight. A stale mouse position must not keep a
         // second cell highlighted after keyboard navigation.
         hovered: const CellStyle(underline: false),
@@ -362,11 +368,14 @@ class _MatrixShellState extends State<MatrixShell> {
                             ),
                           ),
                         ),
-                        Text(widget.count, style: mutedText),
+                        Text(terminalSafeText(widget.count), style: mutedText),
                       ],
                     ),
                     Text(
-                      widget.subtitle,
+                      widget.subtitle
+                          .split('\n')
+                          .map(terminalSafeText)
+                          .join('\n'),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -464,5 +473,15 @@ class MatrixDetails extends StatelessWidget {
       style: failed ? const CellStyle(foreground: warning) : const CellStyle(),
     ),
     actions: [MatrixButton(text: 'Back', autofocus: true, onPressed: onBack)],
+  );
+}
+
+/// Full-width separators share the same bounds and muted tone in command tables.
+class MatrixRule extends StatelessWidget {
+  const MatrixRule({super.key});
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (_, bounds) =>
+        Text('─' * (bounds.maxCols ?? 80), style: mutedText, softWrap: false),
   );
 }

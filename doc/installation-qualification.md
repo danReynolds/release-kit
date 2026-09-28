@@ -1,5 +1,39 @@
 # Installation and TUI implementation receipt
 
+## Shared Use and Status design — September 28, 2026
+
+`rk status --interactive` now opens the release matrix. It and Use share the
+104-column bound, terminal background, blue action focus, separators, detail
+view, Back behavior and inline lifecycle. Status opens without focus and reads
+each configured destination asynchronously; grouped publication cells retain
+per-package evidence. Refresh creates new readers and reports its timestamp.
+Ordinary status, redirected output and JSON remain finite reports.
+
+The matrix consumes typed snapshots from the existing StatusCommand checks.
+It does not reconstruct release readiness from display strings or introduce a
+second release policy. Done prints the completed snapshot without another read.
+Closing cancels owned network/process readers and ignores late callbacks.
+
+Validation on macOS arm64 / Dart 3.12.2:
+
+- Analyzer and the third-party import boundary check pass.
+- Focused status, process-cancellation and shared TUI tests pass, including
+  partial grouped publication, independently completing checks, refresh failure,
+  cancellation during discovery, late replies, and destination-scoped details.
+- The CLI suite passes, including the compiled binary case rerun outside the
+  sandbox after Dart telemetry writes were denied by the initial sandbox run.
+- All three native PTY suites pass: Use/Install/Uninstall/Init, their detailed
+  interaction states, and Status. Status covers wide/narrow/no-color layouts,
+  Back/focus restoration, refresh, resize to 40x12, Ctrl+C, error details,
+  missing configuration, finite redirected/JSON output, and unchanged fixtures.
+- The PTY emulator now explicitly retains clipped top rows in scrollback during
+  a height reduction; pyte otherwise deletes those rows during resize itself.
+
+The browser study now contains only Use and the chosen release matrix, with
+matching controls and destination detail views. It remains a simulated preview.
+This is local UX qualification, not a new release or cross-platform release
+qualification; the previously recorded SDK bundle limitation below remains.
+
 ## Local command DX follow-up — September 28, 2026
 
 The effective default is now a static badge; it is excluded from focus traversal.
@@ -37,9 +71,9 @@ that interference and exposed the LICENSE-path failure. The focused UX checks
 above pass, but this follow-up is not full release qualification. No SDK files
 or release-build behavior were changed to bypass those failures.
 
-Status remains a finite report. Three browser-only inspector proposals are
-available for design feedback; none changes publication behavior. This pass
-adds no new live Homebrew mutation or Linux qualification.
+At that point status remained a finite report with three browser inspector
+proposals. The shared-design follow-up above implements the chosen matrix.
+Neither pass adds live Homebrew mutation or Linux qualification.
 
 
 ## Source version table — September 28, 2026

@@ -173,6 +173,12 @@ and run `use` again to rebind the desired source.
 
 ## Implementation and qualification
 
+`use` shares the bounded table, focus treatment, detail view and terminal
+lifecycle with [`status --interactive`](status.md). Green identifies the
+effective local default; blue identifies the one action Enter will activate.
+Status uses green for verified stage/publication facts. Its cells inspect
+release evidence, while Use changes local installations and command routing.
+
 `installations/manager.dart` owns the shared operation lifecycle;
 `installations/store.dart` owns receipts and atomic routing. Provider adapters
 live beside their publication counterparts under `targets/*/installation.dart`.

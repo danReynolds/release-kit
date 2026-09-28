@@ -70,22 +70,81 @@ class StatusCommand {
       return ExitCodes.usage;
     }
 
+    final snapshot = await collect(only: only, checking: output.targetChecks());
+    render(snapshot);
+    return ExitCodes.ok;
+  }
+
+  /// Read once, present as text, JSON, or an interactive matrix. Callbacks carry
+  /// provisional observations; the completed snapshot includes reconciliation
+  /// and the same release blockers used by the ordinary report.
+  Future<StatusSnapshot> collect({
+    String? only,
+    TargetChecks? checking,
+    void Function(StatusUnitSnapshot)? onUnit,
+    void Function(String unit, TargetObservation)? onTarget,
+    void Function(String unit, Inspection)? onStage,
+  }) async {
+    final units = only == null
+        ? resolution.units
+        : resolution.units.where((u) => u.name == only).toList();
+    if (units.isEmpty) throw ArgumentError('No release unit named $only');
     final repositoryProblems = Diagnostics();
     _checkRepositoryState(repositoryProblems, units);
 
     // Every public read is started before rendering. Future.wait preserves
     // this configured order even when providers answer in another one.
-    final checking = output.targetChecks();
-    final List<_UnitSnapshot> snapshots;
+    final List<StatusUnitSnapshot> snapshots;
     try {
       snapshots = await Future.wait([
         for (final unit in units)
-          _gather(unit, checking, group: units.length > 1 ? unit.name : null),
+          _gather(
+            unit,
+            checking,
+            group: units.length > 1 ? unit.name : null,
+            onTarget: onTarget,
+            onStage: onStage,
+          ).then((snapshot) {
+            onUnit?.call(snapshot);
+            return snapshot;
+          }),
       ]);
     } finally {
-      checking.close();
+      checking?.close();
     }
 
+    final workRemains = snapshots.any(_workRemains);
+    final issues = <StatusIssue>[
+      for (final snapshot in snapshots) ...snapshot.issues,
+      if (workRemains)
+        for (final diagnostic in repositoryProblems.found)
+          StatusIssue(diagnostic: diagnostic),
+    ];
+    final uniqueIssues = _deduplicate(issues);
+    String? nextCommand;
+    final unfinished = snapshots.where(_workRemains).toList();
+    if (uniqueIssues.isEmpty && unfinished.length == 1) {
+      final snapshot = unfinished.single;
+      nextCommand = (_isLocalOnlyOutput(snapshot)
+          ? 'rk release ${snapshot.unit.name}'
+          : !git.isBound
+          ? 'rk release ${snapshot.unit.name}'
+          : snapshot.stage?.reusable == true
+          ? 'rk release ${snapshot.unit.name}'
+          : 'rk release ${snapshot.unit.name} --stage');
+    }
+    return StatusSnapshot(
+      units: snapshots,
+      issues: uniqueIssues,
+      warning: workRemains ? sourceWarning : null,
+      nextCommand: nextCommand,
+      nextUnit: nextCommand == null ? null : unfinished.single.unit.name,
+    );
+  }
+
+  void render(StatusSnapshot snapshot) {
+    final snapshots = snapshot.units;
+    final uniqueIssues = snapshot.issues;
     output.repository(
       name: tree.description.split('/').last,
       branch: repositoryGit.branch,
@@ -110,18 +169,10 @@ class StatusCommand {
       _renderUnit(snapshot);
     }
 
-    final workRemains = snapshots.any(_workRemains);
-    final issues = <StatusIssue>[
-      for (final snapshot in snapshots) ...snapshot.issues,
-      if (workRemains)
-        for (final diagnostic in repositoryProblems.found)
-          StatusIssue(diagnostic: diagnostic),
-    ];
-    final uniqueIssues = _deduplicate(issues);
-    if (workRemains && sourceWarning != null) {
+    if (snapshot.warning != null) {
       output.blank();
       output.heading('Warnings');
-      output.warning(sourceWarning!, depth: 1);
+      output.warning(snapshot.warning!, depth: 1);
     }
     if (uniqueIssues.isNotEmpty) _renderIssues(uniqueIssues);
 
@@ -135,29 +186,18 @@ class StatusCommand {
       );
     }
 
-    final unfinished = snapshots.where(_workRemains).toList();
-    if (uniqueIssues.isEmpty && unfinished.length == 1) {
-      final snapshot = unfinished.single;
+    if (snapshot.nextCommand case final command?) {
       output.blank();
-      output.next(
-        _isLocalOnlyOutput(snapshot)
-            ? 'rk release ${snapshot.unit.name}'
-            : !git.isBound
-            ? 'rk release ${snapshot.unit.name}'
-            : snapshot.stage?.reusable == true
-            ? 'rk release ${snapshot.unit.name}'
-            : 'rk release ${snapshot.unit.name} --stage',
-      );
+      output.next(command);
     }
-
-    // A status issue is a state to resolve, not a command crash.
-    return ExitCodes.ok;
   }
 
-  Future<_UnitSnapshot> _gather(
+  Future<StatusUnitSnapshot> _gather(
     ResolvedUnit unit,
-    TargetChecks checking, {
+    TargetChecks? checking, {
     required String? group,
+    void Function(String unit, TargetObservation)? onTarget,
+    void Function(String unit, Inspection)? onStage,
   }) async {
     final diagnostics = Diagnostics();
     final checklist = Checklist.derive(unit, resolution, diagnostics);
@@ -173,6 +213,7 @@ class StatusCommand {
     }
 
     final stageResult = _inspectStage(unit);
+    onStage?.call(unit.name, stageResult.state);
     final expectations = inspector.targets.derive(
       unit,
       checklist,
@@ -180,7 +221,7 @@ class StatusCommand {
     );
     final artifactProblems = _artifactProductionProblems(unit, expectations);
     for (final expectation in expectations) {
-      checking.add(expectation.step.id, expectation.label, group: group);
+      checking?.add(expectation.step.id, expectation.label, group: group);
     }
 
     // Calling every async operation before awaiting one is intentional: the
@@ -194,6 +235,7 @@ class StatusCommand {
           stageResult.inspection,
           artifactProblems,
           checking,
+          onTarget,
         ),
     ];
     final prerequisiteSteps = checklist.steps
@@ -377,12 +419,13 @@ class StatusCommand {
         _hostIssue(unit),
     ];
 
-    return _UnitSnapshot(
+    return StatusUnitSnapshot(
       unit: unit,
       checklist: checklist,
       states: states,
       targets: targets,
       stage: stageResult.inspection,
+      stageState: stageResult.state,
       issues: issues,
       sourceVersionAlreadyReleased: releasedSource != null,
     );
@@ -412,7 +455,8 @@ class StatusCommand {
     ResolvedUnit unit,
     StageInspection? stage,
     Map<String, String> artifactProblems,
-    TargetChecks checking,
+    TargetChecks? checking,
+    void Function(String unit, TargetObservation)? onTarget,
   ) async {
     final observed = await _observeTarget(
       expectation,
@@ -420,7 +464,8 @@ class StatusCommand {
       stage,
       artifactProblems,
     );
-    checking.finish(expectation.step.id, observed.inspection.verdict);
+    checking?.finish(expectation.step.id, observed.inspection.verdict);
+    onTarget?.call(unit.name, observed);
     return observed;
   }
 
@@ -782,7 +827,7 @@ class StatusCommand {
     );
   }
 
-  void _renderUnit(_UnitSnapshot snapshot) {
+  void _renderUnit(StatusUnitSnapshot snapshot) {
     final currentVersions = {
       for (final target in snapshot.targets) target.currentVersion,
     };
@@ -835,7 +880,7 @@ class StatusCommand {
   /// they describe: published is public, staged is here. A row then only
   /// has to identify the thing it is about, and only carries a mark when it
   /// disagrees with the others.
-  void _renderPublication(_UnitSnapshot snapshot) {
+  void _renderPublication(StatusUnitSnapshot snapshot) {
     if (snapshot.targets.isEmpty) return;
     final currents = {for (final t in snapshot.targets) t.currentVersion};
     final headerStatedMovement =
@@ -913,7 +958,7 @@ class StatusCommand {
   ///
   /// Public-target rows disappear once their destinations are exact. Binary
   /// stays visible as a selected local output until its exact stage exists.
-  void _renderStage(_UnitSnapshot snapshot) {
+  void _renderStage(StatusUnitSnapshot snapshot) {
     if (snapshot.sourceVersionAlreadyReleased) return;
     final staged = snapshot.stage?.reusable == true;
     final localProject =
@@ -1052,7 +1097,7 @@ class StatusCommand {
     }
   }
 
-  void _recordTarget(_UnitSnapshot snapshot, TargetObservation target) {
+  void _recordTarget(StatusUnitSnapshot snapshot, TargetObservation target) {
     final state = target.inspection;
     output.report.target(
       unit: snapshot.unit.name,
@@ -1215,13 +1260,30 @@ String _versionMovement(String current, String target) {
   return '$current › $target';
 }
 
-class _UnitSnapshot {
-  _UnitSnapshot({
+class StatusSnapshot {
+  StatusSnapshot({
+    required Iterable<StatusUnitSnapshot> units,
+    required Iterable<StatusIssue> issues,
+    this.warning,
+    this.nextCommand,
+    this.nextUnit,
+  }) : units = List.unmodifiable(units),
+       issues = List.unmodifiable(issues);
+  final List<StatusUnitSnapshot> units;
+  final List<StatusIssue> issues;
+  final Diagnostic? warning;
+  final String? nextCommand;
+  final String? nextUnit;
+}
+
+class StatusUnitSnapshot {
+  StatusUnitSnapshot({
     required this.unit,
     required this.checklist,
     required Map<String, Inspection> states,
     required Iterable<TargetObservation> targets,
     required this.stage,
+    required this.stageState,
     required Iterable<StatusIssue> issues,
     required this.sourceVersionAlreadyReleased,
   }) : states = Map<String, Inspection>.unmodifiable(states),
@@ -1233,14 +1295,15 @@ class _UnitSnapshot {
   final Map<String, Inspection> states;
   final List<TargetObservation> targets;
   final StageInspection? stage;
+  final Inspection stageState;
   final List<StatusIssue> issues;
   final bool sourceVersionAlreadyReleased;
 }
 
-bool _isLocalOnlyOutput(_UnitSnapshot snapshot) =>
+bool _isLocalOnlyOutput(StatusUnitSnapshot snapshot) =>
     snapshot.targets.isEmpty && snapshot.unit.shipsBinaries;
 
-bool _workRemains(_UnitSnapshot snapshot) =>
+bool _workRemains(StatusUnitSnapshot snapshot) =>
     snapshot.sourceVersionAlreadyReleased ||
     snapshot.targets.any((target) => !target.inspection.isExact) ||
     _localBinaryWorkRemains(

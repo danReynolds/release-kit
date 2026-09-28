@@ -4,6 +4,34 @@ import 'package:rk/src/engine/tools.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test('cancelling before a read prevents process creation', () async {
+    final cancellation = ToolCancellation()..cancel();
+    final result = await SystemTools(
+      cancellation: cancellation,
+    ).run('this-executable-does-not-exist', const []);
+    expect(result.exitCode, 130);
+    expect(result.stderr, contains('cancelled'));
+  });
+
+  test(
+    'cancelling an active inspection interrupts its long process bound',
+    () async {
+      if (Platform.isWindows) return;
+      final cancellation = ToolCancellation();
+      final stopwatch = Stopwatch()..start();
+      final running = SystemTools(
+        cancellation: cancellation,
+        timeout: const Duration(minutes: 2),
+      ).run('sleep', const ['60']);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      cancellation.cancel();
+      final result = await running.timeout(const Duration(seconds: 4));
+      expect(result.exitCode, 130);
+      expect(result.stderr, contains('cancelled'));
+      expect(stopwatch.elapsed, lessThan(const Duration(seconds: 3)));
+      cancellation.cancel(); // Closing after cancellation is harmless.
+    },
+  );
   test(
     'tool summaries keep the actionable error instead of a trailing hint',
     () {
