@@ -65,6 +65,52 @@ PR #77 merged after final-commit format/analysis and test CI passed on Ubuntu
 and macOS. Local review fixed two installed-CLI regressions. The requested
 GitHub Codex review did not return a response.
 
+## Module pinning — 2026-09-24
+
+Branch `pin-macos-module`. Without a pin, `dartaotruntime` loaded any module
+that library validation admitted. A signed runtime could therefore run a
+different module signed by the same team, with the program's Keychain identity.
+
+An ad-hoc experiment on macOS 26.2 (25C56) with Dart 3.12.2 signed a copy of
+`dartaotruntime` with a library load constraint naming one module's code hash.
+The pinned runtime ran that module and refused a second one with exit code
+`255` ("Library violates process' library load constraint"). The unpinned copy
+ran both. `codesign -dvvvvvv` displays the embedded constraint, which is how rk
+reads it back.
+
+`test/dart_bundle_pin_test.dart` repeats this with a real rk bundle on every
+macOS test run: the pinned launcher runs its own module, refuses a swapped one,
+and runs the swap once the constraint is removed.
+
+The published rk 0.1.12 runtime has no pin. Given a different module signed
+by the same team, it mapped the module and failed only later, at the Dart
+snapshot lookup, because the two snapshot formats differ. An ad-hoc copy of its
+own module was refused by library validation.
+
+A single-file `dart compile exe` binary signed with the hardened runtime is
+killed at launch (`CODESIGNING`, `Invalid Page`) on Dart 3.12.2 and 3.13.4. It
+runs only with the `allow-unsigned-executable-memory` exception, which is why
+macOS keeps the bundle layout.
+
+Not yet checked: the same bundle signed with a Developer ID certificate, where
+library validation and the constraint both apply, and Apple notarization of a
+runtime that carries a constraint. Ad-hoc signatures cannot exercise either.
+
+## Homebrew relocation — 2026-09-27
+
+A Homebrew install of the rk 0.1.12 formula rewrote `app.aot`'s install name
+from `app.aot` to `/opt/homebrew/opt/rk/libexec/lib/rk/app.aot` and re-signed
+it ad hoc (`Keg#fix_dynamic_linkage`), so the Developer ID runtime refused to
+load it and `rk --version` exited 255. This was reproduced by running
+Homebrew's own relocation code on a scratch keg, without installing anything.
+
+With the fix, the same relocation left a pinned bundle byte-identical and the
+command ran. The control, an `@rpath` install name without `preserve_rpath`,
+was rewritten and re-signed, and the pinned runtime refused it with exit code
+`255`. `test/homebrew_install_test.dart` now performs a real `brew install` of
+a bundle on CI's macOS runner and requires the installed launcher, runtime and
+module to match the staged bytes.
+
 ## Qualification boundary
 
 No package, GitHub release or Homebrew tap was published during the synthetic

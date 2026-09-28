@@ -123,6 +123,14 @@ class HomebrewFormula {
       );
     }
 
+    if (hasMac) {
+      // The macOS module has an @rpath install name. Without this line,
+      // Homebrew rewrites the name and re-signs the module ad hoc, and the
+      // signed runtime refuses to load it.
+      buffer
+        ..writeln('  preserve_rpath')
+        ..writeln();
+    }
     buffer
       ..writeln('  def install')
       ..writeln('    libexec.install Dir["*"]')

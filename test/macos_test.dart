@@ -4,6 +4,8 @@ import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/transforms/macos.dart';
 import 'package:test/test.dart';
 
+import 'bundle_tools.dart';
+
 const _name = 'Developer ID Application: Dan (TEAM123456)';
 final _sha1 = 'a' * 40;
 final _otherSha1 = 'b' * 40;
@@ -126,12 +128,258 @@ SHA-1 hash: $_sha1
       );
     },
   );
+
+  group('a runtime admits only the modules it ships', () {
+    final module = 'ab' * 20;
+    final other = '0f' * 20;
+
+    test(
+      'signing embeds a constraint naming exactly the pinned code hashes',
+      () async {
+        String? call;
+        String? constraint;
+        final tools = _tools(
+          certificateOutput: 'SHA-256 hash: $_sha256\nSHA-1 hash: $_sha1\n',
+          onSign: (key) {
+            call = key;
+            constraint = File(
+              key.split(' --library-constraint ').last.split(' --sign ').first,
+            ).readAsStringSync();
+          },
+        );
+
+        final signed = await MacOsSigner(tools: tools).sign(
+          binary: '/tmp/runtime',
+          team: 'TEAM123456',
+          codeId: 'io.example.tool',
+          pinnedLibraries: [module, other],
+        );
+
+        expect(signed.ok, isTrue, reason: signed.problem);
+        expect(
+          call,
+          contains('--enforce-constraint-validity'),
+          reason: 'a constraint this macOS cannot evaluate must fail to sign',
+        );
+        expect(constraint, contains('<key>cdhash</key>'));
+        expect(constraint, contains(r'<key>$in</key>'));
+        expect(
+          constraint,
+          contains('<data>q6urq6urq6urq6urq6urq6urq6s=</data>'),
+        );
+        expect(
+          constraint,
+          contains('<data>Dw8PDw8PDw8PDw8PDw8PDw8PDw8=</data>'),
+        );
+        expect(
+          File('/tmp/runtime.library-constraint.plist').existsSync(),
+          isFalse,
+          reason: 'a codesign input must not survive into the workspace',
+        );
+      },
+    );
+
+    test('a signature with nothing to pin carries no constraint', () async {
+      final tools = _tools(
+        certificateOutput: 'SHA-256 hash: $_sha256\nSHA-1 hash: $_sha1\n',
+      );
+
+      await MacOsSigner(
+        tools: tools,
+      ).sign(binary: '/tmp/tool', team: 'TEAM123456', codeId: 'io.example');
+
+      expect(
+        tools.calls.singleWhere((call) => call.startsWith('codesign --force')),
+        isNot(contains('--library-constraint')),
+      );
+    });
+
+    test(
+      'a malformed code hash is refused before anything is signed',
+      () async {
+        final tools = _tools(
+          certificateOutput: 'SHA-256 hash: $_sha256\nSHA-1 hash: $_sha1\n',
+        );
+
+        final signed = await MacOsSigner(tools: tools).sign(
+          binary: '/tmp/runtime',
+          team: 'TEAM123456',
+          codeId: 'io.example.tool',
+          pinnedLibraries: ['not a hash'],
+        );
+
+        expect(signed.ok, isFalse);
+        expect(signed.problem, contains('malformed'));
+        expect(tools.calls, isEmpty);
+      },
+    );
+
+    test('code hashes are every candidate codesign displays', () async {
+      final tools = _tools(
+        certificateOutput: '',
+        displays: {
+          'codesign -dvvv /tmp/app.aot': ToolResult(
+            exitCode: 0,
+            stdout: '',
+            stderr:
+                'Hash type=sha256 size=32\n'
+                'CandidateCDHash sha1=$other\n'
+                'CandidateCDHash sha256=$module\n'
+                'CandidateCDHashFull sha256=${module}0123456789abcdef01234567\n'
+                'CDHash=$module\n',
+          ),
+        },
+      );
+
+      expect(
+        (await MacOsSigner(
+          tools: tools,
+        ).codeDirectoryHashes('/tmp/app.aot')).hashes,
+        [other, module],
+      );
+    });
+
+    test(
+      'a module whose code hash cannot be read answers null with codesign',
+      () async {
+        final tools = _tools(
+          certificateOutput: '',
+          displays: {
+            'codesign -dvvv /tmp/app.aot': ToolResult(
+              exitCode: 1,
+              stdout: '',
+              stderr: 'not signed at all',
+            ),
+          },
+        );
+
+        final reading = await MacOsSigner(
+          tools: tools,
+        ).codeDirectoryHashes('/tmp/app.aot');
+        expect(reading.hashes, isNull);
+        expect(
+          reading.display.stderr,
+          contains('not signed at all'),
+          reason: 'the failure must be able to show what codesign said',
+        );
+      },
+    );
+
+    test(
+      'the embedded constraint reads back as exactly its code hashes',
+      () async {
+        final tools = _tools(
+          certificateOutput: '',
+          displays: {
+            'codesign -dvvvvvv /tmp/runtime': ToolResult(
+              exitCode: 0,
+              stdout: '',
+              stderr: constraintDisplay(pinConstraint([module])),
+            ),
+          },
+        );
+
+        expect(
+          (await MacOsSigner(
+            tools: tools,
+          ).admittedLibraries('/tmp/runtime')).admitted,
+          {module},
+        );
+      },
+    );
+
+    test(
+      'a constraint stating more than code hashes is not read as a pin',
+      () async {
+        final tools = _tools(
+          certificateOutput: '',
+          displays: {
+            'codesign -dvvvvvv /tmp/runtime': ToolResult(
+              exitCode: 0,
+              stdout: '',
+              stderr: constraintDisplay({
+                'team-identifier': 'TEAM123456',
+                ...pinConstraint([module]),
+              }),
+            ),
+          },
+        );
+
+        expect(
+          (await MacOsSigner(
+            tools: tools,
+          ).admittedLibraries('/tmp/runtime')).admitted,
+          isNull,
+        );
+      },
+    );
+
+    test('a runtime without a constraint admits nothing it records', () async {
+      final tools = _tools(
+        certificateOutput: '',
+        displays: {
+          'codesign -dvvvvvv /tmp/runtime': ToolResult(
+            exitCode: 0,
+            stdout: '',
+            stderr: 'CDHash=$module\nSignature=adhoc\n',
+          ),
+        },
+      );
+
+      expect(
+        (await MacOsSigner(
+          tools: tools,
+        ).admittedLibraries('/tmp/runtime')).admitted,
+        isEmpty,
+      );
+    });
+
+    test('the shared display fixture prints a pin as macOS 26 does', () {
+      expect(
+        constraintDisplay(pinConstraint([module, other])),
+        _macos26Display([module, other]),
+      );
+    });
+  });
 }
+
+/// codesign's highest-verbosity display of rk's pin, copied from macOS 26
+/// (25C56) output. The shared fixture in bundle_tools.dart must match it.
+String _macos26Display(List<String> hashes) => [
+  'Library Load Constraints:',
+  '\tHas Library Load Constraints',
+  'CDHash=${'1' * 40}',
+  'Signature=adhoc',
+  'Internal requirements count=0 size=12',
+  '\t[Dict]',
+  '\t\t[Key] ccat',
+  '\t\t[Value]',
+  '\t\t\t[Int] 0',
+  '\t\t[Key] comp',
+  '\t\t[Value]',
+  '\t\t\t[Int] 1',
+  '\t\t[Key] reqs',
+  '\t\t[Value]',
+  '\t\t\t[Dict]',
+  '\t\t\t\t[Key] cdhash',
+  '\t\t\t\t[Value]',
+  '\t\t\t\t\t[Dict]',
+  '\t\t\t\t\t\t[Key] \$in',
+  '\t\t\t\t\t\t[Value]',
+  '\t\t\t\t\t\t\t[Array]',
+  for (final hash in hashes) '\t\t\t\t\t\t\t\t[Data] $hash',
+  '\t\t[Key] vers',
+  '\t\t[Value]',
+  '\t\t\t[Int] 1',
+].join('\n');
 
 RecordingTools _tools({
   required String certificateOutput,
   bool signatureVerifies = true,
+  void Function(String key)? onSign,
+  Map<String, ToolResult> displays = const {},
 }) => RecordingTools(
+  results: displays,
   onRun: (key) {
     if (key.startsWith('codesign --force')) {
       final path = key
@@ -142,6 +390,7 @@ RecordingTools _tools({
       final entitlements = File(path).readAsStringSync();
       expect(entitlements, contains('<dict>'));
       expect(entitlements, isNot(contains('<key>')));
+      onSign?.call(key);
     }
   },
   answers: (key) {

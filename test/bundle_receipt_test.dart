@@ -16,6 +16,7 @@ void main() {
   late Map<String, Object?> evidence;
   final artifact = BinaryArtifact.dartBundle('tool');
   const prefix = 'producers/tool/macos-arm64';
+  final moduleHash = '5' * 40;
 
   StageArtifact write(String path, String contents, String type, String mode) {
     stage.writeBytesAtomically(path, utf8.encode(contents));
@@ -85,6 +86,9 @@ void main() {
               .singleWhere((output) => output.path == '$prefix/${file.path}')
               .sha256,
           'verified_after_smoke': true,
+          if (file.loadedByIdentity) 'cdhashes': [moduleHash],
+          if (file.path == artifact.identityFile)
+            'pinned_library_cdhashes': [moduleHash],
         },
     };
     evidence = {
@@ -143,6 +147,34 @@ void main() {
         'f' * 64;
     record();
     expect(inspect().validProgress, isFalse);
+  });
+  test('a runtime that pins no module cannot claim a signed build', () {
+    ((evidence['signatures'] as Map)[artifact.identityFile] as Map).remove(
+      'pinned_library_cdhashes',
+    );
+    record();
+    expect(
+      inspect().issues.map((issue) => issue.message).join('\n'),
+      contains('does not pin exactly the modules it ships with'),
+    );
+  });
+  test('a runtime pinned to a different module is refused', () {
+    ((evidence['signatures'] as Map)[artifact.identityFile]
+        as Map)['pinned_library_cdhashes'] = [
+      '6' * 40,
+    ];
+    record();
+    expect(inspect().validProgress, isFalse);
+  });
+  test('a module with no recorded code hash cannot be pinned', () {
+    ((evidence['signatures'] as Map)['lib/tool/app.aot'] as Map).remove(
+      'cdhashes',
+    );
+    record();
+    expect(
+      inspect().issues.map((issue) => issue.message).join('\n'),
+      contains('records no code hash'),
+    );
   });
   test(
     'altering the manifest and its captured digest cannot change the layout',

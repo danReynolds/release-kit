@@ -23,6 +23,23 @@
 - Add focused command help and one actionable next command for an unblocked
   unfinished release. Cancelling a release describes the current unit accurately,
   and cleanup lists recorded stage identities before confirmation.
+
+## 0.1.13
+
+- Homebrew installs keep macOS bundles intact. Homebrew rewrote the AOT
+  module's install name and re-signed it ad hoc, so the installed command
+  failed to start. The module now has an `@rpath/app.aot` install name and the
+  formula declares `preserve_rpath`, so Homebrew leaves the signed files
+  alone. Formulas need Homebrew 4.6.17 or later. A macOS CI test installs a
+  real bundle through Homebrew and requires its signed files to be unchanged.
+- macOS Dart bundles pin their AOT module. rk signs the module first, then
+  signs the runtime with a library load constraint that admits only that
+  module's code hash, reads the constraint back, and records both in the stage
+  receipt. A runtime signed this way refuses other modules signed by the same
+  team. Ad-hoc tests verify the refusal; Developer ID releases still need their
+  own check. Runtimes published earlier, including rk 0.1.12's, are unpinned.
+  RK-SIGN-017 to RK-SIGN-019 carry codesign's output. The stage schema is now
+  12, so older stages are rebuilt.
 - Release commands identify the project version and source checkout before work
   begins. Staging explains source, tooling, and configuration changes when a
   recent receipt can account for a rebuild, and names interrupted work it resumes.

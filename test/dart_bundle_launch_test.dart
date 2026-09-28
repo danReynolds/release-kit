@@ -59,6 +59,15 @@ void main(List<String> args) {
         isTrue,
         reason: '${result.problem}\n${result.transcript}',
       );
+      final installName = await Process.run('otool', [
+        '-D',
+        '${root.path}/initial/lib/tool/app.aot',
+      ]);
+      expect(
+        (installName.stdout as String).trim().split('\n').last,
+        '@rpath/app.aot',
+        reason: 'Homebrew keeps an @rpath install name and rewrites any other',
+      );
       Directory(
         '${root.path}/initial',
       ).renameSync('${root.path}/installed space');

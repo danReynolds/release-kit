@@ -29,6 +29,13 @@ extracted directory together when installing manually. Homebrew installs the
 archive under `libexec` and links the command into `bin`; the same installation
 rule works for Linux's single executable.
 
+Homebrew rewrites each library's install name to its keg path and re-signs the
+library ad hoc, which the signed runtime would refuse. The module therefore has
+an `@rpath/app.aot` install name, and the generated formula declares
+`preserve_rpath`, which keeps such names. Both are needed; this requires
+Homebrew 4.6.17 or later. The formula has no bottle, so Homebrew installs it as
+a source build and needs the Xcode Command Line Tools.
+
 ## One release contract
 
 `BinaryArtifact` describes the entry point, relative paths, modes and files that
@@ -44,6 +51,19 @@ The launcher and module receive `.launcher` and `.app` identifier suffixes. The
 runtime retains the existing program identifier and designated requirement,
 since it becomes the process that accesses OS services such as Keychain.
 Previous single-file rk archives remain readable as the signing baseline.
+
+Library validation admits any library signed by the same team, so a signed
+runtime would otherwise run any module signed with that team's certificates.
+rk signs the module first, then signs the runtime with a library load
+constraint that admits only the module's code directory hash. macOS's own
+libraries are exempt. rk reads the constraint back before continuing, the
+signed smoke test proves the module still loads, and the receipt records both
+hashes. The pin protects runtimes signed from this change on. A runtime
+published earlier, such as rk 0.1.12's, is unpinned and still loads any module
+signed by the same team; only a change of program identity retires it. An older
+pinned release still runs only its own module. rk still compares the runtime's
+designated requirement with the published one, so a signing change that altered
+the program identity would stop the release.
 
 rk checks the signed command, verifies every signature again, notarizes the
 whole payload, and verifies and runs the extracted final archive. Receipts bind
