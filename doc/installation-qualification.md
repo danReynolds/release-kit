@@ -29,6 +29,14 @@ Validation on macOS arm64 / Dart 3.12.2:
   causes before repair instructions, and keeps detailed remote errors in
   Issues rather than repeating them on publication rows.
 
+A broader phase-conformance run passed 52 checks and failed 14 release/bundle
+checks: the installed Homebrew Dart SDK has no `libexec/LICENSE` where the
+existing bundle builder expects it. An initial attempt also resolved Flutter's
+wrapper on PATH and hit sandboxed cache writes; pinning the Homebrew SDK removed
+that interference and exposed the LICENSE-path failure. The focused UX checks
+above pass, but this follow-up is not full release qualification. No SDK files
+or release-build behavior were changed to bypass those failures.
+
 Status remains a finite report. Three browser-only inspector proposals are
 available for design feedback; none changes publication behavior. This pass
 adds no new live Homebrew mutation or Linux qualification.
