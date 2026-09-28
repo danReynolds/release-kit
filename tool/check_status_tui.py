@@ -108,7 +108,7 @@ def main():
         (empty / 'release.toml').write_text('schema = "broken"\n')
         with Terminal(executable, 'status', empty, home) as terminal:
             terminal.wait('Error details')
-            terminal.click('Error details')
+            terminal.activate('Error details')
             terminal.wait('Back')
             assert 'release.toml' in terminal.text(), terminal.text()
             terminal.send(b'\x1b')

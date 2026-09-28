@@ -192,7 +192,7 @@ void main() {
   );
 
   test(
-    'download stays open; repeated Enter cannot switch or implicitly install a missing source',
+    'duplicate downloads are ignored and a switch queues until installation settles',
     () async {
       var downloads = 0, uses = 0, closes = 0;
       final gate = Completer<void>();
@@ -223,13 +223,16 @@ void main() {
       expect(uses, 0);
       final pending = model.download(states.single, InstallationSource.pub);
       await model.download(states.single, InstallationSource.pub);
-      await model.choose(states.single, InstallationSource.local);
+      final switching = model.choose(states.single, InstallationSource.local);
+      expect(
+        model.operationLabel(states.single, InstallationSource.local),
+        'Queued',
+      );
       expect(downloads, 1);
       expect(uses, 0);
       gate.complete();
       await pending;
-      expect(closes, 0);
-      await model.choose(states.single, InstallationSource.local);
+      await switching;
       expect(uses, 1);
       expect(closes, 1);
     },
@@ -425,11 +428,18 @@ void main() {
 
         void expectBlue(String label) {
           final lines = tester.renderToString().split('\n');
+          final buffer = tester.render();
           final row = lines.indexWhere(
-            (line) => line.contains(label) && line.contains('['),
+            (line) =>
+                line.contains(label) &&
+                line.contains('[') &&
+                buffer
+                        .atColRow(line.indexOf(label), lines.indexOf(line))
+                        .style
+                        .background ==
+                    const RgbColor(42, 76, 108),
           );
           expect(row, isNonNegative);
-          final buffer = tester.render();
           expect(
             buffer.atColRow(lines[row].indexOf(label), row).style.background,
             const RgbColor(42, 76, 108),
@@ -482,20 +492,16 @@ void main() {
         await Future<void>.delayed(Duration.zero);
         tester.pump();
         tester.pump();
-        expectBlue('✓ Installed');
+        expect(tester.renderToString(), isNot(contains('✓ Installed')));
         key(KeyCode.enter);
         await Future<void>.delayed(Duration.zero);
         expect(downloads, 1);
         expect(uses, 0);
         expect(closes, 0);
-        // Up/Down and Tab retain distinct actions after asynchronous changes.
-        key(KeyCode.arrowUp);
-        key(
-          KeyCode.arrowDown,
-        ); // Use is preferred when arriving from Local Use.
-        key(KeyCode.arrowLeft);
-        expectBlue('✓ Installed');
-        key(KeyCode.tab); // The next actual button is Use.
+        // Finishing an install clears its focus; Use needs deliberate navigation.
+        key(KeyCode.arrowDown); // Local Use.
+        key(KeyCode.arrowDown); // GitHub Use.
+        expectBlue('Use');
         key(KeyCode.enter);
         await Future<void>.delayed(Duration.zero);
         expect(uses, 1);

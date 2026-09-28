@@ -15,10 +15,11 @@ rk uninstall pub                # confirm removal of an inactive installation
 The picker opens inline beneath your prompt and grows to fit its content, up to
 24 rows. The source table is left-aligned and capped at 104 columns, shrinking
 with narrower terminals. Other command matrices cap at 128 columns to fit their
-additional outputs. Your terminal keeps its background; green marks the effective default and
-a blue fill marks mouse or keyboard focus. It opens without focus, so the default stays green until you navigate. Checkmarks and reverse video preserve
-those distinctions with `NO_COLOR`. Use Tab or arrow keys to navigate and Enter
-to choose. Hover moves focus without changing your selection.
+additional outputs. Your terminal keeps its background; green marks the effective
+default and blue marks keyboard focus. Mouse capture is disabled. It opens without
+focus, so the default stays green until you navigate. Checkmarks and reverse video
+preserve those distinctions with `NO_COLOR`. Use Tab or arrow keys to navigate and Enter
+to choose.
 
 A successful source switch for one project closes the picker and leaves its result in
 shell history. With several projects, the picker stays open so you can change
@@ -57,6 +58,15 @@ version while checks run, and a failed check leaves that version usable. Focus
 an affected row to see its error; **Retry** checks just that source and **Refresh**
 checks all sources. Closing the picker cancels its background network requests.
 `--list` and redirected commands remain local, without remote checks.
+
+**Update** appears only when a successful check confirms a newer compatible
+version. Checking and current sources have no Update button; an absent
+installation offers **Install** after its version check.
+
+While an install or update runs, other rows and Refresh remain usable. Additional
+actions show **Queued** and run in order, keeping package-manager and routing
+changes serialized. Esc cancels queued actions and lets the running operation
+settle safely. A failed operation clears the queue for review.
 
 **Use** selects an installed source and closes a single-project picker.
 **Install** or **Update** installs the displayed available version and keeps the picker open.

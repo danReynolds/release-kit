@@ -1,5 +1,23 @@
 # Installation and TUI implementation receipt
 
+## Keyboard-only and responsive updates — September 28, 2026
+
+All native command matrices now leave mouse capture disabled. `use` keeps its
+keyboard controls and remote version checks live during installation. Additional
+mutations are queued behind the active operation, preserving the manager/store
+lock. Closing cancels queued work; failures clear it for review. Update appears
+only after confirming a newer compatible version. Completed operations clear
+their own action focus without moving it to Use or disturbing another row.
+
+- Analyzer and all 56 installation tests pass on macOS arm64 with Dart 3.12.2.
+- Delayed-provider widget tests cover keyboard navigation, background refresh,
+  queued updates, duplicate Enter, cancellation, failure, and focus preservation.
+- The installation, interaction, and status native PTY suites pass with keyboard
+  controls, including 40-column layouts, resize, signals, and shell restoration.
+  The harness checks that no command enables mouse capture.
+- These checks use disposable fixtures; no shared Homebrew/Pub installation was
+  upgraded as part of this pass.
+
 ## Shared Use and Status design — September 28, 2026
 
 `rk status` now opens the release matrix. It and Use share the

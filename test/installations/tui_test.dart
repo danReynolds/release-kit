@@ -181,6 +181,8 @@ void main() {
           driver: driver,
         );
         await settle();
+        expect(driver.currentMode!.mouse, isFalse);
+        expect(driver.currentMode!.mouseMotion, isFalse);
         expect(driver.output, contains('rk init'));
         expect(driver.output, contains('Added'));
         expect(driver.output, isNot(contains('Included')));

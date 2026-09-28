@@ -26,13 +26,6 @@ def locate(terminal, text):
     return row, line.index(text)
 
 
-def hover(terminal, text):
-    row, col = locate(terminal, text)
-    terminal.send(f'\x1b[<35;{col+1};{row+1}M'.encode())
-    settle(terminal)
-    return row, col
-
-
 def snapshot(terminal, path):
     if path is None:
         return
@@ -119,17 +112,11 @@ def main():
             assert all(len(line.rstrip()) <= 104 for line in terminal.screen.display), 'table expanded beyond its content width'
             assert 'The Pub activation is incomplete.' in terminal.text(), 'problem must be visible without opening details'
             assert 'Why?' not in terminal.text()
-            hover(terminal, 'This checkout')
-            assert not any(cell.bg == '2a4c6c' for line in terminal.screen.buffer.values()
-                           for cell in line.values()), 'blank row space gained hover focus'
-            hover(terminal, 'Use     ]')
+            terminal.focus('Use     ]')
             assert terminal.screen.buffer[row][col].bg == '2a4c6c'
             name_row, name_col = locate(terminal, 'This checkout')
             assert terminal.screen.buffer[name_row][name_col].bg == 'default', 'focus recolored the source row'
             shot(terminal, 'use-action-focus')
-            hover_row, hover_col = hover(terminal, 'Pub')
-            assert terminal.screen.buffer[hover_row][hover_col].bg == 'default'
-            assert terminal.process.poll() is None, 'hover activated an option'
             terminal.send(b'\t')  # Blocked Pub is skipped; focus reaches Refresh.
             settle(terminal)
             assert terminal.screen.buffer[row][col].bg == 'default'
@@ -138,7 +125,7 @@ def main():
             shot(terminal, 'use-unavailable')
             terminal.send(b'\x1b')
             terminal.finish()
-        print('PASS action-only hover/keyboard focus, no initial focus, width bound, inline unavailable reason', flush=True)
+        print('PASS keyboard focus, no initial focus, width bound, inline unavailable reason', flush=True)
 
         with Terminal(executable, 'use', project, home, environment={'NO_COLOR': '1'}) as terminal:
             terminal.wait('Esc Done')
@@ -150,8 +137,9 @@ def main():
             assert terminal.screen.buffer[row][col].reverse, 'Tab did not focus the first action'
             name_row, name_col = locate(terminal, 'This checkout')
             assert not terminal.screen.buffer[name_row][name_col].reverse
-            hover_row, hover_col = hover(terminal, 'r Refresh')
-            assert terminal.screen.buffer[hover_row][hover_col].reverse
+            terminal.focus('r Refresh')
+            refresh_row, refresh_col = locate(terminal, 'r Refresh')
+            assert terminal.screen.buffer[refresh_row][refresh_col].reverse
             assert not terminal.screen.buffer[row][col].reverse
             terminal.send(b'\x1b')
             terminal.finish()
@@ -172,12 +160,12 @@ def main():
         project = workspace(home)
         with Terminal(executable, 'use', project, home) as terminal:
             terminal.wait('2 projects')
-            terminal.click('Use     ]')
+            terminal.activate('Use     ]')
             terminal.wait('orbit → Local')
             settle(terminal)
             assert terminal.process.poll() is None, 'multi-project use closed after one row'
             row, col = locate(terminal, 'Use     ]')
-            assert terminal.screen.buffer[row][col].bg == '2a4c6c', 'operation lost keyboard focus'
+            terminal.focus('Use     ]')
             shot(terminal, 'use-multiple')
             # Row navigation reaches the second project's Local source,
             # even when the table needs to scroll at this terminal height.
@@ -185,7 +173,7 @@ def main():
             terminal.send(b'\x1b[B\x1b[B\r')
             terminal.wait('orbit_admin → Local')
             assert terminal.process.poll() is None
-            terminal.click('Esc Done')
+            terminal.activate('Esc Done')
             terminal.finish()
         assert 'orbit\n' == subprocess.check_output([str(home / 'data/rk/bin/orbit')], text=True)
         assert 'orbit_admin\n' == subprocess.check_output([str(home / 'data/rk/bin/orbit_admin')], text=True)
@@ -212,7 +200,7 @@ def main():
             terminal.wait('Remove orbit from Local?')
             settle(terminal)
             shot(terminal, 'uninstall-confirm')
-            terminal.click('Remove installation')
+            terminal.activate('Remove installation')
             terminal.finish()
         with Terminal(executable, 'uninstall', project, home) as terminal:
             terminal.wait('Not installed')
@@ -234,9 +222,9 @@ def main():
             settle(terminal)
             terminal.send(b'\t\r')
             terminal.wait('Remove orbit_admin from Local?')
-            terminal.click('Remove installation')
+            terminal.activate('Remove installation')
             terminal.wait('removed from Local')
-            terminal.click('Esc Done')
+            terminal.activate('Esc Done')
             terminal.finish()
         print('PASS uninstall navigation starts on a usable row when the first project has no installations', flush=True)
 
@@ -261,7 +249,7 @@ def main():
         project = workspace(home, configured=False, names=names)
         with Terminal(executable, 'init', project, home) as terminal:
             terminal.wait('Review configuration')
-            terminal.click('Review configuration')
+            terminal.activate('Review configuration')
             terminal.wait('More below')
             terminal.send(b'\x1b[F')
             terminal.wait('app_9')
@@ -307,19 +295,19 @@ def main():
             terminal.wait('Review configuration')
             settle(terminal)
             shot(terminal, 'init-multiple')
-            hover(terminal, 'Review configuration')
+            terminal.focus('Review configuration')
             terminal.send(b'\r')
             terminal.wait('Review release.toml')
             settle(terminal)
             shot(terminal, 'init-review')
             terminal.send(b'\x1b')
             terminal.wait('Choose the outputs')
-            terminal.click('Review configuration')
+            terminal.activate('Review configuration')
             terminal.wait('Review release.toml')
-            terminal.click('Create release.toml')
+            terminal.activate('Create release.toml')
             terminal.finish()
         assert (project / 'release.toml').exists()
-        print('PASS init shares hover/keyboard behavior and review/Back/Create', flush=True)
+        print('PASS init shares keyboard behavior and review/Back/Create', flush=True)
 
         for command in ['use', 'install', 'uninstall', 'init']:
             home = root / f'short-{command}'
@@ -336,13 +324,13 @@ def main():
                     terminal.wait('✓ Added')
                     assert 'Local build' in terminal.text(), 'feedback pushed the focused choice offscreen'
                     shot(terminal, 'init-short-toggled')
-                    terminal.click('Review configuration')
+                    terminal.activate('Review configuration')
                     terminal.wait('Review release.toml')
-                    terminal.click('Create release.toml')
+                    terminal.activate('Create release.toml')
                 elif command == 'uninstall':
                     terminal.send(b'\t\r')
                     terminal.wait('Remove installation')
-                    terminal.click('Remove installation')
+                    terminal.activate('Remove installation')
                 else:
                     terminal.send(b'\t\r')
                 terminal.finish()

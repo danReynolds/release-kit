@@ -136,24 +136,25 @@ class Terminal:
         os.write(self.master, keys)
         time.sleep(.15)
 
-    def click(self, text):
+    def focus(self, text):
         self.wait(text)
-        # Inline content measurement can move the footer after its first frame.
-        # Click the settled target, not coordinates from a frame still resizing.
-        deadline = time.monotonic() + 2
-        stable_since = time.monotonic()
-        previous = self.text()
-        while time.monotonic() < deadline:
-            self.read()
-            current = self.text()
-            if current != previous:
-                stable_since = time.monotonic()
-                previous = current
-            elif time.monotonic() - stable_since >= .2:
-                break
-        row, line = next((i, line) for i, line in enumerate(self.screen.display) if text in line)
-        col = line.index(text)
-        self.send(f'\x1b[<0;{col+1};{row+1}M\x1b[<0;{col+1};{row+1}m'.encode())
+        for _ in range(100):
+            for row, line in enumerate(self.screen.display):
+                start = line.find(text)
+                if start < 0:
+                    continue
+                cell = self.screen.buffer[row][start]
+                if cell.bg == '2a4c6c' or cell.reverse:
+                    return
+            self.send(b'\t')
+            deadline = time.monotonic() + .2
+            while time.monotonic() < deadline:
+                self.read()
+        raise AssertionError(f'Cannot focus {text!r}:\n{self.text()}')
+
+    def activate(self, text):
+        self.focus(text)
+        self.send(b'\r')
 
     def finish(self, expected=0):
         deadline = time.monotonic() + 10
@@ -178,7 +179,7 @@ class Terminal:
                       'Install a source', 'Remove a source']:
             assert title not in self.text(), f'Inline frame survived exit: {self.text()}'
         assert b'\x1b[?25h' in self.raw, 'cursor hidden after exit'
-        assert b'\x1b[?1006l' in self.raw, 'mouse capture left enabled'
+        assert not re.search(rb'\x1b\[\?(?:1000|1002|1003|1006)h', self.raw), 'enabled mouse capture'
 
 
 def fixture(home, configured):
@@ -217,7 +218,7 @@ def main():
             terminal.wait('Remove a source')
             terminal.send(b'\r')  # Cancellation restores the originating cell.
             terminal.wait('Remove orbit from Local?')
-            terminal.click('Remove installation')
+            terminal.activate('Remove installation')
             terminal.wait('removed from Local')
             terminal.finish()
         assert (project / 'bin/orbit.dart').exists(), 'local uninstall removed checkout'
@@ -227,7 +228,7 @@ def main():
         project = fixture(home, True)
         with Terminal(executable, 'use', project, home) as terminal:
             terminal.wait('Choose what runs locally.')
-            terminal.click('Use     ]')
+            terminal.activate('Use     ]')
             terminal.wait('→ Local', timeout=60)
             terminal.finish()
             assert '→ Local' in terminal.text(), 'result not retained after exit'
@@ -239,14 +240,14 @@ def main():
         project = fixture(home, False)
         with Terminal(executable, 'init', project, home) as terminal:
             terminal.wait('Choose the outputs for each package.')
-            terminal.click('Review configuration')
+            terminal.activate('Review configuration')
             terminal.wait('Review release.toml')
             assert not (project / 'release.toml').exists()
             terminal.send(b'\x1b')
             terminal.wait('Choose the outputs for each package.')
-            terminal.click('Review configuration')
+            terminal.activate('Review configuration')
             terminal.wait('Review release.toml')
-            terminal.click('Create release.toml')
+            terminal.activate('Create release.toml')
             terminal.finish()
         assert (project / 'release.toml').exists()
         print('init: review, Back, create; inline restored', flush=True)

@@ -40,7 +40,8 @@ Future<int> runMatrixScreen(
           suspendOnCtrlZ: false,
           signalGrace: const Duration(minutes: 11),
         ),
-    mode: const TerminalMode.inline(rows: 12, mouse: true, mouseMotion: true),
+    // Keep terminal selection/scrolling native; RK navigation uses the keyboard.
+    mode: const TerminalMode.inline(rows: 12),
     enableHotReload: false,
     debug: const DebugConfig(enabled: false),
     onEvent: (event) {
