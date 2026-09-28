@@ -50,8 +50,7 @@ rk — an austere release tool
 Release this project
   rk                              status all units
   rk --version                    print this binary's version
-  rk status [unit]                status all units or one
-  rk status --interactive         explore release status in an inline matrix
+  rk status [unit]                explore release status in an inline matrix
   rk plan [unit]                  show the configured release graph; read-only
   rk init                         choose outputs and review release.toml
   rk clean                        remove this repository's staged release work
@@ -102,7 +101,7 @@ Example: rk init
 
 const _statusUsage =
     '''
-rk status [unit] [--interactive] [--json]
+rk status [unit] [--json]
 
 Check configured release destinations and local staged artifacts.
 Reports what is released, what remains, and any issues that prevent release.
@@ -110,9 +109,9 @@ May read the network; does not build or publish. Bare rk also runs status.
 
 $_unitHelp
 Omit the unit to check every release unit.
+In a terminal, explore destinations and evidence in the inline matrix.
+Pipes and terminals that cannot host the matrix receive a finite report.
 --json    emit one structured report
---interactive  explore destinations and evidence in an inline matrix
-               Without a usable terminal, or with --json, emit the report.
 
 Example: rk status tools
 See rk plan tools for the configured steps without destination checks.
@@ -174,16 +173,7 @@ Future<void> main(List<String> args) async {
     return;
   }
 
-  const known = {
-    '-h',
-    '--help',
-    '--stage',
-    '--json',
-    '-y',
-    '--yes',
-    '--write',
-    '--interactive',
-  };
+  const known = {'-h', '--help', '--stage', '--json', '-y', '--yes', '--write'};
   final flags = args.where((argument) => argument.startsWith('-')).toSet();
   final positional = args.where((a) => !a.startsWith('-')).toList();
   final json = flags.contains('--json');
@@ -222,7 +212,7 @@ Future<void> main(List<String> args) async {
   // way as one that does not exist: `rk status --stage` staging under a verb
   // that promises to be read-only is worse than an error.
   const perVerb = {
-    'status': {'-h', '--help', '--json', '--interactive'},
+    'status': {'-h', '--help', '--json'},
     'plan': {'-h', '--help', '--json'},
     'release': {'-h', '--help', '--json', '--stage', '-y', '--yes'},
     'init': {'-h', '--help', '--json', '--write'},
@@ -346,7 +336,7 @@ Future<void> main(List<String> args) async {
       'target' => TargetCommand(output: output).run(target),
       'plan' => await _plan(output, target),
       _ =>
-        !json && flags.contains('--interactive') && _usableInitTerminal()
+        !json && _usableInitTerminal()
             ? await _statusInteractive(output, target)
             : await _status(output, target),
     };

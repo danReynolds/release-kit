@@ -48,9 +48,9 @@ class Terminal:
 
         self.screen = Screen(cols, rows, history=2000)
         self.stream = pyte.Stream(self.screen)
-        os.write(self.slave, f'Shell history stays here\r\n$ rk {command}\r\n'.encode())
+        os.write(self.slave, f'Shell history stays here\r\n$ rk {command or ""}\r\n'.encode())
         self.process = subprocess.Popen(
-            [str(executable), command, *arguments], cwd=project,
+            [str(executable), *([command] if command else []), *arguments], cwd=project,
             env={**{k: v for k, v in os.environ.items() if k not in ('NO_COLOR', 'FORCE_COLOR')},
                  'TERM': 'xterm-256color', 'COLORTERM': 'truecolor',
                  'SHELL': '/bin/sh', 'HOME': str(home), 'FLEURY_SYNC_OUTPUT': '0',

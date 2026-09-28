@@ -2,12 +2,13 @@
 
 ## Shared Use and Status design — September 28, 2026
 
-`rk status --interactive` now opens the release matrix. It and Use share the
+`rk status` now opens the release matrix. It and Use share the
 104-column bound, terminal background, blue action focus, separators, detail
 view, Back behavior and inline lifecycle. Status opens without focus and reads
 each configured destination asynchronously; grouped publication cells retain
 per-package evidence. Refresh creates new readers and reports its timestamp.
-Ordinary status, redirected output and JSON remain finite reports.
+Status and bare rk open the matrix in a usable terminal. Redirected output
+and JSON remain finite reports of the same snapshot.
 
 The matrix consumes typed snapshots from the existing StatusCommand checks.
 It does not reconstruct release readiness from display strings or introduce a

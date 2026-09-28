@@ -47,7 +47,7 @@ def main():
         for width, color in [(132, True), (40, True), (104, False)]:
             env = {} if color else {'NO_COLOR': '1'}
             with Terminal(executable, 'status', project, home, cols=width, rows=24,
-                          arguments=('--interactive',), environment=env) as terminal:
+                          environment=env) as terminal:
                 terminal.wait('checked at')
                 terminal.wait('Not published')
                 terminal.wait('Esc Done')
@@ -73,7 +73,14 @@ def main():
                     assert b'38;2;' not in terminal.raw and b'48;2;' not in terminal.raw
             print(f'status: {width} columns, color={color}, details/Back/refresh/resize/exit passed', flush=True)
 
-        with Terminal(executable, 'status', project, home, arguments=('--interactive',)) as terminal:
+        with Terminal(executable, None, project, home) as terminal:
+            terminal.wait('checked at')
+            terminal.wait('Esc Done')
+            terminal.send(b'\x1b')
+            terminal.finish()
+        print('bare rk: opens the status matrix by default', flush=True)
+
+        with Terminal(executable, 'status', project, home) as terminal:
             # The fake shell prompt also contains "rk status". Wait for an
             # actual UI frame before sending a raw-input Ctrl+C.
             terminal.wait('release destinations')
@@ -84,7 +91,7 @@ def main():
         assert subprocess.check_output(['git', '-C', str(project), 'status', '--porcelain']) == original
         print('status: Ctrl+C restored terminal promptly; repository unchanged', flush=True)
 
-        for args in [('status', '--interactive'), ('status', '--interactive', '--json')]:
+        for args in [('status',), (), ('status', '--json'), ('--json',)]:
             result = subprocess.run([str(executable), *args], cwd=project, capture_output=True, text=True)
             assert result.returncode == 0, result.stderr + result.stdout
             assert '\x1b[' not in result.stdout, result.stdout
@@ -95,11 +102,11 @@ def main():
 
         empty = home / 'empty'
         empty.mkdir()
-        with Terminal(executable, 'status', empty, home, arguments=('--interactive',)) as terminal:
+        with Terminal(executable, 'status', empty, home) as terminal:
             terminal.finish()
             assert 'rk init' in terminal.text(), terminal.text()
         (empty / 'release.toml').write_text('schema = "broken"\n')
-        with Terminal(executable, 'status', empty, home, arguments=('--interactive',)) as terminal:
+        with Terminal(executable, 'status', empty, home) as terminal:
             terminal.wait('Error details')
             terminal.click('Error details')
             terminal.wait('Back')

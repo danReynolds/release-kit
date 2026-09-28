@@ -1,9 +1,9 @@
 # Release status
 
 ```sh
-rk status                    # print a report and return to the prompt
-rk status --interactive      # explore an inline release matrix
-rk status tools --interactive
+rk status                    # explore the inline release matrix
+rk status tools              # inspect one release unit
+rk                           # same as rk status
 rk status --json             # structured report for scripts
 ```
 
@@ -58,4 +58,4 @@ before publishing.
 If refreshing source configuration fails, previous results are labelled as
 previous and the full error remains available through Error details. Missing
 configuration returns to the prompt with setup guidance. Without a usable
-terminal, or with `--json`, `--interactive` falls back to the finite report.
+terminal, status prints a finite report; `--json` emits the structured snapshot.
