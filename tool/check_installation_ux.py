@@ -119,33 +119,25 @@ def main():
             assert 'The Pub activation is incomplete.' in terminal.text(), 'problem must be visible without opening details'
             assert 'Why?' not in terminal.text()
             hover(terminal, 'This checkout')
-            rule = next(line for line in terminal.screen.display if '─' in line)
-            assert all(terminal.screen.buffer[row][x].bg == '2a4c6c'
-                       for x in range(2, len(rule.rstrip()))), 'selected row has holes in its focus fill'
-            shot(terminal, 'use-current')
+            assert not any(cell.bg == '2a4c6c' for line in terminal.screen.buffer.values()
+                           for cell in line.values()), 'blank row space gained hover focus'
+            hover(terminal, '✓ Selected')
+            assert terminal.screen.buffer[row][col].bg == '2a4c6c'
+            name_row, name_col = locate(terminal, 'This checkout')
+            assert terminal.screen.buffer[name_row][name_col].bg == '183729', 'focus recolored the source row'
+            shot(terminal, 'use-action-focus')
             hover_row, hover_col = hover(terminal, 'Pub')
-            active = terminal.screen.buffer[row][col]
-            hovered = terminal.screen.buffer[hover_row][hover_col]
-            assert active.bg == '183729', active  # active selection retains its green tint
-            assert hovered.bg == '2a4c6c' and not hovered.underscore, hovered
+            assert terminal.screen.buffer[hover_row][hover_col].bg == 'default'
             assert terminal.process.poll() is None, 'hover activated an option'
-            shot(terminal, 'use-hover')
-            terminal.send(b'\x1b[A')
+            terminal.send(b'\t')  # Blocked Pub is skipped; focus reaches Refresh.
             settle(terminal)
-            assert any(cell.bg == '2a4c6c' for line in terminal.screen.buffer.values() for cell in line.values())
-            assert terminal.screen.buffer[hover_row][hover_col].bg == 'default', 'stale hover retained a second highlight'
-            terminal.click('Pub')
-            terminal.send(b'\r')
-            terminal.wait('Back')
-            terminal.wait('dart pub global activate --no-executables orbit')
-            settle(terminal)
-            assert terminal.process.poll() is None, 'an unavailable option closed the picker'
+            assert terminal.screen.buffer[row][col].bg == '183729'
+            refresh_row, refresh_col = locate(terminal, 'r Refresh')
+            assert terminal.screen.buffer[refresh_row][refresh_col].bg == '2a4c6c'
             shot(terminal, 'use-unavailable')
             terminal.send(b'\x1b')
-            terminal.wait('Use switches source.')
-            terminal.send(b'\x1b')
-            terminal.finish()  # inspecting a reason is not a failed operation
-        print('PASS active/hover/keyboard states, compact height, no duplicate command, unavailable reason', flush=True)
+            terminal.finish()
+        print('PASS action-only hover/keyboard focus, no initial focus, width bound, inline unavailable reason', flush=True)
 
         with Terminal(executable, 'use', project, home, environment={'NO_COLOR': '1'}) as terminal:
             terminal.wait('Esc Done')
@@ -154,32 +146,26 @@ def main():
             assert not terminal.screen.buffer[row][col].reverse, 'NO_COLOR opened focused'
             terminal.send(b'\t')
             settle(terminal)
-            assert terminal.screen.buffer[row][col].reverse, 'Tab did not focus the first cell'
-            hover_row, hover_col = hover(terminal, 'Pub')
+            assert terminal.screen.buffer[row][col].reverse, 'Tab did not focus the first action'
+            name_row, name_col = locate(terminal, 'This checkout')
+            assert not terminal.screen.buffer[name_row][name_col].reverse
+            hover_row, hover_col = hover(terminal, 'r Refresh')
             assert terminal.screen.buffer[hover_row][hover_col].reverse
             assert not terminal.screen.buffer[row][col].reverse
             terminal.send(b'\x1b')
             terminal.finish()
-        print('PASS NO_COLOR preserves navigation and selected checkmarks', flush=True)
+        print('PASS NO_COLOR focuses only the action and preserves selected checkmarks', flush=True)
 
         with Terminal(executable, 'use', project, home, cols=40, rows=12) as terminal:
             terminal.wait('Esc Done')
-            terminal.send(b'\t\x1b[B')
+            terminal.send(b'\t\x1b[B')  # Blocked Pub has no action to navigate to.
             settle(terminal)
-            row, col = locate(terminal, 'Pub')
-            assert any(cell.bg == '2a4c6c' for line in terminal.screen.buffer.values() for cell in line.values()), 'Down failed to focus Pub'
-            terminal.send(b'\r')
-            terminal.wait('Pub')
-            terminal.send(b'\x1b[F')  # End works from the safe Back action.
-            terminal.wait('global activate')
-            shot(terminal, 'use-compact-reason')
-            terminal.send(b'\r')
-            terminal.wait('Use switches source.')
-            terminal.send(b'\r')  # Back restores the originating cell.
-            terminal.wait('Pub')
+            row, col = locate(terminal, '✓ Selected')
+            assert terminal.screen.buffer[row][col].bg == '2a4c6c'
+            shot(terminal, 'use-compact-action')
             terminal.send(b'\x03')
             terminal.finish(130)
-        print('PASS compact arrow navigation, complete remedy, Back focus and Ctrl+C from details', flush=True)
+        print('PASS compact action navigation skips unavailable controls and restores on Ctrl+C', flush=True)
 
         home = root / 'many'
         project = workspace(home)
@@ -194,6 +180,7 @@ def main():
             shot(terminal, 'use-multiple')
             # Row navigation reaches the second project's Local source,
             # even when the table needs to scroll at this terminal height.
+            terminal.wait('Check failed')  # Retry is an explicit, focusable action.
             terminal.send(b'\x1b[B\x1b[B\r')
             terminal.wait('orbit_admin → Local')
             assert terminal.process.poll() is None

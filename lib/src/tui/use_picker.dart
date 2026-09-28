@@ -53,6 +53,9 @@ class UsePicker extends Notifier {
   final InstallationOperation use;
   final void Function() close;
   final available = <SourceKey, AvailableState>{};
+  // Keep the completed action in place until this picker closes. Repeated Enter
+  // must never move from downloading an update to selecting its source.
+  final downloaded = <SourceKey, String>{};
   SourceKey? pending;
   bool downloading = false,
       busy = false,
@@ -201,6 +204,9 @@ class UsePicker extends Notifier {
       failed = true;
       message += '\nCould not refresh installations: ${_describe(error)}';
     }
+    if (!failed && release != null) {
+      downloaded[(state.project.name, source)] = release.version;
+    }
     busy = false;
     pending = null;
     if (failed && !closing) {
@@ -283,11 +289,15 @@ class UseScreen extends StatefulWidget {
   State<UseScreen> createState() => _UseScreenState();
 }
 
+enum _SourceAction { download, use }
+
+typedef _ActionKey = (SourceKey, _SourceAction);
+
 class _UseScreenState extends State<UseScreen> {
   UsePicker get model => widget.model;
-  final _rows = <SourceKey, FocusNode>{};
+  final _actions = <_ActionKey, FocusNode>{};
   final _scroll = ScrollController();
-  SourceKey? _focused, _activeRow;
+  _ActionKey? _focused;
   bool _overlay = false;
   @override
   void initState() {
@@ -299,54 +309,114 @@ class _UseScreenState extends State<UseScreen> {
 
   @override
   void dispose() {
-    for (final node in _rows.values) {
+    for (final node in _actions.values) {
       node.dispose();
     }
     _scroll.dispose();
     super.dispose();
   }
 
-  void _move(int direction) {
+  bool _canUse(ProjectInstallations state, InstallationSource source) =>
+      !model.busy &&
+      state.sources[source]!.problem == null &&
+      (source == InstallationSource.local ||
+          state.sources[source]!.installation != null);
+
+  bool _downloaded(ProjectInstallations state, InstallationSource source) {
+    final version = model.downloaded[(state.project.name, source)];
+    return version != null &&
+        state.sources[source]!.installation?.version == version &&
+        model.availability(state, source).release?.version == version;
+  }
+
+  bool _canFocusDownload(
+    ProjectInstallations state,
+    InstallationSource source,
+  ) =>
+      !model.busy &&
+      source != InstallationSource.local &&
+      state.sources[source]!.problem == null &&
+      (model.availability(state, source).error != null ||
+          model.canDownload(state, source) ||
+          _downloaded(state, source));
+
+  List<_ActionKey> _choices(
+    ProjectInstallations state,
+    InstallationSource source,
+  ) => [
+    if (_canFocusDownload(state, source))
+      ((state.project.name, source), _SourceAction.download),
+    if (_canUse(state, source))
+      ((state.project.name, source), _SourceAction.use),
+  ];
+
+  _ActionKey? get _current =>
+      _actions.entries.where((entry) => entry.value.hasFocus).firstOrNull?.key;
+
+  void _moveSource(int direction) {
     if (model.busy) return;
-    final keys = [
+    final rows = [
       for (final state in model.states)
-        for (final source in state.sources.keys) (state.project.name, source),
+        for (final source in state.sources.keys)
+          if (_choices(state, source).isNotEmpty) _choices(state, source),
     ];
-    final index = keys.indexOf(_focused ?? ('', InstallationSource.local));
+    if (rows.isEmpty) return;
+    final current = _current;
+    final index = rows.indexWhere((row) => row.first.$1 == current?.$1);
     final next = index < 0
-        ? (direction > 0 ? 0 : keys.length - 1)
-        : (index + direction).clamp(0, keys.length - 1);
-    _rows[keys[next]]?.requestFocus();
+        ? (direction > 0 ? 0 : rows.length - 1)
+        : (index + direction).clamp(0, rows.length - 1);
+    final choices = rows[next];
+    // Prefer Use on entry, retain the same action when moving between sources.
+    final target =
+        choices.where((key) => key.$2 == current?.$2).firstOrNull ??
+        choices.last;
+    _actions[target]?.requestFocus();
+  }
+
+  void _moveAction(int direction) {
+    if (model.busy) return;
+    final current = _current;
+    if (current == null) return;
+    final state = model.states.singleWhere(
+      (s) => s.project.name == current.$1.$1,
+    );
+    final choices = _choices(state, current.$1.$2);
+    if (choices.isEmpty) return;
+    final index = choices.indexOf(current);
+    final next = (index + direction).clamp(0, choices.length - 1);
+    _actions[choices[next]]?.requestFocus();
   }
 
   List<KeyBinding> _navigation() => [
-    KeyBinding(KeySequence.down, onTrigger: (_) => _move(1)),
-    KeyBinding(KeySequence.up, onTrigger: (_) => _move(-1)),
+    KeyBinding(KeySequence.down, onTrigger: (_) => _moveSource(1)),
+    KeyBinding(KeySequence.up, onTrigger: (_) => _moveSource(-1)),
+    KeyBinding(KeySequence.left, onTrigger: (_) => _moveAction(-1)),
+    KeyBinding(KeySequence.right, onTrigger: (_) => _moveAction(1)),
     KeyBinding(KeySequence.r, onTrigger: (_) => model.checkAll()),
-    KeyBinding(
-      KeySequence.enter,
-      onTrigger: (event) {
-        final row = _rows.entries
-            .where((entry) => entry.value.hasFocus)
-            .firstOrNull;
-        if (row == null) {
-          event.bubble();
-          return;
-        }
-        final state = model.states.singleWhere(
-          (s) => s.project.name == row.key.$1,
-        );
-        unawaited(model.choose(state, row.key.$2));
-      },
-    ),
   ];
+
+  Widget _action(
+    SourceKey source,
+    _SourceAction action,
+    Widget Function(FocusNode) builder,
+  ) {
+    final key = (source, action);
+    return FocusDetector(
+      key: ValueKey(key),
+      onFocusChange: (focused) {
+        if (focused) setState(() => _focused = key);
+      },
+      child: builder(_actions.putIfAbsent(key, FocusNode.new)),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     context.listen(model);
     if (_overlay && model.details == null) {
       TuiBinding.of(context).addPostFrameCallback((_) {
-        if (mounted) _rows[_focused]?.requestFocus();
+        if (mounted) _actions[_focused]?.requestFocus();
       });
     }
     _overlay = model.details != null;
@@ -376,10 +446,10 @@ class _UseScreenState extends State<UseScreen> {
             ? model.message
             : _focused == null
             ? ''
-            : model.available[_focused]?.error ?? '',
+            : model.available[_focused?.$1]?.error ?? '',
         failed: model.failed,
         positive: model.outcomes.isNotEmpty && !model.failed && !model.busy,
-        hint: '↑↓ rows · Tab actions · Enter choose',
+        hint: '↑↓ source · ←→ action · Tab move · Enter activate',
         actions: [
           MatrixButton(
             text: 'r Refresh',
@@ -392,8 +462,7 @@ class _UseScreenState extends State<UseScreen> {
             onPressed: model.exit,
           ),
         ],
-        // The table owns Up/Down before the enclosing viewport's spatial
-        // traversal can skip rows whose Use action is disabled.
+        // Action navigation must run before the viewport's spatial traversal.
         child: KeyBindings(
           bindings: _navigation(),
           child: LayoutBuilder(
@@ -461,7 +530,6 @@ class _UseScreenState extends State<UseScreen> {
     bool wide,
   ) {
     final key = (state.project.name, source);
-    final node = _rows.putIfAbsent(key, () => FocusNode(skipTraversal: true));
     final inspection = state.sources[source]!;
     final result = model.availability(state, source);
     final local = source == InstallationSource.local;
@@ -490,39 +558,48 @@ class _UseScreenState extends State<UseScreen> {
         ? 'Check failed'
         : result.release?.version ?? 'Checking…';
     final canDownload = model.canDownload(state, source);
-    Widget downloadButton() => MatrixButton(
-      text: pending && model.downloading
-          ? (model.message.startsWith('Installing')
-                ? 'Installing…'
-                : 'Downloading…')
-          : result.error != null
-          ? 'Retry'
-          : canDownload
-          ? '↓ Download'
-          : inspection.installation?.version == result.release?.version &&
-                result.release != null
-          ? '✓ Current'
-          : '↓ Download',
-      unavailable: !canDownload && result.error == null,
-      onPressed: model.busy
-          ? null
-          : result.error != null
-          ? () => unawaited(model.check(state, source))
-          : canDownload
-          ? () => unawaited(model.download(state, source))
-          : null,
+    Widget downloadButton() => _action(
+      key,
+      _SourceAction.download,
+      (node) => MatrixButton(
+        focusNode: node,
+        text: pending && model.downloading
+            ? (model.message.startsWith('Installing')
+                  ? 'Installing…'
+                  : 'Downloading…')
+            : result.error != null
+            ? 'Retry'
+            : _downloaded(state, source)
+            ? '✓ Downloaded'
+            : canDownload
+            ? '↓ Download'
+            : inspection.installation?.version == result.release?.version &&
+                  result.release != null
+            ? '✓ Current'
+            : '↓ Download',
+        unavailable: !_canFocusDownload(state, source),
+        onPressed: model.busy
+            ? null
+            : result.error != null
+            ? () => unawaited(model.check(state, source))
+            : _canFocusDownload(state, source)
+            ? () => unawaited(model.download(state, source))
+            : null,
+      ),
     );
     Widget useButton() => SizedBox(
       width: 15,
-      child: MatrixButton(
-        text: useText,
-        selected: (selected || active) && _activeRow != key,
-        onPressed:
-            model.busy ||
-                inspection.problem != null ||
-                (!local && inspection.installation == null)
-            ? null
-            : () => unawaited(model.choose(state, source)),
+      child: _action(
+        key,
+        _SourceAction.use,
+        (node) => MatrixButton(
+          focusNode: node,
+          text: useText,
+          selected: selected || active,
+          onPressed: _canUse(state, source)
+              ? () => unawaited(model.choose(state, source))
+              : null,
+        ),
       ),
     );
     Widget availability() => Row(
@@ -541,111 +618,61 @@ class _UseScreenState extends State<UseScreen> {
           SizedBox(width: 17, child: downloadButton()),
       ],
     );
-    return FocusDetector(
-      key: ValueKey(key),
-      onFocusChange: (focused) {
-        setState(() {
-          if (focused) {
-            _focused = key;
-            _activeRow = key;
-          } else if (_activeRow == key) {
-            _activeRow = null;
-          }
-        });
-      },
-      child: Focus(
-        focusNode: node,
-        skipTraversal: true,
-        child: KeyBindings(
-          bindings: [
-            KeyBinding(
-              KeySequence.enter,
-              onTrigger: (_) {
-                if (node.hasFocus) {
-                  unawaited(model.choose(state, source));
-                }
-              },
-            ),
-          ],
-          child: LayoutBuilder(
-            builder: (context, _) {
-              return MouseRegion(
-                onEnter: model.busy ? null : node.requestFocus,
-                child: GestureDetector(
-                  onTap: model.busy ? null : node.requestFocus,
-                  child: DefaultTextStyle(
-                    style: _activeRow == key
-                        ? matrixFocusStyle(context)
-                        : selected || active
-                        ? selectedStyle
-                        : const CellStyle(),
-                    child: Container(
-                      color: _activeRow == key
-                          ? const RgbColor(42, 76, 108)
-                          : selected || active
-                          ? const RgbColor(24, 55, 41)
-                          : null,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 0),
-                        child: wide
-                            ? Row(
-                                children: [
-                                  SizedBox(
-                                    width: 13,
-                                    child: Text(
-                                      source.label,
-                                      style: const CellStyle(bold: true),
-                                    ),
-                                  ),
-                                  SizedBox(
-                                    width: 21,
-                                    child: Text(
-                                      terminalSafeText(installed),
-                                      maxLines: 1,
-                                    ),
-                                  ),
-                                  Expanded(child: availability()),
-                                  const SizedBox(width: 1),
-                                  useButton(),
-                                ],
-                              )
-                            : Column(
-                                mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: Text(
-                                          source.label,
-                                          style: const CellStyle(bold: true),
-                                        ),
-                                      ),
-                                      useButton(),
-                                    ],
-                                  ),
-                                  Text(
-                                    'Installed  ${terminalSafeText(installed)}',
-                                    style: mutedText,
-                                  ),
-                                  Row(
-                                    children: [
-                                      const Text(
-                                        'Available  ',
-                                        style: mutedText,
-                                      ),
-                                      Expanded(child: availability()),
-                                    ],
-                                  ),
-                                ],
-                              ),
+    return GestureDetector(
+      // Blank row space previews Use without running it. Only buttons own focus.
+      onTap: _canUse(state, source)
+          ? () => _actions[(key, _SourceAction.use)]?.requestFocus()
+          : null,
+      child: DefaultTextStyle(
+        style: selected || active ? selectedStyle : const CellStyle(),
+        child: Container(
+          color: selected || active ? const RgbColor(24, 55, 41) : null,
+          child: wide
+              ? Row(
+                  children: [
+                    SizedBox(
+                      width: 13,
+                      child: Text(
+                        source.label,
+                        style: const CellStyle(bold: true),
                       ),
                     ),
-                  ),
+                    SizedBox(
+                      width: 21,
+                      child: Text(terminalSafeText(installed), maxLines: 1),
+                    ),
+                    Expanded(child: availability()),
+                    const SizedBox(width: 1),
+                    useButton(),
+                  ],
+                )
+              : Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            source.label,
+                            style: const CellStyle(bold: true),
+                          ),
+                        ),
+                        useButton(),
+                      ],
+                    ),
+                    Text(
+                      'Installed  ${terminalSafeText(installed)}',
+                      style: mutedText,
+                    ),
+                    Row(
+                      children: [
+                        const Text('Available  ', style: mutedText),
+                        Expanded(child: availability()),
+                      ],
+                    ),
+                  ],
                 ),
-              );
-            },
-          ),
         ),
       ),
     );
