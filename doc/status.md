@@ -38,7 +38,9 @@ short windows. Use shares these bounds, controls and detail views.
 
 ## Read the evidence
 
-`Published` means the candidate matches that destination. `Latest` names the
+`Published` means that candidate version is verified at the destination.
+A unit marked `changed` has new source under an already released version; its
+release issue remains visible even when every destination is published. `Latest` names the
 latest published version returned by its reader, which can differ from the
 candidate. A grouped cell reports partial publication rather than hiding the
 remaining packages. An unread history remains a failed check even when the

@@ -29,6 +29,13 @@ Validation on macOS arm64 / Dart 3.12.2:
 - The PTY emulator now explicitly retains clipped top rows in scrollback during
   a height reduction; pyte otherwise deletes those rows during resize itself.
 
+A read-only pass against the actual RK checkout and installed sources also
+passes: completed remote observations, bounded layout, static default, action
+focus, detail/Back, uninstall cancellation, Ctrl+C and unchanged selection.
+That pass exposed the need to show source drift even when all destinations
+are published; the unit now says "changed" and the first release blocker is
+visible beneath the matrix.
+
 The browser study now contains only Use and the chosen release matrix, with
 matching controls and destination detail views. It remains a simulated preview.
 This is local UX qualification, not a new release or cross-platform release

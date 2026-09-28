@@ -355,12 +355,16 @@ class _StatusScreenState extends State<StatusScreen> {
         subtitle: subtitle,
         onEscape: model.exit,
         scrollController: _scroll,
-        failed: model.error != null,
+        failed: model.error != null || issues.isNotEmpty,
         message: model.error != null
             ? 'Read failed. Open error details for the cause and next step.'
-            : (model.checking || model.snapshot?.nextCommand == null
-                  ? ''
-                  : 'Next: ${model.snapshot!.nextCommand}'),
+            : model.checking
+            ? ''
+            : model.snapshot?.nextCommand != null
+            ? 'Next: ${model.snapshot!.nextCommand}'
+            : issues.isNotEmpty
+            ? issues.first.diagnostic.message
+            : '',
         hint: '↑↓ unit · ←→ destination · Tab move · Enter inspect',
         actions: [
           if (model.error != null)
@@ -517,8 +521,15 @@ String statusColumnLabel(String column) => switch (column) {
   if (column == 'unit') {
     return (
       row.unit.name,
-      '${row.unit.version.canonical}${row.complete?.issues.isNotEmpty == true ? ' · !' : ''}',
-      const CellStyle(bold: true),
+      '${row.unit.version.canonical}${row.complete?.sourceVersionAlreadyReleased == true
+          ? ' · changed'
+          : row.complete?.issues.isNotEmpty == true
+          ? ' · !'
+          : ''}',
+      CellStyle(
+        bold: true,
+        foreground: row.complete?.issues.isNotEmpty == true ? warning : null,
+      ),
     );
   }
   if (column == 'stage') {

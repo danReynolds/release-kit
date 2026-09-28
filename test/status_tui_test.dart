@@ -75,6 +75,44 @@ Future<void> settle() => Future<void>.delayed(const Duration(milliseconds: 80));
 
 void main() {
   test(
+    'published destinations cannot hide source drift on the release unit',
+    () async {
+      final model = StatusPicker(
+        load: () async => StatusReadSession(
+          command(
+            inspector: fixtures.FixedInspector(
+              registry: fixtures.FakeRegistry({}),
+              git: fixtures.git(),
+              answer: const Inspection.exact(),
+              latest: const Inspection.exact(evidence: {'version': '0.2.0'}),
+              answers: const {
+                StepKind.tag: Inspection.conflict(
+                  'source differs',
+                  sourceMismatch: SourceBindingMismatch(
+                    releasedCommit: 'dddddddddddddddddddddddddddddddddddddddd',
+                    currentCommit: fixtures.testHead,
+                  ),
+                ),
+              },
+            ),
+          ),
+          () {},
+        ),
+        close: () {},
+      );
+      addTearDown(model.dispose);
+      await model.refresh();
+      final row = model.rows.single;
+      expect(statusCell(row, 'gitTag').$1, '✓ Published');
+      expect(statusCell(row, 'unit').$2, '0.2.0 · changed');
+      expect(
+        model.issues.first.diagnostic.message,
+        contains('already released'),
+      );
+      expect(model.snapshot!.nextCommand, isNull);
+    },
+  );
+  test(
     'a grouped publication cell keeps each package and partial completion visible',
     () async {
       final reader = command(
