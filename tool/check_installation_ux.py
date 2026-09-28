@@ -99,7 +99,7 @@ def main():
         run(executable, project, home, 'use', 'local', '--json')
         # An incomplete Pub activation gives an inspectable unavailable choice.
         (home / 'cache/global_packages/orbit').mkdir(parents=True)
-        with Terminal(executable, 'use', project, home) as terminal:
+        with Terminal(executable, 'use', project, home, cols=240) as terminal:
             terminal.wait('Esc Done')
             settle(terminal)
             row, col = locate(terminal, '✓ Selected')
@@ -115,8 +115,15 @@ def main():
             assert 'Commands: orbit' not in terminal.text()
             assert all(terminal.screen.buffer[y][0].bg == 'default' for y in range(32))
             assert next(i for i, line in enumerate(terminal.screen.display) if 'Esc Done' in line) < 24
+            assert all(len(line.rstrip()) <= 104 for line in terminal.screen.display), 'table expanded beyond its content width'
+            assert 'The Pub activation is incomplete.' in terminal.text(), 'problem must be visible without opening details'
+            assert 'Why?' not in terminal.text()
+            hover(terminal, 'This checkout')
+            rule = next(line for line in terminal.screen.display if '─' in line)
+            assert all(terminal.screen.buffer[row][x].bg == '2a4c6c'
+                       for x in range(2, len(rule.rstrip()))), 'selected row has holes in its focus fill'
             shot(terminal, 'use-current')
-            hover_row, hover_col = hover(terminal, 'Why?')
+            hover_row, hover_col = hover(terminal, 'Pub')
             active = terminal.screen.buffer[row][col]
             hovered = terminal.screen.buffer[hover_row][hover_col]
             assert active.bg == '183729', active  # active selection retains its green tint
@@ -127,7 +134,9 @@ def main():
             settle(terminal)
             assert any(cell.bg == '2a4c6c' for line in terminal.screen.buffer.values() for cell in line.values())
             assert terminal.screen.buffer[hover_row][hover_col].bg == 'default', 'stale hover retained a second highlight'
-            terminal.click('Why?')
+            terminal.click('Pub')
+            terminal.send(b'\r')
+            terminal.wait('Back')
             terminal.wait('dart pub global activate --no-executables orbit')
             settle(terminal)
             assert terminal.process.poll() is None, 'an unavailable option closed the picker'
@@ -146,7 +155,7 @@ def main():
             terminal.send(b'\t')
             settle(terminal)
             assert terminal.screen.buffer[row][col].reverse, 'Tab did not focus the first cell'
-            hover_row, hover_col = hover(terminal, 'Why?')
+            hover_row, hover_col = hover(terminal, 'Pub')
             assert terminal.screen.buffer[hover_row][hover_col].reverse
             assert not terminal.screen.buffer[row][col].reverse
             terminal.send(b'\x1b')
@@ -157,7 +166,7 @@ def main():
             terminal.wait('Esc Done')
             terminal.send(b'\t\x1b[B')
             settle(terminal)
-            row, col = locate(terminal, 'Why?')
+            row, col = locate(terminal, 'Pub')
             assert any(cell.bg == '2a4c6c' for line in terminal.screen.buffer.values() for cell in line.values()), 'Down failed to focus Pub'
             terminal.send(b'\r')
             terminal.wait('Pub')

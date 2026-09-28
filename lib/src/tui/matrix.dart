@@ -14,7 +14,7 @@ const selectedStyle = CellStyle(
 // The terminal still owns the page background. Only actionable cells are filled.
 const matrixTheme = ThemeData(colorScheme: ColorScheme(primary: accent));
 
-CellStyle _highlight(BuildContext context) =>
+CellStyle matrixFocusStyle(BuildContext context) =>
     MediaQuery.colorModeOf(context) == ColorMode.none
     ? const CellStyle(inverse: true, bold: true, underline: false, dim: false)
     : const CellStyle(
@@ -100,7 +100,7 @@ class _MatrixButtonState extends State<MatrixButton> {
         // Focus owns the highlight. A stale mouse position must not keep a
         // second cell highlighted after keyboard navigation.
         hovered: const CellStyle(underline: false),
-        focused: _highlight(context),
+        focused: matrixFocusStyle(context),
       ),
     ),
   );
@@ -254,10 +254,12 @@ class MatrixShell extends StatefulWidget {
     this.scrollFromActions = false,
     this.hint = '',
     this.scrollController,
+    this.maxWidth = 128,
   });
   final String command, subtitle, message, count, hint;
   final Widget child;
   final bool failed, positive;
+  final int maxWidth;
 
   /// Text reviews allow paging from their actions and show overflow guidance.
   /// The viewport itself is not an invisible keyboard stop.
@@ -302,7 +304,12 @@ class _MatrixShellState extends State<MatrixShell> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => Align(
+    alignment: Alignment.topLeft,
+    child: ConstrainedBox(maxWidth: widget.maxWidth, child: _contents(context)),
+  );
+
+  Widget _contents(BuildContext context) {
     final region = context.scope<MatrixRegion?>();
     final binding = TuiBinding.of(context);
     context.listen(_scroll);
@@ -438,14 +445,17 @@ class MatrixDetails extends StatelessWidget {
     required this.body,
     required this.onBack,
     this.failed = false,
+    this.maxWidth = 128,
   });
   final String command, title, body;
   final void Function() onBack;
   final bool failed;
+  final int maxWidth;
 
   @override
   Widget build(BuildContext context) => MatrixShell(
     command: command,
+    maxWidth: maxWidth,
     subtitle: title,
     onEscape: onBack,
     scrollFromActions: true,

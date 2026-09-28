@@ -353,6 +353,7 @@ class _UseScreenState extends State<UseScreen> {
     if (model.details case final details?) {
       return MatrixDetails(
         command: 'rk use',
+        maxWidth: 104,
         title: details.title,
         body: details.body,
         failed: model.failed,
@@ -363,6 +364,7 @@ class _UseScreenState extends State<UseScreen> {
       bindings: _navigation(),
       child: MatrixShell(
         command: 'rk use',
+        maxWidth: 104,
         count: model.states.length == 1
             ? model.states.single.project.name
             : '${model.states.length} projects',
@@ -425,6 +427,17 @@ class _UseScreenState extends State<UseScreen> {
                     _TableRule(),
                     for (final source in state.sources.keys) ...[
                       _row(state, source, wide),
+                      if (state.sources[source]?.problem case final problem?)
+                        Padding(
+                          padding: const EdgeInsets.only(left: 2),
+                          child: Text(
+                            problem
+                                .split('\n')
+                                .map(terminalSafeText)
+                                .join('\n'),
+                            style: mutedText,
+                          ),
+                        ),
                       _TableRule(),
                     ],
                     for (final issue in state.routing)
@@ -460,15 +473,14 @@ class _UseScreenState extends State<UseScreen> {
                   inspection.installation!.location != state.project.directory
               ? 'Other checkout'
               : 'This checkout')
-        : inspection.installation?.version ?? 'Not installed';
+        : inspection.installation?.version ??
+              (inspection.problem == null ? 'Not installed' : 'Unavailable');
     final useText = pending && !model.downloading
         ? 'Switching…'
         : active
         ? '✓ Using'
         : selected
         ? '✓ Selected'
-        : inspection.problem != null
-        ? 'Why?'
         : 'Use';
     final availableText = local
         ? '—'
@@ -504,12 +516,11 @@ class _UseScreenState extends State<UseScreen> {
       width: 15,
       child: MatrixButton(
         text: useText,
-        selected: selected || active,
+        selected: (selected || active) && _activeRow != key,
         onPressed:
             model.busy ||
-                (!local &&
-                    inspection.installation == null &&
-                    inspection.problem == null)
+                inspection.problem != null ||
+                (!local && inspection.installation == null)
             ? null
             : () => unawaited(model.choose(state, source)),
       ),
@@ -526,7 +537,8 @@ class _UseScreenState extends State<UseScreen> {
             overflow: TextOverflow.ellipsis,
           ),
         ),
-        if (!local) SizedBox(width: 17, child: downloadButton()),
+        if (!local && inspection.problem == null)
+          SizedBox(width: 17, child: downloadButton()),
       ],
     );
     return FocusDetector(
@@ -562,10 +574,8 @@ class _UseScreenState extends State<UseScreen> {
                 child: GestureDetector(
                   onTap: model.busy ? null : node.requestFocus,
                   child: DefaultTextStyle(
-                    style:
-                        _activeRow == key &&
-                            MediaQuery.colorModeOf(context) == ColorMode.none
-                        ? const CellStyle(inverse: true)
+                    style: _activeRow == key
+                        ? matrixFocusStyle(context)
                         : selected || active
                         ? selectedStyle
                         : const CellStyle(),

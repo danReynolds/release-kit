@@ -276,7 +276,11 @@ void main() {
       lock.writeAsStringSync('packages:\n  orbit_cli:\n    source: path\n');
       expect(
         (await provider.inspect(project)).problem,
-        contains('different source'),
+        contains('Already activated from a local path'),
+      );
+      expect(
+        (await provider.inspect(project)).problem,
+        contains('dart pub global deactivate orbit_cli'),
       );
     },
   );

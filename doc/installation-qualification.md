@@ -9,9 +9,14 @@ installed; Enter on those rows does not download. Download retains source
 selection and the open picker. Single-project Use restores the terminal as soon
 as switching succeeds, without another provider scan.
 
+The dogfood follow-up caps this table at 104 columns using Fleury's existing
+Align/ConstrainedBox widgets. Row focus now propagates its blue style through
+text and selected buttons. Pub conflicts show their reason and repair command
+inline, rather than claiming the package is absent or requiring a Why action.
+
 Evidence on macOS arm64, Dart 3.12.2:
 
-- 47 installation/provider/controller/CLI tests pass, including late check
+- 48 installation/provider/controller/CLI tests pass, including late check
   replies, cancellation, download versus selection, exact project binding,
   compatible Pub releases, changed Homebrew formula refusal, and keyboard rows.
 - Both retained native PTY scripts pass. They exercise all four inline commands,

@@ -65,12 +65,20 @@ class PubInstallationProvider
       lock.path,
       diagnostics,
     )?.map('packages')?.map(project.name);
-    if (diagnostics.isNotEmpty ||
-        package?.string('source') != 'hosted' ||
-        package?.map('description')?.string('url') != 'https://pub.dev') {
-      return const SourceInspection(
+    if (diagnostics.isNotEmpty || package == null) {
+      return SourceInspection(problem: repair);
+    }
+    if (package.string('source') != 'hosted' ||
+        package.map('description')?.string('url') != 'https://pub.dev') {
+      final kind = switch (package.string('source')) {
+        'path' => 'a local path',
+        'git' => 'Git',
+        _ => 'another registry',
+      };
+      return SourceInspection(
         problem:
-            'The global activation uses a different source. Keep it or deactivate it with Dart before installing from pub.dev.',
+            'Already activated from $kind. To replace it with pub.dev, first run:\n'
+            'dart pub global deactivate ${project.name}',
       );
     }
     final config = File('$root/.dart_tool/package_config.json');
@@ -101,7 +109,7 @@ class PubInstallationProvider
     );
     if (pubspec == null ||
         pubspec.name != project.name ||
-        pubspec.version?.canonical != package?.string('version')) {
+        pubspec.version?.canonical != package.string('version')) {
       return const SourceInspection(
         problem: 'The pub activation does not match its package metadata.',
       );
@@ -118,7 +126,7 @@ class PubInstallationProvider
     return SourceInspection(
       installation: Installation(
         source: source,
-        version: package!.string('version')!,
+        version: package.string('version')!,
         location: directory,
         exportedPaths: [
           for (final command in project.commands) '$cache/bin/$command',

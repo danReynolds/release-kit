@@ -12,7 +12,9 @@ rk uninstall pub                # confirm removal of an inactive installation
 ```
 
 The picker opens inline beneath your prompt and grows to fit its content, up to
-24 rows. Your terminal keeps its background; green marks the current choice and
+24 rows. The source table is left-aligned and capped at 104 columns, shrinking
+with narrower terminals. Other command matrices cap at 128 columns to fit their
+additional outputs. Your terminal keeps its background; green marks the current choice and
 a blue fill marks mouse or keyboard focus. It opens without focus, so the saved
 selection stays green until you navigate. Checkmarks and reverse video preserve
 those distinctions with `NO_COLOR`. Use Tab or arrow keys to navigate and Enter
@@ -22,8 +24,10 @@ A successful source switch for one project closes the picker and leaves its resu
 shell history. With several projects, the picker stays open so you can change
 another row; choose Done or press Escape when finished. `-p` limits it to one
 project and restores single-action completion. Errors stay open for inspection
-and retry. Unavailable choices open their full reason and repair command;
-reading one does not fail the command. Back restores the originating choice
+and retry. The source table shows unavailable reasons and repair commands
+beneath the affected row, disables Use, and hides Download. Enter on that row
+opens a scrollable explanation when you need more room; reading it does not
+fail the command. Back restores the originating choice
 and scroll position. Uninstall asks for confirmation before removing an
 installation and restores your place when cancelled.
 
