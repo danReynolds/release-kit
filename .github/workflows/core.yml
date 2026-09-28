@@ -57,3 +57,4 @@ jobs:
           dart compile exe bin/rk.dart -o .dart_tool/rk-inline-check
           .dart_tool/pty-env/bin/python tool/check_installation_tui.py .dart_tool/rk-inline-check
           .dart_tool/pty-env/bin/python tool/check_installation_ux.py .dart_tool/rk-inline-check
+          .dart_tool/pty-env/bin/python tool/check_status_tui.py .dart_tool/rk-inline-check
