@@ -343,7 +343,9 @@ Future<int> _run(
   } else if (source == null) {
     for (final state in states) {
       output.line(
-        '${state.project.name} · ${state.project.label}',
+        state.project.name == state.project.label
+            ? state.project.name
+            : '${state.project.name} · ${state.project.label}',
         strong: true,
       );
       for (final e in state.sources.entries) {

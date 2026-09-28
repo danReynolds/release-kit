@@ -139,6 +139,14 @@ class UsePicker extends Notifier {
       notify();
       return;
     }
+    if (state.currentSource == source &&
+        (source != InstallationSource.local ||
+            inspection.installation?.location == state.project.directory)) {
+      // The green Using control is also Done for a single-project picker.
+      // Reusing it must not reinstall or rewrite a custom local launcher.
+      if (states.length == 1) close();
+      return;
+    }
     await _run(state, source, null);
   }
 

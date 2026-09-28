@@ -11,7 +11,7 @@ as switching succeeds, without another provider scan.
 
 Evidence on macOS arm64, Dart 3.12.2:
 
-- 46 installation/provider/controller/CLI tests pass, including late check
+- 47 installation/provider/controller/CLI tests pass, including late check
   replies, cancellation, download versus selection, exact project binding,
   compatible Pub releases, changed Homebrew formula refusal, and keyboard rows.
 - Both retained native PTY scripts pass. They exercise all four inline commands,

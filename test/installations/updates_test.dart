@@ -339,6 +339,46 @@ void main() {
   );
 
   test(
+    'Using closes without preparing or rewriting the active source',
+    () async {
+      final states = [
+        ProjectInstallations(
+          project,
+          {
+            InstallationSource.pub: SourceInspection(
+              installation: Installation(
+                source: InstallationSource.pub,
+                version: '1.3.0',
+                location: '/pub',
+                commands: {
+                  for (final c in project.commands)
+                    c: LaunchCommand('/bin/echo'),
+                },
+              ),
+            ),
+          },
+          currentSources: {
+            for (final c in project.commands) c: InstallationSource.pub,
+          },
+        ),
+      ];
+      var closed = false;
+      final model = UsePicker(
+        states: states,
+        refresh: () async => throw StateError('No rescan'),
+        checkAvailable: (_, _, _) async => Release(project),
+        downloadAvailable: (_, _, _, _) async =>
+            throw StateError('No download'),
+        use: (_, _, _, _) async => throw StateError('No reinstall'),
+        close: () => closed = true,
+      );
+      addTearDown(model.dispose);
+      await model.choose(states.single, InstallationSource.pub);
+      expect(closed, isTrue);
+    },
+  );
+
+  test(
     'Pub checks SDK, command set, retractions and stable versions without activating',
     () async {
       final calls = <List<String>>[];
