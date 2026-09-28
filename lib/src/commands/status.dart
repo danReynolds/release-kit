@@ -484,6 +484,7 @@ class StatusCommand {
                 'rk release ${unit.name} --stage',
             evidence: '$error',
           ),
+          evidence: {'Cause': '$error'},
         ),
       );
     }
@@ -894,7 +895,10 @@ class StatusCommand {
               target.currentVersion!,
               target.expectation.targetVersion,
             ),
-          if (agreed == null || speaks || linked) _condition(state),
+          if (agreed == null || speaks || linked)
+            state.verdict == Verdict.unknown
+                ? 'could not be read'
+                : _condition(state),
         ].join(' · '),
         depth: 2,
         labelWidth: 30,
@@ -913,15 +917,18 @@ class StatusCommand {
     if (snapshot.sourceVersionAlreadyReleased) return;
     final staged = snapshot.stage?.reusable == true;
     final localProject =
-        _localBinaryWorkRemains(
-          unit: snapshot.unit,
-          targets: snapshot.targets,
-          stage: snapshot.stage,
-        )
+        (staged &&
+                snapshot.targets.isEmpty &&
+                snapshot.unit.binaryProject != null) ||
+            _localBinaryWorkRemains(
+              unit: snapshot.unit,
+              targets: snapshot.targets,
+              stage: snapshot.stage,
+            )
         ? snapshot.unit.binaryProject
         : null;
     final localBlocked = {
-      if (localProject != null)
+      if (localProject != null && !staged)
         for (final platform in localProject.binaryPlatforms)
           if (!capabilities.resolve(platform).canProduce)
             platform:

@@ -1,5 +1,39 @@
 # Installation and TUI implementation receipt
 
+## Local command DX follow-up — September 28, 2026
+
+The effective default is now a static badge; it is excluded from focus traversal.
+Saved-but-shadowed selections have a separate warning label. Install/Update
+remain separate from Use, while contextual Uninstall reuses the existing scoped
+confirmation. Broken owned installations expose Remove directly. `install
+SOURCE --latest` uses the same checked update operation as the table.
+
+Before changing RK itself, the manager preserves and verifies a recovery build
+outside selectable provider installations and reports its exact invocation.
+This covers switching, updating and confirmed uninstall. Runtime/snapshot
+bundles retain their matching VM; source runs compile a standalone build.
+
+Validation on macOS arm64 / Dart 3.12.2:
+
+- Analyzer clean; 52 installation tests and 53 status tests pass.
+- The new recovery regression compiles native, AOT and JIT variants, removes
+  their originals, reopens each retained build, preserves it a second time,
+  and executes the second recovery entry point.
+- Both native PTY scripts pass, including all four commands at 40×12,
+  pointer/keyboard focus, confirmation/back, multiple packages, signals,
+  resize and terminal restoration.
+- A read-only native pass against the user's installed sources confirms the
+  green Homebrew default, action-only blue focus, contextual GitHub removal
+  and cancellation, and unchanged selection after Ctrl+C.
+- Status now retains completed binary-only artifacts, displays stage-read
+  causes before repair instructions, and keeps detailed remote errors in
+  Issues rather than repeating them on publication rows.
+
+Status remains a finite report. Three browser-only inspector proposals are
+available for design feedback; none changes publication behavior. This pass
+adds no new live Homebrew mutation or Linux qualification.
+
+
 ## Source version table — September 28, 2026
 
 The `rk use` table has independent Installed and Available state. It starts

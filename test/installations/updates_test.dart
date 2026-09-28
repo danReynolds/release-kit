@@ -242,6 +242,12 @@ void main() {
       final pub = UpdatingProvider();
       await local.install(project, (_) {});
       await pub.install(project, (_) {});
+      local.installed = Installation(
+        source: local.source,
+        version: '1.2.0',
+        location: project.directory,
+        commands: local.installed!.commands,
+      );
       var source = InstallationSource.local;
       var uses = 0;
       final states = [
@@ -274,7 +280,7 @@ void main() {
       tester.pumpWidget(FleuryApp(title: 'rk', home: UseScreen(model)));
       tester.pump();
       expect(tester.renderToString(), contains('Checking…'));
-      expect(tester.renderToString(), contains('✓ Using'));
+      expect(tester.renderToString(), contains('✓ Default'));
       tester.sendKey(const KeyEvent(KeyCode.enter));
       tester.pump();
       expect(uses, 0);
@@ -292,6 +298,85 @@ void main() {
       await Future<void>.delayed(Duration.zero);
     },
   );
+
+  for (final broken in [false, true]) {
+    test(
+      'uninstall ${broken ? 'broken owned' : 'inactive'} source requires confirmation and stays open',
+      () async {
+        final pub = UpdatingProvider();
+        await pub.install(project, (_) {});
+        var removed = false, calls = 0, closes = 0;
+        final gate = Completer<String>();
+        List<ProjectInstallations> inspect() => [
+          ProjectInstallations(project, {
+            InstallationSource.local: const SourceInspection(),
+            pub.source: SourceInspection(
+              installation: removed ? null : pub.installed,
+              problem: broken && !removed
+                  ? 'Archive was damaged. Remove before reinstalling.'
+                  : null,
+            ),
+          }),
+        ];
+        final model = UsePicker(
+          states: inspect(),
+          refresh: () async => inspect(),
+          checkAvailable: (_, _, _) async => Release(project),
+          downloadAvailable: (_, _, _, _) async =>
+              throw StateError('No download'),
+          use: (_, _, _, _) async => throw StateError('No switch'),
+          uninstall: (_, source, _, _) {
+            expect(source, pub.source);
+            calls++;
+            return gate.future;
+          },
+          close: () => closes++,
+        );
+        addTearDown(model.dispose);
+        final tester = FleuryTester(viewportSize: const CellSize(104, 28));
+        addTearDown(tester.dispose);
+        tester.pumpWidget(FleuryApp(title: 'rk', home: UseScreen(model)));
+        tester.pump();
+        void key(KeyCode code) {
+          tester.sendKey(KeyEvent(code));
+          tester.pump();
+        }
+
+        key(KeyCode.arrowDown); // Local.
+        key(KeyCode.arrowDown); // Pub Use, or recovery Remove.
+        expect(tester.renderToString(), contains('u Uninstall Pub'));
+        if (broken) {
+          key(KeyCode.enter);
+        } else {
+          model.requestRemoval(model.states.single, pub.source);
+          tester.pump();
+        }
+        expect(
+          tester.renderToString(),
+          contains('Remove ${project.label} from Pub?'),
+        );
+        key(KeyCode.enter); // Cancel is the default.
+        expect(calls, 0);
+        expect(model.removal, isNull);
+        model.requestRemoval(model.states.single, pub.source);
+        tester.pump();
+        final operation = model.confirmRemoval();
+        tester.pump();
+        expect(tester.renderToString(), contains('Removing'));
+        expect(tester.renderToString(), isNot(contains('Switching')));
+        await model
+            .confirmRemoval(); // Duplicate confirmation cannot remove twice.
+        expect(calls, 1);
+        removed = true;
+        gate.complete('Removed Pub.');
+        await operation;
+        tester.pump();
+        expect(closes, 0);
+        expect(tester.renderToString(), contains('Not installed'));
+        expect(model.canUninstall(model.states.single, pub.source), isFalse);
+      },
+    );
+  }
 
   for (final mouse in [false, true]) {
     test(
@@ -340,7 +425,9 @@ void main() {
 
         void expectBlue(String label) {
           final lines = tester.renderToString().split('\n');
-          final row = lines.indexWhere((line) => line.contains(label));
+          final row = lines.indexWhere(
+            (line) => line.contains(label) && line.contains('['),
+          );
           expect(row, isNonNegative);
           final buffer = tester.render();
           expect(
@@ -360,11 +447,13 @@ void main() {
         key(
           KeyCode.arrowDown,
         ); // Skip blocked Pub; missing GitHub has Download only.
-        expectBlue('↓ Download');
+        expectBlue('Install');
         if (mouse) {
           final lines = tester.renderToString().split('\n');
-          final row = lines.indexWhere((line) => line.contains('↓ Download'));
-          final col = lines[row].indexOf('↓ Download');
+          final row = lines.indexWhere(
+            (line) => line.contains('Install') && line.contains('['),
+          );
+          final col = lines[row].indexOf('Install');
           for (final kind in [MouseEventKind.down, MouseEventKind.up]) {
             tester.sendMouse(
               MouseEvent(
@@ -382,7 +471,7 @@ void main() {
         key(KeyCode.enter);
         expect(downloads, 1);
         expect(uses, 0);
-        expect(tester.renderToString(), contains('Downloading…'));
+        expect(tester.renderToString(), contains('Installing…'));
         installed = Installation(
           source: InstallationSource.github,
           version: '1.3.0',
@@ -393,7 +482,7 @@ void main() {
         await Future<void>.delayed(Duration.zero);
         tester.pump();
         tester.pump();
-        expectBlue('✓ Downloaded');
+        expectBlue('✓ Installed');
         key(KeyCode.enter);
         await Future<void>.delayed(Duration.zero);
         expect(downloads, 1);
@@ -405,7 +494,7 @@ void main() {
           KeyCode.arrowDown,
         ); // Use is preferred when arriving from Local Use.
         key(KeyCode.arrowLeft);
-        expectBlue('✓ Downloaded');
+        expectBlue('✓ Installed');
         key(KeyCode.tab); // The next actual button is Use.
         key(KeyCode.enter);
         await Future<void>.delayed(Duration.zero);
@@ -416,7 +505,7 @@ void main() {
   }
 
   test(
-    'Using closes without preparing or rewriting the active source',
+    'Default is inert; Done closes without preparing or rewriting the active source',
     () async {
       final states = [
         ProjectInstallations(
@@ -451,6 +540,8 @@ void main() {
       );
       addTearDown(model.dispose);
       await model.choose(states.single, InstallationSource.pub);
+      expect(closed, isFalse);
+      model.exit();
       expect(closed, isTrue);
     },
   );

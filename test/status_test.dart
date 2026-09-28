@@ -1698,6 +1698,65 @@ publish = ["pub.dev"]
     });
   }
 
+  test(
+    'completed binary-only stage stays visible without a host blocker',
+    () async {
+      final root = Directory.systemTemp.createTempSync(
+        'rk-status-local-stage-',
+      );
+      addTearDown(() => root.deleteSync(recursive: true));
+      final config = binaryConfig.replaceFirst(
+        'publish = ["git-tag", "pub.dev", "github-release"]',
+        'publish = []',
+      );
+      final stage = await _completedBinaryStage(
+        root: root,
+        config: config,
+        source: binaryTree,
+      );
+      final run = await statusRun(
+        withConfig: config,
+        source: binaryTree,
+        state: git(),
+        registry: FakeRegistry(const {}),
+        stageFor: (_) => stage,
+        capabilities: HostCapabilities(
+          hostPlatform: 'linux-x64',
+          containerRuntime: null,
+          hasNativeAssets: false,
+        ),
+      );
+      expect(run.text, contains('Staged'));
+      expect(run.text, contains('keybay-0.2.0-macos-arm64.tar.gz'));
+      expect(run.text, isNot(contains('cannot produce')));
+      expect(run.report['problems'], isEmpty);
+      expect(run.report['next'], isEmpty);
+    },
+  );
+
+  test('unreadable stage shows its cause before the repair', () async {
+    final run = await statusRun(
+      withConfig: binaryConfig,
+      source: binaryTree,
+      state: git(),
+      registry: FakeRegistry(const {}),
+      stageFor: (_) => throw StateError('receipt truncated'),
+      inspectorBuilder: (git, _) => FixedInspector(
+        registry: FakeRegistry(const {}),
+        git: git,
+        answer: const Inspection.absent(),
+      ),
+    );
+    expect(run.text, contains('Cause:'));
+    expect(run.text, contains('receipt truncated'));
+    expect(run.text.indexOf('Cause:'), lessThan(run.text.indexOf('Fix:')));
+    final problems = (run.report['problems'] as List).cast<Map>();
+    expect(
+      problems.singleWhere((p) => p['code'] == 'RK-STAGE-002')['evidence'],
+      endsWith('RK-STAGE-002.txt'),
+    );
+  });
+
   test('an exact stage lists exact filenames and is good to release', () async {
     final root = Directory.systemTemp.createTempSync('rk-status-stage-');
     addTearDown(() => root.deleteSync(recursive: true));

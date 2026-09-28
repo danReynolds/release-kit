@@ -52,6 +52,10 @@ void main() {
         ['use', 'local', '--list'],
         ['install', 'pub', '--yes'],
         ['use', 'local', 'extra'],
+        ['use', 'pub', '--latest'],
+        ['install', '--latest'],
+        ['install', 'local', '--latest'],
+        ['install', 'pub', '--latest', '--list'],
       ]) {
         final (code, _) = await run(project.directory, args);
         expect(code, 2);

@@ -169,7 +169,7 @@ class Terminal:
         history = '\n'.join(''.join(cell.data for cell in line.values())
                             for line in self.screen.history.top) + self.text()
         assert 'Shell history stays here' in history, history
-        for title in ['Use switches source.', 'Choose where', 'Choose the outputs', 'Review release.toml',
+        for title in ['Choose what runs locally.', 'Choose where', 'Choose the outputs', 'Review release.toml',
                       'Install a source', 'Remove a source']:
             assert title not in self.text(), f'Inline frame survived exit: {self.text()}'
         assert b'\x1b[?25h' in self.raw, 'cursor hidden after exit'
@@ -221,7 +221,7 @@ def main():
         home = root / 'use'
         project = fixture(home, True)
         with Terminal(executable, 'use', project, home) as terminal:
-            terminal.wait('Use switches source.')
+            terminal.wait('Choose what runs locally.')
             terminal.click('Use     ]')
             terminal.wait('→ Local', timeout=60)
             terminal.finish()

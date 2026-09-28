@@ -7,6 +7,7 @@ rk use                          # compare sources and available updates
 rk use --list                   # inspect without opening the TUI
 rk use local                    # prepare this checkout, then select it
 rk install homebrew             # install without changing the selection
+rk install homebrew --latest    # install the latest compatible version
 rk use homebrew                 # select it; install first if missing
 rk uninstall pub                # confirm removal of an inactive installation
 ```
@@ -14,9 +15,8 @@ rk uninstall pub                # confirm removal of an inactive installation
 The picker opens inline beneath your prompt and grows to fit its content, up to
 24 rows. The source table is left-aligned and capped at 104 columns, shrinking
 with narrower terminals. Other command matrices cap at 128 columns to fit their
-additional outputs. Your terminal keeps its background; green marks the current choice and
-a blue fill marks mouse or keyboard focus. It opens without focus, so the saved
-selection stays green until you navigate. Checkmarks and reverse video preserve
+additional outputs. Your terminal keeps its background; green marks the effective default and
+a blue fill marks mouse or keyboard focus. It opens without focus, so the default stays green until you navigate. Checkmarks and reverse video preserve
 those distinctions with `NO_COLOR`. Use Tab or arrow keys to navigate and Enter
 to choose. Hover moves focus without changing your selection.
 
@@ -25,20 +25,21 @@ shell history. With several projects, the picker stays open so you can change
 another row; choose Done or press Escape when finished. `-p` limits it to one
 project and restores single-action completion. Errors stay open for inspection
 and retry. The source table shows unavailable reasons and repair commands
-beneath the affected row, disables Use, and hides Download. Enter on that row
-opens a scrollable explanation when you need more room; reading it does not
-fail the command. Back restores the originating choice
-and scroll position. Uninstall asks for confirmation before removing an
-installation and restores your place when cancelled.
+beneath the affected row and disables unavailable actions. Uninstall appears in
+the footer for a focused inactive installation. A damaged owned installation
+also offers Remove directly. Removal asks for confirmation and restores your
+place when cancelled; it never removes the active or saved selected source.
+
 
 Long configuration reviews and explanations show a scrollbar and accept
 PageUp/PageDown or Home/End from their footer actions. Discovery notes in
 `rk init` explain omitted packages and build-platform choices before you write
 the configuration.
 
-The table groups sources by executable package. Click a row or use Up/Down,
-then Enter to use its installed version. Tab moves between individual actions. **Using** means the commands resolve to
-that source on the process's PATH. **Selected** means RK has saved the selection,
+The table groups sources by executable package. Up/Down moves between sources;
+Left/Right chooses an action; Tab moves between buttons. Enter activates exactly
+the blue action. **Default** is a static badge: the commands resolve to that
+source on the process's PATH. **Selected** means RK has saved the selection,
 but something earlier on PATH can still take precedence. `--list --json` also
 reports each resolved command path. Shell aliases and functions are outside
 this process-level PATH check.
@@ -48,7 +49,7 @@ work without a TUI; `--json` produces one structured report. Noninteractive
 removal needs `--yes`. SDK packages are consumed as dependencies and do not
 appear as installations.
 
-## Check and download updates
+## Install and update
 
 `rk use` opens with **Installed** from local inspection and **Available** checking
 in the background. Each source finishes independently. You can use an installed
@@ -58,28 +59,28 @@ checks all sources. Closing the picker cancels its background network requests.
 `--list` and redirected commands remain local, without remote checks.
 
 **Use** selects an installed source and closes a single-project picker.
-**Download** installs the displayed available version and keeps the picker open.
+**Install** or **Update** installs the displayed available version and keeps the picker open.
 It does not select another source. If you update the source already selected,
 its new version runs on the next command. Local has no remote version: **Use**
 prepares and binds the checkout you are in. Explicit `rk use pub`, for example,
 still installs first when missing; the table keeps those two actions separate.
 
-| Source | What Available means | Download |
+| Source | What Available means | Install / Update |
 | --- | --- | --- |
 | Homebrew | Stable RK-generated formula in the configured public tap for this host | Refresh Homebrew metadata, verify the formula still matches, then install or upgrade that formula |
 | Pub | Highest stable, non-retracted release with the same commands and a compatible installed Dart SDK | Activate that exact version with Pub; its dependency solver remains the final compatibility check |
 | GitHub | Stable release matching this release unit, with an archive for this host | Download the checked archive and verify its size, checksum, layout, and executable |
 
 Checks do not install packages or refresh Homebrew's local repositories.
-A Homebrew download runs `brew update` before installing; it can refresh other
+A Homebrew update runs `brew update` before installing; it can refresh other
 tap metadata, but RK only asks to install or upgrade the chosen formula.
 Existing Homebrew links follow the package manager's normal upgrade behavior.
 The manager protects RK's source selection, not external shell aliases or links.
 
-Downloads show progress in place. Escape or Ctrl+C during a package-manager
+Installations show progress in place. Escape or Ctrl+C during a package-manager
 operation waits for it to finish safely. An update already committed is retained,
 and RK finishes recording it before restoring the terminal. Cancellation is not
-an undo operation. Downloads never automatically move focus to **Use**.
+an undo operation. Completed installations never automatically move focus to **Use**.
 
 ## Workspaces and multiple commands
 
@@ -146,6 +147,13 @@ state. Existing fish sessions normally pick that up at their next prompt.
 Other shells receive the exact PATH command to run and persist in their own
 configuration. RK never rewrites shell startup files. The next `rk use --list`
 checks the environment actually inherited from the shell.
+
+When changing RK itself with `use`, `install --latest`, or `uninstall`, RK preserves and checks
+an independent copy of the running manager first. The result prints its exact
+path: run that path with `use` from an RK project to reopen this version even if
+the default is now older. It lives under the managed data directory's `managers`
+folder, outside provider installations. Native binaries and runtime/snapshot
+bundles are retained; a Dart source invocation compiles a standalone copy.
 
 RK refuses to overwrite an unrelated command in its managed bin directory or
 to follow symbolic links through its owned state directories. The project

@@ -90,7 +90,7 @@ void main() {
     );
     tester.pump();
     expectRow(const RgbColor(24, 55, 41));
-    // Blank space never gains hover focus; the button alone turns blue.
+    // The default badge is status, never a hoverable/focusable button.
     tester.sendMouse(
       MouseEvent(
         kind: MouseEventKind.moved,
@@ -100,17 +100,9 @@ void main() {
       ),
     );
     tester.pump();
-    final focused = tester.render();
-    expect(
-      focused.atColRow(95, row).style.background,
-      const RgbColor(42, 76, 108),
-    );
-    for (var col = 2; col < lines[row].indexOf('['); col++) {
-      expect(
-        focused.atColRow(col, row).style.background,
-        const RgbColor(24, 55, 41),
-      );
-    }
+    expectRow(const RgbColor(24, 55, 41));
+    expect(lines[row], contains('✓ Default'));
+    expect(lines[row], isNot(contains('[')));
     tester.sendKey(const KeyEvent(KeyCode.tab));
     tester.pump();
     expectRow(const RgbColor(24, 55, 41));

@@ -12,6 +12,8 @@ import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/installations/discovery.dart';
 import 'package:rk/src/installations/local.dart';
+import 'package:rk/src/installations/provider.dart';
+import 'package:rk/src/installations/recovery.dart';
 import 'package:rk/src/installations/manager.dart';
 import 'package:rk/src/installations/model.dart';
 import 'package:rk/src/installations/shell_routing.dart';
@@ -22,6 +24,7 @@ import 'package:rk/src/targets/homebrew/installation.dart';
 import 'package:rk/src/targets/pub_dev/installation.dart';
 import 'package:rk/src/tui/installation_picker.dart';
 import 'package:rk/src/tui/use_picker.dart';
+import 'package:rk/src/version.dart';
 
 const installationUsage = '''
 rk use [source] [-p project]       install if needed, then select
@@ -30,6 +33,7 @@ rk uninstall [source] [-p project] remove an inactive installation
 
 Sources: local, homebrew, pub, github — only those configured for this project.
 No source: open the matrix in a terminal, or list sources when redirected.
+--latest        install: get the latest compatible version; keep the selected source
 --list          inspect available sources and current selection; no changes
 -p, --project   package name; required for an explicit source in a multi-app repo
 --json          one structured report, no TUI or prompts
@@ -95,7 +99,11 @@ Future<int> _run(
   bool json,
 ) async {
   String? projectName, sourceName;
-  var list = false, yes = false, help = false, seenCommand = false;
+  var list = false,
+      yes = false,
+      latest = false,
+      help = false,
+      seenCommand = false;
   String? usageError;
   for (var i = 0; i < args.length; i++) {
     final arg = args[i];
@@ -117,6 +125,8 @@ Future<int> _run(
         break;
       }
       if (projectName.isEmpty) usageError = '$arg needs a package name.';
+    } else if (arg == '--latest') {
+      latest = true;
     } else if (arg == '--list') {
       list = true;
     } else if (arg == '--json') {
@@ -131,6 +141,13 @@ Future<int> _run(
       usageError = 'Unexpected argument: $arg';
       break;
     }
+  }
+  if (latest && (command != 'install' || sourceName == null || list)) {
+    usageError = '--latest needs an explicit rk install source.';
+  }
+  if (latest && sourceName == 'local') {
+    usageError =
+        'Local follows this checkout; it has no remote version to update.';
   }
   if (yes && (command != 'uninstall' || sourceName == null || list)) {
     usageError = '--yes needs an explicit rk uninstall source.';
@@ -277,12 +294,53 @@ Future<int> _run(
     return states;
   }
 
+  String? recoveryPath;
+  Future<void> preserveSelf(
+    ExecutableProject project,
+    void Function(String) progress,
+  ) async {
+    if (project.name == 'rk' && project.commands.contains('rk')) {
+      recoveryPath ??= await preserveManager(store, tools, progress);
+    }
+  }
+
+  String withRecovery(String message) => [
+    message,
+    if (recoveryPath != null)
+      'Reopen this manager from an rk project:\n${shellQuote(recoveryPath!)} use',
+  ].join('\n');
+
+  Future<String> downloadLatest(
+    ExecutableProject project,
+    AvailableInstallation release,
+    void Function(String) progress,
+    InstallationCancellation cancellation,
+  ) async {
+    await preserveSelf(project, progress);
+    cancellation.check();
+    output.report.acted = true;
+    final message = withRecovery(
+      await manager.download(
+        project,
+        release,
+        progress: progress,
+        cancellation: cancellation,
+      ),
+    );
+    outcomes.add(message);
+    return message;
+  }
+
   Future<String> operate(
     ExecutableProject project,
     InstallationSource source,
     void Function(String) progress,
     InstallationCancellation cancellation,
   ) async {
+    if (action != InstallationAction.install) {
+      await preserveSelf(project, progress);
+    }
+    cancellation.check();
     output.report.acted = true;
     final result = await manager.act(
       project,
@@ -294,7 +352,45 @@ Future<int> _run(
     final routing = action == InstallationAction.use
         ? await ShellRouting(store, tools, environment).ensure(project)
         : null;
-    final message = [result, if (routing != null) routing].join('\n');
+    final message = [
+      result,
+      if (routing != null) routing,
+      if (recoveryPath != null)
+        'Reopen this manager from an rk project:\n${shellQuote(recoveryPath!)} use',
+    ].join('\n');
+    outcomes.add(message);
+    return message;
+  }
+
+  Future<String> installLatest(
+    ExecutableProject project,
+    InstallationSource source,
+    void Function(String) progress,
+    InstallationCancellation cancellation,
+  ) async {
+    final release = await manager.latest(project, source);
+    cancellation.check();
+    return downloadLatest(project, release, progress, cancellation);
+  }
+
+  Future<String> remove(
+    ExecutableProject project,
+    InstallationSource source,
+    void Function(String) progress,
+    InstallationCancellation cancellation,
+  ) async {
+    await preserveSelf(project, progress);
+    cancellation.check();
+    output.report.acted = true;
+    final message = withRecovery(
+      await manager.act(
+        project,
+        source,
+        InstallationAction.uninstall,
+        progress: progress,
+        cancellation: cancellation,
+      ),
+    );
     outcomes.add(message);
     return message;
   }
@@ -311,20 +407,13 @@ Future<int> _run(
             states: states,
             refresh: refresh,
             use: operate,
+            uninstall: remove,
+            sessionNote: projects.any((p) => p.name == 'rk')
+                ? 'Running manager: rk $rkVersion'
+                : null,
             checkAvailable: (project, source, check) =>
                 manager.latest(project, source, check: check),
-            downloadAvailable:
-                (project, release, progress, cancellation) async {
-                  output.report.acted = true;
-                  final message = await manager.download(
-                    project,
-                    release,
-                    progress: progress,
-                    cancellation: cancellation,
-                  );
-                  outcomes.add(message);
-                  return message;
-                },
+            downloadAvailable: downloadLatest,
           )
         : await runInstallationPicker(
             action: action,
@@ -360,7 +449,7 @@ Future<int> _run(
               (e.value.installation == null
                   ? 'Not installed'
                   : '${e.value.installation!.version}${state.currentSource == e.key
-                        ? ' · using'
+                        ? ' · default on PATH'
                         : state.selected == e.key
                         ? ' · selected'
                         : ' · installed'}'),
@@ -395,7 +484,7 @@ Future<int> _run(
       }
     }
     try {
-      final result = await operate(
+      final result = await (latest ? installLatest : operate)(
         projects.single,
         source,
         (message) => output.say(message),

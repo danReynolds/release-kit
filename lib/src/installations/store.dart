@@ -159,6 +159,57 @@ class InstallationStore {
     }
   }
 
+  /// Retain the manager outside all selectable installations. Runtime-backed
+  /// releases keep the VM and snapshot together, independently of the provider.
+  Future<String> retainManager(String executable, {String? program}) async {
+    final runtimeName = executable.split(Platform.pathSeparator).last;
+    if (program != null &&
+        !{'dart', 'dartvm', 'dartaotruntime'}.contains(runtimeName)) {
+      throw const InstallationFailure(
+        'Unrecognized Dart runtime for recovery.',
+      );
+    }
+    final vm = File('${File(executable).parent.path}/dartvm');
+    final files = <String, List<int>>{
+      program == null ? 'rk' : runtimeName: File(executable).readAsBytesSync(),
+      if (program != null) 'app.aot': File(program).readAsBytesSync(),
+      if (program != null && runtimeName == 'dart' && vm.existsSync())
+        'dartvm': vm.readAsBytesSync(),
+    };
+    final digest = Sha256.hex(
+      utf8.encode(
+        files.entries
+            .map((entry) => '${entry.key}:${Sha256.hex(entry.value)}')
+            .join('\n'),
+      ),
+    );
+    final lockFile = lock();
+    try {
+      final directory = '$root/managers/$digest';
+      _directory('$root/managers');
+      _directory(directory);
+      if (program != null) {
+        files['rk'] = utf8.encode(
+          '#!/bin/sh\nexec ${shellQuote('$directory/$runtimeName')} ${shellQuote('$directory/app.aot')} "\$@"\n',
+        );
+      }
+      for (final entry in files.entries) {
+        final path = '$directory/${entry.key}';
+        _regularOrAbsent(path);
+        if (!File(path).existsSync() ||
+            Sha256.hex(File(path).readAsBytesSync()) !=
+                Sha256.hex(entry.value)) {
+          AtomicFile.write(path, entry.value);
+        }
+        await checked(tools, '/bin/chmod', ['700', path]);
+      }
+      return '$directory/rk';
+    } finally {
+      lockFile.unlockSync();
+      lockFile.closeSync();
+    }
+  }
+
   void checkOwnership(ExecutableProject project) {
     for (final command in project.commands) {
       final path = '$bin/$command';

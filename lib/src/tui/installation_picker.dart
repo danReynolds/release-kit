@@ -239,34 +239,12 @@ class _InstallationScreenState extends State<InstallationScreen> {
           .singleWhere((s) => s.project == project)
           .sources[source]!
           .installation!;
-      return MatrixShell(
-        key: const ValueKey('removal'),
-        command: 'rk uninstall',
-        subtitle: 'Remove ${project.label} from ${source.label}?',
-        scrollFromActions: true,
-        onEscape: model.exit,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Version: ${installed.version}'),
-            Text('Location: ${installed.location}'),
-            const SizedBox(height: 1),
-            Text(
-              source == InstallationSource.local
-                  ? 'Only the local registration is removed. Your checkout stays.'
-                  : 'This removes the installation provided by ${source.label}.',
-            ),
-          ],
-        ),
-        actions: [
-          MatrixButton(text: 'Cancel', autofocus: true, onPressed: model.exit),
-          MatrixButton(
-            text: 'Remove installation',
-            variant: ButtonVariant.error,
-            onPressed: () => unawaited(model.apply(project, source)),
-          ),
-        ],
+      return RemovalConfirmation(
+        project: project,
+        source: source,
+        installed: installed,
+        onCancel: model.exit,
+        onConfirm: () => unawaited(model.apply(project, source)),
       );
     }
     final sources = InstallationSource.values
@@ -395,4 +373,55 @@ class _InstallationScreenState extends State<InstallationScreen> {
             },
     );
   }
+}
+
+/// The same scoped confirmation is used from use and uninstall.
+class RemovalConfirmation extends StatelessWidget {
+  const RemovalConfirmation({
+    super.key,
+    required this.project,
+    required this.source,
+    required this.installed,
+    required this.onCancel,
+    required this.onConfirm,
+    this.command = 'rk uninstall',
+    this.maxWidth = 128,
+  });
+  final ExecutableProject project;
+  final InstallationSource source;
+  final Installation installed;
+  final void Function() onCancel, onConfirm;
+  final String command;
+  final int maxWidth;
+  @override
+  Widget build(BuildContext context) => MatrixShell(
+    command: command,
+    maxWidth: maxWidth,
+    subtitle: 'Remove ${project.label} from ${source.label}?',
+    scrollFromActions: true,
+    onEscape: onCancel,
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Version: ${installed.version}'),
+        Text('Location: ${installed.location}'),
+        Text('Commands: ${project.commands.join(', ')}'),
+        const SizedBox(height: 1),
+        Text(
+          source == InstallationSource.local
+              ? 'Only the local registration is removed. Your checkout stays.'
+              : 'This removes the ${source.label} installation, including its use outside this repository.',
+        ),
+      ],
+    ),
+    actions: [
+      MatrixButton(text: 'Cancel', autofocus: true, onPressed: onCancel),
+      MatrixButton(
+        text: 'Remove installation',
+        variant: ButtonVariant.error,
+        onPressed: onConfirm,
+      ),
+    ],
+  );
 }

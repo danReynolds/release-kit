@@ -46,26 +46,29 @@ import 'package:rk/src/version.dart';
 const _usage = '''
 rk — an austere release tool
 
-Usage
+Release this project
   rk                              status all units
   rk --version                    print this binary's version
   rk status [unit]                status all units or one
   rk plan [unit]                  show the configured release graph; read-only
   rk init                         choose outputs and review release.toml
-  rk use [source] [-p project]     choose the source of your commands
-  rk install [source] [-p project] prepare an installation without switching
-  rk uninstall [source] [-p project] remove an inactive installation
   rk clean                        remove this repository's staged release work
   rk target list                  list every release choice this rk supports
   rk target <name>                explain one choice and its configuration
   rk release [unit]               release all unfinished units, or one named unit
   rk release [unit] --stage       prepare one exact stage; name it if ambiguous
 
+Run locally
+  rk use [source] [-p project]     choose the source of your commands
+  rk install [source] [-p project] prepare an installation without switching
+  rk uninstall [source] [-p project] remove an inactive installation
+
 Flags
   --version   print this binary's version and exit
   --json      the machine surface (doc/json.md)
   --stage     release: build, sign, and notarize exact artifacts; publish nothing
-  -y, --yes   release or clean: answer yes without an interactive prompt
+  -y, --yes   release, clean or uninstall: confirm without an interactive prompt
+  --latest    install: get the latest compatible version without changing source
   --write     init: write the default configuration without a prompt
 
 Marks: ✓ done,  · already satisfied,  ✗ problem or conflict,  ! warning,

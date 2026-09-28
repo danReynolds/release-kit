@@ -102,9 +102,10 @@ def main():
         with Terminal(executable, 'use', project, home, cols=240) as terminal:
             terminal.wait('Esc Done')
             settle(terminal)
-            row, col = locate(terminal, '✓ Selected')
+            row, col = locate(terminal, 'Use     ]')
             selected = terminal.screen.buffer[row][col]
-            assert selected.bg == '183729', selected  # selection is visible before navigation
+            assert selected.bg == 'default', selected  # saved selection is not the effective PATH default
+            assert 'Selected' in terminal.text()
             assert not any(cell.bg == '2a4c6c' for line in terminal.screen.buffer.values()
                            for cell in line.values()), 'opening must have no focus'
             terminal.send(b'\r')
@@ -121,17 +122,17 @@ def main():
             hover(terminal, 'This checkout')
             assert not any(cell.bg == '2a4c6c' for line in terminal.screen.buffer.values()
                            for cell in line.values()), 'blank row space gained hover focus'
-            hover(terminal, '✓ Selected')
+            hover(terminal, 'Use     ]')
             assert terminal.screen.buffer[row][col].bg == '2a4c6c'
             name_row, name_col = locate(terminal, 'This checkout')
-            assert terminal.screen.buffer[name_row][name_col].bg == '183729', 'focus recolored the source row'
+            assert terminal.screen.buffer[name_row][name_col].bg == 'default', 'focus recolored the source row'
             shot(terminal, 'use-action-focus')
             hover_row, hover_col = hover(terminal, 'Pub')
             assert terminal.screen.buffer[hover_row][hover_col].bg == 'default'
             assert terminal.process.poll() is None, 'hover activated an option'
             terminal.send(b'\t')  # Blocked Pub is skipped; focus reaches Refresh.
             settle(terminal)
-            assert terminal.screen.buffer[row][col].bg == '183729'
+            assert terminal.screen.buffer[row][col].bg == 'default'
             refresh_row, refresh_col = locate(terminal, 'r Refresh')
             assert terminal.screen.buffer[refresh_row][refresh_col].bg == '2a4c6c'
             shot(terminal, 'use-unavailable')
@@ -142,7 +143,7 @@ def main():
         with Terminal(executable, 'use', project, home, environment={'NO_COLOR': '1'}) as terminal:
             terminal.wait('Esc Done')
             settle(terminal)
-            row, col = locate(terminal, '✓ Selected')
+            row, col = locate(terminal, 'Use     ]')
             assert not terminal.screen.buffer[row][col].reverse, 'NO_COLOR opened focused'
             terminal.send(b'\t')
             settle(terminal)
@@ -160,7 +161,7 @@ def main():
             terminal.wait('Esc Done')
             terminal.send(b'\t\x1b[B')  # Blocked Pub has no action to navigate to.
             settle(terminal)
-            row, col = locate(terminal, '✓ Selected')
+            row, col = locate(terminal, 'Use     ]')
             assert terminal.screen.buffer[row][col].bg == '2a4c6c'
             shot(terminal, 'use-compact-action')
             terminal.send(b'\x03')
@@ -175,7 +176,7 @@ def main():
             terminal.wait('orbit → Local')
             settle(terminal)
             assert terminal.process.poll() is None, 'multi-project use closed after one row'
-            row, col = locate(terminal, '✓ Selected')
+            row, col = locate(terminal, 'Use     ]')
             assert terminal.screen.buffer[row][col].bg == '2a4c6c', 'operation lost keyboard focus'
             shot(terminal, 'use-multiple')
             # Row navigation reaches the second project's Local source,
@@ -190,7 +191,7 @@ def main():
         assert 'orbit_admin\n' == subprocess.check_output([str(home / 'data/rk/bin/orbit_admin')], text=True)
         # Restricting a multi-project configuration to one row restores auto-close.
         with Terminal(executable, 'use', project, home, arguments=('-p', 'orbit')) as terminal:
-            terminal.wait('Use switches source.')
+            terminal.wait('Choose what runs locally.')
             terminal.send(b'\t\r')
             terminal.finish()
         print('PASS multi-project stays open; explicit -p completes in one selection', flush=True)
