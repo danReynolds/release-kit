@@ -79,12 +79,16 @@ class DartCliBuilder {
       // re-signs it ad hoc, which the signed runtime then refuses. The
       // generated formula preserves @rpath names, so this one keeps the
       // module's bytes intact.
-      final named = await tools
-          .run('/usr/bin/install_name_tool', ['-id', '@rpath/app.aot', module]);
+      final named = await tools.run('/usr/bin/install_name_tool', [
+        '-id',
+        '@rpath/app.aot',
+        module,
+      ]);
       if (!named.ok) {
         return BuildOutcome.failed(
-            'the Dart module install name could not be set',
-            transcript: named.transcript);
+          'the Dart module install name could not be set',
+          transcript: named.transcript,
+        );
       }
       try {
         final assembled = await _assembleBundle(artifact, root);

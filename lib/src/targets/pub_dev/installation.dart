@@ -1,5 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:pub_semver/pub_semver.dart' as semver;
+import '../../installations/metadata.dart';
 
 import '../../engine/diagnostic.dart';
 import '../../engine/pubspec.dart';
@@ -9,8 +11,15 @@ import '../../installations/model.dart';
 import '../../installations/provider.dart';
 
 /// Pub owns the activation and dependency graph; rk owns only its routing.
-class PubInstallationProvider implements InstallationProvider {
-  PubInstallationProvider(this.tools, this.dart, this.environment);
+class PubInstallationProvider
+    implements InstallationProvider, InstallationUpdates {
+  PubInstallationProvider(
+    this.tools,
+    this.dart,
+    this.environment, {
+    this.fetch = fetchInstallationMetadata,
+  });
+  final MetadataFetch fetch;
   final Tools tools;
   final String? dart;
   final Map<String, String> environment;
@@ -137,6 +146,101 @@ class PubInstallationProvider implements InstallationProvider {
   }
 
   @override
+  Future<AvailableInstallation> latest(
+    ExecutableProject project, {
+    InstallationCheck? check,
+  }) async {
+    Future<List<int>> metadata(Uri uri, int max) =>
+        fetch == fetchInstallationMetadata
+        ? fetchInstallationMetadata(uri, max, check: check)
+        : fetch(uri, max);
+    if (dart == null || !project.project.pubspec.declaresPubDev) {
+      throw const InstallationFailure(
+        'This source needs Dart and a pub.dev package.',
+      );
+    }
+    final sdkResult = await tools.run(dart!, [
+      '--version',
+    ], timeout: const Duration(seconds: 8));
+    final sdkText = RegExp(
+      r'Dart SDK version: ([^ ]+)',
+    ).firstMatch('${sdkResult.stdout} ${sdkResult.stderr}')?.group(1);
+    final sdk = sdkText == null ? null : semver.Version.parse(sdkText);
+    if (!sdkResult.ok || sdk == null) {
+      throw const InstallationFailure(
+        'Could not determine the installed Dart SDK version.',
+      );
+    }
+    final data =
+        jsonDecode(
+              utf8.decode(
+                await metadata(
+                  Uri.https('pub.dev', '/api/packages/${project.name}'),
+                  8 * 1024 * 1024,
+                ),
+              ),
+            )
+            as Map;
+    if (data['isDiscontinued'] == true) {
+      throw const InstallationFailure('This pub.dev package is discontinued.');
+    }
+    final compatible = <semver.Version>[];
+    for (final entry in (data['versions'] as List).cast<Map>()) {
+      if (entry['retracted'] == true) continue;
+      final version = semver.Version.parse(entry['version'] as String);
+      final spec = entry['pubspec'] as Map;
+      final env = spec['environment'] as Map?;
+      final commands = spec['executables'] as Map?;
+      if (version.isPreRelease ||
+          env?['flutter'] != null ||
+          (spec['dependencies'] as Map?)?.containsKey('flutter') == true ||
+          env?['sdk'] is! String ||
+          !semver.VersionConstraint.parse(env!['sdk'] as String).allows(sdk) ||
+          spec['name'] != project.name ||
+          commands == null ||
+          commands.length != project.commands.length ||
+          !commands.keys.toSet().containsAll(project.commands)) {
+        continue;
+      }
+      compatible.add(version);
+    }
+    if (compatible.isEmpty) {
+      throw const InstallationFailure(
+        'No stable release matches this Dart SDK and command set.',
+      );
+    }
+    compatible.sort();
+    return _PubRelease(project, compatible.last.toString());
+  }
+
+  @override
+  Future<Installation> download(
+    ExecutableProject project,
+    AvailableInstallation release,
+    void Function(String) progress,
+  ) async {
+    release.validate(project, source);
+    if (release is! _PubRelease) {
+      throw const InstallationFailure('Invalid Pub release.');
+    }
+    progress('Installing ${project.name} ${release.version} from pub.dev…');
+    await checked(tools, dart!, [
+      '--suppress-analytics',
+      'pub',
+      'global',
+      'activate',
+      '--no-executables',
+      project.name,
+      release.version,
+    ], environment: _environment);
+    final state = await inspect(project);
+    return state.installation ??
+        (throw InstallationFailure(
+          state.problem ?? 'Pub did not activate the release.',
+        ));
+  }
+
+  @override
   Future<Installation> install(
     ExecutableProject project,
     void Function(String) progress,
@@ -171,4 +275,9 @@ class PubInstallationProvider implements InstallationProvider {
       project.name,
     ], environment: _environment);
   }
+}
+
+class _PubRelease extends AvailableInstallation {
+  _PubRelease(ExecutableProject project, String version)
+    : super(project, InstallationSource.pub, version);
 }

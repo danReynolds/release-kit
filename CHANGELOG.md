@@ -2,9 +2,11 @@
 
 ## Unreleased
 
+- Replace the `rk use` source matrix with an inline version table. Installed sources stay usable while Homebrew, Pub and GitHub check available releases independently; Download updates a source separately from Use.
+
 - Add project-scoped `use`, `install`, and `uninstall` commands for executable
   packages, with Local, Homebrew, Pub, and public GitHub release sources.
-  Bare commands open an inline Fleury matrix; explicit sources and JSON support scripts.
+  Bare commands open inline Fleury pickers; explicit sources and JSON support scripts.
   Local commands follow checkout edits, grouped commands switch together, and
   installation listings distinguish RK selection from effective PATH resolution.
 - Replace init's terminal selector with the Fleury output matrix and a validated

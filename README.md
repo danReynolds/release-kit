@@ -34,14 +34,14 @@ of a release script.
 ## Dogfood your commands
 
 ```sh
-rk use                     # select Local, Homebrew, Pub or GitHub in the matrix
+rk use                     # compare installed and available versions; choose a source
 rk use local               # bind this checkout; edits work on the next run
 rk install pub             # prepare without switching
 rk use --list              # sources, installation state and PATH resolution
 ```
 
 Run inside the configured project. With multiple executable packages, select
-one in the inline matrix or add `-p package_name`. Every command in a package
+one in the inline table or add `-p package_name`. Every command in a package
 switches together; SDK dependencies follow that installation. See [installation management](doc/installations.md).
 
 ## Getting Started

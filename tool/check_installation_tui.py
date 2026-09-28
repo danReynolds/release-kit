@@ -169,7 +169,7 @@ class Terminal:
         history = '\n'.join(''.join(cell.data for cell in line.values())
                             for line in self.screen.history.top) + self.text()
         assert 'Shell history stays here' in history, history
-        for title in ['Choose where', 'Choose the outputs', 'Review release.toml',
+        for title in ['Use switches source.', 'Choose where', 'Choose the outputs', 'Review release.toml',
                       'Install a source', 'Remove a source']:
             assert title not in self.text(), f'Inline frame survived exit: {self.text()}'
         assert b'\x1b[?25h' in self.raw, 'cursor hidden after exit'
@@ -221,8 +221,8 @@ def main():
         home = root / 'use'
         project = fixture(home, True)
         with Terminal(executable, 'use', project, home) as terminal:
-            terminal.wait('Choose where your commands come from.')
-            terminal.click('Install & use')
+            terminal.wait('Use switches source.')
+            terminal.click('Use     ]')
             terminal.wait('→ Local', timeout=60)
             terminal.finish()
             assert '→ Local' in terminal.text(), 'result not retained after exit'
@@ -258,6 +258,8 @@ def main():
                 terminal.wait_layout(
                     (lambda lines: any('Binary' in line and 'Git tag' in line for line in lines))
                     if command == 'init' else
+                    (lambda lines: any('Source' in line and 'Available' in line for line in lines))
+                    if command == 'use' else
                     (lambda lines: any('PROJECT' in line for line in lines)))
                 terminal.send(b'\x1b')
                 terminal.finish()

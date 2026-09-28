@@ -1,5 +1,42 @@
 # Installation and TUI implementation receipt
 
+## Source version table — September 28, 2026
+
+The `rk use` table has independent Installed and Available state. It starts
+public update checks on opening, keeps local choices usable on failure, and
+separates Download from Use. Row navigation includes sources that are not yet
+installed; Enter on those rows does not download. Download retains source
+selection and the open picker. Single-project Use restores the terminal as soon
+as switching succeeds, without another provider scan.
+
+Evidence on macOS arm64, Dart 3.12.2:
+
+- 46 installation/provider/controller/CLI tests pass, including late check
+  replies, cancellation, download versus selection, exact project binding,
+  compatible Pub releases, changed Homebrew formula refusal, and keyboard rows.
+- Both retained native PTY scripts pass. They exercise all four inline commands,
+  green selection and blue explicit focus, mouse/keyboard actions, multiple
+  projects, compact terminals, resize, signals, and shell restoration.
+- The broader suite passed 1,153 tests with one disposable-runner Homebrew test
+  skipped. Its only failing architecture assertion was updated to permit
+  `pub_semver` specifically in the Pub installation adapter, then passed on
+  rerun. A status subprocess stalled during the run; terminating it let the
+  suite continue, and the isolated status check passed. Release and signing
+  code remain outside the third-party dependency boundary.
+- Real public checks resolved Homebrew, Pub and GitHub to 0.1.13. Live Pub
+  activation and GitHub archive download/verification/execution both passed in
+  temporary stores, without selecting either source. The probe is repeatable
+  with `tool/check_installation_sources.dart`.
+- Closing the compiled table during live checks restored the shell in roughly
+  0.3 seconds in the local PTY probe. This is local evidence, not a startup SLA.
+
+Live Homebrew upgrade and Linux provider operations have not been exercised in
+this pass. Homebrew metadata checking is live-qualified; mutation is covered by
+provider fixtures. Existing Homebrew installations were left untouched. The
+Fleury Git override remains a development dependency, so this build is for local
+dogfooding rather than publication.
+
+
 ## Core command UX review — September 27, 2026
 
 Three separate reviews covered first-time setup, native keyboard/pointer

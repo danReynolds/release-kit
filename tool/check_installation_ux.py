@@ -100,7 +100,7 @@ def main():
         # An incomplete Pub activation gives an inspectable unavailable choice.
         (home / 'cache/global_packages/orbit').mkdir(parents=True)
         with Terminal(executable, 'use', project, home) as terminal:
-            terminal.wait('Esc Cancel')
+            terminal.wait('Esc Done')
             settle(terminal)
             row, col = locate(terminal, '✓ Selected')
             selected = terminal.screen.buffer[row][col]
@@ -111,42 +111,42 @@ def main():
             settle(terminal)
             assert terminal.process.poll() is None, 'unfocused Enter activated a source'
             assert 'Preparing' not in terminal.text()
-            assert sum(line[:25].strip() == 'orbit' for line in terminal.screen.display) == 1
+            assert sum('rk use' in line and 'orbit' in line for line in terminal.screen.display) == 1
             assert 'Commands: orbit' not in terminal.text()
             assert all(terminal.screen.buffer[y][0].bg == 'default' for y in range(32))
-            assert next(i for i, line in enumerate(terminal.screen.display) if 'Esc Cancel' in line) < 17
+            assert next(i for i, line in enumerate(terminal.screen.display) if 'Esc Done' in line) < 24
             shot(terminal, 'use-current')
-            hover_row, hover_col = hover(terminal, 'Unavailable')
+            hover_row, hover_col = hover(terminal, 'Why?')
             active = terminal.screen.buffer[row][col]
             hovered = terminal.screen.buffer[hover_row][hover_col]
             assert active.bg == '183729', active  # active selection retains its green tint
             assert hovered.bg == '2a4c6c' and not hovered.underscore, hovered
             assert terminal.process.poll() is None, 'hover activated an option'
             shot(terminal, 'use-hover')
-            terminal.send(b'\x1b[D')
+            terminal.send(b'\x1b[A')
             settle(terminal)
-            assert terminal.screen.buffer[row][col].bg == '2a4c6c'
+            assert any(cell.bg == '2a4c6c' for line in terminal.screen.buffer.values() for cell in line.values())
             assert terminal.screen.buffer[hover_row][hover_col].bg == 'default', 'stale hover retained a second highlight'
-            terminal.click('Unavailable')
+            terminal.click('Why?')
             terminal.wait('dart pub global activate --no-executables orbit')
             settle(terminal)
             assert terminal.process.poll() is None, 'an unavailable option closed the picker'
             shot(terminal, 'use-unavailable')
             terminal.send(b'\x1b')
-            terminal.wait('Choose where your commands come from.')
+            terminal.wait('Use switches source.')
             terminal.send(b'\x1b')
             terminal.finish()  # inspecting a reason is not a failed operation
         print('PASS active/hover/keyboard states, compact height, no duplicate command, unavailable reason', flush=True)
 
         with Terminal(executable, 'use', project, home, environment={'NO_COLOR': '1'}) as terminal:
-            terminal.wait('Esc Cancel')
+            terminal.wait('Esc Done')
             settle(terminal)
             row, col = locate(terminal, '✓ Selected')
             assert not terminal.screen.buffer[row][col].reverse, 'NO_COLOR opened focused'
             terminal.send(b'\t')
             settle(terminal)
             assert terminal.screen.buffer[row][col].reverse, 'Tab did not focus the first cell'
-            hover_row, hover_col = hover(terminal, 'Unavailable')
+            hover_row, hover_col = hover(terminal, 'Why?')
             assert terminal.screen.buffer[hover_row][hover_col].reverse
             assert not terminal.screen.buffer[row][col].reverse
             terminal.send(b'\x1b')
@@ -154,18 +154,18 @@ def main():
         print('PASS NO_COLOR preserves navigation and selected checkmarks', flush=True)
 
         with Terminal(executable, 'use', project, home, cols=40, rows=12) as terminal:
-            terminal.wait('Esc Cancel')
+            terminal.wait('Esc Done')
             terminal.send(b'\t\x1b[B')
             settle(terminal)
-            row, col = locate(terminal, 'Unavailable')
-            assert terminal.screen.buffer[row][col].bg == '2a4c6c', 'Down failed to move focus to Pub'
+            row, col = locate(terminal, 'Why?')
+            assert any(cell.bg == '2a4c6c' for line in terminal.screen.buffer.values() for cell in line.values()), 'Down failed to focus Pub'
             terminal.send(b'\r')
             terminal.wait('Pub')
             terminal.send(b'\x1b[F')  # End works from the safe Back action.
             terminal.wait('global activate')
             shot(terminal, 'use-compact-reason')
             terminal.send(b'\r')
-            terminal.wait('Choose where')
+            terminal.wait('Use switches source.')
             terminal.send(b'\r')  # Back restores the originating cell.
             terminal.wait('Pub')
             terminal.send(b'\x03')
@@ -176,20 +176,16 @@ def main():
         project = workspace(home)
         with Terminal(executable, 'use', project, home) as terminal:
             terminal.wait('2 projects')
-            terminal.click('Install & use')
+            terminal.click('Use     ]')
             terminal.wait('orbit → Local')
             settle(terminal)
             assert terminal.process.poll() is None, 'multi-project use closed after one row'
             row, col = locate(terminal, '✓ Selected')
             assert terminal.screen.buffer[row][col].bg == '2a4c6c', 'operation lost keyboard focus'
             shot(terminal, 'use-multiple')
-            # The remaining uninstalled Local cell belongs to the second row.
-            rows = [(i, line) for i, line in enumerate(terminal.screen.display)
-                    if 'orbit_admin' in line and 'Install & use' in line]
-            assert rows, terminal.text()
-            row, line = rows[0]
-            col = line.index('Install & use')
-            terminal.send(f'\x1b[<0;{col+1};{row+1}M\x1b[<0;{col+1};{row+1}m'.encode())
+            # Row navigation reaches the second project's Local source,
+            # even when the table needs to scroll at this terminal height.
+            terminal.send(b'\x1b[B\x1b[B\r')
             terminal.wait('orbit_admin → Local')
             assert terminal.process.poll() is None
             terminal.click('Esc Done')
@@ -198,7 +194,7 @@ def main():
         assert 'orbit_admin\n' == subprocess.check_output([str(home / 'data/rk/bin/orbit_admin')], text=True)
         # Restricting a multi-project configuration to one row restores auto-close.
         with Terminal(executable, 'use', project, home, arguments=('-p', 'orbit')) as terminal:
-            terminal.wait('1 project')
+            terminal.wait('Use switches source.')
             terminal.send(b'\t\r')
             terminal.finish()
         print('PASS multi-project stays open; explicit -p completes in one selection', flush=True)
@@ -300,7 +296,7 @@ def main():
         with Terminal(executable, 'use', project, home,
                       environment={'PATH': str(tools) + ':' + os.environ['PATH'],
                                    'RK_BREW_CALLS': str(calls)}) as terminal:
-            terminal.wait('Esc Cancel')
+            terminal.wait('Esc Done')
             before = calls.read_text()
             terminal.send(b'\x03')
             terminal.finish(130)

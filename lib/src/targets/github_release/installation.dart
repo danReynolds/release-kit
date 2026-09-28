@@ -11,13 +11,15 @@ import '../../engine/stage_archive.dart';
 import '../../engine/tools.dart';
 import '../../engine/version.dart';
 import '../../installations/model.dart';
+import '../../installations/metadata.dart';
 import '../../installations/provider.dart';
 import '../../installations/store.dart';
 import '../../transforms/digest.dart';
 
 /// Public release assets, verified against RK's release manifest before use.
 /// The checksum proves consistency with that release, not independent authorship.
-class GithubInstallationProvider implements InstallationProvider {
+class GithubInstallationProvider
+    implements InstallationProvider, InstallationUpdates {
   GithubInstallationProvider(
     this.tools,
     this.store,
@@ -77,91 +79,127 @@ class GithubInstallationProvider implements InstallationProvider {
   }
 
   @override
+  Future<AvailableInstallation> latest(
+    ExecutableProject project, {
+    InstallationCheck? check,
+  }) async {
+    if (project.repository == null ||
+        project.unit.tagPattern == null ||
+        !project.project.binaryPlatforms.contains(platform)) {
+      throw InstallationFailure('No configured GitHub binary for $platform.');
+    }
+    // Release summaries advertise their asset inventory. Ignore newer releases
+    // that do not carry this project's host binary (including multi-unit repos).
+    for (var page = 1; page <= 10; page++) {
+      final uri = Uri.https(
+        'api.github.com',
+        '/repos/${project.repository}/releases',
+        {'per_page': '100', 'page': '$page'},
+      );
+      final bytes = await (fetch == fetchPublicRelease
+          ? fetchInstallationMetadata(uri, 8 * 1024 * 1024, check: check)
+          : fetch(uri, 8 * 1024 * 1024));
+      final list = (jsonDecode(utf8.decode(bytes)) as List)
+          .cast<Map<String, dynamic>>();
+      final candidates = <(Map<String, dynamic>, Version)>[];
+      for (final item in list) {
+        if (item['draft'] != false || item['prerelease'] != false) continue;
+        final version = GitState.versionIn(
+          item['tag_name'] as String,
+          project.unit.tagPattern!,
+        );
+        final parsed = version == null ? null : Version.tryParse(version);
+        if (parsed != null && !parsed.isPrerelease) {
+          candidates.add((item, parsed));
+        }
+      }
+      candidates.sort((a, b) => b.$2.compareTo(a.$2));
+      for (final (item, parsed) in candidates) {
+        final version = parsed.canonical;
+        final tag = item['tag_name'] as String;
+        final archiveName = ReleaseAssets.archiveName(
+          project.commands.single,
+          version,
+          platform,
+        );
+        if (item['assets'] case final List assets) {
+          final names = assets.whereType<Map>().map((a) => a['name']).toSet();
+          if (!names.contains(archiveName) ||
+              !names.contains(ReleaseAssets.manifest)) {
+            continue;
+          }
+        }
+        Uri asset(String name) => Uri(
+          scheme: 'https',
+          host: 'github.com',
+          pathSegments: [
+            ...project.repository!.split('/'),
+            'releases',
+            'download',
+            tag,
+            name,
+          ],
+        );
+        final manifest = ReleaseManifest.parse(
+          utf8.decode(
+            (fetch == fetchPublicRelease
+                ? await fetchPublicRelease(
+                    asset(ReleaseAssets.manifest),
+                    2 * 1024 * 1024,
+                    check: check,
+                  )
+                : await fetch(asset(ReleaseAssets.manifest), 2 * 1024 * 1024)),
+          ),
+        );
+        if (manifest.unit != project.unit.name ||
+            manifest.version != version ||
+            manifest.tag != tag) {
+          throw const InstallationFailure(
+            'The release manifest does not match the selected release.',
+          );
+        }
+        final metadata = manifest.artifacts
+            .where((a) => a.name == archiveName)
+            .firstOrNull;
+        if (metadata == null || metadata.size > 128 * 1024 * 1024) continue;
+        return _GithubRelease(project, version, asset(archiveName), metadata);
+      }
+      if (list.length < 100) break;
+    }
+    throw InstallationFailure(
+      'No public stable $platform release matches ${project.unit.name}.',
+    );
+  }
+
+  @override
   Future<Installation> install(
     ExecutableProject project,
     void Function(String) progress,
   ) async {
     progress('Finding the latest ${project.unit.name} release…');
-    Map<String, dynamic>? release;
-    String? version;
-    // Scope releases by the configured unit's tag, including multi-unit repos.
-    for (var page = 1; page <= 10 && release == null; page++) {
-      final list =
-          jsonDecode(
-                utf8.decode(
-                  await fetch(
-                    Uri.https(
-                      'api.github.com',
-                      '/repos/${project.repository}/releases',
-                      {'per_page': '100', 'page': '$page'},
-                    ),
-                    8 * 1024 * 1024,
-                  ),
-                ),
-              )
-              as List;
-      for (final item in list.cast<Map<String, dynamic>>()) {
-        if (item['draft'] != false || item['prerelease'] != false) continue;
-        final candidate = GitState.versionIn(
-          item['tag_name'] as String,
-          project.unit.tagPattern!,
-        );
-        final parsed = candidate == null ? null : Version.tryParse(candidate);
-        if (parsed == null || parsed.isPrerelease) continue;
-        release = item;
-        version = candidate;
-        break;
-      }
-      if (list.length < 100) break;
+    return download(project, await latest(project), progress);
+  }
+
+  @override
+  Future<Installation> download(
+    ExecutableProject project,
+    AvailableInstallation release,
+    void Function(String) progress,
+  ) async {
+    release.validate(project, source);
+    if (release is! _GithubRelease) {
+      throw const InstallationFailure('Invalid GitHub release.');
     }
-    if (release == null) {
-      throw InstallationFailure(
-        'No public stable release was found for ${project.unit.name}.',
-        'Publish a release with RK first, or choose another source.',
-      );
-    }
-    final tag = release['tag_name'] as String;
-    Uri asset(String name) => Uri(
-      scheme: 'https',
-      host: 'github.com',
-      pathSegments: [
-        ...project.repository!.split('/'),
-        'releases',
-        'download',
-        tag,
-        name,
-      ],
-    );
-    final manifest = ReleaseManifest.parse(
-      utf8.decode(await fetch(asset(ReleaseAssets.manifest), 2 * 1024 * 1024)),
-    );
-    if (manifest.unit != project.unit.name ||
-        manifest.version != version ||
-        manifest.tag != tag) {
-      throw const InstallationFailure(
-        'The release manifest does not match the selected release.',
-      );
-    }
-    final archiveName = ReleaseAssets.archiveName(
-      project.commands.single,
-      version!,
-      platform,
-    );
-    final metadata = manifest.artifacts
-        .where((a) => a.name == archiveName)
-        .firstOrNull;
-    if (metadata == null || metadata.size > 128 * 1024 * 1024) {
-      throw InstallationFailure(
-        'No supported $platform archive exists in this release.',
-      );
-    }
+    final version = release.version;
+    final metadata = release.metadata;
     progress('Downloading ${project.name} $version…');
-    final bytes = await fetch(asset(archiveName), metadata.size);
+    final bytes = await fetch(release.archive, metadata.size);
     if (bytes.length != metadata.size || Sha256.hex(bytes) != metadata.sha256) {
       throw const InstallationFailure(
         'The downloaded archive failed its release checksum.',
       );
     }
+    progress('Installing ${project.name} $version…');
     final decoded = await decodeInstallationArchive(
       bytes,
       project.commands.single,
@@ -279,10 +317,16 @@ Future<InstallationArchive> decodeInstallationArchive(
   }
 }
 
-Future<Uint8List> fetchPublicRelease(Uri uri, int maxBytes) async {
+Future<Uint8List> fetchPublicRelease(
+  Uri uri,
+  int maxBytes, {
+  InstallationCheck? check,
+}) async {
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 20);
+  void close() => client.close(force: true);
+  check?.add(close);
   final deadline = Timer(
-    const Duration(minutes: 3),
+    check == null ? const Duration(minutes: 3) : const Duration(seconds: 15),
     () => client.close(force: true),
   );
   try {
@@ -335,7 +379,19 @@ Future<Uint8List> fetchPublicRelease(Uri uri, int maxBytes) async {
     }
     throw const InstallationFailure('Too many release download redirects.');
   } finally {
+    check?.remove(close);
     deadline.cancel();
     client.close(force: true);
   }
+}
+
+class _GithubRelease extends AvailableInstallation {
+  _GithubRelease(
+    ExecutableProject project,
+    String version,
+    this.archive,
+    this.metadata,
+  ) : super(project, InstallationSource.github, version);
+  final Uri archive;
+  final ReleaseManifestArtifact metadata;
 }

@@ -153,6 +153,15 @@ void main() {
                     'prerelease': false,
                   },
                   {'tag_name': 'v2.0.0', 'draft': true, 'prerelease': false},
+                  {
+                    'tag_name': 'v4.0.0',
+                    'draft': false,
+                    'prerelease': false,
+                    'assets': [
+                      {'name': ReleaseAssets.manifest},
+                      {'name': 'orbit-4.0.0-linux-arm64.tar.gz'},
+                    ],
+                  },
                   {'tag_name': 'v1.1.0', 'draft': false, 'prerelease': false},
                 ]),
               ),

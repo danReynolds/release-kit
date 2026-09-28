@@ -384,7 +384,7 @@ void main() {
     setUpAll(() => scratch = Directory.systemTemp.createTempSync('rk-phase3-'));
     tearDownAll(() => scratch.deleteSync(recursive: true));
 
-    test('third-party imports stay at the UI boundary', () {
+    test('third-party imports stay outside the release and signing engine', () {
       expect(fileExists('lib/src/engine/registry.dart'), isTrue);
       final foreign = <String>[];
       for (final entity in Directory('lib').listSync(recursive: true)) {
@@ -398,6 +398,13 @@ void main() {
           if (!target.contains(':')) continue; // relative
           if (entity.path.startsWith('lib/src/tui/') &&
               target.startsWith('package:fleury/')) {
+            continue;
+          }
+          // Installation eligibility uses Pub's own SDK-constraint semantics.
+          // This exception is exact: publication, signing and the release
+          // engine still cannot import third-party version/UI/archive code.
+          if (entity.path == 'lib/src/targets/pub_dev/installation.dart' &&
+              target == 'package:pub_semver/pub_semver.dart') {
             continue;
           }
           foreign.add('${entity.path}: $target');

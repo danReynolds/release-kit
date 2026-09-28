@@ -306,59 +306,75 @@ executables:
         .where((call) => call.startsWith('codesign --force'))
         .toList();
 
-    test('the module is signed first and the runtime pinned to its hash',
-        () async {
-      final tools = scripted();
+    test(
+      'the module is signed first and the runtime pinned to its hash',
+      () async {
+        final tools = scripted();
 
-      final built = await chain(tools)
-          .buildStep(step(StepKind.build), project, signing: signing);
+        final built = await chain(
+          tools,
+        ).buildStep(step(StepKind.build), project, signing: signing);
 
-      expect(built.ok, isTrue, reason: built.problem ?? buffer.toString());
-      final signed = signatures(tools);
-      expect(signed.first, endsWith('/lib/tool/app.aot'));
-      expect(signed.last, endsWith('/lib/tool/dartaotruntime'));
-      expect(signed.last, contains('--library-constraint'));
-      expect(signed[1], isNot(contains('--library-constraint')),
-          reason: 'only the identity process loads the module');
-      final records = built.evidence['signatures']! as Map;
-      final module = records['lib/tool/app.aot'] as Map;
-      expect(module['cdhashes'], hasLength(1));
-      expect(
+        expect(built.ok, isTrue, reason: built.problem ?? buffer.toString());
+        final signed = signatures(tools);
+        expect(signed.first, endsWith('/lib/tool/app.aot'));
+        expect(signed.last, endsWith('/lib/tool/dartaotruntime'));
+        expect(signed.last, contains('--library-constraint'));
+        expect(
+          signed[1],
+          isNot(contains('--library-constraint')),
+          reason: 'only the identity process loads the module',
+        );
+        final records = built.evidence['signatures']! as Map;
+        final module = records['lib/tool/app.aot'] as Map;
+        expect(module['cdhashes'], hasLength(1));
+        expect(
           (records['lib/tool/dartaotruntime']
               as Map)['pinned_library_cdhashes'],
-          module['cdhashes']);
-    });
+          module['cdhashes'],
+        );
+      },
+    );
 
-    test('an unreadable module hash stops before the runtime is signed',
-        () async {
-      final tools = scripted(
+    test(
+      'an unreadable module hash stops before the runtime is signed',
+      () async {
+        final tools = scripted(
           display: (key) => key.startsWith('codesign -dvvv ')
               ? ToolResult(exitCode: 0, stdout: '', stderr: 'Signature=adhoc')
-              : null);
+              : null,
+        );
 
-      final built = await chain(tools)
-          .buildStep(step(StepKind.build), project, signing: signing);
+        final built = await chain(
+          tools,
+        ).buildStep(step(StepKind.build), project, signing: signing);
 
-      expect(built.ok, isFalse);
-      expect(built.problem, contains('code hash of lib/tool/app.aot'));
-      expect(signatures(tools).where((call) => call.endsWith('dartaotruntime')),
-          isEmpty);
-    });
+        expect(built.ok, isFalse);
+        expect(built.problem, contains('code hash of lib/tool/app.aot'));
+        expect(
+          signatures(tools).where((call) => call.endsWith('dartaotruntime')),
+          isEmpty,
+        );
+      },
+    );
 
     test('a constraint that states more than code hashes is refused', () async {
       final tools = scripted(
-          display: (key) => key.startsWith('codesign -dvvvvvv ')
-              ? ToolResult(
-                  exitCode: 0,
-                  stdout: '',
-                  stderr: constraintDisplay({
-                    'team-identifier': 'TEAM123456',
-                    ...pinConstraint(['5' * 40]),
-                  }))
-              : null);
+        display: (key) => key.startsWith('codesign -dvvvvvv ')
+            ? ToolResult(
+                exitCode: 0,
+                stdout: '',
+                stderr: constraintDisplay({
+                  'team-identifier': 'TEAM123456',
+                  ...pinConstraint(['5' * 40]),
+                }),
+              )
+            : null,
+      );
 
-      final built = await chain(tools)
-          .buildStep(step(StepKind.build), project, signing: signing);
+      final built = await chain(
+        tools,
+      ).buildStep(step(StepKind.build), project, signing: signing);
 
       expect(built.ok, isFalse);
       expect(built.problem, contains('could not be read'));
@@ -366,15 +382,18 @@ executables:
 
     test('a constraint admitting another module is refused', () async {
       final tools = scripted(
-          display: (key) => key.startsWith('codesign -dvvvvvv ')
-              ? ToolResult(
-                  exitCode: 0,
-                  stdout: '',
-                  stderr: constraintDisplay(pinConstraint(['6' * 40])))
-              : null);
+        display: (key) => key.startsWith('codesign -dvvvvvv ')
+            ? ToolResult(
+                exitCode: 0,
+                stdout: '',
+                stderr: constraintDisplay(pinConstraint(['6' * 40])),
+              )
+            : null,
+      );
 
-      final built = await chain(tools)
-          .buildStep(step(StepKind.build), project, signing: signing);
+      final built = await chain(
+        tools,
+      ).buildStep(step(StepKind.build), project, signing: signing);
 
       expect(built.ok, isFalse);
       expect(built.problem, contains('does not admit exactly'));

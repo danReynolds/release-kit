@@ -2,6 +2,8 @@ import 'dart:io';
 import 'dart:async';
 
 import 'model.dart';
+import '../engine/version.dart';
+import 'metadata.dart';
 import 'provider.dart';
 import 'store.dart';
 
@@ -74,6 +76,94 @@ class InstallationManager {
       currentSources: current,
       routing: store.routingProblems(project, environment),
     );
+  }
+
+  Future<AvailableInstallation> latest(
+    ExecutableProject project,
+    InstallationSource source, {
+    InstallationCheck? check,
+  }) async {
+    final provider = providers[source];
+    if (!project.sources.contains(source) || provider is! InstallationUpdates) {
+      throw const InstallationFailure(
+        'This source does not provide remote updates.',
+      );
+    }
+    return _providerCall(
+      () => (provider as InstallationUpdates).latest(project, check: check),
+    );
+  }
+
+  Future<String> download(
+    ExecutableProject project,
+    AvailableInstallation release, {
+    required void Function(String) progress,
+    InstallationCancellation? cancellation,
+  }) async {
+    release.validate(project, release.source);
+    final provider = providers[release.source];
+    if (!project.sources.contains(release.source) ||
+        provider is! InstallationUpdates) {
+      throw const InstallationFailure(
+        'This source does not provide downloads.',
+      );
+    }
+    if (_busy) {
+      throw const InstallationFailure(
+        'An installation operation is already running.',
+      );
+    }
+    final lock = store.lock();
+    _busy = true;
+    try {
+      cancellation?.check();
+      final current = store.selected(project)?.source;
+      final inspected = await _providerCall(() => provider!.inspect(project));
+      if (inspected.problem != null) {
+        throw InstallationFailure(inspected.problem!);
+      }
+      final previousVersion = inspected.installation?.version;
+      final previous = previousVersion == null
+          ? null
+          : Version.tryParse(previousVersion);
+      final next = Version.tryParse(release.version);
+      if (previousVersion == release.version) {
+        return '${project.name} · ${release.source.label} ${release.version} is already installed. Source selection unchanged.';
+      }
+      if (previous != null && next != null && previous.compareTo(next) > 0) {
+        throw const InstallationFailure(
+          'A newer version is already installed.',
+          'Refresh the table before downloading.',
+        );
+      }
+      cancellation?.check();
+      if (current == release.source) store.checkOwnership(project);
+      final installed = await _providerCall(
+        () => (provider as InstallationUpdates).download(
+          project,
+          release,
+          progress,
+        ),
+      );
+      if (installed.source != release.source ||
+          installed.version != release.version) {
+        throw const InstallationFailure(
+          'The installed version differs from the checked release.',
+          'Check the provider before retrying.',
+        );
+      }
+      final generation = await store.record(project, installed);
+      // A package manager may already have committed its update. Finish the
+      // receipt/routing transaction even when cancellation arrived meanwhile.
+      // Updating the selected source advances that source, never selects another.
+      if (current == release.source) await store.activate(project, generation);
+      return '${project.name} · ${release.source.label} ${installed.version} installed. '
+          '${current == release.source ? 'Using it on the next command.' : 'Source selection unchanged.'}';
+    } finally {
+      lock.unlockSync();
+      lock.closeSync();
+      _busy = false;
+    }
   }
 
   Future<String> act(

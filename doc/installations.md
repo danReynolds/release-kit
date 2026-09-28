@@ -3,7 +3,7 @@
 From a project with `release.toml`:
 
 ```sh
-rk use                          # open the source matrix
+rk use                          # compare sources and available updates
 rk use --list                   # inspect without opening the TUI
 rk use local                    # prepare this checkout, then select it
 rk install homebrew             # install without changing the selection
@@ -11,15 +11,15 @@ rk use homebrew                 # select it; install first if missing
 rk uninstall pub                # confirm removal of an inactive installation
 ```
 
-The matrix opens inline beneath your prompt and grows to fit its content, up to
+The picker opens inline beneath your prompt and grows to fit its content, up to
 24 rows. Your terminal keeps its background; green marks the current choice and
 a blue fill marks mouse or keyboard focus. It opens without focus, so the saved
 selection stays green until you navigate. Checkmarks and reverse video preserve
 those distinctions with `NO_COLOR`. Use Tab or arrow keys to navigate and Enter
 to choose. Hover moves focus without changing your selection.
 
-A successful action for one project closes the matrix and leaves its result in
-shell history. With several projects, the matrix stays open so you can change
+A successful source switch for one project closes the picker and leaves its result in
+shell history. With several projects, the picker stays open so you can change
 another row; choose Done or press Escape when finished. `-p` limits it to one
 project and restores single-action completion. Errors stay open for inspection
 and retry. Unavailable choices open their full reason and repair command;
@@ -32,8 +32,8 @@ PageUp/PageDown or Home/End from their footer actions. Discovery notes in
 `rk init` explain omitted packages and build-platform choices before you write
 the configuration.
 
-The matrix shows each executable package and its configured sources. Click a
-cell or use the arrow keys and Enter. **Using** means the commands resolve to
+The table groups sources by executable package. Click a row or use Up/Down,
+then Enter to use its installed version. Tab moves between individual actions. **Using** means the commands resolve to
 that source on the process's PATH. **Selected** means RK has saved the selection,
 but something earlier on PATH can still take precedence. `--list --json` also
 reports each resolved command path. Shell aliases and functions are outside
@@ -44,10 +44,43 @@ work without a TUI; `--json` produces one structured report. Noninteractive
 removal needs `--yes`. SDK packages are consumed as dependencies and do not
 appear as installations.
 
+## Check and download updates
+
+`rk use` opens with **Installed** from local inspection and **Available** checking
+in the background. Each source finishes independently. You can use an installed
+version while checks run, and a failed check leaves that version usable. Focus
+an affected row to see its error; **Retry** checks just that source and **Refresh**
+checks all sources. Closing the picker cancels its background network requests.
+`--list` and redirected commands remain local, without remote checks.
+
+**Use** selects an installed source and closes a single-project picker.
+**Download** installs the displayed available version and keeps the picker open.
+It does not select another source. If you update the source already selected,
+its new version runs on the next command. Local has no remote version: **Use**
+prepares and binds the checkout you are in. Explicit `rk use pub`, for example,
+still installs first when missing; the table keeps those two actions separate.
+
+| Source | What Available means | Download |
+| --- | --- | --- |
+| Homebrew | Stable RK-generated formula in the configured public tap for this host | Refresh Homebrew metadata, verify the formula still matches, then install or upgrade that formula |
+| Pub | Highest stable, non-retracted release with the same commands and a compatible installed Dart SDK | Activate that exact version with Pub; its dependency solver remains the final compatibility check |
+| GitHub | Stable release matching this release unit, with an archive for this host | Download the checked archive and verify its size, checksum, layout, and executable |
+
+Checks do not install packages or refresh Homebrew's local repositories.
+A Homebrew download runs `brew update` before installing; it can refresh other
+tap metadata, but RK only asks to install or upgrade the chosen formula.
+Existing Homebrew links follow the package manager's normal upgrade behavior.
+The manager protects RK's source selection, not external shell aliases or links.
+
+Downloads show progress in place. Escape or Ctrl+C during a package-manager
+operation waits for it to finish safely. An update already committed is retained,
+and RK finishes recording it before restoring the terminal. Cancellation is not
+an undo operation. Downloads never automatically move focus to **Use**.
+
 ## Workspaces and multiple commands
 
 One executable package is inferred. With several, an explicit source requires
-its package name; the bare matrix lets you work through all of them:
+its package name; the bare table lets you work through all of them:
 
 ```sh
 rk use
@@ -123,7 +156,7 @@ GitHub uninstall removes only RK's verified managed download directory.
 
 If a checkout or native installation moves or disappears, launchers stop with
 repair instructions. They do not fall back to another source. Native package
-managers can also change installations independently; inspect the source matrix
+managers can also change installations independently; inspect the source table
 and run `use` again to rebind the desired source.
 
 ## Implementation and qualification
@@ -138,7 +171,9 @@ commands. Publication modules do not import the installation adapters.
 The TUI dependency raises RK's minimum SDK to Dart 3.10.4. During development,
 `pubspec_overrides.yaml` pins Fleury’s inline-mode API plus the native output and shutdown fixes from Fleury #278.
 Replace this development pin with a qualified hosted Fleury dependency before
-publishing RK to pub.dev. Fleury is confined to UI imports. The GitHub adapter
+publishing RK to pub.dev. Fleury is confined to UI imports. Pub's `pub_semver` is confined to the Pub
+installation adapter, where it evaluates SDK constraints using Pub's semantics.
+The GitHub adapter
 limits download and decompression sizes, then reuses the release engine’s exact
 archive inventory validator. Signing, digests, and archive validation have no
 third-party runtime imports.

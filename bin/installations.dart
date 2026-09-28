@@ -21,6 +21,7 @@ import 'package:rk/src/targets/github_release/installation.dart';
 import 'package:rk/src/targets/homebrew/installation.dart';
 import 'package:rk/src/targets/pub_dev/installation.dart';
 import 'package:rk/src/tui/installation_picker.dart';
+import 'package:rk/src/tui/use_picker.dart';
 
 const installationUsage = '''
 rk use [source] [-p project]       install if needed, then select
@@ -305,12 +306,32 @@ Future<int> _run(
       environment['TERM'] != 'dumb';
   final states = await refresh();
   if (source == null && !list && interactive) {
-    final result = await runInstallationPicker(
-      action: action,
-      states: states,
-      refresh: refresh,
-      operate: operate,
-    );
+    final result = action == InstallationAction.use
+        ? await runUsePicker(
+            states: states,
+            refresh: refresh,
+            use: operate,
+            checkAvailable: (project, source, check) =>
+                manager.latest(project, source, check: check),
+            downloadAvailable:
+                (project, release, progress, cancellation) async {
+                  output.report.acted = true;
+                  final message = await manager.download(
+                    project,
+                    release,
+                    progress: progress,
+                    cancellation: cancellation,
+                  );
+                  outcomes.add(message);
+                  return message;
+                },
+          )
+        : await runInstallationPicker(
+            action: action,
+            states: states,
+            refresh: refresh,
+            operate: operate,
+          );
     // The picker refreshes after operations. Dismissing it is not another
     // inspection: a Homebrew subprocess here delayed even an idle Ctrl+C.
     for (final message in outcomes) {
