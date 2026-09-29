@@ -2,9 +2,10 @@
 
 ## Unreleased
 
-- Add `rk stage [unit]` to prepare and validate artifacts without publishing.
-  `rk release` still prepares as needed and publishes; `rk release --stage`
-  remains a compatibility alias. Help and recovery suggestions use `rk stage`.
+- Replace `rk release --stage` with `rk stage [unit]` to prepare and validate
+  artifacts without publishing. `rk release` still prepares as needed and
+  publishes. JSON schema 12 identifies the operation through `command` and
+  removes the obsolete `mode.stage` field.
 - Add an inline version table to `rk use`. Installed versions remain visible
   while remote checks run independently. Install and Update are separate from
   Use; Update appears only for a confirmed newer version. Navigation and checks

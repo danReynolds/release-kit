@@ -19,7 +19,7 @@ class Report {
   final String command;
 
   /// Wire format version, bumped whenever the serialized contract changes.
-  static const schema = 11;
+  static const schema = 12;
 
   /// Units by name, in the order they were first mentioned.
   ///
@@ -46,10 +46,6 @@ class Report {
   /// destination — so a caller can tell "try again" from "a human has to
   /// decide" without reading the sentence.
   var rerunHelps = true;
-
-  /// How the run was asked to operate. Release retains its stage flag for
-  /// compatibility; the stage verb has no mode field.
-  final Map<String, Object> mode = {};
 
   /// Whether this run began changing things.
   ///
@@ -291,5 +287,5 @@ class Report {
   /// The document, with [exit] folded in so a caller that captured only stdout
   /// still knows how the process ended.
   String encode({required int exit}) =>
-      '${const JsonEncoder.withIndent('  ').convert({'rk': schema, 'command': command, if (mode.isNotEmpty) 'mode': mode, 'observed_at': DateTime.now().toUtc().toIso8601String(), 'exit': exit, 'rerun_helps': rerunHelps, if (_repository != null) 'repository': _repository, if (_init != null) 'init': _init, if (_cleanup != null) 'cleanup': _cleanup, if (_plan != null) 'plan': _plan, if (_installations != null) 'installations': _installations, if (_releaseChoices != null) 'release_choices': _releaseChoices, 'units': _units.values.toList(), 'problems': _problems, 'warnings': _warnings, 'next': _next, if (attachments.isNotEmpty) 'attachments': attachments, if (diagnosis != null) 'diagnosis': diagnosis, if (_halt != null) 'halt': _halt})}\n';
+      '${const JsonEncoder.withIndent('  ').convert({'rk': schema, 'command': command, 'observed_at': DateTime.now().toUtc().toIso8601String(), 'exit': exit, 'rerun_helps': rerunHelps, if (_repository != null) 'repository': _repository, if (_init != null) 'init': _init, if (_cleanup != null) 'cleanup': _cleanup, if (_plan != null) 'plan': _plan, if (_installations != null) 'installations': _installations, if (_releaseChoices != null) 'release_choices': _releaseChoices, 'units': _units.values.toList(), 'problems': _problems, 'warnings': _warnings, 'next': _next, if (attachments.isNotEmpty) 'attachments': attachments, if (diagnosis != null) 'diagnosis': diagnosis, if (_halt != null) 'halt': _halt})}\n';
 }

@@ -164,8 +164,6 @@ Omit the unit to release every unfinished unit in dependency order.
 Example: rk release tools
 To prepare without publishing: rk stage tools
 Use rk plan tools to see the configured work before running it.
-
-Compatibility: rk release [unit] --stage is an alias for rk stage [unit].
 ''';
 
 String _usageFor(String? command) => switch (command) {
@@ -188,7 +186,7 @@ Future<void> main(List<String> args) async {
     return;
   }
 
-  const known = {'-h', '--help', '--stage', '--json', '-y', '--yes', '--write'};
+  const known = {'-h', '--help', '--json', '-y', '--yes', '--write'};
   final flags = args.where((argument) => argument.startsWith('-')).toSet();
   final positional = args.where((a) => !a.startsWith('-')).toList();
   final json = flags.contains('--json');
@@ -212,12 +210,6 @@ Future<void> main(List<String> args) async {
   final target = positional.length > 1 ? positional[1] : null;
 
   final output = Output.stdio(json: json, command: command);
-  // The document says how it was asked to operate — only where the answer
-  // varies. The release --stage alias keeps its existing machine contract;
-  // stage itself has no modes, so its document carries none.
-  if (command == 'release') {
-    output.report.mode.addAll({'stage': flags.contains('--stage')});
-  }
 
   if (!verbs.contains(command)) {
     output.problem(
@@ -233,13 +225,13 @@ Future<void> main(List<String> args) async {
   }
 
   // A flag that exists but does not apply to this verb is refused the same
-  // way as one that does not exist: `rk status --stage` staging under a verb
-  // that promises to be read-only is worse than an error.
+  // way as one that does not exist: accepting `rk status --yes` would imply
+  // that a read-only report needs authorization.
   const perVerb = {
     'status': {'-h', '--help', '--json'},
     'plan': {'-h', '--help', '--json'},
     'stage': {'-h', '--help', '--json'},
-    'release': {'-h', '--help', '--json', '--stage', '-y', '--yes'},
+    'release': {'-h', '--help', '--json', '-y', '--yes'},
     'init': {'-h', '--help', '--json', '--write'},
     'clean': {'-h', '--help', '--json', '-y', '--yes'},
     'target': {'-h', '--help', '--json'},
@@ -271,27 +263,6 @@ Future<void> main(List<String> args) async {
         code: 'RK-CLI-005',
         message: 'rk $command does not have ${inapplicable.join(', ')}',
         remedy: _usageFor(first).trim(),
-      ),
-    );
-    exitCode = ExitCodes.usage;
-    if (json) stdout.write(output.report.encode(exit: ExitCodes.usage));
-    return;
-  }
-
-  if ((flags.contains('--yes') || flags.contains('-y')) &&
-      flags.contains('--stage') &&
-      !flags.contains('-h') &&
-      !flags.contains('--help')) {
-    // Staging publishes nothing, so there is nothing the yes could apply
-    // to; accepting and discarding an authorization teaches callers that
-    // consent is decorative.
-    output.problem(
-      Diagnostic(
-        code: 'RK-CLI-005',
-        message: 'rk release --stage does not have --yes',
-        remedy:
-            'staging publishes nothing, so it takes no authorization. '
-            'Run rk stage <unit>, then rk release <unit> --yes',
       ),
     );
     exitCode = ExitCodes.usage;
@@ -344,7 +315,7 @@ Future<void> main(List<String> args) async {
       'stage' || 'release' => await _release(
         output,
         target,
-        stageOnly: command == 'stage' || flags.contains('--stage'),
+        stageOnly: command == 'stage',
         interactive: !json,
         yes: flags.contains('--yes') || flags.contains('-y'),
       ),
