@@ -148,7 +148,7 @@ class HostCapabilities {
   /// It deliberately does not wake Docker, read a keychain, compile, sign, or
   /// contact Apple. Linux cross-targets remain producible-but-unproven without
   /// a runtime, while targets the SDK cannot produce from this OS are known
-  /// blockers and can be reported before `rk release --stage` is attempted.
+  /// blockers and can be reported before `rk stage` is attempted.
   static HostCapabilities inspect({bool hasNativeAssets = false}) =>
       HostCapabilities(
         hostPlatform: _hostPlatform(),

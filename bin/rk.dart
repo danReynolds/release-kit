@@ -55,8 +55,8 @@ Release this project
   rk clean                        remove this repository's staged release work
   rk target list                  list every release choice this rk supports
   rk target <name>                explain one choice and its configuration
+  rk stage [unit]                 prepare and validate artifacts; publish nothing
   rk release [unit]               release all unfinished units, or one named unit
-  rk release [unit] --stage       prepare one exact stage; name it if ambiguous
 
 Run locally
   rk use [source] [-p project]     choose the source of your commands
@@ -66,7 +66,6 @@ Run locally
 Flags
   --version   print this binary's version and exit
   --json      the machine surface (doc/json.md)
-  --stage     release: build, sign, and notarize exact artifacts; publish nothing
   -y, --yes   release, clean or uninstall: confirm without an interactive prompt
   --latest    install: get the latest compatible version without changing source
   --write     init: write the default configuration without a prompt
@@ -130,32 +129,50 @@ Omit the unit to show every release unit.
 Example: rk plan tools
 ''';
 
+const _stageUsage =
+    '''
+rk stage [unit] [--json]
+
+Prepare and validate the exact artifacts for a release; publish nothing.
+Runs configured builds, signing, notarization, and package checks.
+May contact private services; does not ask for publication approval.
+
+$_unitHelp
+Omit the unit when the configuration contains only one; otherwise name it.
+--json    emit one structured report
+
+Example: rk stage tools
+Then:    rk release tools
+Release reuses a valid stage and prepares one when needed.
+''';
+
 const _releaseUsage =
     '''
 rk release [unit] [--yes] [--json]
-rk release [unit] --stage [--json]
 
 Prepare configured artifacts, then publish unfinished release targets.
+Reuses a valid stage and prepares one when needed; rk stage is optional.
 Existing releases are checked before work proceeds. Public changes require
 confirmation in a terminal, or --yes when that confirmation is intentional.
 
 $_unitHelp
 Omit the unit to release every unfinished unit in dependency order.
-With --stage, name a unit if the configuration contains more than one.
 
---stage   build, sign, and prepare artifacts locally; publish nothing
 -y, --yes answer yes to the publication prompt; checks still run
 --json    emit one structured report; does not prompt
 
-Example: rk release tools --stage
-Then:    rk release tools
+Example: rk release tools
+To prepare without publishing: rk stage tools
 Use rk plan tools to see the configured work before running it.
+
+Compatibility: rk release [unit] --stage is an alias for rk stage [unit].
 ''';
 
 String _usageFor(String? command) => switch (command) {
   'init' => _initUsage,
   'status' => _statusUsage,
   'plan' => _planUsage,
+  'stage' => _stageUsage,
   'release' => _releaseUsage,
   'target' => TargetCommand.usage,
   'clean' => CleanCommand.usage,
@@ -176,7 +193,15 @@ Future<void> main(List<String> args) async {
   final positional = args.where((a) => !a.startsWith('-')).toList();
   final json = flags.contains('--json');
 
-  const verbs = {'status', 'plan', 'release', 'init', 'clean', 'target'};
+  const verbs = {
+    'status',
+    'plan',
+    'stage',
+    'release',
+    'init',
+    'clean',
+    'target',
+  };
   final first = positional.isEmpty ? null : positional.first;
   if (const {'use', 'install', 'uninstall'}.contains(first)) {
     await installations.loadLibrary();
@@ -188,7 +213,8 @@ Future<void> main(List<String> args) async {
 
   final output = Output.stdio(json: json, command: command);
   // The document says how it was asked to operate — only where the answer
-  // varies. status and init have no modes, so their documents carry none.
+  // varies. The release --stage alias keeps its existing machine contract;
+  // stage itself has no modes, so its document carries none.
   if (command == 'release') {
     output.report.mode.addAll({'stage': flags.contains('--stage')});
   }
@@ -212,6 +238,7 @@ Future<void> main(List<String> args) async {
   const perVerb = {
     'status': {'-h', '--help', '--json'},
     'plan': {'-h', '--help', '--json'},
+    'stage': {'-h', '--help', '--json'},
     'release': {'-h', '--help', '--json', '--stage', '-y', '--yes'},
     'init': {'-h', '--help', '--json', '--write'},
     'clean': {'-h', '--help', '--json', '-y', '--yes'},
@@ -264,7 +291,7 @@ Future<void> main(List<String> args) async {
         message: 'rk release --stage does not have --yes',
         remedy:
             'staging publishes nothing, so it takes no authorization. '
-            'Stage first, then rk release <unit> --yes',
+            'Run rk stage <unit>, then rk release <unit> --yes',
       ),
     );
     exitCode = ExitCodes.usage;
@@ -314,10 +341,10 @@ Future<void> main(List<String> args) async {
   String? crash;
   try {
     code = switch (command) {
-      'release' => await _release(
+      'stage' || 'release' => await _release(
         output,
         target,
-        stageOnly: flags.contains('--stage'),
+        stageOnly: command == 'stage' || flags.contains('--stage'),
         interactive: !json,
         yes: flags.contains('--yes') || flags.contains('-y'),
       ),

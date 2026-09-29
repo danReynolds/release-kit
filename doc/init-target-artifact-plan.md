@@ -264,7 +264,7 @@ complete receipt remains exact. Unbound stages:
 - record no commit or invented directory hash;
 - bind the exact captured source and produced bytes;
 - may complete a one-shot release in the creating invocation; and
-- cannot be handed to another invocation with `--stage`.
+- cannot be handed to another invocation with `rk stage`.
 
 Destination state and source comparison remain independent. A registry can be
 exact while source comparison is unavailable; status reports both facts.
@@ -284,7 +284,7 @@ Release sequencing is:
 6. obtain version-specific authorization; and
 7. publish and read back each target.
 
-`status` and `release --stage` never acquire publication sessions. Custom or
+`status` and `stage` never acquire publication sessions. Custom or
 ambient Dart registry redirection is not mislabeled as pub.dev, and diagnostic
 output does not echo credential-bearing coordinates.
 

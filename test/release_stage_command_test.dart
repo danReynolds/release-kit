@@ -120,7 +120,7 @@ void main() {
           run.text,
           contains('bump the version and add its changelog entry'),
         );
-        expect(run.text, contains('rk release tool --stage'));
+        expect(run.text, contains('rk stage tool'));
         expect(run.text, contains('No public targets changed'));
         expect(run.text, isNot(contains(_otherHead)));
         expect(run.text, isNot(contains('manifest sha256')));
@@ -175,7 +175,7 @@ void main() {
         run.text,
         contains('bump the version and add its changelog entry'),
       );
-      expect(run.text, contains('rk release tool --stage'));
+      expect(run.text, contains('rk stage tool'));
       expect(
         (run.report['problems'] as List).cast<Map>().single['code'],
         'RK-MONO-004',

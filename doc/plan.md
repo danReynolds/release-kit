@@ -169,8 +169,9 @@ nothing else prevents.**
 - `--rehearse` and `--dry-run` were two flags for one job, and the weaker
   one duplicated a whole verb: "inspect and stop before acting" is what
   `rk status` says. This historical pass retained `--dry-run`; the production
-  alpha later renamed that exact private-preparation contract to `--stage`,
-  which is the only spelling the current CLI accepts.
+  alpha later renamed that exact private-preparation contract to `--stage`.
+  The current CLI uses `rk stage`, with `rk release --stage` retained as a
+  compatibility alias.
 - `-v` / `--verbose` was a second, worse rendering of the default view: it
   carried *less* verdict information than the lanes it replaced. `--json` is
   the surface for everything-at-once, including stable diagnostic codes; the
@@ -1014,7 +1015,7 @@ terminal for the release confirmation. The path to it, in order:
    gate green.
 7. Then the cli, for the phase 7b checkpoint: bump packages/keybay_cli
    (with its CHANGELOG entry — the entry becomes the release body), run
-   `rk status`, then `rk release cli --stage` (every local step, signing
+   `rk status`, then `rk stage cli` (every local step, signing
    and notarization included, nothing public), then `rk release cli`. No
    `[identity]` is needed: rk derives the team and the code identifier from
    the published 0.1.0 binary, and a declaration that contradicted it would

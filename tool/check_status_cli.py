@@ -91,7 +91,7 @@ def main():
         with Terminal(executable, 'status', project, home, rows=60, arguments=('cli',)) as terminal:
             text = report(terminal)
             assert '1.2.0' in text and '0.4.0' not in text, text
-            assert 'rk release cli --stage' in text, text
+            assert 'rk stage cli' in text, text
         with Terminal(executable, 'status', project, home, rows=60, arguments=('missing',)) as terminal:
             assert 'no unit' in report(terminal, 2).lower()
         print('status: unit filtering, next action and invalid-unit exit remain intact', flush=True)

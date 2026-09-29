@@ -624,7 +624,7 @@ void main() {
         run.text,
         contains('bump the version and add its changelog entry'),
       );
-      expect(run.text, contains('rk release core --stage'));
+      expect(run.text, contains('rk stage core'));
       expect(run.text, isNot(contains('Not staged')));
       expect(
         _targetLine(run.text, 'Git tag').trimLeft(),
@@ -700,10 +700,10 @@ publish = ["pub.dev"]
     expect(text, isNot(contains('prevent')));
     expect(text, contains('0.1.0 › 0.2.0'));
     expect(text, isNot(contains('ready')));
-    expect(text.trimRight(), endsWith('→ rk release core --stage'));
+    expect(text.trimRight(), endsWith('→ rk stage core'));
     expect(
       run.report['next'],
-      ['rk release core --stage'],
+      ['rk stage core'],
       reason:
           'an unstaged unit is staged first; a mutation collapsing this '
           'to the publish form survived the whole suite',
@@ -792,7 +792,7 @@ executables:
       run.text,
       contains('producers/keybay/archives/keybay-0.2.0-linux-x64.tar.gz'),
     );
-    expect(run.report['next'], ['rk release cli --stage']);
+    expect(run.report['next'], ['rk stage cli']);
   });
 
   test(
@@ -1380,7 +1380,7 @@ publish = ["pub.dev"]
     expect(text, matches(RegExp(r'pub\.dev\s+keybay')));
     expect(text, contains('0.1.0 › 0.2.0'));
     expect(text, isNot(contains('prevent')));
-    expect(text, contains('→ rk release core --stage'));
+    expect(text, contains('→ rk stage core'));
     expect(
       _targetLine(text, 'pub.dev ').trimLeft(),
       startsWith('pub.dev'),
@@ -1689,7 +1689,7 @@ publish = ["pub.dev"]
       run.text,
       contains('Fix: a release moves forward — bump past 0.3.0'),
     );
-    expect(run.text, isNot(contains('rk release core --stage')));
+    expect(run.text, isNot(contains('rk stage core')));
 
     final targets =
         ((run.report['units'] as List).single as Map)['targets'] as List;
@@ -1932,7 +1932,7 @@ publish = ["pub.dev"]
       expect(settledNotStaged, isNot(contains('\x1b[34m')));
       _expectStyledSubject(
         notStaged.text,
-        'rk release cli --stage',
+        'rk stage cli',
         code: '36',
         after: 'Not staged',
       );

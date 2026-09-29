@@ -211,7 +211,7 @@ class ReleaseCommand {
           remedy:
               'a dependent package may need its sibling version to be '
               'public before its native package staging can pass. Stage one '
-              'unit explicitly: rk release <unit> --stage',
+              'unit explicitly: rk stage <unit>',
         ),
       );
       return ExitCodes.usage;

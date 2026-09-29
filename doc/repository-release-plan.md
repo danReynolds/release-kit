@@ -9,12 +9,12 @@ release visits every unit that still has work, in dependency order; naming a
 unit narrows the operation to exactly that unit.
 
 ```text
-rk plan [unit]             show the configured graph; inspect no destination
+rk plan [unit]              show the configured graph; inspect no destination
+rk stage [unit]             prepare one unit; name it when several exist
 rk release                 release unfinished units in dependency order
 rk release <unit>          release exactly one unit
 rk release --yes           show the same plans; skip their yes/no prompts
 rk release -y              alias of --yes
-rk release [unit] --stage  prepare one unit; name it when several exist
 ```
 
 This adds no release group, shared version, root version, changeset file,
@@ -37,7 +37,7 @@ public targets are already published is skipped unless a configured local output
 still needs a reusable stage. Consequently Binary remains an independent
 output rather than becoming conditional on a publisher.
 
-Bare `--stage` is intentionally not a repository coordinator. In a repository
+Bare `rk stage` is intentionally not a repository coordinator. In a repository
 with several units it asks for a unit name. A dependent's native Pub archive
 validation can require the provider version to be public, so claiming to stage
 the whole repository before publication would be false.
@@ -94,7 +94,7 @@ that was omitted as exact and later becomes absent, unknown, or conflicting
 refuses and requires a fresh plan.
 
 Already-exact and local-only units require no authorization. Supplying `--yes`
-to an idempotent exact run remains harmless. `--yes --stage` is a usage error
+to an idempotent exact run remains harmless. `rk stage --yes` is a usage error
 because staging has no public act to authorize.
 
 ## Output
@@ -149,7 +149,7 @@ Focused tests prove:
 - `--yes` never bypasses conflicts, drift, source, stage, signing, or endpoint
   checks;
 - post-consent work may shrink but never grow;
-- multi-unit `--stage` requires a unit and never publishes;
+- multi-unit `rk stage` requires a unit and never publishes;
 - multi-unit JSON is deterministic; and
 - the existing single-unit release safety suite stays green on the same path.
 

@@ -87,7 +87,7 @@ final class ReleaseStageCoordinator {
         remedy:
             '${inspected.issues.join('\n')}\n'
             '${reviewed ? 'rk will not silently replace reviewed bytes. ' : ''}'
-            'Rebuild it explicitly: rk release ${unit.name} --stage',
+            'Rebuild it explicitly: rk stage ${unit.name}',
       );
     }
     return null;
@@ -107,7 +107,7 @@ final class ReleaseStageCoordinator {
         message: 'the reviewed release stage changed $changed',
         remedy:
             '${inspected.issues.join('\n')}\n'
-            'rebuild it explicitly: rk release ${unit.name} --stage',
+            'rebuild it explicitly: rk stage ${unit.name}',
       ),
     );
     output.halt(halt);
@@ -132,7 +132,7 @@ final class ReleaseStageCoordinator {
           message: 'the release context could not be refreshed $changed',
           remedy:
               'restore a readable repository, then re-run '
-              'rk release ${unit.name} --stage',
+              'rk stage ${unit.name}',
           evidence: '$error',
         ),
       );
@@ -200,7 +200,7 @@ final class ReleaseStageCoordinator {
         remedy:
             '${drift.join('\n')}\n'
             'restore those inputs or review a replacement stage: '
-            'rk release ${unit.name} --stage',
+            'rk stage ${unit.name}',
       ),
     );
     output.halt(halt);
@@ -278,7 +278,7 @@ final class ReleaseStageCoordinator {
                   'identities',
               remedy:
                   'rebuild it explicitly: '
-                  'rk release ${unit.name} --stage',
+                  'rk stage ${unit.name}',
             ),
             unit: unit.name,
           );
@@ -342,7 +342,7 @@ final class ReleaseStageCoordinator {
             message: 'the old release stage could not be replaced safely',
             remedy:
                 'resolve the recorded filesystem failure, then re-run '
-                'rk release ${unit.name} --stage',
+                'rk stage ${unit.name}',
             evidence: '$error',
           ),
         );
@@ -363,7 +363,7 @@ final class ReleaseStageCoordinator {
             message: 'the committed source could not be staged',
             remedy:
                 'resolve the recorded source-staging failure, then re-run '
-                'rk release ${unit.name} --stage',
+                'rk stage ${unit.name}',
             evidence: '$error',
           ),
         );
@@ -608,7 +608,7 @@ final class ReleaseStageCoordinator {
           message: 'the release stage could not be completed',
           remedy:
               'resolve the recorded stage assembly failure, then re-run '
-              'rk release ${unit.name} --stage',
+              'rk stage ${unit.name}',
           evidence: '$error',
         ),
       );
@@ -704,7 +704,7 @@ final class ReleaseStageCoordinator {
         message: 'the published signing identity changed after staging',
         remedy:
             'The reviewed signature was built against a different public '
-            'baseline. Rebuild it explicitly: rk release ${unit.name} --stage.',
+            'baseline. Rebuild it explicitly: rk stage ${unit.name}.',
       ),
     );
     output.halt(HaltKind.beforeActing);

@@ -34,6 +34,8 @@ void main() {
       expect(run.all, contains('rk use [source]'));
       expect(run.all, contains('rk init'));
       expect(run.all, contains('rk plan [unit]'));
+      expect(run.all, contains('rk stage [unit]'));
+      expect(run.all, isNot(contains('--stage')));
     });
 
     for (final (command, explanation) in [
@@ -43,6 +45,7 @@ void main() {
         'Check configured release destinations and local staged artifacts.',
       ),
       ('plan', 'no destination checks, builds, or changes.'),
+      ('stage', 'Prepare and validate the exact artifacts for a release'),
       ('release', 'Public changes require'),
     ]) {
       test('$command help explains its scope without the global index', () {
@@ -59,6 +62,10 @@ void main() {
         }
         final machine = loose([command, '--help', '--json']);
         expect(machine.code, 0, reason: machine.all);
+        expect(machine.json['command'], command);
+        if (command == 'stage') {
+          expect(machine.json, isNot(contains('mode')));
+        }
         expect((machine.json['next'] as List).single, run.stdout.trim());
       });
     }
@@ -143,12 +150,20 @@ void main() {
       expect(run.problems.map((p) => p['code']), contains('RK-CLI-007'));
     });
 
-    test('release help shows the unit as optional', () {
-      final run = repo(['release', '--help']);
-      expect(run.code, 0, reason: run.all);
-      expect(run.all, contains('rk release [unit]'));
-      expect(run.all, contains('rk release [unit] --stage'));
-    });
+    test(
+      'release help teaches stage and documents the compatibility alias',
+      () {
+        final run = repo(['release', '--help']);
+        expect(run.code, 0, reason: run.all);
+        expect(run.all, contains('rk release [unit]'));
+        expect(run.all, contains('rk release [unit] --stage'));
+        expect(
+          run.all,
+          contains('To prepare without publishing: rk stage tools'),
+        );
+        expect(run.all, contains('rk stage is optional'));
+      },
+    );
 
     test('the removed --confirm flag is refused', () {
       final run = repo(['release', 'lib', '--confirm=1.4.0', '--json']);
@@ -161,7 +176,28 @@ void main() {
       expect(run.code, 2, reason: run.all);
       expect(run.problems.map((p) => p['code']), contains('RK-CLI-005'));
       expect(run.all, contains('staging publishes nothing'));
+      expect(run.json['command'], 'release');
+      expect(run.json['mode'], {'stage': true});
     });
+
+    test(
+      'stage refuses publication authorization and redundant mode flags',
+      () {
+        for (final flag in ['--yes', '-y', '--stage']) {
+          final run = repo(['stage', 'lib', flag, '--json']);
+          expect(run.code, 2, reason: run.all);
+          expect(run.problems.single['code'], 'RK-CLI-005');
+          expect(
+            run.problems.single['message'],
+            'rk stage does not have $flag',
+          );
+          expect(run.problems.single['remedy'], contains('rk stage [unit]'));
+          expect(run.json['command'], 'stage');
+          expect(run.json, isNot(contains('mode')));
+        }
+        expect(Directory('${repo.root}/.rk').existsSync(), isFalse);
+      },
+    );
 
     test('--yes and -y apply only to release and clean', () {
       // --help short-circuits before the verb runs, so this proves only the

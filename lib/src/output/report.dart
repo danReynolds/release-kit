@@ -47,8 +47,8 @@ class Report {
   /// decide" without reading the sentence.
   var rerunHelps = true;
 
-  /// How the run was asked to operate — today only whether release was
-  /// asked to stop at the private stage.
+  /// How the run was asked to operate. Release retains its stage flag for
+  /// compatibility; the stage verb has no mode field.
   final Map<String, Object> mode = {};
 
   /// Whether this run began changing things.
