@@ -6,17 +6,31 @@
   artifacts without publishing. `rk release` still prepares as needed and
   publishes. JSON schema 12 identifies the operation through `command` and
   removes the obsolete `mode.stage` field.
-- Read YAML flow collections (`[a, b]`, `{name: value}`) in pubspecs and
-  overrides files as the lists and maps they are, instead of refusing the file.
-  Anchors, aliases, tags, duplicate keys and unclosed collections are still
-  refused.
+- Read the pubspec YAML that real packages write and that rk used to refuse.
+  - Flow collections (`[a, b]`, `{name: value}`), after their key or on the
+    lines below it, and continued over several lines.
+  - Plain scalars wrapped over several lines or starting below their key, as
+    many descriptions are, and a leading document marker.
+  - Every `pubspec.yaml` and `pubspec_overrides.yaml` in a 1,566-file local pub
+    cache now reads exactly as package:yaml reads it.
+  - Anchors, aliases, tags, complex keys, duplicate keys, unclosed collections
+    and documents that are not maps are refused everywhere, rather than read
+    as something else.
 - Refuse a tracked dependency override (`RK-PUB-008`) only when it reaches the
-  staged package: rk resolves the staged snapshot with `dart pub deps --json`
-  and refuses when an override replaces the package or anything it depends on,
-  or when the graph cannot be read. Overrides that reach only other workspace
-  members are listed in the run's report as `pub-overrides-<package>.txt`.
+  staged package.
+  - rk reads the override files of every package in the workspace the
+    package resolves with, from its top-most root, with glob members.
+  - It resolves the staged snapshot with `dart pub deps --json` and checks its
+    reading against the workspace and overrides Pub reports.
+  - It refuses an override of the package or of anything its dependencies
+    reach, and every override when a declaration, the workspace or the graph
+    cannot be read.
+  - Overrides that reach only other workspace members are listed in the run's
+    report as `pub-overrides-<package>.txt`.
 - Refuse to stage a package that resolves with Flutter packages when rk's Dart
-  is not a Flutter SDK's (`RK-PUB-014`), before Pub runs.
+  is not a Flutter SDK's (`RK-PUB-014`), before Pub runs. The stage records the
+  Dart it uses, and a standalone one would depend on an unrecorded
+  `FLUTTER_ROOT`.
 - Add an inline version table to `rk use`. Installed versions remain visible
   while remote checks run independently. Install and Update are separate from
   Use; Update appears only for a confirmed newer version. Navigation and checks

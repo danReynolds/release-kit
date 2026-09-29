@@ -51,6 +51,37 @@ ToolResult keybayDeps(List<String> dependencies) => ToolResult(
   stderr: '',
 );
 
+/// `pub deps --json` for a workspace: [roots] are its packages, each with
+/// its direct dependencies and any overrides it declares; [hosted] lists
+/// the other packages with their dependencies.
+ToolResult workspaceDeps(
+  Map<String, ({List<String> direct, List<String> overrides})> roots, {
+  Map<String, List<String>> hosted = const {},
+}) => ToolResult(
+  exitCode: 0,
+  stdout: jsonEncode({
+    'root': roots.keys.first,
+    'packages': [
+      for (final MapEntry(key: name, value: root) in roots.entries)
+        {
+          'name': name,
+          'kind': 'root',
+          'dependencies': [...root.direct, ...root.overrides],
+          'directDependencies': root.direct,
+          'devDependencies': <String>[],
+        },
+      for (final MapEntry(key: name, value: dependencies) in hosted.entries)
+        {
+          'name': name,
+          'kind': 'transitive',
+          'dependencies': dependencies,
+          'directDependencies': dependencies,
+        },
+    ],
+  }),
+  stderr: '',
+);
+
 /// Checks each phase against the deliverables its plan lists, so "done" is
 /// something this file decides rather than something a judgement call does.
 ///
@@ -1013,6 +1044,142 @@ publish = ["git-tag", "pub.dev"]
       expect(run.text, contains('mask consumer resolution'));
       expect(run.text, contains('could not resolve'));
       expect(run.calls.where((c) => c.startsWith('dart pub publish')), isEmpty);
+    });
+
+    group('a workspace', () {
+      const members = {
+        'pubspec.yaml':
+            'name: ws\n'
+            'publish_to: none\n'
+            'environment:\n'
+            '  sdk: ^3.11.0\n'
+            'workspace:\n'
+            '  - packages/*\n',
+        'packages/keybay/pubspec.yaml':
+            'name: keybay\n'
+            'version: 0.2.0\n'
+            'resolution: workspace\n'
+            'dependencies:\n'
+            '  leaf: ^1.0.0\n',
+        'packages/host/pubspec.yaml':
+            'name: host\n'
+            'publish_to: none\n'
+            'resolution: workspace\n'
+            'dependencies:\n'
+            '  pinned: ^1.0.0\n',
+      };
+      const none = <String>[];
+
+      test("refuses an override a sibling member declares", () async {
+        // Pub applies any member's overrides to the whole workspace, so
+        // host's pin of leaf is what keybay validates against.
+        final run = await release(
+          sourceFiles: {
+            ...members,
+            'packages/host/pubspec.yaml':
+                '${members['packages/host/pubspec.yaml']}'
+                'dependency_overrides:\n'
+                '  leaf:\n'
+                '    path: ../fork\n',
+          },
+          results: {
+            'dart pub deps --json': workspaceDeps(
+              {
+                'ws': (direct: none, overrides: none),
+                'keybay': (direct: ['leaf'], overrides: none),
+                'host': (direct: ['pinned'], overrides: ['leaf']),
+              },
+              hosted: {'leaf': none, 'pinned': none},
+            ),
+          },
+        );
+
+        expect(run.code, ExitCodes.refused);
+        expect(run.text, contains('keybay depends on leaf'));
+        expect(run.text, contains('packages/host/pubspec.yaml'));
+        expect(
+          run.calls.where((c) => c.startsWith('dart pub publish')),
+          isEmpty,
+        );
+      });
+
+      test('stages past a root pin that only another member uses', () async {
+        // Flark's shape: the root pins a Git package for one host, and the
+        // package being released never depends on it.
+        final run = await release(
+          sourceFiles: {
+            ...members,
+            'pubspec.yaml':
+                '${members['pubspec.yaml']}'
+                'dependency_overrides:\n'
+                '  pinned:\n'
+                '    git: https://example.com/pinned.git\n',
+          },
+          results: {
+            'dart pub deps --json': workspaceDeps(
+              {
+                'ws': (direct: none, overrides: ['pinned']),
+                'keybay': (direct: ['leaf'], overrides: none),
+                'host': (direct: ['pinned'], overrides: none),
+              },
+              hosted: {'leaf': none, 'pinned': none},
+            ),
+          },
+        );
+
+        expect(run.code, ExitCodes.ok, reason: run.text);
+        expect(
+          run.report['attachments'],
+          containsPair('pub-overrides-keybay.txt', contains('pinned')),
+        );
+      });
+
+      test('refuses when Pub resolves packages rk did not read', () async {
+        final run = await release(
+          sourceFiles: {
+            ...members,
+            'pubspec.yaml':
+                '${members['pubspec.yaml']}'
+                'dependency_overrides:\n'
+                '  pinned: 1.0.0\n',
+          },
+          results: {
+            'dart pub deps --json': workspaceDeps(
+              {
+                'ws': (direct: none, overrides: ['pinned']),
+                'keybay': (direct: ['leaf'], overrides: none),
+                'host': (direct: ['pinned'], overrides: none),
+                'unlisted': (direct: none, overrides: none),
+              },
+              hosted: {'leaf': none, 'pinned': none},
+            ),
+          },
+        );
+
+        expect(run.code, ExitCodes.refused);
+        expect(run.text, contains('could not resolve'));
+      });
+
+      test('refuses an override only Pub reports', () async {
+        // rk's reading found none; Pub's report of what it applied is the
+        // check that catches a declaration rk misread.
+        final run = await release(
+          sourceFiles: members,
+          results: {
+            'dart pub deps --json': workspaceDeps(
+              {
+                'ws': (direct: none, overrides: none),
+                'keybay': (direct: ['leaf'], overrides: none),
+                'host': (direct: ['pinned'], overrides: ['leaf']),
+              },
+              hosted: {'leaf': none, 'pinned': none},
+            ),
+          },
+        );
+
+        expect(run.code, ExitCodes.refused);
+        expect(run.text, contains('an override Pub applied for host'));
+      });
     });
 
     group('a workspace with Flutter packages', () {

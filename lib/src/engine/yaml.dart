@@ -9,10 +9,12 @@ import 'diagnostic.dart';
 /// accessors enforce.
 ///
 /// Accepted: block maps, block sequences, flow sequences and mappings (`[a, b]`,
-/// `{path: ../core}`, on one line or continued over several), plain and quoted
-/// scalars, folded and literal block scalars (whose content is kept opaque,
-/// since rk never reads a description). Absent: anchors, aliases, tags,
-/// multiple documents, and tabs for indentation.
+/// `{path: ../core}`, continued over several lines), plain scalars (wrapped
+/// over more-indented lines too) and quoted scalars, each written after its
+/// key or on the lines below it, folded and literal block scalars (whose content is kept
+/// opaque, since rk never reads a description), and one leading `---`.
+/// Refused: anchors, aliases, tags, multiple documents, and tabs for
+/// indentation.
 sealed class YamlNode {
   const YamlNode(this.line);
 
@@ -79,11 +81,25 @@ class _Parser {
   var _failed = false;
 
   YamlMap? run() {
+    // One document, which may open with its marker.
+    while (_cursor < _lines.length && _strip(_lines[_cursor]).trim().isEmpty) {
+      _cursor++;
+    }
+    if (_cursor < _lines.length && _strip(_lines[_cursor]).trim() == '---') {
+      _cursor++;
+    }
     final root = _block(0);
     if (_failed) return null;
-    if (root is YamlMap) return root;
     // An empty document is a map with nothing in it.
-    return YamlMap(1);
+    if (root == null) return YamlMap(1);
+    if (root is YamlMap) return root;
+    // Read as an empty map, a list would declare nothing where Pub refuses.
+    _fail(
+      'the document is not a map of keys',
+      root.line,
+      remedy: 'a pubspec and its overrides file are maps of keys',
+    );
+    return null;
   }
 
   void _fail(String message, int line, {String? remedy}) {
@@ -138,6 +154,25 @@ class _Parser {
       // Belongs to an enclosing block.
       if (at < (isDash ? dashFrom : indent)) break;
 
+      // A flow collection on its own line is the whole value of the key
+      // above it, as `{path: ../core}` is under `core:`. Read as a key, it
+      // would hide that path dependency.
+      if (!isDash && _opensFlow(body)) {
+        if (asMap != null || asList != null) {
+          _fail(
+            'a flow collection cannot follow other entries of a block',
+            line,
+            remedy: 'give "$body" its own key',
+          );
+          return null;
+        }
+        _cursor++;
+        final node = _flow(raw.substring(at), line);
+        if (node == null) return null;
+        _endOfValue(indent, line);
+        return _failed ? null : node;
+      }
+
       if (isDash) {
         asList ??= YamlList(line);
         if (asMap != null) {
@@ -145,10 +180,11 @@ class _Parser {
           return null;
         }
         final item = body == '-' ? '' : body.substring(2).trim();
+        if (_hasProperty(item, line)) return null;
 
         if (_opensFlow(item)) {
           _cursor++;
-          final node = _flow(item, line);
+          final node = _flow(raw.substring(raw.indexOf(item, at + 1)), line);
           if (node == null) return null;
           asList.items.add(node);
         } else if (item.isEmpty) {
@@ -171,7 +207,8 @@ class _Parser {
           if (nested != null) asList.items.add(nested);
         } else {
           _cursor++;
-          asList.items.add(YamlScalar(_unquote(item), line));
+          asList.items.add(_scalar(item, at, line));
+          if (_failed) return null;
         }
         continue;
       }
@@ -191,6 +228,13 @@ class _Parser {
       }
 
       final colon = _keyColon(body);
+      // A scalar on the lines below its key, as wrapped descriptions and
+      // paths often are, is that key's whole value.
+      if (colon < 0 && indent > 0 && asMap == null && !isDash) {
+        _cursor++;
+        final node = _scalar(body, indent - 1, line);
+        return _failed ? null : node;
+      }
       if (colon < 0) {
         _fail(
           'expected "key: value"',
@@ -200,8 +244,20 @@ class _Parser {
         return null;
       }
 
-      final key = _unquote(body.substring(0, colon).trim());
+      final written = body.substring(0, colon).trim();
+      if (written.startsWith('?') || _hasProperty(written, line)) {
+        if (!_failed) {
+          _fail(
+            'rk does not read complex keys',
+            line,
+            remedy: 'write "$written" as a plain or quoted key',
+          );
+        }
+        return null;
+      }
+      final key = _unquote(written);
       final rest = body.substring(colon + 1).trim();
+      if (_hasProperty(rest, line)) return null;
       asMap ??= YamlMap(line);
 
       // YAML forbids duplicate keys, and a manifest with two version: lines is
@@ -217,7 +273,7 @@ class _Parser {
       _cursor++;
 
       if (_opensFlow(rest)) {
-        final node = _flow(rest, line);
+        final node = _flow(raw.substring(raw.indexOf(rest, at + colon)), line);
         if (node == null) return null;
         asMap.entries[key] = node;
       } else if (rest.isEmpty) {
@@ -231,30 +287,103 @@ class _Parser {
         // ever written this way.
         asMap.entries[key] = YamlScalar(_blockScalar(at), line);
       } else {
-        asMap.entries[key] = YamlScalar(
-          _unquote(rest),
-          line,
-          quoted: rest.startsWith('"') || rest.startsWith("'"),
-        );
+        asMap.entries[key] = _scalar(rest, at, line);
+        if (_failed) return null;
       }
     }
 
     return asMap ?? asList;
   }
 
+  /// A scalar written after a key or dash indented [indent]. A plain scalar
+  /// continues over following lines indented further, joined with spaces, as
+  /// wrapped descriptions are written; such a line cannot be a key, which
+  /// YAML also refuses inside a plain scalar.
+  YamlScalar _scalar(String value, int indent, int line) {
+    final quoted = value.startsWith('"') || value.startsWith("'");
+    if (quoted) return YamlScalar(_unquote(value), line, quoted: true);
+    // Folded as YAML folds: a line break is a space, and each blank line
+    // between two lines is a newline.
+    final folded = StringBuffer(value);
+    var blanks = 0;
+    var next = _cursor;
+    while (next < _lines.length) {
+      final raw = _lines[next];
+      if (raw.trim().isEmpty) {
+        blanks++;
+        next++;
+        continue;
+      }
+      final text = _strip(raw).trim();
+      if (text.isEmpty || _indentOf(raw) <= indent) break;
+      if (_keyColon(text) >= 0 || text.startsWith('- ') || text == '-') {
+        _fail(
+          'a key or list item is indented under the scalar on line $line',
+          next + 1,
+          remedy: 'outdent it, or quote the scalar if it is one value',
+        );
+        return YamlScalar(value, line);
+      }
+      folded
+        ..write(blanks == 0 ? ' ' : '\n' * blanks)
+        ..write(text);
+      blanks = 0;
+      _cursor = ++next;
+    }
+    return YamlScalar(folded.toString(), line);
+  }
+
+  /// Refuses what [value] would need an anchor, alias or tag to mean.
+  bool _hasProperty(String value, int line) {
+    if (!value.startsWith('&') &&
+        !value.startsWith('*') &&
+        !value.startsWith('!')) {
+      return false;
+    }
+    _fail(
+      'rk does not read anchors, aliases or tags',
+      line,
+      remedy: 'write "$value" out in full',
+    );
+    return true;
+  }
+
+  /// Requires the next meaningful line to leave the block indented [indent]:
+  /// a flow collection written below its key is that key's whole value.
+  void _endOfValue(int indent, int line) {
+    for (var next = _cursor; next < _lines.length; next++) {
+      final raw = _lines[next];
+      if (_strip(raw).trim().isEmpty) continue;
+      if (_indentOf(raw) >= indent) {
+        _fail(
+          'a flow collection is the whole value of its key',
+          next + 1,
+          remedy: 'end the block that the collection on line $line opens',
+        );
+      }
+      return;
+    }
+  }
+
   bool _opensFlow(String value) =>
       value.startsWith('[') || value.startsWith('{');
 
-  /// Reads the flow collection that [text] opens on [line], taking following
-  /// lines while its brackets are still open.
+  /// Reads the flow collection that [raw] (the line from its opening
+  /// bracket) begins on [line], taking following lines while a bracket or
+  /// quoted scalar is still open.
+  ///
+  /// One scan carries quotes, comments and brackets across the lines, so a
+  /// `#` or bracket inside a quoted scalar never closes the collection early
+  /// or keeps it open.
   ///
   /// A flow collection is read into the same maps and lists as block style,
   /// never kept as an opaque scalar: `dependencies: {core: {path: ../core}}`
   /// must answer `map('dependencies')` with the path dependency rk exists to
   /// refuse, exactly as the block form does.
-  YamlNode? _flow(String text, int line) {
-    var source = text;
-    while (_FlowReader.opensMore(source)) {
+  YamlNode? _flow(String raw, int line) {
+    final scan = _Scan();
+    final source = StringBuffer(_uncomment(raw, scan));
+    while (scan.depth > 0 || scan.quote.isNotEmpty) {
       if (_cursor >= _lines.length) {
         _fail(
           'a flow collection is not closed',
@@ -263,10 +392,12 @@ class _Parser {
         );
         return null;
       }
-      source = '$source ${_strip(_lines[_cursor]).trim()}';
+      source
+        ..write(' ')
+        ..write(_uncomment(_lines[_cursor].trimLeft(), scan));
       _cursor++;
     }
-    final reader = _FlowReader(source);
+    final reader = _FlowReader(source.toString().trim());
     final node = reader.read(line);
     if (node == null) {
       _fail(
@@ -318,24 +449,7 @@ class _Parser {
   /// Removes a comment, honouring YAML's rule that `#` only begins one at the
   /// start of a line or after whitespace — so `homepage: https://x/#cli` keeps
   /// its fragment.
-  String _strip(String line) {
-    var quote = '';
-    for (var i = 0; i < line.length; i++) {
-      final ch = line[i];
-      if (quote.isNotEmpty) {
-        if (ch == quote) quote = '';
-        continue;
-      }
-      if (ch == '"' || ch == "'") {
-        quote = ch;
-        continue;
-      }
-      if (ch == '#' && (i == 0 || line[i - 1] == ' ' || line[i - 1] == '\t')) {
-        return line.substring(0, i);
-      }
-    }
-    return line;
-  }
+  String _strip(String line) => _uncomment(line, _Scan());
 
   /// Leading spaces, or -1 when the line is indented with a tab.
   int _indentOf(String line) {
@@ -375,38 +489,6 @@ final class _FlowReader {
 
   /// Why [read] returned null.
   String? error;
-
-  /// Whether [text] opens more brackets than it closes, outside quotes.
-  ///
-  /// A quote opens a quoted scalar only where a scalar starts, as [read]
-  /// treats it; inside a plain scalar such as `it's` it is a character.
-  static bool opensMore(String text) {
-    var depth = 0;
-    var quote = '';
-    var scalarStart = true;
-    for (var i = 0; i < text.length; i++) {
-      final ch = text[i];
-      if (quote.isNotEmpty) {
-        if (quote == '"' && ch == r'\') {
-          i++;
-        } else if (ch == quote) {
-          quote = '';
-        }
-        continue;
-      }
-      if (ch == ' ' || ch == '\t') continue;
-      final starts = scalarStart;
-      scalarStart = '[{,:'.contains(ch);
-      if ((ch == '"' || ch == "'") && starts) {
-        quote = ch;
-      } else if (ch == '[' || ch == '{') {
-        depth++;
-      } else if (ch == ']' || ch == '}') {
-        depth--;
-      }
-    }
-    return depth > 0;
-  }
 
   YamlNode? read(int line) {
     final node = _node(line);
@@ -563,4 +645,66 @@ final class _FlowReader {
     }
     return YamlScalar(value, line);
   }
+}
+
+/// Where a scan of YAML text stands: inside a quoted scalar or not, how many
+/// flow brackets are open, and whether a scalar may start next.
+final class _Scan {
+  var quote = '';
+  var depth = 0;
+  var scalarStart = true;
+}
+
+/// [line] without its comment, advancing [scan] across it.
+///
+/// A quote opens a quoted scalar only where a scalar starts, so the one in
+/// `it's` is a character; inside double quotes a backslash escapes, inside
+/// single quotes `''` does. A `#` begins a comment only outside quotes, at the
+/// start of the line or after whitespace. Brackets count only in flow context:
+/// one that opens a value, or any inside a collection already open.
+String _uncomment(String line, _Scan scan) {
+  for (var i = 0; i < line.length; i++) {
+    final ch = line[i];
+    if (scan.quote == '"') {
+      if (ch == r'\') {
+        i++;
+      } else if (ch == '"') {
+        scan.quote = '';
+      }
+      continue;
+    }
+    if (scan.quote == "'") {
+      if (ch == "'") {
+        if (i + 1 < line.length && line[i + 1] == "'") {
+          i++;
+        } else {
+          scan.quote = '';
+        }
+      }
+      continue;
+    }
+    if (ch == ' ' || ch == '\t') continue;
+    if (ch == '#' && (i == 0 || line[i - 1] == ' ' || line[i - 1] == '\t')) {
+      return line.substring(0, i);
+    }
+    final starts = scan.scalarStart;
+    final spaced =
+        i + 1 == line.length || line[i + 1] == ' ' || line[i + 1] == '\t';
+    scan.scalarStart = false;
+    if ((ch == '"' || ch == "'") && starts) {
+      scan.quote = ch;
+    } else if ((ch == '[' || ch == '{') && (starts || scan.depth > 0)) {
+      scan.depth++;
+      scan.scalarStart = true;
+    } else if ((ch == ']' || ch == '}') && scan.depth > 0) {
+      scan.depth--;
+    } else if (ch == ',' && scan.depth > 0) {
+      scan.scalarStart = true;
+    } else if (ch == ':' && (spaced || scan.depth > 0)) {
+      scan.scalarStart = true;
+    } else if ((ch == '-' || ch == '?') && spaced && scan.depth == 0) {
+      scan.scalarStart = true;
+    }
+  }
+  return line;
 }

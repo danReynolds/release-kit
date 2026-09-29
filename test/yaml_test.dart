@@ -1,6 +1,27 @@
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/yaml.dart';
 import 'package:test/test.dart';
+import 'package:yaml/yaml.dart' as yaml;
+
+/// A document as plain Dart values, the way rk reads it.
+Object? _fromRk(YamlNode node) => switch (node) {
+  YamlScalar(:final value) => value,
+  YamlList(:final items) => [for (final item in items) _fromRk(item)],
+  YamlMap(:final entries) => {
+    for (final entry in entries.entries) entry.key: _fromRk(entry.value),
+  },
+};
+
+/// A document as plain Dart values, the way YAML reads it, with scalars as
+/// the text rk keeps (rk types nothing; its accessors do).
+Object? _fromYaml(Object? node) => switch (node) {
+  null => '',
+  yaml.YamlList() => [for (final item in node) _fromYaml(item)],
+  yaml.YamlMap() => {
+    for (final entry in node.entries) '${entry.key}': _fromYaml(entry.value),
+  },
+  _ => '$node',
+};
 
 YamlMap parse(String source) {
   final diagnostics = Diagnostics();
@@ -234,6 +255,77 @@ version: 1.0.0
         final diagnostics = Diagnostics();
         expect(parseYaml(source, 'p.yaml', diagnostics), isNull);
         expect(diagnostics.found.single.message, contains(reason));
+      });
+    }
+  });
+
+  group('agrees with the YAML parser', () {
+    // Each is valid YAML that an earlier reader either refused or read as
+    // something else; a path dependency hidden that way is what rk refuses.
+    for (final (label, source) in [
+      (
+        'a flow map below its key',
+        'dependencies:\n  core:\n    {path: ../core}\n',
+      ),
+      (
+        'a flow map that opens a block',
+        'dependencies:\n  {core:\n    {path: ../core}}\nname: x\n',
+      ),
+      (
+        'an escaped quote before a comment sign',
+        'false_secrets: ["a\\" # b"]\ndescription: x"]\n'
+            'dependencies:\n  core:\n    path: ../core\n',
+      ),
+      (
+        'a plain scalar with an apostrophe beside a quoted one',
+        "topics: [it's, 'a # b']\ndescription: x']\n"
+            'dependencies:\n  core:\n    path: ../core\n',
+      ),
+      ('a doubled quote before a bracket', "topics: ['it''s [x']\n"),
+      ('a quoted scalar across lines', 'list: ["a\n  b # c"]\nname: x\n'),
+      ('JSON-style adjacent values', 'map: {"a":"b # c", "d":[1,2]}\n'),
+      ('an apostrophe before a comment', "description: don't # comment\n"),
+      (
+        'a wrapped description',
+        'description: A long\n  description, wrapped.\nversion: 1.0.0\n',
+      ),
+      (
+        'a description below its key',
+        'description:\n  A long description\n\n  over lines.\nversion: 1.0.0\n',
+      ),
+      (
+        'a path below its key',
+        'dependencies:\n  core:\n    path:\n      ../core\n',
+      ),
+      ('a document marker', '---\nname: x\n'),
+    ]) {
+      test(label, () {
+        expect(_fromRk(parse(source)), _fromYaml(yaml.loadYaml(source)));
+      });
+    }
+  });
+
+  group('refuses what it would misread', () {
+    for (final (label, source) in [
+      (
+        'an anchor on a block',
+        'dependencies: &deps\n  core:\n    path: ../core\n',
+      ),
+      ('a tag on a flow map', 'dependencies: !!map {core: {path: ../core}}\n'),
+      ('an alias item', 'topics:\n  - *topic\n'),
+      ('a complex key', '? name\n: x\n'),
+      ('a second document', 'name: x\n---\nname: y\n'),
+      ('a list document', '- name: x\n'),
+      (
+        'a key under a scalar',
+        'dependencies: none\n  core:\n    path: ../core\n',
+      ),
+      ('entries after a flow value', 'core:\n  {path: ../core}\n  extra: 1\n'),
+    ]) {
+      test(label, () {
+        final diagnostics = Diagnostics();
+        expect(parseYaml(source, 'p.yaml', diagnostics), isNull);
+        expect(diagnostics.found, isNotEmpty);
       });
     }
   });

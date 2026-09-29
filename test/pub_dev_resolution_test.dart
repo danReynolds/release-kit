@@ -4,16 +4,17 @@ import 'dart:io';
 import 'package:rk/src/targets/pub_dev/resolution.dart';
 import 'package:test/test.dart';
 
-/// `pub deps --json` for a workspace: two members, one of which reaches a
-/// Git-overridden package through its own dependencies.
+/// `pub deps --json` for a workspace, in the shape Pub 3.12 prints: two
+/// members, one of which reaches a Git-overridden package through its own
+/// dependencies, and a third whose pubspec declares that override.
 final _workspaceDeps = jsonEncode({
   'root': 'example_workspace',
   'packages': [
     {
       'name': 'example_workspace',
       'kind': 'root',
-      'dependencies': ['core', 'host', 'overridden'],
-      'directDependencies': ['core', 'host'],
+      'dependencies': <String>[],
+      'directDependencies': <String>[],
       'devDependencies': <String>[],
     },
     {
@@ -29,6 +30,15 @@ final _workspaceDeps = jsonEncode({
       'dependencies': ['core', 'widgets', 'lints'],
       'directDependencies': ['core', 'widgets'],
       'devDependencies': ['lints'],
+    },
+    {
+      'name': 'pinner',
+      'kind': 'root',
+      // An override declared in a member is reported as a dependency that is
+      // neither direct nor dev.
+      'dependencies': ['overridden'],
+      'directDependencies': <String>[],
+      'devDependencies': <String>[],
     },
     {
       'name': 'widgets',
@@ -51,6 +61,13 @@ final _workspaceDeps = jsonEncode({
       },
   ],
 });
+
+/// [_workspaceDeps] with one package entry changed by [edit].
+String _edited(void Function(List<Object?> packages) edit) {
+  final decoded = jsonDecode(_workspaceDeps) as Map<String, Object?>;
+  edit(decoded['packages'] as List<Object?>);
+  return jsonEncode(decoded);
+}
 
 void main() {
   group('runtimeDependencies', () {
@@ -85,6 +102,52 @@ void main() {
         reason: 'without its dependency list, a package cannot be placed',
       );
     });
+
+    test('answers null rather than a smaller graph for a reshaped one', () {
+      // An edge to a package the output does not list.
+      final unlisted = _edited(
+        (packages) =>
+            packages.removeWhere((p) => (p as Map)['name'] == 'widgets'),
+      );
+      // An edge that is not a package name.
+      final objectEdge = _edited((packages) {
+        final host = packages.firstWhere((p) => (p as Map)['name'] == 'host');
+        ((host as Map)['directDependencies'] as List).add({'name': 'x'});
+      });
+      // An entry that is not a package.
+      final stray = _edited((packages) => packages.add('widgets'));
+      // The same package twice.
+      final twice = _edited(
+        (packages) => packages.add({
+          'name': 'core',
+          'kind': 'transitive',
+          'dependencies': <String>[],
+        }),
+      );
+      for (final json in [unlisted, objectEdge, stray, twice]) {
+        expect(runtimeDependencies(json, 'host'), isNull, reason: json);
+      }
+    });
+  });
+
+  group('appliedOverrides', () {
+    test('reads what each workspace package depends on beyond its own', () {
+      expect(appliedOverrides(_workspaceDeps), {
+        'example_workspace': <String>{},
+        'core': <String>{},
+        'host': <String>{},
+        'pinner': {'overridden'},
+      });
+    });
+
+    test('answers null for a root package without its lists', () {
+      final bare = _edited((packages) {
+        final core = packages.firstWhere((p) => (p as Map)['name'] == 'core');
+        (core as Map).remove('devDependencies');
+      });
+      expect(appliedOverrides(bare), isNull);
+      expect(appliedOverrides('[]'), isNull);
+    });
   });
 
   group('maskingOverrides', () {
@@ -106,7 +169,7 @@ void main() {
       expect(maskingOverrides([own], 'core', const {}), [own]);
     });
 
-    test('an unreadable overrides file and an unknown graph mask', () {
+    test('an unreadable declaration and an unknown graph mask', () {
       expect(maskingOverrides([unreadable], 'core', const {}), [unreadable]);
       expect(maskingOverrides([overridden], 'core', null), [overridden]);
     });
@@ -123,69 +186,176 @@ void main() {
         ..writeAsStringSync(contents);
     }
 
-    void workspace({String overrides = '', String hostDeps = ''}) {
+    String member(String name, [String more = '']) =>
+        'name: $name\nversion: 1.0.0\nresolution: workspace\n$more';
+
+    void workspace({String members = '  - packages/*\n', String more = ''}) {
       write(
         'pubspec.yaml',
-        'name: example_workspace\n'
-            'publish_to: none\n'
-            'workspace:\n  - packages/core\n  - packages/host\n'
-            '$overrides',
+        'name: example_workspace\npublish_to: none\n'
+            'workspace:\n$members$more',
+      );
+      write('packages/core/pubspec.yaml', member('core'));
+      write('packages/host/pubspec.yaml', member('host'));
+    }
+
+    Map<String, String>? packagesOf(String dir) =>
+        resolutionPackages(root.path, '${root.path}/$dir').packages;
+
+    List<DependencyOverride> overridesOf(String dir) =>
+        dependencyOverrides(root.path, packagesOf(dir)!.values);
+
+    test('is every package of the workspace, members matched by glob', () {
+      workspace();
+      // A directory without a pubspec is not a member; a hidden one is.
+      Directory('${root.path}/packages/docs').createSync(recursive: true);
+      write('packages/.tool/pubspec.yaml', member('tool'));
+      expect(packagesOf('packages/core'), {
+        'example_workspace': root.path,
+        'core': '${root.path}/packages/core',
+        'host': '${root.path}/packages/host',
+        'tool': '${root.path}/packages/.tool',
+      });
+    });
+
+    test('is read from the top-most root of nested workspaces', () {
+      write(
+        'pubspec.yaml',
+        'name: top\npublish_to: none\nworkspace:\n  - pkgs\n',
       );
       write(
-        'packages/core/pubspec.yaml',
-        'name: core\nversion: 1.0.0\nresolution: workspace\n',
+        'pkgs/pubspec.yaml',
+        'name: middle\npublish_to: none\nresolution: workspace\n'
+            'workspace:\n  - "**/keybay"\n',
+      );
+      write('pkgs/deep/keybay/pubspec.yaml', member('keybay'));
+      expect(packagesOf('pkgs/deep/keybay')!.keys, {'top', 'middle', 'keybay'});
+    });
+
+    test('is unknown when a manifest or member cannot be read', () {
+      workspace(members: '  - packages/missing\n');
+      expect(
+        resolutionPackages(root.path, '${root.path}/packages/core').unreadable,
+        'pubspec.yaml (workspace member "packages/missing")',
+      );
+
+      workspace(members: '  - packages/{core,host}\n');
+      expect(packagesOf('packages/core'), isNull, reason: 'brace globs');
+
+      // Valid YAML rk does not read (an anchor) leaves the root unknown
+      // rather than empty.
+      workspace(more: 'dependency_overrides: &pins\n  leaf: 1.0.0\n');
+      expect(
+        resolutionPackages(root.path, '${root.path}/packages/core').unreadable,
+        'pubspec.yaml',
+      );
+    });
+
+    test('a member with no workspace above it is unknown', () {
+      write('packages/core/pubspec.yaml', member('core'));
+      expect(packagesOf('packages/core'), isNull);
+    });
+
+    test('a package outside any workspace is resolved alone', () {
+      write('pubspec.yaml', 'name: solo\nversion: 1.0.0\n');
+      expect(resolutionPackages(root.path, root.path).packages, {
+        'solo': root.path,
+      });
+    });
+
+    test("overrides are read from every package, a sibling's included", () {
+      workspace(
+        more:
+            'dependency_overrides:\n'
+            '  pinned:\n    git: https://example.com/x.git\n',
       );
       write(
         'packages/host/pubspec.yaml',
-        'name: host\nversion: 1.0.0\nresolution: workspace\n$hostDeps',
+        member('host', 'dependency_overrides:\n  leaf:\n    path: ../fork\n'),
       );
-    }
-
-    test('overrides are found at the workspace root', () {
-      workspace(
-        overrides:
-            'dependency_overrides:\n'
-            '  overridden:\n    git: https://example.com/x.git\n',
+      write(
+        'packages/core/pubspec_overrides.yaml',
+        'dependency_overrides:\n  other: 1.0.0\n',
       );
-      expect(dependencyOverrides(root.path, '${root.path}/packages/core'), [
+      expect(overridesOf('packages/core').toSet(), {
         (
-          package: 'overridden',
+          package: 'pinned',
           declaredIn: 'the dependency_overrides section in pubspec.yaml',
         ),
-      ]);
+        (
+          package: 'leaf',
+          declaredIn:
+              'the dependency_overrides section in packages/host/pubspec.yaml',
+        ),
+        (package: 'other', declaredIn: 'packages/core/pubspec_overrides.yaml'),
+      });
     });
 
-    test('a pubspec_overrides.yaml names its packages, or every package', () {
+    test('an overrides file replaces the section, as Pub reads it', () {
       workspace();
       write(
-        'pubspec_overrides.yaml',
-        'dependency_overrides:\n  a:\n    path: ../a\n  b: 1.0.0\n',
+        'packages/core/pubspec.yaml',
+        member('core', 'dependency_overrides:\n  ignored: 1.0.0\n'),
       );
-      write('packages/core/pubspec_overrides.yaml', 'nothing: here\n');
-      expect(dependencyOverrides(root.path, '${root.path}/packages/core'), [
+      write(
+        'packages/core/pubspec_overrides.yaml',
+        'dependency_overrides:\n  used: 1.0.0\n',
+      );
+      expect(overridesOf('packages/core'), [
+        (package: 'used', declaredIn: 'packages/core/pubspec_overrides.yaml'),
+      ]);
+
+      // One without the key leaves the section in force.
+      write('packages/core/pubspec_overrides.yaml', 'other: true\n');
+      expect(overridesOf('packages/core').single.package, 'ignored');
+    });
+
+    test('what rk cannot read as a package name overrides everything', () {
+      workspace();
+      write(
+        'packages/core/pubspec_overrides.yaml',
+        'dependency_overrides:\n  "{leaf": {path: fork}\n',
+      );
+      write(
+        'packages/host/pubspec_overrides.yaml',
+        'dependency_overrides: 3\n',
+      );
+      expect(overridesOf('packages/core').map((o) => o.package), [
+        everyPackage,
+        everyPackage,
+      ]);
+
+      write('packages/host/pubspec_overrides.yaml', '- not a map\n');
+      write('packages/core/pubspec_overrides.yaml', 'dependency_overrides:\n');
+      expect(overridesOf('packages/core'), [
         (
           package: everyPackage,
-          declaredIn: 'packages/core/pubspec_overrides.yaml',
+          declaredIn: 'packages/host/pubspec_overrides.yaml',
         ),
-        (package: 'a', declaredIn: 'pubspec_overrides.yaml'),
-        (package: 'b', declaredIn: 'pubspec_overrides.yaml'),
       ]);
     });
 
     test('a Flutter member makes every member need Flutter', () {
-      workspace(hostDeps: 'dependencies:\n  flutter:\n    sdk: flutter\n');
-      expect(needsFlutter(root.path, '${root.path}/packages/core'), isTrue);
-      expect(needsFlutter(root.path, '${root.path}/packages/host'), isTrue);
+      workspace();
+      write(
+        'packages/host/pubspec.yaml',
+        member('host', 'dependencies:\n  flutter:\n    sdk: flutter\n'),
+      );
+      expect(needsFlutter(packagesOf('packages/core')!.values), isTrue);
     });
 
     test('a Flutter SDK constraint alone needs Flutter', () {
-      workspace(hostDeps: 'environment:\n  flutter: ">=3.0.0"\n');
-      expect(needsFlutter(root.path, '${root.path}/packages/core'), isTrue);
+      workspace();
+      write(
+        'packages/host/pubspec.yaml',
+        member('host', 'environment:\n  flutter: ">=3.0.0"\n'),
+      );
+      expect(needsFlutter(packagesOf('packages/core')!.values), isTrue);
     });
 
     test('a Dart-only workspace does not need Flutter', () {
       workspace();
-      expect(needsFlutter(root.path, '${root.path}/packages/core'), isFalse);
+      expect(needsFlutter(packagesOf('packages/core')!.values), isFalse);
     });
   });
 
@@ -216,7 +386,7 @@ void main() {
       );
     });
 
-    test('a link to Flutter\'s dart is followed', () {
+    test("a link to Flutter's dart is followed", () {
       flutterSdk('flutter');
       Link(
         '${root.path}/usr/local/bin/dart',
@@ -224,16 +394,24 @@ void main() {
       expect(dartInFlutterSdk('${root.path}/usr/local/bin/dart'), isTrue);
     });
 
-    test('a standalone Dart SDK is not, even beside a flutter link', () {
-      flutterSdk('flutter');
-      final dart = file('dart-sdk/bin/dart');
-      Link('${root.path}/brew/bin/dart').createSync(dart, recursive: true);
-      Link(
-        '${root.path}/brew/bin/flutter',
-      ).createSync('${root.path}/flutter/bin/flutter');
-      expect(dartInFlutterSdk(dart), isFalse);
-      expect(dartInFlutterSdk('${root.path}/brew/bin/dart'), isFalse);
-      expect(dartInFlutterSdk('${root.path}/missing/dart'), isFalse);
-    });
+    test(
+      'a standalone Dart SDK is not, even linked from a Flutter-like bin',
+      () {
+        flutterSdk('flutter');
+        final dart = file('dart-sdk/bin/dart');
+        // Read without following the link, brew/bin would pass for a Flutter
+        // SDK's bin: it holds a flutter and a cache/dart-sdk.
+        Link('${root.path}/brew/bin/dart').createSync(dart, recursive: true);
+        Link(
+          '${root.path}/brew/bin/flutter',
+        ).createSync('${root.path}/flutter/bin/flutter');
+        Directory(
+          '${root.path}/brew/bin/cache/dart-sdk',
+        ).createSync(recursive: true);
+        expect(dartInFlutterSdk(dart), isFalse);
+        expect(dartInFlutterSdk('${root.path}/brew/bin/dart'), isFalse);
+        expect(dartInFlutterSdk('${root.path}/missing/dart'), isFalse);
+      },
+    );
   });
 }
