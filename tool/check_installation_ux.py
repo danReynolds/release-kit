@@ -322,7 +322,13 @@ def main():
                     assert 'Local build' in terminal.text(), 'footer crowded out init choices'
                     terminal.send(b'\t ')
                     terminal.wait('✓ Added')
-                    assert 'Local build' in terminal.text(), 'feedback pushed the focused choice offscreen'
+                    # A PTY read can end between the changed title and its
+                    # repainted detail. Check the completed feedback layout,
+                    # not a partially delivered terminal frame.
+                    terminal.wait_layout(lambda lines: all(
+                        text in '\n'.join(lines)
+                        for text in ('✓ Added', 'Local build', 'Binary enabled')
+                    ))
                     shot(terminal, 'init-short-toggled')
                     terminal.activate('Review configuration')
                     terminal.wait('Review release.toml')
