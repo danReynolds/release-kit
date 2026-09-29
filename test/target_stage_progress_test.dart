@@ -8,29 +8,29 @@ import 'package:rk/src/targets/target_module.dart';
 import 'package:test/test.dart';
 
 TargetPlan _target() => TargetPlan(
-      label: 'Example',
-      kindLabel: 'Example',
-      identity: 'example',
-      planNote: 'example assets',
-      coordinate: 'example/1.0.0',
-      targetVersion: '1.0.0',
-      step: Step(
-        id: 'tool/example',
-        kind: StepKind.publishRelease,
-        unit: 'tool',
-        summary: 'publish example',
-        needs: const [],
-        target: PublishTarget.githubRelease,
-      ),
-      artifacts: const ['one.txt', 'two.txt'],
-    );
+  label: 'Example',
+  kindLabel: 'Example',
+  identity: 'example',
+  planNote: 'example assets',
+  coordinate: 'example/1.0.0',
+  targetVersion: '1.0.0',
+  step: Step(
+    id: 'tool/example',
+    kind: StepKind.publishRelease,
+    unit: 'tool',
+    summary: 'publish example',
+    needs: const [],
+    target: PublishTarget.githubRelease,
+  ),
+  artifacts: const ['one.txt', 'two.txt'],
+);
 
 StageContributionContract _contract() => const StageContributionContract(
-      step: StageStepContract(
-        'example-stage',
-        outputs: {'private/one': 'one', 'private/two': 'two'},
-      ),
-    );
+  step: StageStepContract(
+    'example-stage',
+    outputs: {'private/one': 'one', 'private/two': 'two'},
+  ),
+);
 
 void main() {
   test('one contribution can bind two outputs and a validation-only row', () {
@@ -49,10 +49,7 @@ void main() {
           output: 'private/two',
           artifact: 'two.txt',
         ),
-        TargetStageProgress.row(
-          id: 'validation',
-          label: 'package metadata',
-        ),
+        TargetStageProgress.row(id: 'validation', label: 'package metadata'),
       ],
       prepare: (_) async =>
           TargetStageSuccess(StageStep(name: 'example-stage')),

@@ -48,31 +48,30 @@ class DartCliBuilder {
     final target = _target(platform);
     final artifact = BinaryArtifact.forPlatform(_fileNameOf(output), platform);
     final root = _directoryOf(output);
-    final module =
-        artifact.isBundle ? '$root/lib/${artifact.entryPoint}/app.aot' : output;
+    final module = artifact.isBundle
+        ? '$root/lib/${artifact.entryPoint}/app.aot'
+        : output;
     if (artifact.isBundle) File(module).parent.createSync(recursive: true);
-    final compiled = await tools.run(
-      compilerExecutable,
-      [
-        'compile',
-        artifact.isBundle ? 'aot-snapshot' : 'exe',
-        for (final name in defines.keys.toList()..sort())
-          '-D$name=${defines[name]}',
-        if (capability.capability == Capability.crossCompiled ||
-            capability.capability == Capability.buildableUnproven) ...[
-          '--target-os=${target.os}',
-          '--target-arch=${target.arch}',
-        ],
-        entryPoint,
-        '-o',
-        module,
+    final compiled = await tools.run(compilerExecutable, [
+      'compile',
+      artifact.isBundle ? 'aot-snapshot' : 'exe',
+      for (final name in defines.keys.toList()..sort())
+        '-D$name=${defines[name]}',
+      if (capability.capability == Capability.crossCompiled ||
+          capability.capability == Capability.buildableUnproven) ...[
+        '--target-os=${target.os}',
+        '--target-arch=${target.arch}',
       ],
-      workingDirectory: workingDirectory,
-    );
+      entryPoint,
+      '-o',
+      module,
+    ], workingDirectory: workingDirectory);
 
     if (!compiled.ok) {
-      return BuildOutcome.failed(compiled.summary,
-          transcript: compiled.transcript);
+      return BuildOutcome.failed(
+        compiled.summary,
+        transcript: compiled.transcript,
+      );
     }
 
     if (artifact.isBundle) {
@@ -80,19 +79,24 @@ class DartCliBuilder {
       // re-signs it ad hoc, which the signed runtime then refuses. The
       // generated formula preserves @rpath names, so this one keeps the
       // module's bytes intact.
-      final named = await tools
-          .run('/usr/bin/install_name_tool', ['-id', '@rpath/app.aot', module]);
+      final named = await tools.run('/usr/bin/install_name_tool', [
+        '-id',
+        '@rpath/app.aot',
+        module,
+      ]);
       if (!named.ok) {
         return BuildOutcome.failed(
-            'the Dart module install name could not be set',
-            transcript: named.transcript);
+          'the Dart module install name could not be set',
+          transcript: named.transcript,
+        );
       }
       try {
         final assembled = await _assembleBundle(artifact, root);
         if (assembled != null) return assembled;
       } on FileSystemException catch (error) {
         return BuildOutcome.failed(
-            'the Dart bundle could not be assembled: $error');
+          'the Dart bundle could not be assembled: $error',
+        );
       } on DartCompilerUnavailable catch (error) {
         return BuildOutcome.failed('$error');
       } on StateError catch (error) {
@@ -122,7 +126,9 @@ class DartCliBuilder {
   }
 
   Future<BuildOutcome?> _assembleBundle(
-      BinaryArtifact artifact, String root) async {
+    BinaryArtifact artifact,
+    String root,
+  ) async {
     final compiler = compilerExecutable == 'dart'
         ? DartCompilerIdentity.readAmbient().executable
         : File(compilerExecutable).absolute.path;
@@ -131,56 +137,71 @@ class DartCliBuilder {
     final copied = await tools.run('/bin/cp', [runtime, installedRuntime]);
     if (!copied.ok) {
       return BuildOutcome.failed(
-          'the matching Dart runtime could not be copied',
-          transcript: copied.transcript);
+        'the matching Dart runtime could not be copied',
+        transcript: copied.transcript,
+      );
     }
     if (runtimeSha256 != null &&
         Sha256.hex(File(installedRuntime).readAsBytesSync()) != runtimeSha256) {
       return const BuildOutcome.failed(
-          'the Dart runtime changed after the stage was identified');
+        'the Dart runtime changed after the stage was identified',
+      );
     }
     final licensePath = '$root/lib/${artifact.entryPoint}/LICENSE.dart';
-    final license = await tools.run('/bin/cp',
-        ['${File(compiler).parent.parent.path}/LICENSE', licensePath]);
+    final license = await tools.run('/bin/cp', [
+      '${File(compiler).parent.parent.path}/LICENSE',
+      licensePath,
+    ]);
     if (!license.ok) {
-      return BuildOutcome.failed('the Dart runtime license could not be copied',
-          transcript: license.transcript);
+      return BuildOutcome.failed(
+        'the Dart runtime license could not be copied',
+        transcript: license.transcript,
+      );
     }
     if (runtimeLicenseSha256 != null &&
         Sha256.hex(File(licensePath).readAsBytesSync()) !=
             runtimeLicenseSha256) {
       return const BuildOutcome.failed(
-          'the Dart runtime license changed after the stage was identified');
+        'the Dart runtime license changed after the stage was identified',
+      );
     }
     final source = File('$root/.rk-launcher.c');
     try {
       source.writeAsStringSync(dartLauncherSource(artifact.entryPoint));
       if (launcherCompiler != null && !launcherCompiler!.isCurrent) {
         return const BuildOutcome.failed(
-            'the launcher toolchain changed after the stage was identified');
+          'the launcher toolchain changed after the stage was identified',
+        );
       }
-      final launcher =
-          await tools.run(launcherCompiler?.executable ?? '/usr/bin/clang', [
-        if (launcherCompiler != null) ...['-isysroot', launcherCompiler!.sdk],
-        '-O2',
-        '-Wall',
-        '-Werror',
-        source.path,
-        '-o',
-        '$root/${artifact.entryPoint}',
-      ]);
+      final launcher = await tools.run(
+        launcherCompiler?.executable ?? '/usr/bin/clang',
+        [
+          if (launcherCompiler != null) ...['-isysroot', launcherCompiler!.sdk],
+          '-O2',
+          '-Wall',
+          '-Werror',
+          source.path,
+          '-o',
+          '$root/${artifact.entryPoint}',
+        ],
+      );
       if (!launcher.ok) {
-        return BuildOutcome.failed('the native launcher could not be built',
-            transcript: launcher.transcript);
+        return BuildOutcome.failed(
+          'the native launcher could not be built',
+          transcript: launcher.transcript,
+        );
       }
     } finally {
       if (source.existsSync()) source.deleteSync();
     }
-    File('$root/${BinaryArtifact.manifestName}')
-        .writeAsStringSync(artifact.manifest);
+    File(
+      '$root/${BinaryArtifact.manifestName}',
+    ).writeAsStringSync(artifact.manifest);
     for (final file in artifact.files) {
-      final mode =
-          await tools.run('/bin/chmod', [file.mode, '$root/${file.path}']);
+      final mode = await tools.run('/bin/chmod', [
+        file.mode,
+        '$root/${file.path}',
+      ]);
       if (!mode.ok) {
         return BuildOutcome.failed(mode.summary, transcript: mode.transcript);
       }
@@ -201,11 +222,9 @@ class DartCliBuilder {
   }) async {
     final ToolResult result;
     if (capability.capability == Capability.native) {
-      result = await tools.run(
-        binary,
-        const ['--version'],
-        timeout: _smokeTimeout,
-      );
+      result = await tools.run(binary, const [
+        '--version',
+      ], timeout: _smokeTimeout);
     } else {
       final target = _target(platform);
       final runtime = capabilities.containerRuntime;
@@ -217,21 +236,17 @@ class DartCliBuilder {
           'no container runtime is available to run it',
         );
       }
-      result = await tools.run(
-        runtime,
-        [
-          'run',
-          '--rm',
-          '--platform',
-          'linux/${target.arch == 'x64' ? 'amd64' : 'arm64'}',
-          '-v',
-          '${_directoryOf(binary)}:/w:ro',
-          'debian:bookworm-slim',
-          '/w/${_fileNameOf(binary)}',
-          '--version',
-        ],
-        timeout: _smokeTimeout,
-      );
+      result = await tools.run(runtime, [
+        'run',
+        '--rm',
+        '--platform',
+        'linux/${target.arch == 'x64' ? 'amd64' : 'arm64'}',
+        '-v',
+        '${_directoryOf(binary)}:/w:ro',
+        'debian:bookworm-slim',
+        '/w/${_fileNameOf(binary)}',
+        '--version',
+      ], timeout: _smokeTimeout);
     }
 
     if (!result.ok) {
@@ -273,13 +288,17 @@ class DartCliBuilder {
 enum DartBuildEvent { testing }
 
 class BuildOutcome {
-  const BuildOutcome._(this.path, this.problem,
-      {this.unproven, this.transcript});
+  const BuildOutcome._(
+    this.path,
+    this.problem, {
+    this.unproven,
+    this.transcript,
+  });
 
   const BuildOutcome.built(String path, {String? unproven})
-      : this._(path, null, unproven: unproven);
+    : this._(path, null, unproven: unproven);
   const BuildOutcome.failed(String problem, {String? transcript})
-      : this._(null, problem, transcript: transcript);
+    : this._(null, problem, transcript: transcript);
 
   final String? path;
   final String? problem;

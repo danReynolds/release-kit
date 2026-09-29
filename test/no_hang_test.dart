@@ -52,11 +52,10 @@ void main() {
     // the regression this guards against wedged the test runner instead of
     // reporting. A guard that hangs CI is the failure it was written to
     // prevent.
-    final process = await Process.start(
-      Platform.resolvedExecutable,
-      ['run', '${scratch.path}/main.dart'],
-      workingDirectory: Directory.current.path,
-    );
+    final process = await Process.start(Platform.resolvedExecutable, [
+      'run',
+      '${scratch.path}/main.dart',
+    ], workingDirectory: Directory.current.path);
     final out = process.stdout.transform(utf8.decoder).join();
 
     final code = await process.exitCode.timeout(
@@ -102,11 +101,10 @@ void main() {
 }
 ''');
 
-    final process = await Process.start(
-      Platform.resolvedExecutable,
-      ['run', '${scratch.path}/main.dart'],
-      workingDirectory: Directory.current.path,
-    );
+    final process = await Process.start(Platform.resolvedExecutable, [
+      'run',
+      '${scratch.path}/main.dart',
+    ], workingDirectory: Directory.current.path);
     final out = process.stdout.transform(utf8.decoder).join();
     final code = await process.exitCode.timeout(
       const Duration(seconds: 45),

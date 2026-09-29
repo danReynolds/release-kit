@@ -35,65 +35,69 @@ publish = ["pub.dev"]
 
   tearDown(() => root.deleteSync(recursive: true));
 
-  test('dirty registry-only source includes working-tree and untracked bytes',
-      () async {
-    _write(root, 'notes.txt', 'untracked release note\n');
-    final tree = GitSourceTree(root.path);
-    final git = await GitState.read(root.path);
-    final resolution = _resolve(tree);
-    _write(root, 'pubspec.yaml', 'name: tool\nversion: 1.1.0\n');
-    final diagnostics = Diagnostics();
+  test(
+    'dirty registry-only source includes working-tree and untracked bytes',
+    () async {
+      _write(root, 'notes.txt', 'untracked release note\n');
+      final tree = GitSourceTree(root.path);
+      final git = await GitState.read(root.path);
+      final resolution = _resolve(tree);
+      _write(root, 'pubspec.yaml', 'name: tool\nversion: 1.1.0\n');
+      final diagnostics = Diagnostics();
 
-    final source = ReleaseSource.select(
-      tree: tree,
-      git: git,
-      repository: git,
-      resolution: resolution,
-      only: null,
-      diagnostics: diagnostics,
-    )!;
+      final source = ReleaseSource.select(
+        tree: tree,
+        git: git,
+        repository: git,
+        resolution: resolution,
+        only: null,
+        diagnostics: diagnostics,
+      )!;
 
-    expect(source.binding.isBound, isFalse);
-    expect(source.repository.root, git.root);
-    expect(source.warning?.code, 'RK-GIT-001');
-    expect(source.tree.read('pubspec.yaml'), contains('version: 1.1.0'));
-    expect(source.tree.read('notes.txt'), 'untracked release note\n');
-    expect(source.tree.trackedFiles(), contains('notes.txt'));
-    expect(source.resolution.unit('tool')!.version.canonical, '1.1.0');
-    _write(root, 'appeared-later.txt', 'drift\n');
-    expect(
-      source.tree.trackedFiles(),
-      isNot(contains('appeared-later.txt')),
-      reason: 'resolution and staging use the same immutable capture',
-    );
-  });
+      expect(source.binding.isBound, isFalse);
+      expect(source.repository.root, git.root);
+      expect(source.warning?.code, 'RK-GIT-001');
+      expect(source.tree.read('pubspec.yaml'), contains('version: 1.1.0'));
+      expect(source.tree.read('notes.txt'), 'untracked release note\n');
+      expect(source.tree.trackedFiles(), contains('notes.txt'));
+      expect(source.resolution.unit('tool')!.version.canonical, '1.1.0');
+      _write(root, 'appeared-later.txt', 'drift\n');
+      expect(
+        source.tree.trackedFiles(),
+        isNot(contains('appeared-later.txt')),
+        reason: 'resolution and staging use the same immutable capture',
+      );
+    },
+  );
 
-  test('a Git-bound target keeps dirty source blocking and commit-bound',
-      () async {
-    _write(root, 'release.toml', '''
+  test(
+    'a Git-bound target keeps dirty source blocking and commit-bound',
+    () async {
+      _write(root, 'release.toml', '''
 schema = 2
 
 [release.tool]
 publish = ["git-tag", "pub.dev"]
 ''');
-    final tree = GitSourceTree(root.path);
-    final git = await GitState.read(root.path);
-    final resolution = _resolve(tree);
-    final diagnostics = Diagnostics();
+      final tree = GitSourceTree(root.path);
+      final git = await GitState.read(root.path);
+      final resolution = _resolve(tree);
+      final diagnostics = Diagnostics();
 
-    final source = ReleaseSource.select(
-      tree: tree,
-      git: git,
-      repository: git,
-      resolution: resolution,
-      only: null,
-      diagnostics: diagnostics,
-    )!;
+      final source = ReleaseSource.select(
+        tree: tree,
+        git: git,
+        repository: git,
+        resolution: resolution,
+        only: null,
+        diagnostics: diagnostics,
+      )!;
 
-    expect(source.binding.isBound, isTrue);
-    expect(source.warning, isNull);
-    expect(source.binding.uncommittedProblem(), isNotNull);
-  });
+      expect(source.binding.isBound, isTrue);
+      expect(source.warning, isNull);
+      expect(source.binding.uncommittedProblem(), isNotNull);
+    },
+  );
 
   test('a Git target added before freezing remains blocking', () async {
     _write(root, 'pubspec.yaml', 'name: tool\nversion: 1.1.0\n');
@@ -158,8 +162,9 @@ Resolution _resolve(SourceTree tree) {
     'release.toml',
     diagnostics,
   );
-  final resolution =
-      config == null ? null : Resolution.resolve(config, tree, diagnostics);
+  final resolution = config == null
+      ? null
+      : Resolution.resolve(config, tree, diagnostics);
   expect(resolution, isNotNull, reason: diagnostics.found.join('\n'));
   return resolution!;
 }

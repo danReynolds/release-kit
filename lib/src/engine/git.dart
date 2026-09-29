@@ -27,20 +27,20 @@ class GitState {
   }) : headTree = headTree ?? head;
 
   GitState.unbound(String root)
-      : this(
-          root: root,
-          head: '',
-          headTree: '',
-          branch: null,
-          isClean: true,
-          uncommitted: const [],
-          headIsPushed: false,
-          hasRemote: false,
-          tags: const [],
-          signingConfigured: false,
-          originUrl: null,
-          isBound: false,
-        );
+    : this(
+        root: root,
+        head: '',
+        headTree: '',
+        branch: null,
+        isClean: true,
+        uncommitted: const [],
+        headIsPushed: false,
+        hasRemote: false,
+        tags: const [],
+        signingConfigured: false,
+        originUrl: null,
+        isBound: false,
+      );
 
   final bool isBound;
 
@@ -216,7 +216,8 @@ class GitState {
       return Diagnostic(
         code: 'RK-GIT-008',
         message: 'the worktree state could not be read',
-        remedy: '$worktreeStatusError\n'
+        remedy:
+            '$worktreeStatusError\n'
             '`git status --porcelain` must succeed before rk can prove the '
             'release is of the committed source.',
       );
@@ -239,14 +240,14 @@ class GitState {
     final paths = uncommitted.length <= 8
         ? uncommitted.join(', ')
         : '${uncommitted.take(8).join(', ')} '
-            '…and ${uncommitted.length - 8} more';
+              '…and ${uncommitted.length - 8} more';
     return Diagnostic(
       code: 'RK-GIT-001',
       message: snapshot
           ? 'working-tree changes will be captured in the source snapshot'
           : uncommitted.length == 1
-              ? '1 path is uncommitted'
-              : '${uncommitted.length} paths are uncommitted',
+          ? '1 path is uncommitted'
+          : '${uncommitted.length} paths are uncommitted',
       remedy: snapshot
           ? 'Commit them to bind this release to Git: $paths'
           : 'a release is of a commit, and these are not in one: $paths',
@@ -263,7 +264,8 @@ class GitState {
       return Diagnostic(
         code: 'RK-GIT-003',
         message: 'this repository has no remote',
-        remedy: 'rk publishes what others can fetch, and nothing here is '
+        remedy:
+            'rk publishes what others can fetch, and nothing here is '
             'fetchable yet. git remote add origin <url>, then '
             'git push -u origin ${branch ?? 'main'}',
       );
@@ -279,11 +281,24 @@ class GitState {
     }
     return Diagnostic(
       code: 'RK-GIT-003',
-      message: '$where is ahead of origin/$branch by '
+      message:
+          '$where is ahead of origin/$branch by '
           '$ahead commit${ahead == 1 ? '' : 's'}',
-      remedy: 'a tag here would point at commits origin cannot fetch — '
+      remedy:
+          'a tag here would point at commits origin cannot fetch — '
           'git push',
     );
+  }
+
+  /// Reads only the origin identity for commands that do not need release
+  /// preflight. This also works in an uncommitted repository or a subdirectory.
+  static Future<String?> readOrigin(String root) async {
+    final result = await Process.run('git', const [
+      'remote',
+      'get-url',
+      'origin',
+    ], workingDirectory: root);
+    return result.exitCode == 0 ? _originSlug(result.stdout as String) : null;
   }
 
   /// Reads the repository's state.
@@ -293,11 +308,10 @@ class GitState {
   /// together rather than one at a time. Sequential `runSync` calls also
   /// blocked the isolate, which froze every progress row rk was animating.
   static Future<GitState> read(String root) async {
-    Future<ProcessResult> ask(List<String> args) => Process.run(
-          'git',
-          ['--no-optional-locks', ...args],
-          workingDirectory: root,
-        );
+    Future<ProcessResult> ask(List<String> args) => Process.run('git', [
+      '--no-optional-locks',
+      ...args,
+    ], workingDirectory: root);
     String text(ProcessResult result) =>
         result.exitCode != 0 ? '' : (result.stdout as String).trim();
 
@@ -318,8 +332,10 @@ class GitState {
     final status = answers[0];
     final statusError = status.exitCode == 0
         ? null
-        : _processFailure(status,
-            fallback: 'git status exited ${status.exitCode}');
+        : _processFailure(
+            status,
+            fallback: 'git status exited ${status.exitCode}',
+          );
     final uncommitted = status.exitCode == 0
         ? _uncommittedIn(status.stdout as String)
         : const <String>[];
@@ -342,10 +358,9 @@ class GitState {
       headIsPushed: contains.trim().isNotEmpty,
       hasRemote: text(answers[6]).trim().isNotEmpty,
       aheadOfUpstream: int.tryParse(text(answers[7])),
-      tags: text(answers[8])
-          .split('\n')
-          .where((t) => t.trim().isNotEmpty)
-          .toList(),
+      tags: text(
+        answers[8],
+      ).split('\n').where((t) => t.trim().isNotEmpty).toList(),
       tagObjects: _tagObjects(showRef),
       tagTargets: _tagTargets(showRef),
       // A configured signing key, whether SSH or GPG. Inferring one from a
@@ -361,8 +376,9 @@ class GitState {
   /// `owner/name` from either remote form, or null when it is neither.
   static String? _originSlug(String url) {
     if (url.isEmpty) return null;
-    final match = RegExp(r'github\.com[:/]([^/]+)/(.+?)(?:\.git)?$')
-        .firstMatch(url.trim());
+    final match = RegExp(
+      r'github\.com[:/]([^/]+)/(.+?)(?:\.git)?$',
+    ).firstMatch(url.trim());
     if (match == null) return null;
     return '${match.group(1)}/${match.group(2)}';
   }

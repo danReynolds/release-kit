@@ -55,10 +55,10 @@ class GitTreeEntry {
   bool get executable => mode == '100755';
 
   String get unsupportedKind => switch ((mode, type)) {
-        ('120000', 'blob') => 'symbolic link',
-        ('160000', 'commit') => 'gitlink/submodule',
-        _ => '$type with mode $mode',
-      };
+    ('120000', 'blob') => 'symbolic link',
+    ('160000', 'commit') => 'gitlink/submodule',
+    _ => '$type with mode $mode',
+  };
 }
 
 /// A repository on disk, listing files through git so untracked material is
@@ -116,11 +116,10 @@ class GitSourceTree implements SourceTree {
   @override
   List<String> trackedFiles() {
     if (_tracked != null) return _tracked!;
-    final result = Process.runSync(
-      'git',
-      const ['ls-files', '-z'],
-      workingDirectory: root,
-    );
+    final result = Process.runSync('git', const [
+      'ls-files',
+      '-z',
+    ], workingDirectory: root);
     if (result.exitCode != 0) {
       // Not an empty list: an empty list is a real answer — "this repository
       // tracks nothing" — and callers act on it as one. init would propose
@@ -139,11 +138,12 @@ class GitSourceTree implements SourceTree {
   /// index. Release staging uses these after it captures HEAD and its tree so
   /// a concurrent edit cannot be trusted under the old tree identity.
   List<GitTreeEntry> trackedEntriesAt(String commit) {
-    final result = Process.runSync(
-      'git',
-      ['ls-tree', '-r', '-z', commit],
-      workingDirectory: root,
-    );
+    final result = Process.runSync('git', [
+      'ls-tree',
+      '-r',
+      '-z',
+      commit,
+    ], workingDirectory: root);
     if (result.exitCode != 0) {
       throw SourceUnreadable(
         'the source tree at $commit',
@@ -151,9 +151,10 @@ class GitSourceTree implements SourceTree {
       );
     }
     final entries = <GitTreeEntry>[];
-    for (final record in (result.stdout as String)
-        .split('\u0000')
-        .where((r) => r.isNotEmpty)) {
+    for (final record
+        in (result.stdout as String)
+            .split('\u0000')
+            .where((r) => r.isNotEmpty)) {
       final separator = record.indexOf('\t');
       if (separator <= 0 || separator == record.length - 1) {
         throw SourceUnreadable(
@@ -172,11 +173,9 @@ class GitSourceTree implements SourceTree {
         );
       }
       _resolve(path);
-      entries.add(GitTreeEntry(
-        path: path,
-        mode: metadata[0],
-        type: metadata[1],
-      ));
+      entries.add(
+        GitTreeEntry(path: path, mode: metadata[0], type: metadata[1]),
+      );
     }
     return entries;
   }
@@ -208,11 +207,10 @@ class GitSourceTree implements SourceTree {
     }
     if (batched.isEmpty) return result;
 
-    final process = await Process.start(
-      'git',
-      const ['cat-file', '--batch'],
-      workingDirectory: root,
-    );
+    final process = await Process.start('git', const [
+      'cat-file',
+      '--batch',
+    ], workingDirectory: root);
     // Copies as it accumulates. `copy: false` would retain the stream's own
     // buffers, and the snapshot every release verifies is not the place to
     // depend on dart:io never reusing one.
@@ -271,11 +269,10 @@ class GitSourceTree implements SourceTree {
 
   /// The repository root containing [start], or null when there is none.
   static String? findRoot(String start) {
-    final result = Process.runSync(
-      'git',
-      const ['rev-parse', '--show-toplevel'],
-      workingDirectory: start,
-    );
+    final result = Process.runSync('git', const [
+      'rev-parse',
+      '--show-toplevel',
+    ], workingDirectory: start);
     if (result.exitCode != 0) return null;
     return (result.stdout as String).trim();
   }
@@ -384,15 +381,16 @@ class FileSystemSourceTree implements SourceTree {
         );
       }
       if (type != FileSystemEntityType.directory) continue;
-      for (final entity in Directory(full).listSync(
-        recursive: true,
-        followLinks: false,
-      )) {
+      for (final entity in Directory(
+        full,
+      ).listSync(recursive: true, followLinks: false)) {
         if (entity is! File) continue;
         final relative = entity.path
-            .substring(root.endsWith(Platform.pathSeparator)
-                ? root.length
-                : root.length + 1)
+            .substring(
+              root.endsWith(Platform.pathSeparator)
+                  ? root.length
+                  : root.length + 1,
+            )
             .split(Platform.pathSeparator)
             .join('/');
         if (relative == '.rk' || relative.startsWith('.rk/')) continue;
@@ -416,17 +414,13 @@ class GitWorktreeSourceTree extends FileSystemSourceTree {
 
   @override
   List<String> trackedFiles() {
-    final result = Process.runSync(
-      'git',
-      const [
-        'ls-files',
-        '--cached',
-        '--others',
-        '--exclude-standard',
-        '-z',
-      ],
-      workingDirectory: root,
-    );
+    final result = Process.runSync('git', const [
+      'ls-files',
+      '--cached',
+      '--others',
+      '--exclude-standard',
+      '-z',
+    ], workingDirectory: root);
     if (result.exitCode != 0) {
       throw SourceUnreadable(
         'the Git working-tree file list',
@@ -434,10 +428,11 @@ class GitWorktreeSourceTree extends FileSystemSourceTree {
       );
     }
     final files = <String>[];
-    for (final path in (result.stdout as String)
-        .split('\u0000')
-        .where((path) => path.isNotEmpty)
-        .where((path) => path != '.rk' && !path.startsWith('.rk/'))) {
+    for (final path
+        in (result.stdout as String)
+            .split('\u0000')
+            .where((path) => path.isNotEmpty)
+            .where((path) => path != '.rk' && !path.startsWith('.rk/'))) {
       final type = FileSystemEntity.typeSync('$root/$path', followLinks: false);
       // A deleted tracked path remains in the index but is intentionally
       // absent from this working-tree snapshot.
@@ -573,7 +568,7 @@ String _normalizeSourcePath(String path) =>
 /// different from the committed source the target version names.
 class GitCommitSourceTree implements SourceTree {
   GitCommitSourceTree(String root, this.commit)
-      : _repository = GitSourceTree(root);
+    : _repository = GitSourceTree(root);
 
   final GitSourceTree _repository;
   final String commit;
@@ -583,8 +578,9 @@ class GitCommitSourceTree implements SourceTree {
   String get description => '${_repository.root}@$commit';
 
   String _path(String path) {
-    final parts =
-        path.split('/').where((part) => part.isNotEmpty && part != '.');
+    final parts = path
+        .split('/')
+        .where((part) => part.isNotEmpty && part != '.');
     if (parts.contains('..')) {
       throw ArgumentError('path escapes the committed source: $path');
     }
@@ -595,9 +591,8 @@ class GitCommitSourceTree implements SourceTree {
   List<String> trackedFiles() => List.unmodifiable(_treeEntries.keys);
 
   Map<String, GitTreeEntry> get _treeEntries => _entries ??= {
-        for (final entry in _repository.trackedEntriesAt(commit))
-          entry.path: entry,
-      };
+    for (final entry in _repository.trackedEntriesAt(commit)) entry.path: entry,
+  };
 
   @override
   bool exists(String path) {
@@ -647,8 +642,9 @@ class SnapshotSourceTree implements SourceTree {
   String get description => root;
 
   String _resolve(String path) {
-    final parts =
-        path.split('/').where((part) => part.isNotEmpty && part != '.');
+    final parts = path
+        .split('/')
+        .where((part) => part.isNotEmpty && part != '.');
     if (parts.contains('..')) {
       throw ArgumentError('path escapes the source snapshot: $path');
     }
@@ -683,8 +679,10 @@ class SnapshotSourceTree implements SourceTree {
     final directory = Directory(root);
     if (!directory.existsSync()) return const [];
     final files = <String>[];
-    for (final entity
-        in directory.listSync(recursive: true, followLinks: false)) {
+    for (final entity in directory.listSync(
+      recursive: true,
+      followLinks: false,
+    )) {
       if (entity is! File) continue;
       files.add(
         entity.path

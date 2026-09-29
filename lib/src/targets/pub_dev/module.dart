@@ -20,10 +20,8 @@ final class PubDevTargetModule extends TargetModule {
   PublishTarget get target => PublishTarget.pubDev;
 
   @override
-  ProgressActivity get publishActivity => ProgressActivity(
-        running: 'publishing',
-        failed: 'publish failed',
-      );
+  ProgressActivity get publishActivity =>
+      ProgressActivity(running: 'publishing', failed: 'publish failed');
 
   @override
   TargetSessionProvider get authentication => const PubDevSession();
@@ -79,8 +77,10 @@ final class PubDevTargetModule extends TargetModule {
     String? expectedArchiveSha256;
     if (stage != null) {
       try {
-        expectedArchiveSha256 =
-            requirePubArchive(stage, target.project!).sha256;
+        expectedArchiveSha256 = requirePubArchive(
+          stage,
+          target.project!,
+        ).sha256;
       } on Object catch (error) {
         return Future.value(
           Inspection.unknown(
@@ -124,7 +124,8 @@ final class PubDevTargetModule extends TargetModule {
                   TargetClaim(
                     registrar: 'pub.dev',
                     name: target.coordinate,
-                    consequence: 'permanent: a package name cannot be '
+                    consequence:
+                        'permanent: a package name cannot be '
                         'renamed, reassigned, or released back',
                   ),
                 ]
@@ -151,13 +152,15 @@ final class PubDevTargetModule extends TargetModule {
           problems: [
             Diagnostic(
               code: 'RK-PUB-010',
-              message: '${project.name} on pub.dev points to '
+              message:
+                  '${project.name} on pub.dev points to '
                   '$publishedRepository, not $localRepository',
               source: SourceLocation(
                 project.pubspec.path,
                 project.pubspec.nameLine,
               ),
-              remedy: 'choose an unclaimed package name in pubspec.yaml; '
+              remedy:
+                  'choose an unclaimed package name in pubspec.yaml; '
                   'pub.dev package names cannot be reclaimed by publishing '
                   'a newer version',
             ),
@@ -174,7 +177,8 @@ final class PubDevTargetModule extends TargetModule {
         target: target,
         regressionDiagnostic: (publicVersion) => Diagnostic(
           code: 'RK-MONO-002',
-          message: '${project.name} ${project.version} is behind published '
+          message:
+              '${project.name} ${project.version} is behind published '
               'version $publicVersion',
           source: SourceLocation(
             project.pubspec.path,
@@ -197,14 +201,15 @@ final class PubDevTargetModule extends TargetModule {
     ResolvedUnit unit,
     TargetPlan target,
     Inspection conflict,
-  ) =>
-      Diagnostic(
-        code: 'RK-REL-001',
-        message: '${target.label}: '
-            '${conflict.detail ?? 'the published package does not match'}',
-        remedy: 'pub.dev versions are immutable. Bump the version and '
-            'changelog, then stage the new release',
-      );
+  ) => Diagnostic(
+    code: 'RK-REL-001',
+    message:
+        '${target.label}: '
+        '${conflict.detail ?? 'the published package does not match'}',
+    remedy:
+        'pub.dev versions are immutable. Bump the version and '
+        'changelog, then stage the new release',
+  );
 
   @override
   Future<TargetReadinessOutcome> checkReadiness(
@@ -213,15 +218,18 @@ final class PubDevTargetModule extends TargetModule {
   ) async {
     final redirected = unit.projects
         .where((project) => project.publish.contains(PublishTarget.pubDev))
-        .any((project) => !isPubDevDestination(
-              project.pubspec.effectivePublishDestination(context.environment),
-            ));
+        .any(
+          (project) => !isPubDevDestination(
+            project.pubspec.effectivePublishDestination(context.environment),
+          ),
+        );
     if (!redirected) return const TargetReady();
     return TargetNotReady(
       Diagnostic(
         code: 'RK-PUB-009',
         message: 'the native Dart configuration redirects pub.dev publication',
-        remedy: 'rk will not publish a pub.dev target to an ambient or custom '
+        remedy:
+            'rk will not publish a pub.dev target to an ambient or custom '
             'registry. Remove PUB_HOSTED_URL, or declare the intended native '
             'publish_to and use a future matching target. The URL is omitted '
             'because it may contain credentials.',
@@ -238,8 +246,9 @@ final class PubDevTargetModule extends TargetModule {
   ) {
     final endpoints = <String>[
       for (final target in targets)
-        target.project!.pubspec
-            .effectivePublishDestination(context.environment),
+        target.project!.pubspec.effectivePublishDestination(
+          context.environment,
+        ),
     ]..sort();
     return endpoints.join('\n');
   }
@@ -260,17 +269,13 @@ final class PubDevTargetModule extends TargetModule {
     // Publication is non-interactive after the explicit session preflight.
     // Capture pub's output so it cannot write through RK's live multi-target
     // progress surface; the transcript is retained if the act fails.
-    final result = await context.tools.run(
-      'dart',
-      [
-        'pub',
-        'publish',
-        '--from-archive',
-        context.workspace.pathOf(archive.path),
-        '--force',
-      ],
-      workingDirectory: directory,
-    );
+    final result = await context.tools.run('dart', [
+      'pub',
+      'publish',
+      '--from-archive',
+      context.workspace.pathOf(archive.path),
+      '--force',
+    ], workingDirectory: directory);
     context.reads.registry!.forget(project.name);
     if (!result.ok) {
       if (result.exitCode == 64) {
@@ -281,7 +286,8 @@ final class PubDevTargetModule extends TargetModule {
           diagnostic: const Diagnostic(
             code: 'RK-PUB-011',
             message: 'this Dart SDK cannot publish the staged Pub archive',
-            remedy: 'upgrade Dart to an SDK whose pub publish command '
+            remedy:
+                'upgrade Dart to an SDK whose pub publish command '
                 'supports native archive publication, then re-run. rk will '
                 'not repackage the staged release at publication time.',
           ),
@@ -296,7 +302,8 @@ final class PubDevTargetModule extends TargetModule {
         diagnostic: Diagnostic(
           code: 'RK-PUB-003',
           message: '${project.name}: dart pub publish did not complete',
-          remedy: 'fix what dart pub reported and re-run. The login preflight '
+          remedy:
+              'fix what dart pub reported and re-run. The login preflight '
               'confirms a current session, not uploader permission for this '
               'package; if the upload may have landed, re-running inspects '
               'public truth before acting',
@@ -328,7 +335,8 @@ final class PubDevTargetModule extends TargetModule {
         if (state.isAbsent && waited >= context.confirmDeadline) {
           final project = target.project!;
           return Inspection.absent(
-            detail: 'pub.dev does not report it after ${waited.inSeconds}s: '
+            detail:
+                'pub.dev does not report it after ${waited.inSeconds}s: '
                 '${project.name} ${project.version}',
             evidence: state.evidence,
           );
@@ -360,32 +368,37 @@ final class PubDevTargetModule extends TargetModule {
           '--version',
           target.targetVersion,
         ],
-        environment: {
-          'PUB_CACHE': cache.path,
-          'DART_DISABLE_ANALYTICS': '1',
-        },
+        environment: {'PUB_CACHE': cache.path, 'DART_DISABLE_ANALYTICS': '1'},
         timeout: const Duration(seconds: 45),
       );
       if (result.ok) {
         return const TargetAvailable(note: 'available to Dart');
       }
-      return TargetAvailabilityPending(Diagnostic(
-        code: 'RK-PUB-013',
-        message: '${target.coordinate} ${target.targetVersion} is published '
-            'but not available to a fresh Dart resolver yet',
-        remedy: 'publication already reconciled exactly; wait for pub.dev '
-            'propagation and do not upload the version again',
-        evidence: result.transcript,
-      ));
+      return TargetAvailabilityPending(
+        Diagnostic(
+          code: 'RK-PUB-013',
+          message:
+              '${target.coordinate} ${target.targetVersion} is published '
+              'but not available to a fresh Dart resolver yet',
+          remedy:
+              'publication already reconciled exactly; wait for pub.dev '
+              'propagation and do not upload the version again',
+          evidence: result.transcript,
+        ),
+      );
     } on Object catch (error) {
-      return TargetAvailabilityPending(Diagnostic(
-        code: 'RK-PUB-013',
-        message: '${target.coordinate} ${target.targetVersion} is published '
-            'but fresh Dart availability could not be checked',
-        remedy: 'publication already reconciled exactly; restore Dart or '
-            'network access and verify from a fresh PUB_CACHE',
-        evidence: '$error',
-      ));
+      return TargetAvailabilityPending(
+        Diagnostic(
+          code: 'RK-PUB-013',
+          message:
+              '${target.coordinate} ${target.targetVersion} is published '
+              'but fresh Dart availability could not be checked',
+          remedy:
+              'publication already reconciled exactly; restore Dart or '
+              'network access and verify from a fresh PUB_CACHE',
+          evidence: '$error',
+        ),
+      );
     } finally {
       try {
         cache.deleteSync(recursive: true);
@@ -408,10 +421,10 @@ final class PubDevTargetModule extends TargetModule {
     final code = conflict ? 'RK-PUB-006' : act.diagnostic?.code ?? 'RK-PUB-005';
     final message = conflict
         ? '${act.coordinate ?? target.project?.name}: '
-            '${state.detail ?? 'the public archive differs'}'
+              '${state.detail ?? 'the public archive differs'}'
         : act.diagnostic?.message ??
-            '${act.coordinate ?? target.project?.name}: the exact public '
-                'archive could not be confirmed';
+              '${act.coordinate ?? target.project?.name}: the exact public '
+                  'archive could not be confirmed';
     final details = <String>[
       if (act.diagnostic?.remedy != null) act.diagnostic!.remedy!,
       if (act.problem != null) act.problem!,
@@ -421,17 +434,17 @@ final class PubDevTargetModule extends TargetModule {
     final halt = conflict
         ? HaltKind.actedAndUnfixable
         : act.mayHaveActed || state.verdict == Verdict.unknown
-            ? HaltKind.lostTrack
-            : actedBefore
-                ? HaltKind.stoppedPartway
-                : HaltKind.beforeActing;
+        ? HaltKind.lostTrack
+        : actedBefore
+        ? HaltKind.stoppedPartway
+        : HaltKind.beforeActing;
     return TargetFailure(
       diagnostic: Diagnostic(
         code: code,
         message: message,
         remedy: details.isEmpty
             ? 're-run; the shared destination inspection will classify the '
-                'public target before any retry'
+                  'public target before any retry'
             : details.join('\n'),
         evidence: act.evidence ?? act.diagnostic?.evidence,
       ),
@@ -444,8 +457,7 @@ final class PubDevTargetModule extends TargetModule {
   TargetStage stageInput({
     required ResolvedUnit unit,
     required TargetPlan target,
-  }) =>
-      pubDevPackageStage(target: target);
+  }) => pubDevPackageStage(target: target);
 }
 
 String? _repositoryIdentity(String? value) {

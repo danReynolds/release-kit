@@ -14,12 +14,12 @@ final class TargetReleaseProgress {
     required String title,
     required Iterable<TargetPlan> targets,
     Duration delay = const Duration(milliseconds: 80),
-  })  : _output = output,
-        live = output.progressBoard(
-          title,
-          delay: delay,
-          emitSlowToNonTerminal: true,
-        ) {
+  }) : _output = output,
+       live = output.progressBoard(
+         title,
+         delay: delay,
+         emitSlowToNonTerminal: true,
+       ) {
     for (final target in targets) {
       _controllers[target.step.id] = live.addRow(
         id: target.step.id,
@@ -73,30 +73,21 @@ final class TargetReleaseProgress {
     final row = _row(target);
     if (row.state != ProgressRowState.active) return;
     if (inspection.isExact) {
-      row.complete(
-        note: 'already published',
-        mark: ProgressRowMark.satisfied,
-      );
+      row.complete(note: 'already published', mark: ProgressRowMark.satisfied);
     } else if (inspection.isAbsent) {
-      row.complete(
-        note: 'not published',
-        mark: ProgressRowMark.none,
-      );
+      row.complete(note: 'not published', mark: ProgressRowMark.none);
     } else {
       row.complete(
-        note:
-            inspection.verdict == Verdict.conflict ? 'conflict' : 'unreadable',
+        note: inspection.verdict == Verdict.conflict
+            ? 'conflict'
+            : 'unreadable',
         mark: ProgressRowMark.none,
         emphasis: ProgressRowEmphasis.attention,
       );
     }
   }
 
-  void fail(
-    TargetPlan target, {
-    ProgressActivity? activity,
-    String? note,
-  }) {
+  void fail(TargetPlan target, {ProgressActivity? activity, String? note}) {
     final row = _row(target);
     if (row.state == ProgressRowState.active) {
       row.fail(activity: activity, note: note);
@@ -142,10 +133,10 @@ final class TargetReleaseProgress {
   void discard() => live.discard();
 
   void settle({bool released = false}) => live.settle(
-        title: released
-            ? live.model.title.replaceFirst(' · releasing', ' · released')
-            : null,
-      );
+    title: released
+        ? live.model.title.replaceFirst(' · releasing', ' · released')
+        : null,
+  );
 }
 
 /// Receipt-backed stage rows rendered through the shared progress model.
@@ -154,10 +145,7 @@ final class StageReleaseProgress {
     Output output, {
     required String title,
     required this.board,
-  }) : live = output.progressBoard(
-          title,
-          emitSlowToNonTerminal: true,
-        ) {
+  }) : live = output.progressBoard(title, emitSlowToNonTerminal: true) {
     for (final group in board.groups) {
       for (final row in group.rows) {
         _controllers[row] = live.addRow(
@@ -177,17 +165,15 @@ final class StageReleaseProgress {
   ProgressHandle? handleFor(String producer) {
     final rows = board.rowsFor(producer);
     if (rows.isEmpty) return null;
-    return ProgressHandle.combine(
-      rows.map((row) => _controllers[row]!.handle),
-    );
+    return ProgressHandle.combine(rows.map((row) => _controllers[row]!.handle));
   }
 
   Map<String, ProgressHandle> handlesFor(TargetStage stage) => {
-        for (final view in stage.progress)
-          view.id: _controllers[
-                  board.progressRow(stage.contract.step.name, view.id)!]!
+    for (final view in stage.progress)
+      view.id:
+          _controllers[board.progressRow(stage.contract.step.name, view.id)!]!
               .handle,
-      };
+  };
 
   void begin(String producer, ProgressActivity activity) {
     for (final row in board.rowsFor(producer)) {

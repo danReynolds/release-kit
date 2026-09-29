@@ -20,7 +20,9 @@ void main() {
     ]) {
       test('"$heading"', () {
         expect(
-            Changelog.mentions('$heading\n\n- a change\n', v('0.2.0')), isTrue);
+          Changelog.mentions('$heading\n\n- a change\n', v('0.2.0')),
+          isTrue,
+        );
       });
     }
 
@@ -60,10 +62,12 @@ void main() {
       expect(Changelog.mentions('## 0.2.0-beta.1\n', v('0.2.0')), isFalse);
     });
 
-    test('when the release is a prerelease and only the release is written',
-        () {
-      expect(Changelog.mentions('## 0.2.0\n', v('0.2.0-beta.1')), isFalse);
-    });
+    test(
+      'when the release is a prerelease and only the release is written',
+      () {
+        expect(Changelog.mentions('## 0.2.0\n', v('0.2.0-beta.1')), isFalse);
+      },
+    );
 
     test('when the version appears in prose rather than a heading', () {
       expect(
@@ -124,7 +128,8 @@ void main() {
   });
 
   group('the entry — the release body — extracts exactly its own section', () {
-    const multi = '# Changelog\n'
+    const multi =
+        '# Changelog\n'
         '\n'
         '## 0.2.0\n'
         '\n'

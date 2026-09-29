@@ -93,7 +93,8 @@ class Version implements Comparable<Version> {
       code,
       '$describe is not a valid version: "$input"',
       source: source,
-      remedy: 'use major.minor.patch, such as 1.2.3, with no leading "v" '
+      remedy:
+          'use major.minor.patch, such as 1.2.3, with no leading "v" '
           'and no leading zeros',
     );
     return null;

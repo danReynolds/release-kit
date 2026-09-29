@@ -64,10 +64,9 @@ publish = ["pub.dev"]
         'core/stage/complete',
         'core/pub.dev/example@1.2.3',
       ]);
-      expect(
-        checklist['core/pub.dev/example@1.2.3']!.needs,
-        ['core/stage/complete'],
-      );
+      expect(checklist['core/pub.dev/example@1.2.3']!.needs, [
+        'core/stage/complete',
+      ]);
     });
 
     test('an explicit tag sits between stage and registry publication', () {
@@ -87,14 +86,12 @@ publish = ["git-tag", "pub.dev"]
         'core/tag/release-v1.2.3',
         'core/pub.dev/example@1.2.3',
       ]);
-      expect(
-        checklist['core/tag/release-v1.2.3']!.needs,
-        ['core/stage/complete'],
-      );
-      expect(
-        checklist['core/pub.dev/example@1.2.3']!.needs,
-        ['core/tag/release-v1.2.3'],
-      );
+      expect(checklist['core/tag/release-v1.2.3']!.needs, [
+        'core/stage/complete',
+      ]);
+      expect(checklist['core/pub.dev/example@1.2.3']!.needs, [
+        'core/tag/release-v1.2.3',
+      ]);
     });
 
     test('a metadata-only GitHub release has notes and a manifest', () {
@@ -141,8 +138,11 @@ binary_platforms = ["linux-x64"]
 
   test('a registry-only unit stages before its tag and publish', () {
     final resolution = resolve(keybayConfig, keybayTree);
-    final checklist =
-        Checklist.derive(resolution.unit('core')!, resolution, Diagnostics());
+    final checklist = Checklist.derive(
+      resolution.unit('core')!,
+      resolution,
+      Diagnostics(),
+    );
 
     expect(checklist.steps.map((s) => s.id), [
       'core/stage/complete',
@@ -150,19 +150,16 @@ binary_platforms = ["linux-x64"]
       'core/pub.dev/keybay@0.2.0',
     ]);
     expect(checklist['core/stage/complete']!.needs, isEmpty);
-    expect(
-      checklist['core/tag/keybay-v0.2.0']!.needs,
-      ['core/stage/complete'],
-    );
-    expect(
-      checklist['core/pub.dev/keybay@0.2.0']!.needs,
-      ['core/tag/keybay-v0.2.0'],
-    );
+    expect(checklist['core/tag/keybay-v0.2.0']!.needs, ['core/stage/complete']);
+    expect(checklist['core/pub.dev/keybay@0.2.0']!.needs, [
+      'core/tag/keybay-v0.2.0',
+    ]);
   });
 
   test('a unit refuses several standalone producers', () {
     final diagnostics = Diagnostics();
-    final config = ReleaseConfig.parse('''
+    final config = ReleaseConfig.parse(
+      '''
 schema = 2
 
 [release.tools]
@@ -176,24 +173,28 @@ binary_platforms = ["linux-x64"]
 [[release.tools.project]]
 path = "packages/admin"
 binary_platforms = ["linux-x64"]
-''', 'release.toml', diagnostics)!;
+''',
+      'release.toml',
+      diagnostics,
+    )!;
     final resolution = Resolution.resolve(
-        config,
-        MemorySourceTree({
-          'packages/server/pubspec.yaml': '''
+      config,
+      MemorySourceTree({
+        'packages/server/pubspec.yaml': '''
 name: server_cli
 version: 1.0.0
 executables:
   server: server
 ''',
-          'packages/admin/pubspec.yaml': '''
+        'packages/admin/pubspec.yaml': '''
 name: admin_cli
 version: 1.0.0
 executables:
   admin: admin
 ''',
-        }),
-        diagnostics);
+      }),
+      diagnostics,
+    );
 
     expect(resolution, isNull);
     expect(diagnostics.found.single.code, 'RK-RES-009');
@@ -201,8 +202,11 @@ executables:
 
   test('the binary chain covers every declared platform', () {
     final resolution = resolve(keybayConfig, keybayTree);
-    final checklist =
-        Checklist.derive(resolution.unit('cli')!, resolution, Diagnostics());
+    final checklist = Checklist.derive(
+      resolution.unit('cli')!,
+      resolution,
+      Diagnostics(),
+    );
     final ids = checklist.steps.map((s) => s.id).toList();
 
     expect(ids, contains('cli/build/keybay_cli/linux-x64'));
@@ -225,27 +229,29 @@ executables:
 
   test('notarization sits between the signed build and its archive', () {
     final resolution = resolve(keybayConfig, keybayTree);
-    final checklist =
-        Checklist.derive(resolution.unit('cli')!, resolution, Diagnostics());
+    final checklist = Checklist.derive(
+      resolution.unit('cli')!,
+      resolution,
+      Diagnostics(),
+    );
 
     expect(
       checklist['cli/sign/macos-arm64'],
       isNull,
-      reason: 'compiling and signing are one build step, so the checklist, '
+      reason:
+          'compiling and signing are one build step, so the checklist, '
           'the receipt, and the validators speak the same producer names',
     );
     expect(
       checklist['cli/build/keybay_cli/macos-arm64']!.summary,
       contains('build and sign'),
     );
-    expect(
-      checklist['cli/notarize/keybay_cli/macos-arm64']!.needs,
-      ['cli/build/keybay_cli/macos-arm64'],
-    );
-    expect(
-      checklist['cli/archive/keybay_cli/macos-arm64']!.needs,
-      ['cli/notarize/keybay_cli/macos-arm64'],
-    );
+    expect(checklist['cli/notarize/keybay_cli/macos-arm64']!.needs, [
+      'cli/build/keybay_cli/macos-arm64',
+    ]);
+    expect(checklist['cli/archive/keybay_cli/macos-arm64']!.needs, [
+      'cli/notarize/keybay_cli/macos-arm64',
+    ]);
     expect(
       checklist['cli/archive/keybay_cli/linux-x64']!.needs,
       ['cli/build/keybay_cli/linux-x64'],
@@ -255,14 +261,19 @@ executables:
 
   test('the complete-stage barrier waits for every local producer', () {
     final resolution = resolve(keybayConfig, keybayTree);
-    final checklist =
-        Checklist.derive(resolution.unit('cli')!, resolution, Diagnostics());
+    final checklist = Checklist.derive(
+      resolution.unit('cli')!,
+      resolution,
+      Diagnostics(),
+    );
     final producers = checklist.steps
-        .where((step) => const {
-              StepKind.build,
-              StepKind.notarize,
-              StepKind.archive,
-            }.contains(step.kind))
+        .where(
+          (step) => const {
+            StepKind.build,
+            StepKind.notarize,
+            StepKind.archive,
+          }.contains(step.kind),
+        )
         .map((step) => step.id)
         .toList();
 
@@ -276,8 +287,11 @@ executables:
 
   test('every public act transitively depends on the complete stage', () {
     final resolution = resolve(keybayConfig, keybayTree);
-    final checklist =
-        Checklist.derive(resolution.unit('cli')!, resolution, Diagnostics());
+    final checklist = Checklist.derive(
+      resolution.unit('cli')!,
+      resolution,
+      Diagnostics(),
+    );
     const barrier = 'cli/stage/complete';
 
     for (final step in checklist.steps.where((step) => step.isPublic)) {
@@ -291,14 +305,18 @@ executables:
 
   test('the explicit safety phases never move backwards', () {
     final resolution = resolve(keybayConfig, keybayTree);
-    final checklist =
-        Checklist.derive(resolution.unit('cli')!, resolution, Diagnostics());
+    final checklist = Checklist.derive(
+      resolution.unit('cli')!,
+      resolution,
+      Diagnostics(),
+    );
     var phase = StepPhase.inspect;
     for (final step in checklist.steps) {
       expect(
         step.phase.index,
         greaterThanOrEqualTo(phase.index),
-        reason: '${step.id} moved from ${phase.name} back to '
+        reason:
+            '${step.id} moved from ${phase.name} back to '
             '${step.phase.name}',
       );
       phase = step.phase;
@@ -309,18 +327,23 @@ executables:
 
   test('the formula waits for the release to be public', () {
     final resolution = resolve(keybayConfig, keybayTree);
-    final checklist =
-        Checklist.derive(resolution.unit('cli')!, resolution, Diagnostics());
-    expect(
-      checklist['cli/homebrew/keybay_cli/keybay']!.needs,
-      ['cli/github-release/keybay_cli-v0.2.0'],
+    final checklist = Checklist.derive(
+      resolution.unit('cli')!,
+      resolution,
+      Diagnostics(),
     );
+    expect(checklist['cli/homebrew/keybay_cli/keybay']!.needs, [
+      'cli/github-release/keybay_cli-v0.2.0',
+    ]);
   });
 
   test('permanent and public steps are marked', () {
     final resolution = resolve(keybayConfig, keybayTree);
-    final checklist =
-        Checklist.derive(resolution.unit('cli')!, resolution, Diagnostics());
+    final checklist = Checklist.derive(
+      resolution.unit('cli')!,
+      resolution,
+      Diagnostics(),
+    );
 
     expect(checklist['cli/pub.dev/keybay_cli@0.2.0']!.isPermanent, isTrue);
     expect(checklist['cli/build/keybay_cli/linux-x64']!.isPermanent, isFalse);
@@ -375,30 +398,33 @@ publish = ["pub.dev"]
     test('order comes from the manifests, not the file', () {
       final resolution = resolve(config, tree);
       final checklist = Checklist.derive(
-          resolution.unit('framework')!, resolution, Diagnostics());
+        resolution.unit('framework')!,
+        resolution,
+        Diagnostics(),
+      );
       final published = checklist.steps
           .where((s) => s.kind == StepKind.publishRegistry)
           .map((s) => s.project)
           .toList();
 
-      expect(
-        published,
-        ['fleury', 'fleury_test', 'fleury_widgets'],
-        reason: 'declaration order was the reverse',
-      );
+      expect(published, [
+        'fleury',
+        'fleury_test',
+        'fleury_widgets',
+      ], reason: 'declaration order was the reverse');
     });
 
     test('a dependent names its sibling as a prerequisite', () {
       final resolution = resolve(config, tree);
       final checklist = Checklist.derive(
-          resolution.unit('framework')!, resolution, Diagnostics());
-      expect(
-        checklist['framework/pub.dev/fleury_test@0.1.0']!.needs,
-        [
-          'framework/tag/fleury-v0.1.0',
-          'framework/pub.dev/fleury@0.1.0',
-        ],
+        resolution.unit('framework')!,
+        resolution,
+        Diagnostics(),
       );
+      expect(checklist['framework/pub.dev/fleury_test@0.1.0']!.needs, [
+        'framework/tag/fleury-v0.1.0',
+        'framework/pub.dev/fleury@0.1.0',
+      ]);
     });
   });
 
@@ -428,8 +454,9 @@ publish = ["pub.dev"]
     test('an ordinary caret pin still derives a prerequisite', () {
       final resolution = resolve(config, tree);
       final diagnostics = Diagnostics();
-      final prerequisites = ReleaseDependencyPlan(resolution)
-          .prerequisites(resolution.unit('mcp')!, diagnostics);
+      final prerequisites = ReleaseDependencyPlan(
+        resolution,
+      ).prerequisites(resolution.unit('mcp')!, diagnostics);
 
       expect(prerequisites, hasLength(1));
       expect(prerequisites.single.package, 'fleury');
@@ -445,8 +472,9 @@ publish = ["pub.dev"]
     test('an exact pin derives one too', () {
       final resolution = resolve(keybayConfig, keybayTree);
       final diagnostics = Diagnostics();
-      final prerequisites = ReleaseDependencyPlan(resolution)
-          .prerequisites(resolution.unit('cli')!, diagnostics);
+      final prerequisites = ReleaseDependencyPlan(
+        resolution,
+      ).prerequisites(resolution.unit('cli')!, diagnostics);
       expect(prerequisites.single.coordinate, 'pub.dev/keybay/0.2.0');
 
       final checklist = Checklist.derive(
@@ -454,42 +482,41 @@ publish = ["pub.dev"]
         resolution,
         Diagnostics(),
       );
-      expect(
-        checklist['cli/pub.dev/keybay_cli@0.2.0']!.needs,
-        [
-          'cli/tag/keybay_cli-v0.2.0',
-          'cli/requires/pub.dev/keybay/0.2.0',
-        ],
-      );
+      expect(checklist['cli/pub.dev/keybay_cli@0.2.0']!.needs, [
+        'cli/tag/keybay_cli-v0.2.0',
+        'cli/requires/pub.dev/keybay/0.2.0',
+      ]);
     });
 
     test('a third-party dependency is not a prerequisite', () {
       final resolution = resolve(
-          '''
+        '''
 schema = 2
 
 [release.lib]
 publish = ["pub.dev"]
 ''',
-          MemorySourceTree({
-            'pubspec.yaml': '''
+        MemorySourceTree({
+          'pubspec.yaml': '''
 name: lib
 version: 1.0.0
 dependencies:
   ffi: 2.2.0
 ''',
-          }));
+        }),
+      );
       final diagnostics = Diagnostics();
       expect(
-        ReleaseDependencyPlan(resolution)
-            .prerequisites(resolution.unit('lib')!, diagnostics),
+        ReleaseDependencyPlan(
+          resolution,
+        ).prerequisites(resolution.unit('lib')!, diagnostics),
         isEmpty,
       );
     });
 
     test('a constraint the release cannot satisfy is refused', () {
       final resolution = resolve(
-          '''
+        '''
 schema = 2
 
 [release.framework]
@@ -500,19 +527,21 @@ publish = ["pub.dev"]
 path = "packages/fleury_mcp"
 publish = ["pub.dev"]
 ''',
-          MemorySourceTree({
-            'packages/fleury/pubspec.yaml': 'name: fleury\nversion: 0.2.0\n',
-            'packages/fleury_mcp/pubspec.yaml': '''
+        MemorySourceTree({
+          'packages/fleury/pubspec.yaml': 'name: fleury\nversion: 0.2.0\n',
+          'packages/fleury_mcp/pubspec.yaml': '''
 name: fleury_mcp
 version: 0.1.0
 dependencies:
   fleury: ^0.1.0
 ''',
-          }));
+        }),
+      );
 
       final diagnostics = Diagnostics();
-      ReleaseDependencyPlan(resolution)
-          .prerequisites(resolution.unit('mcp')!, diagnostics);
+      ReleaseDependencyPlan(
+        resolution,
+      ).prerequisites(resolution.unit('mcp')!, diagnostics);
       expect(diagnostics.found.single.code, 'RK-DEP-001');
     });
   });
@@ -537,8 +566,11 @@ executables:
 ''',
     });
     final resolution = resolve(keybayConfig, tree);
-    final checklist =
-        Checklist.derive(resolution.unit('cli')!, resolution, Diagnostics());
+    final checklist = Checklist.derive(
+      resolution.unit('cli')!,
+      resolution,
+      Diagnostics(),
+    );
 
     expect(checklist.steps.map((s) => s.id).toList(), [
       'cli/requires/pub.dev/keybay/0.2.0',
@@ -590,8 +622,11 @@ publish = ["pub.dev"]
     test('a cyclic unit still derives every publish step', () {
       final resolution = resolve(cycleWithDownstream, cycleTree);
       final diagnostics = Diagnostics();
-      final checklist =
-          Checklist.derive(resolution.unit('tools')!, resolution, diagnostics);
+      final checklist = Checklist.derive(
+        resolution.unit('tools')!,
+        resolution,
+        diagnostics,
+      );
 
       expect(diagnostics.found.map((d) => d.code), contains('RK-DEP-003'));
       // The diagnostic refuses the release; the rows still describe it, so
@@ -609,11 +644,14 @@ publish = ["pub.dev"]
     test('the cycle remedy names the circle, not its dependents', () {
       final resolution = resolve(cycleWithDownstream, cycleTree);
       final diagnostics = Diagnostics();
-      resolution.dependencyPlan
-          .projects(resolution.unit('tools')!, diagnostics);
+      resolution.dependencyPlan.projects(
+        resolution.unit('tools')!,
+        diagnostics,
+      );
 
-      final remedy =
-          diagnostics.found.singleWhere((d) => d.code == 'RK-DEP-003').remedy!;
+      final remedy = diagnostics.found
+          .singleWhere((d) => d.code == 'RK-DEP-003')
+          .remedy!;
       expect(remedy, contains('alpha'));
       expect(remedy, contains('beta'));
       expect(remedy, isNot(contains('gamma')));
@@ -621,7 +659,7 @@ publish = ["pub.dev"]
 
     test('a devDependency edge appears on the publish step graph', () {
       final resolution = resolve(
-          '''
+        '''
 schema = 2
 
 [release.tools]
@@ -636,15 +674,19 @@ publish = ["pub.dev"]
 path = "packages/lib_test"
 publish = ["pub.dev"]
 ''',
-          MemorySourceTree({
-            'packages/lib/pubspec.yaml': 'name: lib\nversion: 1.0.0\n'
-                'dev_dependencies:\n  lib_test: 1.0.0\n',
-            'packages/lib_test/pubspec.yaml':
-                'name: lib_test\nversion: 1.0.0\n',
-          }));
+        MemorySourceTree({
+          'packages/lib/pubspec.yaml':
+              'name: lib\nversion: 1.0.0\n'
+              'dev_dependencies:\n  lib_test: 1.0.0\n',
+          'packages/lib_test/pubspec.yaml': 'name: lib_test\nversion: 1.0.0\n',
+        }),
+      );
       final diagnostics = Diagnostics();
-      final checklist =
-          Checklist.derive(resolution.unit('tools')!, resolution, diagnostics);
+      final checklist = Checklist.derive(
+        resolution.unit('tools')!,
+        resolution,
+        diagnostics,
+      );
 
       expect(diagnostics.found, isEmpty);
       final publish = checklist['tools/pub.dev/lib@1.0.0']!;

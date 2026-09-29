@@ -31,28 +31,31 @@ of a release script.
 - **Monorepos.** Cross-unit version constraints are checked before
   anything acts.
 
-## Getting Started
+## Dogfood your commands
 
-`rk init` reads the repository and proposes a configuration.
-
-```console
-$ rk init
-Select release outputs
-
-                         Produce              Publish
-  Unit                    Binary   Git tag   pub.dev   GitHub   Homebrew
-› rk                      [ ]      [x]       [x]       [ ]      [ ]
-
-Binary — standalone rk archives for macos-arm64
-
-↑↓ unit   ←→ option   space toggle   enter review   q cancel
-
+```sh
+rk use                     # compare installed and available versions; choose a source
+rk use local               # bind this checkout; edits work on the next run
+rk install pub             # prepare without switching
+rk use --list              # sources, installation state and PATH resolution
 ```
 
-The selector keeps workspace grouping roots out of the way and hides
-`publish_to: none` packages by default. If one of those packages intentionally
-ships through tags, binaries, GitHub, or Homebrew, press `a` to show it. JSON
-output still reports every discovered candidate.
+Run inside the configured project. With multiple executable packages, select
+one in the inline table or add `-p package_name`. Every command in a package
+switches together; SDK dependencies follow that installation. See [installation management](doc/installations.md).
+
+## Getting Started
+
+`rk init` opens an inline Fleury matrix of packages and release outputs. Select the
+cells you want, then choose **Review configuration** to see the exact
+`release.toml` before creating it. Selected cells say **Added**, and prerequisites
+such as GitHub's Git tag are added together.
+
+Arrow keys move; Space or Enter selects. **Show private packages** reveals
+`publish_to: none` packages that can still ship through other outputs. Without
+a terminal, RK prints its proposal; `rk init --write` explicitly accepts it.
+**Discovery notes** explains omitted packages and available build platforms.
+Long reviews support PageUp/PageDown and Home/End from the footer actions.
 
 That proposal is the whole configuration. Targets are opt-in —
 release-kit's own file says yes to all of them. `rk plan` draws the configured
@@ -90,7 +93,13 @@ terminals receive the tree; narrow terminals and pipes receive an outline, and
 
 `rk status` checks the
 destinations themselves, not a log; "Not staged" is the private work
-that must finish before anything goes public:
+that must finish before anything goes public.
+
+Run `rk status` to explore those checks in an inline release
+matrix. Choose a unit for its overview or a destination for its evidence;
+`r` refreshes and Escape returns to the report. The matrix shares its controls
+and visual language with `rk use`, which manages local executables.
+See [release status](doc/status.md) for both views and their meaning.
 
 When Binary or Homebrew is selected, `rk init` proposes every binary platform
 the current host can produce. A macOS host can build its native macOS binary
@@ -253,7 +262,10 @@ Release core 0.3.0? [y/N]
 
 | | |
 |---|---|
-| `rk init` | propose a `release.toml` |
+| `rk init` | choose outputs and review `release.toml` |
+| `rk use [source] [-p project]` | install if needed, then select command source |
+| `rk install [source] [-p project]` | prepare a source without switching |
+| `rk uninstall [source] [-p project]` | remove a confirmed inactive installation |
 | `rk plan [unit]` | show the configured source-only release graph |
 | `rk status` | inspect this repository |
 | `rk release` | publish unfinished units |
@@ -283,8 +295,8 @@ $ rk status --json | jq .problems
 ]
 ```
 
-Without a terminal, a needed answer stops the release — "no terminal
-to answer on — stopped; nothing was published." `--yes` is the
+Without a terminal, a needed answer stops the current unit before its remaining
+targets are published. Earlier completed units stay published. `--yes` is the
 unattended yes, and it skips no inspection. Exit codes: 0 report or
 completed command, 1 refused or failed, 2 usage, 3 rk itself crashed —
 `--json` mirrors it in `exit`.
@@ -294,7 +306,8 @@ completed command, 1 refused or failed, 2 usage, 3 rk itself crashed —
 Stages live under `.rk/work/stages`. Keep them while a binary release is
 partly public so the remaining targets receive the exact staged bytes
 the public ones already pinned; `rk clean` removes this repository's
-stages, and asks first.
+stages, lists their recorded identities, and asks first. Receipt metadata helps
+identify a stage; it does not prove that its bytes are no longer needed.
 
 Git-identified targets (`git-tag`, `github-release`, `homebrew`) need a
 clean working tree. A registry-only or local release may include

@@ -31,21 +31,13 @@ TargetStage pubDevPackageStage({required TargetPlan target}) {
     target: target,
     contract: contract,
     planLabel: 'package archive',
-    progress: [
-      TargetStageProgress.row(
-        id: 'source',
-        label: 'package archive',
-      ),
-    ],
+    progress: [TargetStageProgress.row(id: 'source', label: 'package archive')],
     prepare: (context) => _prepareStage(context, target.project!),
   );
 }
 
 /// The one native Pub archive frozen in a completed stage.
-StageArtifact requirePubArchive(
-  ReleaseStage stage,
-  ResolvedProject project,
-) {
+StageArtifact requirePubArchive(ReleaseStage stage, ResolvedProject project) {
   final path = ReleaseAssets.pubArchivePath(project);
   final matches = stage
       .requireReceipt()
@@ -66,10 +58,7 @@ Future<TargetStageOutcome> _prepareStage(
   context.progress('source').begin(CommonProgressActivities.validating);
   final validation = await _packageArchive(context, project);
   if (validation.diagnostic case final diagnostic?) {
-    return TargetStageFailure(
-      diagnostic,
-      unit: project.unitName,
-    );
+    return TargetStageFailure(diagnostic, unit: project.unitName);
   }
   return TargetStageSuccess(
     StageStep(
@@ -105,9 +94,11 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
     return (
       diagnostic: Diagnostic(
         code: 'RK-PUB-008',
-        message: '${project.name}: tracked dependency overrides '
+        message:
+            '${project.name}: tracked dependency overrides '
             'mask consumer resolution',
-        remedy: '$masking is honoured locally and stripped from the '
+        remedy:
+            '$masking is honoured locally and stripped from the '
             'published archive, so validation here would not see what '
             'consumers see. Remove it and re-stage.',
       ),
@@ -124,15 +115,13 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
     final mirroredSource = _join(mirror.path, const ['source']);
     final directory = project.pubspec.directory == '.'
         ? mirroredSource
-        : _join(
-            mirroredSource,
-            StagePath.segments(project.pubspec.directory),
-          );
-    packaged = await context.tools.run(
-      'dart',
-      ['pub', 'publish', '--to-archive', archive.path],
-      workingDirectory: directory,
-    );
+        : _join(mirroredSource, StagePath.segments(project.pubspec.directory));
+    packaged = await context.tools.run('dart', [
+      'pub',
+      'publish',
+      '--to-archive',
+      archive.path,
+    ], workingDirectory: directory);
   } finally {
     mirror.deleteSync(recursive: true);
   }
@@ -149,7 +138,8 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
         diagnostic: const Diagnostic(
           code: 'RK-PUB-011',
           message: 'this Dart SDK cannot stage the native Pub archive',
-          remedy: 'upgrade Dart to an SDK whose pub publish command '
+          remedy:
+              'upgrade Dart to an SDK whose pub publish command '
               'supports native archive staging, then re-run. rk does not '
               'reimplement Pub packaging or publish different bytes from '
               'the ones it staged.',
@@ -157,11 +147,11 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
         warnings: const <Diagnostic>[],
       );
     }
-    final summary = RegExp(r'Package has[^\n]*')
-        .allMatches(validation)
-        .map((match) => match.group(0)!)
-        .lastOrNull;
-    final warningsOnly = summary != null &&
+    final summary = RegExp(
+      r'Package has[^\n]*',
+    ).allMatches(validation).map((match) => match.group(0)!).lastOrNull;
+    final warningsOnly =
+        summary != null &&
         !summary.toLowerCase().contains('error') &&
         summary.toLowerCase().contains('warning');
     if (!warningsOnly || !archive.existsSync()) {
@@ -169,7 +159,8 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
         diagnostic: Diagnostic(
           code: 'RK-PUB-001',
           message: 'pub refuses to publish ${project.name}',
-          remedy: 'fix the validation errors reported by Pub, then stage '
+          remedy:
+              'fix the validation errors reported by Pub, then stage '
               '${project.name} again',
           evidence: validation.isEmpty ? packaged.summary : validation,
         ),
@@ -189,7 +180,8 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
           Diagnostic(
             code: 'RK-PUB-012',
             message: 'pub validation for ${project.name}: $detail',
-            remedy: 'fix or consciously accept this warning before release; '
+            remedy:
+                'fix or consciously accept this warning before release; '
                 'rk publishes past it only after explicit authorization',
           ),
       ],
@@ -201,7 +193,8 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
       diagnostic: Diagnostic(
         code: 'RK-PUB-011',
         message: 'Pub reported success without producing $archivePath',
-        remedy: 'upgrade or repair the Dart SDK and re-run; rk publishes '
+        remedy:
+            'upgrade or repair the Dart SDK and re-run; rk publishes '
             'only the exact native archive recorded in its stage',
       ),
       warnings: const <Diagnostic>[],
@@ -243,8 +236,9 @@ Directory _mirrorSourceSnapshot(TargetStageContext context) {
       }
       final destination = File(_join(mirror.path, parts));
       destination.parent.createSync(recursive: true);
-      File(context.stage.directory.resolve(artifact.path))
-          .copySync(destination.path);
+      File(
+        context.stage.directory.resolve(artifact.path),
+      ).copySync(destination.path);
       modes[destination.path] = artifact.mode;
     }
     setFileModes(modes);
@@ -282,8 +276,9 @@ String? _maskedResolution(String sourceRoot, String directory) {
   for (final root in {directory, _resolutionRoot(sourceRoot, directory)}) {
     final overrides = '$root/pubspec_overrides.yaml';
     if (File(overrides).existsSync()) return describe(overrides);
-    final section =
-        _pubspecMap('$root/pubspec.yaml')?.map('dependency_overrides');
+    final section = _pubspecMap(
+      '$root/pubspec.yaml',
+    )?.map('dependency_overrides');
     if (section != null && section.entries.isNotEmpty) {
       return 'the dependency_overrides section in '
           '${describe('$root/pubspec.yaml')}';

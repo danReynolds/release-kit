@@ -66,7 +66,8 @@ class Resolution {
           'RK-RES-012',
           'unit "${unit.name}" needs an explicit tag pattern',
           source: unit.location,
-          remedy: 'this repository tags several units; declaring '
+          remedy:
+              'this repository tags several units; declaring '
               'tag = "${unit.name}-v{version}" keeps this unit\'s public '
               'tag namespace stable if the repository changes again',
         );
@@ -84,7 +85,7 @@ class Resolution {
           publish: declared.publish,
           tagPattern: tags
               ? declared.tagPattern ??
-                  _derivedTagPattern(resolved.single, tagUnits > 1)
+                    _derivedTagPattern(resolved.single, tagUnits > 1)
               : null,
           tagWasDeclared: declared.tagPattern != null,
           homebrewTap: declared.homebrewTap,
@@ -111,8 +112,7 @@ class Resolution {
   static String _derivedTagPattern(
     ResolvedProject project,
     bool releasesSeveral,
-  ) =>
-      releasesSeveral ? '${project.pubspec.name}-v{version}' : 'v{version}';
+  ) => releasesSeveral ? '${project.pubspec.name}-v{version}' : 'v{version}';
 
   /// Two units cannot share a tag.
   ///
@@ -148,7 +148,8 @@ class Resolution {
         'the units "${first.name}" and "${unit.name}" would share the tag '
             '"$tag"',
         source: unit.location,
-        remedy: 'give each unit a tag that names it, as in '
+        remedy:
+            'give each unit a tag that names it, as in '
             'tag = "${unit.name}-v{version}"',
       );
     }
@@ -160,8 +161,9 @@ class Resolution {
     SourceTree tree,
     Diagnostics diagnostics,
   ) {
-    final manifestPath =
-        declared.path == '.' ? 'pubspec.yaml' : '${declared.path}/pubspec.yaml';
+    final manifestPath = declared.path == '.'
+        ? 'pubspec.yaml'
+        : '${declared.path}/pubspec.yaml';
 
     final source = tree.read(manifestPath);
     if (source == null) {
@@ -186,7 +188,7 @@ class Resolution {
         source: SourceLocation(manifestPath, pubspec.nameLine),
         remedy: pubspec.isWorkspaceRoot
             ? 'this is a workspace root, not a package — release its members '
-                'instead'
+                  'instead'
             : 'add a version to the manifest',
       );
       return null;
@@ -199,7 +201,8 @@ class Resolution {
         '"${pubspec.name}" sets publish_to: none but is asked to publish to '
             'pub.dev',
         source: declared.location,
-        remedy: 'the manifest\'s veto wins — drop "pub.dev" from publish, or '
+        remedy:
+            'the manifest\'s veto wins — drop "pub.dev" from publish, or '
             'remove publish_to from the manifest',
       );
       return null;
@@ -211,7 +214,8 @@ class Resolution {
         '"${pubspec.name}" names a custom package registry but is asked to '
             'publish to pub.dev',
         source: declared.location,
-        remedy: 'this rk build has no custom Dart-registry target. Remove '
+        remedy:
+            'this rk build has no custom Dart-registry target. Remove '
             '"pub.dev" from publish; do not copy the custom URL into '
             'release.toml',
       );
@@ -223,7 +227,8 @@ class Resolution {
         'RK-RES-004',
         '"${pubspec.name}" ships binaries but declares no executable',
         source: declared.location,
-        remedy: 'add an executables: entry to the manifest, or drop the '
+        remedy:
+            'add an executables: entry to the manifest, or drop the '
             'binary channels',
       );
       return null;
@@ -241,7 +246,8 @@ class Resolution {
         '"${pubspec.name}" is built from sources this repository does not '
             'contain',
         source: SourceLocation(manifestPath, pubspec.nameLine),
-        remedy: 'these dependencies come from outside its own history, so a '
+        remedy:
+            'these dependencies come from outside its own history, so a '
             'release built today and one built next month are different '
             'programs and nobody can tell which one a published artifact came '
             'from:\n  ${escaping.join('\n  ')}\n'
@@ -256,7 +262,8 @@ class Resolution {
         '"${pubspec.name}" declares ${pubspec.executables.length} executables, '
             'so rk cannot tell which one to ship',
         source: SourceLocation(manifestPath, pubspec.nameLine),
-        remedy: 'binary channels support one executable per project: '
+        remedy:
+            'binary channels support one executable per project: '
             '${pubspec.executables.join(', ')}',
       );
       return null;
@@ -267,10 +274,12 @@ class Resolution {
       final value = pubspec.stringAt(field);
       if (value == null || value.trim().isEmpty || value.contains('\u0000')) {
         diagnostics.add(
-            'RK-RES-015', '$field must be non-empty text in $manifestPath',
-            source: declared.location,
-            remedy:
-                'define the native metadata in pubspec.yaml or remove its compile-time projection');
+          'RK-RES-015',
+          '$field must be non-empty text in $manifestPath',
+          source: declared.location,
+          remedy:
+              'define the native metadata in pubspec.yaml or remove its compile-time projection',
+        );
         return null;
       }
       defines[field] = value;
@@ -321,7 +330,8 @@ class Resolution {
         'RK-RES-007',
         'the package "$name" is declared by two projects',
         source: project.config.location,
-        remedy: 'both "${first.config.path}" and "${project.config.path}" '
+        remedy:
+            'both "${first.config.path}" and "${project.config.path}" '
             'resolve to the same package',
       );
     }
@@ -343,7 +353,8 @@ class Resolution {
       'RK-RES-009',
       'the unit "${unit.name}" ships binaries from ${binary.length} projects',
       source: binary[1].config.location,
-      remedy: 'a release unit ships one standalone program; give '
+      remedy:
+          'a release unit ships one standalone program; give '
           '${binary.map((project) => project.name).join(', ')} separate '
           'units',
     );
@@ -369,7 +380,8 @@ class Resolution {
       'the projects in "${unit.name}" are at different versions: '
           '${versions.join(', ')}',
       source: unit.location,
-      remedy: 'a unit releases its projects together — align the manifests, '
+      remedy:
+          'a unit releases its projects together — align the manifests, '
           'or split them into units of their own',
     );
   }
@@ -424,9 +436,9 @@ class ResolvedUnit {
 
   /// Whether any selected destination binds this unit to Git history.
   bool get requiresGit => <PublishTarget>{
-        ...publish,
-        for (final project in projects) ...project.publish,
-      }.any((target) => target.requiresGit);
+    ...publish,
+    for (final project in projects) ...project.publish,
+  }.any((target) => target.requiresGit);
 
   /// A project carried by a typed checklist step. Project names are unique
   /// across the resolution (RK-RES-007), so they are stable producer ids too.

@@ -72,9 +72,11 @@ final class ReleaseStageCoordinator {
       );
     }
 
-    final completedOrCorrupt = inspected.claimsCompletion ||
-        inspected.issues
-            .any((issue) => issue.kind == StageIssueKind.invalidReceipt);
+    final completedOrCorrupt =
+        inspected.claimsCompletion ||
+        inspected.issues.any(
+          (issue) => issue.kind == StageIssueKind.invalidReceipt,
+        );
     if (completedOrCorrupt && !mayReplaceReviewed) {
       final reviewed = inspected.claimsCompletion;
       return Diagnostic(
@@ -82,7 +84,8 @@ final class ReleaseStageCoordinator {
         message: reviewed
             ? 'the reviewed release stage no longer validates'
             : 'the release stage receipt is invalid',
-        remedy: '${inspected.issues.join('\n')}\n'
+        remedy:
+            '${inspected.issues.join('\n')}\n'
             '${reviewed ? 'rk will not silently replace reviewed bytes. ' : ''}'
             'Rebuild it explicitly: rk release ${unit.name} --stage',
       );
@@ -98,12 +101,15 @@ final class ReleaseStageCoordinator {
   }) {
     final inspected = stage.inspect();
     if (inspected.reusable) return true;
-    output.problem(Diagnostic(
-      code: 'RK-STAGE-002',
-      message: 'the reviewed release stage changed $changed',
-      remedy: '${inspected.issues.join('\n')}\n'
-          'rebuild it explicitly: rk release ${unit.name} --stage',
-    ));
+    output.problem(
+      Diagnostic(
+        code: 'RK-STAGE-002',
+        message: 'the reviewed release stage changed $changed',
+        remedy:
+            '${inspected.issues.join('\n')}\n'
+            'rebuild it explicitly: rk release ${unit.name} --stage',
+      ),
+    );
     output.halt(halt);
     return false;
   }
@@ -120,13 +126,16 @@ final class ReleaseStageCoordinator {
     try {
       current = await refreshGit();
     } on Object catch (error) {
-      output.problem(Diagnostic(
-        code: 'RK-STAGE-004',
-        message: 'the release context could not be refreshed $changed',
-        remedy: 'restore a readable repository, then re-run '
-            'rk release ${unit.name} --stage',
-        evidence: '$error',
-      ));
+      output.problem(
+        Diagnostic(
+          code: 'RK-STAGE-004',
+          message: 'the release context could not be refreshed $changed',
+          remedy:
+              'restore a readable repository, then re-run '
+              'rk release ${unit.name} --stage',
+          evidence: '$error',
+        ),
+      );
       output.halt(halt);
       return false;
     }
@@ -134,14 +143,17 @@ final class ReleaseStageCoordinator {
     if (current.isBound != initialGit.isBound) {
       drift.add('the source binding changed');
     } else if (initialGit.isBound && current.head != initialGit.head) {
-      drift.add('HEAD is ${current.shortHead}; staged HEAD was '
-          '${initialGit.shortHead}');
+      drift.add(
+        'HEAD is ${current.shortHead}; staged HEAD was '
+        '${initialGit.shortHead}',
+      );
     }
     if (initialGit.isBound && current.headTree != initialGit.headTree) {
       drift.add('the HEAD tree changed');
     }
     if (initialGit.isBound && !current.isClean) {
-      final detail = current.worktreeStatusError ??
+      final detail =
+          current.worktreeStatusError ??
           (current.uncommitted.isEmpty
               ? 'the worktree is not clean'
               : 'uncommitted: ${current.uncommitted.join(', ')}');
@@ -151,8 +163,10 @@ final class ReleaseStageCoordinator {
       drift.add('HEAD is no longer present on a remote branch');
     }
     if (initialGit.isBound && current.originUrl != initialGit.originUrl) {
-      drift.add('origin is ${current.originUrl ?? 'unreadable'}; staged origin '
-          'was ${initialGit.originUrl ?? 'unreadable'}');
+      drift.add(
+        'origin is ${current.originUrl ?? 'unreadable'}; staged origin '
+        'was ${initialGit.originUrl ?? 'unreadable'}',
+      );
     }
     if (unit.publish.contains(PublishTarget.gitTag) &&
         current.signingConfigured != initialGit.signingConfigured) {
@@ -168,22 +182,27 @@ final class ReleaseStageCoordinator {
     try {
       final refreshed = refreshStage(unit, current);
       if (refreshed.directory.identity.id != stage.directory.identity.id) {
-        drift.add('the release plan now resolves to '
-            '${refreshed.directory.identity.id}; the reviewed stage is '
-            '${stage.directory.identity.id}');
+        drift.add(
+          'the release plan now resolves to '
+          '${refreshed.directory.identity.id}; the reviewed stage is '
+          '${stage.directory.identity.id}',
+        );
       }
     } on Object catch (error) {
       drift.add('the release plan could not be resolved: $error');
     }
 
     if (drift.isEmpty) return true;
-    output.problem(Diagnostic(
-      code: 'RK-STAGE-004',
-      message: 'the repository or release plan changed $changed',
-      remedy: '${drift.join('\n')}\n'
-          'restore those inputs or review a replacement stage: '
-          'rk release ${unit.name} --stage',
-    ));
+    output.problem(
+      Diagnostic(
+        code: 'RK-STAGE-004',
+        message: 'the repository or release plan changed $changed',
+        remedy:
+            '${drift.join('\n')}\n'
+            'restore those inputs or review a replacement stage: '
+            'rk release ${unit.name} --stage',
+      ),
+    );
     output.halt(halt);
     return false;
   }
@@ -234,10 +253,7 @@ final class ReleaseStageCoordinator {
         ..settle(title: '${unit.name} ${unit.version} · staged');
       _showStageWarnings(
         unit,
-        _recordedStageWarnings(
-          inspected.receipt!.steps,
-          targetStagesByName,
-        ),
+        _recordedStageWarnings(inspected.receipt!.steps, targetStagesByName),
       );
       ReleaseSigningContext? recoveredSigning;
       for (final step in inspected.receipt!.steps.where(
@@ -257,9 +273,11 @@ final class ReleaseStageCoordinator {
           output.problem(
             Diagnostic(
               code: 'RK-STAGE-003',
-              message: 'the completed stage records conflicting signing '
+              message:
+                  'the completed stage records conflicting signing '
                   'identities',
-              remedy: 'rebuild it explicitly: '
+              remedy:
+                  'rebuild it explicitly: '
                   'rk release ${unit.name} --stage',
             ),
             unit: unit.name,
@@ -269,10 +287,7 @@ final class ReleaseStageCoordinator {
         }
         recoveredSigning = recovered;
       }
-      return PreparedRelease(
-        claims: claims,
-        signing: recoveredSigning,
-      );
+      return PreparedRelease(claims: claims, signing: recoveredSigning);
     }
 
     final stageProblem = preparationProblem(
@@ -291,16 +306,21 @@ final class ReleaseStageCoordinator {
       output.say('Resuming interrupted staging.', role: VisualRole.secondary);
     } else if (!stage.directory.identity.isGitBound) {
       output.say(
-          'Staging a temporary source snapshot; each run starts a new stage.',
-          role: VisualRole.secondary);
+        'Staging a temporary source snapshot; each run starts a new stage.',
+        role: VisualRole.secondary,
+      );
     } else if (inspected.claimsCompletion) {
-      output.say('Rebuilding: the recorded stage no longer verifies.',
-          role: VisualRole.secondary);
+      output.say(
+        'Rebuilding: the recorded stage no longer verifies.',
+        role: VisualRole.secondary,
+      );
     } else {
       final reasons = StageHistory.rebuildReasons(stage);
       if (reasons.isNotEmpty) {
-        output.say('Rebuilding: ${reasons.join('; ')}.',
-            role: VisualRole.secondary);
+        output.say(
+          'Rebuilding: ${reasons.join('; ')}.',
+          role: VisualRole.secondary,
+        );
       }
     }
 
@@ -316,13 +336,16 @@ final class ReleaseStageCoordinator {
         stage.reset();
       } on Object catch (error) {
         stageProgress.discard();
-        output.problem(Diagnostic(
-          code: 'RK-STAGE-001',
-          message: 'the old release stage could not be replaced safely',
-          remedy: 'resolve the recorded filesystem failure, then re-run '
-              'rk release ${unit.name} --stage',
-          evidence: '$error',
-        ));
+        output.problem(
+          Diagnostic(
+            code: 'RK-STAGE-001',
+            message: 'the old release stage could not be replaced safely',
+            remedy:
+                'resolve the recorded filesystem failure, then re-run '
+                'rk release ${unit.name} --stage',
+            evidence: '$error',
+          ),
+        );
         output.halt(HaltKind.beforeActing);
         return null;
       }
@@ -334,13 +357,16 @@ final class ReleaseStageCoordinator {
         _persistStageProgress(stage, sourceArtifacts, progress);
       } on Object catch (error) {
         stageProgress.discard();
-        output.problem(Diagnostic(
-          code: 'RK-STAGE-003',
-          message: 'the committed source could not be staged',
-          remedy: 'resolve the recorded source-staging failure, then re-run '
-              'rk release ${unit.name} --stage',
-          evidence: '$error',
-        ));
+        output.problem(
+          Diagnostic(
+            code: 'RK-STAGE-003',
+            message: 'the committed source could not be staged',
+            remedy:
+                'resolve the recorded source-staging failure, then re-run '
+                'rk release ${unit.name} --stage',
+            evidence: '$error',
+          ),
+        );
         output.halt(HaltKind.beforeActing);
         return null;
       }
@@ -350,10 +376,7 @@ final class ReleaseStageCoordinator {
     final producersByName = {
       for (final step in producerSteps) receiptNameFor(step): step,
     };
-    final runnable = {
-      ...producersByName.keys,
-      ...targetStagesByName.keys,
-    };
+    final runnable = {...producersByName.keys, ...targetStagesByName.keys};
     final graph = DependencyGraph<String>(
       stage.producerNames,
       idOf: (producer) => producer,
@@ -399,10 +422,7 @@ final class ReleaseStageCoordinator {
             _StageWarning(warning, target: target.step.id),
         ]);
         if (result case TargetStageFailure(:final diagnostic, :final unit)) {
-          _discardInterruptedOutputs(
-            stage,
-            outputsByProducer[receiptName]!,
-          );
+          _discardInterruptedOutputs(stage, outputsByProducer[receiptName]!);
           stageProgress.fail(receiptName);
           output.problem(diagnostic, unit: unit);
           return _StageWorkCompletion.failed(
@@ -422,10 +442,7 @@ final class ReleaseStageCoordinator {
           );
         }
       } on Object catch (error) {
-        _discardInterruptedOutputs(
-          stage,
-          outputsByProducer[receiptName]!,
-        );
+        _discardInterruptedOutputs(stage, outputsByProducer[receiptName]!);
         stageProgress.fail(receiptName);
         _stageOperationProblem('${target.label} stage preparation', error);
         return _StageWorkCompletion.failed(
@@ -465,10 +482,7 @@ final class ReleaseStageCoordinator {
             progress: stageProgress.handleFor(receiptName),
           );
         } on Object catch (error) {
-          _discardInterruptedOutputs(
-            stage,
-            outputsByProducer[receiptName]!,
-          );
+          _discardInterruptedOutputs(stage, outputsByProducer[receiptName]!);
           stageProgress.fail(receiptName);
           _stageOperationProblem(step.summary, error);
           return _StageWorkCompletion.failed(
@@ -477,10 +491,7 @@ final class ReleaseStageCoordinator {
           );
         }
         if (!act.ok) {
-          _discardInterruptedOutputs(
-            stage,
-            outputsByProducer[receiptName]!,
-          );
+          _discardInterruptedOutputs(stage, outputsByProducer[receiptName]!);
           stageProgress.fail(receiptName);
           return _StageWorkCompletion.failed(
             receiptName,
@@ -488,14 +499,9 @@ final class ReleaseStageCoordinator {
           );
         }
         try {
-          record(_captureProducerStep(
-            stage,
-            unit,
-            step,
-            sourceStep,
-            progress,
-            act,
-          ));
+          record(
+            _captureProducerStep(stage, unit, step, sourceStep, progress, act),
+          );
           return _StageWorkCompletion.succeeded(receiptName);
         } on Object catch (error) {
           stageProgress.fail(receiptName);
@@ -506,10 +512,7 @@ final class ReleaseStageCoordinator {
           );
         }
       } on Object catch (error) {
-        _discardInterruptedOutputs(
-          stage,
-          outputsByProducer[receiptName]!,
-        );
+        _discardInterruptedOutputs(stage, outputsByProducer[receiptName]!);
         stageProgress.fail(receiptName);
         _stageOperationProblem('the ${unit.name} stage', error);
         return _StageWorkCompletion.failed(
@@ -565,18 +568,18 @@ final class ReleaseStageCoordinator {
       try {
         laneSource.close();
       } on Object catch (error) {
-        _stageOperationProblem(
-          'the ${unit.name} producer lane cleanup',
-          error,
-        );
+        _stageOperationProblem('the ${unit.name} producer lane cleanup', error);
         failures.add(HaltKind.stoppedPartway);
       }
     }
     if (failures.isNotEmpty) {
       stageProgress.concludeStopped();
       if (!output.report.halted) {
-        output.halt(failures
-            .reduce((left, right) => left.index >= right.index ? left : right));
+        output.halt(
+          failures.reduce(
+            (left, right) => left.index >= right.index ? left : right,
+          ),
+        );
       }
       return null;
     }
@@ -599,13 +602,16 @@ final class ReleaseStageCoordinator {
       );
     } on Object catch (error) {
       stageProgress.conclude();
-      output.problem(Diagnostic(
-        code: 'RK-STAGE-003',
-        message: 'the release stage could not be completed',
-        remedy: 'resolve the recorded stage assembly failure, then re-run '
-            'rk release ${unit.name} --stage',
-        evidence: '$error',
-      ));
+      output.problem(
+        Diagnostic(
+          code: 'RK-STAGE-003',
+          message: 'the release stage could not be completed',
+          remedy:
+              'resolve the recorded stage assembly failure, then re-run '
+              'rk release ${unit.name} --stage',
+          evidence: '$error',
+        ),
+      );
       output.halt(HaltKind.beforeActing);
       return null;
     }
@@ -623,10 +629,7 @@ final class ReleaseStageCoordinator {
       ..restore(completedReceipt)
       ..settle(title: '${unit.name} ${unit.version} · staged');
     _showStageWarnings(unit, warnings);
-    return PreparedRelease(
-      claims: claims,
-      signing: signing,
-    );
+    return PreparedRelease(claims: claims, signing: signing);
   }
 
   /// Restores a valid receipt prefix after an interrupted producer left its
@@ -695,12 +698,15 @@ final class ReleaseStageCoordinator {
         refreshed.requirement == prepared.signing!.publishedRequirement) {
       return true;
     }
-    output.problem(Diagnostic(
-      code: 'RK-SIGN-013',
-      message: 'the published signing identity changed after staging',
-      remedy: 'The reviewed signature was built against a different public '
-          'baseline. Rebuild it explicitly: rk release ${unit.name} --stage.',
-    ));
+    output.problem(
+      Diagnostic(
+        code: 'RK-SIGN-013',
+        message: 'the published signing identity changed after staging',
+        remedy:
+            'The reviewed signature was built against a different public '
+            'baseline. Rebuild it explicitly: rk release ${unit.name} --stage.',
+      ),
+    );
     output.halt(HaltKind.beforeActing);
     return false;
   }
@@ -708,24 +714,23 @@ final class ReleaseStageCoordinator {
   StageStep _sourceStageStep(
     ReleaseStage stage,
     List<StageArtifact> sourceArtifacts,
-  ) =>
-      StageStep(
-        name: 'source-snapshot',
-        inputs: [
-          if (stage.directory.identity.isGitBound)
-            StageInput.commit(stage.directory.identity),
-          if (stage.directory.identity.isGitBound)
-            StageInput.tree(stage.directory.identity),
-          StageInput.plan(stage.directory.identity),
-        ],
-        outputs: sourceArtifacts,
-        evidence: stage.directory.identity.isGitBound
-            ? {
-                'commit': stage.directory.identity.headCommit,
-                'tree': stage.directory.identity.headTree,
-              }
-            : const {'source_binding': 'unbound'},
-      );
+  ) => StageStep(
+    name: 'source-snapshot',
+    inputs: [
+      if (stage.directory.identity.isGitBound)
+        StageInput.commit(stage.directory.identity),
+      if (stage.directory.identity.isGitBound)
+        StageInput.tree(stage.directory.identity),
+      StageInput.plan(stage.directory.identity),
+    ],
+    outputs: sourceArtifacts,
+    evidence: stage.directory.identity.isGitBound
+        ? {
+            'commit': stage.directory.identity.headCommit,
+            'tree': stage.directory.identity.headTree,
+          }
+        : const {'source_binding': 'unbound'},
+  );
 
   void _persistStageProgress(
     ReleaseStage stage,
@@ -754,15 +759,14 @@ final class ReleaseStageCoordinator {
     return warnings;
   }
 
-  void _showStageWarnings(
-    ResolvedUnit unit,
-    Iterable<_StageWarning> found,
-  ) {
+  void _showStageWarnings(ResolvedUnit unit, Iterable<_StageWarning> found) {
     final seen = <String>{};
     final warnings = [
       for (final warning in found)
-        if (seen.add('${warning.diagnostic.code}\u0000'
-            '${warning.diagnostic.message}'))
+        if (seen.add(
+          '${warning.diagnostic.code}\u0000'
+          '${warning.diagnostic.message}',
+        ))
           warning,
     ];
     if (warnings.isEmpty) return;
@@ -779,23 +783,29 @@ final class ReleaseStageCoordinator {
   }
 
   void _stageProgressProblem(Object error) {
-    output.problem(Diagnostic(
-      code: 'RK-STAGE-003',
-      message: 'the completed producer could not be recorded safely',
-      remedy: 'resolve the recorded stage-write failure, then rebuild the '
-          'stage',
-      evidence: '$error',
-    ));
+    output.problem(
+      Diagnostic(
+        code: 'RK-STAGE-003',
+        message: 'the completed producer could not be recorded safely',
+        remedy:
+            'resolve the recorded stage-write failure, then rebuild the '
+            'stage',
+        evidence: '$error',
+      ),
+    );
   }
 
   void _stageOperationProblem(String operation, Object error) {
-    output.problem(Diagnostic(
-      code: 'RK-STAGE-003',
-      message: '$operation failed while preparing the release stage',
-      remedy: 'fix the recorded local failure, then re-run; no public target '
-          'was changed',
-      evidence: '$error',
-    ));
+    output.problem(
+      Diagnostic(
+        code: 'RK-STAGE-003',
+        message: '$operation failed while preparing the release stage',
+        remedy:
+            'fix the recorded local failure, then re-run; no public target '
+            'was changed',
+        evidence: '$error',
+      ),
+    );
   }
 
   StageStep _captureProducerStep(
@@ -827,9 +837,12 @@ final class ReleaseStageCoordinator {
                     ),
             )
           else
-            StageInput.artifact(recorded[input] ??
-                (throw StateError(
-                    '${contract.name} input $input is not recorded'))),
+            StageInput.artifact(
+              recorded[input] ??
+                  (throw StateError(
+                    '${contract.name} input $input is not recorded',
+                  )),
+            ),
       ],
       outputs: [
         for (final artifact in outcome.outputs)
@@ -865,10 +878,12 @@ final class ReleaseStageCoordinator {
     if (!inspected.reusable) {
       final macosProject = _macosProject(unit);
       if (macosProject != null) {
-        row.handle.begin(ProgressActivity(
-          running: 'checking notarization',
-          failed: 'notarization check failed',
-        ));
+        row.handle.begin(
+          ProgressActivity(
+            running: 'checking notarization',
+            failed: 'notarization check failed',
+          ),
+        );
         final notary = await MacOsNotarizer(tools: tools).preflight();
         if (!notary.ok) {
           live.conclude();
@@ -884,10 +899,12 @@ final class ReleaseStageCoordinator {
           output.halt(HaltKind.beforeActing);
           return null;
         }
-        row.handle.begin(ProgressActivity(
-          running: 'checking signing',
-          failed: 'signing check failed',
-        ));
+        row.handle.begin(
+          ProgressActivity(
+            running: 'checking signing',
+            failed: 'signing check failed',
+          ),
+        );
       }
       final baseline = await _signingBaseline(unit, macosProject);
       if (!baseline.ok) {
@@ -906,11 +923,13 @@ final class ReleaseStageCoordinator {
             : BinaryChain.identifierOf(publishedRequirement);
         if (codeId == null || codeId.isEmpty) {
           live.conclude();
-          output.problem(Diagnostic(
-            code: 'RK-SIGN-009',
-            message: 'no release states what this program is called',
-            remedy: 'declare one executable in the native project manifest',
-          ));
+          output.problem(
+            Diagnostic(
+              code: 'RK-SIGN-009',
+              message: 'no release states what this program is called',
+              remedy: 'declare one executable in the native project manifest',
+            ),
+          );
           output.halt(HaltKind.beforeActing);
           return null;
         }
@@ -930,15 +949,8 @@ final class ReleaseStageCoordinator {
     return _StageInputs(signing: signing);
   }
 
-  Future<
-      ({
-        bool ok,
-        SigningIdentity? identity,
-        String? certificateSha256,
-      })> _signingCertificate(
-    ResolvedUnit unit,
-    String? publishedRequirement,
-  ) async {
+  Future<({bool ok, SigningIdentity? identity, String? certificateSha256})>
+  _signingCertificate(ResolvedUnit unit, String? publishedRequirement) async {
     final signer = MacOsSigner(tools: tools);
     final certificates = await signer.availableIdentities();
     Diagnostic? refusal;
@@ -947,7 +959,8 @@ final class ReleaseStageCoordinator {
       refusal = Diagnostic(
         code: 'RK-SIGN-006',
         message: 'the login keychain could not be read',
-        remedy: 'signing needs `security find-identity -v -p codesigning` to '
+        remedy:
+            'signing needs `security find-identity -v -p codesigning` to '
             'answer. This is not the same as having no certificate, and rk '
             'will not guess which it is.',
       );
@@ -955,7 +968,8 @@ final class ReleaseStageCoordinator {
       refusal = Diagnostic(
         code: 'RK-SIGN-007',
         message: 'no Developer ID Application certificate is installed',
-        remedy: 'a signed release needs one in the login keychain — it is '
+        remedy:
+            'a signed release needs one in the login keychain — it is '
             'the only certificate that distributes outside the App Store.',
       );
     } else if (publishedRequirement != null &&
@@ -967,7 +981,8 @@ final class ReleaseStageCoordinator {
       refusal = Diagnostic(
         code: 'RK-SIGN-001',
         message: 'the published release names no team rk can read',
-        remedy: 'its designated requirement carries no subject.OU, so rk '
+        remedy:
+            'its designated requirement carries no subject.OU, so rk '
             'cannot tell which certificate reproduces it.',
       );
     } else if (publishedRequirement != null &&
@@ -983,7 +998,8 @@ final class ReleaseStageCoordinator {
       refusal = Diagnostic(
         code: 'RK-SIGN-010',
         message: 'no certificate for the team the published release names',
-        remedy: 'users installed a binary signed by team '
+        remedy:
+            'users installed a binary signed by team '
             '${BinaryChain.teamOf(publishedRequirement)}; this machine has '
             '${certificates.map((c) => c.team).join(', ')}. Signing with a '
             'different team ships what macOS treats as a new program.',
@@ -991,15 +1007,18 @@ final class ReleaseStageCoordinator {
     } else if (publishedRequirement != null &&
         certificates
                 .where(
-                    (c) => c.team == BinaryChain.teamOf(publishedRequirement))
+                  (c) => c.team == BinaryChain.teamOf(publishedRequirement),
+                )
                 .length >
             1) {
       refusal = Diagnostic(
         code: 'RK-SIGN-011',
-        message: 'several certificates for team '
+        message:
+            'several certificates for team '
             '${BinaryChain.teamOf(publishedRequirement)}, and rk will not '
             'guess which one distributes this',
-        remedy: 'leave one Developer ID Application certificate for that '
+        remedy:
+            'leave one Developer ID Application certificate for that '
             'team in the login keychain.',
       );
     } else if (publishedRequirement == null && certificates.length > 1) {
@@ -1009,9 +1028,11 @@ final class ReleaseStageCoordinator {
       // signing is what makes the answer permanent.
       refusal = Diagnostic(
         code: 'RK-SIGN-008',
-        message: 'this machine has ${certificates.length} Developer ID '
+        message:
+            'this machine has ${certificates.length} Developer ID '
             'certificates and nothing published says which distributes this',
-        remedy: 'release once from a machine with one '
+        remedy:
+            'release once from a machine with one '
             '(${certificates.map((c) => c.team).join(', ')}), and every '
             'release after derives it from what users installed.',
       );
@@ -1020,11 +1041,7 @@ final class ReleaseStageCoordinator {
     if (refusal != null) {
       output.problem(refusal, unit: unit.name);
       output.halt(HaltKind.beforeActing);
-      return (
-        ok: false,
-        identity: null,
-        certificateSha256: null,
-      );
+      return (ok: false, identity: null, certificateSha256: null);
     }
     final selected = publishedRequirement == null
         ? certificates!.single
@@ -1037,9 +1054,11 @@ final class ReleaseStageCoordinator {
       output.problem(
         Diagnostic(
           code: 'RK-SIGN-012',
-          message: 'the selected signing certificate fingerprint could not '
+          message:
+              'the selected signing certificate fingerprint could not '
               'be read',
-          remedy: '`security find-certificate -a -c '
+          remedy:
+              '`security find-certificate -a -c '
               '"${selected.name}" -Z` must report the SHA-256 and SHA-1 '
               'hashes for the exact identity selected by '
               '`security find-identity`.',
@@ -1047,17 +1066,9 @@ final class ReleaseStageCoordinator {
         unit: unit.name,
       );
       output.halt(HaltKind.beforeActing);
-      return (
-        ok: false,
-        identity: null,
-        certificateSha256: null,
-      );
+      return (ok: false, identity: null, certificateSha256: null);
     }
-    return (
-      ok: true,
-      identity: selected,
-      certificateSha256: fingerprint,
-    );
+    return (ok: true, identity: selected, certificateSha256: fingerprint);
   }
 
   /// The designated requirement of the newest already-published release,
@@ -1096,7 +1107,8 @@ final class ReleaseStageCoordinator {
         Diagnostic(
           code: 'RK-SIGN-004',
           message: 'the identity users already installed could not be read',
-          remedy: '${history.why}\n'
+          remedy:
+              '${history.why}\n'
               'rk must read the complete public release history before it '
               'can decide this is the first signed release.',
         ),
@@ -1130,9 +1142,11 @@ final class ReleaseStageCoordinator {
           output.problem(
             Diagnostic(
               code: 'RK-SIGN-004',
-              message: 'the identity users already installed could not be '
+              message:
+                  'the identity users already installed could not be '
                   'read',
-              remedy: '${reading.why}\n'
+              remedy:
+                  '${reading.why}\n'
                   'rk found a published signing candidate at $tag; until '
                   'that release can be read, a new signature cannot be '
                   'proven continuous with it.',
@@ -1150,8 +1164,9 @@ final class ReleaseStageCoordinator {
   ResolvedProject? _macosProject(ResolvedUnit unit) {
     final project = unit.binaryProject;
     return project != null &&
-            project.binaryPlatforms
-                .any((platform) => platform.startsWith('macos-'))
+            project.binaryPlatforms.any(
+              (platform) => platform.startsWith('macos-'),
+            )
         ? project
         : null;
   }
@@ -1190,10 +1205,7 @@ final class ReleaseStageCoordinator {
     }
   }
 
-  BinaryChain _chain(
-    ResolvedUnit unit, {
-    required String repositoryRoot,
-  }) {
+  BinaryChain _chain(ResolvedUnit unit, {required String repositoryRoot}) {
     final stage = stageFor(unit);
     return BinaryChain(
       tools: tools,
@@ -1209,20 +1221,20 @@ final class ReleaseStageCoordinator {
   }
 
   ProgressActivity _producerActivity(Step step) => switch (step.kind) {
-        StepKind.build => ProgressActivity(
-            running: 'building',
-            failed: 'build failed',
-          ),
-        StepKind.notarize => ProgressActivity(
-            running: 'notarizing',
-            failed: 'notarization failed',
-          ),
-        StepKind.archive => ProgressActivity(
-            running: 'packaging',
-            failed: 'packaging failed',
-          ),
-        _ => throw StateError('${step.kind.name} is not a stage producer'),
-      };
+    StepKind.build => ProgressActivity(
+      running: 'building',
+      failed: 'build failed',
+    ),
+    StepKind.notarize => ProgressActivity(
+      running: 'notarizing',
+      failed: 'notarization failed',
+    ),
+    StepKind.archive => ProgressActivity(
+      running: 'packaging',
+      failed: 'packaging failed',
+    ),
+    _ => throw StateError('${step.kind.name} is not a stage producer'),
+  };
 }
 
 final class _StageWarning {

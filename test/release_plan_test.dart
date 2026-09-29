@@ -30,13 +30,12 @@ publish = ["git-tag", "pub.dev", "github-release", "homebrew"]
 binary_platforms = ["linux-x64", "macos-arm64"]
 ''';
 
-final _tree = MemorySourceTree(
-  {
-    'packages/core/pubspec.yaml': '''
+final _tree = MemorySourceTree({
+  'packages/core/pubspec.yaml': '''
 name: example_core
 version: 1.2.0
 ''',
-    'packages/cli/pubspec.yaml': '''
+  'packages/cli/pubspec.yaml': '''
 name: example_cli
 version: 1.2.0
 dependencies:
@@ -44,9 +43,7 @@ dependencies:
 executables:
   example: example_cli
 ''',
-  },
-  description: '/source/example',
-);
+}, description: '/source/example');
 
 Resolution _resolve(
   String config,
@@ -106,8 +103,9 @@ RepositoryReleasePlan _syntheticPlan(ReleaseUnitPlan unit) {
       .whereType<MethodMirror>()
       .singleWhere((member) => member.isConstructor);
   return mirror.newInstance(constructor.constructorName, [
-    <ReleaseUnitPlan>[unit],
-  ]).reflectee as RepositoryReleasePlan;
+        <ReleaseUnitPlan>[unit],
+      ]).reflectee
+      as RepositoryReleasePlan;
 }
 
 void main() {
@@ -123,9 +121,13 @@ void main() {
       expect(requirement.id, 'cli/requires/pub.dev/example_core/1.2.0');
       expect(requirement.coordinate, 'pub.dev/example_core/1.2.0');
       expect(requirement.requiresUnit, 'core');
-      expect(requirement.project, isNull,
-          reason: 'the requirement node represents a coordinate, not one '
-              'possibly-arbitrary dependent');
+      expect(
+        requirement.project,
+        isNull,
+        reason:
+            'the requirement node represents a coordinate, not one '
+            'possibly-arbitrary dependent',
+      );
       expect(requirement.needs, isEmpty);
     });
 
@@ -193,7 +195,8 @@ dependencies:
       expect(
         RegExp('serialized in pub\\.dev lane').allMatches(rendered),
         hasLength(4),
-        reason: 'two package archives and two public writes share one target '
+        reason:
+            'two package archives and two public writes share one target '
             'lane; sibling branches must not imply guaranteed concurrency',
       );
     });
@@ -220,9 +223,7 @@ dependencies:
           localProducers: localProducerContracts(unit),
         );
         final stage = unitPlan.stage.toList();
-        final producerById = {
-          for (final node in stage) node.id: node.producer,
-        };
+        final producerById = {for (final node in stage) node.id: node.producer};
 
         expect(stage.map((node) => node.producer), graph.producerNames);
         for (final node in stage) {
@@ -276,8 +277,9 @@ dependencies:
       final units = (json['units']! as List).cast<Map<String, Object?>>();
       final cli = units.singleWhere((unit) => unit['name'] == 'cli');
       final nodes = (cli['nodes']! as List).cast<Map<String, Object?>>();
-      final complete =
-          nodes.singleWhere((node) => node['kind'] == 'completeStage');
+      final complete = nodes.singleWhere(
+        (node) => node['kind'] == 'completeStage',
+      );
       final publicByKind = {
         for (final node in nodes.where((node) => node['phase'] == 'publish'))
           node['kind']: node,
@@ -331,7 +333,8 @@ dependencies:
       expect(
         ReleasePlanNodeKind.values.map((kind) => kind.name),
         kindVocabulary,
-        reason: 'kind names are schema-10 wire vocabulary, not incidental '
+        reason:
+            'kind names are schema-10 wire vocabulary, not incidental '
             'implementation labels',
       );
 
@@ -339,7 +342,8 @@ dependencies:
       final units = (json['units']! as List).cast<Map<String, Object?>>();
       final allNodes = units
           .expand(
-              (unit) => (unit['nodes']! as List).cast<Map<String, Object?>>())
+            (unit) => (unit['nodes']! as List).cast<Map<String, Object?>>(),
+          )
           .toList();
       expect(
         allNodes.map((node) => node['kind']).toSet(),
@@ -348,16 +352,24 @@ dependencies:
       );
 
       for (final node in allNodes) {
-        final targetOwned = node['kind'] == 'targetStage' ||
+        final targetOwned =
+            node['kind'] == 'targetStage' ||
             node['phase'] == StepPhase.publish.name;
         if (targetOwned) {
           expect(node['target'], isNotNull, reason: '${node['id']}');
-          expect(node['lane'], node['target'],
-              reason: '${node['id']} is serialized by its target kind');
+          expect(
+            node['lane'],
+            node['target'],
+            reason: '${node['id']} is serialized by its target kind',
+          );
         } else {
-          expect(node, isNot(contains('lane')),
-              reason: '${node['id']} is a dependency node or local producer; '
-                  'its needs edges, not a target mutex, order it');
+          expect(
+            node,
+            isNot(contains('lane')),
+            reason:
+                '${node['id']} is a dependency node or local producer; '
+                'its needs edges, not a target mutex, order it',
+          );
         }
       }
 
@@ -386,52 +398,52 @@ dependencies:
       );
     });
 
-    test('a local-output-only unit has a complete stage and no public acts',
-        () {
-      const config = '''
+    test(
+      'a local-output-only unit has a complete stage and no public acts',
+      () {
+        const config = '''
 schema = 2
 
 [release.tool]
 binary_platforms = ["linux-x64"]
 ''';
-      final tree = MemorySourceTree({
-        'pubspec.yaml': '''
+        final tree = MemorySourceTree({
+          'pubspec.yaml': '''
 name: local_tool
 version: 1.0.0
 publish_to: none
 executables:
   local: local_tool
 ''',
-      });
-      final diagnostics = Diagnostics();
-      final plan = RepositoryReleasePlan.derive(
-        resolution: _resolve(config, tree),
-        repository: null,
-        targets: TargetCatalog.builtIn(),
-        diagnostics: diagnostics,
-      );
-      expect(plan, isNotNull, reason: diagnostics.found.join('\n'));
+        });
+        final diagnostics = Diagnostics();
+        final plan = RepositoryReleasePlan.derive(
+          resolution: _resolve(config, tree),
+          repository: null,
+          targets: TargetCatalog.builtIn(),
+          diagnostics: diagnostics,
+        );
+        expect(plan, isNotNull, reason: diagnostics.found.join('\n'));
 
-      final unit = plan!.units.single;
-      expect(unit.public, isEmpty);
-      expect(
-        unit.stage.map((node) => node.kind),
-        [
+        final unit = plan!.units.single;
+        expect(unit.public, isEmpty);
+        expect(unit.stage.map((node) => node.kind), [
           ReleasePlanNodeKind.sourceSnapshot,
           ReleasePlanNodeKind.build,
           ReleasePlanNodeKind.archive,
           ReleasePlanNodeKind.completeStage,
-        ],
-      );
-      expect(
-        _render(plan, terminal: true, color: false, width: 180),
-        contains('PUBLISH\n      none'),
-      );
-    });
+        ]);
+        expect(
+          _render(plan, terminal: true, color: false, width: 180),
+          contains('PUBLISH\n      none'),
+        );
+      },
+    );
 
-    test('refuses a dependency constraint that excludes the planned version',
-        () {
-      const incompatible = '''
+    test(
+      'refuses a dependency constraint that excludes the planned version',
+      () {
+        const incompatible = '''
 schema = 2
 
 [release.core]
@@ -442,29 +454,32 @@ publish = ["pub.dev"]
 path = "packages/cli"
 publish = ["pub.dev"]
 ''';
-      final tree = MemorySourceTree({
-        'packages/core/pubspec.yaml': 'name: core\nversion: 2.0.0\n',
-        'packages/cli/pubspec.yaml': '''
+        final tree = MemorySourceTree({
+          'packages/core/pubspec.yaml': 'name: core\nversion: 2.0.0\n',
+          'packages/cli/pubspec.yaml': '''
 name: cli
 version: 1.0.0
 dependencies:
   core: ^1.0.0
 ''',
-      });
-      final resolution = _resolve(incompatible, tree);
-      final diagnostics = Diagnostics();
+        });
+        final resolution = _resolve(incompatible, tree);
+        final diagnostics = Diagnostics();
 
-      final plan = RepositoryReleasePlan.derive(
-        resolution: resolution,
-        repository: 'example/repository',
-        targets: TargetCatalog.builtIn(),
-        diagnostics: diagnostics,
-      );
+        final plan = RepositoryReleasePlan.derive(
+          resolution: resolution,
+          repository: 'example/repository',
+          targets: TargetCatalog.builtIn(),
+          diagnostics: diagnostics,
+        );
 
-      expect(plan, isNull);
-      expect(
-          diagnostics.found.map((item) => item.code), contains('RK-DEP-001'));
-    });
+        expect(plan, isNull);
+        expect(
+          diagnostics.found.map((item) => item.code),
+          contains('RK-DEP-001'),
+        );
+      },
+    );
   });
 
   group('release plan rendering', () {
@@ -544,28 +559,24 @@ dependencies:
         ),
       );
 
-      final rendered = _render(
-        plan,
-        terminal: true,
-        color: false,
-        width: 180,
-      );
+      final rendered = _render(plan, terminal: true, color: false, width: 180);
       final targetLine = rendered
           .split('\n')
           .singleWhere((line) => line.contains('[channel metadata]'));
 
-      expect(targetInput.summary, isNot(contains('formula')),
-          reason: 'the label deliberately carries no target-type hint');
-      expect(targetInput.summary, isNot(contains('after')),
-          reason: 'the sequencing annotation must come from needs');
+      expect(
+        targetInput.summary,
+        isNot(contains('formula')),
+        reason: 'the label deliberately carries no target-type hint',
+      );
+      expect(
+        targetInput.summary,
+        isNot(contains('after')),
+        reason: 'the sequencing annotation must come from needs',
+      );
       expect(targetLine, contains('needs archives'));
 
-      final colored = _render(
-        plan,
-        terminal: true,
-        color: true,
-        width: 180,
-      );
+      final colored = _render(plan, terminal: true, color: true, width: 180);
       final coloredTargetLine = colored
           .split('\n')
           .singleWhere((line) => line.contains('[channel metadata]'));
@@ -605,18 +616,8 @@ dependencies:
 
     test('semantic colors never change the graph text', () {
       final plan = _plan();
-      final plain = _render(
-        plan,
-        terminal: true,
-        color: false,
-        width: 180,
-      );
-      final colored = _render(
-        plan,
-        terminal: true,
-        color: true,
-        width: 180,
-      );
+      final plain = _render(plan, terminal: true, color: false, width: 180);
+      final colored = _render(plan, terminal: true, color: true, width: 180);
 
       expect(_withoutAnsi(colored), plain);
       expect(colored, contains('\x1b[1;33m'));
@@ -632,8 +633,11 @@ dependencies:
         expect(line, isNot(contains('needs')));
         expect(line, isNot(contains('\x1b[33m')));
       }
-      expect(colored, isNot(contains('\x1b[32m')),
-          reason: 'green is reserved for observed success, not a plan');
+      expect(
+        colored,
+        isNot(contains('\x1b[32m')),
+        reason: 'green is reserved for observed success, not a plan',
+      );
     });
 
     test('a pipe gets the append-only outline with no control codes', () {

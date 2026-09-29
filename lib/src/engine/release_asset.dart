@@ -9,14 +9,13 @@ String standaloneArchiveName(
   String executable,
   String version,
   String platform,
-) =>
-    '$executable-$version-$platform.tar.gz';
+) => '$executable-$version-$platform.tar.gz';
 
 /// One static, pre-write projection from a private staged output to its public
 /// release filename. Producer outputs cannot claim rk-owned names.
 final class ReleaseAssetSpec {
   ReleaseAssetSpec({required String stagedPath, required this.publicName})
-      : stagedPath = StagePath.require(stagedPath) {
+    : stagedPath = StagePath.require(stagedPath) {
     _requirePublicName(publicName);
   }
 

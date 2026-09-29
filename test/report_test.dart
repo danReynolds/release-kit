@@ -59,7 +59,8 @@ void main() {
       expect(
         (steps.single as Map)['verdict'],
         'unknown',
-        reason: 'an absent key invites reading it as "nothing is there", '
+        reason:
+            'an absent key invites reading it as "nothing is there", '
             'which is the one collapse rk must never make',
       );
     });
@@ -72,7 +73,8 @@ void main() {
       expect(
         json.containsKey('safe_to_rerun'),
         isFalse,
-        reason: 're-running is safe by construction — the same inspection '
+        reason:
+            're-running is safe by construction — the same inspection '
             'precedes every act — so a field for it could only ever say so',
       );
     });
@@ -98,12 +100,14 @@ void main() {
 
   test('a problem carries the code the prose hides', () {
     final report = Report('status')
-      ..problem(Diagnostic(
-        code: 'RK-DEP-001',
-        message: 'the pin does not match',
-        source: SourceLocation('pubspec.yaml', 4),
-        remedy: 'align the constraint',
-      ));
+      ..problem(
+        Diagnostic(
+          code: 'RK-DEP-001',
+          message: 'the pin does not match',
+          source: SourceLocation('pubspec.yaml', 4),
+          remedy: 'align the constraint',
+        ),
+      );
     final problem = (decode(report)['problems'] as List).single as Map;
     expect(problem['code'], 'RK-DEP-001');
     expect(problem['source'], 'pubspec.yaml:4');
@@ -112,10 +116,12 @@ void main() {
 
   test('warnings are separate, coded, and nonblocking', () {
     final report = Report('status')
-      ..warning(const Diagnostic(
-        code: 'RK-GIT-001',
-        message: '1 uncommitted path will be included',
-      ));
+      ..warning(
+        const Diagnostic(
+          code: 'RK-GIT-001',
+          message: '1 uncommitted path will be included',
+        ),
+      );
     final json = decode(report);
     expect(json['problems'], isEmpty);
     expect((json['warnings'] as List).single['code'], 'RK-GIT-001');
@@ -151,32 +157,21 @@ void main() {
     group('write policy', () {
       test('plan never leaves repository-local evidence, even on a crash', () {
         expect(
-          Diagnosis.shouldWrite(
-            command: 'plan',
-            acted: false,
-            crashed: true,
-          ),
+          Diagnosis.shouldWrite(command: 'plan', acted: false, crashed: true),
           isFalse,
         );
         expect(
-          Diagnosis.shouldWrite(
-            command: 'plan',
-            acted: true,
-            crashed: true,
-          ),
+          Diagnosis.shouldWrite(command: 'plan', acted: true, crashed: true),
           isFalse,
-          reason: 'the read-only verb stays write-free even under an '
+          reason:
+              'the read-only verb stays write-free even under an '
               'impossible acted flag',
         );
       });
 
       test('other commands retain crashes and acted failures only', () {
         expect(
-          Diagnosis.shouldWrite(
-            command: 'status',
-            acted: false,
-            crashed: true,
-          ),
+          Diagnosis.shouldWrite(command: 'status', acted: false, crashed: true),
           isTrue,
           reason: 'a crash stack is otherwise lost',
         );
@@ -237,14 +232,17 @@ void main() {
 
     test('a finding files its own account, and names it', () {
       final report = Report('release')
-        ..problem(const Diagnostic(
-          code: 'RK-BUILD-001',
-          message: 'macos-arm64: the build did not produce a working binary',
-          evidence: 'exit 1\n--- stderr ---\nlib/a.dart:3:5: Error: nope',
-        ));
+        ..problem(
+          const Diagnostic(
+            code: 'RK-BUILD-001',
+            message: 'macos-arm64: the build did not produce a working binary',
+            evidence: 'exit 1\n--- stderr ---\nlib/a.dart:3:5: Error: nope',
+          ),
+        );
 
-      final problem = (jsonDecode(report.encode(exit: 1))['problems'] as List)
-          .single as Map;
+      final problem =
+          (jsonDecode(report.encode(exit: 1))['problems'] as List).single
+              as Map;
       expect(problem['evidence'], 'tool-output/1-RK-BUILD-001.txt');
       expect(
         report.attachments['tool-output/1-RK-BUILD-001.txt'],
@@ -258,29 +256,30 @@ void main() {
       // rest without saying so.
       final report = Report('release');
       for (final platform in ['linux-x64', 'macos-arm64']) {
-        report.problem(Diagnostic(
-          code: 'RK-BUILD-001',
-          message: '$platform: the build did not produce a working binary',
-          evidence: 'the $platform compiler said this',
-        ));
+        report.problem(
+          Diagnostic(
+            code: 'RK-BUILD-001',
+            message: '$platform: the build did not produce a working binary',
+            evidence: 'the $platform compiler said this',
+          ),
+        );
       }
 
       expect(report.attachments, hasLength(2));
       expect(
         report.attachments.values,
-        containsAll([
-          contains('linux-x64'),
-          contains('macos-arm64'),
-        ]),
+        containsAll([contains('linux-x64'), contains('macos-arm64')]),
       );
     });
 
     test('a finding with nothing to file attaches nothing', () {
       final report = Report('release')
-        ..problem(const Diagnostic(
-          code: 'RK-CONF-019',
-          message: 'a project does not say where to publish',
-        ));
+        ..problem(
+          const Diagnostic(
+            code: 'RK-CONF-019',
+            message: 'a project does not say where to publish',
+          ),
+        );
       expect(report.attachments, isEmpty);
       expect(
         ((jsonDecode(report.encode(exit: 1))['problems'] as List).single
@@ -292,14 +291,19 @@ void main() {
     test('two runs do not overwrite one another', () {
       final root = Directory.systemTemp.createTempSync('rk-diag-');
       addTearDown(() => root.deleteSync(recursive: true));
-      Diagnosis.write(root.path,
-          stamp: 'a', report: Report('release'), exit: 1);
-      Diagnosis.write(root.path,
-          stamp: 'b', report: Report('release'), exit: 1);
-      expect(
-        Directory('${root.path}/.rk/diagnosis').listSync(),
-        hasLength(2),
+      Diagnosis.write(
+        root.path,
+        stamp: 'a',
+        report: Report('release'),
+        exit: 1,
       );
+      Diagnosis.write(
+        root.path,
+        stamp: 'b',
+        report: Report('release'),
+        exit: 1,
+      );
+      expect(Directory('${root.path}/.rk/diagnosis').listSync(), hasLength(2));
     });
   });
 }

@@ -20,11 +20,11 @@ import 'stage_receipt.dart';
 
 /// The receipt producer name for one local checklist step.
 String receiptNameFor(Step step) => switch (step.kind) {
-      StepKind.build => 'build:${step.project}:${step.platform}',
-      StepKind.notarize => 'notarize:${step.project}:${step.platform}',
-      StepKind.archive => 'archive:${step.project}:${step.platform}',
-      _ => throw StateError('${step.kind.name} is not a local producer'),
-    };
+  StepKind.build => 'build:${step.project}:${step.platform}',
+  StepKind.notarize => 'notarize:${step.project}:${step.platform}',
+  StepKind.archive => 'archive:${step.project}:${step.platform}',
+  _ => throw StateError('${step.kind.name} is not a local producer'),
+};
 
 bool isMacosBuildReceipt(String name) {
   final parts = name.split(':');
@@ -45,9 +45,9 @@ String archiveReceiptName(String project, String platform) =>
 
 /// The ordered receipt contracts for every local producer of [unit].
 List<StageStepContract> localProducerContracts(ResolvedUnit unit) => [
-      for (final step in Checklist.localProducerSteps(unit))
-        contractFor(unit, step),
-    ];
+  for (final step in Checklist.localProducerSteps(unit))
+    contractFor(unit, step),
+];
 
 /// The receipt contract one local checklist step must satisfy.
 StageStepContract contractFor(ResolvedUnit unit, Step step) {
@@ -86,9 +86,7 @@ StageStepContract contractFor(ResolvedUnit unit, Step step) {
           if (platform!.startsWith('macos-'))
             'step:notarize:${project.name}:$platform',
         },
-        outputs: {
-          ReleaseAssets.archivePath(project, platform): 'archive',
-        },
+        outputs: {ReleaseAssets.archivePath(project, platform): 'archive'},
         validate: _archiveEvidence,
       );
 
@@ -110,9 +108,7 @@ Iterable<StageIssue> _archiveEvidence(
       signature['scope'] == 'archive-extracted') {
     return const [];
   }
-  return [
-    _structure('${step.name} has no final archive signature evidence'),
-  ];
+  return [_structure('${step.name} has no final archive signature evidence')];
 }
 
 /// A build proves its smoke outcome, and a macOS build its signature too.
@@ -184,11 +180,7 @@ Iterable<StageIssue> _notaryEvidence(
 /// Apple's log carries the submission under `id` or `jobId`; when it names
 /// one, it must be the submission the result named — a log for different
 /// bytes is not evidence about these.
-bool _logNamesSubmission(
-  StageDirectory stage,
-  String path,
-  String submission,
-) {
+bool _logNamesSubmission(StageDirectory stage, String path, String submission) {
   try {
     final decoded = jsonDecode(File(stage.resolve(path)).readAsStringSync());
     if (decoded is! Map) return false;
@@ -199,11 +191,7 @@ bool _logNamesSubmission(
   }
 }
 
-bool _acceptedNotaryFile(
-  StageDirectory stage,
-  String path,
-  String submission,
-) {
+bool _acceptedNotaryFile(StageDirectory stage, String path, String submission) {
   try {
     final decoded = jsonDecode(File(stage.resolve(path)).readAsStringSync());
     return decoded is Map &&
@@ -214,8 +202,5 @@ bool _acceptedNotaryFile(
   }
 }
 
-StageIssue _structure(String message) => StageIssue(
-      StageIssueKind.invalidStructure,
-      message,
-      path: 'stage.json',
-    );
+StageIssue _structure(String message) =>
+    StageIssue(StageIssueKind.invalidStructure, message, path: 'stage.json');

@@ -25,15 +25,20 @@ void main() {
   }
 
   void record() {
-    StageReceiptStore(stage)
-        .write(StageReceipt(identity: stage.identity, steps: [
-      source,
-      StageStep(
-          name: 'build:tool:macos-arm64',
-          inputs: [StageInput.step(source)],
-          outputs: outputs,
-          evidence: evidence),
-    ]));
+    StageReceiptStore(stage).write(
+      StageReceipt(
+        identity: stage.identity,
+        steps: [
+          source,
+          StageStep(
+            name: 'build:tool:macos-arm64',
+            inputs: [StageInput.step(source)],
+            outputs: outputs,
+            evidence: evidence,
+          ),
+        ],
+      ),
+    );
   }
 
   StageInspection inspect() => const StageInspector().inspect(stage);
@@ -41,25 +46,30 @@ void main() {
   setUp(() {
     root = Directory.systemTemp.createTempSync('rk-bundle-receipt-');
     stage = StageDirectory(
-        repositoryRoot: root.path,
-        identity: StageIdentity.forUnboundPlan(
-            runId: 'fixture', resolvedPlan: {'unit': 'tool'}));
-    source = StageStep(name: 'source-snapshot', inputs: [
-      StageInput.plan(stage.identity)
-    ], outputs: [
-      write('source/bin/tool.dart', 'void main() {}', 'source', '0644')
-    ], evidence: {
-      'source_binding': 'unbound'
-    });
+      repositoryRoot: root.path,
+      identity: StageIdentity.forUnboundPlan(
+        runId: 'fixture',
+        resolvedPlan: {'unit': 'tool'},
+      ),
+    );
+    source = StageStep(
+      name: 'source-snapshot',
+      inputs: [StageInput.plan(stage.identity)],
+      outputs: [
+        write('source/bin/tool.dart', 'void main() {}', 'source', '0644'),
+      ],
+      evidence: {'source_binding': 'unbound'},
+    );
     outputs = [
       for (final file in artifact.files)
         write(
-            '$prefix/${file.path}',
-            file.path == BinaryArtifact.manifestName
-                ? artifact.manifest
-                : file.path,
-            file.type,
-            file.mode)
+          '$prefix/${file.path}',
+          file.path == BinaryArtifact.manifestName
+              ? artifact.manifest
+              : file.path,
+          file.type,
+          file.mode,
+        ),
     ];
     final signatures = <String, Map<String, Object?>>{
       for (final file in artifact.signedFiles)
@@ -93,13 +103,18 @@ void main() {
   });
   tearDown(() => root.deleteSync(recursive: true));
 
-  test('an intact multi-file build is resumable',
-      () => expect(inspect().validProgress, isTrue));
+  test(
+    'an intact multi-file build is resumable',
+    () => expect(inspect().validProgress, isTrue),
+  );
   test('a changed companion cannot reuse the signed build', () {
-    File(stage.resolve('$prefix/lib/tool/app.aot'))
-        .writeAsStringSync('changed');
-    expect(inspect().issues.map((issue) => issue.kind),
-        contains(StageIssueKind.changedArtifact));
+    File(
+      stage.resolve('$prefix/lib/tool/app.aot'),
+    ).writeAsStringSync('changed');
+    expect(
+      inspect().issues.map((issue) => issue.kind),
+      contains(StageIssueKind.changedArtifact),
+    );
     expect(inspect().validProgress, isFalse);
   });
   test('even a recaptured companion must match its signature digest', () {
@@ -107,56 +122,79 @@ void main() {
       for (final output in outputs)
         output.path.endsWith('app.aot')
             ? write(output.path, 'changed', output.type, output.mode)
-            : output
+            : output,
     ];
     record();
-    expect(inspect().issues.map((issue) => issue.message).join('\n'),
-        contains('not bound to its bytes'));
+    expect(
+      inspect().issues.map((issue) => issue.message).join('\n'),
+      contains('not bound to its bytes'),
+    );
   });
-  test('a missing companion signature cannot claim a complete signed build',
-      () {
-    (evidence['signatures'] as Map).remove('lib/tool/app.aot');
-    record();
-    expect(inspect().issues.map((issue) => issue.message).join('\n'),
-        contains('complete per-file'));
-  });
+  test(
+    'a missing companion signature cannot claim a complete signed build',
+    () {
+      (evidence['signatures'] as Map).remove('lib/tool/app.aot');
+      record();
+      expect(
+        inspect().issues.map((issue) => issue.message).join('\n'),
+        contains('complete per-file'),
+      );
+    },
+  );
   test('a companion signed by another certificate is refused', () {
     ((evidence['signatures'] as Map)['lib/tool/app.aot']
-        as Map)['certificate_sha256'] = 'f' * 64;
+            as Map)['certificate_sha256'] =
+        'f' * 64;
     record();
     expect(inspect().validProgress, isFalse);
   });
   test('a runtime that pins no module cannot claim a signed build', () {
-    ((evidence['signatures'] as Map)[artifact.identityFile] as Map)
-        .remove('pinned_library_cdhashes');
+    ((evidence['signatures'] as Map)[artifact.identityFile] as Map).remove(
+      'pinned_library_cdhashes',
+    );
     record();
-    expect(inspect().issues.map((issue) => issue.message).join('\n'),
-        contains('does not pin exactly the modules it ships with'));
+    expect(
+      inspect().issues.map((issue) => issue.message).join('\n'),
+      contains('does not pin exactly the modules it ships with'),
+    );
   });
   test('a runtime pinned to a different module is refused', () {
     ((evidence['signatures'] as Map)[artifact.identityFile]
-        as Map)['pinned_library_cdhashes'] = ['6' * 40];
+        as Map)['pinned_library_cdhashes'] = [
+      '6' * 40,
+    ];
     record();
     expect(inspect().validProgress, isFalse);
   });
   test('a module with no recorded code hash cannot be pinned', () {
-    ((evidence['signatures'] as Map)['lib/tool/app.aot'] as Map)
-        .remove('cdhashes');
+    ((evidence['signatures'] as Map)['lib/tool/app.aot'] as Map).remove(
+      'cdhashes',
+    );
     record();
-    expect(inspect().issues.map((issue) => issue.message).join('\n'),
-        contains('records no code hash'));
+    expect(
+      inspect().issues.map((issue) => issue.message).join('\n'),
+      contains('records no code hash'),
+    );
   });
-  test('altering the manifest and its captured digest cannot change the layout',
-      () {
-    outputs = [
-      for (final output in outputs)
-        output.path.endsWith(BinaryArtifact.manifestName)
-            ? write(output.path, BinaryArtifact.single('tool').manifest,
-                output.type, output.mode)
-            : output
-    ];
-    record();
-    expect(inspect().issues.map((issue) => issue.message).join('\n'),
-        contains('manifest differs'));
-  });
+  test(
+    'altering the manifest and its captured digest cannot change the layout',
+    () {
+      outputs = [
+        for (final output in outputs)
+          output.path.endsWith(BinaryArtifact.manifestName)
+              ? write(
+                  output.path,
+                  BinaryArtifact.single('tool').manifest,
+                  output.type,
+                  output.mode,
+                )
+              : output,
+      ];
+      record();
+      expect(
+        inspect().issues.map((issue) => issue.message).join('\n'),
+        contains('manifest differs'),
+      );
+    },
+  );
 }

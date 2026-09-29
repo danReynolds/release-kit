@@ -18,7 +18,9 @@ void main() {
         () => ReleaseAssetSpec(stagedPath: path, publicName: 'tool.tar.gz'),
     ]) {
       expect(
-          create, throwsA(anyOf(isA<ArgumentError>(), isA<FormatException>())));
+        create,
+        throwsA(anyOf(isA<ArgumentError>(), isA<FormatException>())),
+      );
     }
   });
 
@@ -45,18 +47,9 @@ void main() {
   });
 
   test('inventory is stable regardless of specification order', () {
-    final a = ReleaseAssetSpec(
-      stagedPath: 'private/a',
-      publicName: 'a.tar.gz',
-    );
-    final b = ReleaseAssetSpec(
-      stagedPath: 'private/b',
-      publicName: 'b.tar.gz',
-    );
-    final c = ReleaseAssetSpec(
-      stagedPath: 'private/c',
-      publicName: 'c.tar.gz',
-    );
+    final a = ReleaseAssetSpec(stagedPath: 'private/a', publicName: 'a.tar.gz');
+    final b = ReleaseAssetSpec(stagedPath: 'private/b', publicName: 'b.tar.gz');
+    final c = ReleaseAssetSpec(stagedPath: 'private/c', publicName: 'c.tar.gz');
 
     expect(
       validateReleaseAssetSpecs([c, a, b]).map((asset) => asset.publicName),
@@ -71,14 +64,8 @@ void main() {
   test('same and destination-equivalent public names always collide', () {
     expect(
       () => validateReleaseAssetSpecs([
-        ReleaseAssetSpec(
-          stagedPath: 'private/one',
-          publicName: 'tool.tar.gz',
-        ),
-        ReleaseAssetSpec(
-          stagedPath: 'private/two',
-          publicName: 'tool.tar.gz',
-        ),
+        ReleaseAssetSpec(stagedPath: 'private/one', publicName: 'tool.tar.gz'),
+        ReleaseAssetSpec(stagedPath: 'private/two', publicName: 'tool.tar.gz'),
       ]),
       throwsArgumentError,
     );
@@ -102,10 +89,7 @@ void main() {
     expect(inventory, isEmpty);
     expect(
       () => inventory.add(
-        ReleaseAssetSpec(
-          stagedPath: 'private/tool',
-          publicName: 'tool',
-        ),
+        ReleaseAssetSpec(stagedPath: 'private/tool', publicName: 'tool'),
       ),
       throwsUnsupportedError,
     );

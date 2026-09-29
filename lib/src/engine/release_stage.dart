@@ -37,12 +37,11 @@ class ReleaseStages {
     DartCompilerIdentity Function()? compilerIdentity,
     RkImplementationIdentity Function()? rkIdentity,
     Map<String, String> Function()? environment,
-  })  : repositoryRoot = repositoryRoot ?? git.root,
-        _compilerIdentity =
-            compilerIdentity ?? DartCompilerIdentity.readAmbient,
-        _rkIdentity = rkIdentity ?? RkImplementationIdentity.readAmbient,
-        _environment =
-            environment ?? (() => Map<String, String>.of(Platform.environment));
+  }) : repositoryRoot = repositoryRoot ?? git.root,
+       _compilerIdentity = compilerIdentity ?? DartCompilerIdentity.readAmbient,
+       _rkIdentity = rkIdentity ?? RkImplementationIdentity.readAmbient,
+       _environment =
+           environment ?? (() => Map<String, String>.of(Platform.environment));
 
   final SourceTree source;
   final GitState git;
@@ -56,14 +55,14 @@ class ReleaseStages {
   DartCompilerIdentity? _compiler;
 
   ReleaseStage call(ResolvedUnit unit) => _stages.putIfAbsent(
-        unit.name,
-        () => _resolve(
-          unit,
-          git,
-          _compiler ??= _readCompilerIdentity(),
-          _readRkIdentity(),
-        ),
-      );
+    unit.name,
+    () => _resolve(
+      unit,
+      git,
+      _compiler ??= _readCompilerIdentity(),
+      _readRkIdentity(),
+    ),
+  );
 
   /// Resolves the stage again from facts read at the release boundary.
   ///
@@ -71,12 +70,8 @@ class ReleaseStages {
   /// the initial Git state. Publication must notice a PATH-selected compiler,
   /// signing policy, origin, commit, tree, platform, or plan change that
   /// happened while private preparation or authorization was in progress.
-  ReleaseStage refresh(ResolvedUnit unit, GitState currentGit) => _resolve(
-        unit,
-        currentGit,
-        _readCompilerIdentity(),
-        _readRkIdentity(),
-      );
+  ReleaseStage refresh(ResolvedUnit unit, GitState currentGit) =>
+      _resolve(unit, currentGit, _readCompilerIdentity(), _readRkIdentity());
 
   ReleaseStage _resolve(
     ResolvedUnit unit,
@@ -84,9 +79,13 @@ class ReleaseStages {
     DartCompilerIdentity compiler,
     RkImplementationIdentity rk,
   ) {
-    final launcher = Platform.isMacOS &&
-            unit.projects.any((project) => project.binaryPlatforms
-                .any((platform) => platform.startsWith('macos-')))
+    final launcher =
+        Platform.isMacOS &&
+            unit.projects.any(
+              (project) => project.binaryPlatforms.any(
+                (platform) => platform.startsWith('macos-'),
+              ),
+            )
         ? LauncherCompiler.read()
         : null;
     final plan = stagePlanFor(
@@ -142,8 +141,10 @@ class ReleaseStages {
     try {
       return _rkIdentity();
     } on Object catch (error) {
-      throw StateError('the rk implementation could not be identified: '
-          '$error');
+      throw StateError(
+        'the rk implementation could not be identified: '
+        '$error',
+      );
     }
   }
 }
@@ -164,8 +165,9 @@ class ReleaseStage {
     this.enforceUnitContract = false,
     this.resolvedPlan,
     Iterable<StageContributionContract> targetContributions = const [],
-  }) : targetContributions =
-            List<StageContributionContract>.unmodifiable(targetContributions);
+  }) : targetContributions = List<StageContributionContract>.unmodifiable(
+         targetContributions,
+       );
 
   final ResolvedUnit unit;
   final SourceTree source;
@@ -246,9 +248,11 @@ class ReleaseStage {
     final receipt = inspected.receipt;
     final issues = [...inspected.issues];
     if (receipt?.complete == true &&
-        !issues.any((issue) =>
-            issue.kind == StageIssueKind.invalidManifest ||
-            issue.path == 'release-manifest.json')) {
+        !issues.any(
+          (issue) =>
+              issue.kind == StageIssueKind.invalidManifest ||
+              issue.path == 'release-manifest.json',
+        )) {
       try {
         final manifest = ReleaseManifest.parse(
           File(directory.resolve('release-manifest.json')).readAsStringSync(),
@@ -259,19 +263,23 @@ class ReleaseStage {
             manifest.version != unit.version.canonical ||
             manifest.tag != unit.tag ||
             manifestHomebrew != wantedHomebrew) {
-          issues.add(const StageIssue(
-            StageIssueKind.invalidManifest,
-            'release manifest names different release coordinates or '
-            'Homebrew formulae',
-            path: 'release-manifest.json',
-          ));
+          issues.add(
+            const StageIssue(
+              StageIssueKind.invalidManifest,
+              'release manifest names different release coordinates or '
+              'Homebrew formulae',
+              path: 'release-manifest.json',
+            ),
+          );
         }
       } on Object catch (error) {
-        issues.add(StageIssue(
-          StageIssueKind.invalidManifest,
-          'release manifest Homebrew binding could not be validated: $error',
-          path: 'release-manifest.json',
-        ));
+        issues.add(
+          StageIssue(
+            StageIssueKind.invalidManifest,
+            'release manifest Homebrew binding could not be validated: $error',
+            path: 'release-manifest.json',
+          ),
+        );
       }
     }
     if (receipt != null && _unitContract != null) {
@@ -286,18 +294,22 @@ class ReleaseStage {
     try {
       final actual = DartCompilerIdentity.fromJson(recorded);
       if (actual != expectedCompiler) {
-        issues.add(const StageIssue(
-          StageIssueKind.wrongStage,
-          'the completed stage records a different Dart compiler',
-          path: 'stage.json',
-        ));
+        issues.add(
+          const StageIssue(
+            StageIssueKind.wrongStage,
+            'the completed stage records a different Dart compiler',
+            path: 'stage.json',
+          ),
+        );
       }
     } on Object {
-      issues.add(const StageIssue(
-        StageIssueKind.invalidStructure,
-        'the completed stage does not record its Dart compiler',
-        path: 'stage.json',
-      ));
+      issues.add(
+        const StageIssue(
+          StageIssueKind.invalidStructure,
+          'the completed stage does not record its Dart compiler',
+          path: 'stage.json',
+        ),
+      );
     }
     return StageInspection(receipt: receipt, issues: issues);
   }
@@ -314,9 +326,9 @@ class ReleaseStage {
         directory.unsafeFixedPath() != null) {
       throw FileSystemException('unsafe stage cannot be reset', directory.path);
     }
-    final removed = StageStore(directory.repositoryRoot).deleteEntry(
-      StageEntry(name: directory.identity.id, type: type),
-    );
+    final removed = StageStore(
+      directory.repositoryRoot,
+    ).deleteEntry(StageEntry(name: directory.identity.id, type: type));
     if (!removed) {
       throw FileSystemException(
         'stage changed before it could be reset',
@@ -347,9 +359,7 @@ class ReleaseStage {
         'only an incomplete receipted stage can discard interrupted outputs',
       );
     }
-    final recorded = {
-      for (final artifact in receipt.artifacts) artifact.path,
-    };
+    final recorded = {for (final artifact in receipt.artifacts) artifact.path};
     final candidates = declaredOutputs.toSet().difference(recorded).toList()
       ..sort();
     for (final relativePath in candidates) {
@@ -397,8 +407,10 @@ class ReleaseStage {
       // stop at the stage root and retain anything another lane owns.
       for (var index = parts.length - 1; index > 0; index--) {
         final parent = directory.resolve(parts.take(index).join('/'));
-        final parentType =
-            FileSystemEntity.typeSync(parent, followLinks: false);
+        final parentType = FileSystemEntity.typeSync(
+          parent,
+          followLinks: false,
+        );
         if (parentType != FileSystemEntityType.directory) break;
         if (Directory(parent).listSync(followLinks: false).isNotEmpty) break;
         Directory(parent).deleteSync();
@@ -418,7 +430,7 @@ class ReleaseStage {
         ? const <String, GitTreeEntry>{}
         : {for (final entry in gitEntries) entry.path: entry};
     final tracked = [
-      ...(gitEntries?.map((entry) => entry.path) ?? source.trackedFiles())
+      ...(gitEntries?.map((entry) => entry.path) ?? source.trackedFiles()),
     ]..sort();
     // What rk refuses to stage is decided before anything is read. A bulk
     // read cannot say why a gitlink is unacceptable — it only reports that
@@ -462,11 +474,9 @@ class ReleaseStage {
     // it will remain.
     _setGitFileModes(modes);
     for (final at in staged) {
-      outputs.add(StageArtifact.capture(
-        stage: directory,
-        path: at,
-        type: 'source',
-      ));
+      outputs.add(
+        StageArtifact.capture(stage: directory, path: at, type: 'source'),
+      );
     }
     return outputs;
   }
@@ -515,9 +525,7 @@ class ReleaseStage {
   /// A changed or missing tracked file is refused, never restored: producer
   /// output must not be able to alter the bytes the stage identity names.
   void sealSource(Iterable<StageArtifact> expected) {
-    final byPath = {
-      for (final artifact in expected) artifact.path: artifact,
-    };
+    final byPath = {for (final artifact in expected) artifact.path: artifact};
     final source = Directory(sourceRoot);
     if (!source.existsSync()) {
       throw StateError('the staged source snapshot disappeared');
@@ -586,15 +594,14 @@ class ReleaseStage {
     if (publicNames.length != bindings.length ||
         stagedPaths.length != bindings.length) {
       throw ArgumentError(
-          'release assets must name unique public files and blobs');
+        'release assets must name unique public files and blobs',
+      );
     }
     final homebrewBinding = _homebrewBinding();
     final homebrewStagedPaths = {
       if (homebrewBinding != null) homebrewBinding.stagedPath,
     };
-    final duplicatedHomebrew = stagedPaths.intersection(
-      homebrewStagedPaths,
-    );
+    final duplicatedHomebrew = stagedPaths.intersection(homebrewStagedPaths);
     if (duplicatedHomebrew.isNotEmpty) {
       throw ArgumentError(
         'Homebrew formulae cannot also be release assets: '
@@ -617,8 +624,9 @@ class ReleaseStage {
       final existingManifest = ReleaseManifest.parse(
         File(directory.resolve('release-manifest.json')).readAsStringSync(),
       );
-      final existingPublic =
-          existingManifest.artifacts.map((artifact) => artifact.name).toSet();
+      final existingPublic = existingManifest.artifacts
+          .map((artifact) => artifact.name)
+          .toSet();
       final existingHomebrew = existingManifest.homebrew?.identity;
       final wantedHomebrew = homebrewBinding?.identity;
       if (existingPublic.length != publicNames.length ||
@@ -660,13 +668,14 @@ class ReleaseStage {
 
     final beforeManifest = _captureAll();
     final byPath = {
-      for (final artifact in beforeManifest) artifact.path: artifact
+      for (final artifact in beforeManifest) artifact.path: artifact,
     };
     final boundStagedPaths = {...stagedPaths, ...homebrewStagedPaths};
     final missing = boundStagedPaths.difference(byPath.keys.toSet());
     if (missing.isNotEmpty) {
       throw StateError(
-          'stage is missing publication artifacts: ${missing.join(', ')}');
+        'stage is missing publication artifacts: ${missing.join(', ')}',
+      );
     }
 
     final allowed = <String>{
@@ -694,14 +703,13 @@ class ReleaseStage {
             artifact: byPath[binding.stagedPath]!,
           ),
       ],
-      homebrew: homebrewBinding?.bind(
-        byPath[homebrewBinding.stagedPath]!,
-      ),
+      homebrew: homebrewBinding?.bind(byPath[homebrewBinding.stagedPath]!),
     );
     manifest.writeTo(directory);
 
-    final recorded =
-        progress.artifacts.map((artifact) => artifact.path).toSet();
+    final recorded = progress.artifacts
+        .map((artifact) => artifact.path)
+        .toSet();
     final unrecorded = byPath.keys.toSet().difference(recorded);
     if (unrecorded.isNotEmpty) {
       throw StateError(
@@ -805,10 +813,9 @@ class ReleaseStage {
     final ordered = contract == null
         ? List<StageStep>.of(steps)
         : _contractOrdered(steps, contract.producerNames);
-    StageReceiptStore(directory).write(StageReceipt(
-      identity: directory.identity,
-      steps: ordered,
-    ));
+    StageReceiptStore(
+      directory,
+    ).write(StageReceipt(identity: directory.identity, steps: ordered));
   }
 
   /// Steps in contract order; names outside the contract keep their given
@@ -817,13 +824,12 @@ class ReleaseStage {
     Iterable<StageStep> steps,
     List<String> canonical,
   ) {
-    final order = {
-      for (final (index, name) in canonical.indexed) name: index,
-    };
+    final order = {for (final (index, name) in canonical.indexed) name: index};
     final decorated = steps.indexed.toList()
       ..sort((left, right) {
-        final byContract = (order[left.$2.name] ?? order.length)
-            .compareTo(order[right.$2.name] ?? order.length);
+        final byContract = (order[left.$2.name] ?? order.length).compareTo(
+          order[right.$2.name] ?? order.length,
+        );
         return byContract != 0 ? byContract : left.$1.compareTo(right.$1);
       });
     return [for (final (_, step) in decorated) step];
@@ -832,9 +838,10 @@ class ReleaseStage {
   List<StageArtifact> _captureAll() {
     if (!Directory(directory.path).existsSync()) return const [];
     final artifacts = <StageArtifact>[];
-    final entities = Directory(directory.path)
-        .listSync(recursive: true, followLinks: false)
-      ..sort((left, right) => left.path.compareTo(right.path));
+    final entities = Directory(directory.path).listSync(
+      recursive: true,
+      followLinks: false,
+    )..sort((left, right) => left.path.compareTo(right.path));
     for (final entity in entities) {
       if (entity is! File) continue;
       final relative = entity.path
@@ -842,11 +849,13 @@ class ReleaseStage {
           .split(Platform.pathSeparator)
           .join('/');
       if (relative == 'stage.json') continue;
-      artifacts.add(StageArtifact.capture(
-        stage: directory,
-        path: relative,
-        type: _typeOf(relative),
-      ));
+      artifacts.add(
+        StageArtifact.capture(
+          stage: directory,
+          path: relative,
+          type: _typeOf(relative),
+        ),
+      );
     }
     return artifacts;
   }
@@ -876,9 +885,7 @@ class ReleaseStage {
     // Prereleases publish their archives but leave the stable tap unchanged.
     if (unit.version.isPrerelease) return null;
     final project = unit.projects
-        .where(
-          (project) => project.publish.contains(PublishTarget.homebrew),
-        )
+        .where((project) => project.publish.contains(PublishTarget.homebrew))
         .firstOrNull;
     if (project == null) return null;
     final sourceRepository = repository;

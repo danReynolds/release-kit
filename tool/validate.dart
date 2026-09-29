@@ -68,16 +68,18 @@ Future<void> main(List<String> args) async {
         (total, u) => total + ((u as Map)['steps'] as List).length,
       );
 
-      stdout.writeln('  $label → exit ${run['exit']}  '
-          '${units.length} units, $steps steps  '
-          '${codes.isEmpty ? 'no problems' : codes.join(', ')}');
+      stdout.writeln(
+        '  $label → exit ${run['exit']}  '
+        '${units.length} units, $steps steps  '
+        '${codes.isEmpty ? 'no problems' : codes.join(', ')}',
+      );
 
       // The one thing worth failing on: rk falling over on real input.
       if (codes.contains('RK-INT-001')) {
         crashed++;
-        final problem = problems.firstWhere(
-          (p) => (p as Map)['code'] == 'RK-INT-001',
-        ) as Map;
+        final problem =
+            problems.firstWhere((p) => (p as Map)['code'] == 'RK-INT-001')
+                as Map;
         stdout.writeln('    CRASH: ${problem['message']}');
         stdout.writeln('    evidence: ${run['diagnosis']}');
       }
@@ -85,8 +87,10 @@ Future<void> main(List<String> args) async {
       // Worth reading every time, because it is the gap the examples hide:
       // what a person is shown and what a caller is handed should agree.
       if (units.isEmpty && run['exit'] == 0) {
-        stdout.writeln('    (the document carries no units — a caller sees '
-            'nothing here)');
+        stdout.writeln(
+          '    (the document carries no units — a caller sees '
+          'nothing here)',
+        );
       }
     }
     stdout.writeln('');
@@ -103,11 +107,10 @@ Future<Map<String, Object?>?> _run(
   String directory,
   List<String> args,
 ) async {
-  final result = await Process.run(
-    Platform.resolvedExecutable,
-    [rk, ...args],
-    workingDirectory: directory,
-  );
+  final result = await Process.run(Platform.resolvedExecutable, [
+    rk,
+    ...args,
+  ], workingDirectory: directory);
   try {
     return jsonDecode(result.stdout as String) as Map<String, Object?>;
   } on Object {
@@ -125,8 +128,9 @@ bool codesIndexIsCurrent() {
   for (final dir in [Directory('lib'), Directory('bin')]) {
     for (final entry in dir.listSync(recursive: true)) {
       if (entry is! File || !entry.path.endsWith('.dart')) continue;
-      for (final m in RegExp(r"'(RK-[A-Z]+-\d+)'")
-          .allMatches(entry.readAsStringSync())) {
+      for (final m in RegExp(
+        r"'(RK-[A-Z]+-\d+)'",
+      ).allMatches(entry.readAsStringSync())) {
         declared.add(m.group(1)!);
       }
     }
@@ -137,10 +141,9 @@ bool codesIndexIsCurrent() {
     return false;
   }
   final source = index.readAsStringSync();
-  final listed = RegExp(r'`(RK-[A-Z]+-\d+)`')
-      .allMatches(source)
-      .map((m) => m.group(1)!)
-      .toSet();
+  final listed = RegExp(
+    r'`(RK-[A-Z]+-\d+)`',
+  ).allMatches(source).map((m) => m.group(1)!).toSet();
 
   final missing = declared.difference(listed).toList()..sort();
   // Both directions. Checking only that every declared code is listed lets a
@@ -154,12 +157,16 @@ bool codesIndexIsCurrent() {
     stderr.writeln('doc/codes.md does not list: ${missing.join(', ')}');
   }
   if (stale.isNotEmpty) {
-    stderr.writeln('doc/codes.md lists codes nothing declares: '
-        '${stale.join(', ')}');
+    stderr.writeln(
+      'doc/codes.md lists codes nothing declares: '
+      '${stale.join(', ')}',
+    );
   }
   if (claimed != null && int.parse(claimed.group(1)!) != listed.length) {
-    stderr.writeln('doc/codes.md says ${claimed.group(1)} codes and lists '
-        '${listed.length}');
+    stderr.writeln(
+      'doc/codes.md says ${claimed.group(1)} codes and lists '
+      '${listed.length}',
+    );
     return false;
   }
   return missing.isEmpty && stale.isEmpty;

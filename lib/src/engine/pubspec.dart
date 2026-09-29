@@ -54,6 +54,31 @@ class Pubspec {
   /// the package wants a signed binary shipped.
   final List<String> executables;
 
+  /// Native command-to-bin-script mapping. A null value means the same name.
+  Map<String, String> get executableScripts {
+    final result = <String, String>{};
+    for (final command in executables) {
+      final node = _nativeFields?.map('executables')?[command];
+      final value = node is YamlScalar ? node.value : null;
+      if (node != null &&
+          node is! YamlScalar &&
+          !(node is YamlMap && node.entries.isEmpty)) {
+        throw FormatException(
+          'Executable $command must name a bin script or be null.',
+        );
+      }
+      result[command] =
+          value == null ||
+              value.isEmpty ||
+              (node is YamlScalar &&
+                  !node.quoted &&
+                  const {'null', 'Null', 'NULL', '~'}.contains(value))
+          ? command
+          : value;
+    }
+    return result;
+  }
+
   /// Dependency name to how it is required.
   final Map<String, Dependency> dependencies;
   final Map<String, Dependency> devDependencies;
@@ -83,11 +108,7 @@ class Pubspec {
     return cut < 0 ? '.' : path.substring(0, cut);
   }
 
-  static Pubspec? parse(
-    String source,
-    String path,
-    Diagnostics diagnostics,
-  ) {
+  static Pubspec? parse(String source, String path, Diagnostics diagnostics) {
     final doc = parseYaml(source, path, diagnostics);
     if (doc == null) return null;
 
@@ -201,10 +222,10 @@ class Dependency {
   const Dependency._(this.kind, this.constraint, this.location, this.line);
 
   const Dependency.hosted(String constraint, int line)
-      : this._(DependencyKind.hosted, constraint, null, line);
+    : this._(DependencyKind.hosted, constraint, null, line);
 
   const Dependency.path(String location, int line)
-      : this._(DependencyKind.path, null, location, line);
+    : this._(DependencyKind.path, null, location, line);
 
   const Dependency.git(int line) : this._(DependencyKind.git, null, null, line);
 
@@ -225,10 +246,10 @@ class Dependency {
 
   /// How the requirement reads, for a message about it.
   String describeRequirement() => switch (kind) {
-        DependencyKind.hosted => constraint ?? 'any version',
-        DependencyKind.path => 'a directory at $location',
-        DependencyKind.git => 'a git repository',
-      };
+    DependencyKind.hosted => constraint ?? 'any version',
+    DependencyKind.path => 'a directory at $location',
+    DependencyKind.git => 'a git repository',
+  };
 
   /// Whether [version] satisfies this dependency's constraint.
   ///

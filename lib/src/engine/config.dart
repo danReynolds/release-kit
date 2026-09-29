@@ -17,8 +17,9 @@ class ReleaseConfig {
   /// The only schema version this build understands.
   static const supportedSchema = 2;
 
-  static final targetNames =
-      Set<String>.unmodifiable(PublishTarget.values.map((t) => t.configName));
+  static final targetNames = Set<String>.unmodifiable(
+    PublishTarget.values.map((t) => t.configName),
+  );
 
   /// The closed, enumerable platform vocabulary, matching public asset names.
   static const supportedPlatformsList = [
@@ -115,7 +116,8 @@ class _Reader {
           'RK-CONF-037',
           '$key is empty',
           source: value.locationOf(key),
-          remedy: 'give it a value or remove the line — a blank setting is '
+          remedy:
+              'give it a value or remove the line — a blank setting is '
               'not the same as an absent one',
         );
         return null;
@@ -174,7 +176,8 @@ class _Reader {
         'RK-CONF-004',
         'release.toml declares no release units',
         source: SourceLocation(_path, 1),
-        remedy: 'add a unit, as in:\n'
+        remedy:
+            'add a unit, as in:\n'
             '  [release.core]\n'
             '  path = "packages/keybay"\n'
             '  publish = ["pub.dev"]',
@@ -204,7 +207,8 @@ class _Reader {
         'RK-CONF-006',
         'unit name "$name" is not usable',
         source: location,
-        remedy: 'start with a lowercase letter, then lowercase letters, '
+        remedy:
+            'start with a lowercase letter, then lowercase letters, '
             'digits, hyphens or underscores',
       );
       return null;
@@ -248,7 +252,8 @@ class _Reader {
         'RK-CONF-009',
         'unit "$name" declares a project inline and also as rows',
         source: location,
-        remedy: 'a unit with one project uses path/publish directly; a unit '
+        remedy:
+            'a unit with one project uses path/publish directly; a unit '
             'with several uses [[release.$name.project]] rows — not both',
       );
       return null;
@@ -266,7 +271,8 @@ class _Reader {
           'RK-CONF-038',
           '"${target.configName}" belongs to a project in "$name"',
           source: value.locationOf('publish'),
-          remedy: 'move it to the relevant [[release.$name.project]] row\n'
+          remedy:
+              'move it to the relevant [[release.$name.project]] row\n'
               'Run rk target ${target.configName} for a complete example.',
         );
       } else {
@@ -290,7 +296,8 @@ class _Reader {
           'RK-CONF-024',
           '${target.configName} needs ${prerequisite.configName}',
           source: value.locationOf('publish'),
-          remedy: 'add "${prerequisite.configName}", or drop '
+          remedy:
+              'add "${prerequisite.configName}", or drop '
               '"${target.configName}"\n'
               'Run rk target ${target.configName} for its requirements.',
         );
@@ -347,7 +354,8 @@ class _Reader {
         'RK-CONF-012',
         'unit "$name" releases several projects, so its tag cannot be derived',
         source: location,
-        remedy: 'a set of packages has no canonical name — declare one, as in '
+        remedy:
+            'a set of packages has no canonical name — declare one, as in '
             'tag = "$name-v{version}"',
       );
       return null;
@@ -378,7 +386,8 @@ class _Reader {
           'RK-CONF-024',
           'homebrew needs ${prerequisite.configName}',
           source: homebrewProjects.first.location,
-          remedy: 'add "${prerequisite.configName}" and its prerequisites '
+          remedy:
+              'add "${prerequisite.configName}" and its prerequisites '
               'to the unit publish list, or drop "homebrew"\n'
               'Run rk target homebrew for a complete example.',
         );
@@ -389,7 +398,8 @@ class _Reader {
             'RK-CONF-025',
             'a Homebrew project in "$name" names no binary platforms',
             source: project.location,
-            remedy: 'add binary_platforms, or drop "homebrew"\n'
+            remedy:
+                'add binary_platforms, or drop "homebrew"\n'
                 'Run rk target homebrew for supported values and an example.',
           );
         }
@@ -414,7 +424,8 @@ class _Reader {
         'RK-CONF-040',
         'homebrew_tap must be a GitHub owner/repository',
         source: value.locationOf('homebrew_tap'),
-        remedy: 'use a coordinate such as "some-org/homebrew-tools"; '
+        remedy:
+            'use a coordinate such as "some-org/homebrew-tools"; '
             'omit it for the conventional owner/homebrew-tap\n'
             'Run rk target homebrew for the inferred default and example.',
       );
@@ -493,7 +504,7 @@ class _Reader {
       'path',
       'publish',
       'binary_platforms',
-      'dart_defines_from_pubspec'
+      'dart_defines_from_pubspec',
     };
     const unitLevel = {'tag', 'project', 'homebrew_tap'};
     for (final key in table.keys) {
@@ -507,7 +518,7 @@ class _Reader {
         source: table.locationOf(key),
         remedy: unitLevel.contains(key)
             ? 'a unit releases its projects under one $key — move it up to '
-                '[release.$unit]'
+                  '[release.$unit]'
             : 'a project holds ${known.join(', ')}',
       );
     }
@@ -530,22 +541,28 @@ class _Reader {
       }
     }
 
-    final projectPublish =
-        selected.where((target) => target.scope == TargetScope.project).toSet();
+    final projectPublish = selected
+        .where((target) => target.scope == TargetScope.project)
+        .toSet();
     final platforms = _platforms(unit, table, location);
     if (platforms == null) return null;
 
     final defines = table['dart_defines_from_pubspec'] ?? <String>[];
     if (defines is! List ||
-        defines.any((value) =>
-            value is! String ||
-            !RegExp(r'^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$')
-                .hasMatch(value)) ||
+        defines.any(
+          (value) =>
+              value is! String ||
+              !RegExp(
+                r'^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$',
+              ).hasMatch(value),
+        ) ||
         defines.toSet().length != defines.length ||
         (defines.isNotEmpty && platforms.isEmpty)) {
-      _diagnostics.add('RK-CONF-041',
-          'dart_defines_from_pubspec must contain unique dotted field names for a binary project',
-          source: table.locationOf('dart_defines_from_pubspec'));
+      _diagnostics.add(
+        'RK-CONF-041',
+        'dart_defines_from_pubspec must contain unique dotted field names for a binary project',
+        source: table.locationOf('dart_defines_from_pubspec'),
+      );
       return null;
     }
     return ProjectConfig(
@@ -557,11 +574,7 @@ class _Reader {
     );
   }
 
-  String? _projectPath(
-    String unit,
-    TomlTable table,
-    SourceLocation location,
-  ) {
+  String? _projectPath(String unit, TomlTable table, SourceLocation location) {
     // An omitted path means the repository root, where release.toml lives.
     if (!table.has('path')) return '.';
     final value = table['path'];
@@ -587,8 +600,10 @@ class _Reader {
   }
 
   static String _canonical(String path) {
-    final parts =
-        path.split('/').where((p) => p.isNotEmpty && p != '.').toList();
+    final parts = path
+        .split('/')
+        .where((p) => p.isNotEmpty && p != '.')
+        .toList();
     return parts.isEmpty ? '.' : parts.join('/');
   }
 
@@ -628,7 +643,8 @@ class _Reader {
           'RK-CONF-022',
           'unknown target "$name"',
           source: table.locationOf('publish'),
-          remedy: 'rk publishes to ${ReleaseConfig.targetNames.join(', ')}\n'
+          remedy:
+              'rk publishes to ${ReleaseConfig.targetNames.join(', ')}\n'
               'Run rk target list to see what each choice does.',
         );
         return null;
@@ -688,6 +704,4 @@ class _Reader {
   }
 }
 
-final RegExp _githubCoordinate = RegExp(
-  r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$',
-);
+final RegExp _githubCoordinate = RegExp(r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$');

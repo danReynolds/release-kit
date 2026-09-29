@@ -20,8 +20,9 @@ sealed class YamlNode {
 }
 
 class YamlScalar extends YamlNode {
-  const YamlScalar(this.value, super.line);
+  const YamlScalar(this.value, super.line, {this.quoted = false});
   final String value;
+  final bool quoted;
 }
 
 class YamlMap extends YamlNode {
@@ -68,7 +69,7 @@ YamlMap? parseYaml(String source, String path, Diagnostics diagnostics) {
 
 class _Parser {
   _Parser(String source, this._path, this._diagnostics)
-      : _lines = source.split('\n');
+    : _lines = source.split('\n');
 
   final List<String> _lines;
   final String _path;
@@ -223,7 +224,11 @@ class _Parser {
         // ever written this way.
         asMap.entries[key] = YamlScalar(_blockScalar(at), line);
       } else {
-        asMap.entries[key] = YamlScalar(_unquote(rest), line);
+        asMap.entries[key] = YamlScalar(
+          _unquote(rest),
+          line,
+          quoted: rest.startsWith('"') || rest.startsWith("'"),
+        );
       }
     }
 

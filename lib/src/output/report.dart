@@ -19,7 +19,7 @@ class Report {
   final String command;
 
   /// Wire format version, bumped whenever the serialized contract changes.
-  static const schema = 10;
+  static const schema = 11;
 
   /// Units by name, in the order they were first mentioned.
   ///
@@ -35,6 +35,8 @@ class Report {
   Map<String, Object?>? _init;
   Map<String, Object?>? _cleanup;
   Map<String, Object?>? _plan;
+  Map<String, Object?>? _installations;
+  void installations(Map<String, Object?> value) => _installations = value;
   List<Map<String, Object?>>? _releaseChoices;
   Map<String, Object?>? _halt;
 
@@ -96,9 +98,9 @@ class Report {
   }
 
   Map<String, Object?> _entry(String name) => _units.putIfAbsent(
-        name,
-        () => {'name': name, 'steps': <Map<String, Object?>>[]},
-      );
+    name,
+    () => {'name': name, 'steps': <Map<String, Object?>>[]},
+  );
 
   /// Records a step under its own unit, keyed by [id].
   /// [verdict] is always written, and defaults to `unknown` rather than to
@@ -164,10 +166,9 @@ class Report {
     required List<Map<String, Object?>> artifacts,
   }) {
     final entry = _entry(unit);
-    final targets = entry.putIfAbsent(
-      'targets',
-      () => <Map<String, Object?>>[],
-    ) as List<Map<String, Object?>>;
+    final targets =
+        entry.putIfAbsent('targets', () => <Map<String, Object?>>[])
+            as List<Map<String, Object?>>;
     targets.removeWhere((target) => target['id'] == id);
     targets.add({
       'id': id,
@@ -222,15 +223,14 @@ class Report {
     Diagnostic diagnostic, {
     String? unit,
     String? target,
-  }) =>
-      {
-        if (unit != null) 'unit': unit,
-        if (target != null) 'target': target,
-        'code': diagnostic.code,
-        'message': diagnostic.message,
-        if (diagnostic.source != null) 'source': diagnostic.source.toString(),
-        if (diagnostic.remedy != null) 'remedy': diagnostic.remedy,
-      };
+  }) => {
+    if (unit != null) 'unit': unit,
+    if (target != null) 'target': target,
+    'code': diagnostic.code,
+    'message': diagnostic.message,
+    if (diagnostic.source != null) 'source': diagnostic.source.toString(),
+    if (diagnostic.remedy != null) 'remedy': diagnostic.remedy,
+  };
 
   /// The command that would advance things, as data rather than as formatting a
   /// caller would have to parse back out of prose.
@@ -264,12 +264,7 @@ class Report {
     required int found,
     required int removed,
   }) {
-    _cleanup = {
-      'root': root,
-      'path': path,
-      'found': found,
-      'removed': removed,
-    };
+    _cleanup = {'root': root, 'path': path, 'found': found, 'removed': removed};
   }
 
   /// Static reference entries reported by `rk target`.
@@ -288,11 +283,7 @@ class Report {
   /// is the answer for the run. Re-running is safe by construction — the
   /// same inspection precedes every act — so the document does not carry a
   /// field that could only ever say so.
-  void halt(
-    String kind,
-    String sentence, {
-    required bool helps,
-  }) {
+  void halt(String kind, String sentence, {required bool helps}) {
     _halt = {'kind': kind, 'sentence': sentence};
     if (!helps) rerunHelps = false;
   }
@@ -300,24 +291,5 @@ class Report {
   /// The document, with [exit] folded in so a caller that captured only stdout
   /// still knows how the process ended.
   String encode({required int exit}) =>
-      '${const JsonEncoder.withIndent('  ').convert({
-            'rk': schema,
-            'command': command,
-            if (mode.isNotEmpty) 'mode': mode,
-            'observed_at': DateTime.now().toUtc().toIso8601String(),
-            'exit': exit,
-            'rerun_helps': rerunHelps,
-            if (_repository != null) 'repository': _repository,
-            if (_init != null) 'init': _init,
-            if (_cleanup != null) 'cleanup': _cleanup,
-            if (_plan != null) 'plan': _plan,
-            if (_releaseChoices != null) 'release_choices': _releaseChoices,
-            'units': _units.values.toList(),
-            'problems': _problems,
-            'warnings': _warnings,
-            'next': _next,
-            if (attachments.isNotEmpty) 'attachments': attachments,
-            if (diagnosis != null) 'diagnosis': diagnosis,
-            if (_halt != null) 'halt': _halt,
-          })}\n';
+      '${const JsonEncoder.withIndent('  ').convert({'rk': schema, 'command': command, if (mode.isNotEmpty) 'mode': mode, 'observed_at': DateTime.now().toUtc().toIso8601String(), 'exit': exit, 'rerun_helps': rerunHelps, if (_repository != null) 'repository': _repository, if (_init != null) 'init': _init, if (_cleanup != null) 'cleanup': _cleanup, if (_plan != null) 'plan': _plan, if (_installations != null) 'installations': _installations, if (_releaseChoices != null) 'release_choices': _releaseChoices, 'units': _units.values.toList(), 'problems': _problems, 'warnings': _warnings, 'next': _next, if (attachments.isNotEmpty) 'attachments': attachments, if (diagnosis != null) 'diagnosis': diagnosis, if (_halt != null) 'halt': _halt})}\n';
 }

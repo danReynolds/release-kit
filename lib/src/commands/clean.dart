@@ -1,8 +1,12 @@
+import 'dart:convert';
 import 'dart:io';
 
+import '../engine/canonical_json.dart';
 import '../engine/diagnostic.dart';
+import '../engine/stage_receipt.dart';
 import '../engine/stage_store.dart';
 import '../output/output.dart';
+import '../transforms/digest.dart';
 
 /// Explicitly removes repository-local private release stages.
 ///
@@ -63,13 +67,26 @@ Usage
       output.blank();
       output.line(
         'remove',
-        note: '$found ${found == 1 ? 'stage' : 'stages'} · '
+        note:
+            '$found ${found == 1 ? 'stage' : 'stages'} · '
             '.rk/work/stages',
         depth: 1,
         labelWidth: 10,
         role: VisualRole.localWork,
         noteRole: VisualRole.secondary,
       );
+      for (final entry in inventory) {
+        output.line(
+          RegExp(r'^[0-9a-f]{64}$').hasMatch(entry.name)
+              ? entry.name.substring(0, 12)
+              : entry.name,
+          note: _describeEntry(entry),
+          depth: 2,
+          labelWidth: 16,
+          role: VisualRole.secondary,
+          noteRole: VisualRole.secondary,
+        );
+      }
       output.line(
         'keep',
         note: 'diagnoses · .rk/diagnosis',
@@ -79,21 +96,26 @@ Usage
         noteRole: VisualRole.secondary,
       );
       output.blank();
-      output.warning(const Diagnostic(
-        code: 'RK-CLEAN-005',
-        message: 'a partially completed release may need these exact staged '
-            'bytes to resume',
-      ));
+      output.warning(
+        const Diagnostic(
+          code: 'RK-CLEAN-005',
+          message:
+              'a partially completed release may need these exact staged '
+              'bytes to resume',
+        ),
+      );
 
       if (!yes) {
         final ask = confirm;
         if (ask == null) {
           output.blank();
-          output.problem(const Diagnostic(
-            code: 'RK-CLEAN-004',
-            message: 'nobody is here to authorize cleanup',
-            remedy: 'review the staged work above, then run rk clean --yes',
-          ));
+          output.problem(
+            const Diagnostic(
+              code: 'RK-CLEAN-004',
+              message: 'nobody is here to authorize cleanup',
+              remedy: 'review the staged work above, then run rk clean --yes',
+            ),
+          );
           output.report.next('rk clean --yes');
           return ExitCodes.refused;
         }
@@ -111,12 +133,15 @@ Usage
       final current = store.inventory();
       if (!_sameEntries(inventory, current)) {
         output.blank();
-        output.problem(const Diagnostic(
-          code: 'RK-CLEAN-003',
-          message: 'staged work changed while cleanup was being reviewed',
-          remedy: 'nothing was removed; run rk clean again to review the '
-              'current staged work',
-        ));
+        output.problem(
+          const Diagnostic(
+            code: 'RK-CLEAN-003',
+            message: 'staged work changed while cleanup was being reviewed',
+            remedy:
+                'nothing was removed; run rk clean again to review the '
+                'current staged work',
+          ),
+        );
         return ExitCodes.refused;
       }
 
@@ -134,13 +159,16 @@ Usage
       }
       if (removed != found) {
         output.blank();
-        output.problem(Diagnostic(
-          code: 'RK-CLEAN-003',
-          message: 'staged work changed while cleanup was running',
-          remedy: '$removed ${removed == 1 ? 'stage was' : 'stages were'} '
-              'removed; the changed entries were left alone. Run rk clean '
-              'again to review what remains.',
-        ));
+        output.problem(
+          Diagnostic(
+            code: 'RK-CLEAN-003',
+            message: 'staged work changed while cleanup was running',
+            remedy:
+                '$removed ${removed == 1 ? 'stage was' : 'stages were'} '
+                'removed; the changed entries were left alone. Run rk clean '
+                'again to review what remains.',
+          ),
+        );
         return ExitCodes.refused;
       }
 
@@ -152,36 +180,98 @@ Usage
       );
       return ExitCodes.ok;
     } on StageStoreBusy {
-      output.problem(const Diagnostic(
-        code: 'RK-CLEAN-002',
-        message: 'another rk command is using staged work',
-        remedy: 'let that command finish, then run rk clean again',
-      ));
+      output.problem(
+        const Diagnostic(
+          code: 'RK-CLEAN-002',
+          message: 'another rk command is using staged work',
+          remedy: 'let that command finish, then run rk clean again',
+        ),
+      );
       return ExitCodes.refused;
     } on StageStoreUnsafe catch (error) {
-      output.problem(Diagnostic(
-        code: 'RK-CLEAN-001',
-        message: 'the local stage path is not safe to clean',
-        remedy: '$error\nRK did not follow or remove the unexpected path.',
-      ));
+      output.problem(
+        Diagnostic(
+          code: 'RK-CLEAN-001',
+          message: 'the local stage path is not safe to clean',
+          remedy: '$error\nRK did not follow or remove the unexpected path.',
+        ),
+      );
       return ExitCodes.refused;
     } on FileSystemException catch (error) {
-      output.problem(Diagnostic(
-        code: 'RK-CLEAN-003',
-        message: 'local staged work could not be completely removed',
-        remedy: '$error\nReview .rk/work/stages, then run rk clean again.',
-      ));
+      output.problem(
+        Diagnostic(
+          code: 'RK-CLEAN-003',
+          message: 'local staged work could not be completely removed',
+          remedy: '$error\nReview .rk/work/stages, then run rk clean again.',
+        ),
+      );
       return ExitCodes.refused;
     } finally {
       lock?.close();
     }
   }
 
+  /// Receipt metadata helps identify the bytes being discarded. It does not
+  /// verify artifacts or establish whether a public release still needs them.
+  String _describeEntry(StageEntry entry) {
+    if (entry.type == FileSystemEntityType.link) {
+      return 'symbolic link · not followed';
+    }
+    if (entry.type != FileSystemEntityType.directory) {
+      return 'not a stage directory';
+    }
+    try {
+      final directory = '${store.path}/${entry.name}';
+      if (FileSystemEntity.typeSync(directory, followLinks: false) !=
+          FileSystemEntityType.directory) {
+        return 'stage directory changed';
+      }
+      final file = File('$directory/stage.json');
+      final type = FileSystemEntity.typeSync(file.path, followLinks: false);
+      if (type == FileSystemEntityType.notFound) return 'no stage receipt';
+      if (type != FileSystemEntityType.file) {
+        return 'stage receipt is not a regular file · not read';
+      }
+      if (file.lengthSync() > 4 * 1024 * 1024) {
+        return 'stage receipt too large to inspect';
+      }
+      final receipt = StageReceipt.parse(file.readAsStringSync());
+      if (receipt.identity.id != entry.name) {
+        return 'stage receipt belongs to another stage';
+      }
+      final plan = receipt.steps.lastOrNull?.evidence['release_plan'];
+      if (plan != null &&
+          Sha256.hex(utf8.encode(CanonicalJson.encode(plan))) !=
+              receipt.identity.planSha256) {
+        return 'recorded release plan does not match this stage';
+      }
+      final unit = plan is Map ? plan['unit'] : null;
+      final commit = receipt.identity.headCommit;
+      return [
+        if (unit is Map && unit['name'] is String && unit['version'] is String)
+          '${unit['name']} ${unit['version']}',
+        if (commit != null)
+          'commit ${commit.substring(0, 7)}'
+        else
+          'unbound source',
+        receipt.complete ? 'completion recorded' : 'incomplete stage',
+      ].join(' · ');
+    } on Object {
+      // A broken or obsolete receipt must remain cleanable. Cleanup neither
+      // follows its artifact paths nor treats missing metadata as approval.
+      return 'unreadable stage receipt';
+    }
+  }
+
   void _heading() {
     final separator = Platform.pathSeparator;
     final parts = store.repositoryRoot.split(separator);
-    output.heading(parts.lastWhere((part) => part.isNotEmpty,
-        orElse: () => store.repositoryRoot));
+    output.heading(
+      parts.lastWhere(
+        (part) => part.isNotEmpty,
+        orElse: () => store.repositoryRoot,
+      ),
+    );
   }
 
   static bool _sameEntries(List<StageEntry> left, List<StageEntry> right) {

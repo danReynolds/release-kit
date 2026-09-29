@@ -42,20 +42,20 @@ class ReleaseManifestArtifact {
   factory ReleaseManifestArtifact.fromStage({
     required String publicName,
     required StageArtifact artifact,
-  }) =>
-      ReleaseManifestArtifact(
-        name: publicName,
-        type: artifact.type,
-        size: artifact.size,
-        sha256: artifact.sha256,
-      );
+  }) => ReleaseManifestArtifact(
+    name: publicName,
+    type: artifact.type,
+    size: artifact.size,
+    sha256: artifact.sha256,
+  );
 
   factory ReleaseManifestArtifact.fromJson(Object? value) {
-    final map = _strictMap(
-      value,
-      const {'name', 'sha256', 'size', 'type'},
-      'release artifact',
-    );
+    final map = _strictMap(value, const {
+      'name',
+      'sha256',
+      'size',
+      'type',
+    }, 'release artifact');
     final size = map['size'];
     if (size is! int) {
       throw const FormatException('artifact size is not an integer');
@@ -74,11 +74,11 @@ class ReleaseManifestArtifact {
   final String sha256;
 
   Map<String, Object?> toJson() => {
-        'name': name,
-        'sha256': sha256,
-        'size': size,
-        'type': type,
-      };
+    'name': name,
+    'sha256': sha256,
+    'size': size,
+    'type': type,
+  };
 }
 
 /// One private staged Homebrew file and the tap path that will receive it.
@@ -98,16 +98,12 @@ final class StagedHomebrewBinding {
   }
 
   factory StagedHomebrewBinding.fromEvidence(Object? value) {
-    final map = _strictMap(
-      value,
-      const {
-        'path',
-        'project',
-        'staged_path',
-        'tap',
-      },
-      'staged Homebrew binding',
-    );
+    final map = _strictMap(value, const {
+      'path',
+      'project',
+      'staged_path',
+      'tap',
+    }, 'staged Homebrew binding');
     return StagedHomebrewBinding(
       project: _string(map, 'project'),
       tap: _string(map, 'tap'),
@@ -124,11 +120,11 @@ final class StagedHomebrewBinding {
   String get identity => _homebrewIdentity(project, tap, path);
 
   Map<String, Object?> toEvidence() => {
-        'path': path,
-        'project': project,
-        'staged_path': stagedPath,
-        'tap': tap,
-      };
+    'path': path,
+    'project': project,
+    'staged_path': stagedPath,
+    'tap': tap,
+  };
 
   ReleaseManifestHomebrew bind(StageArtifact artifact) {
     if (artifact.path != stagedPath) {
@@ -175,27 +171,22 @@ class ReleaseManifestHomebrew {
     required String tap,
     required String path,
     required StageArtifact artifact,
-  }) =>
-      ReleaseManifestHomebrew(
-        project: project,
-        tap: tap,
-        path: path,
-        size: artifact.size,
-        sha256: artifact.sha256,
-      );
+  }) => ReleaseManifestHomebrew(
+    project: project,
+    tap: tap,
+    path: path,
+    size: artifact.size,
+    sha256: artifact.sha256,
+  );
 
   factory ReleaseManifestHomebrew.fromJson(Object? value) {
-    final map = _strictMap(
-      value,
-      const {
-        'path',
-        'project',
-        'sha256',
-        'size',
-        'tap',
-      },
-      'Homebrew binding',
-    );
+    final map = _strictMap(value, const {
+      'path',
+      'project',
+      'sha256',
+      'size',
+      'tap',
+    }, 'Homebrew binding');
     final size = map['size'];
     if (size is! int) {
       throw const FormatException('Homebrew formula size is not an integer');
@@ -224,16 +215,15 @@ class ReleaseManifestHomebrew {
     required String project,
     required String tap,
     required String path,
-  }) =>
-      this.project == project && this.tap == tap && this.path == path;
+  }) => this.project == project && this.tap == tap && this.path == path;
 
   Map<String, Object?> toJson() => {
-        'path': path,
-        'project': project,
-        'sha256': sha256,
-        'size': size,
-        'tap': tap,
-      };
+    'path': path,
+    'project': project,
+    'sha256': sha256,
+    'size': size,
+    'tap': tap,
+  };
 }
 
 /// The publishable release inventory.
@@ -250,9 +240,9 @@ class ReleaseManifest {
     required Iterable<ReleaseManifestArtifact> artifacts,
     this.homebrew,
   }) : artifacts = List<ReleaseManifestArtifact>.unmodifiable(
-          artifacts.toList()
-            ..sort((left, right) => left.name.compareTo(right.name)),
-        ) {
+         artifacts.toList()
+           ..sort((left, right) => left.name.compareTo(right.name)),
+       ) {
     _requirePublicText('unit', unit);
     _requirePublicText('version', version);
     if (tag != null) _requirePublicText('tag', tag!);
@@ -273,24 +263,18 @@ class ReleaseManifest {
     if (schema != releaseManifestSchemaVersion) {
       throw FormatException('unsupported release manifest schema: $schema');
     }
-    final map = _strictMap(
-      decoded,
-      const {
-        'artifacts',
-        'homebrew',
-        'schema',
-        'source',
-        'tag',
-        'unit',
-        'version',
-      },
-      'release manifest',
-    );
-    final source = _strictMap(
-      map['source'],
-      const {'commit'},
-      'release source',
-    );
+    final map = _strictMap(decoded, const {
+      'artifacts',
+      'homebrew',
+      'schema',
+      'source',
+      'tag',
+      'unit',
+      'version',
+    }, 'release manifest');
+    final source = _strictMap(map['source'], const {
+      'commit',
+    }, 'release source');
     final artifacts = map['artifacts'];
     if (artifacts is! List) {
       throw const FormatException('manifest artifacts is not an array');
@@ -320,14 +304,14 @@ class ReleaseManifest {
   final ReleaseManifestHomebrew? homebrew;
 
   Map<String, Object?> toJson() => {
-        'artifacts': artifacts.map((artifact) => artifact.toJson()).toList(),
-        'homebrew': homebrew?.toJson(),
-        'schema': releaseManifestSchemaVersion,
-        'source': {'commit': commit},
-        'tag': tag,
-        'unit': unit,
-        'version': version,
-      };
+    'artifacts': artifacts.map((artifact) => artifact.toJson()).toList(),
+    'homebrew': homebrew?.toJson(),
+    'schema': releaseManifestSchemaVersion,
+    'source': {'commit': commit},
+    'tag': tag,
+    'unit': unit,
+    'version': version,
+  };
 
   String encode() => '${CanonicalJson.encode(toJson())}\n';
 
@@ -341,11 +325,7 @@ class ReleaseManifest {
   }
 }
 
-Map<String, Object?> _strictMap(
-  Object? value,
-  Set<String> keys,
-  String label,
-) {
+Map<String, Object?> _strictMap(Object? value, Set<String> keys, String label) {
   if (value is! Map) throw FormatException('$label is not an object');
   final map = <String, Object?>{};
   for (final entry in value.entries) {
@@ -374,11 +354,7 @@ void _requirePublicText(String label, String value) {
   }
 }
 
-String _homebrewIdentity(
-  String project,
-  String tap,
-  String path,
-) =>
+String _homebrewIdentity(String project, String tap, String path) =>
     '$project\u0000$tap\u0000$path';
 
 void _requireDestinationPath(String path) {
@@ -391,8 +367,9 @@ void _requireDestinationPath(String path) {
     throw ArgumentError('destination path must be relative and safe: $path');
   }
   final segments = path.split('/');
-  if (segments
-      .any((segment) => segment.isEmpty || segment == '.' || segment == '..')) {
+  if (segments.any(
+    (segment) => segment.isEmpty || segment == '.' || segment == '..',
+  )) {
     throw ArgumentError('destination path must be relative and safe: $path');
   }
   for (final segment in segments) {
@@ -402,9 +379,7 @@ void _requireDestinationPath(String path) {
 
 void _requireFormulaPath(String path) {
   _requireDestinationPath(path);
-  if (!RegExp(
-    r'^Formula/[a-z](?:[a-z0-9-]*[a-z0-9])?\.rb$',
-  ).hasMatch(path)) {
+  if (!RegExp(r'^Formula/[a-z](?:[a-z0-9-]*[a-z0-9])?\.rb$').hasMatch(path)) {
     throw ArgumentError(
       'Homebrew formula path must be Formula/<token>.rb: $path',
     );

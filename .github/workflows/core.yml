@@ -23,7 +23,8 @@ jobs:
           persist-credentials: false
       - uses: dart-lang/setup-dart@v1
         with:
-          sdk: stable
+          # Keep formatter output stable; functional tests use the current SDK.
+          sdk: 3.12.2
       - run: dart pub get
       - run: dart format --output=none --set-exit-if-changed .
       - run: dart analyze
@@ -31,7 +32,9 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    # Native terminal qualification follows the full suite and real Homebrew
+    # installation; slower macOS runners can need more than 15 minutes.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -49,3 +52,11 @@ jobs:
           # The Homebrew install test changes the host's Homebrew, so it runs
           # only on CI's disposable macOS runners.
           RK_BREW_INSTALL_TEST: ${{ matrix.os == 'macos-latest' && '1' || '' }}
+      - name: Qualify inline command flows
+        run: |
+          python3 -m venv .dart_tool/pty-env
+          .dart_tool/pty-env/bin/pip install -r tool/tui-requirements.txt
+          dart compile exe bin/rk.dart -o .dart_tool/rk-inline-check
+          .dart_tool/pty-env/bin/python tool/check_installation_tui.py .dart_tool/rk-inline-check
+          .dart_tool/pty-env/bin/python tool/check_installation_ux.py .dart_tool/rk-inline-check
+          .dart_tool/pty-env/bin/python tool/check_status_tui.py .dart_tool/rk-inline-check

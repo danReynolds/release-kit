@@ -43,7 +43,8 @@ class InitCommand {
   final Future<InitPlan?> Function(InitPlan plan)? select;
 
   /// Optional final review prompt with a path back to [select].
-  final Future<InitReviewDecision> Function(String prompt)? review;
+  final Future<InitReviewDecision> Function(String proposal, bool needsIgnore)?
+  review;
 
   /// Merge-safe filesystem update used by the real command. Tests may omit
   /// it and observe the complete proposed file through [write].
@@ -116,7 +117,8 @@ class InitCommand {
         Diagnostic(
           code: 'RK-INIT-002',
           message: 'release.toml already exists',
-          remedy: 'rk never edits one — a config is a decision already made. '
+          remedy:
+              'rk never edits one — a config is a decision already made. '
               'Change it by hand.',
         ),
       );
@@ -137,7 +139,8 @@ class InitCommand {
       return ExitCodes.refused;
     }
     final gitignore = gitBound ? tree.read('.gitignore') : null;
-    final needsIgnore = gitBound &&
+    final needsIgnore =
+        gitBound &&
         (gitignore == null ||
             !gitignore.split('\n').any((l) => l.trim() == '.rk/'));
     while (true) {
@@ -155,36 +158,41 @@ class InitCommand {
 
       final reasons = _reasons(plan);
       if (plan.included.isEmpty) {
-        output.problem(Diagnostic(
-          code: 'RK-INIT-003',
-          message: 'nothing here can be released',
-          remedy: reasons.isEmpty
-              ? 'no discovered pubspec.yaml declares a releasable package'
-              : reasons.join('\n'),
-        ));
+        output.problem(
+          Diagnostic(
+            code: 'RK-INIT-003',
+            message: 'nothing here can be released',
+            remedy: reasons.isEmpty
+                ? 'no discovered pubspec.yaml declares a releasable package'
+                : reasons.join('\n'),
+          ),
+        );
         return ExitCodes.ok;
       }
 
-      output.blank();
-      output.line(
-        '${plan.included.length} selected '
-        '${plan.included.length == 1 ? 'unit' : 'units'}',
-        role: VisualRole.checkpoint,
-        strong: true,
-      );
-      for (final candidate in plan.included) {
+      if (review == null) {
+        output.blank();
         output.line(
-          candidate.unit,
-          depth: 1,
-          labelWidth: 22,
-          note: '${candidate.version} · path ${candidate.path}'
-              '${candidate.executables.isEmpty ? '' : ' · executable '
-                  '${candidate.executables.join(', ')}'}',
-          noteRole: VisualRole.secondary,
+          '${plan.included.length} selected '
+          '${plan.included.length == 1 ? 'unit' : 'units'}',
+          role: VisualRole.checkpoint,
+          strong: true,
         );
-      }
-      for (final reason in reasons) {
-        output.say(reason, depth: 1, role: VisualRole.secondary);
+        for (final candidate in plan.included) {
+          output.line(
+            candidate.unit,
+            depth: 1,
+            labelWidth: 22,
+            note:
+                '${candidate.version} · path ${candidate.path}'
+                '${candidate.executables.isEmpty ? '' : ' · executable '
+                          '${candidate.executables.join(', ')}'}',
+            noteRole: VisualRole.secondary,
+          );
+        }
+        for (final reason in reasons) {
+          output.say(reason, depth: 1, role: VisualRole.secondary);
+        }
       }
 
       final proposal = plan.renderToml();
@@ -193,12 +201,15 @@ class InitCommand {
       if (parsed != null) Resolution.resolve(parsed, tree, problems);
       if (problems.isNotEmpty) {
         output.blank();
-        output.problem(Diagnostic(
-          code: 'RK-INIT-001',
-          message: 'the config rk would propose is one rk itself refuses',
-          remedy: 'write release.toml by hand — the refusals below say what '
-              'the proposal got wrong',
-        ));
+        output.problem(
+          Diagnostic(
+            code: 'RK-INIT-001',
+            message: 'the config rk would propose is one rk itself refuses',
+            remedy:
+                'write release.toml by hand — the refusals below say what '
+                'the proposal got wrong',
+          ),
+        );
         output.problems(problems.found);
         output.report.attach('release.toml.refused', proposal);
         output.report.rerunHelps = false;
@@ -209,12 +220,14 @@ class InitCommand {
       }
 
       output.report.attach('release.toml', proposal);
-      output.blank();
-      for (final line in proposal.split('\n')) {
-        output.say(line, depth: 1, role: VisualRole.secondary);
-      }
-      if (needsIgnore) {
-        output.say('and add .rk/ to .gitignore', depth: 1);
+      if (review == null) {
+        output.blank();
+        for (final line in proposal.split('\n')) {
+          output.say(line, depth: 1, role: VisualRole.secondary);
+        }
+        if (needsIgnore) {
+          output.say('and add .rk/ to .gitignore', depth: 1);
+        }
       }
 
       if (confirm == null && review == null) {
@@ -229,13 +242,15 @@ class InitCommand {
           : 'write release.toml? [Y/n/b] ';
       final decision = review == null
           ? await confirm!(prompt)
-              ? InitReviewDecision.write
-              : InitReviewDecision.cancel
-          : await review!(prompt);
+                ? InitReviewDecision.write
+                : InitReviewDecision.cancel
+          : await review!(proposal, needsIgnore);
       if (decision == InitReviewDecision.back && selector != null) continue;
       if (decision != InitReviewDecision.write) {
         output.say('nothing was written.');
-        output.next('rk init --write');
+        // Selections belong to this review. A fresh --write accepts the
+        // defaults, which may be different from the proposal just declined.
+        output.next('rk init');
         return ExitCodes.ok;
       }
 
@@ -244,20 +259,25 @@ class InitCommand {
         try {
           currentGitignore = tree.read('.gitignore');
         } on SourceUnreadable catch (error) {
-          output.problem(Diagnostic(
-            code: 'RK-INIT-005',
-            message: '.gitignore changed or became unreadable during init',
-            remedy: '${error.reason}\nnothing was written; review it and '
-                'run rk init again',
-          ));
+          output.problem(
+            Diagnostic(
+              code: 'RK-INIT-005',
+              message: '.gitignore changed or became unreadable during init',
+              remedy:
+                  '${error.reason}\nnothing was written; review it and '
+                  'run rk init again',
+            ),
+          );
           return ExitCodes.refused;
         }
         if (currentGitignore != gitignore) {
-          output.problem(const Diagnostic(
-            code: 'RK-INIT-005',
-            message: '.gitignore changed while init was being reviewed',
-            remedy: 'nothing was written; review it and run rk init again',
-          ));
+          output.problem(
+            const Diagnostic(
+              code: 'RK-INIT-005',
+              message: '.gitignore changed while init was being reviewed',
+              remedy: 'nothing was written; review it and run rk init again',
+            ),
+          );
           return ExitCodes.refused;
         }
       }
@@ -265,11 +285,13 @@ class InitCommand {
       try {
         write('release.toml', proposal);
       } on Object catch (error) {
-        output.problem(Diagnostic(
-          code: 'RK-INIT-004',
-          message: 'release.toml appeared before rk could write it',
-          remedy: '$error\nrk will not overwrite it; review that file',
-        ));
+        output.problem(
+          Diagnostic(
+            code: 'RK-INIT-004',
+            message: 'release.toml appeared before rk could write it',
+            remedy: '$error\nrk will not overwrite it; review that file',
+          ),
+        );
         return ExitCodes.refused;
       }
       output.report.acted = true;
@@ -282,16 +304,19 @@ class InitCommand {
             final lead = currentGitignore == null
                 ? ''
                 : currentGitignore.endsWith('\n')
-                    ? currentGitignore
-                    : '$currentGitignore\n';
+                ? currentGitignore
+                : '$currentGitignore\n';
             write('.gitignore', '$lead.rk/\n');
           }
         } on Object catch (error) {
-          output.problem(Diagnostic(
-            code: 'RK-INIT-006',
-            message: 'release.toml was written but .gitignore was not updated',
-            remedy: '$error\nadd .rk/ to .gitignore by hand',
-          ));
+          output.problem(
+            Diagnostic(
+              code: 'RK-INIT-006',
+              message:
+                  'release.toml was written but .gitignore was not updated',
+              remedy: '$error\nadd .rk/ to .gitignore by hand',
+            ),
+          );
           return ExitCodes.refused;
         }
       }
@@ -301,8 +326,10 @@ class InitCommand {
         output.line('.rk/ added to .gitignore', mark: Mark.done);
       }
       output.next('rk status');
-      output.say('Learn about release choices and customization: '
-          'rk target list');
+      output.say(
+        'Learn about release choices and customization: '
+        'rk target list',
+      );
       return ExitCodes.ok;
     }
   }
@@ -315,15 +342,17 @@ class InitCommand {
       gitBound: gitBound,
       hasRemote: hasRemote ?? origin != null,
       githubRepository: origin,
-      platformCapabilities:
-          ReleaseConfig.supportedPlatformsList.map(capabilities.resolve),
+      platformCapabilities: ReleaseConfig.supportedPlatformsList.map(
+        capabilities.resolve,
+      ),
       ambientPubHostedUrl: ambientPubHostedUrl,
     );
     if (!gitBound) return plan;
     final tracked = tree
         .trackedFiles()
         .where(
-            (path) => path == 'pubspec.yaml' || path.endsWith('/pubspec.yaml'))
+          (path) => path == 'pubspec.yaml' || path.endsWith('/pubspec.yaml'),
+        )
         .toSet();
     final untracked = _untrackedManifests(tracked);
     if (untracked.isEmpty) return plan;
@@ -344,13 +373,13 @@ class InitCommand {
   }
 
   List<String> _reasons(InitPlan plan) => {
-        ...plan.notices,
-        ...plan.binaryPlatformNotices,
-        for (final candidate in plan.candidates)
-          if (!plan.included.contains(candidate))
-            '${candidate.name}: '
-                '${_excludedReason(candidate)}',
-      }.toList();
+    ...plan.notices,
+    ...plan.binaryPlatformNotices,
+    for (final candidate in plan.candidates)
+      if (!plan.included.contains(candidate))
+        '${candidate.name}: '
+            '${_excludedReason(candidate)}',
+  }.toList();
 
   String _excludedReason(InitCandidate candidate) {
     final registry = candidate.availability[ReleaseChoice.pubDev]!;
@@ -381,9 +410,8 @@ extension on InitCommand {
     if (root == null) return null;
     final packages = Directory('$root/packages');
     if (!packages.existsSync()) return null;
-    return packages
-        .listSync()
-        .whereType<Directory>()
-        .map((d) => 'packages/${d.path.split('/').last}/pubspec.yaml');
+    return packages.listSync().whereType<Directory>().map(
+      (d) => 'packages/${d.path.split('/').last}/pubspec.yaml',
+    );
   }
 }

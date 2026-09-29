@@ -21,11 +21,68 @@ void main() {
   setUpAll(() => scratch = Directory.systemTemp.createTempSync('rk-cli-'));
   tearDownAll(() => scratch.deleteSync(recursive: true));
 
+  group('focused command help before repository discovery', () {
+    late Rk loose;
+    setUpAll(() {
+      final directory = Directory('${scratch.path}/help-only')..createSync();
+      loose = Rk(directory.path);
+    });
+
+    test('bare --help remains the command index', () {
+      final run = loose(['--help']);
+      expect(run.code, 0, reason: run.all);
+      expect(run.all, contains('rk use [source]'));
+      expect(run.all, contains('rk init'));
+      expect(run.all, contains('rk plan [unit]'));
+    });
+
+    for (final (command, explanation) in [
+      ('init', 'write the default configuration without opening the selector'),
+      (
+        'status',
+        'Check configured release destinations and local staged artifacts.',
+      ),
+      ('plan', 'no destination checks, builds, or changes.'),
+      ('release', 'Public changes require'),
+    ]) {
+      test('$command help explains its scope without the global index', () {
+        final run = loose([command, '--help']);
+        expect(run.code, 0, reason: run.all);
+        expect(run.all, contains('rk $command'));
+        expect(run.all, contains(explanation));
+        expect(run.all, contains('Example: rk $command'));
+        expect(run.all, isNot(contains('rk uninstall [source]')));
+        expect(run.all, isNot(contains('no release.toml')));
+        if (command != 'init') {
+          expect(run.all, contains('[release.<unit>]'));
+          expect(run.all, contains('pubspec.yaml'));
+        }
+        final machine = loose([command, '--help', '--json']);
+        expect(machine.code, 0, reason: machine.all);
+        expect((machine.json['next'] as List).single, run.stdout.trim());
+      });
+    }
+
+    test('usage errors explain only the command that was attempted', () {
+      for (final args in [
+        ['init', 'tool'],
+        ['init', '--yes'],
+        ['init', '--unknown'],
+      ]) {
+        final run = loose([...args, '--json']);
+        expect(run.code, 2, reason: run.all);
+        final remedy = run.problems.single['remedy'] as String;
+        expect(remedy, contains('rk init [--write] [--json]'));
+        expect(remedy, isNot(contains('rk release [unit]')));
+      }
+      expect(Directory('${loose.root}/.rk').existsSync(), isFalse);
+      expect(File('${loose.root}/release.toml').existsSync(), isFalse);
+    });
+  });
+
   group('a release the repository cannot build is refused at resolve', () {
     late Run run;
-    setUpAll(
-      () => run = Rk.example(scratch, 'escapes-repository')(['status']),
-    );
+    setUpAll(() => run = Rk.example(scratch, 'escapes-repository')(['status']));
 
     test('it is refused, not released', () {
       expect(run.code, 1, reason: run.all);
@@ -68,7 +125,9 @@ void main() {
       expect(run.code, 2);
       expect(run.problems.map((p) => p['code']), contains('RK-CLI-008'));
       expect(
-          run.problems.single['message'], 'rk has no command named "verify"');
+        run.problems.single['message'],
+        'rk has no command named "verify"',
+      );
     });
 
     test('a unit name is scoped through status, not inferred as a command', () {
@@ -120,44 +179,50 @@ void main() {
     });
   });
 
-  test('the shipped form — a compiled binary, invoked by bare name — works',
-      () {
-    // Every other test drives `dart run bin/rk.dart`, which is not what a
-    // user installs. A compiled binary resolves Platform.script from
-    // argv[0]: passed a bare name, Dart resolves it against the current
-    // directory and names a file that is not there. rk read it anyway, so
-    // every stage inspection under an installed rk answered RK-STAGE-002 —
-    // and the alpha gate's consume step only runs --version and --help,
-    // which never inspect a stage, so nothing here would have caught it.
-    final compiled = '${scratch.path}/rk-compiled';
-    final built = Process.runSync(
-      Platform.resolvedExecutable,
-      ['compile', 'exe', 'bin/rk.dart', '-o', compiled],
-    );
-    expect(built.exitCode, 0, reason: '${built.stdout}${built.stderr}');
+  test(
+    'the shipped form — a compiled binary, invoked by bare name — works',
+    () {
+      // Every other test drives `dart run bin/rk.dart`, which is not what a
+      // user installs. A compiled binary resolves Platform.script from
+      // argv[0]: passed a bare name, Dart resolves it against the current
+      // directory and names a file that is not there. rk read it anyway, so
+      // every stage inspection under an installed rk answered RK-STAGE-002 —
+      // and the alpha gate's consume step only runs --version and --help,
+      // which never inspect a stage, so nothing here would have caught it.
+      final compiled = '${scratch.path}/rk-compiled';
+      final built = Process.runSync(Platform.resolvedExecutable, [
+        'compile',
+        'exe',
+        'bin/rk.dart',
+        '-o',
+        compiled,
+      ]);
+      expect(built.exitCode, 0, reason: '${built.stdout}${built.stderr}');
 
-    final repo = Rk.example(scratch, 'binary-cli', as: 'shipped')..commit();
-    // Committed: without a HEAD there is no stage to inspect, so the
-    // program identity is never computed and this proves nothing.
-    // `exec -a` is how a shell that passes a bare argv[0] invokes it. Use
-    // bash explicitly: Ubuntu's /bin/sh is dash, which has no -a option.
-    final run = Process.runSync(
-      '/bin/bash',
-      ['-c', 'exec -a rk "$compiled" status --json'],
-      workingDirectory: repo.root,
-    );
-    expect(run.exitCode, 0, reason: '${run.stdout}${run.stderr}');
-    final report = jsonDecode(run.stdout as String) as Map<String, Object?>;
-    final problems = ((report['problems'] as List?) ?? const [])
-        .cast<Map<String, Object?>>();
+      final repo = Rk.example(scratch, 'binary-cli', as: 'shipped')..commit();
+      // Committed: without a HEAD there is no stage to inspect, so the
+      // program identity is never computed and this proves nothing.
+      // `exec -a` is how a shell that passes a bare argv[0] invokes it. Use
+      // bash explicitly: Ubuntu's /bin/sh is dash, which has no -a option.
+      final run = Process.runSync('/bin/bash', [
+        '-c',
+        'exec -a rk "$compiled" status --json',
+      ], workingDirectory: repo.root);
+      expect(run.exitCode, 0, reason: '${run.stdout}${run.stderr}');
+      final report = jsonDecode(run.stdout as String) as Map<String, Object?>;
+      final problems = ((report['problems'] as List?) ?? const [])
+          .cast<Map<String, Object?>>();
 
-    expect(
-      problems.map((problem) => problem['code']),
-      isNot(contains('RK-STAGE-002')),
-      reason: 'the running program must be able to identify itself: '
-          '${run.stdout}${run.stderr}',
-    );
-  }, timeout: const Timeout(Duration(minutes: 3)));
+      expect(
+        problems.map((problem) => problem['code']),
+        isNot(contains('RK-STAGE-002')),
+        reason:
+            'the running program must be able to identify itself: '
+            '${run.stdout}${run.stderr}',
+      );
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
 
   test('--version identifies the binary without repository preparation', () {
     final loose = Directory('${scratch.path}/version-only')..createSync();
@@ -203,8 +268,7 @@ publish_to: none
 executables:
   plan: plan_cli
 ''',
-      })
-        ..commit();
+      })..commit();
     });
 
     test('reports the configured graph without creating local state', () {
@@ -214,22 +278,28 @@ executables:
       final run = repo(['plan', '--json']);
 
       expect(run.code, 0, reason: run.all);
-      expect(run.json['rk'], 10);
+      expect(run.json['rk'], 11);
       expect(run.json['command'], 'plan');
-      expect(run.units, isEmpty,
-          reason: 'runtime observations do not masquerade as plan steps');
+      expect(
+        run.units,
+        isEmpty,
+        reason: 'runtime observations do not masquerade as plan steps',
+      );
       final plan = run.json['plan']! as Map<String, Object?>;
       expect(plan['source_only'], isTrue);
       expect(plan['destinations_inspected'], isFalse);
       final units = (plan['units']! as List).cast<Map<String, Object?>>();
       expect(units.map((unit) => unit['name']), ['lib', 'cli']);
-      final libNodes =
-          (units.first['nodes']! as List).cast<Map<String, Object?>>();
+      final libNodes = (units.first['nodes']! as List)
+          .cast<Map<String, Object?>>();
       final complete = libNodes.singleWhere(
         (node) => node['kind'] == 'completeStage',
       );
-      expect(complete['summary'], 'complete and validate stage',
-          reason: 'concise human copy must not weaken the JSON contract');
+      expect(
+        complete['summary'],
+        'complete and validate stage',
+        reason: 'concise human copy must not weaken the JSON contract',
+      );
       expect(
         jsonEncode(plan),
         allOf(
@@ -240,8 +310,11 @@ executables:
         ),
       );
       expect(jsonEncode(plan), isNot(contains('"verdict"')));
-      expect(scratchState.existsSync(), isFalse,
-          reason: 'planning neither stages nor records a diagnosis');
+      expect(
+        scratchState.existsSync(),
+        isFalse,
+        reason: 'planning neither stages nor records a diagnosis',
+      );
     });
 
     test('an unborn Git repository with no config is benign', () {
@@ -284,8 +357,7 @@ schema = 2
 publish = ["pub.dev"]
 ''',
         'pubspec.yaml': 'name: index_plan\nversion: 1.0.0\n',
-      })
-        ..commit();
+      })..commit();
       final manifest = File('${stable.root}/pubspec.yaml');
       manifest.setLastModifiedSync(DateTime.now().add(const Duration(days: 1)));
       final index = File('${stable.root}/.git/index');
@@ -298,8 +370,11 @@ publish = ["pub.dev"]
 
       expect(run.code, 0, reason: run.all);
       expect(index.readAsBytesSync(), before);
-      expect(index.lastModifiedSync(), beforeModified,
-          reason: 'a source-only plan must not refresh or rewrite .git/index');
+      expect(
+        index.lastModifiedSync(),
+        beforeModified,
+        reason: 'a source-only plan must not refresh or rewrite .git/index',
+      );
     });
 
     test('freezes and reports the current dirty topology consistently', () {
@@ -312,10 +387,10 @@ tag = "v{version}"
 publish = ["git-tag", "pub.dev"]
 ''',
         'pubspec.yaml': 'name: dirty_plan\nversion: 1.0.0\n',
-      })
-        ..commit();
-      File('${dirty.root}/pubspec.yaml')
-          .writeAsStringSync('name: dirty_plan\nversion: 1.1.0\n');
+      })..commit();
+      File(
+        '${dirty.root}/pubspec.yaml',
+      ).writeAsStringSync('name: dirty_plan\nversion: 1.1.0\n');
 
       final run = dirty(['plan', '--json']);
 
@@ -328,71 +403,76 @@ publish = ["git-tag", "pub.dev"]
       expect(Directory('${dirty.root}/.rk').existsSync(), isFalse);
     });
 
-    test('a Git-clean plan resolves immutable HEAD, not hidden worktree bytes',
-        () {
-      final clean = Rk.repository(scratch, 'plan-clean-head', {
-        'release.toml': '''
+    test(
+      'a Git-clean plan resolves immutable HEAD, not hidden worktree bytes',
+      () {
+        final clean = Rk.repository(scratch, 'plan-clean-head', {
+          'release.toml': '''
 schema = 2
 
 [release.lib]
 publish = ["pub.dev"]
 ''',
-        'pubspec.yaml': 'name: clean_head_plan\nversion: 1.0.0\n',
-      })
-        ..commit();
-      final hidden = Process.runSync(
-        'git',
-        ['update-index', '--assume-unchanged', 'pubspec.yaml'],
-        workingDirectory: clean.root,
-      );
-      expect(hidden.exitCode, 0, reason: '${hidden.stdout}${hidden.stderr}');
-      File('${clean.root}/pubspec.yaml')
-          .writeAsStringSync('name: clean_head_plan\nversion: 9.9.9\n');
-      final status = Process.runSync(
-        'git',
-        ['status', '--porcelain'],
-        workingDirectory: clean.root,
-      );
-      expect(status.exitCode, 0, reason: '${status.stdout}${status.stderr}');
-      expect(status.stdout, isEmpty,
-          reason: 'the fixture must exercise bytes hidden from Git status');
+          'pubspec.yaml': 'name: clean_head_plan\nversion: 1.0.0\n',
+        })..commit();
+        final hidden = Process.runSync('git', [
+          'update-index',
+          '--assume-unchanged',
+          'pubspec.yaml',
+        ], workingDirectory: clean.root);
+        expect(hidden.exitCode, 0, reason: '${hidden.stdout}${hidden.stderr}');
+        File(
+          '${clean.root}/pubspec.yaml',
+        ).writeAsStringSync('name: clean_head_plan\nversion: 9.9.9\n');
+        final status = Process.runSync('git', [
+          'status',
+          '--porcelain',
+        ], workingDirectory: clean.root);
+        expect(status.exitCode, 0, reason: '${status.stdout}${status.stderr}');
+        expect(
+          status.stdout,
+          isEmpty,
+          reason: 'the fixture must exercise bytes hidden from Git status',
+        );
 
-      final run = clean(['plan', '--json']);
+        final run = clean(['plan', '--json']);
 
-      expect(run.code, 0, reason: run.all);
-      expect((run.json['repository']! as Map)['uncommitted'], 0);
-      final encoded = jsonEncode(run.json['plan']);
-      expect(encoded, contains('clean_head_plan@1.0.0'));
-      expect(encoded, isNot(contains('clean_head_plan@9.9.9')),
-          reason: 'a plan Git describes as clean must use the same immutable '
-              'HEAD topology that release selects');
-      expect(Directory('${clean.root}/.rk').existsSync(), isFalse);
-    });
+        expect(run.code, 0, reason: run.all);
+        expect((run.json['repository']! as Map)['uncommitted'], 0);
+        final encoded = jsonEncode(run.json['plan']);
+        expect(encoded, contains('clean_head_plan@1.0.0'));
+        expect(
+          encoded,
+          isNot(contains('clean_head_plan@9.9.9')),
+          reason:
+              'a plan Git describes as clean must use the same immutable '
+              'HEAD topology that release selects',
+        );
+        expect(Directory('${clean.root}/.rk').existsSync(), isFalse);
+      },
+    );
 
     test('hidden worktree config cannot replace the clean HEAD definition', () {
       for (final replacement in <String, String?>{
         'missing': null,
         'invalid': 'this is not release configuration\n',
       }.entries) {
-        final clean = Rk.repository(
-          scratch,
-          'plan-clean-config-${replacement.key}',
-          {
-            'release.toml': '''
+        final clean =
+            Rk.repository(scratch, 'plan-clean-config-${replacement.key}', {
+              'release.toml': '''
 schema = 2
 
 [release.lib]
 publish = ["pub.dev"]
 ''',
-            'pubspec.yaml':
-                'name: clean_config_${replacement.key}\nversion: 1.0.0\n',
-          },
-        )..commit();
-        final hidden = Process.runSync(
-          'git',
-          ['update-index', '--skip-worktree', 'release.toml'],
-          workingDirectory: clean.root,
-        );
+              'pubspec.yaml':
+                  'name: clean_config_${replacement.key}\nversion: 1.0.0\n',
+            })..commit();
+        final hidden = Process.runSync('git', [
+          'update-index',
+          '--skip-worktree',
+          'release.toml',
+        ], workingDirectory: clean.root);
         expect(hidden.exitCode, 0, reason: '${hidden.stdout}${hidden.stderr}');
         final config = File('${clean.root}/release.toml');
         if (replacement.value == null) {
@@ -400,14 +480,16 @@ publish = ["pub.dev"]
         } else {
           config.writeAsStringSync(replacement.value!);
         }
-        final status = Process.runSync(
-          'git',
-          ['status', '--porcelain'],
-          workingDirectory: clean.root,
-        );
+        final status = Process.runSync('git', [
+          'status',
+          '--porcelain',
+        ], workingDirectory: clean.root);
         expect(status.exitCode, 0, reason: '${status.stdout}${status.stderr}');
-        expect(status.stdout, isEmpty,
-            reason: 'the fixture must hide the ${replacement.key} config');
+        expect(
+          status.stdout,
+          isEmpty,
+          reason: 'the fixture must hide the ${replacement.key} config',
+        );
 
         final run = clean(['plan', '--json']);
 
@@ -421,10 +503,9 @@ publish = ["pub.dev"]
             2,
             reason: '$command/${replacement.key}: ${scoped.all}',
           );
-          expect(
-            scoped.problems.map((problem) => problem['code']),
-            ['RK-CLI-003'],
-          );
+          expect(scoped.problems.map((problem) => problem['code']), [
+            'RK-CLI-003',
+          ]);
         }
       }
     });
@@ -452,24 +533,23 @@ publish = ["pub.dev"]
 ''',
         'actual-pubspec.yaml': 'name: manifest_link_plan\nversion: 1.0.0\n',
       });
-      Link('${manifestLink.root}/pubspec.yaml')
-          .createSync('actual-pubspec.yaml');
+      Link(
+        '${manifestLink.root}/pubspec.yaml',
+      ).createSync('actual-pubspec.yaml');
       manifestLink.commit();
 
       final configRun = configLink(['plan', '--json']);
       final manifestRun = manifestLink(['plan', '--json']);
 
       expect(configRun.code, 1, reason: configRun.all);
-      expect(
-        configRun.problems.map((problem) => problem['code']),
-        ['RK-CONF-034'],
-      );
+      expect(configRun.problems.map((problem) => problem['code']), [
+        'RK-CONF-034',
+      ]);
       expect(configRun.all, contains('symbolic link'));
       expect(manifestRun.code, 1, reason: manifestRun.all);
-      expect(
-        manifestRun.problems.map((problem) => problem['code']),
-        ['RK-SRC-003'],
-      );
+      expect(manifestRun.problems.map((problem) => problem['code']), [
+        'RK-SRC-003',
+      ]);
       expect(manifestRun.all, contains('symbolic link'));
 
       for (final (repo, expected) in [
@@ -479,80 +559,81 @@ publish = ["pub.dev"]
         for (final command in ['status', 'release']) {
           final run = repo([command, '--json']);
           expect(run.code, 1, reason: '$command: ${run.all}');
-          expect(
-            run.problems.map((problem) => problem['code']),
-            [expected],
-          );
+          expect(run.problems.map((problem) => problem['code']), [expected]);
           expect(run.all, isNot(contains('RK-INT-001')));
         }
       }
     });
 
-    test('shows Git-target topology before the repository has Git identity',
-        () {
-      final loose = Directory('${scratch.path}/plan-before-git')
-        ..createSync(recursive: true);
-      File('${loose.path}/release.toml').writeAsStringSync('''
+    test(
+      'shows Git-target topology before the repository has Git identity',
+      () {
+        final loose = Directory('${scratch.path}/plan-before-git')
+          ..createSync(recursive: true);
+        File('${loose.path}/release.toml').writeAsStringSync('''
 schema = 2
 
 [release.tool]
 tag = "v{version}"
 publish = ["git-tag", "github-release"]
 ''');
-      File('${loose.path}/pubspec.yaml').writeAsStringSync('''
+        File('${loose.path}/pubspec.yaml').writeAsStringSync('''
 name: plan_before_git
 version: 1.0.0
 publish_to: none
 ''');
 
-      final run = Rk(loose.path)(['plan', '--json']);
+        final run = Rk(loose.path)(['plan', '--json']);
 
-      expect(run.code, 0, reason: run.all);
-      expect(run.problems, isEmpty);
-      expect((run.json['repository']! as Map)['remote'], isNull);
-      final plan = run.json['plan']! as Map<String, Object?>;
-      expect(
-        jsonEncode(plan),
-        allOf(
-          contains('tool/tag/v1.0.0'),
-          contains('tool/stage/release-notes'),
-          contains('tool/github-release/v1.0.0'),
-        ),
-      );
-      expect(Directory('${loose.path}/.rk').existsSync(), isFalse);
-    });
+        expect(run.code, 0, reason: run.all);
+        expect(run.problems, isEmpty);
+        expect((run.json['repository']! as Map)['remote'], isNull);
+        final plan = run.json['plan']! as Map<String, Object?>;
+        expect(
+          jsonEncode(plan),
+          allOf(
+            contains('tool/tag/v1.0.0'),
+            contains('tool/stage/release-notes'),
+            contains('tool/github-release/v1.0.0'),
+          ),
+        );
+        expect(Directory('${loose.path}/.rk').existsSync(), isFalse);
+      },
+    );
 
-    test('unbound commands refuse a configured path through a symbolic link',
-        () {
-      if (Platform.isWindows) return;
-      final outside = Directory('${scratch.path}/plan-link-outside/project')
-        ..createSync(recursive: true);
-      File('${outside.path}/pubspec.yaml')
-          .writeAsStringSync('name: outside_plan\nversion: 1.0.0\n');
-      final loose = Directory('${scratch.path}/plan-link-root')
-        ..createSync(recursive: true);
-      File('${loose.path}/release.toml').writeAsStringSync('''
+    test(
+      'unbound commands refuse a configured path through a symbolic link',
+      () {
+        if (Platform.isWindows) return;
+        final outside = Directory('${scratch.path}/plan-link-outside/project')
+          ..createSync(recursive: true);
+        File(
+          '${outside.path}/pubspec.yaml',
+        ).writeAsStringSync('name: outside_plan\nversion: 1.0.0\n');
+        final loose = Directory('${scratch.path}/plan-link-root')
+          ..createSync(recursive: true);
+        File('${loose.path}/release.toml').writeAsStringSync('''
 schema = 2
 
 [release.lib]
 path = "packages/project"
 publish = ["pub.dev"]
 ''');
-      Link('${loose.path}/packages').createSync(outside.parent.path);
+        Link('${loose.path}/packages').createSync(outside.parent.path);
 
-      for (final command in ['plan', 'status', 'release']) {
-        final run = Rk(loose.path)([command, '--json']);
+        for (final command in ['plan', 'status', 'release']) {
+          final run = Rk(loose.path)([command, '--json']);
 
-        expect(run.code, 1, reason: '$command: ${run.all}');
-        expect(
-          run.problems.map((problem) => problem['code']),
-          ['RK-SRC-003'],
-        );
-        expect(run.json, isNot(contains('plan')));
-        expect(run.all, contains('symbolic link'));
-        expect(run.all, isNot(contains('RK-INT-001')));
-      }
-    });
+          expect(run.code, 1, reason: '$command: ${run.all}');
+          expect(run.problems.map((problem) => problem['code']), [
+            'RK-SRC-003',
+          ]);
+          expect(run.json, isNot(contains('plan')));
+          expect(run.all, contains('symbolic link'));
+          expect(run.all, isNot(contains('RK-INT-001')));
+        }
+      },
+    );
 
     test('unbound plan preserves an existing package directory in errors', () {
       final loose = Directory('${scratch.path}/plan-empty-project')
@@ -600,12 +681,10 @@ publish = ["pub.dev"]
     test('a release.toml directory is an error in every source binding', () {
       final clean = Rk.repository(scratch, 'plan-config-directory-clean', {
         'release.toml/entry': 'not a configuration file\n',
-      })
-        ..commit();
+      })..commit();
       final dirty = Rk.repository(scratch, 'plan-config-directory-dirty', {
         'release.toml': 'schema = 2\n',
-      })
-        ..commit();
+      })..commit();
       File('${dirty.root}/release.toml').deleteSync();
       File('${dirty.root}/release.toml/entry')
         ..createSync(recursive: true)
@@ -621,10 +700,9 @@ publish = ["pub.dev"]
           final run = repo([command, '--json']);
 
           expect(run.code, 1, reason: '$command: ${run.all}');
-          expect(
-            run.problems.map((problem) => problem['code']),
-            ['RK-CONF-034'],
-          );
+          expect(run.problems.map((problem) => problem['code']), [
+            'RK-CONF-034',
+          ]);
           expect(run.json, isNot(contains('plan')));
         }
       }
@@ -637,8 +715,8 @@ publish = ["pub.dev"]
       final plan = run.json['plan']! as Map<String, Object?>;
       final units = (plan['units']! as List).cast<Map<String, Object?>>();
       expect(units.map((unit) => unit['name']), ['cli']);
-      final nodes =
-          (units.single['nodes']! as List).cast<Map<String, Object?>>();
+      final nodes = (units.single['nodes']! as List)
+          .cast<Map<String, Object?>>();
       expect(nodes.map((node) => node['id']), contains('cli/stage/source'));
       expect(
         nodes.map((node) => node['id']),
@@ -673,7 +751,8 @@ publish = ["pub.dev"]
     test('a local output snapshots the worktree and warns', () {
       final platform = Platform.isMacOS ? 'macos-arm64' : 'linux-x64';
       final repo = Rk.repository(scratch, 'dirty-local-output', {
-        'release.toml': '''
+        'release.toml':
+            '''
 schema = 2
 
 [release.tool]
@@ -689,8 +768,7 @@ executables:
         'bin/tool.dart': 'void main() {}\n',
         'CHANGELOG.md': '## 1.0.0\n\nFirst release.\n',
         'README.md': 'committed\n',
-      })
-        ..commit();
+      })..commit();
       File('${repo.root}/README.md').writeAsStringSync('working tree\n');
 
       final run = repo(['status', '--json']);
@@ -704,40 +782,43 @@ executables:
       expect((run.json['repository'] as Map)['source_binding'], 'unbound');
     });
 
-    test('a Git target still refuses, without showing its code to a person',
-        () {
-      final repo = Rk.repository(scratch, 'dirty-git-target', {
-        'release.toml': '''
+    test(
+      'a Git target still refuses, without showing its code to a person',
+      () {
+        final repo = Rk.repository(scratch, 'dirty-git-target', {
+          'release.toml': '''
 schema = 2
 
 [release.tool]
 publish = ["git-tag"]
 ''',
-        'pubspec.yaml': '''
+          'pubspec.yaml': '''
 name: dirty_git_target
 version: 1.0.0
 publish_to: none
 ''',
-        'CHANGELOG.md': '## 1.0.0\n\nFirst release.\n',
-        'README.md': 'committed\n',
-      })
-        ..commit();
-      File('${repo.root}/README.md').writeAsStringSync('working tree\n');
+          'CHANGELOG.md': '## 1.0.0\n\nFirst release.\n',
+          'README.md': 'committed\n',
+        })..commit();
+        File('${repo.root}/README.md').writeAsStringSync('working tree\n');
 
-      final machine = repo(['status', '--json']);
-      final human = repo(['status']);
+        final machine = repo(['status', '--json']);
+        final human = repo(['status']);
 
-      expect(machine.code, 0, reason: machine.all);
-      expect(
-        machine.problems.map((problem) => problem['code']),
-        contains('RK-GIT-001'),
-      );
-      expect(machine.warnings, isEmpty);
-      expect(
-          (machine.json['repository'] as Map)['source_binding'], 'gitCommit');
-      expect(human.all, contains('1 path is uncommitted'));
-      expect(human.all, isNot(contains('RK-GIT-001')));
-    });
+        expect(machine.code, 0, reason: machine.all);
+        expect(
+          machine.problems.map((problem) => problem['code']),
+          contains('RK-GIT-001'),
+        );
+        expect(machine.warnings, isEmpty);
+        expect(
+          (machine.json['repository'] as Map)['source_binding'],
+          'gitCommit',
+        );
+        expect(human.all, contains('1 path is uncommitted'));
+        expect(human.all, isNot(contains('RK-GIT-001')));
+      },
+    );
   });
 
   test('a release.toml rk cannot read reports itself', () {
@@ -760,26 +841,29 @@ publish_to: none
     );
   });
 
-  test('a repository with no unit is answered by the config, not the parser',
-      () {
-    // There is no second answer for "no units": resolution already refuses
-    // with the table to add, which is more use than any usage line.
-    final empty = Rk.repository(scratch, 'no-units', {
-      'release.toml': 'schema = 2\n',
-    });
+  test(
+    'a repository with no unit is answered by the config, not the parser',
+    () {
+      // There is no second answer for "no units": resolution already refuses
+      // with the table to add, which is more use than any usage line.
+      final empty = Rk.repository(scratch, 'no-units', {
+        'release.toml': 'schema = 2\n',
+      });
 
-    final run = empty(['release', '--json']);
+      final run = empty(['release', '--json']);
 
-    expect(run.code, 1, reason: run.all);
-    expect(run.problems.map((problem) => problem['code']), ['RK-CONF-004']);
-    expect(run.all, contains('[release.core]'));
-    expect(
-      run.all,
-      isNot(contains('--write')),
-      reason: 'one missing word is answered with the missing word, not with '
-          'every flag rk has',
-    );
-  });
+      expect(run.code, 1, reason: run.all);
+      expect(run.problems.map((problem) => problem['code']), ['RK-CONF-004']);
+      expect(run.all, contains('[release.core]'));
+      expect(
+        run.all,
+        isNot(contains('--write')),
+        reason:
+            'one missing word is answered with the missing word, not with '
+            'every flag rk has',
+      );
+    },
+  );
 
   group('a repository rk has nothing to say about', () {
     test('no release.toml is not an error', () {
@@ -806,10 +890,12 @@ schema = 2
 [release.tool]
 publish = ["git-tag"]
 ''');
-      File('${loose.path}/pubspec.yaml')
-          .writeAsStringSync('name: tool\nversion: 1.0.0\n');
-      File('${loose.path}/CHANGELOG.md')
-          .writeAsStringSync('## 1.0.0\n\n- First release.\n');
+      File(
+        '${loose.path}/pubspec.yaml',
+      ).writeAsStringSync('name: tool\nversion: 1.0.0\n');
+      File(
+        '${loose.path}/CHANGELOG.md',
+      ).writeAsStringSync('## 1.0.0\n\n- First release.\n');
 
       final run = Rk(loose.path)(['status', '--json']);
       expect(run.code, 1, reason: run.all);
@@ -819,13 +905,16 @@ publish = ["git-tag"]
 
     test('non-Git init writes no Git-only file', () {
       final loose = Directory('${scratch.path}/loose-init')..createSync();
-      File('${loose.path}/pubspec.yaml')
-          .writeAsStringSync('name: tool\nversion: 1.0.0\n');
+      File(
+        '${loose.path}/pubspec.yaml',
+      ).writeAsStringSync('name: tool\nversion: 1.0.0\n');
 
       final run = Rk(loose.path)(['init', '--write']);
       expect(run.code, 0, reason: run.all);
-      expect(File('${loose.path}/release.toml').readAsStringSync(),
-          contains('publish = ["pub.dev"]'));
+      expect(
+        File('${loose.path}/release.toml').readAsStringSync(),
+        contains('publish = ["pub.dev"]'),
+      );
       expect(File('${loose.path}/.gitignore').existsSync(), isFalse);
     });
   });

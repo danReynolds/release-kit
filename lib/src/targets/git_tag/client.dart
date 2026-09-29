@@ -36,11 +36,11 @@ class GitTag {
   /// discipline each caller has to remember — the same shape the forge
   /// reader already uses for its own lookups.
   Future<TagPresence> onOrigin(String tag) async {
-    final result = await tools.run(
-      'git',
-      ['ls-remote', 'origin', 'refs/tags/$tag'],
-      workingDirectory: root,
-    );
+    final result = await tools.run('git', [
+      'ls-remote',
+      'origin',
+      'refs/tags/$tag',
+    ], workingDirectory: root);
     if (!result.ok) return TagUnreadable(result.summary);
     return result.stdout.contains('refs/tags/$tag')
         ? const TagListed()
@@ -59,11 +59,11 @@ class GitTag {
     }
     final ToolResult result;
     try {
-      result = await tools.run(
-        'git',
-        const ['ls-remote', '--tags', 'origin'],
-        workingDirectory: root,
-      );
+      result = await tools.run('git', const [
+        'ls-remote',
+        '--tags',
+        'origin',
+      ], workingDirectory: root);
     } on Object catch (error) {
       return Inspection.unknown('origin tags could not be read: $error');
     }
@@ -173,7 +173,7 @@ class GitTag {
       detail: parsed.peeled == null
           ? 'origin points at $expectedCommitId'
           : 'origin has tag object $expectedObjectId, peeled to '
-              '$expectedCommitId',
+                '$expectedCommitId',
       evidence: {
         'tag object': expectedObjectId,
         'source commit': expectedCommitId,
@@ -222,14 +222,16 @@ class GitTag {
 
     final ToolResult object;
     try {
-      object = await tools.run(
-        'git',
-        ['cat-file', 'tag', expectedObject],
-        workingDirectory: root,
-      );
+      object = await tools.run('git', [
+        'cat-file',
+        'tag',
+        expectedObject,
+      ], workingDirectory: root);
     } on Object catch (error) {
-      return TagManifestUnreadable('the annotated tag could not be read: '
-          '$error');
+      return TagManifestUnreadable(
+        'the annotated tag could not be read: '
+        '$error',
+      );
     }
     if (!object.ok) {
       return TagManifestUnreadable(
@@ -276,11 +278,11 @@ class GitTag {
     final expectedSource = expectedCommit.toLowerCase();
     final sourceMatches = remote.peeled == expectedSource;
 
-    final object = await tools.run(
-      'git',
-      ['cat-file', 'tag', remote.direct!],
-      workingDirectory: root,
-    );
+    final object = await tools.run('git', [
+      'cat-file',
+      'tag',
+      remote.direct!,
+    ], workingDirectory: root);
     if (!object.ok) {
       return Inspection.unknown(
         'origin\'s annotated tag object could not be read: ${object.summary}',
@@ -294,8 +296,7 @@ class GitTag {
         TagManifestMalformed(:final why) ||
         TagManifestConflict(:final why) ||
         TagManifestUnreadable(:final why) ||
-        TagManifestUnbound(:final why) =>
-          why,
+        TagManifestUnbound(:final why) => why,
         TagManifestBound() => 'unexpected manifest binding state',
       };
       return Inspection.conflict(
@@ -315,11 +316,10 @@ class GitTag {
     }
 
     if (requireSignature) {
-      final verified = await tools.run(
-        'git',
-        ['verify-tag', remote.direct!],
-        workingDirectory: root,
-      );
+      final verified = await tools.run('git', [
+        'verify-tag',
+        remote.direct!,
+      ], workingDirectory: root);
       if (!verified.ok) {
         return Inspection.conflict(
           'origin\'s release tag signature could not be verified',
@@ -382,11 +382,11 @@ class GitTag {
       );
     }
 
-    final object = await tools.run(
-      'git',
-      ['cat-file', 'tag', expectedObject],
-      workingDirectory: root,
-    );
+    final object = await tools.run('git', [
+      'cat-file',
+      'tag',
+      expectedObject,
+    ], workingDirectory: root);
     if (!object.ok) {
       return Inspection.unknown(
         'the local annotated tag object could not be read: ${object.summary}',
@@ -401,7 +401,8 @@ class GitTag {
       return Inspection.conflict(
         'the local release tag points at a different source commit',
         evidence: {
-          'source commit': 'local ${objectHeader?.group(1) ?? 'unreadable'}, '
+          'source commit':
+              'local ${objectHeader?.group(1) ?? 'unreadable'}, '
               'expected ${expectedCommit.toLowerCase()}',
         },
       );
@@ -415,8 +416,7 @@ class GitTag {
         TagManifestMalformed(:final why) ||
         TagManifestConflict(:final why) ||
         TagManifestUnreadable(:final why) ||
-        TagManifestUnbound(:final why) =>
-          why,
+        TagManifestUnbound(:final why) => why,
         TagManifestBound() => 'unexpected manifest binding state',
       };
       return Inspection.conflict(
@@ -436,11 +436,10 @@ class GitTag {
     }
 
     if (requireSignature) {
-      final verified = await tools.run(
-        'git',
-        ['verify-tag', expectedObject],
-        workingDirectory: root,
-      );
+      final verified = await tools.run('git', [
+        'verify-tag',
+        expectedObject,
+      ], workingDirectory: root);
       if (!verified.ok) {
         return Inspection.conflict(
           'the local release tag signature could not be verified',
@@ -464,18 +463,17 @@ class GitTag {
     final peeledRef = '$directRef^{}';
     final ToolResult result;
     try {
-      result = await tools.run(
-        'git',
-        ['ls-remote', 'origin', directRef, peeledRef],
-        workingDirectory: root,
-      );
+      result = await tools.run('git', [
+        'ls-remote',
+        'origin',
+        directRef,
+        peeledRef,
+      ], workingDirectory: root);
     } on Object catch (error) {
       return _RemoteTag(problem: 'origin could not be read: $error');
     }
     if (!result.ok) {
-      return _RemoteTag(
-        problem: 'origin could not be read: ${result.summary}',
-      );
+      return _RemoteTag(problem: 'origin could not be read: ${result.summary}');
     }
     return _RemoteTag.parse(
       result.stdout,
@@ -497,11 +495,11 @@ class GitTag {
   Future<bool?> hasSignature(String object) async {
     final ToolResult read;
     try {
-      read = await tools.run(
-        'git',
-        ['cat-file', 'tag', object],
-        workingDirectory: root,
-      );
+      read = await tools.run('git', [
+        'cat-file',
+        'tag',
+        object,
+      ], workingDirectory: root);
     } on Object {
       return null;
     }
@@ -510,23 +508,21 @@ class GitTag {
   }
 
   /// Whether git can authenticate [object]'s signature on this machine.
-  Future<ToolResult> verifySignature(String object) => tools.run(
-        'git',
-        ['verify-tag', object],
-        workingDirectory: root,
-      );
+  Future<ToolResult> verifySignature(String object) =>
+      tools.run('git', ['verify-tag', object], workingDirectory: root);
 
   /// Creates the tag locally, signed when the repository has a key.
   Future<ToolResult> create(
     String tag, {
     required bool signed,
     required String message,
-  }) =>
-      tools.run(
-        'git',
-        ['tag', if (signed) '-s' else '-a', tag, '-m', message],
-        workingDirectory: root,
-      );
+  }) => tools.run('git', [
+    'tag',
+    if (signed) '-s' else '-a',
+    tag,
+    '-m',
+    message,
+  ], workingDirectory: root);
 
   /// Resolves the immutable annotated-tag object currently named by [tag].
   ///
@@ -536,11 +532,11 @@ class GitTag {
   Future<({String? object, String? problem})> localObject(String tag) async {
     final ToolResult result;
     try {
-      result = await tools.run(
-        'git',
-        ['rev-parse', '--verify', 'refs/tags/$tag^{tag}'],
-        workingDirectory: root,
-      );
+      result = await tools.run('git', [
+        'rev-parse',
+        '--verify',
+        'refs/tags/$tag^{tag}',
+      ], workingDirectory: root);
     } on Object catch (error) {
       return (object: null, problem: '$error');
     }
@@ -564,11 +560,11 @@ class GitTag {
     if (!_isObjectId(object)) {
       throw ArgumentError.value(object, 'object', 'invalid Git object id');
     }
-    return tools.run(
-      'git',
-      ['push', 'origin', '${object.toLowerCase()}:refs/tags/$tag'],
-      workingDirectory: root,
-    );
+    return tools.run('git', [
+      'push',
+      'origin',
+      '${object.toLowerCase()}:refs/tags/$tag',
+    ], workingDirectory: root);
   }
 
   /// Removes a local tag only while it still names the object rk created.
@@ -580,11 +576,12 @@ class GitTag {
     if (!_isObjectId(object)) {
       throw ArgumentError.value(object, 'object', 'invalid Git object id');
     }
-    return tools.run(
-      'git',
-      ['update-ref', '-d', 'refs/tags/$tag', object.toLowerCase()],
-      workingDirectory: root,
-    );
+    return tools.run('git', [
+      'update-ref',
+      '-d',
+      'refs/tags/$tag',
+      object.toLowerCase(),
+    ], workingDirectory: root);
   }
 }
 
@@ -619,8 +616,9 @@ TagManifestBinding _manifestBindingIn(String tagObject) {
       'the annotated tag message has more than one manifest binding',
     );
   }
-  final match = RegExp(r'^release-manifest-sha256: ([0-9a-f]{64})$')
-      .firstMatch(candidates.single);
+  final match = RegExp(
+    r'^release-manifest-sha256: ([0-9a-f]{64})$',
+  ).firstMatch(candidates.single);
   if (match == null) {
     return const TagManifestMalformed(
       'the annotated tag message has a malformed manifest binding',

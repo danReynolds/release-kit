@@ -41,8 +41,8 @@ class PubDevTarget implements PublicationInspector {
     final unavailableReason = expectedArchiveSha256 == null
         ? 'no matching stage'
         : published.archiveSha256 == null
-            ? 'pub.dev did not provide an archive digest'
-            : 'archive proof was incomplete';
+        ? 'pub.dev did not provide an archive digest'
+        : 'archive proof was incomplete';
     return PublicReconciliation.appendOnly(
       label: 'the pub.dev archive',
       expected: const {'archive'},

@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+- Add an inline version table to `rk use`. Installed versions remain visible
+  while remote checks run independently. Install and Update are separate from
+  Use; Update appears only for a confirmed newer version. Navigation and checks
+  remain responsive during installation, with additional operations queued.
+- Open the release status matrix by default for `rk status` and bare `rk` in a
+  terminal. Explore stage and destination evidence with the same inspection
+  results used by the finite text and JSON reports.
+- Add project-scoped `use`, `install`, and `uninstall` commands for executable
+  packages, with Local, Homebrew, Pub, and public GitHub release sources.
+  Bare commands open inline Fleury pickers; explicit sources and JSON support scripts.
+  Local commands follow checkout edits, grouped commands switch together, and
+  installation listings distinguish RK selection from effective PATH resolution.
+- Replace init's terminal selector with the Fleury output matrix and a validated
+  configuration review. Selected outputs read “Added”. Require Dart 3.10.4 or newer.
+- Inline matrices keep the terminal background, use distinct active and focus
+  colors, fit their content, and omit duplicate command labels. Keyboard
+  navigation highlights one action; mouse capture stays disabled. Single-project actions close on success;
+  multi-project matrices keep focus and stay open until Done. Init retains its
+  configuration review, and unavailable choices explain why they cannot be used.
+- Inline commands leave shell history intact and restore the prompt before
+  reporting results. Ctrl+C and termination signals
+  preserve their exit status while cancellation waits for in-progress work.
+- Preserve the originating choice when returning from confirmation or details.
+  Long reviews and errors support paging from their actions; init exposes
+  discovery notes. Inspecting an unavailable source does not fail the command.
+- Show archive locations after local-only builds.
+- Add focused command help and one actionable next command for an unblocked
+  unfinished release. Cancelling a release describes the current unit accurately,
+  and cleanup lists recorded stage identities before confirmation.
+
 ## 0.1.13
 
 - Homebrew installs keep macOS bundles intact. Homebrew rewrote the AOT

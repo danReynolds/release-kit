@@ -66,10 +66,10 @@ class ToolResult {
   /// compiler output". Kept for the diagnosis, where an operator goes when
   /// the one line was not enough.
   String get transcript => [
-        'exit $exitCode',
-        if (stdout.trim().isNotEmpty) ...['--- stdout ---', stdout.trimRight()],
-        if (stderr.trim().isNotEmpty) ...['--- stderr ---', stderr.trimRight()],
-      ].join('\n');
+    'exit $exitCode',
+    if (stdout.trim().isNotEmpty) ...['--- stdout ---', stdout.trimRight()],
+    if (stderr.trim().isNotEmpty) ...['--- stderr ---', stderr.trimRight()],
+  ].join('\n');
 }
 
 /// UTF-8 that survives a byte sequence it cannot make sense of.
@@ -125,8 +125,19 @@ final class _CapturedOutput {
   Future<void> cancel() => _subscription.cancel();
 }
 
+/// Cancellation belongs to a read-only inspection session, never release acts.
+class ToolCancellation {
+  final _done = Completer<void>();
+  bool get cancelled => _done.isCompleted;
+  Future<void> get whenCancelled => _done.future;
+  void cancel() {
+    if (!cancelled) _done.complete();
+  }
+}
+
 class SystemTools implements Tools {
-  const SystemTools({this.timeout});
+  const SystemTools({this.timeout, this.cancellation});
+  final ToolCancellation? cancellation;
 
   /// A bound for non-interactive subprocesses, used by public-target readers.
   /// Release acts deliberately use an unbounded instance: signing and
@@ -141,7 +152,17 @@ class SystemTools implements Tools {
     Map<String, String>? environment,
     Duration? timeout,
   }) async {
-    final bound = timeout ?? this.timeout;
+    if (cancellation?.cancelled == true) {
+      return ToolResult(
+        exitCode: 130,
+        stdout: '',
+        stderr: 'inspection cancelled',
+      );
+    }
+    final bound =
+        timeout ??
+        this.timeout ??
+        (cancellation == null ? null : const Duration(minutes: 2));
     if (bound == null) {
       final result = await Process.run(
         executable,
@@ -190,6 +211,7 @@ class SystemTools implements Tools {
       timedOut = await Future.any([
         completed.then((_) => false),
         deadline.future.then((_) => true),
+        if (cancellation != null) cancellation!.whenCancelled.then((_) => true),
       ]);
     } on Object {
       await _cancel(stdout, stderr);
@@ -222,12 +244,16 @@ class SystemTools implements Tools {
     final capturedOut = stdout.text;
     final capturedErr = stderr.text;
     return ToolResult(
-      exitCode: timedOut ? 124 : observedExitCode!,
+      exitCode: timedOut
+          ? (cancellation?.cancelled == true ? 130 : 124)
+          : observedExitCode!,
       stdout: capturedOut,
       stderr: timedOut
           ? [
               capturedErr.trimRight(),
-              'timed out after ${_durationLabel(bound)}',
+              cancellation?.cancelled == true
+                  ? 'inspection cancelled'
+                  : 'timed out after ${_durationLabel(bound)}',
             ].where((line) => line.isNotEmpty).join('\n')
           : capturedErr,
     );
@@ -238,10 +264,10 @@ class SystemTools implements Tools {
     _CapturedOutput stderr,
   ) async {
     try {
-      await Future.wait([stdout.cancel(), stderr.cancel()]).timeout(
-        const Duration(seconds: 1),
-        onTimeout: () => <void>[],
-      );
+      await Future.wait([
+        stdout.cancel(),
+        stderr.cancel(),
+      ]).timeout(const Duration(seconds: 1), onTimeout: () => <void>[]);
     } on Object {
       // Capture cancellation is best-effort housekeeping after the result is
       // already known. It must not turn a timeout into another unbounded wait
@@ -274,8 +300,12 @@ class SystemTools implements Tools {
 
 /// Records what would have been run, for tests and for a dry run.
 class RecordingTools implements Tools {
-  RecordingTools(
-      {this.results = const {}, this.onRun, this.answers, this.probe});
+  RecordingTools({
+    this.results = const {},
+    this.onRun,
+    this.answers,
+    this.probe,
+  });
 
   /// Keyed by `executable arg1 arg2`, so a test can decide an outcome.
   final Map<String, ToolResult> results;

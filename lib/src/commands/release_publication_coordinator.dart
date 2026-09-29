@@ -46,12 +46,12 @@ final class PublicationPlan {
     required this.prepared,
     required this.stage,
     required this.recoversWithoutStage,
-  })  : steps = List.unmodifiable(steps),
-        publicSteps = List.unmodifiable(publicSteps),
-        targets = List.unmodifiable(targets),
-        states = Map.of(states),
-        actions = Map.of(actions),
-        endpointBaselines = Map.unmodifiable(endpointBaselines);
+  }) : steps = List.unmodifiable(steps),
+       publicSteps = List.unmodifiable(publicSteps),
+       targets = List.unmodifiable(targets),
+       states = Map.of(states),
+       actions = Map.of(actions),
+       endpointBaselines = Map.unmodifiable(endpointBaselines);
 
   final ResolvedUnit unit;
   final List<Step> steps;
@@ -158,9 +158,11 @@ final class ReleasePublicationCoordinator {
       } on Object catch (error) {
         final diagnostic = Diagnostic(
           code: 'RK-REL-004',
-          message: '${target.label}: consumer availability could not be '
+          message:
+              '${target.label}: consumer availability could not be '
               'checked',
-          remedy: 'publication already reconciled exactly; restore the '
+          remedy:
+              'publication already reconciled exactly; restore the '
               'consumer check and verify without repeating publication',
           evidence: '$error',
         );
@@ -205,12 +207,14 @@ final class ReleasePublicationCoordinator {
       git: initialGit,
       environment: refreshEnvironment(),
     );
-    final outstanding =
-        targets.where((target) => !states[target.step.id]!.isExact).toList();
+    final outstanding = targets
+        .where((target) => !states[target.step.id]!.isExact)
+        .toList();
     final bindings = <String, String>{};
     for (final targetKind in outstanding.map((item) => item.target).toSet()) {
-      final grouped =
-          outstanding.where((item) => item.target == targetKind).toList();
+      final grouped = outstanding
+          .where((item) => item.target == targetKind)
+          .toList();
       final module = inspector.targets.moduleForTarget(grouped.first);
       for (final target in grouped) {
         progress.begin(target, CommonProgressActivities.checking);
@@ -237,8 +241,9 @@ final class ReleasePublicationCoordinator {
       final note = (readiness as TargetReady).note;
       for (final target in grouped) {
         progress.complete(target, note: note);
-        bindings[target.step.id] =
-            module.destinationBinding(context, unit, [target]);
+        bindings[target.step.id] = module.destinationBinding(context, unit, [
+          target,
+        ]);
       }
     }
     progress.discard();
@@ -252,11 +257,13 @@ final class ReleasePublicationCoordinator {
     for (final provider in providers) {
       final String? note;
       try {
-        note = await provider.restore(TargetReadinessContext(
-          tools: tools,
-          git: await refreshGit(),
-          environment: refreshEnvironment(),
-        ));
+        note = await provider.restore(
+          TargetReadinessContext(
+            tools: tools,
+            git: await refreshGit(),
+            environment: refreshEnvironment(),
+          ),
+        );
       } on Object {
         continue;
       }
@@ -304,32 +311,29 @@ final class ReleasePublicationCoordinator {
   }) {
     // Targets own their recovery advice. The observed bytes remain in the
     // step's JSON evidence, rather than taking the place of an action.
-    final diagnostic = state.verdict == Verdict.conflict &&
-            target != null &&
-            !afterAct
-        ? inspector.targets.moduleForTarget(target).diagnoseConflict(
-              unit,
-              target,
-              state,
-            )
+    final diagnostic =
+        state.verdict == Verdict.conflict && target != null && !afterAct
+        ? inspector.targets
+              .moduleForTarget(target)
+              .diagnoseConflict(unit, target, state)
         : Diagnostic(
             code: afterAct ? 'RK-REL-003' : 'RK-REL-001',
             message: '${step.summary}: ${state.detail ?? state.verdict.name}',
             remedy: state.evidence.isEmpty
                 ? (state.verdict == Verdict.unknown
-                    ? 'the target could not be proven; fix the read and re-run'
-                    : null)
+                      ? 'the target could not be proven; fix the read and re-run'
+                      : null)
                 : state.evidence.entries
-                    .map((entry) => '${entry.key}: ${entry.value}')
-                    .join('\n'),
+                      .map((entry) => '${entry.key}: ${entry.value}')
+                      .join('\n'),
           );
     output.problem(diagnostic, unit: unit.name);
     output.halt(
       state.verdict == Verdict.conflict
           ? (afterAct ? HaltKind.actedAndUnfixable : HaltKind.unfixableByRerun)
           : afterAct
-              ? HaltKind.lostTrack
-              : HaltKind.beforeActing,
+          ? HaltKind.lostTrack
+          : HaltKind.beforeActing,
     );
   }
 
@@ -343,9 +347,7 @@ final class ReleasePublicationCoordinator {
     final prepared = plan.prepared;
     final stage = plan.stage;
     final recoversWithoutStage = plan.recoversWithoutStage;
-    final targetByStep = {
-      for (final target in targets) target.step.id: target,
-    };
+    final targetByStep = {for (final target in targets) target.step.id: target};
 
     // Consent is based on fresh public truth and the same private stage that
     // was reviewed. These reads intentionally happen here, immediately before
@@ -382,18 +384,17 @@ final class ReleasePublicationCoordinator {
         mark: Mark.satisfied,
         note: 'already released',
       );
-      await verifyAvailability(
-        unit: unit,
-        targets: targets,
-      );
+      await verifyAvailability(unit: unit, targets: targets);
       return ExitCodes.ok;
     }
 
     if (!recoversWithoutStage && prepared.signing != null) {
-      releaseInputsRow.handle.begin(ProgressActivity(
-        running: 'checking signing',
-        failed: 'signing check failed',
-      ));
+      releaseInputsRow.handle.begin(
+        ProgressActivity(
+          running: 'checking signing',
+          failed: 'signing check failed',
+        ),
+      );
     }
     if (!recoversWithoutStage &&
         !await stages.signingStillValid(unit, prepared)) {
@@ -447,10 +448,7 @@ final class ReleasePublicationCoordinator {
         mark: Mark.satisfied,
         note: 'already released',
       );
-      await verifyAvailability(
-        unit: unit,
-        targets: targets,
-      );
+      await verifyAvailability(unit: unit, targets: targets);
       return ExitCodes.ok;
     }
     // Native sessions are deliberately late: package validation, builds,
@@ -469,15 +467,19 @@ final class ReleasePublicationCoordinator {
         final binding = module.stageRecoveryBinding(states[target.step.id]!);
         if (binding == null) {
           releaseInputs.conclude();
-          output.problem(Diagnostic(
-            code: 'RK-STAGE-005',
-            message: '${target.step.summary} can no longer recover without '
-                'its stage',
-            remedy: 'public inputs changed before authorization. Re-run so '
-                'rk can inspect the release again; restore '
-                '${stage.directory.path} if the target still needs the '
-                'original bytes.',
-          ));
+          output.problem(
+            Diagnostic(
+              code: 'RK-STAGE-005',
+              message:
+                  '${target.step.summary} can no longer recover without '
+                  'its stage',
+              remedy:
+                  'public inputs changed before authorization. Re-run so '
+                  'rk can inspect the release again; restore '
+                  '${stage.directory.path} if the target still needs the '
+                  'original bytes.',
+            ),
+          );
           output.halt(HaltKind.beforeActing);
           showActions(targets, publicActions);
           return ExitCodes.refused;
@@ -528,10 +530,7 @@ final class ReleasePublicationCoordinator {
     for (final target in remainingTargets.where(
       (target) => !sessionTargetIds.contains(target.step.id),
     )) {
-      sessionProgress.begin(
-        target,
-        CommonProgressActivities.checking,
-      );
+      sessionProgress.begin(target, CommonProgressActivities.checking);
       sessionProgress.complete(target, note: 'checked');
     }
     for (final requirement in sessionRequirements.values) {
@@ -544,8 +543,9 @@ final class ReleasePublicationCoordinator {
         git: await refreshGit(),
         environment: refreshEnvironment(),
         progress: sessionProgress.combined(grouped),
-        runInteractive:
-            allowInteractiveTools ? sessionProgress.interactive(tools) : null,
+        runInteractive: allowInteractiveTools
+            ? sessionProgress.interactive(tools)
+            : null,
       );
       final beforeMatches = grouped.every((target) {
         final module = inspector.targets.moduleForTarget(target);
@@ -566,8 +566,11 @@ final class ReleasePublicationCoordinator {
       final established = _createdSessions.containsKey(requirement.key)
           ? false
           : await requirement.provider.established(before);
-      final acquired =
-          await requirement.provider.acquire(before, unit, grouped);
+      final acquired = await requirement.provider.acquire(
+        before,
+        unit,
+        grouped,
+      );
       if (established == false) {
         _createdSessions[requirement.key] = requirement.provider;
       }
@@ -642,17 +645,12 @@ final class ReleasePublicationCoordinator {
     // gain work. Sweep every omitted target together before the first act so
     // one that disappeared from public truth cannot hide behind an earlier
     // authorized step in checklist order.
-    for (final step
-        in publicSteps.where((step) => !authorizedStepIds.contains(step.id))) {
+    for (final step in publicSteps.where(
+      (step) => !authorizedStepIds.contains(step.id),
+    )) {
       final state = await inspector.inspect(step, unit);
       if (!state.isExact) {
-        _haltForAuthorizationGrowth(
-          step,
-          state,
-          unit,
-          targets,
-          publicActions,
-        );
+        _haltForAuthorizationGrowth(step, state, unit, targets, publicActions);
         return ExitCodes.refused;
       }
     }
@@ -749,19 +747,22 @@ final class ReleasePublicationCoordinator {
               action: publicActions[omitted.id]!.wire,
               show: false,
             );
-            failures.add(_PublicationFailure(
-              step: omitted,
-              diagnostics: [
-                Diagnostic(
-                  code: 'RK-AUTH-003',
-                  message: 'the release plan grew after authorization',
-                  remedy: '${omitted.summary} was not work when the plan was '
-                      'shown. RK will not add it after the yes; inspect the '
-                      'changed destination and authorize a fresh plan.',
-                ),
-              ],
-              halt: HaltKind.stoppedPartway,
-            ));
+            failures.add(
+              _PublicationFailure(
+                step: omitted,
+                diagnostics: [
+                  Diagnostic(
+                    code: 'RK-AUTH-003',
+                    message: 'the release plan grew after authorization',
+                    remedy:
+                        '${omitted.summary} was not work when the plan was '
+                        'shown. RK will not add it after the yes; inspect the '
+                        'changed destination and authorize a fresh plan.',
+                  ),
+                ],
+                halt: HaltKind.stoppedPartway,
+              ),
+            );
             break;
           }
         }
@@ -777,10 +778,7 @@ final class ReleasePublicationCoordinator {
     }
 
     releaseProgress.settle(released: true);
-    await verifyAvailability(
-      unit: unit,
-      targets: targets,
-    );
+    await verifyAvailability(unit: unit, targets: targets);
     return ExitCodes.ok;
   }
 
@@ -810,8 +808,8 @@ final class ReleasePublicationCoordinator {
       final note = blockers.isNotEmpty
           ? 'waiting for ${blockers.join(', ')}'
           : activeTargets.contains(target.target)
-              ? 'waiting for ${target.kindLabel} lane'
-              : null;
+          ? 'waiting for ${target.kindLabel} lane'
+          : null;
       if (note != null) progress.waiting(target, note: note);
     }
   }
@@ -840,10 +838,7 @@ final class ReleasePublicationCoordinator {
       return _PublicTargetCompletion.completed(step);
     }
     if (!state.isAbsent) {
-      releaseProgress.fail(
-        target,
-        activity: CommonProgressActivities.checking,
-      );
+      releaseProgress.fail(target, activity: CommonProgressActivities.checking);
       return _PublicTargetCompletion.failed(
         step,
         _inspectionFailure(step, state),
@@ -858,10 +853,7 @@ final class ReleasePublicationCoordinator {
       refreshRegistry: true,
     );
     if (currentVersion.isNotEmpty) {
-      releaseProgress.fail(
-        target,
-        activity: CommonProgressActivities.checking,
-      );
+      releaseProgress.fail(target, activity: CommonProgressActivities.checking);
       return _PublicTargetCompletion.failed(
         step,
         _PublicationFailure(
@@ -908,8 +900,9 @@ final class ReleasePublicationCoordinator {
       }
     }
 
-    final validationHalt =
-        output.report.acted ? HaltKind.stoppedPartway : HaltKind.beforeActing;
+    final validationHalt = output.report.acted
+        ? HaltKind.stoppedPartway
+        : HaltKind.beforeActing;
     if (!recoversWithoutStage &&
         !stages.stageStillValid(
           stage,
@@ -957,10 +950,7 @@ final class ReleasePublicationCoordinator {
       return _PublicTargetCompletion.completed(step);
     }
     if (!state.isAbsent) {
-      releaseProgress.fail(
-        target,
-        activity: CommonProgressActivities.checking,
-      );
+      releaseProgress.fail(target, activity: CommonProgressActivities.checking);
       return _PublicTargetCompletion.failed(
         step,
         _inspectionFailure(step, state),
@@ -968,10 +958,7 @@ final class ReleasePublicationCoordinator {
     }
     if (recoversWithoutStage &&
         module.stageRecoveryBinding(state) != recoveryBinding) {
-      releaseProgress.fail(
-        target,
-        activity: CommonProgressActivities.checking,
-      );
+      releaseProgress.fail(target, activity: CommonProgressActivities.checking);
       return _PublicTargetCompletion.failed(
         step,
         _PublicationFailure(
@@ -979,9 +966,11 @@ final class ReleasePublicationCoordinator {
           diagnostics: [
             Diagnostic(
               code: 'RK-STAGE-005',
-              message: '${step.summary} can no longer recover without its '
+              message:
+                  '${step.summary} can no longer recover without its '
                   'stage',
-              remedy: 'public inputs changed after authorization. Re-run so '
+              remedy:
+                  'public inputs changed after authorization. Re-run so '
                   'rk can inspect the release again; restore '
                   '${stage.directory.path} if the target still needs the '
                   'original bytes.',
@@ -1010,8 +999,9 @@ final class ReleasePublicationCoordinator {
       tools: tools,
       stage: stage,
       progress: releaseProgress.handle(target),
-      runInteractive:
-          allowInteractiveTools ? releaseProgress.interactive(tools) : null,
+      runInteractive: allowInteractiveTools
+          ? releaseProgress.interactive(tools)
+          : null,
       wait: wait,
       confirmDeadline: confirmDeadline,
       confirmInterval: confirmInterval,
@@ -1041,8 +1031,9 @@ final class ReleasePublicationCoordinator {
         '${target.kindLabel} verification threw: $error',
       );
     }
-    publicActions[step.id] =
-        state.isExact ? ReleaseAction.completed : ReleaseAction.failed;
+    publicActions[step.id] = state.isExact
+        ? ReleaseAction.completed
+        : ReleaseAction.failed;
     output.step(
       step,
       verdict: state.verdict,
@@ -1119,11 +1110,7 @@ final class ReleasePublicationCoordinator {
     TargetReleaseProgress progress,
   ) {
     actions[step.id] = ReleaseAction.alreadyPublished;
-    progress.complete(
-      target,
-      note: 'already published',
-      satisfied: true,
-    );
+    progress.complete(target, note: 'already published', satisfied: true);
     output.step(
       step,
       mark: Mark.satisfied,
@@ -1144,20 +1131,20 @@ final class ReleasePublicationCoordinator {
           message: '${step.summary}: ${state.detail ?? state.verdict.name}',
           remedy: state.evidence.isEmpty
               ? (state.verdict == Verdict.unknown
-                  ? 'the target could not be proven; fix the read and re-run'
-                  : null)
+                    ? 'the target could not be proven; fix the read and re-run'
+                    : null)
               : state.evidence.entries
-                  .map((entry) => '${entry.key}: ${entry.value}')
-                  .join('\n'),
+                    .map((entry) => '${entry.key}: ${entry.value}')
+                    .join('\n'),
         ),
       ],
       halt: state.verdict == Verdict.conflict
           ? acted
-              ? HaltKind.actedAndUnfixable
-              : HaltKind.unfixableByRerun
+                ? HaltKind.actedAndUnfixable
+                : HaltKind.unfixableByRerun
           : acted
-              ? HaltKind.stoppedPartway
-              : HaltKind.beforeActing,
+          ? HaltKind.stoppedPartway
+          : HaltKind.beforeActing,
     );
   }
 
@@ -1219,8 +1206,9 @@ final class ReleasePublicationCoordinator {
         unit,
         blocked,
         snapshot.states[blocked.id]!,
-        target:
-            targets.where((target) => target.step.id == blocked.id).firstOrNull,
+        target: targets
+            .where((target) => target.step.id == blocked.id)
+            .firstOrNull,
       );
       showActions(targets, actions);
       return null;
@@ -1239,15 +1227,19 @@ final class ReleasePublicationCoordinator {
     List<TargetPlan> targets,
     Map<String, ReleaseAction> actions,
   ) {
-    output.problem(Diagnostic(
-      code: 'RK-DEST-001',
-      message: '${target.configName} changed destination while preparing '
-          'publication',
-      remedy: 'no public target changed. Restore the repository or native '
-          'publisher configuration used before staging, then re-run. rk does '
-          'not print destination values here because native coordinates may '
-          'contain credentials.',
-    ));
+    output.problem(
+      Diagnostic(
+        code: 'RK-DEST-001',
+        message:
+            '${target.configName} changed destination while preparing '
+            'publication',
+        remedy:
+            'no public target changed. Restore the repository or native '
+            'publisher configuration used before staging, then re-run. rk does '
+            'not print destination values here because native coordinates may '
+            'contain credentials.',
+      ),
+    );
     output.halt(HaltKind.beforeActing);
     showActions(targets, actions);
   }
@@ -1272,7 +1264,8 @@ final class ReleasePublicationCoordinator {
       Diagnostic(
         code: 'RK-AUTH-003',
         message: 'the release plan grew after authorization',
-        remedy: '${step.summary} was not work when the plan was shown. RK '
+        remedy:
+            '${step.summary} was not work when the plan was shown. RK '
             'will not add it after the yes; inspect the changed destination '
             'and authorize a fresh plan.',
       ),
@@ -1335,8 +1328,10 @@ final class ReleasePublicationCoordinator {
     for (final target in remaining) {
       final permanence = <String>[
         if (target.step.isPermanent) 'permanent',
-        if (firstClaims.contains('${target.kindLabel}\u0000'
-            '${target.coordinate}'))
+        if (firstClaims.contains(
+          '${target.kindLabel}\u0000'
+          '${target.coordinate}',
+        ))
           'first claim',
       ];
       output.line(
@@ -1345,8 +1340,9 @@ final class ReleasePublicationCoordinator {
         depth: 1,
         labelWidth: 26,
         role: VisualRole.releaseTarget,
-        noteState:
-            permanence.isEmpty ? RuntimeState.neutral : RuntimeState.attention,
+        noteState: permanence.isEmpty
+            ? RuntimeState.neutral
+            : RuntimeState.attention,
       );
     }
     final firstSigning = signing?.firstCertificate == null ? null : signing;
@@ -1356,7 +1352,8 @@ final class ReleasePublicationCoordinator {
       // rather than hunted for. The certificate says who signed it.
       output.line(
         'macOS identity',
-        note: '${firstSigning.codeId} signed by '
+        note:
+            '${firstSigning.codeId} signed by '
             '${_shortCertificate(firstSigning.firstCertificate!)} · '
             'permanent · first claim',
         depth: 1,
@@ -1376,9 +1373,11 @@ final class ReleasePublicationCoordinator {
         for (final target in permanent)
           if (target.permanenceNotice case final notice?) notice,
       };
-      disclosed.add('${notices.join('\n')}\n'
-          'everything before this yes re-runs safely. after it, the first '
-          'permanent step is: ${permanent.first.step.summary}.');
+      disclosed.add(
+        '${notices.join('\n')}\n'
+        'everything before this yes re-runs safely. after it, the first '
+        'permanent step is: ${permanent.first.step.summary}.',
+      );
     }
 
     disclosed.addAll(_recordClaims(claims, firstSigning));
@@ -1394,18 +1393,22 @@ final class ReleasePublicationCoordinator {
         output.warning(
           Diagnostic(
             code: 'RK-BUILD-002',
-            message: '${item.platform} was built but not executed: '
+            message:
+                '${item.platform} was built but not executed: '
                 '${item.reason}',
-            remedy: 'run the staged binary on ${item.platform} before '
+            remedy:
+                'run the staged binary on ${item.platform} before '
                 'release if that platform is release-critical',
           ),
           unit: unit.name,
           depth: 1,
         );
       }
-      disclosed.add('these ship built but never executed — rk cannot '
-          'prove they run or report ${unit.version}:\n'
-          '${unprovable.map((item) => '${item.platform} — ${item.reason}').join('\n')}');
+      disclosed.add(
+        'these ship built but never executed — rk cannot '
+        'prove they run or report ${unit.version}:\n'
+        '${unprovable.map((item) => '${item.platform} — ${item.reason}').join('\n')}',
+      );
     }
 
     // What the yes accepts travels with it. The attachment keeps the long
@@ -1428,19 +1431,24 @@ final class ReleasePublicationCoordinator {
     };
     if (!accepted) {
       output.blank();
-      output.say(answer == null
-          ? 'no terminal to answer on — stopped; nothing was published.'
-          : 'stopped. nothing was published.');
+      output.say(
+        answer == null
+            ? 'No confirmation received for ${unit.name} ${unit.version}.'
+            : 'Cancelled release of ${unit.name} ${unit.version}.',
+      );
+      output.say('Its remaining targets were not published.');
       output.problem(
         Diagnostic(
           code: 'RK-AUTH-002',
           message: 'the release was not authorized',
-          remedy: 'answer yes at the prompt, or pass --yes for an '
+          remedy:
+              'answer yes at the prompt, or pass --yes for an '
               'unattended release',
         ),
         unit: unit.name,
       );
       output.halt(HaltKind.beforeActing);
+      output.next('rk release ${unit.name}');
       return false;
     }
     return true;
@@ -1452,7 +1460,8 @@ final class ReleasePublicationCoordinator {
       Diagnostic(
         code: 'RK-AUTH-001',
         message: 'nobody is here to authorize this release',
-        remedy: 'answer yes at a terminal, or pass --yes for an unattended '
+        remedy:
+            'answer yes at a terminal, or pass --yes for an unattended '
             'release. Without either, rk refuses.',
       ),
       unit: unit.name,
@@ -1512,15 +1521,12 @@ final class _PublicationFailure {
   }) : reported = false;
 
   const _PublicationFailure.reported(this.step)
-      : diagnostics = const [],
-        halt = HaltKind.beforeActing,
-        nextCommand = null,
-        reported = true;
+    : diagnostics = const [],
+      halt = HaltKind.beforeActing,
+      nextCommand = null,
+      reported = true;
 
-  factory _PublicationFailure.fromTarget(
-    Step step,
-    TargetFailure failure,
-  ) =>
+  factory _PublicationFailure.fromTarget(Step step, TargetFailure failure) =>
       _PublicationFailure(
         step: step,
         diagnostics: [failure.diagnostic],

@@ -387,7 +387,7 @@ From RFC 0002's CI-readiness section, binding on every phase:
 5. Authorization is a signal with carriers.
 6. Optional evidence degrades honestly.
 
-Plus: zero runtime dependencies, enforced by a test over the import graph.
+The original zero-runtime-dependency milestone is superseded by the installation/TUI work: an import-boundary test confines Fleury to the UI. The GitHub installer reuses the existing release archive validator.
 
 ## Review doctrine, amended after phase 4
 

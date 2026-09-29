@@ -40,7 +40,8 @@ void main() {
     expect(
       config,
       isNot(contains('binary_platforms =')),
-      reason: 'an executable is not a request for signed binaries; the '
+      reason:
+          'an executable is not a request for signed binaries; the '
           'comment offers the option, the config does not take it',
     );
     expect(
@@ -54,8 +55,11 @@ void main() {
   test('a Linux proposal includes every binary Linux can produce', () async {
     final buffer = StringBuffer();
     final written = <String, String>{};
-    final output =
-        Output(sink: buffer.write, isTerminal: false, useColor: false);
+    final output = Output(
+      sink: buffer.write,
+      isTerminal: false,
+      useColor: false,
+    );
     final code = await InitCommand(
       tree: MemorySourceTree({
         'pubspec.yaml': '''
@@ -83,8 +87,8 @@ executables:
     expect(written['release.toml'], isNot(contains('"macos-arm64"')));
     expect(buffer.toString(), contains('macos-arm64 was not selected'));
     final document = jsonDecode(output.report.encode(exit: code)) as Map;
-    final platforms =
-        ((document['init'] as Map)['binary_platforms'] as List).cast<Map>();
+    final platforms = ((document['init'] as Map)['binary_platforms'] as List)
+        .cast<Map>();
     expect(
       platforms.singleWhere((item) => item['name'] == 'linux-arm64'),
       containsPair('selected_by_default', true),
@@ -104,30 +108,28 @@ executables:
     expect(buffer.toString(), contains('already exists'));
   });
 
-  test('an empty repository skips the selector and reports no candidates',
-      () async {
-    var selections = 0;
-    final output = Output(
-      sink: (_) {},
-      isTerminal: true,
-      useColor: false,
-    );
-    final code = await InitCommand(
-      tree: MemorySourceTree(const {}),
-      output: output,
-      gitBound: false,
-      select: (plan) async {
-        selections++;
-        return plan;
-      },
-      write: (_, __) {},
-      confirm: (_) async => true,
-    ).run();
+  test(
+    'an empty repository skips the selector and reports no candidates',
+    () async {
+      var selections = 0;
+      final output = Output(sink: (_) {}, isTerminal: true, useColor: false);
+      final code = await InitCommand(
+        tree: MemorySourceTree(const {}),
+        output: output,
+        gitBound: false,
+        select: (plan) async {
+          selections++;
+          return plan;
+        },
+        write: (_, __) {},
+        confirm: (_) async => true,
+      ).run();
 
-    expect(code, ExitCodes.ok);
-    expect(selections, 0);
-    expect(problemCodes(output.report), contains('RK-INIT-003'));
-  });
+      expect(code, ExitCodes.ok);
+      expect(selections, 0);
+      expect(problemCodes(output.report), contains('RK-INIT-003'));
+    },
+  );
 
   test('declining writes nothing', () async {
     final buffer = StringBuffer();
@@ -142,17 +144,60 @@ executables:
     expect(buffer.toString(), contains('nothing was written'));
   });
 
+  test(
+    'cancelling a customized review retries selection, not defaults',
+    () async {
+      final buffer = StringBuffer();
+      final written = <String, String>{};
+      final output = Output(
+        sink: buffer.write,
+        isTerminal: true,
+        useColor: false,
+      );
+      String? reviewed;
+      final code = await InitCommand(
+        tree: MemorySourceTree({
+          'pubspec.yaml':
+              'name: tool\nversion: 1.0.0\nexecutables:\n  tool: tool\n',
+        }),
+        gitBound: false,
+        capabilities: HostCapabilities(
+          hostPlatform: 'linux-x64',
+          containerRuntime: null,
+          hasNativeAssets: false,
+        ),
+        output: output,
+        select: (plan) async => plan
+            .toggle(0, ReleaseChoice.pubDev)
+            .plan
+            .toggle(0, ReleaseChoice.binary)
+            .plan,
+        review: (proposal, _) async {
+          reviewed = proposal;
+          return InitReviewDecision.cancel;
+        },
+        write: (path, contents) => written[path] = contents,
+        confirm: null,
+      ).run();
+
+      expect(code, ExitCodes.ok);
+      expect(reviewed, contains('binary_platforms'));
+      expect(reviewed, isNot(contains('pub.dev')));
+      expect(written, isEmpty);
+      final document = jsonDecode(output.report.encode(exit: code)) as Map;
+      expect(document['next'], ['rk init']);
+      expect(buffer.toString(), contains('→ rk init'));
+      expect(buffer.toString(), isNot(contains('--write')));
+    },
+  );
+
   test('a concurrent .gitignore edit is never overwritten', () async {
     final files = <String, String>{
       'pubspec.yaml': 'name: a\nversion: 1.0.0\n',
       '.gitignore': 'build/\n',
     };
     final written = <String, String>{};
-    final output = Output(
-      sink: (_) {},
-      isTerminal: false,
-      useColor: false,
-    );
+    final output = Output(sink: (_) {}, isTerminal: false, useColor: false);
     final code = await InitCommand(
       tree: MemorySourceTree(files),
       output: output,
@@ -220,24 +265,29 @@ executables:
     expect(buffer.toString(), contains('nothing here can be released'));
   });
 
-  test('a repository without a usable remote does not infer Git tagging',
-      () async {
-    final written = <String, String>{};
-    await InitCommand(
-      tree: MemorySourceTree({'pubspec.yaml': 'name: solo\nversion: 1.0.0\n'}),
-      output: Output(sink: (_) {}, isTerminal: false, useColor: false),
-      write: (path, contents) => written[path] = contents,
-      confirm: (_) async => true,
-    ).run();
-    expect(written['release.toml'], contains('publish = ["pub.dev"]'));
-    expect(written['release.toml'], isNot(contains('git-tag')));
-  });
+  test(
+    'a repository without a usable remote does not infer Git tagging',
+    () async {
+      final written = <String, String>{};
+      await InitCommand(
+        tree: MemorySourceTree({
+          'pubspec.yaml': 'name: solo\nversion: 1.0.0\n',
+        }),
+        output: Output(sink: (_) {}, isTerminal: false, useColor: false),
+        write: (path, contents) => written[path] = contents,
+        confirm: (_) async => true,
+      ).run();
+      expect(written['release.toml'], contains('publish = ["pub.dev"]'));
+      expect(written['release.toml'], isNot(contains('git-tag')));
+    },
+  );
 
   test('non-Git discovery follows only native workspace membership', () async {
     final written = <String, String>{};
     await InitCommand(
       tree: MemorySourceTree({
-        'pubspec.yaml': 'name: root\npublish_to: none\nworkspace:\n'
+        'pubspec.yaml':
+            'name: root\npublish_to: none\nworkspace:\n'
             '  - packages/member\n',
         'packages/member/pubspec.yaml': 'name: member\nversion: 1.0.0\n',
         'vendor/accidental/pubspec.yaml': 'name: accidental\nversion: 9.9.9\n',
@@ -302,7 +352,10 @@ workspace:
 
     final diagnostics = Diagnostics();
     final parsed = ReleaseConfig.parse(
-        written['release.toml']!, 'release.toml', diagnostics)!;
+      written['release.toml']!,
+      'release.toml',
+      diagnostics,
+    )!;
     final resolution = Resolution.resolve(parsed, tree, diagnostics);
     expect(resolution, isNotNull, reason: diagnostics.found.join('\n'));
     expect(resolution!.units.single.projects.single.name, 'keybay');
@@ -323,11 +376,13 @@ workspace:
     expect(
       output.report.attachments['release.toml'],
       contains('publish = ["git-tag", "pub.dev"]'),
-      reason: 'an agent reads the proposal from the document; a human writes '
+      reason:
+          'an agent reads the proposal from the document; a human writes '
           'it at a terminal',
     );
-    final document = jsonDecode(output.report.encode(exit: ExitCodes.ok))
-        as Map<String, Object?>;
+    final document =
+        jsonDecode(output.report.encode(exit: ExitCodes.ok))
+            as Map<String, Object?>;
     expect((document['repository'] as Map)['remote'], 'example/solo');
     expect(document['next'], ['rk init --write']);
   });
@@ -337,15 +392,16 @@ workspace:
 /// document, not reached through the report's internals.
 Iterable<Object?> problemCodes(Report report, {int exit = 0}) {
   final doc = jsonDecode(report.encode(exit: exit)) as Map<String, Object?>;
-  return (doc['problems'] as List)
-      .map((p) => (p as Map<String, Object?>)['code']);
+  return (doc['problems'] as List).map(
+    (p) => (p as Map<String, Object?>)['code'],
+  );
 }
 
 Map<String, Object?> problemNamed(Report report, String code, {int exit = 0}) {
   final doc = jsonDecode(report.encode(exit: exit)) as Map<String, Object?>;
-  return (doc['problems'] as List)
-      .cast<Map<String, Object?>>()
-      .firstWhere((p) => p['code'] == code);
+  return (doc['problems'] as List).cast<Map<String, Object?>>().firstWhere(
+    (p) => p['code'] == code,
+  );
 }
 
 /// Phase 6 review closeout: the findings, each pinned where it bit.
@@ -354,10 +410,16 @@ void closeoutRegressions() {
     // `rk init < /dev/null` used to write the file: EOF read as null,
     // null collapsed to the empty string, and empty means Yes. macOS
     // reports a terminal for /dev/null, so hasTerminal never guarded it.
-    expect(InitCommand.consented(null), isFalse,
-        reason: 'nobody answering is not an answer');
-    expect(InitCommand.consented(''), isTrue,
-        reason: 'a bare enter takes the [Y/n] default');
+    expect(
+      InitCommand.consented(null),
+      isFalse,
+      reason: 'nobody answering is not an answer',
+    );
+    expect(
+      InitCommand.consented(''),
+      isTrue,
+      reason: 'a bare enter takes the [Y/n] default',
+    );
     expect(InitCommand.consented('  '), isTrue);
     expect(InitCommand.consented('y'), isTrue);
     expect(InitCommand.consented('Y'), isTrue);
@@ -365,8 +427,11 @@ void closeoutRegressions() {
     expect(InitCommand.consented('n'), isFalse);
     expect(InitCommand.consented('no'), isFalse);
     expect(InitCommand.consented('q'), isFalse);
-    expect(InitCommand.consented('yolo'), isFalse,
-        reason: 'anything that is not a yes is a no');
+    expect(
+      InitCommand.consented('yolo'),
+      isFalse,
+      reason: 'anything that is not a yes is a no',
+    );
   });
 
   test('a refusal carries the refused proposal and its problems', () async {
@@ -383,20 +448,19 @@ void closeoutRegressions() {
     ).run();
 
     expect(code, ExitCodes.refused);
-    expect(
-      problemCodes(output.report, exit: code),
-      contains('RK-INIT-001'),
-    );
+    expect(problemCodes(output.report, exit: code), contains('RK-INIT-001'));
     expect(
       output.report.attachments['release.toml.refused'],
       contains('[release.foobar]'),
-      reason: 'the problems name lines in a document; the document must be '
+      reason:
+          'the problems name lines in a document; the document must be '
           'in the report for those references to have a referent',
     );
     expect(
       output.report.attachments.containsKey('release.toml'),
       isFalse,
-      reason: 'the unqualified name is the accepted proposal only — a caller '
+      reason:
+          'the unqualified name is the accepted proposal only — a caller '
           'that writes attachments["release.toml"] must never write a '
           'refused one',
     );
@@ -434,52 +498,58 @@ void closeoutRegressions() {
     expect(proposal.attachments['release.toml'], isNotNull);
   });
 
-  test('the skip reasons travel in the document, not only the terminal',
-      () async {
-    final output = Output(sink: (_) {}, isTerminal: false, useColor: false);
-    await InitCommand(
-      tree: MemorySourceTree({
-        'pubspec.yaml': 'name: x\nversion: 1.0.0\npublish_to: none\n',
-        'packages/bad/pubspec.yaml': 'name: [broken\n',
-      }, description: '/repo/x'),
-      output: output,
-      write: (_, __) {},
-      confirm: null,
-    ).run();
-
-    final remedy =
-        problemNamed(output.report, 'RK-INIT-003')['remedy']! as String;
-    expect(remedy, contains('packages/bad/pubspec.yaml'));
-    expect(remedy, contains('could not be parsed'));
-    expect(remedy, contains('publish_to: none'));
-  });
-
-  test('the executable comment appears exactly when an executable exists',
-      () async {
-    Future<String> proposalFor(Map<String, String> files) async {
+  test(
+    'the skip reasons travel in the document, not only the terminal',
+    () async {
       final output = Output(sink: (_) {}, isTerminal: false, useColor: false);
       await InitCommand(
-        tree: MemorySourceTree(files, description: '/repo/x'),
+        tree: MemorySourceTree({
+          'pubspec.yaml': 'name: x\nversion: 1.0.0\npublish_to: none\n',
+          'packages/bad/pubspec.yaml': 'name: [broken\n',
+        }, description: '/repo/x'),
         output: output,
         write: (_, __) {},
         confirm: null,
       ).run();
-      return output.report.attachments['release.toml']!;
-    }
 
-    expect(
-      await proposalFor({
-        'pubspec.yaml': 'name: cli\nversion: 1.0.0\nexecutables:\n  cli: cli\n',
-      }),
-      contains('# A package here declares an executable'),
-    );
-    expect(
-      await proposalFor({'pubspec.yaml': 'name: lib\nversion: 1.0.0\n'}),
-      isNot(contains('# A package here declares an executable')),
-      reason: 'a comment about executables over a repository with none reads '
-          'as a bug in the scanner',
-    );
-  });
+      final remedy =
+          problemNamed(output.report, 'RK-INIT-003')['remedy']! as String;
+      expect(remedy, contains('packages/bad/pubspec.yaml'));
+      expect(remedy, contains('could not be parsed'));
+      expect(remedy, contains('publish_to: none'));
+    },
+  );
+
+  test(
+    'the executable comment appears exactly when an executable exists',
+    () async {
+      Future<String> proposalFor(Map<String, String> files) async {
+        final output = Output(sink: (_) {}, isTerminal: false, useColor: false);
+        await InitCommand(
+          tree: MemorySourceTree(files, description: '/repo/x'),
+          output: output,
+          write: (_, __) {},
+          confirm: null,
+        ).run();
+        return output.report.attachments['release.toml']!;
+      }
+
+      expect(
+        await proposalFor({
+          'pubspec.yaml':
+              'name: cli\nversion: 1.0.0\nexecutables:\n  cli: cli\n',
+        }),
+        contains('# A package here declares an executable'),
+      );
+      expect(
+        await proposalFor({'pubspec.yaml': 'name: lib\nversion: 1.0.0\n'}),
+        isNot(contains('# A package here declares an executable')),
+        reason:
+            'a comment about executables over a repository with none reads '
+            'as a bug in the scanner',
+      );
+    },
+  );
 
   test('unit names are sanitized, and the rules are pinned', () async {
     // The unit name is what policy and step ids are written in terms of, so
@@ -502,7 +572,8 @@ void closeoutRegressions() {
 
   group('.gitignore', () {
     Future<(Map<String, String>, String)> writeAccepting(
-        Map<String, String> files) async {
+      Map<String, String> files,
+    ) async {
       final written = <String, String>{};
       String prompt = '';
       await InitCommand(
@@ -518,8 +589,9 @@ void closeoutRegressions() {
     }
 
     test('is created when absent, and the prompt says so', () async {
-      final (written, prompt) =
-          await writeAccepting({'pubspec.yaml': 'name: a\nversion: 1.0.0\n'});
+      final (written, prompt) = await writeAccepting({
+        'pubspec.yaml': 'name: a\nversion: 1.0.0\n',
+      });
       expect(written['.gitignore'], '.rk/\n');
       expect(prompt, contains('add .rk/ to .gitignore'));
     });
@@ -538,8 +610,11 @@ void closeoutRegressions() {
         '.gitignore': 'build/\n.rk/\n',
       });
       expect(written.containsKey('.gitignore'), isFalse);
-      expect(prompt, isNot(contains('.gitignore')),
-          reason: 'the prompt names what the Yes will do, and nothing else');
+      expect(
+        prompt,
+        isNot(contains('.gitignore')),
+        reason: 'the prompt names what the Yes will do, and nothing else',
+      );
     });
   });
 }
@@ -552,10 +627,16 @@ void realRepositoryRegressions() {
   setUp(() {
     root = Directory.systemTemp.createTempSync('rk-init-');
     Process.runSync('git', ['init', '-q'], workingDirectory: root.path);
-    Process.runSync('git', ['config', 'user.email', 'a@b.c'],
-        workingDirectory: root.path);
-    Process.runSync('git', ['config', 'user.name', 'T'],
-        workingDirectory: root.path);
+    Process.runSync('git', [
+      'config',
+      'user.email',
+      'a@b.c',
+    ], workingDirectory: root.path);
+    Process.runSync('git', [
+      'config',
+      'user.name',
+      'T',
+    ], workingDirectory: root.path);
   });
 
   tearDown(() => root.deleteSync(recursive: true));
@@ -573,8 +654,11 @@ void realRepositoryRegressions() {
 
   Future<(int, Report, String)> init() async {
     final buffer = StringBuffer();
-    final output =
-        Output(sink: buffer.write, isTerminal: false, useColor: false);
+    final output = Output(
+      sink: buffer.write,
+      isTerminal: false,
+      useColor: false,
+    );
     final code = await InitCommand(
       tree: GitSourceTree(root.path),
       output: output,
@@ -584,53 +668,57 @@ void realRepositoryRegressions() {
     return (code, output.report, buffer.toString());
   }
 
-  test('an untracked manifest is named with its command, never proposed from',
-      () async {
-    write('pubspec.yaml', 'name: tracked\nversion: 1.0.0\n');
-    commit();
-    write('packages/extra/pubspec.yaml', 'name: extra\nversion: 2.0.0\n');
-    // Deliberately not committed: this is the forgot-to-add case.
+  test(
+    'an untracked manifest is named with its command, never proposed from',
+    () async {
+      write('pubspec.yaml', 'name: tracked\nversion: 1.0.0\n');
+      commit();
+      write('packages/extra/pubspec.yaml', 'name: extra\nversion: 2.0.0\n');
+      // Deliberately not committed: this is the forgot-to-add case.
 
-    final (code, report, text) = await init();
-    expect(code, ExitCodes.ok);
-    expect(report.attachments['release.toml'], contains('[release.tracked]'));
-    expect(
-      report.attachments['release.toml'],
-      isNot(contains('extra')),
-      reason: 'tracked-only is the rule; a proposal from an untracked file '
-          'would release what git cannot reproduce',
-    );
-    expect(text, contains('not tracked by git'));
-    expect(text, contains('git add packages/extra/pubspec.yaml'));
-  });
+      final (code, report, text) = await init();
+      expect(code, ExitCodes.ok);
+      expect(report.attachments['release.toml'], contains('[release.tracked]'));
+      expect(
+        report.attachments['release.toml'],
+        isNot(contains('extra')),
+        reason:
+            'tracked-only is the rule; a proposal from an untracked file '
+            'would release what git cannot reproduce',
+      );
+      expect(text, contains('not tracked by git'));
+      expect(text, contains('git add packages/extra/pubspec.yaml'));
+    },
+  );
 
-  test('a tracked manifest missing from disk is named, not skipped silently',
-      () async {
-    write('pubspec.yaml', 'name: root\nversion: 1.0.0\n');
-    write('packages/gone/pubspec.yaml', 'name: gone\nversion: 1.0.0\n');
-    commit();
-    File('${root.path}/packages/gone/pubspec.yaml').deleteSync();
+  test(
+    'a tracked manifest missing from disk is named, not skipped silently',
+    () async {
+      write('pubspec.yaml', 'name: root\nversion: 1.0.0\n');
+      write('packages/gone/pubspec.yaml', 'name: gone\nversion: 1.0.0\n');
+      commit();
+      File('${root.path}/packages/gone/pubspec.yaml').deleteSync();
 
-    final (_, _, text) = await init();
-    expect(
+      final (_, _, text) = await init();
+      expect(
         text,
-        contains('packages/gone/pubspec.yaml is tracked but not on '
-            'disk'));
-  });
+        contains(
+          'packages/gone/pubspec.yaml is tracked but not on '
+          'disk',
+        ),
+      );
+    },
+  );
 
   test('real init JSON reports its origin and proposal next action', () {
     write('pubspec.yaml', 'name: origin_fixture\nversion: 1.0.0\n');
     commit();
-    Process.runSync(
-      'git',
-      [
-        'remote',
-        'add',
-        'origin',
-        'git@github.com:example/origin-fixture.git',
-      ],
-      workingDirectory: root.path,
-    );
+    Process.runSync('git', [
+      'remote',
+      'add',
+      'origin',
+      'git@github.com:example/origin-fixture.git',
+    ], workingDirectory: root.path);
 
     final run = Rk(root.path)(['init', '--json']);
     expect(run.code, ExitCodes.ok, reason: run.all);
@@ -639,27 +727,30 @@ void realRepositoryRegressions() {
     expect(run.json['attachments'], contains('release.toml'));
   });
 
-  test('a directory git cannot list is a named refusal, not a bug in rk',
-      () async {
-    final bare = Directory.systemTemp.createTempSync('rk-notrepo-');
-    addTearDown(() => bare.deleteSync(recursive: true));
+  test(
+    'a directory git cannot list is a named refusal, not a bug in rk',
+    () async {
+      final bare = Directory.systemTemp.createTempSync('rk-notrepo-');
+      addTearDown(() => bare.deleteSync(recursive: true));
 
-    final output = Output(sink: (_) {}, isTerminal: false, useColor: false);
-    final code = await InitCommand(
-      tree: GitSourceTree(bare.path),
-      output: output,
-      write: (_, __) {},
-      confirm: null,
-    ).run();
+      final output = Output(sink: (_) {}, isTerminal: false, useColor: false);
+      final code = await InitCommand(
+        tree: GitSourceTree(bare.path),
+        output: output,
+        write: (_, __) {},
+        confirm: null,
+      ).run();
 
-    expect(code, ExitCodes.refused);
-    expect(
-      problemCodes(output.report, exit: code),
-      contains('RK-GIT-006'),
-      reason: 'ls-files failing used to read as "this repository tracks '
-          'nothing", which proposed nothing and called that an answer',
-    );
-  });
+      expect(code, ExitCodes.refused);
+      expect(
+        problemCodes(output.report, exit: code),
+        contains('RK-GIT-006'),
+        reason:
+            'ls-files failing used to read as "this repository tracks '
+            'nothing", which proposed nothing and called that an answer',
+      );
+    },
+  );
 }
 
 extension on Map<String, String> {

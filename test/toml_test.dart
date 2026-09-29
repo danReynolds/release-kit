@@ -40,8 +40,11 @@ binary_platforms = ["linux-x64", "linux-arm64", "macos-arm64"]
 
     final cli = release['cli'] as TomlTable;
     expect(cli['publish'], ['pub.dev', 'github-release', 'homebrew']);
-    expect(
-        cli['binary_platforms'], ['linux-x64', 'linux-arm64', 'macos-arm64']);
+    expect(cli['binary_platforms'], [
+      'linux-x64',
+      'linux-arm64',
+      'macos-arm64',
+    ]);
   });
 
   test('parses a multi-project unit as an array of tables', () {
@@ -87,8 +90,11 @@ binary_platforms = [
 schema = 2
 ''')!;
     expect(document.root['binary_platforms'], hasLength(3));
-    expect(document.root['schema'], 2,
-        reason: 'parsing resumes after the list');
+    expect(
+      document.root['schema'],
+      2,
+      reason: 'parsing resumes after the list',
+    );
   });
 
   test('remembers where each key was written', () {

@@ -23,14 +23,11 @@ final class GitTagTargetModule extends TargetModule {
   Future<TargetReadinessOutcome> checkReadiness(
     TargetReadinessContext context,
     ResolvedUnit unit,
-  ) async =>
-      const TargetReady();
+  ) async => const TargetReady();
 
   @override
-  ProgressActivity get publishActivity => ProgressActivity(
-        running: 'creating',
-        failed: 'tag creation failed',
-      );
+  ProgressActivity get publishActivity =>
+      ProgressActivity(running: 'creating', failed: 'tag creation failed');
 
   @override
   TargetPlan plan({
@@ -79,8 +76,8 @@ final class GitTagTargetModule extends TargetModule {
     if (stage != null) {
       try {
         final manifest = stage.requireReceipt().artifacts.singleWhere(
-              (artifact) => artifact.path == ReleaseAssets.manifest,
-            );
+          (artifact) => artifact.path == ReleaseAssets.manifest,
+        );
         manifestSha256 = manifest.sha256;
       } on Object catch (error) {
         return Inspection.unknown(
@@ -137,8 +134,10 @@ final class GitTagTargetModule extends TargetModule {
     final tools = context.tools;
     final inspection = tools == null
         ? const Inspection.unknown('no tools to read origin with')
-        : await GitTag(tools: tools, root: context.git.root)
-            .inspectLatestVersion(
+        : await GitTag(
+            tools: tools,
+            root: context.git.root,
+          ).inspectLatestVersion(
             requiredTargetTagPattern(unit, PublishTarget.gitTag),
           );
     final history = TargetHistory.versioned(
@@ -146,7 +145,8 @@ final class GitTagTargetModule extends TargetModule {
       target: target,
       regressionDiagnostic: (publicVersion) => Diagnostic(
         code: 'RK-MONO-003',
-        message: '${target.label} is already at $publicVersion, ahead of '
+        message:
+            '${target.label} is already at $publicVersion, ahead of '
             '${target.targetVersion}',
         remedy: 'a release moves forward — bump past $publicVersion',
       ),
@@ -176,7 +176,8 @@ final class GitTagTargetModule extends TargetModule {
       if (existing > unit.version) {
         yield Diagnostic(
           code: 'RK-MONO-001',
-          message: 'the tag $tag is ahead of ${unit.version}, which this '
+          message:
+              'the tag $tag is ahead of ${unit.version}, which this '
               'release would publish',
           remedy: 'a release moves forward — bump past $raw',
         );
@@ -195,21 +196,25 @@ final class GitTagTargetModule extends TargetModule {
       final project = unit.projects.first;
       return Diagnostic(
         code: 'RK-MONO-004',
-        message: 'version ${unit.version} is already released from '
+        message:
+            'version ${unit.version} is already released from '
             'different source',
         source: SourceLocation(
           project.pubspec.path,
           project.pubspec.versionLine,
         ),
-        remedy: 'To release these changes, bump the version and add its '
+        remedy:
+            'To release these changes, bump the version and add its '
             'changelog entry, then run rk release ${unit.name} --stage.',
       );
     }
     return Diagnostic(
       code: 'RK-REL-001',
-      message: '${target.label}: '
+      message:
+          '${target.label}: '
           '${conflict.detail ?? 'the public tag does not match'}',
-      remedy: 'do not move the public tag. If it is not the intended '
+      remedy:
+          'do not move the public tag. If it is not the intended '
           'release, bump the version and changelog, then stage the new '
           'release',
     );
@@ -221,8 +226,7 @@ final class GitTagTargetModule extends TargetModule {
     ResolvedUnit unit,
     TargetPlan target,
     Inspection inspected,
-  ) =>
-      publishGitTag(context, unit);
+  ) => publishGitTag(context, unit);
 
   @override
   Future<TargetFailure> classifyUnconfirmedPublication(
@@ -246,10 +250,10 @@ final class GitTagTargetModule extends TargetModule {
     final code = conflict ? 'RK-TAG-004' : act.diagnostic?.code ?? 'RK-TAG-003';
     final message = conflict
         ? 'origin did not confirm the release binding on '
-            '${act.coordinate ?? target.coordinate}'
+              '${act.coordinate ?? target.coordinate}'
         : act.diagnostic?.message ??
-            'the push reported success, and origin did not confirm the exact '
-                'tag ${act.coordinate ?? target.coordinate}';
+              'the push reported success, and origin did not confirm the exact '
+                  'tag ${act.coordinate ?? target.coordinate}';
     final details = <String>[
       if (act.diagnostic?.remedy != null) act.diagnostic!.remedy!,
       if (act.problem != null) act.problem!,
@@ -261,23 +265,21 @@ final class GitTagTargetModule extends TargetModule {
     final halt = conflict
         ? HaltKind.actedAndUnfixable
         : cleanupFailed
-            ? HaltKind.stoppedPartway
-            : pushProvedAbsent
-                ? (actedBefore
-                    ? HaltKind.stoppedPartway
-                    : HaltKind.beforeActing)
-                : act.mayHaveActed || state.verdict == Verdict.unknown
-                    ? HaltKind.lostTrack
-                    : actedBefore
-                        ? HaltKind.stoppedPartway
-                        : HaltKind.beforeActing;
+        ? HaltKind.stoppedPartway
+        : pushProvedAbsent
+        ? (actedBefore ? HaltKind.stoppedPartway : HaltKind.beforeActing)
+        : act.mayHaveActed || state.verdict == Verdict.unknown
+        ? HaltKind.lostTrack
+        : actedBefore
+        ? HaltKind.stoppedPartway
+        : HaltKind.beforeActing;
     return TargetFailure(
       diagnostic: Diagnostic(
         code: code,
         message: message,
         remedy: details.isEmpty
             ? 're-run; the shared destination inspection will classify the '
-                'public target before any retry'
+                  'public target before any retry'
             : details.join('\n'),
         evidence: act.evidence ?? act.diagnostic?.evidence,
       ),

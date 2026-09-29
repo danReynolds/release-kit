@@ -97,16 +97,13 @@ class StageIdentity {
   }
 
   factory StageIdentity.fromJson(Object? value) {
-    final map = _strictMap(
-        value,
-        const {
-          'id',
-          'head_commit',
-          'head_tree',
-          'plan_sha256',
-          'run_id',
-        },
-        'stage identity');
+    final map = _strictMap(value, const {
+      'id',
+      'head_commit',
+      'head_tree',
+      'plan_sha256',
+      'run_id',
+    }, 'stage identity');
     final commit = map['head_commit'];
     final tree = map['head_tree'];
     final runId = map['run_id'];
@@ -135,36 +132,32 @@ class StageIdentity {
   bool get isGitBound => headCommit != null;
 
   Map<String, Object?> toJson() => {
-        'head_commit': headCommit,
-        'head_tree': headTree,
-        'id': id,
-        'plan_sha256': planSha256,
-        'run_id': runId,
-      };
+    'head_commit': headCommit,
+    'head_tree': headTree,
+    'id': id,
+    'plan_sha256': planSha256,
+    'run_id': runId,
+  };
 }
 
 /// The fixed on-disk location and safe atomic write operations for a stage.
 class StageDirectory {
   StageDirectory({required String repositoryRoot, required this.identity})
-      : repositoryRoot = Directory(repositoryRoot).absolute.path;
+    : repositoryRoot = Directory(repositoryRoot).absolute.path;
 
   final String repositoryRoot;
   final StageIdentity identity;
 
-  String get path => _join(
-        repositoryRoot,
-        ['.rk', 'work', 'stages', identity.id],
-      );
+  String get path =>
+      _join(repositoryRoot, ['.rk', 'work', 'stages', identity.id]);
 
   /// The exact stage location as displayed from the repository boundary.
   ///
   /// The absolute path remains [path] for filesystem work and diagnostics.
   /// Successful handoff output uses this form so a long checkout prefix does
   /// not make the content-addressed id wrap across terminal lines.
-  String get repositoryRelativePath => _join(
-        '.rk',
-        ['work', 'stages', identity.id],
-      );
+  String get repositoryRelativePath =>
+      _join('.rk', ['work', 'stages', identity.id]);
 
   Workspace get workspace => Workspace(path);
 
@@ -214,12 +207,12 @@ class StageDirectory {
 
   /// One entry's cheap description: what a rewrite cannot leave untouched.
   static String _describe(FileStat stat) => [
-        stat.type,
-        stat.size,
-        stat.mode,
-        stat.modified.microsecondsSinceEpoch,
-        stat.changed.microsecondsSinceEpoch,
-      ].join('\u0000');
+    stat.type,
+    stat.size,
+    stat.mode,
+    stat.modified.microsecondsSinceEpoch,
+    stat.changed.microsecondsSinceEpoch,
+  ].join('\u0000');
 
   /// How each file looked when its bytes were last read and digested.
   ///
@@ -236,7 +229,10 @@ class StageDirectory {
   /// nobody digested. Such a file is not remembered at all, so the next
   /// confirmation reads it again.
   void noteDigested(
-      String relativePath, FileStat beforeReading, String sha256) {
+    String relativePath,
+    FileStat beforeReading,
+    String sha256,
+  ) {
     final settled = _describe(File(resolve(relativePath)).statSync());
     if (settled != _describe(beforeReading)) return;
     _digested[relativePath] = '$settled\u0000$sha256';
@@ -277,11 +273,15 @@ class StageDirectory {
   /// Creates only the fixed stage path, refusing any symlink or non-directory
   /// component below the repository root.
   void ensureExists() {
-    final rootType =
-        FileSystemEntity.typeSync(repositoryRoot, followLinks: false);
+    final rootType = FileSystemEntity.typeSync(
+      repositoryRoot,
+      followLinks: false,
+    );
     if (rootType != FileSystemEntityType.directory) {
       throw FileSystemException(
-          'repository root is not a directory', repositoryRoot);
+        'repository root is not a directory',
+        repositoryRoot,
+      );
     }
     var current = repositoryRoot;
     for (final component in ['.rk', 'work', 'stages', identity.id]) {
@@ -394,11 +394,7 @@ class StagePath {
 String _join(String root, Iterable<String> parts) =>
     [root, ...parts].join(Platform.pathSeparator);
 
-Map<String, Object?> _strictMap(
-  Object? value,
-  Set<String> keys,
-  String label,
-) {
+Map<String, Object?> _strictMap(Object? value, Set<String> keys, String label) {
   if (value is! Map) throw FormatException('$label is not an object');
   final map = <String, Object?>{};
   for (final entry in value.entries) {

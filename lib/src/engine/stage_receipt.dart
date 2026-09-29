@@ -25,32 +25,26 @@ class StageInput {
   final String sha256;
 
   /// Binds a consumer directly to exact bytes emitted by an earlier step.
-  factory StageInput.artifact(StageArtifact artifact) => StageInput(
-        name: artifact.path,
-        sha256: artifact.sha256,
-      );
+  factory StageInput.artifact(StageArtifact artifact) =>
+      StageInput(name: artifact.path, sha256: artifact.sha256);
 
   /// Binds a consumer to the complete, ordered output set of an earlier
   /// step. This is useful for source snapshots and other multi-file inputs.
-  factory StageInput.step(StageStep step) => StageInput(
-        name: 'step:${step.name}',
-        sha256: step.outputSha256,
-      );
+  factory StageInput.step(StageStep step) =>
+      StageInput(name: 'step:${step.name}', sha256: step.outputSha256);
 
-  factory StageInput.plan(StageIdentity identity) => StageInput(
-        name: 'stage:plan',
-        sha256: identity.planSha256,
-      );
+  factory StageInput.plan(StageIdentity identity) =>
+      StageInput(name: 'stage:plan', sha256: identity.planSha256);
 
   factory StageInput.commit(StageIdentity identity) => StageInput(
-        name: 'stage:commit',
-        sha256: Sha256.hex(utf8.encode(identity.headCommit!)),
-      );
+    name: 'stage:commit',
+    sha256: Sha256.hex(utf8.encode(identity.headCommit!)),
+  );
 
   factory StageInput.tree(StageIdentity identity) => StageInput(
-        name: 'stage:tree',
-        sha256: Sha256.hex(utf8.encode(identity.headTree!)),
-      );
+    name: 'stage:tree',
+    sha256: Sha256.hex(utf8.encode(identity.headTree!)),
+  );
 
   Map<String, Object?> toJson() => {'name': name, 'sha256': sha256};
 }
@@ -111,21 +105,22 @@ class StageArtifact {
   static StageArtifact confirm(
     StageArtifact recorded, {
     required StageDirectory stage,
-  }) =>
-      stage.digestStillStands(recorded.path, recorded.sha256)
-          ? recorded
-          : StageArtifact.capture(
-              stage: stage,
-              path: recorded.path,
-              type: recorded.type,
-            );
+  }) => stage.digestStillStands(recorded.path, recorded.sha256)
+      ? recorded
+      : StageArtifact.capture(
+          stage: stage,
+          path: recorded.path,
+          type: recorded.type,
+        );
 
   factory StageArtifact.fromJson(Object? value) {
-    final map = _strictMap(
-      value,
-      const {'mode', 'path', 'sha256', 'size', 'type'},
-      'stage artifact',
-    );
+    final map = _strictMap(value, const {
+      'mode',
+      'path',
+      'sha256',
+      'size',
+      'type',
+    }, 'stage artifact');
     final size = map['size'];
     if (size is! int) {
       throw const FormatException('artifact size is not an integer');
@@ -150,12 +145,12 @@ class StageArtifact {
   final String sha256;
 
   Map<String, Object?> toJson() => {
-        'mode': mode,
-        'path': path,
-        'sha256': sha256,
-        'size': size,
-        'type': type,
-      };
+    'mode': mode,
+    'path': path,
+    'sha256': sha256,
+    'size': size,
+    'type': type,
+  };
 }
 
 /// Inputs, outputs, and bounded evidence for one completed operation.
@@ -165,20 +160,21 @@ class StageStep {
     Iterable<StageInput> inputs = const [],
     Iterable<StageArtifact> outputs = const [],
     Map<String, Object?> evidence = const {},
-  })  : inputs = List<StageInput>.unmodifiable(inputs),
-        outputs = List<StageArtifact>.unmodifiable(outputs),
-        evidence = _evidence(evidence) {
+  }) : inputs = List<StageInput>.unmodifiable(inputs),
+       outputs = List<StageArtifact>.unmodifiable(outputs),
+       evidence = _evidence(evidence) {
     _requireLabel('step name', name);
     _requireUnique(this.inputs.map((input) => input.name), 'input name');
     _requireUnique(this.outputs.map((output) => output.path), 'output path');
   }
 
   factory StageStep.fromJson(Object? value) {
-    final map = _strictMap(
-      value,
-      const {'evidence', 'inputs', 'name', 'outputs'},
-      'stage step',
-    );
+    final map = _strictMap(value, const {
+      'evidence',
+      'inputs',
+      'name',
+      'outputs',
+    }, 'stage step');
     final inputs = _list(map, 'inputs');
     final outputs = _list(map, 'outputs');
     final evidence = map['evidence'];
@@ -206,24 +202,24 @@ class StageStep {
   ///
   /// Paths and metadata are included as well as byte hashes, so substituting
   /// the same bytes under another name or mode changes the dependency.
-  String get outputSha256 => Sha256.hex(utf8.encode(CanonicalJson.encode([
-        for (final output in outputs) output.toJson(),
-      ])));
+  String get outputSha256 => Sha256.hex(
+    utf8.encode(
+      CanonicalJson.encode([for (final output in outputs) output.toJson()]),
+    ),
+  );
 
   Map<String, Object?> toJson() => {
-        'evidence': evidence,
-        'inputs': inputs.map((input) => input.toJson()).toList(),
-        'name': name,
-        'outputs': outputs.map((output) => output.toJson()).toList(),
-      };
+    'evidence': evidence,
+    'inputs': inputs.map((input) => input.toJson()).toList(),
+    'name': name,
+    'outputs': outputs.map((output) => output.toJson()).toList(),
+  };
 }
 
 /// The only authority for reusing files in a stage directory.
 class StageReceipt {
-  StageReceipt({
-    required this.identity,
-    Iterable<StageStep> steps = const [],
-  }) : steps = List<StageStep>.unmodifiable(steps) {
+  StageReceipt({required this.identity, Iterable<StageStep> steps = const []})
+    : steps = List<StageStep>.unmodifiable(steps) {
     _requireUnique(this.steps.map((step) => step.name), 'step name');
     _requireUnique(artifacts.map((artifact) => artifact.path), 'artifact path');
   }
@@ -235,11 +231,11 @@ class StageReceipt {
     if (decoded is Map && decoded['schema'] != stageSchemaVersion) {
       throw FormatException('unsupported stage schema: ${decoded['schema']}');
     }
-    final map = _strictMap(
-      decoded,
-      const {'schema', 'stage', 'steps'},
-      'stage receipt',
-    );
+    final map = _strictMap(decoded, const {
+      'schema',
+      'stage',
+      'steps',
+    }, 'stage receipt');
     return StageReceipt(
       identity: StageIdentity.fromJson(map['stage']),
       steps: _list(map, 'steps').map(StageStep.fromJson),
@@ -262,10 +258,10 @@ class StageReceipt {
   }
 
   Map<String, Object?> toJson() => {
-        'schema': stageSchemaVersion,
-        'stage': identity.toJson(),
-        'steps': steps.map((step) => step.toJson()).toList(),
-      };
+    'schema': stageSchemaVersion,
+    'stage': identity.toJson(),
+    'steps': steps.map((step) => step.toJson()).toList(),
+  };
 
   String encode() => '${CanonicalJson.encode(toJson())}\n';
 }
@@ -347,11 +343,7 @@ Map<String, Object?> _evidence(Map<String, Object?> evidence) {
   return normalized;
 }
 
-Map<String, Object?> _strictMap(
-  Object? value,
-  Set<String> keys,
-  String label,
-) {
+Map<String, Object?> _strictMap(Object? value, Set<String> keys, String label) {
   if (value is! Map) throw FormatException('$label is not an object');
   final map = <String, Object?>{};
   for (final entry in value.entries) {

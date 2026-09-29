@@ -45,7 +45,7 @@ class StageIssue {
 
 class StageInspection {
   StageInspection({required this.receipt, required Iterable<StageIssue> issues})
-      : issues = List<StageIssue>.unmodifiable(issues);
+    : issues = List<StageIssue>.unmodifiable(issues);
 
   final StageReceipt? receipt;
   final List<StageIssue> issues;
@@ -154,36 +154,44 @@ class StageInspector {
     try {
       receipt = StageReceiptStore(stage).read();
       if (receipt == null) {
-        issues.add(const StageIssue(
-          StageIssueKind.missingReceipt,
-          'files without a stage receipt are not reusable',
-          path: 'stage.json',
-        ));
+        issues.add(
+          const StageIssue(
+            StageIssueKind.missingReceipt,
+            'files without a stage receipt are not reusable',
+            path: 'stage.json',
+          ),
+        );
       }
     } on Object catch (error) {
-      issues.add(StageIssue(
-        '$error'.contains('escapes the stage')
-            ? StageIssueKind.unsafePath
-            : StageIssueKind.invalidReceipt,
-        'stage receipt is invalid: $error',
-        path: 'stage.json',
-      ));
+      issues.add(
+        StageIssue(
+          '$error'.contains('escapes the stage')
+              ? StageIssueKind.unsafePath
+              : StageIssueKind.invalidReceipt,
+          'stage receipt is invalid: $error',
+          path: 'stage.json',
+        ),
+      );
     }
 
     if (receipt != null) {
       if (receipt.identity.id != stage.identity.id) {
-        issues.add(const StageIssue(
-          StageIssueKind.wrongStage,
-          'receipt identity does not name this stage',
-          path: 'stage.json',
-        ));
+        issues.add(
+          const StageIssue(
+            StageIssueKind.wrongStage,
+            'receipt identity does not name this stage',
+            path: 'stage.json',
+          ),
+        );
       }
       if (!receipt.complete) {
-        issues.add(const StageIssue(
-          StageIssueKind.incompleteReceipt,
-          'receipt records an incomplete stage',
-          path: 'stage.json',
-        ));
+        issues.add(
+          const StageIssue(
+            StageIssueKind.incompleteReceipt,
+            'receipt records an incomplete stage',
+            path: 'stage.json',
+          ),
+        );
       }
       for (final artifact in receipt.artifacts) {
         _inspectArtifact(stage, artifact, issues);
@@ -213,30 +221,36 @@ class StageInspector {
         followLinks: false,
       );
       if (type == FileSystemEntityType.link) {
-        issues.add(StageIssue(
-          StageIssueKind.symlink,
-          'symlinks are never staged artifacts',
-          path: partial,
-        ));
+        issues.add(
+          StageIssue(
+            StageIssueKind.symlink,
+            'symlinks are never staged artifacts',
+            path: partial,
+          ),
+        );
         return;
       }
       final wanted = i == parts.length - 1
           ? FileSystemEntityType.file
           : FileSystemEntityType.directory;
       if (type == FileSystemEntityType.notFound) {
-        issues.add(StageIssue(
-          StageIssueKind.missingArtifact,
-          'receipt artifact is missing',
-          path: expected.path,
-        ));
+        issues.add(
+          StageIssue(
+            StageIssueKind.missingArtifact,
+            'receipt artifact is missing',
+            path: expected.path,
+          ),
+        );
         return;
       }
       if (type != wanted) {
-        issues.add(StageIssue(
-          StageIssueKind.wrongType,
-          'receipt path is not a regular file beneath regular directories',
-          path: partial,
-        ));
+        issues.add(
+          StageIssue(
+            StageIssueKind.wrongType,
+            'receipt path is not a regular file beneath regular directories',
+            path: partial,
+          ),
+        );
         return;
       }
     }
@@ -250,18 +264,22 @@ class StageInspector {
       if (bytes.length != expected.size) differences.add('size');
       if (Sha256.hex(bytes) != expected.sha256) differences.add('sha256');
       if (differences.isNotEmpty) {
-        issues.add(StageIssue(
-          StageIssueKind.changedArtifact,
-          'artifact ${differences.join(', ')} differs from the receipt',
-          path: expected.path,
-        ));
+        issues.add(
+          StageIssue(
+            StageIssueKind.changedArtifact,
+            'artifact ${differences.join(', ')} differs from the receipt',
+            path: expected.path,
+          ),
+        );
       }
     } on FileSystemException catch (error) {
-      issues.add(StageIssue(
-        StageIssueKind.unreadable,
-        'artifact could not be read: ${error.message}',
-        path: expected.path,
-      ));
+      issues.add(
+        StageIssue(
+          StageIssueKind.unreadable,
+          'artifact could not be read: ${error.message}',
+          path: expected.path,
+        ),
+      );
     }
   }
 
@@ -337,10 +355,7 @@ class StageInspector {
             (output) =>
                 output.type != 'source' || !output.path.startsWith('source/'),
           )) {
-        _structure(
-          issues,
-          'source-snapshot must record its source files',
-        );
+        _structure(issues, 'source-snapshot must record its source files');
       }
       final expectedEvidence = receipt.identity.isGitBound
           ? <String, Object?>{
@@ -377,10 +392,7 @@ class StageInspector {
       // unique by construction, so the one damaged shape left to name is a
       // finalizing step that is no longer terminal.
       if (completeIndexes.isNotEmpty) {
-        _structure(
-          issues,
-          'complete-stage must be the terminal step',
-        );
+        _structure(issues, 'complete-stage must be the terminal step');
       }
       return;
     }
@@ -434,19 +446,23 @@ class StageInspector {
         File(stage.resolve('release-manifest.json')).readAsStringSync(),
       );
     } on Object catch (error) {
-      issues.add(StageIssue(
-        StageIssueKind.invalidManifest,
-        'release manifest is invalid: $error',
-        path: 'release-manifest.json',
-      ));
+      issues.add(
+        StageIssue(
+          StageIssueKind.invalidManifest,
+          'release manifest is invalid: $error',
+          path: 'release-manifest.json',
+        ),
+      );
       return;
     }
     if (manifest.commit != receipt.identity.headCommit) {
-      issues.add(const StageIssue(
-        StageIssueKind.invalidManifest,
-        'release manifest belongs to another stage',
-        path: 'release-manifest.json',
-      ));
+      issues.add(
+        const StageIssue(
+          StageIssueKind.invalidManifest,
+          'release manifest belongs to another stage',
+          path: 'release-manifest.json',
+        ),
+      );
     }
 
     final beforeComplete = <String, StageArtifact>{};
@@ -472,14 +488,17 @@ class StageInspector {
     final StagedHomebrewBinding? homebrewBinding;
     try {
       final encoded = complete.evidence['homebrew_binding'];
-      homebrewBinding =
-          encoded == null ? null : StagedHomebrewBinding.fromEvidence(encoded);
+      homebrewBinding = encoded == null
+          ? null
+          : StagedHomebrewBinding.fromEvidence(encoded);
     } on Object catch (error) {
-      issues.add(StageIssue(
-        StageIssueKind.invalidManifest,
-        'complete-stage has malformed Homebrew bindings: $error',
-        path: 'release-manifest.json',
-      ));
+      issues.add(
+        StageIssue(
+          StageIssueKind.invalidManifest,
+          'complete-stage has malformed Homebrew bindings: $error',
+          path: 'release-manifest.json',
+        ),
+      );
       return;
     }
     final expectedCompleteInputs = {
@@ -498,11 +517,13 @@ class StageInspector {
         expectedCompleteInputs
             .difference(completeInputs.keys.toSet())
             .isNotEmpty) {
-      issues.add(const StageIssue(
-        StageIssueKind.invalidManifest,
-        'complete-stage inputs do not exactly bind the publication inventory',
-        path: 'release-manifest.json',
-      ));
+      issues.add(
+        const StageIssue(
+          StageIssueKind.invalidManifest,
+          'complete-stage inputs do not exactly bind the publication inventory',
+          path: 'release-manifest.json',
+        ),
+      );
     }
 
     for (final item in manifest.artifacts) {
@@ -513,21 +534,25 @@ class StageInspector {
           local.size != item.size ||
           local.sha256 != item.sha256 ||
           completeInputs[stagedPath] != item.sha256) {
-        issues.add(StageIssue(
-          StageIssueKind.invalidManifest,
-          'manifest metadata does not match the producer receipt',
-          path: item.name,
-        ));
+        issues.add(
+          StageIssue(
+            StageIssueKind.invalidManifest,
+            'manifest metadata does not match the producer receipt',
+            path: item.name,
+          ),
+        );
         continue;
       }
     }
     final manifestHomebrew = manifest.homebrew;
     if (homebrewBinding?.identity != manifestHomebrew?.identity) {
-      issues.add(const StageIssue(
-        StageIssueKind.invalidManifest,
-        'complete-stage Homebrew evidence does not match the manifest',
-        path: 'release-manifest.json',
-      ));
+      issues.add(
+        const StageIssue(
+          StageIssueKind.invalidManifest,
+          'complete-stage Homebrew evidence does not match the manifest',
+          path: 'release-manifest.json',
+        ),
+      );
     }
     if (manifestHomebrew != null) {
       final local = homebrewBinding == null
@@ -540,11 +565,13 @@ class StageInspector {
           local.sha256 != manifestHomebrew.sha256 ||
           completeInputs[homebrewBinding.stagedPath] !=
               manifestHomebrew.sha256) {
-        issues.add(StageIssue(
-          StageIssueKind.invalidManifest,
-          'Homebrew metadata does not match the producer receipt',
-          path: '${manifestHomebrew.tap}/${manifestHomebrew.path}',
-        ));
+        issues.add(
+          StageIssue(
+            StageIssueKind.invalidManifest,
+            'Homebrew metadata does not match the producer receipt',
+            path: '${manifestHomebrew.tap}/${manifestHomebrew.path}',
+          ),
+        );
       }
     }
   }
@@ -557,7 +584,8 @@ class StageInspector {
   ) {
     try {
       final contents = StageArchiveInventory.decode(
-          File(stage.resolve(path)).readAsBytesSync());
+        File(stage.resolve(path)).readAsBytesSync(),
+      );
       final actual = contents.inventory;
       if (producer == null || !producer.name.startsWith('archive:')) {
         throw const FormatException(
@@ -578,7 +606,8 @@ class StageInspector {
           final entry = actual.singleWhere((entry) => entry.name == file.path);
           if (input == null || input.sha256 != entry.sha256) {
             throw FormatException(
-                'archived ${file.path} differs from its producer input');
+              'archived ${file.path} differs from its producer input',
+            );
           }
         }
       }
@@ -592,7 +621,7 @@ class StageInspector {
                     CanonicalJson.encode(signature['files']) !=
                         CanonicalJson.encode([
                           for (final file in contents.artifact.signedFiles)
-                            file.path
+                            file.path,
                         ])))) {
           throw const FormatException(
             'macOS archive has no final signature verification evidence',
@@ -600,11 +629,13 @@ class StageInspector {
         }
       }
     } on Object catch (error) {
-      issues.add(StageIssue(
-        StageIssueKind.invalidArchive,
-        'archive evidence is invalid: $error',
-        path: path,
-      ));
+      issues.add(
+        StageIssue(
+          StageIssueKind.invalidArchive,
+          'archive evidence is invalid: $error',
+          path: path,
+        ),
+      );
     }
   }
 
@@ -622,39 +653,52 @@ class StageInspector {
         final parts = producer.name.split(':');
         root = 'producers/${parts[1]}/${parts[2]}';
         final expected = {
-          for (final file in artifact.files) '$root/${file.path}': file
+          for (final file in artifact.files) '$root/${file.path}': file,
         };
         if (producer.outputs.length != expected.length ||
-            producer.outputs.any((output) =>
-                expected[output.path]?.mode != output.mode ||
-                expected[output.path]?.type != output.type)) {
+            producer.outputs.any(
+              (output) =>
+                  expected[output.path]?.mode != output.mode ||
+                  expected[output.path]?.type != output.type,
+            )) {
           throw const FormatException(
-              'signed build has an incomplete artifact inventory');
+            'signed build has an incomplete artifact inventory',
+          );
         }
         if (artifact.isBundle) {
           final manifest = CanonicalJson.decodeDocument(
-              File(stage.resolve('$root/${BinaryArtifact.manifestName}'))
-                  .readAsStringSync());
+            File(
+              stage.resolve('$root/${BinaryArtifact.manifestName}'),
+            ).readAsStringSync(),
+          );
           if (CanonicalJson.encode(manifest) !=
               CanonicalJson.encode(artifact.toJson())) {
             throw const FormatException(
-                'signed build manifest differs from its receipt');
+              'signed build manifest differs from its receipt',
+            );
           }
         }
       }
     } on Object catch (error) {
-      issues.add(StageIssue(StageIssueKind.invalidStructure, '$error',
-          path: 'stage.json'));
+      issues.add(
+        StageIssue(
+          StageIssueKind.invalidStructure,
+          '$error',
+          path: 'stage.json',
+        ),
+      );
       return;
     }
     final binary = artifact != null
         ? producer.outputs
-            .where((output) => output.path == '$root/${artifact!.identityFile}')
-            .firstOrNull
+              .where(
+                (output) => output.path == '$root/${artifact!.identityFile}',
+              )
+              .firstOrNull
         : producer.outputs.length == 1 &&
-                producer.outputs.single.type == 'executable'
-            ? producer.outputs.single
-            : null;
+              producer.outputs.single.type == 'executable'
+        ? producer.outputs.single
+        : null;
     String? problem;
     if (binary == null) {
       problem = 'signed build does not produce exactly one executable';
@@ -668,8 +712,9 @@ class StageInspector {
       final certificate = signature['certificate'];
       final fingerprint = signature['certificate_sha256'];
       final firstIdentity = signature['first_identity'];
-      final hasPublishedRequirement =
-          signature.containsKey('published_requirement');
+      final hasPublishedRequirement = signature.containsKey(
+        'published_requirement',
+      );
       final publishedRequirement = signature['published_requirement'];
       final designatedRequirement = signature['designated_requirement'];
       final codeId = signature['code_id'];
@@ -715,8 +760,9 @@ class StageInspector {
       } else {
         for (final file in artifact.signedFiles) {
           final record = signatures[file.path];
-          final output = producer.outputs
-              .singleWhere((output) => output.path == '$root/${file.path}');
+          final output = producer.outputs.singleWhere(
+            (output) => output.path == '$root/${file.path}',
+          );
           if (record is! Map ||
               signature is! Map ||
               record['code_id'] !=
@@ -740,11 +786,13 @@ class StageInspector {
       }
     }
     if (problem != null) {
-      issues.add(StageIssue(
-        StageIssueKind.invalidStructure,
-        problem,
-        path: 'stage.json',
-      ));
+      issues.add(
+        StageIssue(
+          StageIssueKind.invalidStructure,
+          problem,
+          path: 'stage.json',
+        ),
+      );
     }
   }
 
@@ -796,42 +844,52 @@ class StageInspector {
         final relative = _relative(stage.path, entity.path);
         final type = FileSystemEntity.typeSync(entity.path, followLinks: false);
         if (type == FileSystemEntityType.link) {
-          issues.add(StageIssue(
-            StageIssueKind.symlink,
-            'symlinks are not permitted in a stage',
-            path: relative,
-          ));
+          issues.add(
+            StageIssue(
+              StageIssueKind.symlink,
+              'symlinks are not permitted in a stage',
+              path: relative,
+            ),
+          );
           if (!expectedFiles.contains(relative) &&
               !expectedDirectories.contains(relative)) {
-            issues.add(StageIssue(
-              StageIssueKind.extraArtifact,
-              'path is not named by the receipt',
-              path: relative,
-            ));
+            issues.add(
+              StageIssue(
+                StageIssueKind.extraArtifact,
+                'path is not named by the receipt',
+                path: relative,
+              ),
+            );
           }
         } else if (type == FileSystemEntityType.directory) {
           if (!expectedDirectories.contains(relative)) {
-            issues.add(StageIssue(
-              StageIssueKind.extraArtifact,
-              'directory is not needed by a receipt artifact',
-              path: relative,
-            ));
+            issues.add(
+              StageIssue(
+                StageIssueKind.extraArtifact,
+                'directory is not needed by a receipt artifact',
+                path: relative,
+              ),
+            );
           }
           walk(Directory(entity.path));
         } else if (type == FileSystemEntityType.file) {
           if (!expectedFiles.contains(relative)) {
-            issues.add(StageIssue(
-              StageIssueKind.extraArtifact,
-              'file is not named by the receipt',
-              path: relative,
-            ));
+            issues.add(
+              StageIssue(
+                StageIssueKind.extraArtifact,
+                'file is not named by the receipt',
+                path: relative,
+              ),
+            );
           }
         } else {
-          issues.add(StageIssue(
-            StageIssueKind.wrongType,
-            'unsupported filesystem entity in stage',
-            path: relative,
-          ));
+          issues.add(
+            StageIssue(
+              StageIssueKind.wrongType,
+              'unsupported filesystem entity in stage',
+              path: relative,
+            ),
+          );
         }
       }
     }
@@ -839,20 +897,20 @@ class StageInspector {
     try {
       walk(Directory(stage.path));
     } on FileSystemException catch (error) {
-      issues.add(StageIssue(
-        StageIssueKind.unreadable,
-        'stage inventory could not be read: ${error.message}',
-      ));
+      issues.add(
+        StageIssue(
+          StageIssueKind.unreadable,
+          'stage inventory could not be read: ${error.message}',
+        ),
+      );
     }
   }
 }
 
 void _structure(List<StageIssue> issues, String message) {
-  issues.add(StageIssue(
-    StageIssueKind.invalidStructure,
-    message,
-    path: 'stage.json',
-  ));
+  issues.add(
+    StageIssue(StageIssueKind.invalidStructure, message, path: 'stage.json'),
+  );
 }
 
 bool _sameMap(Map<String, Object?> left, Map<String, Object?> right) {
@@ -879,8 +937,9 @@ List<StageIssue> _deduplicate(List<StageIssue> issues) {
   final keys = <String>{};
   return [
     for (final issue in issues)
-      if (keys
-          .add('${issue.kind.index}\u0000${issue.path}\u0000${issue.message}'))
+      if (keys.add(
+        '${issue.kind.index}\u0000${issue.path}\u0000${issue.message}',
+      ))
         issue,
   ];
 }

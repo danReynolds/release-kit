@@ -24,9 +24,9 @@ class DartCompilerIdentity {
     required String sha256,
     this.runtimeSha256,
     this.runtimeLicenseSha256,
-  })  : executable = executable.trim(),
-        version = version.trim(),
-        sha256 = sha256.toLowerCase() {
+  }) : executable = executable.trim(),
+       version = version.trim(),
+       sha256 = sha256.toLowerCase() {
     if (this.executable.isEmpty || this.executable.contains('\u0000')) {
       throw ArgumentError('the Dart compiler path is empty or invalid');
     }
@@ -54,11 +54,14 @@ class DartCompilerIdentity {
           'sha256',
           'version',
           'runtime_sha256',
-          'runtime_license_sha256'
+          'runtime_license_sha256',
         }).isNotEmpty ||
-        const {'command', 'executable', 'sha256', 'version'}
-            .difference(value.keys.toSet())
-            .isNotEmpty ||
+        const {
+          'command',
+          'executable',
+          'sha256',
+          'version',
+        }.difference(value.keys.toSet()).isNotEmpty ||
         value['command'] != 'dart' ||
         value['executable'] is! String ||
         value['sha256'] is! String ||
@@ -151,23 +154,23 @@ class DartCompilerIdentity {
   final String? runtimeLicenseSha256;
 
   Map<String, Object?> toJson() => {
-        'command': 'dart',
-        'executable': executable,
-        'sha256': sha256,
-        'version': version,
-        if (runtimeSha256 != null) 'runtime_sha256': runtimeSha256,
-        if (runtimeLicenseSha256 != null)
-          'runtime_license_sha256': runtimeLicenseSha256,
-      };
+    'command': 'dart',
+    'executable': executable,
+    'sha256': sha256,
+    'version': version,
+    if (runtimeSha256 != null) 'runtime_sha256': runtimeSha256,
+    if (runtimeLicenseSha256 != null)
+      'runtime_license_sha256': runtimeLicenseSha256,
+  };
 
   Map<String, Object?> toPlanJson() => {
-        'command': 'dart',
-        'sha256': sha256,
-        'version': version,
-        if (runtimeSha256 != null) 'runtime_sha256': runtimeSha256,
-        if (runtimeLicenseSha256 != null)
-          'runtime_license_sha256': runtimeLicenseSha256,
-      };
+    'command': 'dart',
+    'sha256': sha256,
+    'version': version,
+    if (runtimeSha256 != null) 'runtime_sha256': runtimeSha256,
+    if (runtimeLicenseSha256 != null)
+      'runtime_license_sha256': runtimeLicenseSha256,
+  };
 
   @override
   bool operator ==(Object other) =>
@@ -214,10 +217,10 @@ class RkImplementationIdentity {
   final String sha256;
 
   Map<String, Object?> toJson() => {
-        'sha256': sha256,
-        'stage_schema': stageSchema,
-        'version': version,
-      };
+    'sha256': sha256,
+    'stage_schema': stageSchema,
+    'version': version,
+  };
 }
 
 final Map<String, _CachedCompilerIdentity> _compilerIdentityCache = {};
@@ -235,15 +238,20 @@ class _CachedCompilerIdentity {
 
 String _compilerExecutableFingerprint(String executable) {
   final stat = File(executable).statSync();
-  return Sha256.hex(utf8.encode(CanonicalJson.encode({
-    'changed': stat.changed.microsecondsSinceEpoch,
-    'mode': stat.mode,
-    'modified': stat.modified.microsecondsSinceEpoch,
-    'size': stat.size,
-    'runtime': _runtimeFingerprint(executable),
-    'runtime_license': _fileFingerprint(
-        File('${File(executable).parent.parent.path}/LICENSE')),
-  })));
+  return Sha256.hex(
+    utf8.encode(
+      CanonicalJson.encode({
+        'changed': stat.changed.microsecondsSinceEpoch,
+        'mode': stat.mode,
+        'modified': stat.modified.microsecondsSinceEpoch,
+        'size': stat.size,
+        'runtime': _runtimeFingerprint(executable),
+        'runtime_license': _fileFingerprint(
+          File('${File(executable).parent.parent.path}/LICENSE'),
+        ),
+      }),
+    ),
+  );
 }
 
 String? _runtimeDigest(String compiler) {
@@ -257,14 +265,15 @@ class DartCompilerUnavailable implements Exception {
   final String reason;
 
   @override
-  String toString() => 'the ambient Dart compiler could not be identified: '
+  String toString() =>
+      'the ambient Dart compiler could not be identified: '
       '$reason';
 }
 
 String _compilerOutput(ProcessResult result) => [
-      '${result.stdout}'.trim(),
-      '${result.stderr}'.trim(),
-    ].where((part) => part.isNotEmpty).join('\n').replaceAll('\r\n', '\n');
+  '${result.stdout}'.trim(),
+  '${result.stderr}'.trim(),
+].where((part) => part.isNotEmpty).join('\n').replaceAll('\r\n', '\n');
 
 /// The release-affecting interpretation hashed into a stage identity.
 ///
@@ -279,47 +288,44 @@ Map<String, Object?> stagePlanFor(
   required RkImplementationIdentity rk,
   Map<String, String>? environment,
   Map<String, Object?>? launcherCompiler,
-}) =>
-    {
-      'unit': {
-        'name': unit.name,
-        'version': unit.version.canonical,
-        'tag': unit.tag,
-        'tag_pattern': unit.tagPattern,
-        'homebrew_tap': unit.homebrewTap,
-        'targets': unit.publish.map((target) => target.configName).toList()
+}) => {
+  'unit': {
+    'name': unit.name,
+    'version': unit.version.canonical,
+    'tag': unit.tag,
+    'tag_pattern': unit.tagPattern,
+    'homebrew_tap': unit.homebrewTap,
+    'targets': unit.publish.map((target) => target.configName).toList()..sort(),
+  },
+  'source_binding': git.isBound ? 'git' : 'unbound',
+  if (git.isBound) 'repository': git.originUrl,
+  if (unit.publish.contains(PublishTarget.gitTag))
+    'tag_signing': git.signingConfigured ? 'configured' : 'unsigned',
+  'projects': [
+    for (final project in unit.projects)
+      {
+        'name': project.name,
+        'version': project.version.canonical,
+        'path': project.pubspec.directory,
+        'executable': project.executable,
+        'dart_defines': project.dartDefines,
+        'targets': project.publish.map((target) => target.configName).toList()
           ..sort(),
+        if (project.publish.contains(PublishTarget.pubDev))
+          'registry_endpoint': project.pubspec.effectivePublishDestination(
+            environment ?? Platform.environment,
+          ),
+        'binary_platforms': [...project.binaryPlatforms]..sort(),
       },
-      'source_binding': git.isBound ? 'git' : 'unbound',
-      if (git.isBound) 'repository': git.originUrl,
-      if (unit.publish.contains(PublishTarget.gitTag))
-        'tag_signing': git.signingConfigured ? 'configured' : 'unsigned',
-      'projects': [
-        for (final project in unit.projects)
-          {
-            'name': project.name,
-            'version': project.version.canonical,
-            'path': project.pubspec.directory,
-            'executable': project.executable,
-            'dart_defines': project.dartDefines,
-            'targets':
-                project.publish.map((target) => target.configName).toList()
-                  ..sort(),
-            if (project.publish.contains(PublishTarget.pubDev))
-              'registry_endpoint': project.pubspec.effectivePublishDestination(
-                environment ?? Platform.environment,
-              ),
-            'binary_platforms': [...project.binaryPlatforms]..sort(),
-          },
-      ],
-      'toolchain': {
-        'dart': compiler.toPlanJson(),
-        if (launcherCompiler != null) 'launcher': launcherCompiler,
-        'host_os': Platform.operatingSystem,
-        'host_abi': Abi.current().toString(),
-        'rk': rk.toJson(),
-      },
-    };
+  ],
+  'toolchain': {
+    'dart': compiler.toPlanJson(),
+    if (launcherCompiler != null) 'launcher': launcherCompiler,
+    'host_os': Platform.operatingSystem,
+    'host_abi': Abi.current().toString(),
+    'rk': rk.toJson(),
+  },
+};
 
 String _canonicalFile(String path) {
   final file = File(path).absolute;
@@ -342,9 +348,9 @@ String _resolveOnPath(String command) {
   final separator = Platform.isWindows ? ';' : ':';
   final extensions = Platform.isWindows
       ? (Platform.environment['PATHEXT'] ?? '.EXE;.BAT;.CMD')
-          .split(';')
-          .where((extension) => extension.isNotEmpty)
-          .toList()
+            .split(';')
+            .where((extension) => extension.isNotEmpty)
+            .toList()
       : const [''];
   for (final entry in path.split(separator)) {
     final directory = entry.isEmpty ? Directory.current.path : entry;
@@ -376,8 +382,10 @@ String _rkImplementationSha256() {
   if (sourceRoot != null) {
     final files = <File>[
       File('${sourceRoot.path}${Platform.pathSeparator}pubspec.yaml'),
-      File('${sourceRoot.path}${Platform.pathSeparator}bin'
-          '${Platform.pathSeparator}rk.dart'),
+      File(
+        '${sourceRoot.path}${Platform.pathSeparator}bin'
+        '${Platform.pathSeparator}rk.dart',
+      ),
       ...Directory('${sourceRoot.path}${Platform.pathSeparator}lib')
           .listSync(recursive: true, followLinks: false)
           .whereType<File>()
@@ -425,7 +433,8 @@ String rkProgramDigest(File? script, File executable) {
   final executablePath = _realPath(executable);
   // The bundle launcher passes its adjacent module by absolute path. Unlike
   // a compile-exe argv[0] phantom, it remains the program when cwd is lib/rk.
-  final bundledModule = executablePath != null &&
+  final bundledModule =
+      executablePath != null &&
           executablePath.endsWith('${Platform.pathSeparator}dartaotruntime')
       ? '${File(executablePath).parent.path}${Platform.pathSeparator}app.aot'
       : null;
@@ -433,19 +442,22 @@ String rkProgramDigest(File? script, File executable) {
     final path = _realPath(file);
     if (path == null) continue;
     final cwd = Directory.current.path;
-    final phantom = path ==
+    final phantom =
+        path ==
             '$cwd${Platform.pathSeparator}'
                 '${path.split(Platform.pathSeparator).last}' &&
         path != executablePath &&
         path != bundledModule;
-    final isProgram = identical(file, executable) ||
+    final isProgram =
+        identical(file, executable) ||
         path == executablePath ||
         (!phantom && artifacts.any(path.endsWith));
     if (!isProgram) continue;
     if (!seen.add(path)) continue;
     try {
-      inventory['program-${inventory.length + 1}'] =
-          Sha256.hex(File(path).readAsBytesSync());
+      inventory['program-${inventory.length + 1}'] = Sha256.hex(
+        File(path).readAsBytesSync(),
+      );
     } on Object catch (error) {
       // Existing but unreadable is not evidence either, and letting the
       // read throw reproduced the failure this exists to prevent.
@@ -474,13 +486,13 @@ Directory? _releaseKitSourceRoot(File script) {
     final manifest = File(
       '${directory.path}${Platform.pathSeparator}pubspec.yaml',
     );
-    final library = Directory(
-      '${directory.path}${Platform.pathSeparator}lib',
-    );
+    final library = Directory('${directory.path}${Platform.pathSeparator}lib');
     if (manifest.existsSync() &&
         library.existsSync() &&
-        RegExp(r'^name:\s*rk\s*$', multiLine: true)
-            .hasMatch(manifest.readAsStringSync())) {
+        RegExp(
+          r'^name:\s*rk\s*$',
+          multiLine: true,
+        ).hasMatch(manifest.readAsStringSync())) {
       return directory;
     }
     final parent = directory.parent;
@@ -505,9 +517,11 @@ String _dartSdkExecutable(String selected) {
   try {
     final script = File('${probe.path}/sdk.dart')
       ..writeAsStringSync(
-          "import 'dart:io'; void main() => print(Platform.resolvedExecutable);\n");
-    final result =
-        Process.runSync(selected, [script.path], workingDirectory: probe.path);
+        "import 'dart:io'; void main() => print(Platform.resolvedExecutable);\n",
+      );
+    final result = Process.runSync(selected, [
+      script.path,
+    ], workingDirectory: probe.path);
     if (result.exitCode != 0) return selected;
     final path = '${result.stdout}'.trim().split('\n').last;
     if (!File(path).isAbsolute ||

@@ -1096,10 +1096,11 @@ and no second member in sight is complexity naming no failure.
 vaguest name, and it stays that way: a directory name that is wrong
 excludes falsely, which is worse than one that merely fails to narrow.
 
-rk has **no runtime dependencies** — `dart:*` and its own sources only,
-enforced by a test over the import graph and an empty `dependencies:`
-block. This keeps third-party code away from the signing path and makes
-rk's own bootstrap trivial.
+The original zero-runtime-dependency constraint is superseded for the approved
+installation and Fleury UI work. Fleury imports are allowed only under `tui/`,
+with an import-boundary test protecting the release/signing implementation. The
+GitHub adapter reuses the engine’s archive inventory validator. Native
+installation providers remain separate from publication modules.
 
 ## What rk is not
 

@@ -68,10 +68,7 @@ final class ReleaseSource {
       );
     }
 
-    final frozen = _freeze(
-      GitWorktreeSourceTree(repository.root),
-      diagnostics,
-    );
+    final frozen = _freeze(GitWorktreeSourceTree(repository.root), diagnostics);
     if (frozen == null) return null;
     final frozenResolution = _resolve(frozen, diagnostics);
     if (frozenResolution == null) return null;
@@ -87,27 +84,22 @@ final class ReleaseSource {
     );
   }
 
-  static FrozenSourceTree? _freeze(
-    SourceTree source,
-    Diagnostics diagnostics,
-  ) {
+  static FrozenSourceTree? _freeze(SourceTree source, Diagnostics diagnostics) {
     try {
       return FrozenSourceTree.capture(source);
     } on SourceUnreadable catch (error) {
       diagnostics.add(
         'RK-SRC-003',
         'the source snapshot could not be frozen',
-        remedy: '${error.path}: ${error.reason}\n'
+        remedy:
+            '${error.path}: ${error.reason}\n'
             'Stop concurrent edits, then run rk again.',
       );
       return null;
     }
   }
 
-  static Resolution? _resolve(
-    SourceTree source,
-    Diagnostics diagnostics,
-  ) {
+  static Resolution? _resolve(SourceTree source, Diagnostics diagnostics) {
     try {
       final configSource = source.read('release.toml');
       if (configSource == null) {
@@ -130,7 +122,8 @@ final class ReleaseSource {
       diagnostics.add(
         'RK-SRC-003',
         'the selected source could not be read',
-        remedy: '${error.path}: ${error.reason}\n'
+        remedy:
+            '${error.path}: ${error.reason}\n'
             'Make every release input a regular repository file, then run '
             'rk again.',
       );
@@ -151,14 +144,14 @@ final class ReleaseSource {
         for (final project in unit.projects)
           for (final target in project.publish)
             if (target.requiresGit) target.configName,
-      }.toList()
-        ..sort();
+      }.toList()..sort();
       if (requiringGit.isEmpty) continue;
       valid = false;
       diagnostics.add(
         'RK-SRC-001',
         '${unit.name} selects targets that require Git',
-        remedy: 'initialize a Git repository, or remove '
+        remedy:
+            'initialize a Git repository, or remove '
             '${requiringGit.join(', ')} from this unit',
       );
     }
@@ -168,10 +161,9 @@ final class ReleaseSource {
   static Iterable<ResolvedUnit> _selected(
     Resolution resolution,
     String? only,
-  ) =>
-      only == null
-          ? resolution.units
-          : resolution.units.where((unit) => unit.name == only);
+  ) => only == null
+      ? resolution.units
+      : resolution.units.where((unit) => unit.name == only);
 
   /// The release model parsed from [tree]. For dirty source, both are the
   /// same immutable capture rather than observations made at different times.

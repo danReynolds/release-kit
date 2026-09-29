@@ -16,12 +16,16 @@ void main() {
 
   ResolvedProject project() {
     final diagnostics = Diagnostics();
-    final config = ReleaseConfig.parse('''
+    final config = ReleaseConfig.parse(
+      '''
 schema = 2
 
 [release.tool]
 publish = ["git-tag", "pub.dev"]
-''', 'release.toml', diagnostics)!;
+''',
+      'release.toml',
+      diagnostics,
+    )!;
     final resolution = Resolution.resolve(
       config,
       MemorySourceTree(source),
@@ -36,35 +40,35 @@ publish = ["git-tag", "pub.dev"]
     bool unavailable = false,
     String? registrySha256 = _a,
     String? stagedSha256,
-  }) =>
-      PubDevTarget(
-        registry: _Registry(
-          published: published,
-          unavailable: unavailable,
-          archiveSha256: registrySha256,
-        ),
-      ).inspectProject(
-        project(),
-        expectedArchiveSha256: stagedSha256,
-      );
+  }) => PubDevTarget(
+    registry: _Registry(
+      published: published,
+      unavailable: unavailable,
+      archiveSha256: registrySha256,
+    ),
+  ).inspectProject(project(), expectedArchiveSha256: stagedSha256);
 
-  test('the staged native archive is verified by the registry digest',
-      () async {
-    final result = await inspect(stagedSha256: _a);
+  test(
+    'the staged native archive is verified by the registry digest',
+    () async {
+      final result = await inspect(stagedSha256: _a);
 
-    expect(result.verdict, Verdict.exact);
-    expect(result.evidence['comparison'], 'exact');
-    expect(result.evidence['archive'], 'sha256:$_a');
-  });
+      expect(result.verdict, Verdict.exact);
+      expect(result.evidence['comparison'], 'exact');
+      expect(result.evidence['archive'], 'sha256:$_a');
+    },
+  );
 
-  test('the right version with a different known digest is a conflict',
-      () async {
-    final result = await inspect(stagedSha256: _b);
+  test(
+    'the right version with a different known digest is a conflict',
+    () async {
+      final result = await inspect(stagedSha256: _b);
 
-    expect(result.verdict, Verdict.conflict);
-    expect(result.evidence['archive'], contains(_a));
-    expect(result.evidence['archive'], contains(_b));
-  });
+      expect(result.verdict, Verdict.conflict);
+      expect(result.evidence['archive'], contains(_a));
+      expect(result.evidence['archive'], contains(_b));
+    },
+  );
 
   test('an occupied historical coordinate skips without provenance', () async {
     final result = await inspect();
@@ -76,10 +80,7 @@ publish = ["git-tag", "pub.dev"]
   });
 
   test('a missing provider digest also skips without provenance', () async {
-    final result = await inspect(
-      stagedSha256: _a,
-      registrySha256: null,
-    );
+    final result = await inspect(stagedSha256: _a, registrySha256: null);
 
     expect(result.verdict, Verdict.exact);
     expect(result.evidence['comparison'], 'unavailable');

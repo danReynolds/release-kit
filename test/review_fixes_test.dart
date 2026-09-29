@@ -18,13 +18,17 @@ void main() {
   group('a list of maps stays inside the list', () {
     test('a later key cannot overwrite the package version', () {
       final diagnostics = Diagnostics();
-      final doc = parseYaml('''
+      final doc = parseYaml(
+        '''
 name: keybay
 version: 0.1.0
 screenshots:
   - description: a shot
     version: 9.9.9
-''', 'pubspec.yaml', diagnostics)!;
+''',
+        'pubspec.yaml',
+        diagnostics,
+      )!;
 
       expect(
         doc.string('version'),
@@ -38,7 +42,8 @@ screenshots:
 
     test('several map entries are read, not refused', () {
       final diagnostics = Diagnostics();
-      final doc = parseYaml('''
+      final doc = parseYaml(
+        '''
 name: keybay
 screenshots:
   - description: The CLI
@@ -46,7 +51,10 @@ screenshots:
   - description: The TUI
     path: doc/tui.png
 version: 0.1.0
-''', 'pubspec.yaml', diagnostics);
+''',
+        'pubspec.yaml',
+        diagnostics,
+      );
 
       expect(doc, isNotNull, reason: diagnostics.found.join('\n'));
       final shots = doc!.list('screenshots')!;
@@ -82,7 +90,7 @@ version: 0.1.0
   group('a constraint rk cannot evaluate is not treated as satisfied', () {
     test('a range pin refuses instead of publishing unchecked', () {
       final resolution = _resolve(
-          '''
+        '''
 schema = 2
 
 [release.framework]
@@ -93,26 +101,30 @@ publish = ["pub.dev"]
 path = "packages/fleury_mcp"
 publish = ["pub.dev"]
 ''',
-          MemorySourceTree({
-            'packages/fleury/pubspec.yaml': 'name: fleury\nversion: 0.2.0\n',
-            'packages/fleury_mcp/pubspec.yaml': '''
+        MemorySourceTree({
+          'packages/fleury/pubspec.yaml': 'name: fleury\nversion: 0.2.0\n',
+          'packages/fleury_mcp/pubspec.yaml': '''
 name: fleury_mcp
 version: 0.1.0
 dependencies:
   fleury: ">=0.1.0 <0.3.0"
 ''',
-          }));
+        }),
+      );
 
       final diagnostics = Diagnostics();
-      ReleaseDependencyPlan(resolution)
-          .prerequisites(resolution.unit('mcp')!, diagnostics);
+      ReleaseDependencyPlan(
+        resolution,
+      ).prerequisites(resolution.unit('mcp')!, diagnostics);
       expect(diagnostics.found.single.code, 'RK-DEP-002');
     });
 
     test('an exact pin is still evaluated', () {
       expect(
-        const Dependency.hosted('1.2.3', 1)
-            .satisfiedBy(Version.tryParse('1.2.3')!),
+        const Dependency.hosted(
+          '1.2.3',
+          1,
+        ).satisfiedBy(Version.tryParse('1.2.3')!),
         isTrue,
       );
     });
@@ -126,13 +138,17 @@ dependencies:
 
   test('a project built from outside the repository is refused', () {
     final diagnostics = Diagnostics();
-    final config = ReleaseConfig.parse('''
+    final config = ReleaseConfig.parse(
+      '''
 schema = 2
 
 [release.cli]
 publish = ["git-tag", "github-release"]
 binary_platforms = ["macos-arm64"]
-''', 'release.toml', diagnostics)!;
+''',
+      'release.toml',
+      diagnostics,
+    )!;
 
     final resolution = Resolution.resolve(
       config,
@@ -162,7 +178,8 @@ dependencies:
 
   test('two binary projects must be declared as separate release units', () {
     final diagnostics = Diagnostics();
-    final config = ReleaseConfig.parse('''
+    final config = ReleaseConfig.parse(
+      '''
 schema = 2
 
 [release.tools]
@@ -176,7 +193,10 @@ binary_platforms = ["macos-arm64"]
 [[release.tools.project]]
 path = "packages/two"
 binary_platforms = ["macos-arm64"]
-''', 'release.toml', diagnostics)!;
+''',
+      'release.toml',
+      diagnostics,
+    )!;
 
     final resolution = Resolution.resolve(
       config,
@@ -198,7 +218,7 @@ binary_platforms = ["macos-arm64"]
     // Multi-unit repositories declare the namespace so adding or removing a
     // sibling can never silently rename an existing unit's release history.
     final resolution = _resolve(
-        '''
+      '''
 schema = 2
 
 [release.lib]
@@ -212,38 +232,36 @@ path = "packages/mycli"
 publish = ["git-tag", "github-release"]
 binary_platforms = ["macos-arm64"]
 ''',
-        MemorySourceTree({
-          'packages/mylib/pubspec.yaml': 'name: mylib\nversion: 1.0.0\n',
-          'packages/mycli/pubspec.yaml': '''
+      MemorySourceTree({
+        'packages/mylib/pubspec.yaml': 'name: mylib\nversion: 1.0.0\n',
+        'packages/mycli/pubspec.yaml': '''
 name: mycli
 version: 1.0.0
 publish_to: none
 executables:
   mycli: mycli
 ''',
-        }));
+      }),
+    );
 
     expect(resolution.unit('lib')!.tag, 'mylib-v1.0.0');
     expect(resolution.unit('cli')!.tag, 'mycli-v1.0.0');
   });
 
   test('a repository releasing one unit still gets the bare tag', () {
-    final resolution = _resolve(
-        '''
+    final resolution = _resolve('''
 schema = 2
 
 [release.lib]
 publish = ["git-tag", "pub.dev"]
-''',
-        MemorySourceTree({
-          'pubspec.yaml': 'name: mylib\nversion: 1.5.0\n',
-        }));
+''', MemorySourceTree({'pubspec.yaml': 'name: mylib\nversion: 1.5.0\n'}));
     expect(resolution.unit('lib')!.tag, 'v1.5.0');
   });
 
   test('two units declaring one tag are refused', () {
     final diagnostics = Diagnostics();
-    final config = ReleaseConfig.parse('''
+    final config = ReleaseConfig.parse(
+      '''
 schema = 2
 
 [release.a]
@@ -255,7 +273,10 @@ publish = ["git-tag", "pub.dev"]
 tag = "v{version}"
 path = "packages/b"
 publish = ["git-tag", "pub.dev"]
-''', 'release.toml', diagnostics)!;
+''',
+      'release.toml',
+      diagnostics,
+    )!;
     final resolution = Resolution.resolve(
       config,
       MemorySourceTree({
@@ -308,7 +329,8 @@ publish = ["git-tag", "pub.dev"]
 
   test('a tag on a project row is refused, not ignored', () {
     final diagnostics = Diagnostics();
-    final config = ReleaseConfig.parse('''
+    final config = ReleaseConfig.parse(
+      '''
 schema = 2
 
 [release.framework]
@@ -319,7 +341,10 @@ publish = ["git-tag"]
 path = "packages/a"
 publish = ["pub.dev"]
 tag = "a-v{version}"
-''', 'release.toml', diagnostics);
+''',
+      'release.toml',
+      diagnostics,
+    );
 
     expect(config, isNull, reason: 'silently ignored, it tags the wrong name');
     expect(diagnostics.found.single.code, 'RK-CONF-016');
@@ -328,7 +353,7 @@ tag = "a-v{version}"
 
   test('a cross-unit prerequisite becomes a step rather than being lost', () {
     final resolution = _resolve(
-        '''
+      '''
 schema = 2
 
 [release.core]
@@ -339,18 +364,22 @@ publish = ["pub.dev"]
 path = "packages/keybay_cli"
 publish = ["pub.dev"]
 ''',
-        MemorySourceTree({
-          'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
-          'packages/keybay_cli/pubspec.yaml': '''
+      MemorySourceTree({
+        'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
+        'packages/keybay_cli/pubspec.yaml': '''
 name: keybay_cli
 version: 0.2.0
 dependencies:
   keybay: 0.2.0
 ''',
-        }));
+      }),
+    );
 
-    final checklist =
-        Checklist.derive(resolution.unit('cli')!, resolution, Diagnostics());
+    final checklist = Checklist.derive(
+      resolution.unit('cli')!,
+      resolution,
+      Diagnostics(),
+    );
     final requires = checklist['cli/requires/pub.dev/keybay/0.2.0'];
 
     expect(requires, isNotNull, reason: 'it must be visible in the checklist');
@@ -363,7 +392,7 @@ dependencies:
 
   test('a dependency circle is refused rather than silently ordered', () {
     final resolution = _resolve(
-        '''
+      '''
 schema = 2
 
 [release.pair]
@@ -378,24 +407,22 @@ publish = ["pub.dev"]
 path = "packages/b"
 publish = ["pub.dev"]
 ''',
-        MemorySourceTree({
-          'packages/a/pubspec.yaml':
-              'name: a\nversion: 1.0.0\ndependencies:\n  b: 1.0.0\n',
-          'packages/b/pubspec.yaml':
-              'name: b\nversion: 1.0.0\ndependencies:\n  a: 1.0.0\n',
-        }));
+      MemorySourceTree({
+        'packages/a/pubspec.yaml':
+            'name: a\nversion: 1.0.0\ndependencies:\n  b: 1.0.0\n',
+        'packages/b/pubspec.yaml':
+            'name: b\nversion: 1.0.0\ndependencies:\n  a: 1.0.0\n',
+      }),
+    );
 
     final diagnostics = Diagnostics();
     Checklist.derive(resolution.unit('pair')!, resolution, diagnostics);
-    expect(
-      diagnostics.found.map((d) => d.code),
-      contains('RK-DEP-003'),
-    );
+    expect(diagnostics.found.map((d) => d.code), contains('RK-DEP-003'));
   });
 
   test('every step waits only on steps that come before it', () {
     final resolution = _resolve(
-        '''
+      '''
 schema = 2
 
 [release.cli]
@@ -403,17 +430,21 @@ path = "packages/keybay_cli"
 publish = ["git-tag", "pub.dev", "github-release", "homebrew"]
 binary_platforms = ["linux-x64", "macos-arm64"]
 ''',
-        MemorySourceTree({
-          'packages/keybay_cli/pubspec.yaml': '''
+      MemorySourceTree({
+        'packages/keybay_cli/pubspec.yaml': '''
 name: keybay_cli
 version: 0.2.0
 executables:
   keybay: keybay
 ''',
-        }));
+      }),
+    );
 
-    final checklist =
-        Checklist.derive(resolution.unit('cli')!, resolution, Diagnostics());
+    final checklist = Checklist.derive(
+      resolution.unit('cli')!,
+      resolution,
+      Diagnostics(),
+    );
     final ids = checklist.steps.map((s) => s.id).toList();
 
     expect(ids.toSet(), hasLength(ids.length), reason: 'ids are unique');
@@ -426,23 +457,24 @@ executables:
 
   test('a step names what it acts on without parsing its own id', () {
     final resolution = _resolve(
-        '''
+      '''
 schema = 2
 
 [release.core]
 path = "packages/keybay"
 publish = ["pub.dev"]
 ''',
-        MemorySourceTree({
-          'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
-        }));
-
-    final checklist =
-        Checklist.derive(resolution.unit('core')!, resolution, Diagnostics());
-    expect(
-      checklist['core/pub.dev/keybay@0.2.0']!.coordinate,
-      'keybay@0.2.0',
+      MemorySourceTree({
+        'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
+      }),
     );
+
+    final checklist = Checklist.derive(
+      resolution.unit('core')!,
+      resolution,
+      Diagnostics(),
+    );
+    expect(checklist['core/pub.dev/keybay@0.2.0']!.coordinate, 'keybay@0.2.0');
   });
 }
 
@@ -493,13 +525,17 @@ void yamlAndOrdering() {
 
   group('a sequence at its parent key\'s column', () {
     test('is read, because pubspecs are written that way', () {
-      final doc = parseYaml('''
+      final doc = parseYaml(
+        '''
 name: keybay
 topics:
 - security
 - secrets
 version: 0.1.0
-''', 'pubspec.yaml', Diagnostics());
+''',
+        'pubspec.yaml',
+        Diagnostics(),
+      );
       expect(doc, isNotNull);
       expect(doc!.list('topics')!.strings, ['security', 'secrets']);
       expect(doc.string('version'), '0.1.0', reason: 'the list closes');
@@ -507,12 +543,16 @@ version: 0.1.0
 
     test('a key indented into it cannot become a root key', () {
       final diagnostics = Diagnostics();
-      final doc = parseYaml('''
+      final doc = parseYaml(
+        '''
 name: keybay
 topics:
   - security
   version: 9.9.9
-''', 'pubspec.yaml', diagnostics);
+''',
+        'pubspec.yaml',
+        diagnostics,
+      );
       expect(
         doc,
         isNull,

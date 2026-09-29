@@ -1,16 +1,15 @@
 /// rk's entry point, and its composition root.
 ///
-/// Everything a run needs is built here and nowhere else: this file finds the
+/// The release command composition root: this file finds the
 /// git root, reads and parses `release.toml`, resolves it against the
 /// repository, and constructs the `Registry`, `SystemTools`, and `Output` the
 /// operational verbs are handed. It also dispatches the repository-independent
 /// target reference and, on a run that failed after acting, writes the
 /// diagnosis.
 ///
-/// So the answer to "where does rk read release.toml?" is `_prepare` below,
-/// not a file under `lib/`. Reading files and deciding exit codes is
-/// composition-root work; pushing it down would put `dart:io` in the layer
-/// `engine/source_tree.dart` exists to keep testable.
+/// Release commands read config through `_prepare`; installation commands
+/// compose their working-tree view in `installations.dart`. Both hand resolved
+/// models to the engine, keeping source discovery outside its policy layer.
 library;
 
 import 'dart:io';
@@ -18,7 +17,9 @@ import 'dart:io';
 import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/commands/clean.dart';
 import 'package:rk/src/commands/init.dart';
-import 'package:rk/src/commands/init_selector.dart';
+import 'package:rk/src/tui/init_picker.dart' deferred as init_ui;
+import 'package:rk/src/tui/status_picker.dart' deferred as status_ui;
+import 'installations.dart' deferred as installations;
 import 'package:rk/src/commands/plan.dart';
 import 'package:rk/src/commands/release.dart';
 import 'package:rk/src/commands/status.dart';
@@ -29,7 +30,6 @@ import 'package:rk/src/output/diagnosis.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
-import 'package:rk/src/engine/init_plan.dart';
 import 'package:rk/src/engine/dart_workspace.dart';
 import 'package:rk/src/engine/publish_target.dart';
 import 'package:rk/src/output/output.dart';
@@ -47,30 +47,122 @@ import 'package:rk/src/version.dart';
 const _usage = '''
 rk — an austere release tool
 
-Usage
+Release this project
   rk                              status all units
   rk --version                    print this binary's version
-  rk status [unit]                status all units or one
+  rk status [unit]                explore release status in an inline matrix
   rk plan [unit]                  show the configured release graph; read-only
-  rk init                         propose release.toml; write only on a yes
+  rk init                         choose outputs and review release.toml
   rk clean                        remove this repository's staged release work
   rk target list                  list every release choice this rk supports
   rk target <name>                explain one choice and its configuration
   rk release [unit]               release all unfinished units, or one named unit
   rk release [unit] --stage       prepare one exact stage; name it if ambiguous
 
+Run locally
+  rk use [source] [-p project]     choose the source of your commands
+  rk install [source] [-p project] prepare an installation without switching
+  rk uninstall [source] [-p project] remove an inactive installation
+
 Flags
   --version   print this binary's version and exit
   --json      the machine surface (doc/json.md)
   --stage     release: build, sign, and notarize exact artifacts; publish nothing
-  -y, --yes   release or clean: answer yes without an interactive prompt
-  --write     init: accept the proposal without a prompt
+  -y, --yes   release, clean or uninstall: confirm without an interactive prompt
+  --latest    install: get the latest compatible version without changing source
+  --write     init: write the default configuration without a prompt
 
 Marks: ✓ done,  · already satisfied,  ✗ problem or conflict,  ! warning,
        → your next move,  unmarked pending
 Exit:  0 successful report or completed command, 1 refused or failed,
        2 usage, 3 rk itself crashed — --json mirrors it in "exit"
 ''';
+
+const _unitHelp = '''
+A unit is named by [release.<unit>] in release.toml and groups packages
+released together. Package names come from pubspec.yaml; rk use -p uses those.
+''';
+
+const _initUsage = '''
+rk init [--write] [--json]
+
+Discover Dart packages, choose release outputs, and review release.toml.
+Creates the file after confirmation; existing configurations are left alone.
+In a Git repository, also adds .rk/ to .gitignore. Nothing is published.
+
+--write   write the default configuration without opening the selector
+--json    show the default proposal as JSON; combine with --write to save it
+
+Without a terminal, rk init shows the default proposal and writes nothing.
+To choose different outputs, run rk init in a terminal.
+
+Example: rk init
+''';
+
+const _statusUsage =
+    '''
+rk status [unit] [--json]
+
+Check configured release destinations and local staged artifacts.
+Reports what is released, what remains, and any issues that prevent release.
+May read the network; does not build or publish. Bare rk also runs status.
+
+$_unitHelp
+Omit the unit to check every release unit.
+In a terminal, explore destinations and evidence in the inline matrix.
+Pipes and terminals that cannot host the matrix receive a finite report.
+--json    emit one structured report
+
+Example: rk status tools
+See rk plan tools for the configured steps without destination checks.
+''';
+
+const _planUsage =
+    '''
+rk plan [unit] [--json]
+
+Show the configured release steps and their dependencies.
+Reads source configuration only: no destination checks, builds, or changes.
+Use rk status to check which steps are already complete.
+
+$_unitHelp
+Omit the unit to show every release unit.
+--json    emit the complete graph as one structured report
+
+Example: rk plan tools
+''';
+
+const _releaseUsage =
+    '''
+rk release [unit] [--yes] [--json]
+rk release [unit] --stage [--json]
+
+Prepare configured artifacts, then publish unfinished release targets.
+Existing releases are checked before work proceeds. Public changes require
+confirmation in a terminal, or --yes when that confirmation is intentional.
+
+$_unitHelp
+Omit the unit to release every unfinished unit in dependency order.
+With --stage, name a unit if the configuration contains more than one.
+
+--stage   build, sign, and prepare artifacts locally; publish nothing
+-y, --yes answer yes to the publication prompt; checks still run
+--json    emit one structured report; does not prompt
+
+Example: rk release tools --stage
+Then:    rk release tools
+Use rk plan tools to see the configured work before running it.
+''';
+
+String _usageFor(String? command) => switch (command) {
+  'init' => _initUsage,
+  'status' => _statusUsage,
+  'plan' => _planUsage,
+  'release' => _releaseUsage,
+  'target' => TargetCommand.usage,
+  'clean' => CleanCommand.usage,
+  _ => _usage,
+};
 
 Future<void> main(List<String> args) async {
   // This is deliberately self-contained: smoke tests, Homebrew, and a user
@@ -81,21 +173,18 @@ Future<void> main(List<String> args) async {
     return;
   }
 
-  const known = {
-    '-h',
-    '--help',
-    '--stage',
-    '--json',
-    '-y',
-    '--yes',
-    '--write',
-  };
+  const known = {'-h', '--help', '--stage', '--json', '-y', '--yes', '--write'};
   final flags = args.where((argument) => argument.startsWith('-')).toSet();
   final positional = args.where((a) => !a.startsWith('-')).toList();
   final json = flags.contains('--json');
 
   const verbs = {'status', 'plan', 'release', 'init', 'clean', 'target'};
   final first = positional.isEmpty ? null : positional.first;
+  if (const {'use', 'install', 'uninstall'}.contains(first)) {
+    await installations.loadLibrary();
+    await installations.installationMain(args, first!);
+    return;
+  }
   final command = first ?? 'status';
   final target = positional.length > 1 ? positional[1] : null;
 
@@ -111,7 +200,7 @@ Future<void> main(List<String> args) async {
       Diagnostic(
         code: 'RK-CLI-008',
         message: 'rk has no command named "$command"',
-        remedy: _usage.trim(),
+        remedy: _usageFor(first).trim(),
       ),
     );
     exitCode = ExitCodes.usage;
@@ -141,7 +230,7 @@ Future<void> main(List<String> args) async {
       Diagnostic(
         code: 'RK-CLI-001',
         message: 'rk does not have ${unknown.join(', ')}',
-        remedy: _usage.trim(),
+        remedy: _usageFor(first).trim(),
       ),
     );
     exitCode = ExitCodes.usage;
@@ -156,7 +245,7 @@ Future<void> main(List<String> args) async {
       Diagnostic(
         code: 'RK-CLI-005',
         message: 'rk $command does not have ${inapplicable.join(', ')}',
-        remedy: _usage.trim(),
+        remedy: _usageFor(first).trim(),
       ),
     );
     exitCode = ExitCodes.usage;
@@ -175,7 +264,8 @@ Future<void> main(List<String> args) async {
       Diagnostic(
         code: 'RK-CLI-005',
         message: 'rk release --stage does not have --yes',
-        remedy: 'staging publishes nothing, so it takes no authorization. '
+        remedy:
+            'staging publishes nothing, so it takes no authorization. '
             'Stage first, then rk release <unit> --yes',
       ),
     );
@@ -194,14 +284,14 @@ Future<void> main(List<String> args) async {
         code: 'RK-CLI-007',
         message:
             (command == 'init' || command == 'clean') && positional.length <= 2
-                ? 'rk $command takes no unit — it applies to the whole '
-                    'repository, and got "$target"'
-                : command == 'target'
-                    ? 'rk target takes "list" or one release choice name, and '
-                        'got "${positional.skip(1).join(' ')}"'
-                    : 'rk takes a verb and a unit, and got '
-                        '"${positional.join(' ')}"',
-        remedy: _usage.trim(),
+            ? 'rk $command takes no unit — it applies to the whole '
+                  'repository, and got "$target"'
+            : command == 'target'
+            ? 'rk target takes "list" or one release choice name, and '
+                  'got "${positional.skip(1).join(' ')}"'
+            : 'rk takes a verb and a unit, and got '
+                  '"${positional.join(' ')}"',
+        remedy: _usageFor(first).trim(),
       ),
     );
     exitCode = ExitCodes.usage;
@@ -210,11 +300,7 @@ Future<void> main(List<String> args) async {
   }
 
   if (flags.contains('-h') || flags.contains('--help')) {
-    final usage = switch (command) {
-      'target' => TargetCommand.usage,
-      'clean' => CleanCommand.usage,
-      _ => _usage,
-    };
+    final usage = _usageFor(first);
     // Under --json stdout carries the document and nothing else, so the usage
     // travels inside it rather than beside it.
     if (json) {
@@ -231,25 +317,28 @@ Future<void> main(List<String> args) async {
   try {
     code = switch (command) {
       'release' => await _release(
-          output,
-          target,
-          stageOnly: flags.contains('--stage'),
-          interactive: !json,
-          yes: flags.contains('--yes') || flags.contains('-y'),
-        ),
+        output,
+        target,
+        stageOnly: flags.contains('--stage'),
+        interactive: !json,
+        yes: flags.contains('--yes') || flags.contains('-y'),
+      ),
       'init' => await _init(
-          output,
-          interactive: !json,
-          write: flags.contains('--write'),
-        ),
+        output,
+        interactive: !json,
+        write: flags.contains('--write'),
+      ),
       'clean' => await _clean(
-          output,
-          yes: flags.contains('--yes') || flags.contains('-y'),
-          interactive: !json,
-        ),
+        output,
+        yes: flags.contains('--yes') || flags.contains('-y'),
+        interactive: !json,
+      ),
       'target' => TargetCommand(output: output).run(target),
       'plan' => await _plan(output, target),
-      _ => await _status(output, target),
+      _ =>
+        !json && _usableInitTerminal()
+            ? await _statusInteractive(output, target)
+            : await _status(output, target),
     };
   } on Object catch (error, stack) {
     // Its own exit class: an agent must tell "refused — remedy, then retry"
@@ -276,10 +365,10 @@ Future<void> main(List<String> args) async {
         message: 'rk failed in a way it does not have a message for: $error',
         remedy: recordsDiagnosis
             ? 'this is a bug in rk. The run\'s evidence is written beside '
-                'this message, and re-running will inspect what is really '
-                'there.'
+                  'this message, and re-running will inspect what is really '
+                  'there.'
             : 'this is a bug in rk. rk plan is read-only, so it did not '
-                'write a diagnosis. Re-run with --json and report the error.',
+                  'write a diagnosis. Re-run with --json and report the error.',
       ),
     );
   } finally {
@@ -315,7 +404,8 @@ void _recordDiagnosis(Output output, int code, {String? crash}) {
   )) {
     return;
   }
-  final root = GitSourceTree.findRoot(Directory.current.path) ??
+  final root =
+      GitSourceTree.findRoot(Directory.current.path) ??
       Directory.current.absolute.path;
   if (!File('$root/release.toml').existsSync()) return;
 
@@ -343,44 +433,68 @@ Future<int> _init(
   final tree = gitRoot == null
       ? FileSystemSourceTree(root)
       : GitSourceTree(gitRoot) as SourceTree;
-  final git =
-      gitRoot == null ? GitState.unbound(root) : await GitState.read(root);
+  final git = gitRoot == null
+      ? GitState.unbound(root)
+      : await GitState.read(root);
   final selectorEnabled = interactive && !write && _usableInitTerminal();
 
-  return InitCommand(
-    tree: tree,
-    output: output,
-    capabilities: HostCapabilities.inspect(),
-    origin: git.originUrl,
-    gitBound: git.isBound,
-    hasRemote: git.hasRemote,
-    ambientPubHostedUrl: Platform.environment['PUB_HOSTED_URL'],
-    select: selectorEnabled ? _selectInitPlan : null,
-    review: selectorEnabled
-        ? (prompt) async {
-            output.prompt(prompt);
-            return InitCommand.reviewed(stdin.readLineSync());
-          }
-        : null,
-    updateGitignore: git.isBound ? () => _ensureRkIgnored(root) : null,
-    write: (path, contents) {
-      if (path == 'release.toml') {
-        final file = File('$root/$path')..createSync(exclusive: true);
-        file.writeAsStringSync(contents, flush: true);
-      } else {
-        File('$root/$path').writeAsStringSync(contents);
+  if (selectorEnabled) await init_ui.loadLibrary();
+  final interaction = selectorEnabled ? init_ui.InitInteraction() : null;
+  final transcript = StringBuffer();
+  // Print command diagnostics and the result after clearing the inline region.
+  final commandOutput = interaction == null
+      ? output
+      : Output(
+          sink: transcript.write,
+          isTerminal: output.isTerminal,
+          useColor: output.useColor,
+          terminalWidth: output.terminalWidth,
+          report: output.report,
+        );
+  late final int code;
+  try {
+    code = await InitCommand(
+      tree: tree,
+      output: commandOutput,
+      capabilities: HostCapabilities.inspect(),
+      origin: git.originUrl,
+      gitBound: git.isBound,
+      hasRemote: git.hasRemote,
+      ambientPubHostedUrl: Platform.environment['PUB_HOSTED_URL'],
+      select: interaction?.select,
+      review: interaction?.review,
+      updateGitignore: git.isBound ? () => _ensureRkIgnored(root) : null,
+      write: (path, contents) {
+        if (path == 'release.toml') {
+          final file = File('$root/$path')..createSync(exclusive: true);
+          file.writeAsStringSync(contents, flush: true);
+        } else {
+          File('$root/$path').writeAsStringSync(contents);
+        }
+      },
+      // A prompt would be written straight to stdout, past the sink that --json
+      // silences, so asking is not an option when a caller is parsing the
+      // answer. init already refuses when nobody can confirm. The answer is
+      // parsed by InitCommand.consented, where EOF is a decline — hasTerminal
+      // alone does not guard that, because macOS reports a terminal for
+      // `rk init < /dev/null`.
+      // --write is the typed yes, carried as a flag: the door for scripts and
+      // agents, named in the refusal a terminal-less run prints.
+      confirm: write ? (_) async => true : null,
+    ).run();
+  } finally {
+    try {
+      await interaction?.close();
+    } finally {
+      if (interaction != null) {
+        commandOutput.close();
+        if (interaction.signalExitCode == null) {
+          output.sink(transcript.toString());
+        }
       }
-    },
-    // A prompt would be written straight to stdout, past the sink that --json
-    // silences, so asking is not an option when a caller is parsing the
-    // answer. init already refuses when nobody can confirm. The answer is
-    // parsed by InitCommand.consented, where EOF is a decline — hasTerminal
-    // alone does not guard that, because macOS reports a terminal for
-    // `rk init < /dev/null`.
-    // --write is the typed yes, carried as a flag: the door for scripts and
-    // agents, named in the refusal a terminal-less run prints.
-    confirm: write ? (_) async => true : null,
-  ).run();
+    }
+  }
+  return interaction?.signalExitCode ?? code;
 }
 
 Future<int> _clean(
@@ -388,7 +502,8 @@ Future<int> _clean(
   required bool yes,
   required bool interactive,
 }) {
-  final root = GitSourceTree.findRoot(Directory.current.path) ??
+  final root =
+      GitSourceTree.findRoot(Directory.current.path) ??
       Directory.current.absolute.path;
   return CleanCommand(
     store: StageStore(root),
@@ -408,8 +523,9 @@ void _ensureRkIgnored(String root) {
     final current = file.readAsStringSync();
     if (current.split('\n').any((line) => line.trim() == '.rk/')) return;
     handle.writeStringSync(
-        '${current.isEmpty || current.endsWith('\n') ? '' : '\n'}'
-        '.rk/\n');
+      '${current.isEmpty || current.endsWith('\n') ? '' : '\n'}'
+      '.rk/\n',
+    );
     handle.flushSync();
   } finally {
     try {
@@ -431,61 +547,6 @@ bool _usableInitTerminal() {
   } on Object {
     return false;
   }
-}
-
-Future<InitPlan?> _selectInitPlan(InitPlan plan) async {
-  var interrupted = false;
-  final signals = ProcessSignal.sigint.watch().listen((_) {
-    interrupted = true;
-  });
-  try {
-    return await runInitSelector(
-      plan,
-      const _StdioInitTerminal(),
-      interrupted: () => interrupted,
-    );
-  } finally {
-    await signals.cancel();
-  }
-}
-
-final class _StdioInitTerminal implements InitTerminal {
-  const _StdioInitTerminal();
-
-  @override
-  bool get lineMode => stdin.lineMode;
-  @override
-  set lineMode(bool value) => stdin.lineMode = value;
-
-  @override
-  bool get echoMode => stdin.echoMode;
-  @override
-  set echoMode(bool value) => stdin.echoMode = value;
-
-  @override
-  bool get echoNewlineMode => stdin.echoNewlineMode;
-  @override
-  set echoNewlineMode(bool value) => stdin.echoNewlineMode = value;
-
-  @override
-  int get width => stdout.terminalColumns;
-
-  @override
-  int get height => stdout.terminalLines;
-
-  @override
-  bool get useColor =>
-      !Platform.environment.containsKey('NO_COLOR') &&
-      (Platform.environment['TERM'] ?? '').toLowerCase() != 'dumb';
-
-  @override
-  int readByte() => stdin.readByteSync();
-
-  @override
-  void write(String value) => stdout.write(value);
-
-  @override
-  Future<void> flush() => stdout.flush();
 }
 
 Future<int> _release(
@@ -552,8 +613,8 @@ Future<int> _release(
       confirm: yes
           ? (_) async => 'yes'
           : interactive && stdin.hasTerminal && stdout.hasTerminal
-              ? (prompt) => _promptOnTerminal(output, prompt)
-              : null,
+          ? (prompt) => _promptOnTerminal(output, prompt)
+          : null,
       allowInteractiveTools:
           interactive && stdin.hasTerminal && stdout.hasTerminal,
       stageOnly: stageOnly,
@@ -588,9 +649,7 @@ Future<String?> _promptOnTerminal(Output output, String prompt) async {
 /// see a fault for every repository that simply does not use rk.
 class _Prepared {
   _Prepared.ready(this.resolution, this.context) : code = null;
-  _Prepared.stopped(this.code)
-      : resolution = null,
-        context = null;
+  _Prepared.stopped(this.code) : resolution = null, context = null;
 
   final Resolution? resolution;
   final SourceContext? context;
@@ -602,10 +661,12 @@ class _Prepared {
 Future<_Prepared> _prepare(Output output) async {
   final gitRoot = GitSourceTree.findRoot(Directory.current.path);
   final root = gitRoot ?? Directory.current.absolute.path;
-  SourceTree tree =
-      gitRoot == null ? FileSystemSourceTree(root) : GitSourceTree(gitRoot);
-  final git =
-      gitRoot == null ? GitState.unbound(root) : await GitState.read(root);
+  SourceTree tree = gitRoot == null
+      ? FileSystemSourceTree(root)
+      : GitSourceTree(gitRoot);
+  final git = gitRoot == null
+      ? GitState.unbound(root)
+      : await GitState.read(root);
   if (git.isClean && git.hasCommit) {
     tree = GitCommitSourceTree(root, git.head);
   }
@@ -620,7 +681,8 @@ Future<_Prepared> _prepare(Output output) async {
           : Diagnostic(
               code: 'RK-SRC-003',
               message: 'the selected source could not be read',
-              remedy: '${error.path}: ${error.reason}\n'
+              remedy:
+                  '${error.path}: ${error.reason}\n'
                   'Repair the repository source, then run rk again.',
             ),
     );
@@ -643,8 +705,9 @@ Future<_Prepared> _prepare(Output output) async {
   Resolution? resolution;
   try {
     config = ReleaseConfig.parse(source, 'release.toml', diagnostics);
-    resolution =
-        config == null ? null : Resolution.resolve(config, tree, diagnostics);
+    resolution = config == null
+        ? null
+        : Resolution.resolve(config, tree, diagnostics);
 
     if (resolution != null && !git.isBound) {
       tree = FileSystemSourceTree(
@@ -661,7 +724,8 @@ Future<_Prepared> _prepare(Output output) async {
     diagnostics.add(
       'RK-SRC-003',
       'the source snapshot could not be read',
-      remedy: '${error.path}: ${error.reason}\n'
+      remedy:
+          '${error.path}: ${error.reason}\n'
           'Make that path a readable repository-local regular file or '
           'directory, then run rk again.',
     );
@@ -681,7 +745,8 @@ Future<_Prepared> _prepare(Output output) async {
       diagnostics.add(
         'RK-SRC-001',
         '${unit.name} selects targets that require Git',
-        remedy: 'initialize a Git repository, or remove '
+        remedy:
+            'initialize a Git repository, or remove '
             '${names.join(', ')} from this unit',
       );
     }
@@ -694,16 +759,10 @@ Future<_Prepared> _prepare(Output output) async {
     return _Prepared.stopped(ExitCodes.refused);
   }
 
-  return _Prepared.ready(
-    resolution,
-    SourceContext(tree: tree, git: git),
-  );
+  return _Prepared.ready(resolution, SourceContext(tree: tree, git: git));
 }
 
-Set<String> _filesystemSourceRoots(
-  SourceTree tree,
-  Resolution resolution,
-) {
+Set<String> _filesystemSourceRoots(SourceTree tree, Resolution resolution) {
   final roots = <String>{
     'release.toml',
     ...DartWorkspaceDiscovery(tree).sourceRoots,
@@ -744,10 +803,7 @@ ReleaseSource? _selectReleaseSource(
   return null;
 }
 
-Future<int> _plan(
-  Output output,
-  String? unit,
-) async {
+Future<int> _plan(Output output, String? unit) async {
   final gitRoot = GitSourceTree.findRoot(Directory.current.path);
   final root = gitRoot ?? Directory.current.absolute.path;
   final initial = SourceContext(
@@ -786,7 +842,8 @@ Future<_Prepared> _selectPlanSource(
           Diagnostic(
             code: 'RK-GIT-008',
             message: 'the worktree state could not be read',
-            remedy: '${initialGit.worktreeStatusError}\n'
+            remedy:
+                '${initialGit.worktreeStatusError}\n'
                 '`git status --porcelain` must succeed before rk can select '
                 'the source for this plan.',
           ),
@@ -799,8 +856,8 @@ Future<_Prepared> _selectPlanSource(
     selected = !initialGit.isBound
         ? _captureUnboundPlanSource(context.root)
         : initialGit.isClean && initialGit.head.isNotEmpty
-            ? GitCommitSourceTree(context.root, initialGit.head)
-            : FrozenSourceTree.capture(GitWorktreeSourceTree(context.root));
+        ? GitCommitSourceTree(context.root, initialGit.head)
+        : FrozenSourceTree.capture(GitWorktreeSourceTree(context.root));
   } on SourceUnreadable catch (error) {
     _showPlanSourceProblem(
       output,
@@ -811,7 +868,8 @@ Future<_Prepared> _selectPlanSource(
           : Diagnostic(
               code: 'RK-SRC-003',
               message: 'the source snapshot could not be selected',
-              remedy: '${error.path}: ${error.reason}\n'
+              remedy:
+                  '${error.path}: ${error.reason}\n'
                   'Stop concurrent edits, then run rk plan again.',
             ),
     );
@@ -842,7 +900,8 @@ Future<_Prepared> _selectPlanSource(
       diagnostics.add(
         'RK-SRC-003',
         'the selected source could not be read',
-        remedy: '${error.path}: ${error.reason}\n'
+        remedy:
+            '${error.path}: ${error.reason}\n'
             'Repair the repository, then run rk plan again.',
       );
     }
@@ -858,7 +917,8 @@ Future<_Prepared> _selectPlanSource(
             Diagnostic(
               code: 'RK-GIT-008',
               message: 'the worktree state could not be re-read',
-              remedy: '${selectedGit.worktreeStatusError}\n'
+              remedy:
+                  '${selectedGit.worktreeStatusError}\n'
                   '`git status --porcelain` must remain readable while rk '
                   'selects the source for this plan.',
             ),
@@ -872,7 +932,8 @@ Future<_Prepared> _selectPlanSource(
         const Diagnostic(
           code: 'RK-SRC-003',
           message: 'Git changed while the release plan was being captured',
-          remedy: 'Stop concurrent edits or checkouts, then run rk plan '
+          remedy:
+              'Stop concurrent edits or checkouts, then run rk plan '
               'again.',
         ),
       );
@@ -944,11 +1005,7 @@ FrozenSourceTree _captureUnboundPlanSource(String root) {
       }
     }
     final frozen = FrozenSourceTree.capture(
-      FileSystemSourceTree(
-        root,
-        roots: roots,
-        rootsAreFiles: true,
-      ),
+      FileSystemSourceTree(root, roots: roots, rootsAreFiles: true),
       preservePaths: projectPaths,
     );
     if (frozen.read('release.toml') == source) return frozen;
@@ -978,15 +1035,15 @@ void _showNoReleaseConfig(Output output, String root) {
   output.repository(name: root.split('/').last);
   output.blank();
   output.line('no release.toml', mark: Mark.none);
-  output.say('rk init writes one, and changes nothing else.');
+  output.next('rk init');
 }
 
 Diagnostic _wrongReleaseConfigProblem(String reason) => Diagnostic(
-      code: 'RK-CONF-034',
-      message: 'release.toml is there and rk could not read it',
-      source: const SourceLocation('release.toml', 1),
-      remedy: reason,
-    );
+  code: 'RK-CONF-034',
+  message: 'release.toml is there and rk could not read it',
+  source: const SourceLocation('release.toml', 1),
+  remedy: reason,
+);
 
 void _showPlanSourceProblem(
   Output output,
@@ -1008,15 +1065,30 @@ void _showPlanSourceProblem(
   output.problem(problem);
 }
 
-Future<int> _status(
+Future<int> _status(Output output, String? unit) async {
+  final result = await _openStatus(output, unit);
+  final reader = result.reader;
+  if (reader == null) return result.code;
+  try {
+    return await reader.command.run(only: unit);
+  } finally {
+    reader.close();
+  }
+}
+
+/// Each refresh rereads configuration, Git state and destination caches.
+Future<({int code, _StatusReader? reader})> _openStatus(
   Output output,
-  String? unit,
-) async {
-  final prepared = await _prepare(output);
-  if (!prepared.isReady) return prepared.code!;
-  final source = _selectReleaseSource(prepared, unit, output);
-  if (source == null) return ExitCodes.refused;
+  String? unit, {
+  Output? diagnostics,
+}) async {
+  final preparationOutput = diagnostics ?? output;
+  final prepared = await _prepare(preparationOutput);
+  if (!prepared.isReady) return (code: prepared.code!, reader: null);
+  final source = _selectReleaseSource(prepared, unit, preparationOutput);
+  if (source == null) return (code: ExitCodes.refused, reader: null);
   final registry = Registry();
+  final cancellation = ToolCancellation();
   final resolution = source.resolution;
   final tree = source.tree;
   final git = source.binding;
@@ -1027,8 +1099,11 @@ Future<int> _status(
       git: git,
       stageContracts: targets.stageContractResolver(resolution),
     );
-    const targetTools = SystemTools(timeout: Duration(minutes: 2));
-    return await StatusCommand(
+    final targetTools = SystemTools(
+      timeout: const Duration(minutes: 2),
+      cancellation: cancellation,
+    );
+    final command = StatusCommand(
       resolution: resolution,
       tree: tree,
       git: git,
@@ -1044,18 +1119,67 @@ Future<int> _status(
         targets: targets,
       ),
       output: output,
-    ).run(only: unit);
-  } finally {
+    );
+    return (
+      code: ExitCodes.ok,
+      reader: _StatusReader(command, () {
+        cancellation.cancel();
+        registry.close();
+      }),
+    );
+  } on Object {
     registry.close();
+    rethrow;
   }
 }
 
+class _StatusReader {
+  _StatusReader(this.command, this.close);
+  final StatusCommand command;
+  final void Function() close;
+}
+
+Future<int> _statusInteractive(Output output, String? unit) async {
+  await status_ui.loadLibrary();
+  final result = await status_ui.runStatusInteraction(
+    only: unit,
+    load: () async {
+      final buffer = StringBuffer();
+      final quiet = Output(sink: buffer.write, isTerminal: false);
+      final opened = await _openStatus(output, unit, diagnostics: quiet);
+      final reader = opened.reader;
+      if (reader == null) {
+        throw status_ui.StatusLoadFailure(
+          buffer.toString().trim(),
+          opened.code,
+        );
+      }
+      return status_ui.StatusReadSession(reader.command, reader.close);
+    },
+  );
+  if (result.code != 0) return result.code;
+  if (result.error != null) {
+    if (result.errorCode == 0) {
+      output.help(result.error!);
+      return ExitCodes.ok;
+    }
+    output.problem(Diagnostic(code: 'RK-STATUS-001', message: result.error!));
+    return result.errorCode;
+  }
+  if (result.snapshot case final snapshot?) {
+    result.command!.render(snapshot);
+  } else {
+    output.line('Status check cancelled.');
+  }
+  return ExitCodes.ok;
+}
+
 Diagnostic _stageStoreProblem(Object error) => Diagnostic(
-      code: 'RK-STAGE-006',
-      message: error is StageStoreBusy
-          ? 'another rk command is using staged work'
-          : 'the local stage path is not safe to use',
-      remedy: error is StageStoreBusy
-          ? 'let that command finish, then run rk again'
-          : '$error\nRK did not follow or change the unexpected path.',
-    );
+  code: 'RK-STAGE-006',
+  message: error is StageStoreBusy
+      ? 'another rk command is using staged work'
+      : 'the local stage path is not safe to use',
+  remedy: error is StageStoreBusy
+      ? 'let that command finish, then run rk again'
+      : '$error\nRK did not follow or change the unexpected path.',
+);

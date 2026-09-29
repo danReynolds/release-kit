@@ -13,8 +13,12 @@ import 'package:rk/src/transforms/digest.dart';
 /// A scripted result always wins, as [RecordingTools] promises. The model
 /// answers only the codesign displays nothing scripted.
 class BundleRecordingTools extends RecordingTools {
-  BundleRecordingTools(
-      {super.results, super.answers, super.onRun, super.probe});
+  BundleRecordingTools({
+    super.results,
+    super.answers,
+    super.onRun,
+    super.probe,
+  });
   final _identifiers = <String, String>{};
   final _signatures = <String, _Signature>{};
 
@@ -30,7 +34,8 @@ class BundleRecordingTools extends RecordingTools {
     calls.add(key);
     probe?.call(key, workingDirectory);
     onRun?.call(key);
-    final result = results[key] ??
+    final result =
+        results[key] ??
         answers?.call(key) ??
         _display(executable, arguments) ??
         ToolResult(exitCode: 0, stdout: '', stderr: '');
@@ -59,7 +64,7 @@ class BundleRecordingTools extends RecordingTools {
         at < 0
             ? null
             : parsePlist(File(arguments[at + 1]).readAsStringSync())
-                as Map<String, Object?>,
+                  as Map<String, Object?>,
       );
     } else if (executable == 'codesign' && arguments.contains('-r-')) {
       final id = _identifiers[arguments.last];
@@ -67,16 +72,21 @@ class BundleRecordingTools extends RecordingTools {
         String identify(String value) {
           if (value.contains('identifier')) {
             return value.replaceFirst(
-                RegExp(r'identifier\s+(?:"[^"]+"|\S+)'), 'identifier "$id"');
+              RegExp(r'identifier\s+(?:"[^"]+"|\S+)'),
+              'identifier "$id"',
+            );
           }
           return value.replaceFirst(
-              'designated => ', 'designated => identifier "$id" and ');
+            'designated => ',
+            'designated => identifier "$id" and ',
+          );
         }
 
         return ToolResult(
-            exitCode: result.exitCode,
-            stdout: identify(result.stdout),
-            stderr: identify(result.stderr));
+          exitCode: result.exitCode,
+          stdout: identify(result.stdout),
+          stderr: identify(result.stderr),
+        );
       }
     }
     return result;
@@ -91,14 +101,18 @@ class BundleRecordingTools extends RecordingTools {
     final file = File(path);
     if (!file.existsSync()) {
       return ToolResult(
-          exitCode: 1, stdout: '', stderr: '$path: No such file or directory');
+        exitCode: 1,
+        stdout: '',
+        stderr: '$path: No such file or directory',
+      );
     }
     final signature = _signatures[path];
     if (signature == null || !signature.covers(file.readAsBytesSync())) {
       return ToolResult(
-          exitCode: 1,
-          stdout: '',
-          stderr: '$path: code object is not signed at all');
+        exitCode: 1,
+        stdout: '',
+        stderr: '$path: code object is not signed at all',
+      );
     }
     final constraint = signature.constraint;
     return ToolResult(
@@ -107,8 +121,8 @@ class BundleRecordingTools extends RecordingTools {
       stderr: flag == '-dvvv'
           ? 'CandidateCDHash sha256=${signature.cdhash}\n'
           : constraint == null
-              ? 'CDHash=${signature.cdhash}\nSignature=fixture\n'
-              : constraintDisplay(constraint, cdhash: signature.cdhash),
+          ? 'CDHash=${signature.cdhash}\nSignature=fixture\n'
+          : constraintDisplay(constraint, cdhash: signature.cdhash),
     );
   }
 }
@@ -117,7 +131,10 @@ class BundleRecordingTools extends RecordingTools {
 /// what it was signed with, not on where the file is.
 final class _Signature {
   factory _Signature(
-      List<int> bytes, String identifier, Map<String, Object?>? constraint) {
+    List<int> bytes,
+    String identifier,
+    Map<String, Object?>? constraint,
+  ) {
     final digest = Sha256.hex(bytes);
     final signed = [
       digest,
@@ -125,7 +142,10 @@ final class _Signature {
       if (constraint != null) ..._render(constraint, 0),
     ].join('\n');
     return _Signature._(
-        digest, Sha256.hex(utf8.encode(signed)).substring(0, 40), constraint);
+      digest,
+      Sha256.hex(utf8.encode(signed)).substring(0, 40),
+      constraint,
+    );
   }
   _Signature._(this._digest, this.cdhash, this.constraint);
 
@@ -138,51 +158,50 @@ final class _Signature {
 
 /// The library load constraint rk writes to pin [hashes].
 Map<String, Object?> pinConstraint(List<String> hashes) => {
-      'cdhash': {
-        r'$in': [
-          for (final hash in hashes)
-            Uint8List.fromList([
-              for (var index = 0; index < hash.length; index += 2)
-                int.parse(hash.substring(index, index + 2), radix: 16),
-            ]),
-        ],
-      },
-    };
+  'cdhash': {
+    r'$in': [
+      for (final hash in hashes)
+        Uint8List.fromList([
+          for (var index = 0; index < hash.length; index += 2)
+            int.parse(hash.substring(index, index + 2), radix: 16),
+        ]),
+    ],
+  },
+};
 
 /// codesign's highest-verbosity display of a signature whose library load
 /// constraint is [constraint], laid out as macOS 26 prints it.
-String constraintDisplay(Map<String, Object?> constraint,
-        {String cdhash = '1111111111111111111111111111111111111111'}) =>
-    [
-      'Library Load Constraints:',
-      '\tHas Library Load Constraints',
-      'CDHash=$cdhash',
-      'Signature=adhoc',
-      'Internal requirements count=0 size=12',
-      ..._render({'ccat': 0, 'comp': 1, 'reqs': constraint, 'vers': 1}, 1),
-    ].join('\n');
+String constraintDisplay(
+  Map<String, Object?> constraint, {
+  String cdhash = '1111111111111111111111111111111111111111',
+}) => [
+  'Library Load Constraints:',
+  '\tHas Library Load Constraints',
+  'CDHash=$cdhash',
+  'Signature=adhoc',
+  'Internal requirements count=0 size=12',
+  ..._render({'ccat': 0, 'comp': 1, 'reqs': constraint, 'vers': 1}, 1),
+].join('\n');
 
 List<String> _render(Object? value, int depth) {
   final indent = '\t' * depth;
   return switch (value) {
     Map map => [
-        '$indent[Dict]',
-        for (final entry in map.entries) ...[
-          '$indent\t[Key] ${entry.key}',
-          '$indent\t[Value]',
-          ..._render(entry.value, depth + 2),
-        ],
+      '$indent[Dict]',
+      for (final entry in map.entries) ...[
+        '$indent\t[Key] ${entry.key}',
+        '$indent\t[Value]',
+        ..._render(entry.value, depth + 2),
       ],
+    ],
     Uint8List bytes => [
-        '$indent[Data] '
-            '${[
-          for (final byte in bytes) byte.toRadixString(16).padLeft(2, '0')
-        ].join()}',
-      ],
+      '$indent[Data] '
+          '${[for (final byte in bytes) byte.toRadixString(16).padLeft(2, '0')].join()}',
+    ],
     List list => [
-        '$indent[Array]',
-        for (final item in list) ..._render(item, depth + 1),
-      ],
+      '$indent[Array]',
+      for (final item in list) ..._render(item, depth + 1),
+    ],
     int number => ['$indent[Int] $number'],
     bool flag => ['$indent[Bool] $flag'],
     _ => ['$indent[String] $value'],
@@ -192,11 +211,11 @@ List<String> _render(Object? value, int depth) {
 /// Parses the XML property lists codesign takes as inputs: dict, key, array,
 /// data, string, integer, true and false.
 Object? parsePlist(String xml) {
-  final tokens = RegExp(r'<(dict|array)>|</(dict|array)>|'
-          r'<(key|data|string|integer)>([^<]*)</\3>|<(true|false)\s*/>|'
-          r'<(dict|array)\s*/>')
-      .allMatches(xml)
-      .toList();
+  final tokens = RegExp(
+    r'<(dict|array)>|</(dict|array)>|'
+    r'<(key|data|string|integer)>([^<]*)</\3>|<(true|false)\s*/>|'
+    r'<(dict|array)\s*/>',
+  ).allMatches(xml).toList();
   var at = 0;
   Object? value() {
     final token = tokens[at++];

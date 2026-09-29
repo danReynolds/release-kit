@@ -5,29 +5,39 @@ import '../engine/canonical_json.dart';
 /// description; the compiler alone chooses a layout for a platform.
 final class BinaryArtifact {
   BinaryArtifact.single(String executable)
-      : entryPoint = _executableName(executable),
-        identityFile = executable,
-        files = List.unmodifiable(
-            [BinaryArtifactFile(executable, executable: true, codeSuffix: '')]);
+    : entryPoint = _executableName(executable),
+      identityFile = executable,
+      files = List.unmodifiable([
+        BinaryArtifactFile(executable, executable: true, codeSuffix: ''),
+      ]);
 
   BinaryArtifact.dartBundle(String executable)
-      : entryPoint = _executableName(executable),
-        identityFile = 'lib/$executable/dartaotruntime',
-        files = List.unmodifiable([
-          BinaryArtifactFile(executable,
-              executable: true, codeSuffix: '.launcher'),
-          BinaryArtifactFile('lib/$executable/dartaotruntime',
-              executable: true, codeSuffix: ''),
-          BinaryArtifactFile('lib/$executable/app.aot',
-              codeSuffix: '.app', loadedByIdentity: true),
-          BinaryArtifactFile('lib/$executable/LICENSE.dart'),
-          const BinaryArtifactFile(manifestName),
-        ]);
+    : entryPoint = _executableName(executable),
+      identityFile = 'lib/$executable/dartaotruntime',
+      files = List.unmodifiable([
+        BinaryArtifactFile(
+          executable,
+          executable: true,
+          codeSuffix: '.launcher',
+        ),
+        BinaryArtifactFile(
+          'lib/$executable/dartaotruntime',
+          executable: true,
+          codeSuffix: '',
+        ),
+        BinaryArtifactFile(
+          'lib/$executable/app.aot',
+          codeSuffix: '.app',
+          loadedByIdentity: true,
+        ),
+        BinaryArtifactFile('lib/$executable/LICENSE.dart'),
+        const BinaryArtifactFile(manifestName),
+      ]);
 
   factory BinaryArtifact.forPlatform(String executable, String platform) =>
       platform.startsWith('macos-')
-          ? BinaryArtifact.dartBundle(executable)
-          : BinaryArtifact.single(executable);
+      ? BinaryArtifact.dartBundle(executable)
+      : BinaryArtifact.single(executable);
 
   static const manifestName = 'rk-artifact.json';
   final String entryPoint;
@@ -49,17 +59,17 @@ final class BinaryArtifact {
   /// Libraries, then the other signed files in layout order. The published
   /// file order is unchanged; only signing needs the libraries' hashes first.
   List<BinaryArtifactFile> get signingOrder => [
-        ...libraries,
-        ...signedFiles.where((file) => !file.loadedByIdentity),
-      ];
+    ...libraries,
+    ...signedFiles.where((file) => !file.loadedByIdentity),
+  ];
 
   Map<String, Object?> toJson() => {
-        'schema': 1,
-        'layout': isBundle ? 'dart-aot' : 'single',
-        'entry_point': entryPoint,
-        'identity_file': identityFile,
-        'files': [for (final file in files) file.toJson()],
-      };
+    'schema': 1,
+    'layout': isBundle ? 'dart-aot' : 'single',
+    'entry_point': entryPoint,
+    'identity_file': identityFile,
+    'files': [for (final file in files) file.toJson()],
+  };
 
   String get manifest => '${CanonicalJson.encode(toJson())}\n';
 
@@ -82,21 +92,26 @@ final class BinaryArtifact {
     // Compare objects rather than serialization order.
     final expected = artifact.toJson();
     if (value.length != expected.length ||
-        expected.entries.any((entry) =>
-            CanonicalJson.encode(value[entry.key]) !=
-            CanonicalJson.encode(entry.value))) {
+        expected.entries.any(
+          (entry) =>
+              CanonicalJson.encode(value[entry.key]) !=
+              CanonicalJson.encode(entry.value),
+        )) {
       throw const FormatException(
-          'binary artifact description differs from its layout');
+        'binary artifact description differs from its layout',
+      );
     }
     return artifact;
   }
 }
 
 final class BinaryArtifactFile {
-  const BinaryArtifactFile(this.path,
-      {this.executable = false,
-      this.codeSuffix,
-      this.loadedByIdentity = false});
+  const BinaryArtifactFile(
+    this.path, {
+    this.executable = false,
+    this.codeSuffix,
+    this.loadedByIdentity = false,
+  });
   final String path;
   final bool executable;
   final String? codeSuffix;
@@ -108,13 +123,13 @@ final class BinaryArtifactFile {
   String get type => codeSuffix != null
       ? 'executable'
       : path == BinaryArtifact.manifestName
-          ? 'artifact-manifest'
-          : 'license';
+      ? 'artifact-manifest'
+      : 'license';
   Map<String, Object?> toJson() => {
-        'path': path,
-        'mode': mode,
-        if (codeSuffix != null) 'code_suffix': codeSuffix,
-      };
+    'path': path,
+    'mode': mode,
+    if (codeSuffix != null) 'code_suffix': codeSuffix,
+  };
 }
 
 String _executableName(String value) {

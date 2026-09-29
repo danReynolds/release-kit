@@ -64,11 +64,11 @@ class StageArchiveEntry {
   bool get executable => mode == '0755';
 
   Map<String, Object?> toJson() => {
-        'mode': mode,
-        'name': name,
-        'sha256': sha256,
-        'size': size,
-      };
+    'mode': mode,
+    'name': name,
+    'sha256': sha256,
+    'size': size,
+  };
 }
 
 /// The checked contents of one release archive.
@@ -102,7 +102,7 @@ class StageArchiveContents {
     }
     setFileModes({
       for (final entry in inventory)
-        '${directory.path}/${entry.name}': entry.mode
+        '${directory.path}/${entry.name}': entry.mode,
     });
   }
 }
@@ -126,6 +126,12 @@ abstract final class StageArchiveInventory {
       throw FormatException('archive is not valid gzip: $error');
     }
 
+    return decodeTar(tar);
+  }
+
+  /// Validate an already expanded archive. Download consumers can enforce a
+  /// streaming decompression limit before sharing the release inventory rules.
+  static StageArchiveContents decodeTar(List<int> tar) {
     final entries = <StageArchiveEntry>[];
     final files = <String, List<int>>{};
     final names = <String>{};
@@ -177,12 +183,14 @@ abstract final class StageArchiveInventory {
         throw FormatException('archive entry $name has invalid padding');
       }
       offset += padding;
-      entries.add(StageArchiveEntry(
-        name: name,
-        mode: modeValue.toRadixString(8).padLeft(4, '0'),
-        size: size,
-        sha256: Sha256.hex(bytes),
-      ));
+      entries.add(
+        StageArchiveEntry(
+          name: name,
+          mode: modeValue.toRadixString(8).padLeft(4, '0'),
+          size: size,
+          sha256: Sha256.hex(bytes),
+        ),
+      );
       files[name] = List.unmodifiable(bytes);
     }
 
@@ -200,7 +208,8 @@ abstract final class StageArchiveInventory {
     final BinaryArtifact artifact;
     if (metadata != null) {
       artifact = BinaryArtifact.fromJson(
-          CanonicalJson.decodeDocument(utf8.decode(metadata)));
+        CanonicalJson.decodeDocument(utf8.decode(metadata)),
+      );
     } else if (executables.length == 1) {
       artifact = BinaryArtifact.single(executables.single.name);
     } else {
@@ -209,17 +218,19 @@ abstract final class StageArchiveInventory {
       );
     }
     for (final file in artifact.files) {
-      final entry =
-          entries.where((entry) => entry.name == file.path).firstOrNull;
+      final entry = entries
+          .where((entry) => entry.name == file.path)
+          .firstOrNull;
       if (entry == null || entry.mode != file.mode) {
         throw FormatException(
-            'archive is missing ${file.path} with mode ${file.mode}');
+          'archive is missing ${file.path} with mode ${file.mode}',
+        );
       }
     }
     final allowed = {
       for (final file in artifact.files) file.path,
       'LICENSE',
-      'README.md'
+      'README.md',
     };
     for (final entry in entries) {
       if (!allowed.contains(entry.name) ||
@@ -252,8 +263,8 @@ abstract final class StageArchiveInventory {
   }
 
   static List<Object?> evidence(List<StageArchiveEntry> entries) => [
-        for (final entry in entries) entry.toJson(),
-      ];
+    for (final entry in entries) entry.toJson(),
+  ];
 
   static void requireSame(
     List<StageArchiveEntry> expected,
@@ -271,9 +282,7 @@ abstract final class StageArchiveInventory {
           left.mode != right.mode ||
           left.size != right.size ||
           left.sha256 != right.sha256) {
-        throw FormatException(
-          'archive inventory differs at ${right.name}',
-        );
+        throw FormatException('archive inventory differs at ${right.name}');
       }
     }
   }

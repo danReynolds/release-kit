@@ -30,9 +30,11 @@ Future<TargetActOutcome> publishGitTag(
       coordinate: tag,
       diagnostic: Diagnostic(
         code: 'RK-TAG-005',
-        message: 'this project signs its release tags, and no signing key '
+        message:
+            'this project signs its release tags, and no signing key '
             'is configured',
-        remedy: 'Set user.signingkey (with gpg.format=ssh for an SSH key), '
+        remedy:
+            'Set user.signingkey (with gpg.format=ssh for an SSH key), '
             'or, to release ${unit.name} unsigned, clear tag.gpgSign and '
             'know that its signed release history no longer continues.',
       ),
@@ -76,7 +78,8 @@ Future<TargetActOutcome> publishGitTag(
   final created = await destination.create(
     tag,
     signed: signed,
-    message: '${unit.name} ${unit.version}\n\n'
+    message:
+        '${unit.name} ${unit.version}\n\n'
         'release-manifest-sha256: $manifestSha256',
   );
   if (!created.ok) {
@@ -89,7 +92,8 @@ Future<TargetActOutcome> publishGitTag(
         remedy: created.summary,
       ),
       evidence: created.transcript,
-      reconciledNote: 'tag creation response was lost · origin confirmed '
+      reconciledNote:
+          'tag creation response was lost · origin confirmed '
           'the exact release tag',
     );
   }
@@ -147,8 +151,9 @@ Future<TargetActOutcome> publishGitTag(
         message: 'the new tag $tag did not validate',
         remedy: [
           if (local.detail != null) local.detail!,
-          ...local.evidence.entries
-              .map((entry) => '${entry.key}: ${entry.value}'),
+          ...local.evidence.entries.map(
+            (entry) => '${entry.key}: ${entry.value}',
+          ),
         ].join('\n'),
       ),
     );
@@ -164,7 +169,8 @@ Future<TargetActOutcome> publishGitTag(
       diagnostic: Diagnostic(
         code: 'RK-TAG-002',
         message: 'the tag $tag could not be pushed',
-        remedy: '${pushed.summary}\norigin will be read before this result '
+        remedy:
+            '${pushed.summary}\norigin will be read before this result '
             'is classified; a re-run inspects before pushing again',
       ),
       evidence: pushed.transcript,
@@ -197,7 +203,8 @@ Future<({bool signed, Diagnostic? refusal})> _signatureState(
       refusal: Diagnostic(
         code: 'RK-TAG-006',
         message: 'the tag object for $tag could not be read',
-        remedy: 'Re-run rk release ${unit.name}. The local tag is removed '
+        remedy:
+            'Re-run rk release ${unit.name}. The local tag is removed '
             'when it is not on origin, so a re-run starts from a clean state.',
       ),
     );
@@ -208,9 +215,11 @@ Future<({bool signed, Diagnostic? refusal})> _signatureState(
       signed: false,
       refusal: Diagnostic(
         code: 'RK-TAG-006',
-        message: 'this project signs its release tags, and $tag was created '
+        message:
+            'this project signs its release tags, and $tag was created '
             'without a signature',
-        remedy: 'Confirm the signing key works — git tag -s a throwaway tag '
+        remedy:
+            'Confirm the signing key works — git tag -s a throwaway tag '
             'and check git cat-file tag on it — then re-run rk release '
             '${unit.name}.',
       ),
@@ -222,9 +231,11 @@ Future<({bool signed, Diagnostic? refusal})> _signatureState(
       signed: true,
       refusal: Diagnostic(
         code: 'RK-TAG-007',
-        message: '$tag is signed, and its signature could not be verified '
+        message:
+            '$tag is signed, and its signature could not be verified '
             'on this machine',
-        remedy: 'For an SSH signing key, git needs a list of the signers it '
+        remedy:
+            'For an SSH signing key, git needs a list of the signers it '
             'should trust: write your public key to an allowed-signers file '
             'and set gpg.ssh.allowedSignersFile to it. rk will not record a '
             'release as signed on a signature it could not check.\n'
@@ -266,7 +277,8 @@ Future<TargetActOutcome> _pushExisting(
       diagnostic: Diagnostic(
         code: 'RK-TAG-002',
         message: 'the tag $tag could not be pushed',
-        remedy: 'the validated local tag object id is unavailable; '
+        remedy:
+            'the validated local tag object id is unavailable; '
             're-run so rk can inspect it again',
       ),
     );
@@ -280,7 +292,8 @@ Future<TargetActOutcome> _pushExisting(
       diagnostic: Diagnostic(
         code: 'RK-TAG-002',
         message: 'the tag $tag could not be pushed',
-        remedy: '${pushed.summary}\nthe tag pre-existed this run, so it '
+        remedy:
+            '${pushed.summary}\nthe tag pre-existed this run, so it '
             'was left in place — re-running pushes it again',
       ),
       evidence: pushed.transcript,
@@ -320,6 +333,6 @@ Future<TargetCleanupResult> _deleteLocalTag(
     detail: removed.ok
         ? 'the local tag was removed, so re-running starts clean'
         : 'the local tag could not be removed and was left in place; '
-            're-running inspects and pushes it safely',
+              're-running inspects and pushes it safely',
   );
 }

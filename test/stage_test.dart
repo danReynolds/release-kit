@@ -107,10 +107,12 @@ void main() {
       );
       final differentPlan = _identity({'toolchain': 'dart-3.10'});
 
-      expect(
-        {baseline.id, differentCommit.id, differentTree.id, differentPlan.id},
-        hasLength(4),
-      );
+      expect({
+        baseline.id,
+        differentCommit.id,
+        differentTree.id,
+        differentPlan.id,
+      }, hasLength(4));
     });
 
     test('abbreviated and mismatched Git object IDs are refused', () {
@@ -133,14 +135,8 @@ void main() {
     });
 
     test('only JSON data can enter the canonical plan', () {
-      expect(
-        () => _identity({'bad': DateTime(2026)}),
-        throwsFormatException,
-      );
-      expect(
-        () => _identity({'bad': double.nan}),
-        throwsFormatException,
-      );
+      expect(() => _identity({'bad': DateTime(2026)}), throwsFormatException);
+      expect(() => _identity({'bad': double.nan}), throwsFormatException);
     });
 
     test('unbound identities are invocation-scoped and claim no revision', () {
@@ -316,20 +312,22 @@ void main() {
         (build.evidence['signature']! as Map)['certificate_sha256'],
         'a' * 64,
       );
+      expect(build.evidence['notary'], {
+        'log_sha256': 'b' * 64,
+        'status': 'accepted',
+      });
       expect(
-        build.evidence['notary'],
-        {'log_sha256': 'b' * 64, 'status': 'accepted'},
-      );
-      expect(
-        Directory(stage.path)
-            .listSync()
-            .where((entity) => entity.path.contains('.tmp.')),
+        Directory(
+          stage.path,
+        ).listSync().where((entity) => entity.path.contains('.tmp.')),
         isEmpty,
         reason: 'the atomic rename leaves no writer temporary behind',
       );
       expect(StageInspector().inspect(stage).reusable, isTrue);
       expect(
-          receipt.artifacts.map((artifact) => artifact.path), contains('rk'));
+        receipt.artifacts.map((artifact) => artifact.path),
+        contains('rk'),
+      );
     });
 
     test('an earlier schema refuses by version, not by field shape', () {
@@ -339,12 +337,15 @@ void main() {
         ..['complete'] = true;
       expect(
         () => StageReceipt.parse('${CanonicalJson.encode(old)}\n'),
-        throwsA(isA<FormatException>().having(
-          (error) => error.message,
-          'message',
-          contains('unsupported stage schema'),
-        )),
-        reason: 'the schema message is the one a reader can act on; the '
+        throwsA(
+          isA<FormatException>().having(
+            (error) => error.message,
+            'message',
+            contains('unsupported stage schema'),
+          ),
+        ),
+        reason:
+            'the schema message is the one a reader can act on; the '
             'field error it used to get named a symptom',
       );
     });
@@ -375,14 +376,11 @@ void main() {
       final receipt = StageReceipt(
         identity: stage.identity,
         steps: [
-          StageStep(name: 'build', outputs: [artifact])
+          StageStep(name: 'build', outputs: [artifact]),
         ],
       );
 
-      expect(
-        () => StageReceiptStore(stage).write(receipt),
-        throwsStateError,
-      );
+      expect(() => StageReceiptStore(stage).write(receipt), throwsStateError);
       expect(File(stage.resolve('stage.json')).existsSync(), isFalse);
     });
 
@@ -398,13 +396,15 @@ void main() {
       File(stage.resolve('candidate')).writeAsStringSync('changed');
 
       expect(
-        () => StageReceiptStore(stage).write(StageReceipt(
-          identity: previous.identity,
-          steps: [
-            ...previous.steps,
-            StageStep(name: 'candidate', outputs: [candidate]),
-          ],
-        )),
+        () => StageReceiptStore(stage).write(
+          StageReceipt(
+            identity: previous.identity,
+            steps: [
+              ...previous.steps,
+              StageStep(name: 'candidate', outputs: [candidate]),
+            ],
+          ),
+        ),
         throwsStateError,
       );
       expect(
@@ -468,18 +468,21 @@ void main() {
       );
     });
 
-    test('artifact and ancestor symlinks are rejected without following them',
-        () {
-      _writeCompleteStage(stage);
-      File(stage.resolve('rk')).deleteSync();
-      Link(stage.resolve('rk')).createSync('/private/tmp/outside');
+    test(
+      'artifact and ancestor symlinks are rejected without following them',
+      () {
+        _writeCompleteStage(stage);
+        File(stage.resolve('rk')).deleteSync();
+        Link(stage.resolve('rk')).createSync('/private/tmp/outside');
 
-      _expectIssue(stage, StageIssueKind.symlink);
-    });
+        _expectIssue(stage, StageIssueKind.symlink);
+      },
+    );
 
     test('a symlink in the fixed stage path is an unsafe path', () {
-      final elsewhere =
-          Directory.systemTemp.createTempSync('rk-stage-outside-');
+      final elsewhere = Directory.systemTemp.createTempSync(
+        'rk-stage-outside-',
+      );
       addTearDown(() => elsewhere.deleteSync(recursive: true));
       Link('${repository.path}/.rk').createSync(elsewhere.path);
 
@@ -493,13 +496,12 @@ void main() {
       final receipt = _writeCompleteStage(stage);
       final malformed = receipt.toJson();
       final steps = (malformed['steps']! as List).cast<Map<String, Object?>>();
-      final outputs =
-          (steps[1]['outputs']! as List).cast<Map<String, Object?>>();
+      final outputs = (steps[1]['outputs']! as List)
+          .cast<Map<String, Object?>>();
       outputs.single['path'] = '../outside';
-      File(stage.resolve('stage.json')).writeAsStringSync(
-        '${CanonicalJson.encode(malformed)}\n',
-        flush: true,
-      );
+      File(
+        stage.resolve('stage.json'),
+      ).writeAsStringSync('${CanonicalJson.encode(malformed)}\n', flush: true);
 
       _expectIssue(stage, StageIssueKind.unsafePath);
     });
@@ -511,12 +513,14 @@ void main() {
         path: 'rk',
         type: 'executable',
       );
-      StageReceiptStore(stage).write(StageReceipt(
-        identity: stage.identity,
-        steps: [
-          StageStep(name: 'build', outputs: [artifact])
-        ],
-      ));
+      StageReceiptStore(stage).write(
+        StageReceipt(
+          identity: stage.identity,
+          steps: [
+            StageStep(name: 'build', outputs: [artifact]),
+          ],
+        ),
+      );
 
       _expectIssue(stage, StageIssueKind.incompleteReceipt);
     });
@@ -542,10 +546,12 @@ void main() {
           },
         },
       );
-      StageReceiptStore(stage).write(StageReceipt(
-        identity: receipt.identity,
-        steps: [receipt.steps.first, sign, receipt.steps.last],
-      ));
+      StageReceiptStore(stage).write(
+        StageReceipt(
+          identity: receipt.identity,
+          steps: [receipt.steps.first, sign, receipt.steps.last],
+        ),
+      );
 
       final inspected = StageInspector().inspect(stage);
       expect(inspected.reusable, isFalse);
@@ -581,10 +587,12 @@ void main() {
           },
         },
       );
-      StageReceiptStore(stage).write(StageReceipt(
-        identity: receipt.identity,
-        steps: [receipt.steps.first, sign, receipt.steps.last],
-      ));
+      StageReceiptStore(stage).write(
+        StageReceipt(
+          identity: receipt.identity,
+          steps: [receipt.steps.first, sign, receipt.steps.last],
+        ),
+      );
 
       final inspected = StageInspector().inspect(stage);
       expect(inspected.reusable, isFalse);
@@ -611,63 +619,64 @@ void main() {
       expect(beforeValid, afterValid);
     });
 
-    test('public manifest exposes provenance and digests, not local evidence',
-        () {
-      stage.writeBytesAtomically('artifacts/rk.tar.gz', utf8.encode('archive'));
-      final archive = StageArtifact.capture(
-        stage: stage,
-        path: 'artifacts/rk.tar.gz',
-        type: 'archive',
-      );
-      final manifest = ReleaseManifest(
-        unit: 'rk',
-        version: '1.2.3',
-        tag: 'v1.2.3',
-        commit: stage.identity.headCommit,
-        artifacts: [
-          ReleaseManifestArtifact.fromStage(
-            publicName: 'rk-1.2.3-macos-arm64.tar.gz',
+    test(
+      'public manifest exposes provenance and digests, not local evidence',
+      () {
+        stage.writeBytesAtomically(
+          'artifacts/rk.tar.gz',
+          utf8.encode('archive'),
+        );
+        final archive = StageArtifact.capture(
+          stage: stage,
+          path: 'artifacts/rk.tar.gz',
+          type: 'archive',
+        );
+        final manifest = ReleaseManifest(
+          unit: 'rk',
+          version: '1.2.3',
+          tag: 'v1.2.3',
+          commit: stage.identity.headCommit,
+          artifacts: [
+            ReleaseManifestArtifact.fromStage(
+              publicName: 'rk-1.2.3-macos-arm64.tar.gz',
+              artifact: archive,
+            ),
+          ],
+          homebrew: ReleaseManifestHomebrew.fromStage(
+            project: 'rk',
+            tap: 'example/homebrew-tap',
+            path: 'Formula/rk.rb',
             artifact: archive,
           ),
-        ],
-        homebrew: ReleaseManifestHomebrew.fromStage(
-          project: 'rk',
-          tap: 'example/homebrew-tap',
-          path: 'Formula/rk.rb',
-          artifact: archive,
-        ),
-      );
-      manifest.writeTo(stage);
-      final document =
-          File(stage.resolve('release-manifest.json')).readAsStringSync();
-      final parsed = ReleaseManifest.parse(document);
+        );
+        manifest.writeTo(stage);
+        final document = File(
+          stage.resolve('release-manifest.json'),
+        ).readAsStringSync();
+        final parsed = ReleaseManifest.parse(document);
 
-      expect(parsed.commit, stage.identity.headCommit);
-      expect(parsed.artifacts.single.sha256, archive.sha256);
-      expect(parsed.homebrew!.sha256, archive.sha256);
-      expect(parsed.homebrew!.path, 'Formula/rk.rb');
-      expect(document, contains(_commit));
-      expect(
-        document,
-        isNot(contains(stage.identity.planSha256)),
-        reason: 'the plan is local evidence no external reader can verify',
-      );
-      expect(document, isNot(contains(repository.path)));
-      expect(document, isNot(contains('artifacts/rk.tar.gz')));
-      expect(document, isNot(contains('Developer ID')));
-      expect(document, isNot(contains('notary')));
-    });
+        expect(parsed.commit, stage.identity.headCommit);
+        expect(parsed.artifacts.single.sha256, archive.sha256);
+        expect(parsed.homebrew!.sha256, archive.sha256);
+        expect(parsed.homebrew!.path, 'Formula/rk.rb');
+        expect(document, contains(_commit));
+        expect(
+          document,
+          isNot(contains(stage.identity.planSha256)),
+          reason: 'the plan is local evidence no external reader can verify',
+        );
+        expect(document, isNot(contains(repository.path)));
+        expect(document, isNot(contains('artifacts/rk.tar.gz')));
+        expect(document, isNot(contains('Developer ID')));
+        expect(document, isNot(contains('notary')));
+      },
+    );
 
     test('pre-Formula release manifest schemas are not migrated', () {
-      final unsupported = '${CanonicalJson.encode({
+      final unsupported =
+          '${CanonicalJson.encode({
             'artifacts': <Object?>[],
-            'cask': {
-              'path': 'Casks/rk.rb',
-              'project': 'rk',
-              'sha256': 'a' * 64,
-              'size': 42,
-              'tap': 'example/homebrew-tap',
-            },
+            'cask': {'path': 'Casks/rk.rb', 'project': 'rk', 'sha256': 'a' * 64, 'size': 42, 'tap': 'example/homebrew-tap'},
             'schema': 6,
             'source': {'commit': _commit},
             'tag': 'v1.2.3',
@@ -733,10 +742,10 @@ void main() {
 }
 
 StageIdentity _identity(Object? plan) => StageIdentity.forPlan(
-      headCommit: _commit,
-      headTree: _tree,
-      resolvedPlan: plan,
-    );
+  headCommit: _commit,
+  headTree: _tree,
+  resolvedPlan: plan,
+);
 
 StageReceipt _writeCompleteStage(StageDirectory stage) {
   stage.writeBytesAtomically('source/pubspec.yaml', utf8.encode('name: rk\n'));
@@ -787,10 +796,7 @@ StageReceipt _writeCompleteStage(StageDirectory stage) {
     tag: 'v1.0.0',
     commit: stage.identity.headCommit,
     artifacts: [
-      ReleaseManifestArtifact.fromStage(
-        publicName: 'rk',
-        artifact: artifact,
-      ),
+      ReleaseManifestArtifact.fromStage(publicName: 'rk', artifact: artifact),
     ],
   ).writeTo(stage);
   final manifest = StageArtifact.capture(

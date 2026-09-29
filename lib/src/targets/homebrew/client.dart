@@ -24,17 +24,16 @@ class HomebrewFormula {
     required String tag,
     required Map<String, PlatformAsset> assets,
     required String executable,
-  }) =>
-      render(
-        className: className,
-        description: 'Released by rk',
-        homepage: 'https://github.com/$repository',
-        version: version,
-        repository: repository,
-        tag: tag,
-        assets: assets,
-        executable: executable,
-      );
+  }) => render(
+    className: className,
+    description: 'Released by rk',
+    homepage: 'https://github.com/$repository',
+    version: version,
+    repository: repository,
+    tag: tag,
+    assets: assets,
+    executable: executable,
+  );
 
   /// Builds the formula text.
   ///
@@ -56,11 +55,7 @@ class HomebrewFormula {
     if (!RegExp(r'^[A-Z][A-Za-z0-9]*$').hasMatch(className)) {
       throw ArgumentError('invalid Homebrew formula class: $className');
     }
-    const supportedPlatforms = {
-      'macos-arm64',
-      'linux-arm64',
-      'linux-x64',
-    };
+    const supportedPlatforms = {'macos-arm64', 'linux-arm64', 'linux-x64'};
     final unsupported = assets.keys.toSet().difference(supportedPlatforms);
     if (unsupported.isNotEmpty) {
       throw ArgumentError(
@@ -144,8 +139,10 @@ class HomebrewFormula {
       ..writeln()
       ..writeln('  test do')
       ..writeln('    assert_match version.to_s,')
-      ..writeln('                 shell_output("#{bin}/'
-          '${_escape(executable)} --version")')
+      ..writeln(
+        '                 shell_output("#{bin}/'
+        '${_escape(executable)} --version")',
+      )
       ..writeln('  end')
       ..writeln('end');
 
@@ -167,9 +164,10 @@ class HomebrewFormula {
         !source.startsWith('$generatedHeader$generatedMarker')) {
       return null;
     }
-    final matches = RegExp(r'^  version "([^"]+)"$', multiLine: true)
-        .allMatches(source)
-        .toList();
+    final matches = RegExp(
+      r'^  version "([^"]+)"$',
+      multiLine: true,
+    ).allMatches(source).toList();
     if (matches.length != 1) return null;
     final raw = matches.single.group(1)!;
     final parsed = Version.tryParse(raw);
@@ -240,8 +238,10 @@ class HomebrewFormula {
       buffer
         ..writeln('${outer}url "${_url(repository, tag, asset.name)}"')
         ..writeln('${outer}sha256 "${asset.sha256}"')
-        ..writeln('${outer}depends_on arch: '
-            ':${arm != null ? 'arm64' : 'x86_64'}');
+        ..writeln(
+          '${outer}depends_on arch: '
+          ':${arm != null ? 'arm64' : 'x86_64'}',
+        );
     }
 
     if (scope != null) buffer.writeln('  end');
@@ -278,10 +278,8 @@ class PlatformAsset {
 class HomebrewUpdateAuthority {
   const HomebrewUpdateAuthority.absent({this.replacement}) : sha256 = null;
 
-  HomebrewUpdateAuthority.existing(
-    List<int> bytes, {
-    this.replacement,
-  }) : sha256 = Sha256.hex(bytes);
+  HomebrewUpdateAuthority.existing(List<int> bytes, {this.replacement})
+    : sha256 = Sha256.hex(bytes);
 
   final String? sha256;
 
@@ -341,18 +339,19 @@ class HomebrewTarget {
         !RegExp(r'^[0-9a-f]{64}$').hasMatch(expectedSha256)) {
       throw ArgumentError('expected formula digest is not lowercase SHA-256');
     }
-    final result = await tools.run(
-      'gh',
-      ['api', 'repos/$tap/contents/$formulaPath'],
-      workingDirectory: workingDirectory,
-    );
+    final result = await tools.run('gh', [
+      'api',
+      'repos/$tap/contents/$formulaPath',
+    ], workingDirectory: workingDirectory);
     if (!result.ok) {
       if (result.summary.contains('(HTTP 404)')) {
-        final readable = await tools.run(
-          'gh',
-          ['repo', 'view', tap, '--json', 'name'],
-          workingDirectory: workingDirectory,
-        );
+        final readable = await tools.run('gh', [
+          'repo',
+          'view',
+          tap,
+          '--json',
+          'name',
+        ], workingDirectory: workingDirectory);
         return readable.ok
             ? Inspection.absent(
                 detail: 'no formula in the tap yet',
@@ -381,7 +380,8 @@ class HomebrewTarget {
       publicBytes = base64Decode(content.replaceAll(RegExp(r'\s'), ''));
     } on Object catch (error) {
       return Inspection.unknown(
-          'the tap answered something unreadable: $error');
+        'the tap answered something unreadable: $error',
+      );
     }
 
     final publicSha256 = Sha256.hex(publicBytes);
@@ -392,7 +392,7 @@ class HomebrewTarget {
       publishedVersion: version,
       payloadMatches:
           (expectedBytes != null && _sameBytes(publicBytes, expectedBytes)) ||
-              (expectedSha256 != null && publicSha256 == expectedSha256),
+          (expectedSha256 != null && publicSha256 == expectedSha256),
       publishedIdentity: 'sha256:$publicSha256',
       unrecognizedDetail:
           'the Homebrew formula is not a recognizable rk-generated formula',
@@ -414,11 +414,7 @@ class HomebrewTarget {
 
 /// Moves a tap's formula forward, only from the state rk inspected.
 class HomebrewTap {
-  HomebrewTap({
-    required this.tools,
-    required this.tap,
-    required this.checkout,
-  });
+  HomebrewTap({required this.tools, required this.tap, required this.checkout});
 
   final Tools tools;
 
@@ -491,41 +487,38 @@ class HomebrewTap {
       return TapOutcome.failed('the tap formula could not be written: $error');
     }
 
-    final added = await tools.run(
-      'git',
-      [
-        'add',
-        '--',
-        formulaPath,
-      ],
-      workingDirectory: checkout,
-    );
+    final added = await tools.run('git', [
+      'add',
+      '--',
+      formulaPath,
+    ], workingDirectory: checkout);
     if (!added.ok) {
       return TapOutcome.failed(added.summary, transcript: added.transcript);
     }
 
-    final committed = await tools.run(
-      'git',
-      ['commit', '-m', message],
-      workingDirectory: checkout,
-    );
+    final committed = await tools.run('git', [
+      'commit',
+      '-m',
+      message,
+    ], workingDirectory: checkout);
     if (!committed.ok) {
-      return TapOutcome.failed(committed.summary,
-          transcript: committed.transcript);
+      return TapOutcome.failed(
+        committed.summary,
+        transcript: committed.transcript,
+      );
     }
 
-    final pushed = await tools.run(
-      'git',
-      const ['push'],
-      workingDirectory: checkout,
-    );
+    final pushed = await tools.run('git', const [
+      'push',
+    ], workingDirectory: checkout);
     if (!pushed.ok) {
       // Only an actual rejection is the compare-and-swap failing; an auth
       // failure or an unreachable remote wearing "the tap moved" prose
       // would send the operator hunting for a concurrent writer that does
       // not exist.
       final said = pushed.summary.toLowerCase();
-      final rejected = said.contains('non-fast-forward') ||
+      final rejected =
+          said.contains('non-fast-forward') ||
           said.contains('fetch first') ||
           said.contains('rejected');
       return rejected
@@ -534,22 +527,28 @@ class HomebrewTap {
               'fresh: ${pushed.summary}',
               transcript: pushed.transcript,
             )
-          : TapOutcome.lostTrack('the push failed: ${pushed.summary}',
-              transcript: pushed.transcript);
+          : TapOutcome.lostTrack(
+              'the push failed: ${pushed.summary}',
+              transcript: pushed.transcript,
+            );
     }
     return const TapOutcome.updated();
   }
 }
 
 class TapOutcome {
-  const TapOutcome._(this.problem, this.changed, this.mayHaveActed,
-      {this.transcript});
+  const TapOutcome._(
+    this.problem,
+    this.changed,
+    this.mayHaveActed, {
+    this.transcript,
+  });
   const TapOutcome.updated() : this._(null, true, true);
   const TapOutcome.unchanged() : this._(null, false, false);
   const TapOutcome.failed(String problem, {String? transcript})
-      : this._(problem, false, false, transcript: transcript);
+    : this._(problem, false, false, transcript: transcript);
   const TapOutcome.lostTrack(String problem, {String? transcript})
-      : this._(problem, false, true, transcript: transcript);
+    : this._(problem, false, true, transcript: transcript);
 
   final String? problem;
 

@@ -60,7 +60,7 @@ class SourceLocation {
 /// cycle is one edit round rather than several.
 class RkFailure implements Exception {
   RkFailure(this.diagnostics)
-      : assert(diagnostics.isNotEmpty, 'a failure needs at least one problem');
+    : assert(diagnostics.isNotEmpty, 'a failure needs at least one problem');
 
   final List<Diagnostic> diagnostics;
 
@@ -86,12 +86,7 @@ class Diagnostics {
     String? remedy,
   }) {
     _found.add(
-      Diagnostic(
-        code: code,
-        message: message,
-        source: source,
-        remedy: remedy,
-      ),
+      Diagnostic(code: code, message: message, source: source, remedy: remedy),
     );
   }
 }

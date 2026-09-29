@@ -9,10 +9,7 @@ import 'stage_receipt.dart';
 /// complete-stage receipt is the authority for both the private bytes and the
 /// public inventory reviewed by the operator.
 final class ReleaseBundleAsset {
-  const ReleaseBundleAsset({
-    required this.publicName,
-    required this.artifact,
-  });
+  const ReleaseBundleAsset({required this.publicName, required this.artifact});
 
   final String publicName;
   final StageArtifact artifact;
@@ -21,7 +18,7 @@ final class ReleaseBundleAsset {
 /// The exact public bundle frozen by a completed release stage.
 final class ReleaseBundle {
   ReleaseBundle._(Iterable<ReleaseBundleAsset> assets)
-      : assets = List<ReleaseBundleAsset>.unmodifiable(assets);
+    : assets = List<ReleaseBundleAsset>.unmodifiable(assets);
 
   /// Resolves the configured bundle against the completed receipt.
   ///
@@ -38,7 +35,8 @@ final class ReleaseBundle {
     );
     if (manifest.length != 1) {
       return const ReleaseBundleResolution.invalid(
-        message: 'the completed stage has no exact release-manifest.json '
+        message:
+            'the completed stage has no exact release-manifest.json '
             'binding',
         publicName: ReleaseAssets.manifest,
         producer: 'the complete-stage step',
@@ -55,7 +53,8 @@ final class ReleaseBundle {
     final extra = actualNames.difference(planned.keys.toSet());
     if (missing.isNotEmpty || extra.isNotEmpty) {
       return ReleaseBundleResolution.invalid(
-        message: 'the completed stage has a different release-asset '
+        message:
+            'the completed stage has a different release-asset '
             'inventory',
         evidence: {
           for (final name in missing) name: 'missing from stage',
@@ -77,23 +76,18 @@ final class ReleaseBundle {
               : 'the archive steps',
         );
       }
-      assets.add(ReleaseBundleAsset(
-        publicName: entry.key,
-        artifact: artifact,
-      ));
+      assets.add(ReleaseBundleAsset(publicName: entry.key, artifact: artifact));
     }
     return ReleaseBundleResolution.available(ReleaseBundle._(assets));
   }
 
   final List<ReleaseBundleAsset> assets;
 
-  Set<String> get publicNames => {
-        for (final asset in assets) asset.publicName,
-      };
+  Set<String> get publicNames => {for (final asset in assets) asset.publicName};
 
   Map<String, String> get sha256ByPublicName => {
-        for (final asset in assets) asset.publicName: asset.artifact.sha256,
-      };
+    for (final asset in assets) asset.publicName: asset.artifact.sha256,
+  };
 }
 
 /// Result of joining a release plan to its completed-stage artifacts.

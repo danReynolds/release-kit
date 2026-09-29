@@ -78,15 +78,11 @@ Future<void> main(List<String> args) async {
   report.note('snapshot size', _size(bytes));
 
   final sample = paths.take(20).toList();
-  final perFile = report.measure(
-    'read 20 blobs (one call each)',
-    () {
-      for (final path in sample) {
-        tree.readBytesAt(head, path);
-      }
-    },
-    detail: 'the same work, unbatched',
-  );
+  final perFile = report.measure('read 20 blobs (one call each)', () {
+    for (final path in sample) {
+      tree.readBytesAt(head, path);
+    }
+  }, detail: 'the same work, unbatched');
   report.note(
     'unbatched, extrapolated',
     '${(perFile.inMilliseconds * paths.length / sample.length).round()}ms '
@@ -131,15 +127,11 @@ Future<void> main(List<String> args) async {
         detail: 'reads every project manifest',
       );
       if (resolution != null) {
-        report.time(
-          'derive every checklist',
-          () {
-            for (final unit in resolution.units) {
-              Checklist.derive(unit, resolution, Diagnostics());
-            }
-          },
-          detail: '${resolution.units.length} unit(s)',
-        );
+        report.time('derive every checklist', () {
+          for (final unit in resolution.units) {
+            Checklist.derive(unit, resolution, Diagnostics());
+          }
+        }, detail: '${resolution.units.length} unit(s)');
       }
     }
   }
@@ -153,20 +145,23 @@ Future<void> main(List<String> args) async {
   final stages = Directory('$gitRoot/.rk/work/stages');
   final built = stages.existsSync()
       ? stages
-          .listSync()
-          .whereType<Directory>()
-          .where((each) => File('${each.path}/stage.json').existsSync())
-          .toList()
+            .listSync()
+            .whereType<Directory>()
+            .where((each) => File('${each.path}/stage.json').existsSync())
+            .toList()
       : <Directory>[];
   if (built.isEmpty) {
     report.note('verify a built stage', 'none on disk — rk release --stage');
   } else {
-    final newest = built.reduce((left, right) =>
-        left.statSync().modified.isAfter(right.statSync().modified)
-            ? left
-            : right);
-    final recorded =
-        jsonDecode(File('${newest.path}/stage.json').readAsStringSync());
+    final newest = built.reduce(
+      (left, right) =>
+          left.statSync().modified.isAfter(right.statSync().modified)
+          ? left
+          : right,
+    );
+    final recorded = jsonDecode(
+      File('${newest.path}/stage.json').readAsStringSync(),
+    );
     final identity = StageIdentity.fromJson(
       (recorded as Map<String, Object?>)['stage'],
     );
@@ -174,8 +169,10 @@ Future<void> main(List<String> args) async {
         .listSync(recursive: true)
         .whereType<File>()
         .fold<int>(0, (sum, file) => sum + file.lengthSync());
-    final directory =
-        StageDirectory(repositoryRoot: gitRoot, identity: identity);
+    final directory = StageDirectory(
+      repositoryRoot: gitRoot,
+      identity: identity,
+    );
     report.time(
       'verify a built stage',
       () => const StageInspector().inspect(directory),
@@ -239,10 +236,10 @@ class _Baseline {
   }
 
   static Map<String, Object?> describeHost() => {
-        'os': Platform.operatingSystem,
-        'processors': Platform.numberOfProcessors,
-        'dart': Platform.version.split(' ').first,
-      };
+    'os': Platform.operatingSystem,
+    'processors': Platform.numberOfProcessors,
+    'dart': Platform.version.split(' ').first,
+  };
 
   /// Whether the numbers were produced somewhere comparable.
   bool get matchesThisMachine {
@@ -322,8 +319,10 @@ class _Report {
 
   void _print(_Row row) {
     final took = '${row.took.inMicroseconds / 1000}'.padLeft(8);
-    stdout.writeln('  ${row.what.padRight(34)}${took}ms'
-        '${_against(row)}${row.detail == null ? '' : '  ${row.detail}'}');
+    stdout.writeln(
+      '  ${row.what.padRight(34)}${took}ms'
+      '${_against(row)}${row.detail == null ? '' : '  ${row.detail}'}',
+    );
   }
 
   /// How this row compares with the recorded run, when there is one worth
@@ -354,15 +353,19 @@ class _Report {
   void sayWhatIsBeingComparedAgainst() {
     final recorded = baseline;
     if (recorded == null) {
-      stdout.writeln('  no baseline recorded — '
-          'dart run tool/bench.dart --record\n');
+      stdout.writeln(
+        '  no baseline recorded — '
+        'dart run tool/bench.dart --record\n',
+      );
       return;
     }
     if (!recorded.matchesThisMachine) {
-      stdout.writeln('  baseline came from ${recorded.host['os']} on '
-          '${recorded.host['processors']} processors, Dart '
-          '${recorded.host['dart']} — not this machine, so nothing is '
-          'compared\n');
+      stdout.writeln(
+        '  baseline came from ${recorded.host['os']} on '
+        '${recorded.host['processors']} processors, Dart '
+        '${recorded.host['dart']} — not this machine, so nothing is '
+        'compared\n',
+      );
     }
   }
 
@@ -380,11 +383,15 @@ class _Report {
 
   void conclude() {
     final total = _rows.fold(Duration.zero, (sum, row) => sum + row.took);
-    stdout.writeln('  ${'total local work'.padRight(34)}'
-        '${'${total.inMilliseconds}'.padLeft(8)}ms');
-    stdout.writeln('\n  No network, so these are the parts of a release that '
-        'are rk\'s own\n  doing. A step far slower than its neighbours is the '
-        'one to look at.');
+    stdout.writeln(
+      '  ${'total local work'.padRight(34)}'
+      '${'${total.inMilliseconds}'.padLeft(8)}ms',
+    );
+    stdout.writeln(
+      '\n  No network, so these are the parts of a release that '
+      'are rk\'s own\n  doing. A step far slower than its neighbours is the '
+      'one to look at.',
+    );
   }
 }
 

@@ -22,21 +22,20 @@ enum PublishTarget {
   /// or inputs. The parser owns diagnostics; the target vocabulary owns the
   /// dependency graph so adding an adapter cannot leave a second copy stale.
   Set<PublishTarget> get prerequisites => switch (this) {
-        PublishTarget.githubRelease => const {PublishTarget.gitTag},
-        PublishTarget.homebrew => const {PublishTarget.githubRelease},
-        _ => const {},
-      };
+    PublishTarget.githubRelease => const {PublishTarget.gitTag},
+    PublishTarget.homebrew => const {PublishTarget.githubRelease},
+    _ => const {},
+  };
 
   /// Whether the destination's public identity depends on Git history.
   /// Non-Git projects remain valid for registry-only releases; selecting one
   /// of these targets is the explicit point where Git becomes required.
   bool get requiresGit => switch (this) {
-        PublishTarget.gitTag ||
-        PublishTarget.githubRelease ||
-        PublishTarget.homebrew =>
-          true,
-        PublishTarget.pubDev => false,
-      };
+    PublishTarget.gitTag ||
+    PublishTarget.githubRelease ||
+    PublishTarget.homebrew => true,
+    PublishTarget.pubDev => false,
+  };
 
   static PublishTarget? named(String name) {
     for (final target in values) {

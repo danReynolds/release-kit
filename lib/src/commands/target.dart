@@ -32,7 +32,7 @@ Usage
           remedy: name == null
               ? usage.trim()
               : 'Supported: ${ReleaseChoice.values.map((item) => item.id).join(', ')}\n'
-                  'Run rk target list to see what each one does.',
+                    'Run rk target list to see what each one does.',
         ),
       );
       return ExitCodes.usage;
@@ -106,7 +106,9 @@ Usage
     );
     if (reference.usesBinaryPlatforms) {
       _section(
-          'Supported binary platforms', ReleaseConfig.supportedPlatformsList);
+        'Supported binary platforms',
+        ReleaseConfig.supportedPlatformsList,
+      );
     }
     _section('Read automatically', reference.nativeConfiguration);
     _section('Example', reference.example.split('\n'));
@@ -150,26 +152,27 @@ final class _Reference {
   final String example;
 
   Map<String, Object?> get json => {
-        'id': choice.id,
-        'label': choice.selectorLabel,
-        'category': choice.category.name,
-        'summary': choice.summary,
-        'description': description,
-        'requires': choice.requires.map((item) => item.id).toList(),
-        'select': select,
-        'configure': configure,
-        if (usesBinaryPlatforms)
-          'supported_binary_platforms': ReleaseConfig.supportedPlatformsList,
-        'native_configuration': nativeConfiguration,
-        'example': example,
-      };
+    'id': choice.id,
+    'label': choice.selectorLabel,
+    'category': choice.category.name,
+    'summary': choice.summary,
+    'description': description,
+    'requires': choice.requires.map((item) => item.id).toList(),
+    'select': select,
+    'configure': configure,
+    if (usesBinaryPlatforms)
+      'supported_binary_platforms': ReleaseConfig.supportedPlatformsList,
+    'native_configuration': nativeConfiguration,
+    'example': example,
+  };
 }
 
 final Map<ReleaseChoice, _Reference> _references = {
   ReleaseChoice.binary: const _Reference(
     choice: ReleaseChoice.binary,
     title: 'build standalone executable archives',
-    description: 'Builds standalone executable archives locally. It publishes '
+    description:
+        'Builds standalone executable archives locally. It publishes '
         'them nowhere unless another selected target consumes them.',
     select: [
       'Set binary_platforms on the project. `binary` does not go in publish.',
@@ -220,7 +223,8 @@ publish = ["pub.dev"]''',
   ReleaseChoice.githubRelease: const _Reference(
     choice: ReleaseChoice.githubRelease,
     title: 'publish a GitHub Release',
-    description: 'Creates a GitHub Release containing the changelog and '
+    description:
+        'Creates a GitHub Release containing the changelog and '
         'release manifest, plus any selected binary archives.',
     select: ['Add "github-release" to the release unit\'s publish list.'],
     requirementReasons: {
@@ -237,7 +241,8 @@ publish = ["git-tag", "github-release"]''',
   ReleaseChoice.homebrew: const _Reference(
     choice: ReleaseChoice.homebrew,
     title: 'publish through a Homebrew tap',
-    description: 'Publishes stable releases through a formula that installs '
+    description:
+        'Publishes stable releases through a formula that installs '
         'one standalone executable from its GitHub Release. Prereleases keep '
         'the tap on its last stable version.',
     select: ['Add "homebrew" to the project\'s publish list.'],
