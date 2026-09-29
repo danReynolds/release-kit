@@ -3037,22 +3037,32 @@ class _WorldTools implements Tools {
           ? ToolResult(exitCode: 1, stdout: '', stderr: 'authentication failed')
           : _ok(stdout: 'You are already logged in as <dev@example.com>\n');
     }
+    // The pub.dev stage resolves its mirror before packaging it. A native
+    // archive resolves for real; otherwise Pub's reports and records are
+    // modeled.
+    final resolving =
+        _isDart(executable) &&
+        (_starts(arguments, ['pub', 'get', '--no-example']) ||
+            _starts(arguments, ['pub', 'deps']));
+    if (resolving && nativePubArchive) {
+      return const SystemTools().run(
+        executable,
+        arguments,
+        workingDirectory: workingDirectory,
+        environment: environment,
+        timeout: timeout,
+      );
+    }
+    if (resolving && workingDirectory != null) {
+      if (arguments.contains('--no-example')) {
+        return pubGetIn(workingDirectory, environment: environment);
+      }
+      return arguments.contains('--json')
+          ? pubDepsJsonIn(workingDirectory)
+          : pubDepsCompactIn(workingDirectory);
+    }
     if (_isDart(executable) && _starts(arguments, ['pub', 'get'])) {
       return _ok();
-    }
-    // The pub.dev stage resolves its mirror before packaging it. A native
-    // archive resolves for real; otherwise Pub's records are modeled.
-    if (_isDart(executable) && _starts(arguments, ['pub', 'deps'])) {
-      if (nativePubArchive) {
-        return const SystemTools().run(
-          executable,
-          arguments,
-          workingDirectory: workingDirectory,
-          environment: environment,
-          timeout: timeout,
-        );
-      }
-      return workingDirectory == null ? _ok() : pubDepsIn(workingDirectory);
     }
     if (_isDart(executable) && _starts(arguments, ['pub', 'cache', 'add'])) {
       if (pubAvailabilityFailures > 0) {

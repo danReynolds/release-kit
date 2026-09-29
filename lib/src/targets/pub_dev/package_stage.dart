@@ -100,17 +100,7 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
     final dart = context.stage.compiler?.executable;
     if (dart != null && !dartInFlutterSdk(dart)) {
       return (
-        diagnostic: Diagnostic(
-          code: 'RK-PUB-014',
-          message:
-              '${project.name} resolves with Flutter packages, and the '
-              'Dart rk uses is not part of a Flutter SDK',
-          remedy:
-              '$dart is a standalone Dart SDK. rk stages Flutter packages '
-              'with a Flutter SDK\'s Dart, which the stage records. Put your '
-              'Flutter SDK\'s bin directory first on PATH so rk uses its '
-              'dart, then re-stage.',
-        ),
+        diagnostic: _flutterDiagnostic(project.name, dart),
         warnings: const <Diagnostic>[],
       );
     }
@@ -130,14 +120,18 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
         ? mirroredSource
         : _join(mirroredSource, StagePath.segments(project.pubspec.directory));
     // Pub honours dependency overrides where it resolves and strips them
-    // from the published archive. Resolving the staged snapshot is what
-    // Pub validates against: `pub get` reports every override it applied,
-    // whichever package declared it and however, its lockfile marks them
-    // too, and the graph says which of them this package reaches.
-    final get = await context.tools.run('dart', const [
-      'pub',
-      'get',
-    ], workingDirectory: directory);
+    // from the published archive. Resolving the staged snapshot is what Pub
+    // validates against, so Pub decides what is overridden: its compact
+    // report lists what it read from every package's declarations, `pub get`
+    // reports each override it applied, and its lockfile marks them too.
+    // Records left in the snapshot are not Pub's answer for it.
+    _removePubRecords(mirroredSource);
+    final get = await context.tools.run(
+      'dart',
+      const ['pub', 'get', '--no-example'],
+      workingDirectory: directory,
+      environment: const {'PUB_SUMMARY_ONLY': '0'},
+    );
     final deps = get.ok
         ? await context.tools.run('dart', const [
             'pub',
@@ -145,6 +139,13 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
             '--json',
           ], workingDirectory: directory)
         : get;
+    final compact = deps.ok
+        ? await context.tools.run('dart', const [
+            'pub',
+            'deps',
+            '--style=compact',
+          ], workingDirectory: directory)
+        : deps;
     final graph = deps.ok ? deps.stdout : null;
     final reached = graph == null
         ? null
@@ -152,13 +153,16 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
     final unhosted = reached == null
         ? null
         : unhostedDependencies(graph!, reached);
+    final flutter = graph == null ? null : usesFlutter(graph);
     final root = deps.ok ? resolvedRoot(directory) : null;
     final overridden = root == null ? null : overriddenPackages(root);
     final String? unknown = !get.ok
         ? 'dart pub get failed: ${_firstLine(get.stderr)}'
         : !deps.ok
         ? 'dart pub deps failed: ${_firstLine(deps.stderr)}'
-        : reached == null || unhosted == null
+        : !compact.ok
+        ? 'dart pub deps failed: ${_firstLine(compact.stderr)}'
+        : reached == null || unhosted == null || flutter == null
         ? 'dart pub deps did not print a dependency graph rk reads'
         : root == null
         ? 'Pub left no record of where it resolved ${project.name}'
@@ -171,13 +175,25 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
         warnings: const <Diagnostic>[],
       );
     }
+    // Resolved with Flutter packages rk's reading did not see.
+    if (flutter!) {
+      final dart = context.stage.compiler?.executable;
+      if (dart != null && !dartInFlutterSdk(dart)) {
+        return (
+          diagnostic: _flutterDiagnostic(project.name, dart),
+          warnings: const <Diagnostic>[],
+        );
+      }
+    }
     String declaredIn(String package) =>
+        declared.where((o) => o.package == package).firstOrNull?.declaredIn ??
         declared
-            .where((o) => o.package == package || o.package == everyPackage)
-            .map((o) => o.declaredIn)
-            .firstOrNull ??
+            .where((o) => o.package == everyPackage)
+            .firstOrNull
+            ?.declaredIn ??
         'an override Pub applied, which rk did not find declared';
     final all = {
+      ...declaredOverrides(compact.stdout),
       ...reportedOverrides('${get.stdout}\n${get.stderr}'),
       ...overridden!,
       for (final o in declared)
@@ -425,6 +441,38 @@ Diagnostic _unresolvedDiagnostic(String package, String why) => Diagnostic(
 );
 
 String _firstLine(String text) {
-  final line = text.trim().split('\n').first.trim();
+  var line = text.trim().split('\n').first.trim();
+  while (line.endsWith('.')) {
+    line = line.substring(0, line.length - 1);
+  }
   return line.isEmpty ? 'no output' : line;
+}
+
+Diagnostic _flutterDiagnostic(String package, String dart) => Diagnostic(
+  code: 'RK-PUB-014',
+  message:
+      '$package resolves with Flutter packages, and the Dart rk uses is not '
+      'part of a Flutter SDK',
+  remedy:
+      '$dart is a standalone Dart SDK. rk stages Flutter packages with a '
+      'Flutter SDK\'s Dart, which the stage records. Put your Flutter SDK\'s '
+      'bin directory first on PATH so rk uses its dart, then re-stage.',
+);
+
+/// Deletes every `.dart_tool` directory under [directory]. Pub's records
+/// there describe some earlier resolution, and a pointer to another root
+/// would send rk to a lockfile Pub did not write for this one. They are
+/// never part of a package archive.
+void _removePubRecords(String directory) {
+  final stale = <Directory>[];
+  for (final entry in Directory(
+    directory,
+  ).listSync(recursive: true, followLinks: false)) {
+    if (entry is Directory && entry.path.split('/').last == '.dart_tool') {
+      stale.add(entry);
+    }
+  }
+  for (final dir in stale) {
+    if (dir.existsSync()) dir.deleteSync(recursive: true);
+  }
 }

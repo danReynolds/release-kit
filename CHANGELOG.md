@@ -30,23 +30,27 @@
 - Refuse a tracked dependency override (`RK-PUB-008`) only when it reaches the
   staged package, as Pub reports it.
   - The stage resolves its mirror of the source with `dart pub get` and
-    `dart pub deps --json`, so Pub decides what is overridden. `pub get`
-    reports every override it applied, wherever and however it is declared,
-    and its lockfile marks them too.
+    `dart pub deps`, so Pub decides what is overridden:
+    - Pub's compact report lists what it read from every package's
+      declarations.
+    - `pub get`, asked for its full report, prints each override it applied.
+    - Its lockfile marks overrides.
+  - rk adds its own reading of the declarations to these.
+  - Pub records a snapshot carries from an earlier resolution are cleared
+    first. Examples are not resolved, as `pub publish` does not resolve them.
   - rk refuses when the package reaches an overridden package, or is one.
   - It also refuses any reached package that Pub took from a path or Git
     source, because consumers receive only hosted and SDK packages.
-  - rk's own reading of the workspace only names where an override is
-    declared.
   - Overrides that reach only other workspace members are listed in the run's
     report as `pub-overrides-<package>.txt`.
 - Refuse to stage a package when rk cannot read Pub's resolution of it
   (`RK-PUB-016`): a failed resolution, a graph rk does not read, or no record
   of where Pub resolved or what its lockfile says.
 - Refuse to stage a package that resolves with Flutter packages when rk's Dart
-  is not a Flutter SDK's (`RK-PUB-014`), before Pub runs. The stage records the
-  Dart it uses, and a standalone one would depend on an unrecorded
-  `FLUTTER_ROOT`.
+  is not a Flutter SDK's (`RK-PUB-014`). The check runs before Pub when rk can
+  read the workspace, and from Pub's resolved graph otherwise. The stage
+  records the Dart it uses, and a standalone one would depend on an
+  unrecorded `FLUTTER_ROOT`.
 - Add an inline version table to `rk use`. Installed versions remain visible
   while remote checks run independently. Install and Update are separate from
   Use; Update appears only for a confirmed newer version. Navigation and checks

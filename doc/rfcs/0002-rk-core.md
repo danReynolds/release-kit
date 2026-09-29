@@ -823,15 +823,18 @@ act(expected, stage)
   change (RK-PUB-008), and Pub decides what is overridden.
 
   The stage resolves its mirror of the source with `dart pub get` and
-  `dart pub deps --json`. `pub get` reports every override it applied with a
-  `!` line. Any workspace package's pubspec or overrides file can declare one,
-  and Pub applies it to the whole workspace.
+  `dart pub deps`, after clearing any Pub records the snapshot carries. It
+  does not resolve examples, which `pub publish` does not resolve either.
+  Any workspace package's pubspec or overrides file can declare an override,
+  and Pub applies it to the whole workspace. Pub reports overrides three ways:
+  - Its compact report (`pub deps --style=compact`) lists what it read from
+    every package's declarations.
+  - `pub get`, asked for a full report, prints each override it applied.
+    `PUB_SUMMARY_ONLY` would otherwise suppress those lines.
+  - Its lockfile marks overrides, though it records an overridden direct
+    dependency of the root as direct.
 
-  Pub also records where it resolved: a member's
-  `.dart_tool/pub/workspace_ref.json` points to the workspace root. Its
-  lockfile there marks overrides, though an overridden direct dependency of
-  the root is recorded as direct. rk takes the union of both reports and its
-  own reading of the declarations.
+  rk takes the union of these and its own reading.
 
   rk refuses when the package reaches an overridden package, or is one, with
   dev dependencies excluded, since consumers never resolve them. It also
@@ -839,11 +842,11 @@ act(expected, stage)
   Consumers receive only hosted and SDK packages, so such a package is
   overridden whatever declared it.
 
-  rk's own reading of the workspace only names the declaring file. Three
-  reviews found that re-deriving Pub's override rules from YAML leaks: member
-  overrides files, `workspace:` in an overrides file, and a lone carriage
-  return hiding a key. When rk cannot read Pub's resolution, it refuses
-  (RK-PUB-016).
+  rk's own reading of the workspace names the declaring file where it can.
+  Reviews found that re-deriving Pub's override rules from YAML alone leaks:
+  member overrides files, `workspace:` in an overrides file, and a lone
+  carriage return hiding a key. When rk cannot read Pub's resolution, it
+  refuses (RK-PUB-016).
 
   An override that serves only another workspace member changes nothing this
   package's consumers resolve. A Git pin one Flutter host needs is an example.
@@ -851,8 +854,9 @@ act(expected, stage)
 
   A workspace containing Flutter packages is staged only with a Flutter SDK's
   Dart, whose pub finds its own Flutter. Staging with a standalone Dart would
-  depend on an ambient `FLUTTER_ROOT` that the stage does not record, so rk
-  refuses it before Pub runs (RK-PUB-014).
+  depend on an ambient `FLUTTER_ROOT` that the stage does not record. rk
+  refuses it (RK-PUB-014) before Pub runs when it can read the workspace, and
+  otherwise from Pub's resolved graph.
 
   Pubspecs are read as YAML reads them, or refused where rk's subset stops.
 - **`dart-cli`** (build): `dart compile exe` per platform, then smoke-runs

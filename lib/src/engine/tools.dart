@@ -329,6 +329,10 @@ class RecordingTools implements Tools {
 
   final List<String> calls = [];
 
+  /// The environment each command last ran with, by key, so a test can see
+  /// what rk asked of a tool as well as what it ran.
+  final Map<String, Map<String, String>?> environments = {};
+
   ToolResult _result(String key) =>
       results[key] ??
       answers?.call(key) ??
@@ -344,6 +348,7 @@ class RecordingTools implements Tools {
   }) async {
     final key = '$executable ${arguments.join(' ')}';
     calls.add(key);
+    environments[key] = environment;
     probe?.call(key, workingDirectory);
     onRun?.call(key);
     return _result(key);

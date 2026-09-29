@@ -142,16 +142,46 @@ List<DependencyOverride> dependencyOverrides(
 
 /// The packages `dart pub get` reports it overrode, from its [output]: a
 /// `!` line for each, such as `! leaf 9.9.9 from path ../fork (overridden)`.
-/// Pub prints one for every override it applied, whichever package declared
-/// it, including an override of a direct dependency, which its lockfile
-/// records as a direct dependency instead.
+/// Pub prints these only in a full report, which `PUB_SUMMARY_ONLY` turns
+/// off, so the stage runs it with that set to `0`.
 Set<String> reportedOverrides(String output) => {
   for (final match in RegExp(
-    r'^! ([A-Za-z_][A-Za-z0-9_]*) .*\(overridden',
+    r'^! (\S+) .*\(overridden',
     multiLine: true,
   ).allMatches(output))
     match.group(1)!,
 };
+
+/// The overrides Pub read from every package of the workspace, from
+/// `dart pub deps --style=compact`: each package's `dependency overrides:`
+/// section, as Pub parsed its pubspec and overrides file. Unlike
+/// [reportedOverrides], the report does not depend on `PUB_SUMMARY_ONLY`.
+Set<String> declaredOverrides(String compact) {
+  final names = <String>{};
+  var inOverrides = false;
+  for (final line in compact.split('\n')) {
+    if (line.trim() == 'dependency overrides:') {
+      inOverrides = true;
+      continue;
+    }
+    if (!inOverrides) continue;
+    final entry = RegExp(r'^- (\S+)').firstMatch(line);
+    if (entry == null) {
+      inOverrides = false;
+      continue;
+    }
+    names.add(entry.group(1)!);
+  }
+  return names;
+}
+
+/// Whether the resolved graph in [pubDepsJson] takes a package from an SDK,
+/// which only Flutter provides. Null when the output is not a graph.
+bool? usesFlutter(String pubDepsJson) {
+  final packages = _packages(pubDepsJson);
+  if (packages == null) return null;
+  return packages.values.any((entry) => entry['source'] == 'sdk');
+}
 
 /// Where Pub resolved the package at [directory], as Pub records it after
 /// resolving: the root its `.dart_tool/pub/workspace_ref.json` points to, or
