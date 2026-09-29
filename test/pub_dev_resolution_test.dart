@@ -130,9 +130,9 @@ void main() {
     });
   });
 
-  group('appliedOverrides', () {
+  group('reportedOverrides', () {
     test('reads what each workspace package depends on beyond its own', () {
-      expect(appliedOverrides(_workspaceDeps), {
+      expect(reportedOverrides(_workspaceDeps), {
         'example_workspace': <String>{},
         'core': <String>{},
         'host': <String>{},
@@ -145,8 +145,41 @@ void main() {
         final core = packages.firstWhere((p) => (p as Map)['name'] == 'core');
         (core as Map).remove('devDependencies');
       });
-      expect(appliedOverrides(bare), isNull);
-      expect(appliedOverrides('[]'), isNull);
+      expect(reportedOverrides(bare), isNull);
+      expect(reportedOverrides('[]'), isNull);
+    });
+  });
+
+  group('unhostedDependencies', () {
+    String graph(Map<String, String?> sources) => jsonEncode({
+      'packages': [
+        {'name': 'member', 'kind': 'root', 'source': 'root'},
+        for (final MapEntry(key: name, value: source) in sources.entries)
+          {'name': name, 'kind': 'transitive', 'source': ?source},
+      ],
+    });
+
+    test('names reached packages Pub took from a path or Git', () {
+      final json = graph({
+        'fork': 'path',
+        'pinned': 'git',
+        'hosted': 'hosted',
+        'flutter': 'sdk',
+      });
+      expect(
+        unhostedDependencies(json, {'fork', 'pinned', 'hosted', 'flutter'}),
+        {'fork': 'path', 'pinned': 'git'},
+      );
+      expect(unhostedDependencies(json, {'hosted'}), isEmpty);
+    });
+
+    test('leaves out workspace packages, which consumers get published', () {
+      expect(unhostedDependencies(graph({}), {'member'}), isEmpty);
+    });
+
+    test('answers null for a package without its source', () {
+      expect(unhostedDependencies(graph({'fork': null}), {'fork'}), isNull);
+      expect(unhostedDependencies(graph({}), {'absent'}), isNull);
     });
   });
 
@@ -203,7 +236,10 @@ void main() {
         resolutionPackages(root.path, '${root.path}/$dir').packages;
 
     List<DependencyOverride> overridesOf(String dir) =>
-        dependencyOverrides(root.path, packagesOf(dir)!.values);
+        dependencyOverrides(root.path, packagesOf(dir)!).overrides;
+
+    String? unreadable(String dir) =>
+        resolutionPackages(root.path, '${root.path}/$dir').unreadable;
 
     test('is every package of the workspace, members matched by glob', () {
       workspace();
@@ -232,22 +268,79 @@ void main() {
       expect(packagesOf('pkgs/deep/keybay')!.keys, {'top', 'middle', 'keybay'});
     });
 
-    test('is unknown when a manifest or member cannot be read', () {
-      workspace(members: '  - packages/missing\n');
+    test('matches member patterns as Pub does', () {
+      for (final members in [
+        '  - ./packages/*\n',
+        '  - packages/../packages/*/\n',
+        '  - packages/{core,host}\n',
+        '  - packages/[ch]o[!x]*\n',
+        '  - packages/core\n  - packages/h?st\n',
+        // `**` never matches the root it starts from.
+        '  - "**"\n',
+      ]) {
+        workspace(members: members);
+        expect(packagesOf('packages/core')!.keys.toSet(), {
+          'example_workspace',
+          'core',
+          'host',
+        }, reason: members);
+      }
+    });
+
+    test('matches case-insensitively where the platform does', () {
+      workspace(members: '  - Packages/*\n');
+      final caseInsensitive = Platform.isMacOS || Platform.isWindows;
       expect(
-        resolutionPackages(root.path, '${root.path}/packages/core').unreadable,
-        'pubspec.yaml (workspace member "packages/missing")',
+        packagesOf('packages/core')?.keys.toSet(),
+        caseInsensitive ? {'example_workspace', 'core', 'host'} : isNull,
+      );
+    });
+
+    test('is unknown, and says why, when it cannot be read', () {
+      workspace(members: '  - packages/*\n  - tools/*\n');
+      expect(
+        unreadable('packages/core'),
+        'pubspec.yaml lists workspace member "tools/*", which matches no '
+        'package',
       );
 
-      workspace(members: '  - packages/{core,host}\n');
-      expect(packagesOf('packages/core'), isNull, reason: 'brace globs');
+      workspace(members: '  - ../elsewhere/*\n');
+      expect(
+        unreadable('packages/core'),
+        contains('a pattern rk does not read'),
+      );
+
+      workspace(members: '  - packages/{core,{host}}\n');
+      expect(
+        unreadable('packages/core'),
+        contains('a pattern rk does not read'),
+      );
 
       // Valid YAML rk does not read (an anchor) leaves the root unknown
       // rather than empty.
       workspace(more: 'dependency_overrides: &pins\n  leaf: 1.0.0\n');
+      expect(unreadable('packages/core'), 'pubspec.yaml is not YAML rk reads');
+
+      // Nor does a pubspec that is not UTF-8.
+      workspace();
+      File('${root.path}/packages/host/pubspec.yaml').writeAsBytesSync([
+        ...utf8.encode('name: host\ndescription: '),
+        0xff,
+        0xfe,
+        10,
+      ]);
       expect(
-        resolutionPackages(root.path, '${root.path}/packages/core').unreadable,
-        'pubspec.yaml',
+        unreadable('packages/core'),
+        'packages/host/pubspec.yaml is not YAML rk reads',
+      );
+    });
+
+    test('a package its workspace does not list is unknown', () {
+      workspace(members: '  - packages/core\n');
+      expect(
+        unreadable('packages/host'),
+        'packages/host/pubspec.yaml is not one of the packages its workspace '
+        'lists',
       );
     });
 
@@ -305,9 +398,22 @@ void main() {
         (package: 'used', declaredIn: 'packages/core/pubspec_overrides.yaml'),
       ]);
 
+      // The section is replaced, which Pub's report does not show.
+      expect(
+        dependencyOverrides(root.path, packagesOf('packages/core')!).replaced,
+        {'core'},
+      );
+
       // One without the key leaves the section in force.
       write('packages/core/pubspec_overrides.yaml', 'other: true\n');
       expect(overridesOf('packages/core').single.package, 'ignored');
+
+      // A null section declares nothing, and still replaces the pubspec's.
+      write(
+        'packages/core/pubspec_overrides.yaml',
+        'dependency_overrides: ~\n',
+      );
+      expect(overridesOf('packages/core'), isEmpty);
     });
 
     test('what rk cannot read as a package name overrides everything', () {

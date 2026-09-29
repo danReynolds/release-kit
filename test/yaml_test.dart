@@ -298,6 +298,32 @@ version: 1.0.0
         'dependencies:\n  core:\n    path:\n      ../core\n',
       ),
       ('a document marker', '---\nname: x\n'),
+      ("a doubled quote in a single-quoted key", "'it''s': 'a''b'\n"),
+      ('escapes in a double-quoted value', 'resolution: "work\\x73pace"\n'),
+      (
+        'escapes in a double-quoted key',
+        'dependency_overrides:\n  "le\\x61f": 1.0.0\n',
+      ),
+      ('a quoted value over two lines', 'description: "a\n  b"\nname: x\n'),
+      (
+        'a quoted value over a blank line',
+        "description: 'a\n\n  b'\nname: x\n",
+      ),
+      ('an escaped line break', 'description: "a\\\n  b"\nname: x\n'),
+      (
+        'a plain continuation that starts with a quote',
+        "description: a\n  'b # c\nname: x\n",
+      ),
+      ('a bare dash item', 'list:\n  -\n  - x\n'),
+      ('a tab after the colon', 'dependency_overrides:\t{leaf: 1.0.0}\n'),
+      (
+        'a plain key with a colon before a quote',
+        "k: [a:'b, 'a # }']\nresolution: workspace\n",
+      ),
+      (
+        'a quoted flow scalar over a blank line',
+        "k: [ 'a #\n\n   b', c ]\nname: x\n",
+      ),
     ]) {
       test(label, () {
         expect(_fromRk(parse(source)), _fromYaml(yaml.loadYaml(source)));
@@ -321,6 +347,19 @@ version: 1.0.0
         'dependencies: none\n  core:\n    path: ../core\n',
       ),
       ('entries after a flow value', 'core:\n  {path: ../core}\n  extra: 1\n'),
+      ('a tag below its key', 'resolution:\n  !!str workspace\n'),
+      ('an anchor below its key', 'x:\n  &w workspace\nresolution: y\n'),
+      ('an alias below its key', 'resolution:\n  *w\n'),
+      ('a block scalar header below its key', 'description:\n  |\n    text\n'),
+      ('a sequence nested on its item line', 'list:\n  - - x\n'),
+      ('a complex key in a sequence item', 'list:\n  - ? x\n'),
+      ('a pair in a flow sequence', 'list: [a: b]\n'),
+      ('an explicit key in a flow map', 'map: {? leaf : 1}\n'),
+      ('an explicit key in a flow sequence', "x: [? 'a # ]']\n"),
+      ('an escape YAML does not define', 'name: "a\\qb"\n'),
+      ('text after a quoted value', 'name: "a" b\n'),
+      ('a flow line at its key\'s column', 'k: [a,\nresolution: workspace]\n'),
+      ('a quoted value left open', 'name: "a\nversion: 1.0.0\n'),
     ]) {
       test(label, () {
         final diagnostics = Diagnostics();

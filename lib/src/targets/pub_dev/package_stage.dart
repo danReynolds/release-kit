@@ -88,16 +88,31 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
 
   // Pub resolves a workspace member together with every package of its
   // workspace and applies any of their overrides to all of them, so the
-  // whole workspace is read, or refused when rk cannot read it.
+  // whole workspace is read, or the stage refused when rk cannot read it.
   final resolution = resolutionPackages(sourceRoot, sourceDirectory);
   final packages = resolution.packages;
+  if (packages == null) {
+    return (
+      diagnostic: Diagnostic(
+        code: 'RK-PUB-015',
+        message:
+            '${project.name}: rk cannot read the workspace it resolves with',
+        remedy:
+            '${resolution.unreadable}. Any package of a workspace can '
+            'override what ${project.name} is validated against, so rk reads '
+            'them all, and stages nothing it cannot read. Write the workspace '
+            'in the YAML and member patterns rk reads, then re-stage.',
+      ),
+      warnings: const <Diagnostic>[],
+    );
+  }
 
   // A Flutter package, or any package resolved with one in its workspace,
   // needs a Flutter SDK's Dart, whose pub finds its own Flutter. The Dart rk
   // identified for this stage is the one that packages and publishes; a
   // standalone one would depend on an ambient FLUTTER_ROOT the stage does
   // not record.
-  if (packages != null && needsFlutter(packages.values)) {
+  if (needsFlutter(packages.values)) {
     final dart = context.stage.compiler?.executable;
     if (dart != null && !dartInFlutterSdk(dart)) {
       return (
@@ -121,9 +136,7 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
   // the published archive. An override that reaches this package's
   // dependencies masks what its consumers resolve, so it refuses; one that
   // reaches only other packages in the workspace does not.
-  final overrides = packages == null
-      ? [(package: everyPackage, declaredIn: resolution.unreadable!)]
-      : dependencyOverrides(sourceRoot, packages.values);
+  final declared = dependencyOverrides(sourceRoot, packages);
 
   final archivePath = ReleaseAssets.pubArchivePath(project);
   final archive = File(context.workspace.pathOf(archivePath));
@@ -135,7 +148,7 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
     final directory = project.pubspec.directory == '.'
         ? mirroredSource
         : _join(mirroredSource, StagePath.segments(project.pubspec.directory));
-    if (overrides.isNotEmpty || packages == null || packages.length > 1) {
+    if (declared.overrides.isNotEmpty || packages.length > 1) {
       // Resolved where Pub will validate the archive, from the same snapshot.
       final deps = await context.tools.run('dart', const [
         'pub',
@@ -143,37 +156,56 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
         '--json',
       ], workingDirectory: directory);
       final graph = deps.ok ? deps.stdout : null;
-      var reached = graph == null
+      final reached = graph == null
           ? null
           : runtimeDependencies(graph, project.name);
-      // Pub's own report of the workspace and the overrides it applied is a
-      // check on rk's reading: a package rk did not read, or an override it
-      // did not see, leaves the graph unknown and every override masking.
-      final applied = graph == null ? null : appliedOverrides(graph);
-      final all = [...overrides];
-      if (applied == null ||
-          packages == null ||
-          !_sameNames(applied.keys, packages.keys)) {
-        reached = null;
-      } else {
-        for (final MapEntry(key: member, value: names) in applied.entries) {
-          for (final name in names) {
-            if (all.any((o) => o.package == name)) continue;
-            all.add((
-              package: name,
-              declaredIn: 'an override Pub applied for $member',
-            ));
-          }
+      final reported = graph == null ? null : reportedOverrides(graph);
+      final unhosted = reached == null
+          ? null
+          : unhostedDependencies(graph!, reached);
+      final String? unknown = !deps.ok
+          ? 'dart pub deps failed: ${_firstLine(deps.stderr)}'
+          : reached == null || reported == null || unhosted == null
+          ? 'dart pub deps did not print a dependency graph rk reads'
+          : !_sameNames(reported.keys, packages.keys)
+          ? _differentPackages(reported.keys, packages.keys)
+          : null;
+      if (unknown != null) {
+        return (
+          diagnostic: _unresolvedDiagnostic(
+            project.name,
+            unknown,
+            declared.overrides,
+          ),
+          warnings: const <Diagnostic>[],
+        );
+      }
+      // What Pub reports declaring checks rk's reading, except where a
+      // package's overrides file replaces the section Pub still reports.
+      final all = [...declared.overrides];
+      for (final MapEntry(key: member, value: names) in reported!.entries) {
+        if (declared.replaced.contains(member)) continue;
+        for (final name in names) {
+          if (all.any((o) => o.package == name)) continue;
+          all.add((
+            package: name,
+            declaredIn: 'an override Pub reports $member declaring',
+          ));
         }
       }
+      // Declared overrides are named where they are declared; a reached
+      // package from a path or Git source is refused whatever declared it,
+      // which catches a declaration rk could not see.
       final masking = maskingOverrides(all, project.name, reached);
       if (masking.isNotEmpty) {
         return (
-          diagnostic: _maskingDiagnostic(
-            project.name,
-            masking,
-            resolved: reached != null,
-          ),
+          diagnostic: _maskingDiagnostic(project.name, masking),
+          warnings: const <Diagnostic>[],
+        );
+      }
+      if (unhosted!.isNotEmpty) {
+        return (
+          diagnostic: _unhostedDiagnostic(project.name, unhosted),
           warnings: const <Diagnostic>[],
         );
       }
@@ -338,22 +370,15 @@ String _join(String root, Iterable<String> parts) =>
 
 Diagnostic _maskingDiagnostic(
   String package,
-  List<DependencyOverride> masking, {
-  required bool resolved,
-}) {
+  List<DependencyOverride> masking,
+) {
   final where = {for (final o in masking) o.declaredIn}.join(' and ');
   final named = {
     for (final o in masking)
       if (o.package != everyPackage) o.package,
   };
   final String remedy;
-  if (!resolved) {
-    remedy =
-        '$where is honoured locally and stripped from the published '
-        'archive, and rk could not resolve $package\'s dependencies to see '
-        'which packages it reaches, so validation here might not see what '
-        'consumers see. Remove it and re-stage.';
-  } else if (named.isEmpty) {
+  if (named.isEmpty) {
     remedy =
         '$where is honoured locally, stripped from the published archive, '
         'and overrides packages rk cannot name. Remove it and re-stage.';
@@ -376,6 +401,59 @@ Diagnostic _maskingDiagnostic(
     message: '$package: tracked dependency overrides mask consumer resolution',
     remedy: remedy,
   );
+}
+
+Diagnostic _unhostedDiagnostic(String package, Map<String, String> unhosted) {
+  final names = [
+    for (final MapEntry(key: name, value: source) in unhosted.entries)
+      '$name (from $source)',
+  ];
+  return Diagnostic(
+    code: 'RK-PUB-008',
+    message: '$package: tracked dependency overrides mask consumer resolution',
+    remedy:
+        '$package depends on ${names.join(', ')}, which consumers cannot '
+        'receive: they resolve every dependency from pub.dev or the SDK. An '
+        'override or dependency somewhere in the workspace points '
+        '${unhosted.length == 1 ? 'it' : 'them'} elsewhere, so validation '
+        'here would not see what consumers see. Publish the package, remove '
+        'what points at the ${unhosted.length == 1 ? 'copy' : 'copies'}, and '
+        're-stage.',
+  );
+}
+
+Diagnostic _unresolvedDiagnostic(
+  String package,
+  String why,
+  List<DependencyOverride> declared,
+) {
+  final overrides = {for (final o in declared) o.declaredIn};
+  return Diagnostic(
+    code: 'RK-PUB-016',
+    message: 'rk could not resolve which packages $package reaches',
+    remedy:
+        '$why. rk resolves the staged snapshot to see which dependency '
+        'overrides reach $package'
+        '${overrides.isEmpty ? '' : ' (declared in ${overrides.join(' and ')})'}'
+        ', and without that it cannot tell whether validation here matches '
+        'what consumers resolve. Fix the resolution, then re-stage.',
+  );
+}
+
+String _firstLine(String text) {
+  final line = text.trim().split('\n').first.trim();
+  return line.isEmpty ? 'no output' : line;
+}
+
+String _differentPackages(Iterable<String> pub, Iterable<String> rk) {
+  final onlyPub = pub.toSet().difference(rk.toSet()).toList()..sort();
+  final onlyRk = rk.toSet().difference(pub.toSet()).toList()..sort();
+  return [
+    if (onlyPub.isNotEmpty)
+      'Pub resolved ${onlyPub.join(', ')}, which rk did not read',
+    if (onlyRk.isNotEmpty)
+      'rk read ${onlyRk.join(', ')}, which Pub did not resolve',
+  ].join('; ');
 }
 
 bool _sameNames(Iterable<String> a, Iterable<String> b) {

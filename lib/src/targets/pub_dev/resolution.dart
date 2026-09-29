@@ -18,8 +18,8 @@ const everyPackage = '*';
 /// package alone.
 ///
 /// Pub applies any of these packages' overrides to all of them, so all of
-/// them are read. [unreadable] names the manifest or member pattern that
-/// kept rk from knowing the set; [packages] is then null.
+/// them are read. [unreadable] says what kept rk from knowing the set;
+/// [packages] is then null.
 typedef ResolutionPackages = ({
   Map<String, String>? packages,
   String? unreadable,
@@ -28,27 +28,34 @@ typedef ResolutionPackages = ({
 ResolutionPackages resolutionPackages(String sourceRoot, String directory) {
   String describe(String path) => _relative(sourceRoot, path);
   final root = _topRoot(sourceRoot, directory);
-  if (root.unreadable != null) {
-    return (packages: null, unreadable: describe(root.unreadable!));
+  if (root.directory == null) {
+    return (packages: null, unreadable: root.unreadable!(describe));
   }
   final packages = <String, String>{};
   String? visit(String dir) {
     final manifest = _read('$dir/pubspec.yaml');
-    if (manifest.map == null) return describe('$dir/pubspec.yaml');
+    final file = describe('$dir/pubspec.yaml');
+    if (manifest.map == null) return '$file is not YAML rk reads';
     final name = manifest.map!.string('name');
-    if (name == null || packages.containsKey(name)) {
-      return describe('$dir/pubspec.yaml');
+    if (name == null) return '$file names no package';
+    if (packages.containsKey(name)) {
+      return 'two packages of the workspace are named $name';
     }
     packages[name] = dir;
     if (!manifest.map!.has('workspace')) return null;
     final members = manifest.map!.list('workspace');
     if (members == null || members.strings.length != members.items.length) {
-      return '${describe('$dir/pubspec.yaml')} (its workspace list)';
+      return '$file has a workspace that is not a list of paths';
     }
     for (final pattern in members.strings) {
       final matched = _expand(dir, pattern);
       if (matched == null) {
-        return '${describe('$dir/pubspec.yaml')} (workspace member "$pattern")';
+        return '$file lists workspace member "$pattern", a pattern rk does '
+            'not read';
+      }
+      if (matched.isEmpty) {
+        return '$file lists workspace member "$pattern", which matches no '
+            'package';
       }
       for (final member in matched) {
         final problem = visit(member);
@@ -60,19 +67,31 @@ ResolutionPackages resolutionPackages(String sourceRoot, String directory) {
 
   final problem = visit(root.directory!);
   if (problem != null) return (packages: null, unreadable: problem);
+  if (!packages.values.contains(directory)) {
+    return (
+      packages: null,
+      unreadable:
+          '${describe('$directory/pubspec.yaml')} is not one of the packages '
+          'its workspace lists',
+    );
+  }
   return (packages: packages, unreadable: null);
 }
 
-/// Every override declared by [packages] (their directories): each one's
+/// Every override declared by [packages] (name to directory): each one's
 /// `pubspec_overrides.yaml`, or its pubspec's `dependency_overrides` section
-/// when that file declares none, since Pub lets the file replace the section.
-List<DependencyOverride> dependencyOverrides(
-  String sourceRoot,
-  Iterable<String> packages,
-) {
+/// when that file declares none. [replaced] names the packages whose file
+/// replaces their section, as Pub reads it.
+({List<DependencyOverride> overrides, Set<String> replaced})
+dependencyOverrides(String sourceRoot, Map<String, String> packages) {
   final found = <DependencyOverride>[];
+  final replaced = <String>{};
   void declare(YamlNode? section, String where) {
-    if (section == null || (section is YamlScalar && section.value.isEmpty)) {
+    // An empty or null section declares nothing.
+    if (section == null ||
+        (section is YamlScalar &&
+            !section.quoted &&
+            const {'', '~', 'null', 'Null', 'NULL'}.contains(section.value))) {
       return;
     }
     if (section is! YamlMap) {
@@ -88,7 +107,7 @@ List<DependencyOverride> dependencyOverrides(
     }
   }
 
-  for (final dir in packages) {
+  for (final MapEntry(key: name, value: dir) in packages.entries) {
     final file = '$dir/pubspec_overrides.yaml';
     final overrides = _read(file);
     if (overrides.exists) {
@@ -97,6 +116,7 @@ List<DependencyOverride> dependencyOverrides(
           package: everyPackage,
           declaredIn: _relative(sourceRoot, file),
         ));
+        replaced.add(name);
         continue;
       }
       if (overrides.map!.has('dependency_overrides')) {
@@ -104,6 +124,7 @@ List<DependencyOverride> dependencyOverrides(
           overrides.map!['dependency_overrides'],
           _relative(sourceRoot, file),
         );
+        replaced.add(name);
         continue;
       }
     }
@@ -117,7 +138,7 @@ List<DependencyOverride> dependencyOverrides(
     }
     declare(manifest['dependency_overrides'], where);
   }
-  return found;
+  return (overrides: found, replaced: replaced);
 }
 
 /// The packages [package] brings to its consumers, from `pub deps --json`:
@@ -148,25 +169,51 @@ Set<String>? runtimeDependencies(String pubDepsJson, String package) {
 }
 
 /// The workspace packages Pub resolved (`kind: root`), each with the
-/// overrides it reports applying: what it depends on beyond its direct and
-/// dev dependencies. Null when the output does not have that shape.
+/// overrides Pub reports it declaring: what it depends on beyond its direct
+/// and dev dependencies. Null when the output does not have that shape.
 ///
-/// Pub reports overrides declared in pubspecs and in the root's
-/// `pubspec_overrides.yaml`, not those in a member's overrides file, so this
-/// checks rk's own reading rather than replacing it.
-Map<String, Set<String>>? appliedOverrides(String pubDepsJson) {
+/// Pub reports the overrides in each pubspec and in the root's
+/// `pubspec_overrides.yaml`, even a section a member's overrides file
+/// replaces, and not those in a member's file. So this checks rk's own
+/// reading rather than replacing it.
+Map<String, Set<String>>? reportedOverrides(String pubDepsJson) {
   final packages = _packages(pubDepsJson);
   if (packages == null) return null;
-  final applied = <String, Set<String>>{};
+  final reported = <String, Set<String>>{};
   for (final MapEntry(key: name, value: entry) in packages.entries) {
     if (entry['kind'] != 'root') continue;
     final all = _strings(entry['dependencies']);
     final direct = _strings(entry['directDependencies']);
     final dev = _strings(entry['devDependencies']);
     if (all == null || direct == null || dev == null) return null;
-    applied[name] = all.toSet().difference({...direct, ...dev});
+    reported[name] = all.toSet().difference({...direct, ...dev});
   }
-  return applied;
+  return reported;
+}
+
+/// The packages in [reached] that Pub resolved from a path or Git source,
+/// with that source. Consumers of a published package receive only hosted
+/// and SDK packages, so each one is overridden, or a dependency Pub refuses
+/// to publish, whatever declared it. Workspace packages are left out:
+/// consumers receive their published versions, which rk's prerequisites
+/// require. Null when the output does not say where a package came from.
+Map<String, String>? unhostedDependencies(
+  String pubDepsJson,
+  Set<String> reached,
+) {
+  final packages = _packages(pubDepsJson);
+  if (packages == null) return null;
+  final unhosted = <String, String>{};
+  for (final name in reached) {
+    final entry = packages[name];
+    final source = entry?['source'];
+    if (entry == null || source is! String) return null;
+    if (entry['kind'] == 'root' || source == 'hosted' || source == 'sdk') {
+      continue;
+    }
+    unhosted[name] = source;
+  }
+  return unhosted;
 }
 
 /// The overrides among [overrides] that change what [package]'s consumers
@@ -236,16 +283,17 @@ final _packageName = RegExp(r'^[A-Za-z_][A-Za-z0-9_]*$');
 /// Where Pub resolves the package at [directory]: while a package declares
 /// `resolution: workspace`, the nearest ancestor declaring `workspace:`,
 /// and that one's root in turn when it is itself a member, up to the
-/// top-most root. [unreadable] names a manifest that could not be read.
-({String? directory, String? unreadable}) _topRoot(
-  String sourceRoot,
-  String directory,
-) {
+/// top-most root. When there is none, [unreadable] says why, given a way to
+/// describe paths.
+({String? directory, String Function(String Function(String))? unreadable})
+_topRoot(String sourceRoot, String directory) {
+  String Function(String Function(String)) unreadable(String file) =>
+      (describe) => '${describe(file)} is not YAML rk reads';
   var root = directory;
   while (true) {
     final manifest = _read('$root/pubspec.yaml');
     if (manifest.map == null) {
-      return (directory: null, unreadable: '$root/pubspec.yaml');
+      return (directory: null, unreadable: unreadable('$root/pubspec.yaml'));
     }
     if (manifest.map!.string('resolution') != 'workspace') {
       return (directory: root, unreadable: null);
@@ -259,7 +307,7 @@ final _packageName = RegExp(r'^[A-Za-z_][A-Za-z0-9_]*$');
       final ancestor = _read('$dir/pubspec.yaml');
       if (!ancestor.exists) continue;
       if (ancestor.map == null) {
-        return (directory: null, unreadable: '$dir/pubspec.yaml');
+        return (directory: null, unreadable: unreadable('$dir/pubspec.yaml'));
       }
       if (ancestor.map!.has('workspace')) {
         parent = dir;
@@ -268,61 +316,128 @@ final _packageName = RegExp(r'^[A-Za-z_][A-Za-z0-9_]*$');
     }
     // A member with no workspace above it does not resolve at all.
     if (parent == null) {
-      return (directory: null, unreadable: '$root/pubspec.yaml');
+      final file = '$root/pubspec.yaml';
+      return (
+        directory: null,
+        unreadable: (describe) =>
+            '${describe(file)} declares resolution: workspace, and no '
+            'workspace above it lists it',
+      );
     }
     root = parent;
   }
 }
 
 /// The package directories [pattern] names under [base], as Pub matches a
-/// workspace entry: a path, or a glob of `*`, `?` and `**` segments whose
-/// matches count only where they hold a `pubspec.yaml`. Null for a literal
-/// path without one, or for glob syntax rk does not expand.
+/// workspace entry: a path, or a glob whose matches count only where they
+/// hold a `pubspec.yaml`. Globs take `*`, `?`, `**`, `[...]` classes and
+/// `{a,b}` alternatives, matched case-insensitively where the platform's
+/// files are. Empty when nothing matches; null for a pattern that leaves
+/// [base], or for glob syntax rk does not read.
 List<String>? _expand(String base, String pattern) {
-  var path = pattern;
-  while (path.endsWith('/')) {
-    path = path.substring(0, path.length - 1);
+  if (pattern.startsWith('/') || pattern.contains(r'\')) return null;
+  // `./` and `..` are resolved; a pattern may not climb out of its base.
+  final segments = <String>[];
+  for (final segment in pattern.split('/')) {
+    if (segment.isEmpty || segment == '.') continue;
+    if (segment == '..') {
+      if (segments.isEmpty || segments.last == '**') return null;
+      segments.removeLast();
+      continue;
+    }
+    segments.add(segment);
   }
-  if (path.isEmpty || path.startsWith('/') || path.contains('\\')) return null;
-  if (!path.contains(RegExp(r'[*?\[\]{}]'))) {
-    return File('$base/$path/pubspec.yaml').existsSync()
-        ? ['$base/$path']
-        : null;
+  if (segments.isEmpty) return null;
+  final glob = RegExp(r'[*?\[\]{}]');
+  if (!segments.any(glob.hasMatch)) {
+    final path = '$base/${segments.join('/')}';
+    return File('$path/pubspec.yaml').existsSync() ? [path] : const [];
   }
-  if (path.contains(RegExp(r'[\[\]{}]'))) return null;
-  final segments = path.split('/');
-  if (segments.any((s) => s.isEmpty || s == '.' || s == '..')) return null;
 
-  RegExp segment(String glob) => RegExp(
-    '^${glob.split('').map((c) => switch (c) {
-      '*' => '[^/]*',
-      '?' => '[^/]',
-      _ => RegExp.escape(c),
-    }).join()}\$',
-  );
+  final caseSensitive = !(Platform.isMacOS || Platform.isWindows);
+  final matchers = <RegExp?>[];
+  for (final segment in segments) {
+    if (segment == '**') {
+      matchers.add(null);
+      continue;
+    }
+    final matcher = _segment(segment, caseSensitive);
+    if (matcher == null) return null;
+    matchers.add(matcher);
+  }
 
   final matches = <String>{};
   void walk(String dir, int index) {
     if (index == segments.length) {
-      if (File('$dir/pubspec.yaml').existsSync()) matches.add(dir);
+      // `**` never matches the directory the pattern starts from.
+      if (dir != base && File('$dir/pubspec.yaml').existsSync()) {
+        matches.add(dir);
+      }
       return;
     }
-    final glob = segments[index];
-    if (glob == '**') {
+    final matcher = matchers[index];
+    if (matcher == null) {
       walk(dir, index + 1);
       for (final child in _children(dir)) {
         walk(child, index);
       }
       return;
     }
-    final match = segment(glob);
     for (final child in _children(dir)) {
-      if (match.hasMatch(child.split('/').last)) walk(child, index + 1);
+      if (matcher.hasMatch(child.split('/').last)) walk(child, index + 1);
     }
   }
 
   walk(base, 0);
   return matches.toList()..sort();
+}
+
+/// One path segment of a glob as a regular expression, or null for syntax
+/// rk does not read: a nested or unclosed `{`, an unclosed `[`, or `**`
+/// inside a segment.
+RegExp? _segment(String glob, bool caseSensitive) {
+  if (glob.contains('**')) return null;
+  final pattern = StringBuffer('^');
+  var inBraces = false;
+  for (var i = 0; i < glob.length; i++) {
+    final c = glob[i];
+    switch (c) {
+      case '*':
+        pattern.write('[^/]*');
+      case '?':
+        pattern.write('[^/]');
+      case '{':
+        if (inBraces) return null;
+        inBraces = true;
+        pattern.write('(?:');
+      case '}':
+        if (!inBraces) return null;
+        inBraces = false;
+        pattern.write(')');
+      case ',' when inBraces:
+        pattern.write('|');
+      case '[':
+        final close = glob.indexOf(']', i + 2);
+        if (close < 0) return null;
+        var body = glob.substring(i + 1, close);
+        final negated = body.startsWith('!') || body.startsWith('^');
+        if (negated) body = body.substring(1);
+        if (body.isEmpty) return null;
+        final escaped = body.replaceAllMapped(
+          RegExp(r'[\\\]\[^]'),
+          (m) => '\\${m[0]}',
+        );
+        pattern.write(negated ? '[^/$escaped]' : '[$escaped]');
+        i = close;
+      case ']':
+        return null;
+      default:
+        pattern.write(RegExp.escape(c));
+    }
+  }
+  if (inBraces) return null;
+  pattern.write(r'$');
+  return RegExp(pattern.toString(), caseSensitive: caseSensitive);
 }
 
 List<String> _children(String dir) {
@@ -369,12 +484,18 @@ String _relative(String sourceRoot, String path) {
 }
 
 /// A manifest at [path]: whether it exists, and its contents when rk can
-/// read them. A file that exists but does not parse has a null [map].
+/// read them. A file that exists but is not UTF-8 or does not parse has a
+/// null [map].
 ({bool exists, YamlMap? map}) _read(String path) {
   final file = File(path);
   if (!file.existsSync()) return (exists: false, map: null);
-  return (
-    exists: true,
-    map: parseYaml(file.readAsStringSync(), path, Diagnostics()),
-  );
+  final String source;
+  try {
+    source = file.readAsStringSync();
+  } on FileSystemException {
+    return (exists: true, map: null);
+  } on FormatException {
+    return (exists: true, map: null);
+  }
+  return (exists: true, map: parseYaml(source, path, Diagnostics()));
 }

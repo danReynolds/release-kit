@@ -822,20 +822,32 @@ act(expected, stage)
   *Amended (as built):* tracked overrides are checked against the graph they
   change (RK-PUB-008). Pub applies any workspace package's overrides to the
   whole workspace. rk therefore reads every package's `pubspec_overrides.yaml`
-  and `dependency_overrides` from the top-most workspace root, and resolves the
-  staged snapshot with `dart pub deps --json`. It checks its reading against the
-  packages and overrides Pub reports. It refuses an override of the package
-  itself or of anything its dependencies reach (dev dependencies excluded,
-  since consumers never resolve them). It also refuses every override when a
-  declaration, the workspace or the graph cannot be read. An override that
-  serves only another workspace member, such as a Git pin one Flutter host
-  needs, changes nothing this package's consumers resolve. It is listed in the
-  run's report rather than refused. A workspace containing Flutter packages is
-  staged only with a Flutter SDK's Dart, whose pub finds its own Flutter.
-  Staging with a standalone Dart would depend on an ambient `FLUTTER_ROOT` that
-  the stage does not record, so rk refuses it before Pub runs (RK-PUB-014).
-  Pubspecs are read as YAML reads them, flow collections and wrapped scalars
-  included.
+  and `dependency_overrides` from the top-most workspace root, matching member
+  patterns as Pub does. It refuses to stage a workspace it cannot read
+  (RK-PUB-015).
+
+  A workspace member, or a package that declares overrides, is resolved from
+  the staged snapshot with `dart pub deps --json`. Pub's report of the
+  workspace's packages must match rk's reading, or the stage is refused
+  (RK-PUB-016). The overrides Pub reports are added to those rk read.
+
+  rk refuses an override of the package itself or of anything its
+  dependencies reach, with dev dependencies excluded, since consumers never
+  resolve them. It also refuses any reached package that Pub took from a path
+  or Git source. Consumers receive only hosted and SDK packages, so such a
+  package is overridden whatever declared it.
+
+  An override that serves only another workspace member changes nothing this
+  package's consumers resolve. A Git pin one Flutter host needs is an example.
+  Such an override is listed in the run's report rather than refused.
+
+  A workspace containing Flutter packages is staged only with a Flutter SDK's
+  Dart, whose pub finds its own Flutter. Staging with a standalone Dart would
+  depend on an ambient `FLUTTER_ROOT` that the stage does not record, so rk
+  refuses it before Pub runs (RK-PUB-014).
+
+  Pubspecs are read as YAML reads them, or refused where rk's subset stops.
+  That includes flow collections, wrapped and quoted scalars, and escapes.
 - **`dart-cli`** (build): `dart compile exe` per platform, then smoke-runs
   what it produced. Capability is resolved per platform and reported:
   **native** for the host; **cross-compiled** for Linux targets, which

@@ -72,7 +72,7 @@ YamlMap? parseYaml(String source, String path, Diagnostics diagnostics) {
 
 class _Parser {
   _Parser(String source, this._path, this._diagnostics)
-    : _lines = source.split('\n');
+    : _lines = source.replaceAll('\r\n', '\n').split('\n');
 
   final List<String> _lines;
   final String _path;
@@ -149,10 +149,17 @@ class _Parser {
       }
 
       final body = text.trim();
-      final isDash = body.startsWith('- ') || body == '-';
+      final isDash =
+          body == '-' || body.startsWith('- ') || body.startsWith('-\t');
 
       // Belongs to an enclosing block.
       if (at < (isDash ? dashFrom : indent)) break;
+
+      // What only anchors, aliases, tags, complex keys or a block scalar
+      // below its key could mean is refused rather than read as text: read
+      // as text, `resolution:` above `  !!str workspace` would hide a
+      // workspace member.
+      if (!isDash && _unreadable(body, line)) return null;
 
       // A flow collection on its own line is the whole value of the key
       // above it, as `{path: ../core}` is under `core:`. Read as a key, it
@@ -167,7 +174,7 @@ class _Parser {
           return null;
         }
         _cursor++;
-        final node = _flow(raw.substring(at), line);
+        final node = _flow(raw.substring(at), line, indent - 1);
         if (node == null) return null;
         _endOfValue(indent, line);
         return _failed ? null : node;
@@ -179,19 +186,32 @@ class _Parser {
           _fail('a block cannot mix map keys and list items', line);
           return null;
         }
-        final item = body == '-' ? '' : body.substring(2).trim();
-        if (_hasProperty(item, line)) return null;
+        final item = body.substring(1).trim();
+        if (_unreadable(item, line)) return null;
+        if (item == '-' || item.startsWith('- ') || item.startsWith('-\t')) {
+          _fail(
+            'rk does not read a sequence nested on its item\'s line',
+            line,
+            remedy: 'write the inner sequence on the lines below the dash',
+          );
+          return null;
+        }
 
         if (_opensFlow(item)) {
           _cursor++;
-          final node = _flow(raw.substring(raw.indexOf(item, at + 1)), line);
+          final node = _flow(
+            raw.substring(raw.indexOf(item, at + 1)),
+            line,
+            at,
+          );
           if (node == null) return null;
           asList.items.add(node);
         } else if (item.isEmpty) {
           _cursor++;
           final nested = _block(at + 1);
           if (_failed) return null;
-          if (nested != null) asList.items.add(nested);
+          // A bare dash is an item with no value.
+          asList.items.add(nested ?? YamlScalar('', line));
         } else if (_keyColon(item) >= 0) {
           // A map written on the dash line, as pub.dev's screenshots are:
           //   - description: a shot
@@ -231,6 +251,14 @@ class _Parser {
       // A scalar on the lines below its key, as wrapped descriptions and
       // paths often are, is that key's whole value.
       if (colon < 0 && indent > 0 && asMap == null && !isDash) {
+        if (body.startsWith('|') || body.startsWith('>')) {
+          _fail(
+            'rk does not read a block scalar header below its key',
+            line,
+            remedy: 'put "${body[0]}" after the key\'s colon',
+          );
+          return null;
+        }
         _cursor++;
         final node = _scalar(body, indent - 1, line);
         return _failed ? null : node;
@@ -245,19 +273,10 @@ class _Parser {
       }
 
       final written = body.substring(0, colon).trim();
-      if (written.startsWith('?') || _hasProperty(written, line)) {
-        if (!_failed) {
-          _fail(
-            'rk does not read complex keys',
-            line,
-            remedy: 'write "$written" as a plain or quoted key',
-          );
-        }
-        return null;
-      }
-      final key = _unquote(written);
+      final key = _key(written, line);
+      if (key == null) return null;
       final rest = body.substring(colon + 1).trim();
-      if (_hasProperty(rest, line)) return null;
+      if (_unreadable(rest, line)) return null;
       asMap ??= YamlMap(line);
 
       // YAML forbids duplicate keys, and a manifest with two version: lines is
@@ -273,7 +292,11 @@ class _Parser {
       _cursor++;
 
       if (_opensFlow(rest)) {
-        final node = _flow(raw.substring(raw.indexOf(rest, at + colon)), line);
+        final node = _flow(
+          raw.substring(raw.indexOf(rest, at + colon)),
+          line,
+          at,
+        );
         if (node == null) return null;
         asMap.entries[key] = node;
       } else if (rest.isEmpty) {
@@ -295,15 +318,17 @@ class _Parser {
     return asMap ?? asList;
   }
 
-  /// A scalar written after a key or dash indented [indent]. A plain scalar
-  /// continues over following lines indented further, joined with spaces, as
+  /// A scalar written after a key or dash indented [indent].
+  ///
+  /// A plain scalar continues over following lines indented further, as
   /// wrapped descriptions are written; such a line cannot be a key, which
-  /// YAML also refuses inside a plain scalar.
+  /// YAML also refuses inside a plain scalar. A quoted scalar continues until
+  /// its quote closes. Both are folded as YAML folds them, and a quoted one
+  /// is decoded: `''` in single quotes, escapes in double quotes.
   YamlScalar _scalar(String value, int indent, int line) {
-    final quoted = value.startsWith('"') || value.startsWith("'");
-    if (quoted) return YamlScalar(_unquote(value), line, quoted: true);
-    // Folded as YAML folds: a line break is a space, and each blank line
-    // between two lines is a newline.
+    if (value.startsWith('"') || value.startsWith("'")) {
+      return _quotedScalar(value, indent, line);
+    }
     final folded = StringBuffer(value);
     var blanks = 0;
     var next = _cursor;
@@ -314,7 +339,9 @@ class _Parser {
         next++;
         continue;
       }
-      final text = _strip(raw).trim();
+      // The line continues a plain scalar, so a quote on it is a character
+      // and cannot hide a comment.
+      final text = _uncomment(raw, _Scan()..scalarStart = false).trim();
       if (text.isEmpty || _indentOf(raw) <= indent) break;
       if (_keyColon(text) >= 0 || text.startsWith('- ') || text == '-') {
         _fail(
@@ -331,6 +358,116 @@ class _Parser {
       _cursor = ++next;
     }
     return YamlScalar(folded.toString(), line);
+  }
+
+  /// The quoted scalar that [value] opens on [line], continued over the
+  /// lines below until its quote closes, each indented past [indent].
+  YamlScalar _quotedScalar(String value, int indent, int line) {
+    final double = value.startsWith('"');
+    final scan = _Scan();
+    final folded = StringBuffer(_uncomment(value, scan).trimRight());
+    var blanks = 0;
+    var next = _cursor;
+    while (scan.quote.isNotEmpty) {
+      if (next >= _lines.length) {
+        _fail(
+          'the quoted scalar on line $line is not closed',
+          line,
+          remedy: 'close its quote',
+        );
+        return YamlScalar(value, line);
+      }
+      final raw = _lines[next++];
+      if (raw.trim().isEmpty) {
+        blanks++;
+        continue;
+      }
+      if (_indentOf(raw) <= indent) {
+        _fail(
+          'the quoted scalar on line $line is not closed within its block',
+          next,
+          remedy: 'close its quote, or indent its continuation lines',
+        );
+        return YamlScalar(value, line);
+      }
+      final text = _uncomment(raw.trim(), scan).trimRight();
+      final current = folded.toString();
+      if (blanks > 0) {
+        folded.write('\n' * blanks);
+      } else if (double && _escapesLineBreak(current)) {
+        // An escaped line break joins the lines without a space.
+        folded
+          ..clear()
+          ..write(current.substring(0, current.length - 1));
+      } else {
+        folded.write(' ');
+      }
+      folded.write(text);
+      blanks = 0;
+    }
+    _cursor = next;
+    final decoded = _decodeQuoted(folded.toString());
+    if (decoded == null) {
+      _fail(
+        'rk cannot read the quoted scalar on line $line',
+        line,
+        remedy:
+            'end it at its closing quote, and use only the escapes YAML '
+            'defines',
+      );
+      return YamlScalar(value, line);
+    }
+    return YamlScalar(decoded, line, quoted: true);
+  }
+
+  /// Whether [text] ends in a backslash that escapes the line break after
+  /// it: an odd run of them.
+  bool _escapesLineBreak(String text) {
+    var count = 0;
+    for (var i = text.length - 1; i >= 0 && text[i] == r'\'; i--) {
+      count++;
+    }
+    return count.isOdd;
+  }
+
+  /// The key [written] on [line] names, decoded when quoted; null, with the
+  /// reason recorded, for a complex key or one an anchor or tag qualifies.
+  String? _key(String written, int line) {
+    if (written.startsWith('?') || _hasProperty(written, line)) {
+      if (!_failed) {
+        _fail(
+          'rk does not read complex keys',
+          line,
+          remedy: 'write "$written" as a plain or quoted key',
+        );
+      }
+      return null;
+    }
+    if (!written.startsWith('"') && !written.startsWith("'")) return written;
+    final decoded = _decodeQuoted(written);
+    if (decoded == null) {
+      _fail(
+        'rk cannot read the quoted key "$written"',
+        line,
+        remedy: 'use only the escapes YAML defines',
+      );
+    }
+    return decoded;
+  }
+
+  /// Refuses a value that only an anchor, alias, tag, complex key or block
+  /// scalar header below its key could mean, recording why.
+  bool _unreadable(String value, int line) {
+    if (_hasProperty(value, line)) return true;
+    if (value == '?' || value.startsWith('? ') || value.startsWith('?\t')) {
+      _fail(
+        'rk does not read complex keys',
+        line,
+        remedy: 'write the key plainly, before its colon',
+      );
+      return true;
+    }
+    return false;
   }
 
   /// Refuses what [value] would need an anchor, alias or tag to mean.
@@ -380,9 +517,15 @@ class _Parser {
   /// never kept as an opaque scalar: `dependencies: {core: {path: ../core}}`
   /// must answer `map('dependencies')` with the path dependency rk exists to
   /// refuse, exactly as the block form does.
-  YamlNode? _flow(String raw, int line) {
+  ///
+  /// Each following line is indented past [owner], the column of the key or
+  /// dash the collection belongs to, unless it only closes brackets. A line
+  /// that is not cannot belong to the collection in YAML, and taking it
+  /// would swallow the keys after it.
+  YamlNode? _flow(String raw, int line, int owner) {
     final scan = _Scan();
-    final source = StringBuffer(_uncomment(raw, scan));
+    var source = _uncomment(raw, scan);
+    var blanks = 0;
     while (scan.depth > 0 || scan.quote.isNotEmpty) {
       if (_cursor >= _lines.length) {
         _fail(
@@ -392,12 +535,52 @@ class _Parser {
         );
         return null;
       }
-      source
-        ..write(' ')
-        ..write(_uncomment(_lines[_cursor].trimLeft(), scan));
+      final next = _lines[_cursor];
+      final trimmed = next.trimLeft();
+      if (trimmed.isEmpty) {
+        blanks++;
+        _cursor++;
+        continue;
+      }
+      if (_indentOf(next) <= owner &&
+          !(scan.quote.isEmpty &&
+              (trimmed.startsWith(']') || trimmed.startsWith('}')))) {
+        _fail(
+          'line ${_cursor + 1} is not indented past the key of the flow '
+          'collection on line $line',
+          _cursor + 1,
+          remedy: 'close the collection, or indent its lines',
+        );
+        return null;
+      }
+      final quote = scan.quote;
+      if (quote.isEmpty) {
+        // A plain scalar the line continues folds a blank line to a newline,
+        // as a quoted one does; between entries it is only space.
+        final continues =
+            !scan.scalarStart &&
+            !scan.afterJson &&
+            !',]}#'.contains(trimmed[0]) &&
+            !(trimmed[0] == ':' &&
+                (trimmed.length == 1 || ' \t,]}'.contains(trimmed[1])));
+        source = continues && blanks > 0
+            ? '${source.trimRight()}${'\n' * blanks}'
+            : '$source ';
+      } else {
+        source = source.trimRight();
+        if (blanks > 0) {
+          source = '$source${'\n' * blanks}';
+        } else if (quote == '"' && _escapesLineBreak(source)) {
+          source = source.substring(0, source.length - 1);
+        } else {
+          source = '$source ';
+        }
+      }
+      source += _uncomment(trimmed, scan);
+      blanks = 0;
       _cursor++;
     }
-    final reader = _FlowReader(source.toString().trim());
+    final reader = _FlowReader(source.trim());
     final node = reader.read(line);
     if (node == null) {
       _fail(
@@ -427,21 +610,21 @@ class _Parser {
 
   /// The index of the colon separating a key from its value, or -1.
   ///
-  /// A colon only separates when followed by a space or end of line, so a URL
-  /// value on the same line does not split at `https:`.
+  /// A colon only separates when followed by whitespace or the end of the
+  /// line, so a URL value on the same line does not split at `https:`. A
+  /// quoted key is skipped whole; a quote later in a plain key is a character.
   int _keyColon(String body) {
-    var quote = '';
-    for (var i = 0; i < body.length; i++) {
-      final ch = body[i];
-      if (quote.isNotEmpty) {
-        if (ch == quote) quote = '';
-        continue;
+    var i = 0;
+    if (body.startsWith('"') || body.startsWith("'")) {
+      final end = _quoteEnd(body);
+      if (end < 0) return -1;
+      i = end;
+    }
+    for (; i < body.length; i++) {
+      if (body[i] == ':' &&
+          (i + 1 == body.length || body[i + 1] == ' ' || body[i + 1] == '\t')) {
+        return i;
       }
-      if (ch == '"' || ch == "'") {
-        quote = ch;
-        continue;
-      }
-      if (ch == ':' && (i == body.length - 1 || body[i + 1] == ' ')) return i;
     }
     return -1;
   }
@@ -465,16 +648,6 @@ class _Parser {
       }
     }
     return count;
-  }
-
-  String _unquote(String value) {
-    if (value.length >= 2) {
-      final first = value[0];
-      if ((first == '"' || first == "'") && value.endsWith(first)) {
-        return value.substring(1, value.length - 1);
-      }
-    }
-    return value;
   }
 }
 
@@ -523,9 +696,16 @@ final class _FlowReader {
         return _mapping(line);
       case '&' || '*' || '!':
         return _refuse('rk does not read anchors, aliases or tags');
+      case '?' || '-' when _indicator():
+        return _refuse('rk does not read "${_text[_at]}" entries in a flow');
     }
     return _scalar(line, key: false);
   }
+
+  /// Whether the character at the cursor is an indicator: followed by
+  /// whitespace or the end, as `? key` and `- item` are.
+  bool _indicator() =>
+      _at + 1 == _text.length || ' \t'.contains(_text[_at + 1]);
 
   YamlList? _sequence(int line) {
     _at++;
@@ -540,6 +720,16 @@ final class _FlowReader {
       final item = _node(line);
       if (item == null) return null;
       list.items.add(item);
+      _space();
+      // `[a: b]` holds a one-pair map, which rk does not read.
+      if (item is YamlScalar &&
+          _at < _text.length &&
+          _text[_at] == ':' &&
+          (item.quoted ||
+              _at + 1 == _text.length ||
+              ' \t,]'.contains(_text[_at + 1]))) {
+        return _refuse('rk does not read a key: value pair in a sequence');
+      }
       if (!_separator(']')) return null;
       if (_text[_at - 1] == ']') return list;
     }
@@ -554,6 +744,9 @@ final class _FlowReader {
       if (_text[_at] == '}') {
         _at++;
         return map;
+      }
+      if ((_text[_at] == '?' || _text[_at] == '-') && _indicator()) {
+        return _refuse('rk does not read "${_text[_at]}" entries in a flow');
       }
       final key = _scalar(line, key: true);
       if (key == null) return null;
@@ -610,9 +803,15 @@ final class _FlowReader {
           _at++;
           break;
         }
-        if (quote == '"' && ch == r'\' && _at + 1 < _text.length) {
-          value.write(_text[_at + 1]);
-          _at += 2;
+        if (quote == '"' && ch == r'\') {
+          final escape = _escape(_text, _at);
+          if (escape == null) {
+            return _refuse(
+              'rk does not read the escape at "${_text.substring(_at)}"',
+            );
+          }
+          value.write(escape.$1);
+          _at += escape.$2;
           continue;
         }
         if (quote == '"' && ch == '"') {
@@ -628,11 +827,11 @@ final class _FlowReader {
     while (_at < _text.length) {
       final ch = _text[_at];
       if (ch == ',' || ch == ']' || ch == '}' || ch == '[' || ch == '{') break;
-      // A key ends at ": " (or ":" before the next separator), so a URL value
-      // such as https://example.com keeps its colon.
-      if (key &&
-          ch == ':' &&
-          (_at + 1 == _text.length || ' ,]}'.contains(_text[_at + 1]))) {
+      // A plain scalar ends at ": " (or ":" before the next separator), so a
+      // URL such as https://example.com keeps its colon while `[a: ]` holds
+      // the key a.
+      if (ch == ':' &&
+          (_at + 1 == _text.length || ' \t,]}'.contains(_text[_at + 1]))) {
         break;
       }
       _at++;
@@ -653,6 +852,10 @@ final class _Scan {
   var quote = '';
   var depth = 0;
   var scalarStart = true;
+
+  /// Just after a quoted scalar or a closing bracket: in a flow, a colon
+  /// there begins a value even without the space a plain key needs.
+  var afterJson = false;
 }
 
 /// [line] without its comment, advancing [scan] across it.
@@ -670,6 +873,7 @@ String _uncomment(String line, _Scan scan) {
         i++;
       } else if (ch == '"') {
         scan.quote = '';
+        scan.afterJson = true;
       }
       continue;
     }
@@ -679,6 +883,7 @@ String _uncomment(String line, _Scan scan) {
           i++;
         } else {
           scan.quote = '';
+          scan.afterJson = true;
         }
       }
       continue;
@@ -688,9 +893,11 @@ String _uncomment(String line, _Scan scan) {
       return line.substring(0, i);
     }
     final starts = scan.scalarStart;
+    final json = scan.afterJson;
     final spaced =
         i + 1 == line.length || line[i + 1] == ' ' || line[i + 1] == '\t';
     scan.scalarStart = false;
+    scan.afterJson = false;
     if ((ch == '"' || ch == "'") && starts) {
       scan.quote = ch;
     } else if ((ch == '[' || ch == '{') && (starts || scan.depth > 0)) {
@@ -698,13 +905,101 @@ String _uncomment(String line, _Scan scan) {
       scan.scalarStart = true;
     } else if ((ch == ']' || ch == '}') && scan.depth > 0) {
       scan.depth--;
+      scan.afterJson = true;
     } else if (ch == ',' && scan.depth > 0) {
       scan.scalarStart = true;
-    } else if (ch == ':' && (spaced || scan.depth > 0)) {
+    } else if (ch == ':' && (spaced || (scan.depth > 0 && json))) {
       scan.scalarStart = true;
-    } else if ((ch == '-' || ch == '?') && spaced && scan.depth == 0) {
+    } else if (ch == '?' && spaced) {
+      scan.scalarStart = true;
+    } else if (ch == '-' && spaced && scan.depth == 0) {
       scan.scalarStart = true;
     }
   }
   return line;
+}
+
+/// The index just past the closing quote of the quoted scalar [text] opens,
+/// or -1 when it does not close.
+int _quoteEnd(String text) {
+  final quote = text[0];
+  for (var i = 1; i < text.length; i++) {
+    final ch = text[i];
+    if (quote == '"' && ch == r'\') {
+      i++;
+    } else if (ch == quote) {
+      if (quote == "'" && i + 1 < text.length && text[i + 1] == "'") {
+        i++;
+      } else {
+        return i + 1;
+      }
+    }
+  }
+  return -1;
+}
+
+/// The value of [text], exactly one quoted scalar and nothing after it but
+/// whitespace, decoded as YAML decodes it; null for anything else, or for an
+/// escape YAML does not define.
+String? _decodeQuoted(String text) {
+  if (text.isEmpty || (text[0] != '"' && text[0] != "'")) return null;
+  final end = _quoteEnd(text);
+  if (end < 0 || text.substring(end).trim().isNotEmpty) return null;
+  final inner = text.substring(1, end - 1);
+  if (text[0] == "'") return inner.replaceAll("''", "'");
+  final value = StringBuffer();
+  for (var i = 0; i < inner.length; i++) {
+    if (inner[i] != r'\') {
+      value.write(inner[i]);
+      continue;
+    }
+    final escape = _escape(inner, i);
+    if (escape == null) return null;
+    value.write(escape.$1);
+    i += escape.$2 - 1;
+  }
+  return value.toString();
+}
+
+/// Double-quoted escapes YAML defines, by the character after the backslash.
+final _simpleEscapes = <String, int>{
+  '0': 0,
+  'a': 7,
+  'b': 8,
+  't': 9,
+  String.fromCharCode(9): 9,
+  'n': 10,
+  'v': 11,
+  'f': 12,
+  'r': 13,
+  'e': 27,
+  ' ': 32,
+  '"': 34,
+  '/': 47,
+  r'\': 92,
+  'N': 0x85,
+  '_': 0xA0,
+  'L': 0x2028,
+  'P': 0x2029,
+};
+
+/// What the escape whose backslash is at [text][at] stands for, and how many
+/// characters it spans; null for one YAML does not define.
+(String, int)? _escape(String text, int at) {
+  if (at + 1 >= text.length) return null;
+  final kind = text[at + 1];
+  final simple = _simpleEscapes[kind];
+  if (simple != null) return (String.fromCharCode(simple), 2);
+  final width = switch (kind) {
+    'x' => 2,
+    'u' => 4,
+    'U' => 8,
+    _ => 0,
+  };
+  if (width == 0 || at + 2 + width > text.length) return null;
+  final hex = text.substring(at + 2, at + 2 + width);
+  if (!RegExp(r'^[0-9A-Fa-f]+$').hasMatch(hex)) return null;
+  final code = int.parse(hex, radix: 16);
+  if (code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF)) return null;
+  return (String.fromCharCode(code), 2 + width);
 }
