@@ -24,7 +24,7 @@ configuration, Git state, stages and destinations. A failed read is shown as
 unknown or failed, never as proof that nothing was published.
 
 - Use arrows to move between units and destinations, or Tab between controls.
-- Click a unit or press Enter on it for its overview and release issues.
+- Focus a unit and press Enter for its overview and release issues.
 - Open a destination to inspect its candidate, latest published version and
   evidence. Open Stage for its receipt, artifacts and any validation problems.
 - Escape or Back returns to the same cell; Escape from the matrix closes it.
