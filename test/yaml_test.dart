@@ -324,10 +324,36 @@ version: 1.0.0
         'a quoted flow scalar over a blank line',
         "k: [ 'a #\n\n   b', c ]\nname: x\n",
       ),
+      (
+        'lone carriage returns breaking lines',
+        'description: a\rdependency_overrides:\r  leaf: 1.0.0\r',
+      ),
+      ('an escaped space before a line break', 'k: "a\\ \n  b"\n'),
+      ('an escaped tab before a line break', 'k: "a\\\t\n  b"\n'),
+      ("a question mark inside a plain scalar", "k: a ? 'b # c'\n"),
+      ('a dash inside a plain scalar', "k: a - 'b # c'\n"),
+      ('a flow line ending in spaces', 'k: [a  \n  b]\n'),
+      (
+        'a comment line in a flow at its key\'s column',
+        'topics: [\n  a,\n# b,\n  c,\n]\n',
+      ),
     ]) {
       test(label, () {
         expect(_fromRk(parse(source)), _fromYaml(yaml.loadYaml(source)));
       });
+    }
+  });
+
+  test('white space is spaces and tabs, not every Unicode space', () {
+    // A no-break space starts the key's text in YAML, so this is not the
+    // dependency_overrides key rk would find with Dart's trim.
+    final nbsp = String.fromCharCode(0xA0);
+    final source = 'name: x\n${nbsp}dependency_overrides: 1\n';
+    final diagnostics = Diagnostics();
+    final document = parseYaml(source, 'p.yaml', diagnostics);
+    if (document != null) {
+      expect(_fromRk(document), _fromYaml(yaml.loadYaml(source)));
+      expect(document.has('dependency_overrides'), isFalse);
     }
   });
 

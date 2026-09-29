@@ -78,14 +78,15 @@ ResolutionPackages resolutionPackages(String sourceRoot, String directory) {
   return (packages: packages, unreadable: null);
 }
 
-/// Every override declared by [packages] (name to directory): each one's
-/// `pubspec_overrides.yaml`, or its pubspec's `dependency_overrides` section
-/// when that file declares none. [replaced] names the packages whose file
-/// replaces their section, as Pub reads it.
-({List<DependencyOverride> overrides, Set<String> replaced})
-dependencyOverrides(String sourceRoot, Map<String, String> packages) {
+/// Every override declared by [packages] (name to directory), as rk reads
+/// them: each one's `pubspec_overrides.yaml`, or its pubspec's
+/// `dependency_overrides` section when that file declares none. The stage
+/// names declarations with this; Pub's lockfile decides what is overridden.
+List<DependencyOverride> dependencyOverrides(
+  String sourceRoot,
+  Map<String, String> packages,
+) {
   final found = <DependencyOverride>[];
-  final replaced = <String>{};
   void declare(YamlNode? section, String where) {
     // An empty or null section declares nothing.
     if (section == null ||
@@ -107,7 +108,7 @@ dependencyOverrides(String sourceRoot, Map<String, String> packages) {
     }
   }
 
-  for (final MapEntry(key: name, value: dir) in packages.entries) {
+  for (final dir in packages.values) {
     final file = '$dir/pubspec_overrides.yaml';
     final overrides = _read(file);
     if (overrides.exists) {
@@ -116,7 +117,6 @@ dependencyOverrides(String sourceRoot, Map<String, String> packages) {
           package: everyPackage,
           declaredIn: _relative(sourceRoot, file),
         ));
-        replaced.add(name);
         continue;
       }
       if (overrides.map!.has('dependency_overrides')) {
@@ -124,7 +124,6 @@ dependencyOverrides(String sourceRoot, Map<String, String> packages) {
           overrides.map!['dependency_overrides'],
           _relative(sourceRoot, file),
         );
-        replaced.add(name);
         continue;
       }
     }
@@ -138,7 +137,69 @@ dependencyOverrides(String sourceRoot, Map<String, String> packages) {
     }
     declare(manifest['dependency_overrides'], where);
   }
-  return (overrides: found, replaced: replaced);
+  return found;
+}
+
+/// The packages `dart pub get` reports it overrode, from its [output]: a
+/// `!` line for each, such as `! leaf 9.9.9 from path ../fork (overridden)`.
+/// Pub prints one for every override it applied, whichever package declared
+/// it, including an override of a direct dependency, which its lockfile
+/// records as a direct dependency instead.
+Set<String> reportedOverrides(String output) => {
+  for (final match in RegExp(
+    r'^! ([A-Za-z_][A-Za-z0-9_]*) .*\(overridden',
+    multiLine: true,
+  ).allMatches(output))
+    match.group(1)!,
+};
+
+/// Where Pub resolved the package at [directory], as Pub records it after
+/// resolving: the root its `.dart_tool/pub/workspace_ref.json` points to, or
+/// the package itself when Pub wrote its package configuration there. Null
+/// when Pub left neither.
+String? resolvedRoot(String directory) {
+  final reference = File('$directory/.dart_tool/pub/workspace_ref.json');
+  if (reference.existsSync()) {
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(reference.readAsStringSync());
+    } on FormatException {
+      return null;
+    } on FileSystemException {
+      return null;
+    }
+    final relative = decoded is Map ? decoded['workspaceRoot'] : null;
+    if (relative is! String) return null;
+    final root = Uri.directory(
+      '$directory/.dart_tool/pub/',
+    ).resolve(relative.endsWith('/') ? relative : '$relative/');
+    final path = root.toFilePath();
+    return path.length > 1 && path.endsWith('/')
+        ? path.substring(0, path.length - 1)
+        : path;
+  }
+  return File('$directory/.dart_tool/package_config.json').existsSync()
+      ? directory
+      : null;
+}
+
+/// The packages the lockfile Pub wrote at [root] marks overridden. Pub
+/// records an overridden direct dependency of the root as direct, so this
+/// complements [reportedOverrides] rather than replacing it. Null when there
+/// is no lockfile rk can read.
+Set<String>? overriddenPackages(String root) {
+  final lock = _read('$root/pubspec.lock');
+  if (lock.map == null) return null;
+  final packages = lock.map!['packages'];
+  if (packages is YamlScalar && packages.value.isEmpty) return {};
+  if (packages is! YamlMap) return null;
+  final overridden = <String>{};
+  for (final name in packages.keys) {
+    final dependency = packages.map(name)?.string('dependency');
+    if (dependency == null) return null;
+    if (dependency.contains('overridden')) overridden.add(name);
+  }
+  return overridden;
 }
 
 /// The packages [package] brings to its consumers, from `pub deps --json`:
@@ -166,29 +227,6 @@ Set<String>? runtimeDependencies(String pubDepsJson, String package) {
     }
   }
   return reached;
-}
-
-/// The workspace packages Pub resolved (`kind: root`), each with the
-/// overrides Pub reports it declaring: what it depends on beyond its direct
-/// and dev dependencies. Null when the output does not have that shape.
-///
-/// Pub reports the overrides in each pubspec and in the root's
-/// `pubspec_overrides.yaml`, even a section a member's overrides file
-/// replaces, and not those in a member's file. So this checks rk's own
-/// reading rather than replacing it.
-Map<String, Set<String>>? reportedOverrides(String pubDepsJson) {
-  final packages = _packages(pubDepsJson);
-  if (packages == null) return null;
-  final reported = <String, Set<String>>{};
-  for (final MapEntry(key: name, value: entry) in packages.entries) {
-    if (entry['kind'] != 'root') continue;
-    final all = _strings(entry['dependencies']);
-    final direct = _strings(entry['directDependencies']);
-    final dev = _strings(entry['devDependencies']);
-    if (all == null || direct == null || dev == null) return null;
-    reported[name] = all.toSet().difference({...direct, ...dev});
-  }
-  return reported;
 }
 
 /// The packages in [reached] that Pub resolved from a path or Git source,
@@ -331,8 +369,7 @@ _topRoot(String sourceRoot, String directory) {
 /// The package directories [pattern] names under [base], as Pub matches a
 /// workspace entry: a path, or a glob whose matches count only where they
 /// hold a `pubspec.yaml`. Globs take `*`, `?`, `**`, `[...]` classes and
-/// `{a,b}` alternatives, matched case-insensitively where the platform's
-/// files are. Empty when nothing matches; null for a pattern that leaves
+/// `{a,b}` alternatives, matched case-sensitively as Pub matches them. Empty when nothing matches; null for a pattern that leaves
 /// [base], or for glob syntax rk does not read.
 List<String>? _expand(String base, String pattern) {
   if (pattern.startsWith('/') || pattern.contains(r'\')) return null;
@@ -354,7 +391,8 @@ List<String>? _expand(String base, String pattern) {
     return File('$path/pubspec.yaml').existsSync() ? [path] : const [];
   }
 
-  final caseSensitive = !(Platform.isMacOS || Platform.isWindows);
+  // Pub matches glob segments case-sensitively everywhere.
+  const caseSensitive = true;
   final matchers = <RegExp?>[];
   for (final segment in segments) {
     if (segment == '**') {

@@ -26,6 +26,7 @@ import 'package:rk/src/transforms/archive.dart';
 import 'package:rk/src/transforms/digest.dart';
 import 'package:test/test.dart';
 
+import 'pub_deps_double.dart';
 import 'status_test.dart' show FakeRegistry;
 
 const _head = '1111111111111111111111111111111111111111';
@@ -1997,11 +1998,10 @@ void main() {
             prompts++;
             return '1.2.3';
           },
+          // Planted as the pub.dev lane starts (its first Pub command),
+          // before any lane writes.
           onInvocation: (call) {
-            if (planted ||
-                call.key != 'dart pub publish --to-archive <archive>') {
-              return;
-            }
+            if (planted || !call.key.startsWith('dart pub ')) return;
             Directory(
               harness.stage.directory.resolve(failure.path),
             ).createSync(recursive: true);
@@ -3039,6 +3039,20 @@ class _WorldTools implements Tools {
     }
     if (_isDart(executable) && _starts(arguments, ['pub', 'get'])) {
       return _ok();
+    }
+    // The pub.dev stage resolves its mirror before packaging it. A native
+    // archive resolves for real; otherwise Pub's records are modeled.
+    if (_isDart(executable) && _starts(arguments, ['pub', 'deps'])) {
+      if (nativePubArchive) {
+        return const SystemTools().run(
+          executable,
+          arguments,
+          workingDirectory: workingDirectory,
+          environment: environment,
+          timeout: timeout,
+        );
+      }
+      return workingDirectory == null ? _ok() : pubDepsIn(workingDirectory);
     }
     if (_isDart(executable) && _starts(arguments, ['pub', 'cache', 'add'])) {
       if (pubAvailabilityFailures > 0) {

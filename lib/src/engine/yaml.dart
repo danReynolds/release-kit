@@ -72,7 +72,10 @@ YamlMap? parseYaml(String source, String path, Diagnostics diagnostics) {
 
 class _Parser {
   _Parser(String source, this._path, this._diagnostics)
-    : _lines = source.replaceAll('\r\n', '\n').split('\n');
+    : _lines = source
+          .replaceAll('\r\n', '\n')
+          .replaceAll('\r', '\n')
+          .split('\n');
 
   final List<String> _lines;
   final String _path;
@@ -82,10 +85,12 @@ class _Parser {
 
   YamlMap? run() {
     // One document, which may open with its marker.
-    while (_cursor < _lines.length && _strip(_lines[_cursor]).trim().isEmpty) {
+    while (_cursor < _lines.length &&
+        _strip(_lines[_cursor]).yamlTrim().isEmpty) {
       _cursor++;
     }
-    if (_cursor < _lines.length && _strip(_lines[_cursor]).trim() == '---') {
+    if (_cursor < _lines.length &&
+        _strip(_lines[_cursor]).yamlTrim() == '---') {
       _cursor++;
     }
     final root = _block(0);
@@ -133,7 +138,7 @@ class _Parser {
       final raw = _lines[_cursor];
       final line = _cursor + 1;
       final text = _strip(raw);
-      if (text.trim().isEmpty) {
+      if (text.yamlTrim().isEmpty) {
         _cursor++;
         continue;
       }
@@ -148,7 +153,14 @@ class _Parser {
         return null;
       }
 
-      final body = text.trim();
+      // A line ending inside a double-quoted scalar keeps a space or tab a
+      // backslash escapes there: it is content.
+      final ending = _Scan();
+      _uncomment(raw, ending);
+      final body = _trimFolded(
+        text.yamlTrimLeft(),
+        double: ending.quote == '"',
+      );
       final isDash =
           body == '-' || body.startsWith('- ') || body.startsWith('-\t');
 
@@ -186,7 +198,7 @@ class _Parser {
           _fail('a block cannot mix map keys and list items', line);
           return null;
         }
-        final item = body.substring(1).trim();
+        final item = body.substring(1).yamlTrimLeft();
         if (_unreadable(item, line)) return null;
         if (item == '-' || item.startsWith('- ') || item.startsWith('-\t')) {
           _fail(
@@ -272,10 +284,10 @@ class _Parser {
         return null;
       }
 
-      final written = body.substring(0, colon).trim();
+      final written = body.substring(0, colon).yamlTrim();
       final key = _key(written, line);
       if (key == null) return null;
-      final rest = body.substring(colon + 1).trim();
+      final rest = body.substring(colon + 1).yamlTrimLeft();
       if (_unreadable(rest, line)) return null;
       asMap ??= YamlMap(line);
 
@@ -334,14 +346,14 @@ class _Parser {
     var next = _cursor;
     while (next < _lines.length) {
       final raw = _lines[next];
-      if (raw.trim().isEmpty) {
+      if (raw.yamlTrim().isEmpty) {
         blanks++;
         next++;
         continue;
       }
       // The line continues a plain scalar, so a quote on it is a character
       // and cannot hide a comment.
-      final text = _uncomment(raw, _Scan()..scalarStart = false).trim();
+      final text = _uncomment(raw, _Scan()..scalarStart = false).yamlTrim();
       if (text.isEmpty || _indentOf(raw) <= indent) break;
       if (_keyColon(text) >= 0 || text.startsWith('- ') || text == '-') {
         _fail(
@@ -365,7 +377,9 @@ class _Parser {
   YamlScalar _quotedScalar(String value, int indent, int line) {
     final double = value.startsWith('"');
     final scan = _Scan();
-    final folded = StringBuffer(_uncomment(value, scan).trimRight());
+    final folded = StringBuffer(
+      _trimFolded(_uncomment(value, scan), double: double),
+    );
     var blanks = 0;
     var next = _cursor;
     while (scan.quote.isNotEmpty) {
@@ -378,7 +392,7 @@ class _Parser {
         return YamlScalar(value, line);
       }
       final raw = _lines[next++];
-      if (raw.trim().isEmpty) {
+      if (raw.yamlTrim().isEmpty) {
         blanks++;
         continue;
       }
@@ -390,7 +404,10 @@ class _Parser {
         );
         return YamlScalar(value, line);
       }
-      final text = _uncomment(raw.trim(), scan).trimRight();
+      final text = _trimFolded(
+        _uncomment(raw.yamlTrimLeft(), scan),
+        double: double,
+      );
       final current = folded.toString();
       if (blanks > 0) {
         folded.write('\n' * blanks);
@@ -490,7 +507,7 @@ class _Parser {
   void _endOfValue(int indent, int line) {
     for (var next = _cursor; next < _lines.length; next++) {
       final raw = _lines[next];
-      if (_strip(raw).trim().isEmpty) continue;
+      if (_strip(raw).yamlTrim().isEmpty) continue;
       if (_indentOf(raw) >= indent) {
         _fail(
           'a flow collection is the whole value of its key',
@@ -536,7 +553,7 @@ class _Parser {
         return null;
       }
       final next = _lines[_cursor];
-      final trimmed = next.trimLeft();
+      final trimmed = next.yamlTrimLeft();
       if (trimmed.isEmpty) {
         blanks++;
         _cursor++;
@@ -544,7 +561,9 @@ class _Parser {
       }
       if (_indentOf(next) <= owner &&
           !(scan.quote.isEmpty &&
-              (trimmed.startsWith(']') || trimmed.startsWith('}')))) {
+              (trimmed.startsWith(']') ||
+                  trimmed.startsWith('}') ||
+                  trimmed.startsWith('#')))) {
         _fail(
           'line ${_cursor + 1} is not indented past the key of the flow '
           'collection on line $line',
@@ -564,10 +583,10 @@ class _Parser {
             !(trimmed[0] == ':' &&
                 (trimmed.length == 1 || ' \t,]}'.contains(trimmed[1])));
         source = continues && blanks > 0
-            ? '${source.trimRight()}${'\n' * blanks}'
-            : '$source ';
+            ? '${source.yamlTrimRight()}${'\n' * blanks}'
+            : '${source.yamlTrimRight()} ';
       } else {
-        source = source.trimRight();
+        source = _trimFolded(source, double: quote == '"');
         if (blanks > 0) {
           source = '$source${'\n' * blanks}';
         } else if (quote == '"' && _escapesLineBreak(source)) {
@@ -580,7 +599,7 @@ class _Parser {
       blanks = 0;
       _cursor++;
     }
-    final reader = _FlowReader(source.trim());
+    final reader = _FlowReader(source.yamlTrim());
     final node = reader.read(line);
     if (node == null) {
       _fail(
@@ -597,12 +616,12 @@ class _Parser {
     final parts = <String>[];
     while (_cursor < _lines.length) {
       final raw = _lines[_cursor];
-      if (raw.trim().isEmpty) {
+      if (raw.yamlTrim().isEmpty) {
         _cursor++;
         continue;
       }
       if (_indentOf(raw) <= parentIndent) break;
-      parts.add(raw.trim());
+      parts.add(raw.yamlTrim());
       _cursor++;
     }
     return parts.join(' ');
@@ -836,7 +855,7 @@ final class _FlowReader {
       }
       _at++;
     }
-    final value = _text.substring(start, _at).trim();
+    final value = _text.substring(start, _at).yamlTrim();
     if (value.startsWith('&') ||
         value.startsWith('*') ||
         value.startsWith('!')) {
@@ -910,9 +929,9 @@ String _uncomment(String line, _Scan scan) {
       scan.scalarStart = true;
     } else if (ch == ':' && (spaced || (scan.depth > 0 && json))) {
       scan.scalarStart = true;
-    } else if (ch == '?' && spaced) {
+    } else if (ch == '?' && spaced && starts) {
       scan.scalarStart = true;
-    } else if (ch == '-' && spaced && scan.depth == 0) {
+    } else if (ch == '-' && spaced && starts && scan.depth == 0) {
       scan.scalarStart = true;
     }
   }
@@ -944,7 +963,7 @@ int _quoteEnd(String text) {
 String? _decodeQuoted(String text) {
   if (text.isEmpty || (text[0] != '"' && text[0] != "'")) return null;
   final end = _quoteEnd(text);
-  if (end < 0 || text.substring(end).trim().isNotEmpty) return null;
+  if (end < 0 || text.substring(end).yamlTrim().isNotEmpty) return null;
   final inner = text.substring(1, end - 1);
   if (text[0] == "'") return inner.replaceAll("''", "'");
   final value = StringBuffer();
@@ -1002,4 +1021,44 @@ final _simpleEscapes = <String, int>{
   final code = int.parse(hex, radix: 16);
   if (code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF)) return null;
   return (String.fromCharCode(code), 2 + width);
+}
+
+/// [text] without the spaces and tabs that end it, keeping one a backslash
+/// escapes when [double] quotes it: that one is content, and the line break
+/// after it folds as usual.
+String _trimFolded(String text, {required bool double}) {
+  var end = text.length;
+  while (end > 0 && (text[end - 1] == ' ' || text[end - 1] == '\t')) {
+    if (double) {
+      var slashes = 0;
+      for (var i = end - 2; i >= 0 && text[i] == r'\'; i--) {
+        slashes++;
+      }
+      if (slashes.isOdd) break;
+    }
+    end--;
+  }
+  return text.substring(0, end);
+}
+
+/// YAML's white space is spaces and tabs. [String.trim] also takes Unicode
+/// spaces, which YAML reads as content.
+extension on String {
+  String yamlTrim() => yamlTrimLeft().yamlTrimRight();
+
+  String yamlTrimLeft() {
+    var start = 0;
+    while (start < length && (this[start] == ' ' || this[start] == '\t')) {
+      start++;
+    }
+    return substring(start);
+  }
+
+  String yamlTrimRight() {
+    var end = length;
+    while (end > 0 && (this[end - 1] == ' ' || this[end - 1] == '\t')) {
+      end--;
+    }
+    return substring(0, end);
+  }
 }

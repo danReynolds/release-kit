@@ -21,6 +21,7 @@ import 'package:rk/src/transforms/digest.dart';
 import 'package:rk/src/targets/catalog.dart';
 import 'package:test/test.dart';
 
+import 'pub_deps_double.dart';
 import 'status_test.dart' show FakeRegistry;
 
 const _config = '''
@@ -300,10 +301,18 @@ Future<Ran> release({
   // `cat-file` below is where rk reads it back — the fixture models the object,
   // not the intent, because that is the distinction rk now enforces.
   final signedTags = <String>{...signedExistingTags};
+  // `pub deps` leaves Pub's records where it ran, as the real one does.
+  ToolResult? resolved;
   final recording = RecordingTools(
+    probe: (key, workingDirectory) {
+      if (key == 'dart pub deps --json' && workingDirectory != null) {
+        resolved = pubDepsIn(workingDirectory);
+      }
+    },
     answers: (key) {
       final scripted = results[_normalizedPubKey(key)];
       if (scripted != null) return scripted;
+      if (key == 'dart pub deps --json') return resolved;
       const objectPrefix = 'git rev-parse --verify refs/tags/';
       if (key.startsWith(objectPrefix) && key.endsWith('^{tag}')) {
         final tag = key.substring(
