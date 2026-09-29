@@ -1,0 +1,184 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:rk/src/engine/tools.dart';
+
+/// What Pub reports and records when the pub.dev stage resolves its mirror of
+/// the source snapshot. Each report can be set on its own, so a test can
+/// prove the stage reads it.
+final class PubResolution {
+  const PubResolution({
+    this.reported = const {},
+    this.declared = const {},
+    this.lock = const {},
+    this.graph,
+  });
+
+  /// An override Pub shows everywhere it would: `pub get` reports it, the
+  /// compact report lists it under [declaringPackage], and the lockfile marks
+  /// it with [type]. For an override of the root's own dependency, Pub
+  /// writes `direct main` or `direct dev` there instead.
+  factory PubResolution.overriding(
+    Set<String> packages, {
+    String declaringPackage = 'keybay',
+    String type = 'direct overridden',
+  }) => PubResolution(
+    reported: packages,
+    declared: {declaringPackage: packages},
+    lock: {for (final name in packages) name: type},
+  );
+
+  /// Overrides `pub get` reports with a `!` line. Pub prints them only in a
+  /// full report, which the environment variable `PUB_SUMMARY_ONLY` turns
+  /// off; the double assumes the caller's environment sets it, as Flutter's
+  /// tooling does, unless the call itself sets it to `0`.
+  final Set<String> reported;
+
+  /// Each package's `dependency overrides:` in `pub deps --style=compact`.
+  final Map<String, Set<String>> declared;
+
+  /// Lockfile entries: package to the dependency type Pub writes.
+  final Map<String, String> lock;
+
+  /// What `pub deps --json` prints; by default the package alone.
+  final String? graph;
+}
+
+/// `dart pub get --no-example` in [workingDirectory]: writes Pub's records
+/// and prints its report. The lockfile goes at the resolution root. Inside a
+/// workspace, the package also gets a pointer to that root, which Pub writes
+/// only for workspaces.
+ToolResult pubGetIn(
+  String workingDirectory, {
+  PubResolution resolution = const PubResolution(),
+  Map<String, String>? environment,
+}) {
+  final root = _resolutionRoot(workingDirectory);
+  File('$root/.dart_tool/package_config.json')
+    ..parent.createSync(recursive: true)
+    ..writeAsStringSync('{"configVersion": 2, "packages": []}\n');
+  File('$root/pubspec.lock').writeAsStringSync(_lockfile(resolution.lock));
+  if (_isWorkspace(root)) {
+    for (final dir in {root, workingDirectory}) {
+      final depth = dir.length > root.length
+          ? dir.substring(root.length + 1).split('/').length
+          : 0;
+      File('$dir/.dart_tool/pub/workspace_ref.json')
+        ..parent.createSync(recursive: true)
+        ..writeAsStringSync(
+          '${jsonEncode({'workspaceRoot': List.filled(depth + 2, '..').join('/')})}\n',
+        );
+    }
+  }
+  final fullReport = environment?['PUB_SUMMARY_ONLY'] == '0';
+  return ToolResult(
+    exitCode: 0,
+    stdout: [
+      'Resolving dependencies...',
+      if (fullReport)
+        for (final name in resolution.reported)
+          '! $name 9.9.9 from path ../$name (overridden)',
+      fullReport ? 'Got dependencies!' : 'Got dependencies.',
+      '',
+    ].join('\n'),
+    stderr: '',
+  );
+}
+
+/// `dart pub deps --json` in [workingDirectory].
+ToolResult pubDepsJsonIn(
+  String workingDirectory, {
+  PubResolution resolution = const PubResolution(),
+}) => ToolResult(
+  exitCode: 0,
+  stdout: resolution.graph ?? _packageAlone(workingDirectory),
+  stderr: '',
+);
+
+/// `dart pub deps --style=compact` in [workingDirectory]: each package with
+/// its declared overrides.
+ToolResult pubDepsCompactIn(
+  String workingDirectory, {
+  PubResolution resolution = const PubResolution(),
+}) => ToolResult(
+  exitCode: 0,
+  stdout: [
+    'Dart SDK 3.12.2',
+    '${_name(workingDirectory)} 0.2.0',
+    '',
+    for (final MapEntry(key: package, value: names)
+        in resolution.declared.entries) ...[
+      '$package 1.0.0',
+      '',
+      'dependency overrides:',
+      for (final name in names) '- $name 9.9.9',
+      '',
+    ],
+  ].join('\n'),
+  stderr: '',
+);
+
+/// The ancestor a `resolution: workspace` package resolves at: the nearest
+/// one declaring `workspace:`, followed up while that one is a member too.
+String _resolutionRoot(String directory) {
+  var root = directory;
+  while (_pubspec(
+    root,
+  ).contains(RegExp(r'^resolution: workspace', multiLine: true))) {
+    var dir = root;
+    do {
+      dir = File(dir).parent.path;
+    } while (dir.length > 1 && !_isWorkspace(dir));
+    if (dir.length <= 1) return root;
+    root = dir;
+  }
+  return root;
+}
+
+bool _isWorkspace(String directory) =>
+    _pubspec(directory).contains(RegExp(r'^workspace:', multiLine: true));
+
+String _pubspec(String directory) {
+  final file = File('$directory/pubspec.yaml');
+  return file.existsSync() ? file.readAsStringSync() : '';
+}
+
+String? _name(String directory) => RegExp(
+  r'^name:\s*(\S+)',
+  multiLine: true,
+).firstMatch(_pubspec(directory))?.group(1);
+
+String _lockfile(Map<String, String> lock) {
+  if (lock.isEmpty) return '# Generated by pub\npackages: {}\n';
+  return [
+    '# Generated by pub',
+    'packages:',
+    for (final MapEntry(key: name, value: type) in lock.entries) ...[
+      '  $name:',
+      '    dependency: "$type"',
+      '    description:',
+      '      path: "../$name"',
+      '      relative: true',
+      '    source: path',
+      '    version: "9.9.9"',
+    ],
+    '',
+  ].join('\n');
+}
+
+String _packageAlone(String directory) {
+  final name = _name(directory);
+  return jsonEncode({
+    'root': name,
+    'packages': [
+      {
+        'name': name,
+        'kind': 'root',
+        'source': 'root',
+        'dependencies': <String>[],
+        'directDependencies': <String>[],
+        'devDependencies': <String>[],
+      },
+    ],
+  });
+}

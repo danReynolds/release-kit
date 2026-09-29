@@ -26,6 +26,7 @@ import 'package:rk/src/transforms/archive.dart';
 import 'package:rk/src/transforms/digest.dart';
 import 'package:test/test.dart';
 
+import 'pub_deps_double.dart';
 import 'status_test.dart' show FakeRegistry;
 
 const _head = '1111111111111111111111111111111111111111';
@@ -1997,11 +1998,10 @@ void main() {
             prompts++;
             return '1.2.3';
           },
+          // Planted as the pub.dev lane starts (its first Pub command),
+          // before any lane writes.
           onInvocation: (call) {
-            if (planted ||
-                call.key != 'dart pub publish --to-archive <archive>') {
-              return;
-            }
+            if (planted || !call.key.startsWith('dart pub ')) return;
             Directory(
               harness.stage.directory.resolve(failure.path),
             ).createSync(recursive: true);
@@ -3036,6 +3036,30 @@ class _WorldTools implements Tools {
       return failPubLogin
           ? ToolResult(exitCode: 1, stdout: '', stderr: 'authentication failed')
           : _ok(stdout: 'You are already logged in as <dev@example.com>\n');
+    }
+    // The pub.dev stage resolves its mirror before packaging it. A native
+    // archive resolves for real; otherwise Pub's reports and records are
+    // modeled.
+    final resolving =
+        _isDart(executable) &&
+        (_starts(arguments, ['pub', 'get', '--no-example']) ||
+            _starts(arguments, ['pub', 'deps']));
+    if (resolving && nativePubArchive) {
+      return const SystemTools().run(
+        executable,
+        arguments,
+        workingDirectory: workingDirectory,
+        environment: environment,
+        timeout: timeout,
+      );
+    }
+    if (resolving && workingDirectory != null) {
+      if (arguments.contains('--no-example')) {
+        return pubGetIn(workingDirectory, environment: environment);
+      }
+      return arguments.contains('--json')
+          ? pubDepsJsonIn(workingDirectory)
+          : pubDepsCompactIn(workingDirectory);
     }
     if (_isDart(executable) && _starts(arguments, ['pub', 'get'])) {
       return _ok();

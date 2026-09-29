@@ -19,3 +19,5 @@ dev_dependencies:
   archive: ^4.0.9
   lints: ^5.0.0
   test: ^1.25.0
+  # Differential tests of rk's YAML subset against the real parser.
+  yaml: ^3.1.3

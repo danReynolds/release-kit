@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-159 codes across 27 families.
+161 codes across 29 families.
 
 
 ## RK-AUTH — Authorization
@@ -217,6 +217,8 @@ meaning and is not reused.
 | `RK-PUB-011` | this Dart SDK cannot stage the native Pub archive | `lib/src/targets/pub_dev/package_stage.dart`, `lib/src/targets/pub_dev/module.dart` |
 | `RK-PUB-012` | pub validation reported a package warning | `lib/src/targets/pub_dev/package_stage.dart` |
 | `RK-PUB-013` | a published version is not available to a fresh Dart resolver yet | `lib/src/targets/pub_dev/module.dart` |
+| `RK-PUB-014` | ${project.name} resolves with Flutter packages, and the Dart rk uses is not part of a Flutter SDK | `lib/src/targets/pub_dev/package_stage.dart` |
+| `RK-PUB-016` | rk could not resolve which packages $package reaches | `lib/src/targets/pub_dev/package_stage.dart` |
 
 RK-PUB-002 (the consumer-resolve probe) and RK-PUB-004 are retired historical
 meanings and are not reused.
