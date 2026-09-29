@@ -197,6 +197,44 @@ void main() {
     );
   }
 
+  test('an update failure dismisses a pending removal confirmation', () async {
+    final state = ProjectInstallations(project, {
+      InstallationSource.pub: const SourceInspection(),
+      InstallationSource.github: SourceInspection(
+        installation: installed(InstallationSource.github, '1.2.0'),
+      ),
+    });
+    final gate = Completer<String>();
+    var removals = 0;
+    final model = UsePicker(
+      states: [state],
+      refresh: () async => [state],
+      checkAvailable: (_, source, _) async => Release(project, source, '1.3.0'),
+      downloadAvailable: (_, _, _, _) => gate.future,
+      use: (_, _, _, _) async => 'Used',
+      uninstall: (_, _, _, _) async {
+        removals++;
+        return 'Removed';
+      },
+      close: () {},
+    );
+    addTearDown(model.dispose);
+    await model.check(state, InstallationSource.pub);
+    final updating = model.download(state, InstallationSource.pub);
+    model.requestRemoval(state, InstallationSource.github);
+    expect(model.removal, isNotNull);
+    gate.completeError(const InstallationFailure('Update failed.'));
+    await updating;
+    expect(model.details?.body, contains('Update failed.'));
+    expect(
+      model.removal,
+      isNull,
+      reason: 'The failure must replace the old confirmation.',
+    );
+    await model.confirmRemoval();
+    expect(removals, 0);
+  });
+
   test(
     'Update exists only after a successful check proves a newer version',
     () async {

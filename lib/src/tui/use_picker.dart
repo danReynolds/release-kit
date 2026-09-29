@@ -304,6 +304,7 @@ class UsePicker extends Notifier {
     }
     if (failed && !closing) {
       if (_operations.length > 1) message += '\nQueued actions cancelled.';
+      removal = null;
       details = (title: failureTitle, body: message);
       // Resolve a failure before starting another queued mutation.
       _cancelQueued();
