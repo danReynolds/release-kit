@@ -27,18 +27,15 @@ versioned units; name a unit when an automation caller needs the narrowest
 scope. For `clean`, it authorizes only the repository-local stage set shown by
 that run.
 
-`rk stage --json` reports `command: "stage"` and has no `mode` field.
-The compatibility alias `rk release --stage --json` retains
-`command: "release"` and `mode: {"stage": true}`. Both run the same private
-staging pipeline. Ordinary `rk release --json` retains `mode: {"stage": false}`.
+`command` identifies the operation: `"stage"` prepares without publishing;
+`"release"` prepares as needed and publishes. There is no separate mode field.
 
 ## Top level
 
 | key | meaning |
 |---|---|
-| `rk` | schema version (currently `11`) |
+| `rk` | schema version (currently `12`) |
 | `command` | the verb that ran |
-| `mode` | present only where the run has one: `{stage}` on `release` |
 | `observed_at` | UTC ISO 8601 — when rk read the world |
 | `exit` | mirrors the process exit code |
 | `rerun_helps` | whether re-running would move things forward — false on conflicts, where a human has to decide. Re-running is always *safe*: the same inspection precedes every act |
@@ -202,7 +199,7 @@ Exit codes (also in `-h`): `0` a successful report or completed command;
 still writes one final report on exit `3`, including the diagnosis pointer when
 rk may have acted; the diagnosis directory holds the detailed evidence.
 
-## Installation management (schema 11)
+## Installation management
 
 `rk use`, `rk install`, and `rk uninstall` add an `installations` object with
 `root`, `managed_bin`, `projects[]`, and `outcomes[]`. Each project has its native

@@ -170,8 +170,7 @@ nothing else prevents.**
   one duplicated a whole verb: "inspect and stop before acting" is what
   `rk status` says. This historical pass retained `--dry-run`; the production
   alpha later renamed that exact private-preparation contract to `--stage`.
-  The current CLI uses `rk stage`, with `rk release --stage` retained as a
-  compatibility alias.
+  The current CLI replaces that flag with `rk stage`.
 - `-v` / `--verbose` was a second, worse rendering of the default view: it
   carried *less* verdict information than the lanes it replaced. `--json` is
   the surface for everything-at-once, including stable diagnostic codes; the

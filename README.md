@@ -147,7 +147,7 @@ verified stage is reused; interrupted staging resumes from verified work.
 
 Run `rk release` to prepare as needed and publish. Use `rk stage` first when
 you want to inspect the artifacts before publishing; name the unit when the
-repository has several. `rk release --stage` remains a compatibility alias.
+repository has several.
 
 ## Install
 
