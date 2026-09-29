@@ -32,7 +32,9 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    # Native terminal qualification follows the full suite and real Homebrew
+    # installation; slower macOS runners can need more than 15 minutes.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:

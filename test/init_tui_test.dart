@@ -1,4 +1,5 @@
 import 'package:fleury/fleury.dart';
+import 'package:fleury/fleury_test_support.dart';
 import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/commands/init.dart';
 import 'package:rk/src/engine/config.dart';
@@ -17,7 +18,7 @@ const missingPackage =
     '1 pubspec.yaml is not tracked by git — '
     'git add packages/second/pubspec.yaml to include it';
 
-InitPlan discoveryPlan() {
+InitPlan discoveryPlan({List<String> notices = const [missingPackage]}) {
   final discovered = InitPlan.discover(
     tree: MemorySourceTree({
       'pubspec.yaml':
@@ -36,7 +37,7 @@ InitPlan discoveryPlan() {
   );
   return InitPlan(
     candidates: discovered.candidates,
-    notices: const [missingPackage],
+    notices: notices,
     platformCapabilities: discovered.platformCapabilities,
     gitBound: discovered.gitBound,
     hasRemote: discovered.hasRemote,
@@ -45,6 +46,28 @@ InitPlan discoveryPlan() {
 }
 
 void main() {
+  test('compact init keeps the focused output visible when notes appear', () {
+    final model = InitPicker(discoveryPlan(notices: const []), (_) {});
+    addTearDown(model.dispose);
+    final tester = FleuryTester(viewportSize: const CellSize(40, 12));
+    addTearDown(tester.dispose);
+    tester.pumpWidget(FleuryApp(title: 'rk', home: InitScreen(model)));
+    tester.pump();
+    expect(tester.renderToString(), contains('Local build'));
+    expect(tester.renderToString(), isNot(contains('Discovery notes')));
+
+    tester.sendKey(const KeyEvent(KeyCode.tab));
+    tester.type(' ');
+    tester.pump();
+    tester.pump();
+    final output = tester.renderToString();
+    expect(output, contains('Discovery notes (1)'));
+    expect(output, contains('Binary enabled'));
+    expect(output, contains('✓ Added'));
+    expect(output, contains('Local build'));
+    expect(output, contains('Review configuration'));
+  });
+
   test('discovery notes remain available through selection and review', () async {
     final driver = FakeTerminalDriver(size: const CellSize(132, 30));
     final interaction = InitInteraction(driver: driver);

@@ -379,7 +379,7 @@ class _MatrixShellState extends State<MatrixShell> {
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
-                    const SizedBox(height: 1),
+                    if (!compact) const SizedBox(height: 1),
                   ],
                 ),
                 Expanded(
