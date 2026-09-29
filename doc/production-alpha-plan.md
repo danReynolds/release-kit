@@ -35,7 +35,8 @@ The currently supported commands are:
 rk init
 rk plan [unit]
 rk status [unit]
-rk release [unit] [--stage]
+rk stage [unit]
+rk release [unit]
 rk target list
 rk target <name>
 rk clean
@@ -50,7 +51,7 @@ module.
 The important safety contract is:
 
 - `status` is online and read-only;
-- `release --stage` may build, sign, notarize, and contact private services,
+- `stage` may build, sign, notarize, and contact private services,
   but performs no public act;
 - a normal release validates or creates the exact private stage before asking
   for authorization;
@@ -89,7 +90,7 @@ uses Git-identified targets.
 ### 2. Create and inspect the private stage
 
 ```console
-$ dart run bin/rk.dart release rk --stage
+$ dart run bin/rk.dart stage rk
 $ dart run bin/rk.dart status rk
 ```
 

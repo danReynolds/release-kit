@@ -16,7 +16,7 @@ of a release script.
   ([doc/codes.md](doc/codes.md)).
 - **No secrets.** Publication sessions belong to `dart pub`, `gh`,
   `codesign`, `notarytool`, and `git`. rk asks for them only after
-  private work is finished and checked; `status` and `release --stage`
+  private work is finished and checked; `status` and `stage`
   never do. A session rk had to create is cleared when the run ends, so
   a release leaves no credential behind; one that already existed is
   left exactly as it was.
@@ -132,10 +132,10 @@ release-kit · main@888444b
 The release itself — ordered, staged, disclosed, one yes per unit — is
 shown in [Two packages, one release](#two-packages-one-release).
 
-`rk release --stage` opens with the project version and checkout it will use:
+`rk stage` opens with the project version and checkout it will use:
 
 ```console
-$ rk release rk --stage
+$ rk stage rk
 Staging rk 0.1.12
   release-kit · main@888444b
 ```
@@ -144,6 +144,10 @@ A stage belongs to an exact commit and release plan. A new commit, SDK, RK
 installation, or release configuration can require a new stage. When recent
 stage metadata explains the change, RK tells you why it is rebuilding. A
 verified stage is reused; interrupted staging resumes from verified work.
+
+Run `rk release` to prepare as needed and publish. Use `rk stage` first when
+you want to inspect the artifacts before publishing; name the unit when the
+repository has several. `rk release --stage` remains a compatibility alias.
 
 ## Install
 
@@ -267,14 +271,15 @@ Release core 0.3.0? [y/N]
 | `rk uninstall [source] [-p project]` | remove a confirmed inactive installation |
 | `rk plan [unit]` | show the configured source-only release graph |
 | `rk status` | inspect this repository |
+| `rk stage [unit]` | prepare and validate artifacts; publish nothing |
 | `rk release` | publish unfinished units |
 | `rk release <unit>` | one unit |
-| `rk release --stage` | private steps only |
 | `rk target list` | what this binary can create or publish |
 | `rk target <name>` | one target: requirements and a minimal example |
 | `rk clean` | remove this repository's private stages |
 
-`rk -h` lists every flag, the output marks, and the exit codes.
+`rk -h` lists the commands, output marks, and exit codes. Use
+`rk <command> -h` for its flags and examples.
 
 ## Agents
 

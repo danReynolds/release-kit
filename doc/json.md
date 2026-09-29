@@ -11,7 +11,7 @@ supports, end to end:
 ```
 rk plan [unit] --json                   configured topology; source-only
 rk status <unit> --json                 where things stand; read-only
-rk release [unit] --stage --json        exact stage; name it with several units
+rk stage [unit] --json                  exact stage; name it with several units
 rk status <unit> --json                 confirm: staged, good to release
 rk release [unit] --yes --json          publish and read back without prompting
 rk release [unit] --yes --json          idempotent: already-published, no second act
@@ -27,6 +27,11 @@ versioned units; name a unit when an automation caller needs the narrowest
 scope. For `clean`, it authorizes only the repository-local stage set shown by
 that run.
 
+`rk stage --json` reports `command: "stage"` and has no `mode` field.
+The compatibility alias `rk release --stage --json` retains
+`command: "release"` and `mode: {"stage": true}`. Both run the same private
+staging pipeline. Ordinary `rk release --json` retains `mode: {"stage": false}`.
+
 ## Top level
 
 | key | meaning |
@@ -37,7 +42,7 @@ that run.
 | `observed_at` | UTC ISO 8601 — when rk read the world |
 | `exit` | mirrors the process exit code |
 | `rerun_helps` | whether re-running would move things forward — false on conflicts, where a human has to decide. Re-running is always *safe*: the same inspection precedes every act |
-| `repository` | `{name, branch?, head?, remote, uncommitted?, source_binding?, source_comparison?}`. `head` is the full 40-char SHA and is absent for unbound source. `remote` is always present and null when no origin exists. Status and release report `source_binding` as `gitCommit` or `unbound`, independently from `source_comparison` (`exact` or `unavailable`) |
+| `repository` | `{name, branch?, head?, remote, uncommitted?, source_binding?, source_comparison?}`. `head` is the full 40-char SHA and is absent for unbound source. `remote` is always present and null when no origin exists. Status, stage, and release report `source_binding` as `gitCommit` or `unbound`, independently from `source_comparison` (`exact` or `unavailable`) |
 | `init` | present on `init`: `{source: {binding, git_remote, github_repository}, notices[], candidates[]}`. `github_repository` is always present and null when unavailable. Each discovered candidate is reported even when the interactive selector hides it by default, with its unit, native project/path/version/executables and every option's `available`, redacted `reason`, `selected`, and deterministic `effects[]`. A candidate is included when at least one release output is selected |
 | `cleanup` | present on `clean`: `{root, path, found, removed}` for the frozen repository-local stage set. `root` is the absolute repository root and `path` is always `.rk/work/stages`; diagnoses are outside it and are never removed |
 | `plan` | present on `plan`: the canonical configured release topology. It is source-only and contains no observation, verdict, action, credential, or stage receipt |
@@ -100,7 +105,7 @@ their spelling. The human tree may fold repeated edges for readability.
 The units are in the same dependency order a bare `rk release` uses. Naming a
 unit narrows the returned unit list without pretending an external sibling
 requirement is satisfied. Plan nodes deliberately have no `verdict` or
-`action`: use `status` to observe state and `release` to record execution.
+`action`: use `status` to observe state and `stage` or `release` to execute it.
 
 ## Cleanup
 
@@ -127,7 +132,7 @@ public target catalog. The reference describes the installed binary only: use
 
 `targets[]` is the canonical record of public-target state on `status`;
 `steps[]` carries the local pipeline, prerequisites, and — during
-`release` — what this invocation did with each step. status no longer
+`stage` or `release` — what this invocation did with each step. status no longer
 repeats the four public targets under `steps[]`: an agent that wants a
 target's verdict reads it where the settled observation lives.
 
@@ -136,7 +141,7 @@ target's verdict reads it where the settled observation lives.
 Keyed by frozen `id` (treat ids as opaque tokens). Fields: `id`, `kind`,
 optional concrete `target`, `summary`, `verdict`,
 `permanent?`, `public?`, `needs[]`, `detail?`, `evidence?`, `took_ms?`, and
-optional `action` during `release`.
+optional `action` during `stage` or `release`.
 
 `kind` describes lifecycle mechanics; `target` is the stable destination id
 for public steps (for example `pubDev` or `githubRelease`). More than one

@@ -267,13 +267,13 @@ network, or credentials: `target list` describes every release choice in the
 installed binary, and `target <name>` explains one choice's requirements,
 native sources, RK settings, and minimal configuration.
 
-`rk init` · `rk plan` · `rk status` · `rk release`. Bare `rk` runs `status`.
+`rk init` · `rk plan` · `rk status` · `rk stage` · `rk release`. Bare `rk` runs `status`.
 `rk clean` is a separate repository-local maintenance command; it neither
 resolves a release plan nor reads a public target.
 
 `status` takes an optional unit. `release` takes an optional unit: naming one
 keeps the operation narrow, while a bare release coordinates all unfinished
-units in native dependency order. `--stage` prepares one unit and therefore
+units in native dependency order. `stage` prepares one unit and therefore
 requires its name when several are configured. `init` takes no positional.
 Bare `rk` remains status across the configured units; naming a release unit
 is the explicit way to narrow scope. Initialization has its own per-candidate
@@ -303,7 +303,7 @@ selector.
   version, the exact artifacts it consumes, concrete issues and fixes, and
   whether there are no known issues or an exact stage is good to release. It
   never builds, signs, notarizes, packages, or writes a stage.
-- **`rk release [unit] --stage`** — perform every local and package preflight
+- **`rk stage [unit]`** — perform every local and package preflight
   for real and write a complete immutable stage, but make no public mutation
   and never run a registry login.
 - **`rk release [unit]`** — revalidate and reuse an exact stage, or create the
@@ -548,7 +548,7 @@ publication therefore share one fixed-height board:
 - **A TTY shows a spinner and elapsed time** for active work. Target modules own
   their concise activity labels; core owns row lifecycle, layout, and final
   success, failure, and not-attempted states.
-- **`rk release --stage` stops at local and package outputs.** A full release
+- **`rk stage` stops at local and package outputs.** A full release
   clears preparation before authorization, then starts a persistent public
   target board only after the operator says yes.
 - **A failed row stays in the transcript**, downstream rows become `not
@@ -791,7 +791,7 @@ validates the complete private stage, refreshes public observations, then
 acquires native sessions before authorization. `dart pub login` remains
 attached only for a human release with both terminal ends visible; JSON and
 redirected releases require an existing token or session. GitHub checks its
-existing `gh` session. `status` and `release --stage` never acquire sessions.
+existing `gh` session. `status` and `stage` never acquire sessions.
 Failure is target-specific and halts before acting. Success proves a usable
 session, not write authority; provider acts are non-interactive and captured,
 and exact read-back remains the final proof.
@@ -1029,7 +1029,7 @@ concrete failure it prevents.
    a tap target.
 2. **Engine + `dart` + `pub-dev`.** As a later compatibility drive, stage and
    release keybay core from the
-   operator's machine: `rk init`, `rk status`, `rk release core --stage`,
+   operator's machine: `rk init`, `rk status`, `rk stage core`,
    `rk release core`, then `rk status core`. First production use of every
    verb in Keybay, with no binaries, signing, draft, or tap.
 3. **Binary chain + `github-release` + `homebrew-tap`.** Release keybay

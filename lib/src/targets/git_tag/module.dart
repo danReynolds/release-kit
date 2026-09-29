@@ -205,7 +205,7 @@ final class GitTagTargetModule extends TargetModule {
         ),
         remedy:
             'To release these changes, bump the version and add its '
-            'changelog entry, then run rk release ${unit.name} --stage.',
+            'changelog entry, then run rk stage ${unit.name}.',
       );
     }
     return Diagnostic(

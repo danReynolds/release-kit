@@ -20,7 +20,7 @@ import '../targets/target_module.dart';
 ///
 /// Status never proves that local work *can* be performed by performing it.
 /// It reads public destinations and the exact stage receipt, then reports the
-/// facts it has. `rk release --stage` is the command that does producer work.
+/// facts it has. `rk stage` is the command that does producer work.
 class StatusCommand {
   StatusCommand({
     required this.resolution,
@@ -115,7 +115,7 @@ class StatusCommand {
           ? 'rk release ${snapshot.unit.name}'
           : snapshot.stage?.reusable == true
           ? 'rk release ${snapshot.unit.name}'
-          : 'rk release ${snapshot.unit.name} --stage');
+          : 'rk stage ${snapshot.unit.name}');
     }
     return StatusSnapshot(
       units: snapshots,
@@ -483,11 +483,11 @@ class StatusCommand {
                       ? 'the reviewed release stage no longer validates'
                       : 'the release stage receipt is invalid',
                   remedy: inspected.incomplete
-                      ? 're-run rk release ${unit.name} --stage. rk keeps '
+                      ? 're-run rk stage ${unit.name}. rk keeps '
                             'validated completed lanes when it can and replaces '
                             'only incomplete work'
                       : 'rebuild it explicitly: '
-                            'rk release ${unit.name} --stage',
+                            'rk stage ${unit.name}',
                 ),
                 evidence: {
                   for (final issue in inspected.issues)
@@ -507,7 +507,7 @@ class StatusCommand {
             message: 'the release stage could not be inspected',
             remedy:
                 'fix the recorded stage read error, then rebuild it with '
-                'rk release ${unit.name} --stage',
+                'rk stage ${unit.name}',
             evidence: '$error',
           ),
           evidence: {'Cause': '$error'},

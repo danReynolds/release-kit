@@ -151,7 +151,7 @@ Future<void> main(List<String> args) async {
             .toList()
       : <Directory>[];
   if (built.isEmpty) {
-    report.note('verify a built stage', 'none on disk — rk release --stage');
+    report.note('verify a built stage', 'none on disk — rk stage');
   } else {
     final newest = built.reduce(
       (left, right) =>

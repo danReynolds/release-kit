@@ -32,7 +32,7 @@ Issue
   Fix: refresh GitHub access, then run rk release again
 ```
 
-`rk release --stage` uses the same progress renderer for local outputs and
+`rk stage` uses the same progress renderer for local outputs and
 stops at a completed stage. It never says `releasing`, acquires a publication
 session, asks for authorization, or shows a public mutation.
 
@@ -381,7 +381,7 @@ as complete and does not replay producer activities.
 A one-shot full release has three visible surfaces, all delayed so fast work
 does not flicker:
 
-1. initial preparation plus the same live stage board as `--stage`;
+1. initial preparation plus the same live stage board as `rk stage`;
 2. a transient `preparing release` target board for public reads, signing
    baseline continuity, endpoint checks, and session acquisition;
 3. after the release plan and yes/no authorization, a persistent `releasing`
@@ -503,7 +503,7 @@ interactive suspension, and non-TTY behavior are covered without target logic.
   extensions, or receipt-name conditionals.
 - Wire Binary, pub.dev validation, GitHub release-note/manifest work, and the
   Homebrew formula.
-- Make `--stage` stop with the settled board, a success summary and the publish
+- Make `rk stage` stop with the settled board, a success summary and the publish
   command. Keep the stage path in JSON evidence.
 - Replace direct terminal-outcome writes from active stage/producer hooks with
   typed outcomes so the coordinator settles the board before printing issues.
@@ -543,7 +543,7 @@ coordinates sharing a session acquire once, while different endpoints do not.
 - Snapshot TTY, narrow-TTY, non-TTY, failure, resume, already-published, reusable
   and partial stage, interactive interruption, and multi-unit output.
 - Update CLI/RFC documentation with the final stage and release examples.
-- Dogfood a declined release, `--stage`, a resumed partial release, and RK's
+- Dogfood a declined release, `rk stage`, a resumed partial release, and RK's
   own full target set without weakening the existing release safety suite.
 
 Review gate: a synthetic registry module exercises two coordinates, shared and
@@ -557,7 +557,7 @@ architectural proof only; production npm publishing remains its own change.
 
 - Every wait longer than the renderer delay identifies a subject, operation,
   and elapsed time on a TTY.
-- `--stage` reuses the live stage surface and stops before all public work.
+- `rk stage` reuses the live stage surface and stops before all public work.
 - Full release clears preparation before the exact plan and begins public
   progress only after authorization.
 - Targets define bespoke activities without changing a core activity enum.
