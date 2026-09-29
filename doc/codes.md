@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-163 codes across 30 families.
+162 codes across 29 families.
 
 
 ## RK-AUTH — Authorization
@@ -291,12 +291,6 @@ meanings and are not reused.
 | `RK-STAGE-004` | the repository or canonical release plan changed after staging | `lib/src/commands/release.dart` |
 | `RK-STAGE-005` | a partial binary release lost the exact stage it still needs | `lib/src/commands/release.dart`, `lib/src/commands/status.dart` |
 | `RK-STAGE-006` | staged work is locked or its fixed path is unsafe | `bin/rk.dart` |
-
-## RK-STATUS — The status report
-
-| code | says | declared in |
-|---|---|---|
-| `RK-STATUS-001` | — | `bin/rk.dart` |
 
 ## RK-TAG — The tag
 
