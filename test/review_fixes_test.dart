@@ -488,33 +488,42 @@ Resolution _resolve(String config, MemorySourceTree tree) {
 
 /// Round two of the phase 1 review: the YAML holes and the ordering rules.
 void yamlAndOrdering() {
-  group('a flow collection is refused, never read as an empty map', () {
+  group('a flow collection is read as the map or list it is', () {
     test('a path dependency written inline still refuses the repository', () {
+      // Kept as an opaque scalar, a flow map would make the path dependency
+      // invisible. Read, it reaches the same refusal as the block form.
       final diagnostics = Diagnostics();
-      final doc = parseYaml(
-        'name: dune_cli\ndependencies: {dune_core: {path: ../dune_core}}\n',
+      final spec = Pubspec.parse(
+        'name: dune_cli\nversion: 0.1.0\n'
+            'dependencies: {dune_core: {path: ../dune_core}}\n',
         'pubspec.yaml',
         diagnostics,
       );
-      expect(
-        doc,
-        isNull,
-        reason: 'read as a scalar, the path dependency becomes invisible',
-      );
-      expect(diagnostics.found.single.message, contains('flow collections'));
+      expect(spec, isNotNull, reason: diagnostics.found.join('\n'));
+      final core = spec!.dependencies['dune_core']!;
+      expect(core.escapesRepository, isTrue);
+      expect(core.describeRequirement(), contains('../dune_core'));
     });
 
-    test('a flow sequence is refused too', () {
-      final diagnostics = Diagnostics();
-      expect(parseYaml('topics: [a, b]\n', 'p.yaml', diagnostics), isNull);
+    test('a flow sequence is read', () {
+      final doc = parseYaml('topics: [a, b]\n', 'p.yaml', Diagnostics())!;
+      expect(doc.list('topics')!.strings, ['a', 'b']);
     });
 
-    test('a flow collection as a list item is refused', () {
+    test('a flow collection as a list item is read', () {
+      final doc = parseYaml(
+        'screenshots:\n  - {path: a}\n',
+        'p.yaml',
+        Diagnostics(),
+      )!;
+      final item = doc.list('screenshots')!.items.single as YamlMap;
+      expect(item.string('path'), 'a');
+    });
+
+    test('an unclosed flow collection is refused', () {
       final diagnostics = Diagnostics();
-      expect(
-        parseYaml('screenshots:\n  - {path: a}\n', 'p.yaml', diagnostics),
-        isNull,
-      );
+      expect(parseYaml('topics: [a, b\n', 'p.yaml', diagnostics), isNull);
+      expect(diagnostics.found.single.message, contains('not closed'));
     });
 
     test('a value that merely contains a brace is fine', () {

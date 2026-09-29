@@ -160,4 +160,81 @@ version: 0.1.0
     expect(doc, isNull);
     expect(diagnostics.found.single.message, contains('tabs'));
   });
+
+  group('flow collections', () {
+    test('topics and asset platforms, as pubspecs write them', () {
+      final doc = parse('''
+name: flark
+topics: [markdown, editor, parser]
+flutter:
+  assets:
+    - path: lib/assets/wasm/flark_parse.wasm
+      platforms: [web]
+version: 0.5.0
+''');
+      expect(doc.list('topics')!.strings, ['markdown', 'editor', 'parser']);
+      final asset = doc.map('flutter')!.list('assets')!.items.single as YamlMap;
+      expect(asset.list('platforms')!.strings, ['web']);
+      expect(doc.string('version'), '0.5.0');
+    });
+
+    test('nested maps and lists, quoted scalars and a trailing comma', () {
+      final doc = parse('''
+dependencies: {core: {path: ../core}, http: "^1.0.0", url: {hosted: https://x.dev/pub}}
+list: ['a, b', "c]d", [e, f], {g: h},]
+''');
+      final dependencies = doc.map('dependencies')!;
+      expect(dependencies.map('core')!.string('path'), '../core');
+      expect(dependencies.string('http'), '^1.0.0');
+      expect(dependencies.map('url')!.string('hosted'), 'https://x.dev/pub');
+      final items = doc.list('list')!.items;
+      expect(items.length, 4);
+      expect(doc.list('list')!.strings, ['a, b', 'c]d']);
+      expect((items[2] as YamlList).strings, ['e', 'f']);
+      expect((items[3] as YamlMap).string('g'), 'h');
+    });
+
+    test('continued over several lines', () {
+      final doc = parse('''
+topics: [
+  markdown,   # the format
+  editor,
+]
+version: 1.0.0
+''');
+      expect(doc.list('topics')!.strings, ['markdown', 'editor']);
+      expect(doc.string('version'), '1.0.0');
+    });
+
+    test('escapes inside quoted flow scalars', () {
+      final doc = parse('''
+list: ['it''s', "a \\"b\\""]
+''');
+      expect(doc.list('list')!.strings, ["it's", 'a "b"']);
+    });
+
+    test('a quote inside a plain scalar does not hold a collection open', () {
+      final doc = parse('''
+list: [it's,
+  fine]
+version: 1.0.0
+''');
+      expect(doc.list('list')!.strings, ["it's", 'fine']);
+      expect(doc.string('version'), '1.0.0');
+    });
+
+    for (final (label, source, reason) in [
+      ('an anchor', 'list: [&a x]\n', 'anchors'),
+      ('an alias', 'list: [*a]\n', 'anchors'),
+      ('a duplicate key', 'map: {a: 1, a: 2}\n', 'more than once'),
+      ('text after the collection', 'list: [a] b\n', 'unexpected'),
+      ('mismatched brackets', 'list: [a, b}\n', 'expected "," or "]"'),
+    ]) {
+      test('$label is refused', () {
+        final diagnostics = Diagnostics();
+        expect(parseYaml(source, 'p.yaml', diagnostics), isNull);
+        expect(diagnostics.found.single.message, contains(reason));
+      });
+    }
+  });
 }

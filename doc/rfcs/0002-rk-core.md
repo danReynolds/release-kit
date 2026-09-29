@@ -818,6 +818,19 @@ act(expected, stage)
   `pubspec_overrides.yaml` from the archive but honours it locally, so a
   validation can pass while the published package is unresolvable for everyone
   else.
+
+  *Amended (as built):* tracked overrides are checked against the graph they
+  change (RK-PUB-008). rk resolves the staged snapshot with `dart pub deps
+  --json` and refuses an override of the package itself or of anything its
+  dependencies reach — dev dependencies excluded, since consumers never
+  resolve them — and every override when the graph cannot be read. An
+  override that serves only another workspace member, such as a Git pin one
+  Flutter host needs, changes nothing this package's consumers resolve; it is
+  listed in the run's report rather than refused. A workspace containing Flutter
+  packages resolves only with a Flutter SDK's pub, so it is refused before
+  Pub runs when the Dart rk identified is standalone (RK-PUB-014). Pubspecs
+  may use YAML flow collections; they are read as the lists and maps they
+  are.
 - **`dart-cli`** (build): `dart compile exe` per platform, then smoke-runs
   what it produced. Capability is resolved per platform and reported:
   **native** for the host; **cross-compiled** for Linux targets, which

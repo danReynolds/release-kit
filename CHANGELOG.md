@@ -6,6 +6,17 @@
   artifacts without publishing. `rk release` still prepares as needed and
   publishes. JSON schema 12 identifies the operation through `command` and
   removes the obsolete `mode.stage` field.
+- Read YAML flow collections (`[a, b]`, `{name: value}`) in pubspecs and
+  overrides files as the lists and maps they are, instead of refusing the file.
+  Anchors, aliases, tags, duplicate keys and unclosed collections are still
+  refused.
+- Refuse a tracked dependency override (`RK-PUB-008`) only when it reaches the
+  staged package: rk resolves the staged snapshot with `dart pub deps --json`
+  and refuses when an override replaces the package or anything it depends on,
+  or when the graph cannot be read. Overrides that reach only other workspace
+  members are listed in the run's report as `pub-overrides-<package>.txt`.
+- Refuse to stage a package that resolves with Flutter packages when rk's Dart
+  is not a Flutter SDK's (`RK-PUB-014`), before Pub runs.
 - Add an inline version table to `rk use`. Installed versions remain visible
   while remote checks run independently. Install and Update are separate from
   Use; Update appears only for a confirmed newer version. Navigation and checks

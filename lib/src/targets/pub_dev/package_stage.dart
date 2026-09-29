@@ -10,9 +10,9 @@ import '../../engine/stage_contract.dart';
 import '../../engine/stage_receipt.dart';
 import '../../engine/targets.dart';
 import '../../engine/tools.dart';
-import '../../engine/yaml.dart';
 import '../../output/progress.dart';
 import '../target_module.dart';
+import 'resolution.dart';
 
 /// Pub's native package archive contribution to the reusable release stage.
 ///
@@ -86,25 +86,33 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
       ? sourceRoot
       : '$sourceRoot/${project.pubspec.directory}';
 
-  // Pub honours dependency overrides at the resolution root and strips them
-  // from the published archive. Refusing is the honest consumer check: native
-  // validation otherwise succeeds against a graph consumers never receive.
-  final masking = _maskedResolution(sourceRoot, sourceDirectory);
-  if (masking != null) {
-    return (
-      diagnostic: Diagnostic(
-        code: 'RK-PUB-008',
-        message:
-            '${project.name}: tracked dependency overrides '
-            'mask consumer resolution',
-        remedy:
-            '$masking is honoured locally and stripped from the '
-            'published archive, so validation here would not see what '
-            'consumers see. Remove it and re-stage.',
-      ),
-      warnings: const <Diagnostic>[],
-    );
+  // A Flutter package, or any package resolved with one in its workspace,
+  // needs a Flutter SDK's pub. The Dart rk identified for this stage is the
+  // one that packages and publishes, so it must be that SDK's.
+  if (needsFlutter(sourceRoot, sourceDirectory)) {
+    final dart = context.stage.compiler?.executable;
+    if (dart != null && !dartInFlutterSdk(dart)) {
+      return (
+        diagnostic: Diagnostic(
+          code: 'RK-PUB-014',
+          message:
+              '${project.name} resolves with Flutter packages, and the '
+              'Dart rk uses is not part of a Flutter SDK',
+          remedy:
+              '$dart is a standalone Dart SDK, whose pub cannot resolve '
+              'Flutter packages. Put your Flutter SDK\'s bin directory '
+              'first on PATH so rk uses its dart, then re-stage.',
+        ),
+        warnings: const <Diagnostic>[],
+      );
+    }
   }
+
+  // Pub honours dependency overrides at the resolution root and strips them
+  // from the published archive. An override that reaches this package's
+  // dependencies masks what its consumers resolve, so it refuses; one that
+  // reaches only other packages in the workspace does not.
+  final overrides = dependencyOverrides(sourceRoot, sourceDirectory);
 
   final archivePath = ReleaseAssets.pubArchivePath(project);
   final archive = File(context.workspace.pathOf(archivePath));
@@ -116,6 +124,34 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
     final directory = project.pubspec.directory == '.'
         ? mirroredSource
         : _join(mirroredSource, StagePath.segments(project.pubspec.directory));
+    if (overrides.isNotEmpty) {
+      // Resolved where Pub will validate the archive, from the same snapshot.
+      final deps = await context.tools.run('dart', const [
+        'pub',
+        'deps',
+        '--json',
+      ], workingDirectory: directory);
+      final reached = deps.ok
+          ? runtimeDependencies(deps.stdout, project.name)
+          : null;
+      final masking = maskingOverrides(overrides, project.name, reached);
+      if (masking.isNotEmpty) {
+        return (
+          diagnostic: _maskingDiagnostic(
+            project.name,
+            masking,
+            resolved: reached != null,
+          ),
+          warnings: const <Diagnostic>[],
+        );
+      }
+      context.attach(
+        'pub-overrides-${project.name}.txt',
+        'Dependency overrides that do not reach ${project.name}\'s '
+            'dependencies, so its consumers resolve what Pub validated:\n'
+            '${[for (final o in overrides) '  ${o.package} (${o.declaredIn})'].join('\n')}\n',
+      );
+    }
     packaged = await context.tools.run('dart', [
       'pub',
       'publish',
@@ -266,42 +302,38 @@ String? _gitControlAncestor(String path) {
 String _join(String root, Iterable<String> parts) =>
     [root, ...parts].join(Platform.pathSeparator);
 
-/// What masks resolution for the staged package, or null when nothing does.
-String? _maskedResolution(String sourceRoot, String directory) {
-  String describe(String path) {
-    final prefix = '$sourceRoot/';
-    return path.startsWith(prefix) ? path.substring(prefix.length) : path;
+Diagnostic _maskingDiagnostic(
+  String package,
+  List<DependencyOverride> masking, {
+  required bool resolved,
+}) {
+  final where = {for (final o in masking) o.declaredIn}.join(' and ');
+  final named = {
+    for (final o in masking)
+      if (o.package != everyPackage) o.package,
+  };
+  final String remedy;
+  if (!resolved) {
+    remedy =
+        '$where is honoured locally and stripped from the published '
+        'archive, and rk could not resolve $package\'s dependencies to see '
+        'which packages it reaches, so validation here might not see what '
+        'consumers see. Remove it and re-stage.';
+  } else if (named.isEmpty) {
+    remedy =
+        '$where is honoured locally, stripped from the published archive, '
+        'and overrides packages rk cannot name. Remove it and re-stage.';
+  } else {
+    final them = named.length == 1 ? 'it' : 'them';
+    remedy =
+        '$package depends on ${named.join(', ')}, overridden by $where. '
+        'Pub honours that locally and strips it from the published archive, '
+        'so validation here would not see what consumers see. Publish or '
+        'pin $them, remove the override, and re-stage.';
   }
-
-  for (final root in {directory, _resolutionRoot(sourceRoot, directory)}) {
-    final overrides = '$root/pubspec_overrides.yaml';
-    if (File(overrides).existsSync()) return describe(overrides);
-    final section = _pubspecMap(
-      '$root/pubspec.yaml',
-    )?.map('dependency_overrides');
-    if (section != null && section.entries.isNotEmpty) {
-      return 'the dependency_overrides section in '
-          '${describe('$root/pubspec.yaml')}';
-    }
-  }
-  return null;
-}
-
-String _resolutionRoot(String sourceRoot, String directory) {
-  final member = _pubspecMap('$directory/pubspec.yaml');
-  if (member?.string('resolution') != 'workspace') return directory;
-  var dir = directory;
-  while (dir != sourceRoot && dir.length > sourceRoot.length) {
-    final cut = dir.lastIndexOf('/');
-    if (cut < 0) break;
-    dir = dir.substring(0, cut);
-    if (_pubspecMap('$dir/pubspec.yaml')?.has('workspace') == true) return dir;
-  }
-  return directory;
-}
-
-YamlMap? _pubspecMap(String path) {
-  final file = File(path);
-  if (!file.existsSync()) return null;
-  return parseYaml(file.readAsStringSync(), path, Diagnostics());
+  return Diagnostic(
+    code: 'RK-PUB-008',
+    message: '$package: tracked dependency overrides mask consumer resolution',
+    remedy: remedy,
+  );
 }

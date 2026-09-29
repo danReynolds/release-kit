@@ -16,6 +16,7 @@ import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/release_stage.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage.dart';
+import 'package:rk/src/engine/stage_plan.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/transforms/archive.dart';
 import 'package:rk/src/transforms/digest.dart';
@@ -24,6 +25,31 @@ import 'package:test/test.dart';
 
 import 'rk_process.dart';
 import 'status_test.dart' show FakeRegistry;
+
+/// `pub deps --json` for keybay alone, depending on [dependencies].
+ToolResult keybayDeps(List<String> dependencies) => ToolResult(
+  exitCode: 0,
+  stdout: jsonEncode({
+    'root': 'keybay',
+    'packages': [
+      {
+        'name': 'keybay',
+        'kind': 'root',
+        'dependencies': dependencies,
+        'directDependencies': dependencies,
+        'devDependencies': <String>[],
+      },
+      for (final name in dependencies)
+        {
+          'name': name,
+          'kind': 'direct',
+          'dependencies': <String>[],
+          'directDependencies': <String>[],
+        },
+    ],
+  }),
+  stderr: '',
+);
 
 /// Checks each phase against the deliverables its plan lists, so "done" is
 /// something this file decides rather than something a judgement call does.
@@ -575,6 +601,7 @@ void main() {
       Map<String, String> sourceFiles = const {},
       String? config,
       void Function(String key)? onRun,
+      DartCompilerIdentity Function()? compiler,
     }) async {
       // A fresh registry per drive is a fresh process: the world — what is
       // published, what archives exist, what tags exist — persists between
@@ -723,6 +750,7 @@ publish = ["git-tag", "pub.dev"]
             resolution,
           ),
           repositoryRoot: stageRoot.path,
+          compilerIdentity: compiler,
         );
         code = await ReleaseCommand(
           allowInteractiveTools: true,
@@ -793,10 +821,14 @@ publish = ["git-tag", "pub.dev"]
             'packages/keybay/pubspec_overrides.yaml':
                 'dependency_overrides:\n  transitive:\n    path: ../other\n',
           },
+          results: {
+            'dart pub deps --json': keybayDeps(['transitive']),
+          },
         );
 
         expect(run.code, ExitCodes.refused);
         expect(run.text, contains('mask consumer resolution'));
+        expect(run.text, contains('keybay depends on transitive'));
         expect(
           run.calls,
           isNot(contains('dart pub publish --to-archive <archive>')),
@@ -831,6 +863,9 @@ publish = ["git-tag", "pub.dev"]
                 '  transitive:\n'
                 '    path: ../other\n',
           },
+          results: {
+            'dart pub deps --json': keybayDeps(['transitive']),
+          },
         );
 
         expect(run.code, ExitCodes.refused);
@@ -848,7 +883,8 @@ publish = ["git-tag", "pub.dev"]
       () async {
         // Pub resolves a `resolution: workspace` member at the nearest
         // ancestor declaring `workspace:` — which need not be the repository
-        // root. Overrides tracked there mask every member.
+        // root. Overrides tracked there mask every member whose dependencies
+        // reach them; here the graph cannot be read, so they are assumed to.
         final run = await drive(
           published: {
             'keybay': ['0.1.0'],
@@ -889,6 +925,177 @@ publish = ["git-tag", "pub.dev"]
         );
       },
     );
+
+    /// Drives to a completed release: pub.dev lists what was published.
+    Future<
+      ({
+        int code,
+        String text,
+        List<String> calls,
+        Map<String, Object?> report,
+        Object? died,
+      })
+    >
+    release({
+      Map<String, ToolResult> results = const {},
+      Map<String, String> sourceFiles = const {},
+      String? config,
+      DartCompilerIdentity Function()? compiler,
+    }) {
+      final published = {
+        'keybay': ['0.1.0'],
+      };
+      final archives = <String, List<int>>{};
+      return drive(
+        published: published,
+        archives: archives,
+        tags: {},
+        results: results,
+        sourceFiles: sourceFiles,
+        config: config,
+        compiler: compiler,
+        onRun: (key) {
+          if (key == 'dart pub publish --from-archive <archive> --force') {
+            published['keybay']!.add('0.2.0');
+            archives['keybay@0.2.0'] = archiveOfTree();
+          }
+        },
+      );
+    }
+
+    const unrelatedOverride = {
+      'packages/keybay/pubspec.yaml':
+          'name: keybay\n'
+          'version: 0.2.0\n'
+          'dependency_overrides:\n'
+          '  unrelated:\n'
+          '    git: https://example.com/unrelated.git\n',
+    };
+
+    test(
+      'an override that reaches only other packages does not refuse this one',
+      () async {
+        // A workspace overrides a package for one member; another member
+        // that never depends on it resolves exactly what its consumers will.
+        final run = await release(
+          sourceFiles: unrelatedOverride,
+          results: {
+            'dart pub deps --json': keybayDeps(['collection']),
+          },
+        );
+
+        expect(run.code, ExitCodes.ok, reason: run.text);
+        expect(run.text, isNot(contains('mask consumer resolution')));
+        expect(
+          run.calls,
+          containsAllInOrder([
+            'dart pub deps --json',
+            startsWith('dart pub publish --to-archive '),
+            startsWith('dart pub publish --from-archive '),
+          ]),
+        );
+      },
+    );
+
+    test('an override whose reach cannot be resolved still refuses', () async {
+      final run = await release(
+        sourceFiles: unrelatedOverride,
+        results: {
+          'dart pub deps --json': ToolResult(
+            exitCode: 69,
+            stdout: '',
+            stderr: 'Git error: could not fetch unrelated',
+          ),
+        },
+      );
+
+      expect(run.code, ExitCodes.refused);
+      expect(run.text, contains('mask consumer resolution'));
+      expect(run.text, contains('could not resolve'));
+      expect(run.calls.where((c) => c.startsWith('dart pub publish')), isEmpty);
+    });
+
+    group('a workspace with Flutter packages', () {
+      late Directory sdks;
+      setUp(() => sdks = Directory.systemTemp.createTempSync('rk-sdks-'));
+      tearDown(() => sdks.deleteSync(recursive: true));
+
+      String file(String path) {
+        File('${sdks.path}/$path')
+          ..parent.createSync(recursive: true)
+          ..writeAsStringSync('');
+        return '${sdks.path}/$path';
+      }
+
+      DartCompilerIdentity Function() dart(String executable) =>
+          () => DartCompilerIdentity.recorded(
+            executable: executable,
+            version: 'Dart SDK version: 3.12.2',
+            sha256: 'a' * 64,
+          );
+
+      const workspace = {
+        'dart/pubspec.yaml':
+            'name: dart_workspace\n'
+            'publish_to: none\n'
+            'environment:\n'
+            '  sdk: ^3.6.0\n'
+            'workspace:\n'
+            '  - packages/keybay\n'
+            '  - packages/app\n',
+        'dart/packages/keybay/pubspec.yaml':
+            'name: keybay\n'
+            'version: 0.2.0\n'
+            'resolution: workspace\n',
+        'dart/packages/keybay/CHANGELOG.md': '## 0.2.0\n',
+        'dart/packages/app/pubspec.yaml':
+            'name: app\n'
+            'publish_to: none\n'
+            'resolution: workspace\n'
+            'dependencies:\n'
+            '  flutter:\n'
+            '    sdk: flutter\n',
+      };
+      const config = '''
+schema = 2
+
+[release.core]
+path = "dart/packages/keybay"
+publish = ["git-tag", "pub.dev"]
+''';
+
+      test('are refused by a standalone Dart before Pub runs', () async {
+        final run = await release(
+          config: config,
+          sourceFiles: workspace,
+          compiler: dart(file('dart-sdk/bin/dart')),
+        );
+
+        expect(run.code, ExitCodes.refused);
+        expect(
+          (run.report['problems'] as List).map((p) => (p as Map)['code']),
+          contains('RK-PUB-014'),
+        );
+        expect(run.text, contains('not part of a Flutter SDK'));
+        expect(run.calls.where((c) => c.startsWith('dart pub')), isEmpty);
+      });
+
+      test("are staged and published with a Flutter SDK's Dart", () async {
+        file('flutter/bin/flutter');
+        file('flutter/bin/cache/dart-sdk/bin/dart');
+        final run = await release(
+          config: config,
+          sourceFiles: workspace,
+          compiler: dart(file('flutter/bin/dart')),
+        );
+
+        expect(run.code, ExitCodes.ok, reason: run.text);
+        expect(
+          run.calls,
+          contains(startsWith('dart pub publish --from-archive ')),
+        );
+      });
+    });
 
     test(
       'post-publish native digest comparison makes a mismatch terminal',
