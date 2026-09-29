@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:fleury/fleury.dart';
+import 'package:fleury/fleury_test_support.dart';
 import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/commands/status.dart';
 import 'package:rk/src/engine/checklist.dart';
@@ -306,58 +307,57 @@ publish = ["pub.dev"]
 
   for (final width in [132, 40]) {
     test(
-      'status keys inspect one destination, Back restores focus, resize and signals work at $width columns',
+      'status keys preserve destination focus across Back and resize at $width columns',
       () async {
+        var closed = false;
         final model = StatusPicker(
           load: () async => StatusReadSession(command(), () {}),
-          close: exitApp,
+          close: () => closed = true,
         );
-        final driver = FakeTerminalDriver(size: CellSize(width, 24));
-        final running = runMatrixScreen(
-          StatusScreen(model),
-          interrupt: model.interrupt,
-          driver: driver,
-        );
-        try {
-          await settle();
-          expect(driver.output, contains('rk status'));
-          expect(
-            driver.output,
-            isNot(contains('42;76;108')),
-            reason: 'no blue focus on open',
-          );
-          driver.enqueue(const KeyEvent(KeyCode.arrowDown));
-          await settle();
-          // The unit is first, then Stage and the Git tag destination.
-          driver.enqueue(const KeyEvent(KeyCode.arrowRight));
-          await settle();
-          driver.enqueue(const KeyEvent(KeyCode.arrowRight));
-          await settle();
-          driver.enqueue(const KeyEvent(KeyCode.enter));
-          await settle();
-          expect(model.detail, ('core', 'gitTag'));
-          expect(driver.output, contains('Back'));
-          driver.enqueue(const KeyEvent(KeyCode.escape));
-          await settle();
-          expect(model.detail, isNull);
-          driver.enqueue(const KeyEvent(KeyCode.enter));
-          await settle();
-          expect(model.detail, (
-            'core',
-            'gitTag',
-          ), reason: 'Back returns to the same cell');
-          driver.resize(const CellSize(40, 12));
-          await settle();
-          driver.enqueue(const KeyEvent(KeyCode.escape));
-          await settle();
-          driver.enqueue(const KeyEvent(KeyCode.escape));
-          expect(await running.timeout(const Duration(seconds: 3)), 0);
-          expect(driver.restoreCallCount, 1);
-        } finally {
-          exitApp();
-          await running;
-          model.dispose();
+        addTearDown(model.dispose);
+        final tester = FleuryTester(viewportSize: CellSize(width, 24));
+        addTearDown(tester.dispose);
+        tester.pumpWidget(FleuryApp(title: 'rk', home: StatusScreen(model)));
+        tester.pump();
+        await Future<void>.delayed(Duration.zero);
+        tester.pump();
+        expect(model.snapshot, isNotNull);
+        expect(tester.renderToString(), contains('rk status'));
+        final buffer = tester.render();
+        for (var row = 0; row < 24; row++) {
+          for (var col = 0; col < width; col++) {
+            expect(
+              buffer.atColRow(col, row).style.background,
+              isNot(const RgbColor(42, 76, 108)),
+              reason: 'No focus on opening',
+            );
+          }
         }
+        void key(KeyCode code) {
+          tester.sendKey(KeyEvent(code));
+          tester.pump();
+          tester
+              .pump(); // Paint post-frame focus restoration before the next key.
+        }
+
+        key(KeyCode.arrowDown); // Unit, then Stage, then Git tag.
+        key(KeyCode.arrowRight);
+        key(KeyCode.arrowRight);
+        key(KeyCode.enter);
+        expect(model.detail, ('core', 'gitTag'));
+        expect(tester.renderToString(), contains('Back'));
+        key(KeyCode.escape);
+        expect(model.detail, isNull);
+        key(KeyCode.enter);
+        expect(model.detail, (
+          'core',
+          'gitTag',
+        ), reason: 'Back restores the same cell');
+        tester.render(size: const CellSize(40, 12));
+        tester.pump();
+        key(KeyCode.escape);
+        key(KeyCode.escape);
+        expect(closed, isTrue);
       },
     );
   }

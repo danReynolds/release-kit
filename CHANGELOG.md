@@ -2,8 +2,13 @@
 
 ## Unreleased
 
-- Replace the `rk use` source matrix with an inline version table. Installed sources stay usable while Homebrew, Pub and GitHub check available releases independently; Download updates a source separately from Use.
-
+- Add an inline version table to `rk use`. Installed versions remain visible
+  while remote checks run independently. Install and Update are separate from
+  Use; Update appears only for a confirmed newer version. Navigation and checks
+  remain responsive during installation, with additional operations queued.
+- Open the release status matrix by default for `rk status` and bare `rk` in a
+  terminal. Explore stage and destination evidence with the same inspection
+  results used by the finite text and JSON reports.
 - Add project-scoped `use`, `install`, and `uninstall` commands for executable
   packages, with Local, Homebrew, Pub, and public GitHub release sources.
   Bare commands open inline Fleury pickers; explicit sources and JSON support scripts.
@@ -12,8 +17,8 @@
 - Replace init's terminal selector with the Fleury output matrix and a validated
   configuration review. Selected outputs read “Added”. Require Dart 3.10.4 or newer.
 - Inline matrices keep the terminal background, use distinct active and focus
-  colors, fit their content, and omit duplicate command labels. Hover and keyboard
-  navigation share one highlight. Single-project actions close on success;
+  colors, fit their content, and omit duplicate command labels. Keyboard
+  navigation highlights one action; mouse capture stays disabled. Single-project actions close on success;
   multi-project matrices keep focus and stay open until Done. Init retains its
   configuration review, and unavailable choices explain why they cannot be used.
 - Inline commands leave shell history intact and restore the prompt before
@@ -22,6 +27,7 @@
 - Preserve the originating choice when returning from confirmation or details.
   Long reviews and errors support paging from their actions; init exposes
   discovery notes. Inspecting an unavailable source does not fail the command.
+- Show archive locations after local-only builds.
 - Add focused command help and one actionable next command for an unblocked
   unfinished release. Cancelling a release describes the current unit accurately,
   and cleanup lists recorded stage identities before confirmation.
@@ -48,8 +54,7 @@
 - Release conflicts explain how to recover, with source and artifact evidence
   retained in JSON. Released-version conflicts point to the version and changelog.
 - Staging ends with a success summary and the publish command. Verified reruns
-  say the release is already staged; receipt paths remain in JSON evidence.
-  Local-only builds show where their archives can be found.
+  say the release is already staged; storage paths remain in JSON evidence.
 
 ## 0.1.12
 
