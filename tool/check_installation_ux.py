@@ -123,9 +123,16 @@ def main():
             refresh_row, refresh_col = locate(terminal, 'r Refresh')
             assert terminal.screen.buffer[refresh_row][refresh_col].bg == '2a4c6c'
             shot(terminal, 'use-unavailable')
-            terminal.send(b'\x1b')
+            # Pointer motion must not redirect Enter away from Refresh.
+            terminal.send(f'\x1b[<35;{col + 1};{row + 1}M'.encode())
+            settle(terminal)
+            assert terminal.screen.buffer[refresh_row][refresh_col].bg == '2a4c6c'
+            assert terminal.screen.buffer[row][col].bg == 'default'
+            assert not terminal.screen.buffer[row][col].underscore
+            # A click still activates Use at terminal (not widget-local) coordinates.
+            terminal.send(f'\x1b[<0;{col + 1};{row + 1}M\x1b[<0;{col + 1};{row + 1}m'.encode())
             terminal.finish()
-        print('PASS keyboard focus, no initial focus, width bound, inline unavailable reason', flush=True)
+        print('PASS keyboard focus, inert hover, mouse activation, width bound, inline unavailable reason', flush=True)
 
         with Terminal(executable, 'use', project, home, environment={'NO_COLOR': '1'}) as terminal:
             terminal.wait('Esc Done')

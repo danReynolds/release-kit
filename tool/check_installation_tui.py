@@ -28,6 +28,7 @@ import pyte
 
 class Terminal:
     def __init__(self, executable, command, project, home, *, cols=132, rows=32, arguments=(), environment=None):
+        self.mouse = command == 'use'
         self.master, self.slave = pty.openpty()
         self.set_size(cols, rows)
         self.before = termios.tcgetattr(self.slave)
@@ -179,7 +180,15 @@ class Terminal:
                       'Install a source', 'Remove a source']:
             assert title not in self.text(), f'Inline frame survived exit: {self.text()}'
         assert b'\x1b[?25h' in self.raw, 'cursor hidden after exit'
-        assert not re.search(rb'\x1b\[\?(?:1000|1002|1003|1006)h', self.raw), 'enabled mouse capture'
+        assert b'\x1b[?1003h' not in self.raw, 'enabled mouse hover tracking'
+        if self.mouse:
+            for mode in (1000, 1002, 1006):
+                enabled = f'\x1b[?{mode}h'.encode()
+                disabled = f'\x1b[?{mode}l'.encode()
+                assert enabled in self.raw, f'missing mouse mode {mode}'
+                assert self.raw.rfind(disabled) > self.raw.rfind(enabled), f'mouse mode {mode} not restored'
+        else:
+            assert not re.search(rb'\x1b\[\?(?:1000|1002|1006)h', self.raw), 'enabled mouse capture'
 
 
 def fixture(home, configured):

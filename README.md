@@ -95,11 +95,10 @@ terminals receive the tree; narrow terminals and pipes receive an outline, and
 destinations themselves, not a log; "Not staged" is the private work
 that must finish before anything goes public.
 
-Run `rk status` to explore those checks in an inline release
-matrix. Choose a unit for its overview or a destination for its evidence;
-`r` refreshes and Escape returns to the report. The matrix shares its controls
-and visual language with `rk use`, which manages local executables.
-See [release status](doc/status.md) for both views and their meaning.
+`rk status` shows progress while checking, prints its report, and returns to the
+prompt. The report stays in terminal scrollback; rerun it for a fresh check.
+`rk use` is interactive because it manages local executables.
+See [release status](doc/status.md) for the report's evidence and meaning.
 
 When Binary or Homebrew is selected, `rk init` proposes every binary platform
 the current host can produce. A macOS host can build its native macOS binary

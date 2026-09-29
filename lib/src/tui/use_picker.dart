@@ -389,6 +389,7 @@ Future<InstallationPickerResult> runUsePicker({
     final code = await runMatrixScreen(
       UseScreen(model),
       interrupt: model.interrupt,
+      mouse: true,
     );
     return InstallationPickerResult(model.failed, model.message, code);
   } finally {

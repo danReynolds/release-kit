@@ -75,16 +75,9 @@ class StatusCommand {
     return ExitCodes.ok;
   }
 
-  /// Read once, present as text, JSON, or an interactive matrix. Callbacks carry
-  /// provisional observations; the completed snapshot includes reconciliation
-  /// and the same release blockers used by the ordinary report.
-  Future<StatusSnapshot> collect({
-    String? only,
-    TargetChecks? checking,
-    void Function(StatusUnitSnapshot)? onUnit,
-    void Function(String unit, TargetObservation)? onTarget,
-    void Function(String unit, Inspection)? onStage,
-  }) async {
+  /// Read once for the text and JSON reports. Progress uses the same publication
+  /// interpretation as the completed snapshot, including release blockers.
+  Future<StatusSnapshot> collect({String? only, TargetChecks? checking}) async {
     final units = only == null
         ? resolution.units
         : resolution.units.where((u) => u.name == only).toList();
@@ -98,16 +91,7 @@ class StatusCommand {
     try {
       snapshots = await Future.wait([
         for (final unit in units)
-          _gather(
-            unit,
-            checking,
-            group: units.length > 1 ? unit.name : null,
-            onTarget: onTarget,
-            onStage: onStage,
-          ).then((snapshot) {
-            onUnit?.call(snapshot);
-            return snapshot;
-          }),
+          _gather(unit, checking, group: units.length > 1 ? unit.name : null),
       ]);
     } finally {
       checking?.close();
@@ -196,8 +180,6 @@ class StatusCommand {
     ResolvedUnit unit,
     TargetChecks? checking, {
     required String? group,
-    void Function(String unit, TargetObservation)? onTarget,
-    void Function(String unit, Inspection)? onStage,
   }) async {
     final diagnostics = Diagnostics();
     final checklist = Checklist.derive(unit, resolution, diagnostics);
@@ -213,7 +195,6 @@ class StatusCommand {
     }
 
     final stageResult = _inspectStage(unit);
-    onStage?.call(unit.name, stageResult.state);
     final expectations = inspector.targets.derive(
       unit,
       checklist,
@@ -235,7 +216,6 @@ class StatusCommand {
           stageResult.inspection,
           artifactProblems,
           checking,
-          onTarget,
         ),
     ];
     final prerequisiteSteps = checklist.steps
@@ -247,27 +227,6 @@ class StatusCommand {
     var targets = await Future.wait(targetFutures);
     final prerequisites = await Future.wait(prerequisiteFutures);
     final releasedSource = _releasedSourceMismatch(targets);
-    if (releasedSource != null) {
-      targets = [
-        for (final target in targets)
-          identical(target, releasedSource.target)
-              ? TargetObservation(
-                  expectation: target.expectation,
-                  inspection: Inspection.exact(
-                    detail:
-                        'released from '
-                        '${_shortObjectId(releasedSource.releasedCommit)}',
-                    evidence: target.inspection.evidence,
-                  ),
-                  currentVersion: target.currentVersion,
-                  currentKnown: target.currentKnown,
-                  currentDetail: target.currentDetail,
-                  historyProblems: target.historyProblems,
-                  artifacts: target.artifacts,
-                )
-              : target,
-      ];
-    }
 
     final states = <String, Inspection>{
       for (final target in targets)
@@ -437,7 +396,8 @@ class StatusCommand {
         .where(
           (target) =>
               target.expectation.target == PublishTarget.gitTag &&
-              target.inspection.verdict == Verdict.conflict,
+              target.inspection.isExact &&
+              target.inspection.sourceMismatch != null,
         )
         .firstOrNull;
     if (tag == null) return null;
@@ -456,17 +416,38 @@ class StatusCommand {
     StageInspection? stage,
     Map<String, String> artifactProblems,
     TargetChecks? checking,
-    void Function(String unit, TargetObservation)? onTarget,
   ) async {
-    final observed = await _observeTarget(
-      expectation,
-      unit,
-      stage,
-      artifactProblems,
+    final observed = _publicationObservation(
+      await _observeTarget(expectation, unit, stage, artifactProblems),
     );
     checking?.finish(expectation.step.id, observed.inspection.verdict);
-    onTarget?.call(unit.name, observed);
     return observed;
+  }
+
+  TargetObservation _publicationObservation(TargetObservation target) {
+    final mismatch = target.inspection.sourceMismatch;
+    if (target.expectation.target != PublishTarget.gitTag ||
+        target.inspection.verdict != Verdict.conflict ||
+        mismatch == null) {
+      return target;
+    }
+    // A valid earlier release is published even when this checkout has moved
+    // on. Interpret that before emitting progress; keep its source evidence
+    // so the completed report can still flag the change.
+    return TargetObservation(
+      expectation: target.expectation,
+      inspection: Inspection(
+        Verdict.exact,
+        detail: 'released from ${_shortObjectId(mismatch.releasedCommit)}',
+        evidence: target.inspection.evidence,
+        sourceMismatch: mismatch,
+      ),
+      currentVersion: target.currentVersion,
+      currentKnown: target.currentKnown,
+      currentDetail: target.currentDetail,
+      historyProblems: target.historyProblems,
+      artifacts: target.artifacts,
+    );
   }
 
   _StageResult _inspectStage(ResolvedUnit unit) {
