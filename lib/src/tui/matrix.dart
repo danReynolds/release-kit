@@ -30,9 +30,8 @@ CellStyle matrixFocusStyle(BuildContext context) =>
         dim: false,
       );
 
-/// The same pointer/keyboard treatment for cells and footer actions. Hover
-/// moves navigation focus, never the persisted choice, so only one action is
-/// highlighted at a time and Enter acts on the option the pointer just previewed.
+/// Clicks and keyboard navigation focus an action. Hover leaves both the
+/// appearance and keyboard focus unchanged, so Enter keeps its visible target.
 class MatrixButton extends StatefulWidget {
   const MatrixButton({
     super.key,
@@ -88,26 +87,23 @@ class _MatrixButtonState extends State<MatrixButton> {
   }
 
   @override
-  Widget build(BuildContext context) => MouseRegion(
-    onEnter: widget.onPressed == null ? null : _focus.requestFocus,
-    child: Button(
-      text: widget.text,
-      child: widget.child,
-      semanticLabel: widget.semanticLabel,
-      focusNode: _focus,
-      autofocus: widget.autofocus,
-      variant: widget.variant,
-      appearance: widget.appearance,
-      onPressed: widget.onPressed,
-      style: CellStyle.interactive(
-        base: widget.selected
-            ? selectedStyle
-            : widget.baseStyle ?? CellStyle(dim: widget.unavailable),
-        // Focus owns the highlight. A stale mouse position must not keep a
-        // second cell highlighted after keyboard navigation.
-        hovered: const CellStyle(underline: false),
-        focused: matrixFocusStyle(context),
-      ),
+  Widget build(BuildContext context) => Button(
+    text: widget.text,
+    child: widget.child,
+    semanticLabel: widget.semanticLabel,
+    focusNode: _focus,
+    autofocus: widget.autofocus,
+    variant: widget.variant,
+    appearance: widget.appearance,
+    onPressed: widget.onPressed,
+    style: CellStyle.interactive(
+      base: widget.selected
+          ? selectedStyle
+          : widget.baseStyle ?? CellStyle(dim: widget.unavailable),
+      // Focus owns the highlight. A stale mouse position must not keep a
+      // second cell highlighted after keyboard navigation.
+      hovered: CellStyle.none,
+      focused: matrixFocusStyle(context),
     ),
   );
 }

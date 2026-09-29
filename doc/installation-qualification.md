@@ -1,9 +1,24 @@
 # Installation and TUI implementation receipt
 
+## Status returns to the prompt — September 29, 2026
+
+`rk status` and bare `rk` use the finite CLI report in every environment. A
+terminal shows transient check progress before the durable report; no keypress
+is needed to finish. JSON and redirected output retain the same release facts.
+The status picker and its refresh/detail state are removed. `rk use` remains
+interactive for choosing, installing, updating and removing executable sources.
+
+`tool/check_status_cli.py` covers automatic exit, retained reports, wide/narrow
+terminals, NO_COLOR, unit filtering, invalid configuration and JSON output.
+Command tests retain the published-tag/source-change distinction in both
+transient progress and the final report.
+
 ## Keyboard-only and responsive updates — September 28, 2026
 
-All native command matrices now leave mouse capture disabled. `use` keeps its
-keyboard controls and remote version checks live during installation. Additional
+Native command matrices leave mouse capture disabled except for `use`, which
+accepts clicks without hover tracking. Hover never moves focus or styles a
+button; a click or keyboard navigation establishes the blue action focus.
+`use` keeps its keyboard controls and remote version checks live during installation. Additional
 mutations are queued behind the active operation, preserving the manager/store
 lock. Closing cancels queued work; failures clear it for review. Update appears
 only after confirming a newer compatible version. Completed operations clear
@@ -14,11 +29,15 @@ their own action focus without moving it to Use or disturbing another row.
   queued updates, duplicate Enter, cancellation, failure, and focus preservation.
 - The installation, interaction, and status native PTY suites pass with keyboard
   controls, including 40-column layouts, resize, signals, and shell restoration.
-  The harness checks that no command enables mouse capture.
+  The harness checks that only `use` enables mouse capture, never enables hover
+  tracking, and restores all mouse modes when it closes.
 - These checks use disposable fixtures; no shared Homebrew/Pub installation was
   upgraded as part of this pass.
 
-## Shared Use and Status design — September 28, 2026
+## Historical: shared Use and Status design — September 28, 2026
+
+This status-matrix experiment is superseded by the finite report above. The
+following records the earlier implementation and its qualification.
 
 `rk status` now opens the release matrix. It and Use share the
 104-column bound, terminal background, blue action focus, separators, detail
@@ -216,8 +235,8 @@ the terminal. Larger content scrolls; short terminals compact their footer.
 - Terminal-buffer frames were inspected on dark and light rendering backgrounds.
   The page keeps the terminal background; active choices use a green cell fill
   and navigation uses blue. Opening has no focused control; Enter cannot act
-  until navigation or a click establishes focus. Hover moves focus without
-  activation or underlines. Matrices skip the invisible scroll-viewport stop;
+  until navigation or a click establishes focus. Hover leaves focus and
+  styling unchanged. Matrices skip the invisible scroll-viewport stop;
   text-only configuration review retains keyboard scrolling.
   Reverse video and checkmarks preserve meaning without color. These renders
   are not screenshots of a physical terminal emulator.
@@ -226,7 +245,7 @@ the terminal. Larger content scrolls; short terminals compact their footer.
   out of a short terminal. Native assertions retain coverage for those failures.
 - Every native session verifies terminal modes and input blocking flags are
   restored, the inline frame is cleared, no alternate screen or whole-screen
-  clear is used, and mouse capture is disabled. Signal exits retain 130/143/129.
+  clear is used, and mouse capture is restored. Signal exits retain 130/143/129.
 - Analysis, formatting, and AOT compilation pass. CI runs both PTY scripts on
   macOS and Linux. The preceding integration passed both OS test jobs; this receipt's
   latest RK interaction evidence is local macOS until the updated CI runs.

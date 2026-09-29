@@ -335,9 +335,11 @@ class CoordinatedInspector extends Inspector {
     required super.registry,
     required super.git,
     required this.expected,
+    this.answers = const {},
   });
 
   final int expected;
+  final Map<StepKind, Inspection> answers;
   final allStarted = Completer<void>();
   final Map<StepKind, Completer<void>> _gates = {};
   var active = 0;
@@ -353,7 +355,7 @@ class CoordinatedInspector extends Inspector {
     if (started == expected && !allStarted.isCompleted) allStarted.complete();
     await gate.future;
     active--;
-    return const Inspection.absent();
+    return answers[step.kind] ?? const Inspection.absent();
   }
 
   void finish(StepKind kind) => _gates[kind]!.complete();
@@ -1099,6 +1101,66 @@ executables:
           'target report a pipe receives',
     );
   });
+
+  for (final (answer, progress, verdict) in [
+    (
+      const Inspection.conflict(
+        'source differs',
+        sourceMismatch: SourceBindingMismatch(
+          releasedCommit: 'dddddddddddddddddddddddddddddddddddddddd',
+          currentCommit: testHead,
+        ),
+      ),
+      'checked',
+      'exact',
+    ),
+    (const Inspection.conflict('manifest differs'), 'differs', 'conflict'),
+    (const Inspection.unknown('tag read failed'), 'unread', 'unknown'),
+  ]) {
+    test('tag $verdict agrees in live progress and the final report', () async {
+      late CoordinatedInspector inspector;
+      late StringBuffer buffer;
+      final running = statusRun(
+        source: tree(),
+        state: git(),
+        registry: FakeRegistry(const {}),
+        isTerminal: true,
+        onOutputReady: (value) => buffer = value,
+        inspectorBuilder: (git, _) => inspector = CoordinatedInspector(
+          registry: FakeRegistry(const {}),
+          git: git,
+          expected: 2,
+          answers: {StepKind.tag: answer},
+        ),
+      );
+      await inspector.allStarted.future.timeout(const Duration(seconds: 1));
+      inspector.finish(StepKind.tag);
+      try {
+        await _waitForStatusText(
+          buffer,
+          (text) => RegExp(
+            'Git tag\\s+$progress',
+          ).hasMatch(_afterLastTransientErase(text)),
+        );
+        final live = _afterLastTransientErase(buffer.toString());
+        expect(live, matches(RegExp(r'pub\.dev.*checking')));
+        if (verdict == 'exact') expect(live, isNot(contains('differs')));
+      } finally {
+        inspector.finish(StepKind.publishRegistry);
+      }
+      final result = await running;
+      final unit = (result.report['units'] as List).single as Map;
+      final targets = (unit['targets'] as List).cast<Map>();
+      final tag = targets.singleWhere((target) => target['kind'] == 'gitTag');
+      expect(tag['verdict'], verdict);
+      expect(
+        (result.report['problems'] as List).cast<Map>().any(
+          (problem) => problem['code'] == 'RK-MONO-004',
+        ),
+        answer.sourceMismatch != null,
+      );
+    });
+  }
 
   test(
     'multiple units nest transient targets under semantic headings',

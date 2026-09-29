@@ -12,6 +12,85 @@ import 'package:test/test.dart';
 import 'fixtures.dart';
 
 void main() {
+  test('hover preserves button styling and Enter target; clicks activate', () {
+    final tester = FleuryTester(viewportSize: const CellSize(60, 4));
+    addTearDown(tester.dispose);
+    final first = FocusNode(), second = FocusNode();
+    addTearDown(first.dispose);
+    addTearDown(second.dispose);
+    var uses = 0, updates = 0;
+    tester.pumpWidget(
+      FleuryApp(
+        title: 'rk',
+        theme: matrixTheme,
+        home: Row(
+          children: [
+            MatrixButton(
+              text: 'Use',
+              focusNode: first,
+              onPressed: () => uses++,
+            ),
+            MatrixButton(
+              text: 'Update',
+              focusNode: second,
+              onPressed: () => updates++,
+            ),
+          ],
+        ),
+      ),
+    );
+    tester.pump();
+    List<CellStyle> styles() {
+      final buffer = tester.render();
+      return [
+        for (var row = 0; row < 4; row++)
+          for (var col = 0; col < 60; col++) buffer.atColRow(col, row).style,
+      ];
+    }
+
+    final col = tester.renderToString().split('\n').first.indexOf('Update');
+    expect(col, isNonNegative);
+    void pointer(MouseEventKind kind, MouseButton button) {
+      tester.sendMouse(
+        MouseEvent(kind: kind, button: button, col: col, row: 0),
+      );
+      tester.pump();
+    }
+
+    final initial = styles();
+    pointer(MouseEventKind.moved, MouseButton.none);
+    expect(styles(), initial);
+    expect(first.hasFocus || second.hasFocus, isFalse);
+    tester.sendKey(const KeyEvent(KeyCode.enter));
+    tester.pump();
+    expect(updates, 0);
+    tester.sendKey(const KeyEvent(KeyCode.tab));
+    tester.pump();
+    expect(first.hasFocus, isTrue);
+    final focused = styles();
+    // Leave and re-enter the other button while keyboard focus stays on Use.
+    tester.sendMouse(
+      const MouseEvent(
+        kind: MouseEventKind.moved,
+        button: MouseButton.none,
+        col: 50,
+        row: 0,
+      ),
+    );
+    tester.pump();
+    pointer(MouseEventKind.moved, MouseButton.none);
+    expect(styles(), focused);
+    expect(first.hasFocus, isTrue);
+    tester.sendKey(const KeyEvent(KeyCode.enter));
+    tester.pump();
+    expect(uses, 1);
+    expect(updates, 0);
+    pointer(MouseEventKind.down, MouseButton.left);
+    pointer(MouseEventKind.up, MouseButton.left);
+    expect(updates, 1);
+    expect(second.hasFocus, isTrue);
+  });
+
   test('wide table is bounded; only the focused action is blue', () {
     final scratch = Directory.systemTemp.createTempSync('rk-table-layout-');
     addTearDown(() => scratch.deleteSync(recursive: true));

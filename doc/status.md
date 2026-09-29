@@ -1,61 +1,47 @@
 # Release status
 
 ```sh
-rk status                    # explore the inline release matrix
-rk status tools              # inspect one release unit
+rk status                    # check all release units, print the report, exit
+rk status tools              # check one release unit
 rk                           # same as rk status
 rk status --json             # structured report for scripts
 ```
 
 Status reads the destinations and exact local stage for the configured release.
-It does not build, sign, install, or publish. `rk use` manages which executable
-runs locally; `rk status` inspects what this repository is releasing.
+It shows progress while checks run, prints the completed report, and returns to
+the prompt. The report stays in terminal scrollback. Run it again for a fresh check.
 
-## Explore the matrix
+It does not build, sign, install, or publish. `rk use` is the interactive picker
+for which executable runs locally; `rk status` reports what this repository is
+releasing.
 
-Each row is a release unit and its candidate version. Columns come from the
-configuration: Stage, Git tag, pub.dev, GitHub and Homebrew appear when relevant.
-An unconfigured destination is a dash. A grouped unit's publication cell covers
-all packages going to that destination; open it to see each package separately.
+## Read the report
 
-Checks begin on opening. Cells update independently as destinations answer.
-The completion timestamp identifies the snapshot; `r Refresh` rereads source
-configuration, Git state, stages and destinations. A failed read is shown as
-unknown or failed, never as proof that nothing was published.
+Each release unit shows its candidate version, configured public destinations,
+and local preparation still needed. Publication and staging are separate:
 
-- Use arrows to move between units and destinations, or Tab between controls.
-- Focus a unit and press Enter for its overview and release issues.
-- Open a destination to inspect its candidate, latest published version and
-  evidence. Open Stage for its receipt, artifacts and any validation problems.
-- Escape or Back returns to the same cell; Escape from the matrix closes it.
-- Done leaves the completed report in the terminal. Ctrl+C cancels reads,
-  restores the terminal and preserves the interrupt exit status.
+- **Published** means the candidate version is verified at the destination.
+- **Not published** means the candidate is absent. The report shows an earlier
+  published version when one is known.
+- **Does not match** means published content conflicts with the candidate.
+- **Could not be read** means a check failed; it is not evidence of absence.
+- **Staged** means the exact local stage is complete and reusable. A missing
+  stage does not undo an existing publication.
 
-The matrix starts without keyboard focus. Green marks verified stage or
-publication facts; blue marks the specific cell or action Enter activates.
-Narrow terminals stack destinations beneath each unit, with scrolling for
-short windows. Use shares these bounds, controls and detail views.
+If the checkout has changed since its version was released, the report keeps
+that publication visible and explains that the source now differs. The release
+issue asks for a new version rather than replacing the existing tag.
 
-## Read the evidence
+Issues include the affected target, evidence and a remedy. When the checks can
+identify a next step, the report prints the command. `rk release` rechecks its
+prerequisites before publishing; status itself changes nothing.
 
-`Published` means that candidate version is verified at the destination.
-A unit marked `changed` has new source under an already released version; its
-release issue remains visible even when every destination is published. `Latest` names the
-latest published version returned by its reader, which can differ from the
-candidate. A grouped cell reports partial publication rather than hiding the
-remaining packages. An unread history remains a failed check even when the
-candidate itself could be read.
+## Scripts and redirected output
 
-`Staged` means the exact local stage is complete and reusable. It is independent
-of publication: a completed local binary can remain staged without a public
-destination. A missing local stage does not undo an existing publication.
+Redirecting output suppresses transient progress and terminal styling.
+`--json` emits one structured report, including release issues and an exit code.
+A completed status report returns zero even when it finds work remaining;
+invalid configuration or command arguments return an error.
 
-Release issues are available from the footer and the affected unit's detail.
-Green cells alone do not establish release readiness. Any next command comes
-from the same checks as the plain report; `rk release` rechecks its prerequisites
-before publishing.
-
-If refreshing source configuration fails, previous results are labelled as
-previous and the full error remains available through Error details. Missing
-configuration returns to the prompt with setup guidance. Without a usable
-terminal, status prints a finite report; `--json` emits the structured snapshot.
+See [the JSON contract](json.md) for fields and exit codes, or use `rk plan` to
+inspect configured release steps without reading destinations.

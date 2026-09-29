@@ -16,10 +16,11 @@ The picker opens inline beneath your prompt and grows to fit its content, up to
 24 rows. The source table is left-aligned and capped at 104 columns, shrinking
 with narrower terminals. Other command matrices cap at 128 columns to fit their
 additional outputs. Your terminal keeps its background; green marks the effective
-default and blue marks keyboard focus. Mouse capture is disabled. It opens without
-focus, so the default stays green until you navigate. Checkmarks and reverse video
-preserve those distinctions with `NO_COLOR`. Use Tab or arrow keys to navigate and Enter
-to choose.
+default and blue marks action focus. `rk use` accepts mouse clicks; hovering
+does not highlight buttons or move keyboard focus. It opens without focus, so
+the default stays green until you navigate or click. Checkmarks and reverse
+video preserve those distinctions with `NO_COLOR`. Use Tab or arrow keys to
+navigate and Enter to choose. Other command matrices use keyboard controls.
 
 A successful source switch for one project closes the picker and leaves its result in
 shell history. With several projects, the picker stays open so you can change

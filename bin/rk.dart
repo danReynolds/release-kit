@@ -18,7 +18,6 @@ import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/commands/clean.dart';
 import 'package:rk/src/commands/init.dart';
 import 'package:rk/src/tui/init_picker.dart' deferred as init_ui;
-import 'package:rk/src/tui/status_picker.dart' deferred as status_ui;
 import 'installations.dart' deferred as installations;
 import 'package:rk/src/commands/plan.dart';
 import 'package:rk/src/commands/release.dart';
@@ -50,7 +49,7 @@ rk — an austere release tool
 Release this project
   rk                              status all units
   rk --version                    print this binary's version
-  rk status [unit]                explore release status in an inline matrix
+  rk status [unit]                report release status and return to the prompt
   rk plan [unit]                  show the configured release graph; read-only
   rk init                         choose outputs and review release.toml
   rk clean                        remove this repository's staged release work
@@ -109,8 +108,7 @@ May read the network; does not build or publish. Bare rk also runs status.
 
 $_unitHelp
 Omit the unit to check every release unit.
-In a terminal, explore destinations and evidence in the inline matrix.
-Pipes and terminals that cannot host the matrix receive a finite report.
+Prints the report and exits; no interaction is required.
 --json    emit one structured report
 
 Example: rk status tools
@@ -335,10 +333,7 @@ Future<void> main(List<String> args) async {
       ),
       'target' => TargetCommand(output: output).run(target),
       'plan' => await _plan(output, target),
-      _ =>
-        !json && _usableInitTerminal()
-            ? await _statusInteractive(output, target)
-            : await _status(output, target),
+      _ => await _status(output, target),
     };
   } on Object catch (error, stack) {
     // Its own exit class: an agent must tell "refused — remedy, then retry"
@@ -1066,27 +1061,10 @@ void _showPlanSourceProblem(
 }
 
 Future<int> _status(Output output, String? unit) async {
-  final result = await _openStatus(output, unit);
-  final reader = result.reader;
-  if (reader == null) return result.code;
-  try {
-    return await reader.command.run(only: unit);
-  } finally {
-    reader.close();
-  }
-}
-
-/// Each refresh rereads configuration, Git state and destination caches.
-Future<({int code, _StatusReader? reader})> _openStatus(
-  Output output,
-  String? unit, {
-  Output? diagnostics,
-}) async {
-  final preparationOutput = diagnostics ?? output;
-  final prepared = await _prepare(preparationOutput);
-  if (!prepared.isReady) return (code: prepared.code!, reader: null);
-  final source = _selectReleaseSource(prepared, unit, preparationOutput);
-  if (source == null) return (code: ExitCodes.refused, reader: null);
+  final prepared = await _prepare(output);
+  if (!prepared.isReady) return prepared.code!;
+  final source = _selectReleaseSource(prepared, unit, output);
+  if (source == null) return ExitCodes.refused;
   final registry = Registry();
   final cancellation = ToolCancellation();
   final resolution = source.resolution;
@@ -1120,58 +1098,11 @@ Future<({int code, _StatusReader? reader})> _openStatus(
       ),
       output: output,
     );
-    return (
-      code: ExitCodes.ok,
-      reader: _StatusReader(command, () {
-        cancellation.cancel();
-        registry.close();
-      }),
-    );
-  } on Object {
+    return await command.run(only: unit);
+  } finally {
+    cancellation.cancel();
     registry.close();
-    rethrow;
   }
-}
-
-class _StatusReader {
-  _StatusReader(this.command, this.close);
-  final StatusCommand command;
-  final void Function() close;
-}
-
-Future<int> _statusInteractive(Output output, String? unit) async {
-  await status_ui.loadLibrary();
-  final result = await status_ui.runStatusInteraction(
-    only: unit,
-    load: () async {
-      final buffer = StringBuffer();
-      final quiet = Output(sink: buffer.write, isTerminal: false);
-      final opened = await _openStatus(output, unit, diagnostics: quiet);
-      final reader = opened.reader;
-      if (reader == null) {
-        throw status_ui.StatusLoadFailure(
-          buffer.toString().trim(),
-          opened.code,
-        );
-      }
-      return status_ui.StatusReadSession(reader.command, reader.close);
-    },
-  );
-  if (result.code != 0) return result.code;
-  if (result.error != null) {
-    if (result.errorCode == 0) {
-      output.help(result.error!);
-      return ExitCodes.ok;
-    }
-    output.problem(Diagnostic(code: 'RK-STATUS-001', message: result.error!));
-    return result.errorCode;
-  }
-  if (result.snapshot case final snapshot?) {
-    result.command!.render(snapshot);
-  } else {
-    output.line('Status check cancelled.');
-  }
-  return ExitCodes.ok;
 }
 
 Diagnostic _stageStoreProblem(Object error) => Diagnostic(

@@ -191,6 +191,7 @@ void main() {
       // which never inspect a stage, so nothing here would have caught it.
       final compiled = '${scratch.path}/rk-compiled';
       final built = Process.runSync(Platform.resolvedExecutable, [
+        '--suppress-analytics',
         'compile',
         'exe',
         'bin/rk.dart',
