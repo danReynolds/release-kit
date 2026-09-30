@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-162 codes across 29 families.
+171 codes across 29 families.
 
 
 ## RK-AUTH — Authorization
@@ -38,6 +38,8 @@ fails, and the count below is checked against the rows.
 |---|---|---|
 | `RK-BUILD-001` | $platform: the build did not produce a working binary | `lib/src/binary_chain.dart` |
 | `RK-BUILD-002` | $platform was built but not executed | `lib/src/commands/release_publication_coordinator.dart` |
+| `RK-BUILD-003` | a project's own build failed | `lib/src/asset_build.dart` |
+| `RK-BUILD-004` | a project's own build did not write every asset it declares | `lib/src/asset_build.dart` |
 
 ## RK-CHG — The changelog
 
@@ -110,6 +112,10 @@ fails, and the count below is checked against the rows.
 | `RK-CONF-039` | a unit declares a tag without selecting git-tag | `lib/src/engine/config.dart` |
 | `RK-CONF-040` | homebrew_tap is not a GitHub owner/repository coordinate | `lib/src/engine/config.dart` |
 | `RK-CONF-041` | dart_defines_from_pubspec must select unique dotted metadata fields on a binary project | `lib/src/engine/config.dart` |
+| `RK-CONF-042` | build must list a command and its arguments, with no placeholder but {out} | `lib/src/engine/config.dart` |
+| `RK-CONF-043` | assets must name distinct files inside the build's output | `lib/src/engine/config.dart` |
+| `RK-CONF-044` | a project declares build and assets together, and not with binary_platforms | `lib/src/engine/config.dart` |
+| `RK-CONF-045` | a unit that builds release assets must publish a GitHub release | `lib/src/engine/config.dart` |
 
 ## RK-DEST — Effective publication destinations
 
@@ -199,8 +205,9 @@ meaning and is not reused.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-PKG-001` | this manifest declares no package name | `lib/src/engine/pubspec.dart` |
-| `RK-PKG-002` | — | `lib/src/engine/pubspec.dart` |
+| `RK-PKG-001` | this manifest declares no package name | `lib/src/engine/pubspec.dart`, `lib/src/engine/cargo.dart` |
+| `RK-PKG-002` | — | `lib/src/engine/pubspec.dart`, `lib/src/engine/cargo.dart` |
+| `RK-PKG-003` | a crate declares no literal version in its [package] table | `lib/src/engine/cargo.dart` |
 
 ## RK-PUB — Publishing to pub.dev
 
@@ -249,6 +256,8 @@ meanings and are not reused.
 | `RK-RES-012` | a tagged unit needs an explicit tag pattern when several units tag | `lib/src/engine/resolve.dart` |
 | `RK-RES-014` | a package names a custom package registry but is asked to publish to pub.dev | `lib/src/engine/resolve.dart` |
 | `RK-RES-015` | a selected compile-time pubspec field is missing, empty or structured | `lib/src/engine/resolve.dart` |
+| `RK-RES-016` | a Cargo crate is released only through its declared build | `lib/src/engine/resolve.dart` |
+| `RK-RES-017` | a unit builds its GitHub release from more than one project | `lib/src/engine/resolve.dart` |
 
 ## RK-SIGN — Signing identity
 

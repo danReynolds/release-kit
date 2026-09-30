@@ -422,7 +422,7 @@ class ReleaseCommand {
     // exact and its stage is gone, the recovery check below owns the clearer
     // RK-STAGE-005 refusal for every remaining target.
     final partialBinaryStageLoss =
-        unit.shipsBinaries &&
+        unit.buildsReleaseAssets &&
         !stageInspection.reusable &&
         publicSteps.any((step) => states[step.id]!.isExact);
     final initialBlock = checklist.steps.where((step) {
@@ -487,7 +487,7 @@ class ReleaseCommand {
     // unread forge or tap cannot be treated as permission to rebuild: it may
     // already contain the bytes bound by the public tag.
     final partialBinaryRelease =
-        unit.shipsBinaries &&
+        unit.buildsReleaseAssets &&
         !stageInspection.reusable &&
         !recoversWithoutStage &&
         publicSteps.any((step) => states[step.id]!.isExact) &&
@@ -500,10 +500,12 @@ class ReleaseCommand {
       output.problem(
         Diagnostic(
           code: 'RK-STAGE-005',
-          message: 'the partial binary release needs its exact stage',
+          message: unit.shipsBinaries
+              ? 'the partial binary release needs its exact stage'
+              : 'the partial release needs its exact stage',
           remedy:
               'restore ${stage.directory.path} from the machine that '
-              'staged this release. Signed or notarized bytes cannot be '
+              'staged this release. ${unit.shipsBinaries ? 'Signed or notarized bytes' : 'What its build wrote'} cannot be '
               'recreated byte-for-byte after a public target has bound them.',
         ),
       );

@@ -869,6 +869,12 @@ class ReleaseStage {
 
   static String _typeOf(String path) {
     if (path.startsWith('source/')) return 'source';
+    // What a project's own build wrote, whatever the files are called: a
+    // declared asset may well end in .tar.gz or .zip.
+    final parts = path.split('/');
+    if (parts.length > 3 && parts[0] == 'producers' && parts[2] == 'assets') {
+      return 'asset';
+    }
     if (path == 'release-manifest.json') return 'manifest';
     if (path == 'release-notes.md') return 'notes';
     if (path.endsWith('.tar.gz')) return 'archive';

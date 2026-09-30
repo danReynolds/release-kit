@@ -69,6 +69,8 @@ class ProjectConfig {
     required this.publish,
     required this.binaryPlatforms,
     this.dartDefinesFromPubspec = const [],
+    this.build = const [],
+    this.assets = const [],
     required this.location,
   });
 
@@ -83,9 +85,20 @@ class ProjectConfig {
   /// Native manifest fields to project into Dart compile-time environment.
   final List<String> dartDefinesFromPubspec;
 
+  /// The project's own command that builds its release assets: the program
+  /// and its arguments, where `{out}` names the directory it writes to.
+  /// Empty unless the project declares one.
+  final List<String> build;
+
+  /// The files [build] writes that the unit's GitHub release publishes,
+  /// relative to its output directory, each under its own file name.
+  final List<String> assets;
+
   final SourceLocation location;
 
   bool get wantsBinaries => binaryPlatforms.isNotEmpty;
+
+  bool get buildsAssets => build.isNotEmpty;
 }
 
 class _Reader {
@@ -228,6 +241,8 @@ class _Reader {
       'publish',
       'binary_platforms',
       'dart_defines_from_pubspec',
+      'build',
+      'assets',
       'project',
       'homebrew_tap',
     };
@@ -247,7 +262,9 @@ class _Reader {
     if (hasRows &&
         (value.has('path') ||
             value.has('binary_platforms') ||
-            value.has('dart_defines_from_pubspec'))) {
+            value.has('dart_defines_from_pubspec') ||
+            value.has('build') ||
+            value.has('assets'))) {
       _diagnostics.add(
         'RK-CONF-009',
         'unit "$name" declares a project inline and also as rows',
@@ -362,6 +379,20 @@ class _Reader {
     }
 
     final complete = projects.length == attempted;
+    final building = projects.where((project) => project.buildsAssets);
+    if (complete &&
+        building.isNotEmpty &&
+        !unitPublish.contains(PublishTarget.githubRelease)) {
+      _diagnostics.add(
+        'RK-CONF-045',
+        'unit "$name" builds release assets but does not publish a GitHub '
+            'release',
+        source: building.first.location,
+        remedy:
+            'add "github-release" and "git-tag" to its publish list: the '
+            'assets are published as that release',
+      );
+    }
     if (complete &&
         unitPublish.isEmpty &&
         projects.every(
@@ -505,6 +536,8 @@ class _Reader {
       'publish',
       'binary_platforms',
       'dart_defines_from_pubspec',
+      'build',
+      'assets',
     };
     const unitLevel = {'tag', 'project', 'homebrew_tap'};
     for (final key in table.keys) {
@@ -565,10 +598,31 @@ class _Reader {
       );
       return null;
     }
+    final build = _build(unit, table);
+    final assets = _assets(unit, table);
+    if (build == null || assets == null) return null;
+    if (build.isEmpty != assets.isEmpty ||
+        build.isNotEmpty && platforms.isNotEmpty) {
+      _diagnostics.add(
+        'RK-CONF-044',
+        build.isEmpty != assets.isEmpty
+            ? 'a project of "$unit" declares ${build.isEmpty ? 'assets without a build' : 'a build without assets'}'
+            : 'a project of "$unit" declares both a build and binary_platforms',
+        source: table.locationOf(build.isEmpty ? 'assets' : 'build'),
+        remedy: build.isEmpty != assets.isEmpty
+            ? 'build names the command, and assets the files it writes that '
+                  'the release publishes; declare both'
+            : 'rk compiles binary_platforms itself; a project releases '
+                  'either those or what its own build writes',
+      );
+      return null;
+    }
     return ProjectConfig(
       path: path,
       dartDefinesFromPubspec: List.unmodifiable(defines.cast<String>()),
       publish: Set.unmodifiable(projectPublish),
+      build: build,
+      assets: assets,
       binaryPlatforms: platforms,
       location: location,
     );
@@ -661,6 +715,83 @@ class _Reader {
       selected.add(target);
     }
     return selected;
+  }
+
+  /// The declared build command, or empty when there is none.
+  List<String>? _build(String unit, TomlTable table) {
+    final value = table['build'];
+    if (value == null) return const [];
+    if (value is! List<String> ||
+        value.isEmpty ||
+        value.any((argument) => argument.isEmpty)) {
+      _diagnostics.add(
+        'RK-CONF-042',
+        'build must list the command and its arguments',
+        source: table.locationOf('build'),
+        remedy:
+            'as in build = ["tool/build.sh", "{out}"], run from the '
+            "project's directory",
+      );
+      return null;
+    }
+    for (final argument in value) {
+      if (argument.replaceAll('{out}', '').contains(RegExp(r'[{}]'))) {
+        _diagnostics.add(
+          'RK-CONF-042',
+          'build uses a placeholder rk does not have: $argument',
+          source: table.locationOf('build'),
+          remedy: '{out} is the only one: the directory the build writes to',
+        );
+        return null;
+      }
+    }
+    return List.unmodifiable(value);
+  }
+
+  /// The declared assets, or empty when there are none.
+  List<String>? _assets(String unit, TomlTable table) {
+    final value = table['assets'];
+    if (value == null) return const [];
+    final location = table.locationOf('assets');
+    if (value is! List<String> || value.isEmpty) {
+      _diagnostics.add(
+        'RK-CONF-043',
+        'assets must list the files the build writes',
+        source: location,
+        remedy: 'as in assets = ["lib-macos-arm64.dylib"], relative to {out}',
+      );
+      return null;
+    }
+    final names = <String>{};
+    for (final asset in value) {
+      final parts = asset.split('/');
+      final name = parts.last;
+      if (asset.startsWith('/') ||
+          asset.contains(r'\') ||
+          parts.any((part) => part.isEmpty || part == '.' || part == '..')) {
+        _diagnostics.add(
+          'RK-CONF-043',
+          'asset "$asset" is not a file inside the build\'s output',
+          source: location,
+          remedy: 'name it relative to {out}, as in "assets/$name"',
+        );
+        return null;
+      }
+      if (name.toLowerCase() == 'release-manifest.json' ||
+          name.codeUnits.any((unit) => unit < 0x20 || unit == 0x7f) ||
+          !names.add(name.toLowerCase())) {
+        _diagnostics.add(
+          'RK-CONF-043',
+          'asset "$asset" cannot be published under the name "$name"',
+          source: location,
+          remedy:
+              'each asset is published under its file name, so the names '
+              'must differ, and release-manifest.json is rk\'s own',
+        );
+        return null;
+      }
+    }
+    return List.unmodifiable(value);
   }
 
   List<String>? _platforms(

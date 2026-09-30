@@ -373,6 +373,7 @@ final class ReleasePlanRenderer {
     ReleasePlanNodeKind.build => 'build',
     ReleasePlanNodeKind.notarize => 'notarize',
     ReleasePlanNodeKind.archive => 'archive',
+    ReleasePlanNodeKind.buildAssets => 'build',
     _ => _humanSummary(node),
   };
 
@@ -506,6 +507,7 @@ final class ReleasePlanRenderer {
           if (node.platform != null) node.platform!,
           'archive',
         ].join(' '),
+        ReleasePlanNodeKind.buildAssets => 'release assets build',
         ReleasePlanNodeKind.targetStage => _qualifiedSummary(node),
         ReleasePlanNodeKind.prerequisite => _requirementIdentity(node),
         ReleasePlanNodeKind.tag ||

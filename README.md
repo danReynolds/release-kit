@@ -261,6 +261,42 @@ core 0.3.0 · staging
 Release core 0.3.0? [y/N]
 ```
 
+## Release assets your own build makes
+
+A project can publish files that rk does not know how to make, such as a
+native library built for a dozen platforms. Name the command that builds
+them, and the files it writes; rk publishes those files as the unit's GitHub
+release:
+
+```toml
+[release.parser]
+path = "native/parser"
+tag = "parser-v{version}"
+publish = ["git-tag", "github-release"]
+build = ["tool/build_release_libraries.sh", "{out}"]
+assets = [
+  "assets/libparser-macos-arm64.dylib",
+  "assets/libparser-linux-x64.so",
+  "assets/parser-windows-x64.dll",
+]
+```
+
+- **Where it runs.** rk runs the command from the project's directory in a
+  clean copy of the committed source. `{out}` is an empty directory the
+  command writes to.
+- **What reaches the release.** Only the files `assets` names, each under its
+  file name.
+- **What the command is told.** Its environment carries the release's facts:
+  `RK_OUT`, `RK_SOURCE_COMMIT`, `RK_REPOSITORY` (`owner/name`), `RK_VERSION`
+  and `RK_TAG`.
+- **Rust crates.** A directory with a `Cargo.toml` and no `pubspec.yaml` is a
+  Rust crate. Its name and version come from the `[package]` table, and it
+  is released only this way.
+
+The rest is an ordinary rk release. The build runs once per stage, the
+release is drafted, published and read back, and its tag carries the
+manifest of what was built.
+
 ## Commands
 
 | | |

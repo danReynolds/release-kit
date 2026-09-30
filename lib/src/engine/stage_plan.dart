@@ -316,6 +316,8 @@ Map<String, Object?> stagePlanFor(
             environment ?? Platform.environment,
           ),
         'binary_platforms': [...project.binaryPlatforms]..sort(),
+        if (project.buildsAssets) 'build': project.build,
+        if (project.buildsAssets) 'assets': project.assets,
       },
   ],
   'toolchain': {

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:test/test.dart';
@@ -141,6 +142,179 @@ publish = ["git-tag"]
     },
     timeout: const Timeout(Duration(minutes: 2)),
   );
+
+  group("a crate's own build", () {
+    // A stand-in for gh, answering the three reads a stage makes of a
+    // repository that has no releases yet.
+    const gh = r'''#!/bin/bash
+case "$*" in
+  "api repos/example/parser/releases/tags/"*)
+    echo '{"message":"Not Found","status":"404"}'
+    echo 'gh: Not Found (HTTP 404)' >&2
+    exit 1;;
+  "repo view example/parser --json name") echo '{"name":"parser"}';;
+  "api --paginate --slurp repos/example/parser/releases") echo '[[]]';;
+  *) echo "unexpected gh $*" >&2; exit 2;;
+esac
+''';
+
+    ({Rk repo, Map<String, String> environment}) crate(String build) {
+      final repo = Rk.repository(scratch, 'source', {
+        '.gitignore': '.rk/\n',
+        'release.toml': '''
+schema = 2
+
+[release.parser]
+tag = "flark_parse-v{version}"
+path = "native/parser"
+publish = ["git-tag", "github-release"]
+build = ["tool/build.sh", "{out}"]
+assets = ["assets/parser-linux-x64.so", "parser-macos-arm64.dylib", "src.tar.gz"]
+''',
+        'native/parser/Cargo.toml':
+            '[package]\nname = "flark_parse"\nversion = "0.1.0"\n',
+        'native/parser/CHANGELOG.md': '## 0.1.0\n\nFirst release.\n',
+        'native/parser/tool/build.sh': build,
+      });
+      Process.runSync('chmod', [
+        '+x',
+        '${repo.root}/native/parser/tool/build.sh',
+      ]);
+      _git(repo.root, ['config', 'commit.gpgSign', 'false']);
+      _git(repo.root, ['config', 'tag.gpgSign', 'false']);
+      _git(repo.root, ['config', 'user.signingkey', '']);
+      repo.commit();
+      // rk reads the forge's owner/name from origin's URL.
+      final remote = '${scratch.path}/forge/github.com/example/parser.git';
+      Directory(remote).createSync(recursive: true);
+      _git(scratch.path, ['init', '--bare', remote]);
+      _git(repo.root, ['remote', 'add', 'origin', remote]);
+      _git(repo.root, ['push', '-u', 'origin', 'HEAD']);
+      final bin = Directory('${scratch.path}/bin')..createSync();
+      File('${bin.path}/gh').writeAsStringSync(gh);
+      Process.runSync('chmod', ['+x', '${bin.path}/gh']);
+      return (
+        repo: repo,
+        environment: {'PATH': '${bin.path}:${Platform.environment['PATH']}'},
+      );
+    }
+
+    Map<String, Object?> problem(Run run, String code) =>
+        (run.json['problems'] as List).cast<Map<String, Object?>>().singleWhere(
+          (problem) => problem['code'] == code,
+        );
+
+    test('stages the files it declares, built from the committed source', () {
+      final (:repo, :environment) = crate(r'''#!/bin/bash
+set -euo pipefail
+mkdir -p "$1/assets"
+printf '%s %s %s %s' "$RK_SOURCE_COMMIT" "$RK_REPOSITORY" "$RK_VERSION" \
+  "$RK_TAG" > "$1/assets/parser-linux-x64.so"
+printf 'dylib' > "$1/parser-macos-arm64.dylib"
+printf 'tarball' > "$1/src.tar.gz"
+printf 'scratch' > "$1/unrelated.txt"
+[ "$RK_OUT" = "$1" ]
+''');
+      final staged = repo([
+        'stage',
+        'parser',
+        '--json',
+      ], environment: environment);
+      expect(staged.code, 0, reason: staged.all);
+      final build = staged
+          .stepsOf('parser')
+          .singleWhere((step) => step['kind'] == 'buildAssets');
+      expect(build['id'], 'parser/build/flark_parse');
+
+      final stage =
+          '${repo.root}/${stageEvidence(staged, 'parser')['stage path']}';
+      expect(
+        File(
+          '$stage/producers/flark_parse/assets/parser-linux-x64.so',
+        ).readAsStringSync(),
+        '${_git(repo.root, ['rev-parse', 'HEAD'])} example/parser 0.1.0 '
+        'flark_parse-v0.1.0',
+        reason: 'the build is told what it is building',
+      );
+      expect(
+        {
+          for (final file in Directory(
+            '$stage/producers',
+          ).listSync(recursive: true).whereType<File>())
+            file.path.substring(stage.length + 1),
+        },
+        {
+          'producers/flark_parse/assets/parser-linux-x64.so',
+          'producers/flark_parse/assets/parser-macos-arm64.dylib',
+          'producers/flark_parse/assets/src.tar.gz',
+        },
+        reason: 'what the build wrote and did not declare stays behind',
+      );
+      final manifest =
+          jsonDecode(File('$stage/release-manifest.json').readAsStringSync())
+              as Map<String, Object?>;
+      expect(
+        [
+          for (final artifact
+              in (manifest['artifacts'] as List).cast<Map<String, Object?>>())
+            (artifact['name'], artifact['type']),
+        ],
+        [
+          ('parser-linux-x64.so', 'asset'),
+          ('parser-macos-arm64.dylib', 'asset'),
+          ('src.tar.gz', 'asset'),
+        ],
+        reason: 'an asset is an asset, whatever its file name says',
+      );
+      expectNoTags(repo);
+
+      final repeat = repo([
+        'stage',
+        'parser',
+        '--json',
+      ], environment: environment);
+      expect(repeat.code, 0, reason: repeat.all);
+      expect(
+        stageEvidence(repeat, 'parser')['stage id'],
+        stageEvidence(staged, 'parser')['stage id'],
+        reason: 'a complete stage is reused, not built again',
+      );
+    });
+
+    test('refuses when the build fails', () {
+      final (:repo, :environment) = crate(
+        '#!/bin/bash\necho "no compiler for the target" >&2\nexit 3\n',
+      );
+      final run = repo(['stage', 'parser', '--json'], environment: environment);
+      expect(run.code, isNot(0));
+      final failed = problem(run, 'RK-BUILD-003');
+      expect(failed['message'], 'flark_parse: its build failed');
+      expect(failed['remedy'], contains('exited 3'));
+      expect(
+        repo.diagnoses().expand(
+          (diagnosis) => (diagnosis['problems'] as List).map(
+            (problem) => (problem as Map)['code'],
+          ),
+        ),
+        contains('RK-BUILD-003'),
+      );
+      expectNoTags(repo);
+    });
+
+    test('refuses when the build does not write a declared asset', () {
+      final (:repo, :environment) = crate(r'''#!/bin/bash
+mkdir -p "$1/assets"
+printf 'so' > "$1/assets/parser-linux-x64.so"
+printf 'dylib' > "$1/parser-macos-arm64.dylib"
+''');
+      final run = repo(['stage', 'parser', '--json'], environment: environment);
+      expect(run.code, isNot(0));
+      expect(
+        problem(run, 'RK-BUILD-004')['message'],
+        'flark_parse: its build did not write src.tar.gz',
+      );
+    });
+  });
 }
 
 String _git(String root, List<String> args) {

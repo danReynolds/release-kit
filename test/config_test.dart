@@ -511,4 +511,144 @@ linux_deps = ["libsecret"]
       reason: 'a fix cycle should be one edit round',
     );
   });
+  group('a project that builds its own release assets', () {
+    String unit(
+      String settings, {
+      String publish = '"git-tag", "github-release"',
+    }) =>
+        '''
+schema = 2
+
+[release.parser]
+tag = "parser-v{version}"
+path = "native/parser"
+publish = [$publish]
+$settings
+''';
+    const declared =
+        'build = ["tool/build.sh", "{out}"]\n'
+        'assets = ["assets/parser-linux-x64.so", "parser-macos-arm64.dylib"]\n';
+
+    test('declares its command and the files it writes', () {
+      final project = accepted(unit(declared)).units.single.projects.single;
+      expect(project.build, ['tool/build.sh', '{out}']);
+      expect(project.assets, [
+        'assets/parser-linux-x64.so',
+        'parser-macos-arm64.dylib',
+      ]);
+      expect(project.buildsAssets, isTrue);
+      expect(project.binaryPlatforms, isEmpty);
+    });
+
+    test('as a project row too', () {
+      final config = accepted('''
+schema = 2
+
+[release.parser]
+tag = "parser-v{version}"
+publish = ["git-tag", "github-release"]
+
+[[release.parser.project]]
+path = "native/parser"
+build = ["make", "OUT={out}"]
+assets = ["libparser.so"]
+''');
+      expect(config.units.single.projects.single.build, ['make', 'OUT={out}']);
+    });
+
+    test('names a command, not an empty one', () {
+      expect(
+        refusedWith(unit('build = []\nassets = ["a.so"]\n')),
+        'RK-CONF-042',
+      );
+      expect(
+        refusedWith(unit('build = ["tool/build.sh", ""]\nassets = ["a.so"]\n')),
+        'RK-CONF-042',
+      );
+      expect(
+        refusedWith(unit('build = "tool/build.sh"\nassets = ["a.so"]\n')),
+        'RK-CONF-042',
+      );
+    });
+
+    test('has no placeholder but {out}', () {
+      expect(
+        refusedWith(
+          unit('build = ["tool/build.sh", "{version}"]\nassets = ["a.so"]\n'),
+        ),
+        'RK-CONF-042',
+      );
+    });
+
+    test('names each asset inside the build output', () {
+      for (final asset in [
+        '/abs/a.so',
+        '../a.so',
+        'x/../a.so',
+        'x//a.so',
+        'x/',
+      ]) {
+        expect(
+          refusedWith(unit('build = ["b"]\nassets = ["$asset"]\n')),
+          'RK-CONF-043',
+          reason: asset,
+        );
+      }
+      expect(refusedWith(unit('build = ["b"]\nassets = []\n')), 'RK-CONF-043');
+    });
+
+    test('publishes each asset under a name of its own', () {
+      expect(
+        refusedWith(unit('build = ["b"]\nassets = ["x/a.so", "y/A.so"]\n')),
+        'RK-CONF-043',
+        reason: 'GitHub compares asset names without case',
+      );
+      expect(
+        refusedWith(
+          unit('build = ["b"]\nassets = ["x/release-manifest.json"]\n'),
+        ),
+        'RK-CONF-043',
+        reason: "the manifest name is rk's own",
+      );
+    });
+
+    test('declares the command and the assets together', () {
+      expect(refusedWith(unit('build = ["b"]\n')), 'RK-CONF-044');
+      expect(refusedWith(unit('assets = ["a.so"]\n')), 'RK-CONF-044');
+    });
+
+    test('does not also ask rk for binaries', () {
+      expect(
+        refusedWith(
+          unit(
+            '$declared'
+            'binary_platforms = ["linux-x64"]\n',
+          ),
+        ),
+        'RK-CONF-044',
+      );
+    });
+
+    test('publishes its assets as a GitHub release', () {
+      expect(refusedWith(unit(declared, publish: '"git-tag"')), 'RK-CONF-045');
+    });
+
+    test('keeps its settings on its own row when the unit has rows', () {
+      expect(
+        refusedWith('''
+schema = 2
+
+[release.parser]
+tag = "parser-v{version}"
+publish = ["git-tag", "github-release"]
+build = ["b"]
+
+[[release.parser.project]]
+path = "native/parser"
+assets = ["a.so"]
+'''),
+        'RK-CONF-009',
+      );
+    });
+  });
 }

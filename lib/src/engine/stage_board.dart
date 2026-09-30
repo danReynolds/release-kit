@@ -130,8 +130,22 @@ class StageBoard {
     for (final step in Checklist.localProducerSteps(unit)) {
       final platform = step.platform;
       final projectName = step.project;
-      if (platform == null || projectName == null) continue;
+      if (projectName == null) continue;
       final project = unit.project(projectName);
+      if (step.kind == StepKind.buildAssets) {
+        // A project's own build writes every asset it declares at once.
+        final built = {
+          for (final declared in project.assets)
+            ReleaseAssets.assetName(declared),
+        };
+        for (final group in groups) {
+          for (final row in group.rows) {
+            if (built.contains(row.name)) bind(receiptNameFor(step), row);
+          }
+        }
+        continue;
+      }
+      if (platform == null) continue;
       final publicArchive = ReleaseAssets.archiveName(
         project.executable!,
         project.version.canonical,

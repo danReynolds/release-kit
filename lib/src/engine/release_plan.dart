@@ -80,7 +80,8 @@ final class RepositoryReleasePlan {
         (step) =>
             step.kind == StepKind.build ||
             step.kind == StepKind.notarize ||
-            step.kind == StepKind.archive,
+            step.kind == StepKind.archive ||
+            step.kind == StepKind.buildAssets,
       ))
         receiptNameFor(step): step,
     };
@@ -138,6 +139,7 @@ final class RepositoryReleasePlan {
           StepKind.build => ReleasePlanNodeKind.build,
           StepKind.notarize => ReleasePlanNodeKind.notarize,
           StepKind.archive => ReleasePlanNodeKind.archive,
+          StepKind.buildAssets => ReleasePlanNodeKind.buildAssets,
           _ => throw StateError('unexpected local producer ${local.kind}'),
         },
         _ when targetStage != null => ReleasePlanNodeKind.targetStage,
@@ -255,6 +257,7 @@ enum ReleasePlanNodeKind {
   build,
   notarize,
   archive,
+  buildAssets,
   completeStage,
   tag,
   publishRegistry,

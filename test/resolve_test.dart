@@ -354,4 +354,141 @@ dependencies:
     expect(framework.projects, hasLength(2));
     expect(framework.tag, 'fleury-v0.1.0');
   });
+  group('a Cargo crate', () {
+    MemorySourceTree crate({Map<String, String> more = const {}}) =>
+        MemorySourceTree({
+          'native/parser/Cargo.toml':
+              '[package]\nname = "flark_parse"\nversion = "0.1.0"\n',
+          ...more,
+        });
+    String unit(String settings, {String path = 'native/parser'}) =>
+        '''
+schema = 2
+
+[release.parser]
+tag = "flark_parse-v{version}"
+path = "$path"
+publish = ["git-tag", "github-release"]
+$settings
+''';
+    const build =
+        'build = ["tool/build.sh", "{out}"]\n'
+        'assets = ["assets/parser-linux-x64.so"]\n';
+
+    test('releases through its declared build, named by Cargo.toml', () {
+      final parser = resolved(unit(build), crate()).unit('parser')!;
+      final project = parser.projects.single;
+      expect(project.name, 'flark_parse');
+      expect(project.version.canonical, '0.1.0');
+      expect(project.pubspec.path, 'native/parser/Cargo.toml');
+      expect(project.pubspec.vetoesRegistry, isTrue);
+      expect(parser.tag, 'flark_parse-v0.1.0');
+      expect(parser.assetProject, same(project));
+      expect(parser.binaryProject, isNull);
+      expect(
+        parser.buildsReleaseAssets,
+        isTrue,
+        reason:
+            'what its build wrote cannot be rebuilt byte for byte, so a '
+            'partial release keeps needing its stage, as a binary one does',
+      );
+    });
+
+    test(
+      'is the only kind of unit besides binaries that builds its release',
+      () {
+        final keybay = resolved(keybayConfig, keybayTree());
+        expect(keybay.unit('cli')!.buildsReleaseAssets, isTrue);
+        expect(keybay.unit('core')!.buildsReleaseAssets, isFalse);
+      },
+    );
+
+    test('is released only through a declared build', () {
+      final refused = Diagnostics();
+      final parsed = ReleaseConfig.parse(unit(''), 'release.toml', refused)!;
+      expect(Resolution.resolve(parsed, crate(), refused), isNull);
+      expect(refused.found.single.code, 'RK-RES-016');
+      expect(refused.found.single.remedy, contains('declare build'));
+    });
+
+    test('cannot publish to pub.dev', () {
+      final diagnostics = Diagnostics();
+      final parsed = ReleaseConfig.parse(
+        '''
+schema = 2
+
+[release.parser]
+tag = "flark_parse-v{version}"
+path = "native/parser"
+publish = ["git-tag", "github-release", "pub.dev"]
+$build''',
+        'release.toml',
+        diagnostics,
+      )!;
+      expect(Resolution.resolve(parsed, crate(), diagnostics), isNull);
+      expect(diagnostics.found.single.code, 'RK-RES-016');
+      expect(diagnostics.found.single.remedy, contains('"pub.dev"'));
+    });
+
+    test('prefers a pubspec in the same directory', () {
+      final tree = crate(
+        more: {
+          'native/parser/pubspec.yaml': 'name: dart_parser\nversion: 2.0.0\n',
+        },
+      );
+      final project = resolved(
+        unit(build),
+        tree,
+      ).unit('parser')!.projects.single;
+      expect(project.name, 'dart_parser');
+      expect(project.buildsAssets, isTrue);
+    });
+
+    test('is named where no manifest is found at all', () {
+      final diagnostics = Diagnostics();
+      final parsed = ReleaseConfig.parse(
+        unit(build, path: 'native/absent'),
+        'release.toml',
+        diagnostics,
+      )!;
+      final tree = crate(more: {'native/absent/README.md': 'nothing\n'});
+      expect(Resolution.resolve(parsed, tree, diagnostics), isNull);
+      expect(diagnostics.found.single.code, 'RK-RES-001');
+      expect(
+        diagnostics.found.single.remedy,
+        'that directory has no pubspec.yaml or Cargo.toml',
+      );
+    });
+
+    test("builds a unit's release from one project", () {
+      expect(
+        refusedWith(
+          '''
+schema = 2
+
+[release.parser]
+tag = "parser-v{version}"
+publish = ["git-tag", "github-release"]
+
+[[release.parser.project]]
+path = "native/parser"
+build = ["tool/build.sh", "{out}"]
+assets = ["a.so"]
+
+[[release.parser.project]]
+path = "native/other"
+build = ["tool/build.sh", "{out}"]
+assets = ["b.so"]
+''',
+          crate(
+            more: {
+              'native/other/Cargo.toml':
+                  '[package]\nname = "other"\nversion = "0.1.0"\n',
+            },
+          ),
+        ),
+        'RK-RES-017',
+      );
+    });
+  });
 }

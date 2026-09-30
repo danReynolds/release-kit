@@ -470,7 +470,8 @@ class Output {
         StepKind.prerequisite => VisualRole.requirement,
         StepKind.build ||
         StepKind.notarize ||
-        StepKind.archive => VisualRole.localWork,
+        StepKind.archive ||
+        StepKind.buildAssets => VisualRole.localWork,
         StepKind.completeStage => VisualRole.checkpoint,
         StepKind.tag ||
         StepKind.publishRegistry ||

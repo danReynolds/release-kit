@@ -1,3 +1,4 @@
+import 'cargo.dart';
 import 'config.dart';
 import 'diagnostic.dart';
 import 'publish_target.dart';
@@ -98,6 +99,7 @@ class Resolution {
     for (final unit in units) {
       _checkUnitVersions(unit, diagnostics);
       _checkSingleBinaryProject(unit, diagnostics);
+      _checkSingleAssetProject(unit, diagnostics);
     }
     _rejectSharedTags(units, diagnostics);
 
@@ -167,12 +169,19 @@ class Resolution {
 
     final source = tree.read(manifestPath);
     if (source == null) {
+      final crate = declared.path == '.'
+          ? 'Cargo.toml'
+          : '${declared.path}/Cargo.toml';
+      final crateSource = tree.read(crate);
+      if (crateSource != null) {
+        return _crate(unit, declared, crate, crateSource, diagnostics);
+      }
       diagnostics.add(
         'RK-RES-001',
         'no package at "${declared.path}"',
         source: declared.location,
         remedy: tree.exists(declared.path)
-            ? 'that directory has no pubspec.yaml'
+            ? 'that directory has no pubspec.yaml or Cargo.toml'
             : 'that directory does not exist in the repository',
       );
       return null;
@@ -292,6 +301,43 @@ class Resolution {
     );
   }
 
+  /// A Cargo crate, which rk releases only through the build it declares:
+  /// its name and version come from `Cargo.toml`, and its declared assets
+  /// are published as the unit's GitHub release.
+  static ResolvedProject? _crate(
+    UnitConfig unit,
+    ProjectConfig declared,
+    String manifestPath,
+    String source,
+    Diagnostics diagnostics,
+  ) {
+    final manifest = readCargoManifest(source, manifestPath, diagnostics);
+    if (manifest == null) return null;
+    final dart = [
+      for (final target in declared.publish) '"${target.configName}"',
+      if (declared.wantsBinaries) 'binary_platforms',
+    ];
+    if (!declared.buildsAssets || dart.isNotEmpty) {
+      diagnostics.add(
+        'RK-RES-016',
+        '"${manifest.name}" is a Cargo crate, which rk releases only through '
+            'its declared build',
+        source: declared.location,
+        remedy: dart.isNotEmpty
+            ? '${dart.join(' and ')} ${dart.length == 1 ? 'is' : 'are'} for '
+                  'Dart packages; declare build and assets instead'
+            : 'declare build, the command that builds it, and assets, the '
+                  'files that command writes for the GitHub release',
+      );
+      return null;
+    }
+    return ResolvedProject(
+      unitName: unit.name,
+      config: declared,
+      pubspec: manifest,
+    );
+  }
+
   static void _rejectOverlappingPaths(
     List<ResolvedProject> projects,
     Diagnostics diagnostics,
@@ -356,6 +402,28 @@ class Resolution {
       remedy:
           'a release unit ships one standalone program; give '
           '${binary.map((project) => project.name).join(', ')} separate '
+          'units',
+    );
+  }
+
+  /// A unit's GitHub release is built by one project: its binaries, or the
+  /// assets its own build writes.
+  static void _checkSingleAssetProject(
+    ResolvedUnit unit,
+    Diagnostics diagnostics,
+  ) {
+    final building = unit.projects.where((p) => p.buildsAssets).toList();
+    final binary = unit.projects.where((p) => p.config.wantsBinaries).toList();
+    if (building.isEmpty || building.length + binary.length < 2) return;
+    final projects = [...binary, ...building];
+    diagnostics.add(
+      'RK-RES-017',
+      'the unit "${unit.name}" builds its GitHub release from '
+          '${projects.length} projects',
+      source: building.last.config.location,
+      remedy:
+          'a unit\'s release assets come from one project; give '
+          '${projects.map((project) => project.name).join(', ')} separate '
           'units',
     );
   }
@@ -434,6 +502,17 @@ class ResolvedUnit {
 
   bool get shipsBinaries => binaryProject != null;
 
+  /// The project whose own build writes the unit's release assets, when it
+  /// has one. Resolution refuses a second one (RK-RES-017).
+  ResolvedProject? get assetProject =>
+      projects.where((project) => project.buildsAssets).firstOrNull;
+
+  /// Whether the unit's GitHub release carries files built on this machine:
+  /// its binaries, or what its own build writes. Neither can be built again
+  /// byte for byte, so once a public target binds them, the stage that holds
+  /// them is the only copy.
+  bool get buildsReleaseAssets => shipsBinaries || assetProject != null;
+
   /// Whether any selected destination binds this unit to Git history.
   bool get requiresGit => <PublishTarget>{
     ...publish,
@@ -469,6 +548,14 @@ class ResolvedProject {
   Version get version => pubspec.version!;
   Set<PublishTarget> get publish => config.publish;
   List<String> get binaryPlatforms => config.binaryPlatforms;
+
+  /// The command that builds this project's release assets; empty when the
+  /// project declares none.
+  List<String> get build => config.build;
+
+  /// The files [build] writes for the release, relative to its output.
+  List<String> get assets => config.assets;
+  bool get buildsAssets => config.buildsAssets;
 
   /// The single executable a binary channel ships, when there is one.
   String? get executable =>
