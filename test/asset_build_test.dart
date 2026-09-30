@@ -217,7 +217,9 @@ assets = ["assets/parser.so", "parser.dylib"]
             '\x1b[1m$lane/native/parser/src/parser.c:3:5: \x1b[31merror:'
             '\x1b[0m expected ;\n'
             '    return x\n'
-            '           ^\n',
+            '           ^\n'
+            '\tat Parser.parse(Parser.java:12)\n'
+            'plain\x1b(B text\u202e reversed\n',
       ),
     );
 
@@ -233,6 +235,16 @@ assets = ["assets/parser.so", "parser.dylib"]
       remedy,
       contains('      return x\n             ^\n'),
       reason: 'a caret stays under its column',
+    );
+    expect(
+      remedy,
+      contains('          at Parser.parse(Parser.java:12)\n'),
+      reason: 'a tab widens to the next eighth column',
+    );
+    expect(
+      remedy,
+      contains('  plain text  reversed\n'),
+      reason: 'no escape, control or bidi character reaches the terminal',
     );
     expect(printed.toString(), contains('error: expected ;'));
   });
@@ -344,6 +356,33 @@ assets = ["assets/parser.so", "parser.dylib"]
         'program by its path from native/parser, or by a name on PATH, and a '
         'script needs its executable bit',
       ),
+    );
+  });
+
+  test('names a link the build wrote among what it wrote', () async {
+    late final RecordingTools tools;
+    tools = RecordingTools(
+      answers: (_) => ToolResult(exitCode: 0, stdout: '', stderr: ''),
+      onRun: (call) {
+        final out = tools.environments[call]!['RK_OUT']!;
+        File('$out/assets/parser.so')
+          ..createSync(recursive: true)
+          ..writeAsStringSync('so');
+        Link('$out/libparser.so').createSync('assets/parser.so');
+      },
+    );
+    final build = AssetBuild(
+      tools: tools,
+      output: Output(sink: (_) {}, isTerminal: false, useColor: false),
+      workspace: Workspace('${scratch.path}/stage'),
+      sourceRoot: '${scratch.path}/lane',
+    );
+
+    await build.build(step, project);
+
+    expect(
+      problems(build).single['remedy'],
+      contains('it wrote assets/parser.so, libparser.so.'),
     );
   });
 

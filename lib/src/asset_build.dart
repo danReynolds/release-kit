@@ -100,7 +100,8 @@ final class AssetBuild {
       Timer? wait;
       String? unshown;
       void show(String text) {
-        lead!.begin(activity!, detail: text);
+        if (!lead!.active) return;
+        lead.begin(activity!, detail: text);
         // Lines that come before the next redraw wait for it, and only the
         // last of them is shown.
         wait = Timer(_redraw, () {
@@ -210,7 +211,7 @@ final class AssetBuild {
             recursive: true,
             followLinks: false,
           ))
-            if (entity is File)
+            if (entity is File || entity is Link)
               entity.path
                   .substring(out.path.length + 1)
                   .replaceAll(Platform.pathSeparator, '/'),
@@ -260,7 +261,9 @@ final class AssetBuild {
   /// kept, since a caret under a column means something, and a line too long
   /// to read kept at both ends. Null for a blank line.
   static String? _readable(String line) {
-    final text = _withoutEscapes(line).trimRight();
+    final text = _expandTabs(
+      _withoutEscapes(line),
+    ).replaceAll(_invisible, ' ').trimRight();
     if (text.trim().isEmpty) return null;
     final runes = text.runes.toList();
     return runes.length <= 300
@@ -271,20 +274,42 @@ final class AssetBuild {
 
   static String _withoutEscapes(String line) => line
       .replaceAll(RegExp(r'\x1b\[[0-?]*[ -/]*[@-~]'), '')
-      .replaceAll(RegExp(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)'), '');
+      .replaceAll(RegExp(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)'), '')
+      // A character set's designation, then any other escape.
+      .replaceAll(RegExp(r'\x1b[()*+].'), '')
+      .replaceAll(RegExp(r'\x1b[@-_]'), '');
+
+  /// Control, bidirectional and zero-width characters: what would move the
+  /// cursor or reorder a line rather than show in it.
+  static final _invisible = RegExp(
+    r'[\x00-\x1f\x7f\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]',
+  );
+
+  /// [line] with each tab widened to the next eighth column, as a terminal
+  /// would show it, so what lines up under it still does.
+  static String _expandTabs(String line) {
+    if (!line.contains('\t')) return line;
+    final out = StringBuffer();
+    var column = 0;
+    for (final rune in line.runes) {
+      if (rune == 9) {
+        final pad = 8 - column % 8;
+        out.write(' ' * pad);
+        column += pad;
+      } else {
+        out.writeCharCode(rune);
+        column++;
+      }
+    }
+    return out.toString();
+  }
 
   /// [line] as one short printable line, or null when nothing is left once
   /// terminal escapes and control characters are gone.
   static String? _printable(String line) {
-    final text = _withoutEscapes(line)
-        .replaceAll(
-          RegExp(
-            r'[\x00-\x1f\x7f\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]',
-          ),
-          ' ',
-        )
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
+    final text = _withoutEscapes(
+      line,
+    ).replaceAll(_invisible, ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
     if (text.isEmpty) return null;
     final runes = text.runes.toList();
     return runes.length <= 100

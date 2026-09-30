@@ -94,6 +94,11 @@ final class ProgressHandle {
 
   ProgressActivity? get activity => _rows.firstOrNull?.activity;
 
+  /// Whether this handle's rows are still at work, and so may be redrawn.
+  bool get active =>
+      _rows.isNotEmpty &&
+      _rows.every((row) => row.state == ProgressRowState.active);
+
   /// This handle's first row alone, for detail the other rows would only
   /// repeat, such as the latest line of a build that makes them all.
   ProgressHandle get first =>

@@ -1082,16 +1082,19 @@ final class LiveProgress {
       [row.label, if (row.coordinate != null) row.coordinate!].join('  '),
     );
     final overhead = _displayWidth(indent) + _displayWidth(glyph) + 3;
+    const minimumSubjectWidth = 6;
     final status = terminalSafeText(
       _detailGivesWay(
         row,
         rawStatus,
         available == null
             ? null
-            : available - overhead - _displayWidth(left) - 2,
+            : available -
+                  overhead -
+                  _greater(_displayWidth(left), minimumSubjectWidth) -
+                  2,
       ),
     );
-    const minimumSubjectWidth = 6;
     final room = available == null ? null : _atLeastZero(available - overhead);
     final wantedStatus = _displayWidth(status);
     final statusBudget = room == null
@@ -1113,14 +1116,16 @@ final class LiveProgress {
         '${_output._style(fittedStatus, state: textState)}';
   }
 
-  /// [status], with an active row's detail shortened or left out so that it
-  /// fits in [room] beside the whole label. The label and the elapsed time
-  /// say more than a detail does, such as a build's latest line.
+  /// [status], with an active row's long detail shortened or left out so
+  /// that it fits in [room] beside the whole label. The label and the elapsed
+  /// time say more than a long detail does, such as a build's latest line;
+  /// a short one, such as an upload's count, keeps its place.
   String _detailGivesWay(ProgressRow row, String status, int? room) {
     final detail = row.detail;
     if (room == null ||
         detail == null ||
         row.state != ProgressRowState.active ||
+        _displayWidth(detail) <= 12 ||
         _displayWidth(terminalSafeText(status)) <= room) {
       return status;
     }
@@ -1347,6 +1352,8 @@ final class LiveProgress {
   static int _atLeastZero(int value) => value < 0 ? 0 : value;
 
   static int _lesser(int left, int right) => left < right ? left : right;
+
+  static int _greater(int a, int b) => a > b ? a : b;
 
   static String _fit(String text, int? width) {
     text = terminalSafeText(text);

@@ -68,11 +68,20 @@ void main() {
 
     test('a listener that throws does not stop the reading', () async {
       if (Platform.isWindows) return;
+      final scratch = Directory.systemTemp.createTempSync('rk-listener-');
+      addTearDown(() => scratch.deleteSync(recursive: true));
+      final finished = File('${scratch.path}/finished');
       var heard = 0;
 
+      // More than a pipe holds: a reader that stopped would leave the
+      // process blocked, or killed by the broken pipe, before it finishes.
       final running = const SystemTools().runStreaming(
         'sh',
-        const ['-c', r'for i in 1 2 3; do echo $i; done; exit 0'],
+        [
+          '-c',
+          'set -e; echo first; head -c 1000000 /dev/zero | tr "\\0" x; echo; '
+              'touch "${finished.path}"',
+        ],
         onLine: (_) {
           heard++;
           throw StateError('the listener failed');
@@ -81,6 +90,7 @@ void main() {
 
       await expectLater(running, throwsA(isA<StateError>()));
       expect(heard, 1, reason: 'the rest of the output is drained, unheard');
+      expect(finished.existsSync(), isTrue);
     });
 
     test("keeps a bounded instance's bound", () async {
