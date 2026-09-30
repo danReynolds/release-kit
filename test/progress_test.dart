@@ -348,6 +348,101 @@ void main() {
       },
     );
 
+    for (final (width, shown) in [(100, true), (80, false)]) {
+      test('a long detail gives way to the label and the elapsed time '
+          '($width columns)', () async {
+        final harness = _Harness(terminal: true, width: width);
+        final board = harness.output.progressBoard(
+          'Staging parser 0.1.0',
+          delay: Duration.zero,
+        );
+        final building = ProgressActivity(
+          running: 'building',
+          failed: 'build failed',
+        );
+        final row = board.addRow(
+          id: 'so',
+          label: 'aarch64-unknown-linux-gnu-libflark_parse.so',
+        );
+        row.handle.begin(building);
+        harness.now = const Duration(minutes: 3, seconds: 12);
+        row.handle.begin(
+          building,
+          detail: 'Compiling flark_parse v0.5.0 (${'/a/long/lane/path' * 5})',
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 2));
+        board.discard();
+
+        final frame = harness.text
+            .replaceAll(RegExp(r'\x1b\[[0-9;]*[A-Za-z]'), '')
+            .split('\n')
+            .lastWhere((line) => line.contains('building'));
+        expect(frame.runes.length, lessThanOrEqualTo(width));
+        expect(frame, contains('aarch64-unknown-linux-gnu-libflark_parse.so'));
+        expect(frame, endsWith('3m 12s'));
+        expect(
+          frame,
+          shown ? contains('Compiling flark_parse') : isNot(contains('Compil')),
+          reason: shown
+              ? 'the detail is shortened to the room it has'
+              : 'too little room for a detail worth reading',
+        );
+      });
+    }
+
+    test('a short detail keeps its place beside a long label', () async {
+      final harness = _Harness(terminal: true, width: 80);
+      final board = harness.output.progressBoard(
+        'Publishing',
+        delay: Duration.zero,
+      );
+      final uploading = ProgressActivity(
+        running: 'uploading',
+        failed: 'upload failed',
+      );
+      final row = board.addRow(
+        id: 'github',
+        label: 'GitHub Release',
+        coordinate: 'example/parser/releases/tag/flark_parse-v0.1.0',
+      );
+      row.handle.begin(uploading, detail: '3/5');
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      board.discard();
+
+      final frame = harness.text
+          .replaceAll(RegExp(r'\x1b\[[0-9;]*[A-Za-z]'), '')
+          .split('\n')
+          .lastWhere((line) => line.contains('uploading'));
+      expect(frame, contains('uploading · 3/5'));
+    });
+
+    test('a short label still leaves the elapsed time its room', () async {
+      final harness = _Harness(terminal: true, width: 60);
+      final board = harness.output.progressBoard(
+        'Staging',
+        delay: Duration.zero,
+      );
+      final building = ProgressActivity(
+        running: 'building',
+        failed: 'build failed',
+      );
+      final row = board.addRow(id: 'so', label: 'a.so');
+      row.handle.begin(building);
+      harness.now = const Duration(minutes: 3, seconds: 12);
+      row.handle.begin(
+        building,
+        detail: 'Compiling flark_parse v0.5.0 (${'/a/long/lane/path' * 5})',
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      board.discard();
+
+      final frame = harness.text
+          .replaceAll(RegExp(r'\x1b\[[0-9;]*[A-Za-z]'), '')
+          .split('\n')
+          .lastWhere((line) => line.contains('building'));
+      expect(frame, endsWith('3m 12s'));
+    });
+
     test('terminal rows remain one physical line when narrow', () async {
       final harness = _Harness(terminal: true, width: 36);
       final board = harness.output.progressBoard(

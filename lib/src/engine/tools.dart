@@ -32,6 +32,23 @@ abstract class Tools {
   });
 }
 
+/// Tools that can also hand over a command's output line by line as it
+/// arrives, for work long enough that a person wants to watch it move.
+abstract interface class StreamingTools implements Tools {
+  /// Runs [executable] as [run] does, calling [onLine] with each line either
+  /// stream writes, as it arrives. The result still carries all of both.
+  ///
+  /// A tool that cannot watch a process as it runs hands over [ToolResult.lines]
+  /// once it ends.
+  Future<ToolResult> runStreaming(
+    String executable,
+    List<String> arguments, {
+    required void Function(String line) onLine,
+    String? workingDirectory,
+    Map<String, String>? environment,
+  });
+}
+
 class ToolResult {
   ToolResult({
     required this.exitCode,
@@ -44,6 +61,10 @@ class ToolResult {
   final String stderr;
 
   bool get ok => exitCode == 0;
+
+  /// Each line of [stdout], then each line of [stderr].
+  Iterable<String> get lines =>
+      [stdout, stderr].expand(const LineSplitter().convert);
 
   /// The most useful line to show a human, preferring what failed.
   String get summary {
@@ -135,7 +156,7 @@ class ToolCancellation {
   }
 }
 
-class SystemTools implements Tools {
+class SystemTools implements StreamingTools {
   const SystemTools({this.timeout, this.cancellation});
   final ToolCancellation? cancellation;
 
@@ -283,6 +304,75 @@ class SystemTools implements Tools {
   }
 
   @override
+  Future<ToolResult> runStreaming(
+    String executable,
+    List<String> arguments, {
+    required void Function(String line) onLine,
+    String? workingDirectory,
+    Map<String, String>? environment,
+  }) async {
+    // A bounded run keeps [run]'s bound, and hands over its lines at the end.
+    if (timeout != null || cancellation != null) {
+      final result = await run(
+        executable,
+        arguments,
+        workingDirectory: workingDirectory,
+        environment: environment,
+      );
+      result.lines.forEach(onLine);
+      return result;
+    }
+    final process = await Process.start(
+      executable,
+      arguments,
+      workingDirectory: workingDirectory,
+      environment: environment,
+    );
+    // The same closed stdin as [run], so a command that reads it sees EOF.
+    unawaited(process.stdin.close().catchError((Object _) {}));
+    // A listener that fails must not stop the reading: the process would go
+    // on writing into a closed pipe. What it threw is thrown once it ends.
+    Object? failure;
+    StackTrace? failureTrace;
+    void deliver(String line) {
+      if (failure != null) return;
+      try {
+        onLine(line);
+      } on Object catch (error, stackTrace) {
+        failure = error;
+        failureTrace = stackTrace;
+      }
+    }
+
+    Future<String> read(Stream<List<int>> stream) async {
+      final text = StringBuffer();
+      await stream
+          .transform(_lenient.decoder)
+          .map((chunk) {
+            text.write(chunk);
+            return chunk;
+          })
+          .transform(const LineSplitter())
+          .forEach(deliver);
+      return text.toString();
+    }
+
+    final [stdout, stderr, exitCode] = await Future.wait<Object>([
+      read(process.stdout),
+      read(process.stderr),
+      process.exitCode,
+    ]);
+    if (failure case final failed?) {
+      Error.throwWithStackTrace(failed, failureTrace!);
+    }
+    return ToolResult(
+      exitCode: exitCode as int,
+      stdout: stdout as String,
+      stderr: stderr as String,
+    );
+  }
+
+  @override
   Future<int> runInteractive(
     String executable,
     List<String> arguments, {
@@ -299,7 +389,7 @@ class SystemTools implements Tools {
 }
 
 /// Records what would have been run, for tests and for a dry run.
-class RecordingTools implements Tools {
+class RecordingTools implements StreamingTools {
   RecordingTools({
     this.results = const {},
     this.onRun,
@@ -352,6 +442,25 @@ class RecordingTools implements Tools {
     probe?.call(key, workingDirectory);
     onRun?.call(key);
     return _result(key);
+  }
+
+  /// Answers as [run] does, then hands over the answer's lines in order.
+  @override
+  Future<ToolResult> runStreaming(
+    String executable,
+    List<String> arguments, {
+    required void Function(String line) onLine,
+    String? workingDirectory,
+    Map<String, String>? environment,
+  }) async {
+    final result = await run(
+      executable,
+      arguments,
+      workingDirectory: workingDirectory,
+      environment: environment,
+    );
+    result.lines.forEach(onLine);
+    return result;
   }
 
   @override
