@@ -51,6 +51,23 @@
   read the workspace, and from Pub's resolved graph otherwise. The stage
   records the Dart it uses, and a standalone one would depend on an
   unrecorded `FLUTTER_ROOT`.
+- Validate a package against the versions its consumers resolve.
+  - Pub resolves a second mirror of the snapshot with the package as a root
+    of its own, then validates and archives it there. Other workspace members,
+    the workspace root and tracked lockfiles no longer hold its dependencies
+    to versions consumers do not get.
+  - Workspace packages released in the same unit, and those needed only to
+    develop it, come from the snapshot. Everything else comes from pub.dev.
+  - The archive is unchanged: Pub never archives the `pubspec_overrides.yaml`
+    rk writes there, or a lockfile.
+  - rk refuses a package Pub cannot resolve that way (`RK-PUB-017`).
+- Clear tracked lockfiles before Pub resolves the snapshot.
+- Read the graph `pub get` recorded when `dart pub deps --json` fails. It
+  fails when a workspace member's overrides file leaves out a package its
+  pubspec overrides, and rk used to refuse such a workspace (`RK-PUB-016`).
+- Report the warnings Pub finds while writing an archive (`RK-PUB-012`). With
+  warnings alone, Pub exits 0, and rk used to drop them, including analysis
+  errors in `lib`.
 - Add an inline version table to `rk use`. Installed versions remain visible
   while remote checks run independently. Install and Update are separate from
   Use; Update appears only for a confirmed newer version. Navigation and checks

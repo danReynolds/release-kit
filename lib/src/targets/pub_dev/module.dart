@@ -457,7 +457,7 @@ final class PubDevTargetModule extends TargetModule {
   TargetStage stageInput({
     required ResolvedUnit unit,
     required TargetPlan target,
-  }) => pubDevPackageStage(target: target);
+  }) => pubDevPackageStage(target: target, unit: unit);
 }
 
 String? _repositoryIdentity(String? value) {

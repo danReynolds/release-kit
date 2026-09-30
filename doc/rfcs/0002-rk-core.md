@@ -858,6 +858,46 @@ act(expected, stage)
   refuses it (RK-PUB-014) before Pub runs when it can read the workspace, and
   otherwise from Pub's resolved graph.
 
+  *Amended again (as built):* Pub validates the package where it resolves
+  the way its consumers do, which restores the consumer resolve this section
+  first required. The workspace resolution above still decides which
+  overrides reach the package. The stage then resolves a second mirror of
+  the snapshot, with the package as a root of its own. Its
+  `pubspec_overrides.yaml`, which Pub never archives, sets the package's
+  `resolution` and `workspace` aside and replaces every dependency override.
+  Lockfiles are cleared from both mirrors. Pub validates and archives the
+  package in the second mirror. The versions it analyzes against are the
+  ones consumers get, rather than the ones other workspace members, the
+  workspace root, or a tracked lockfile hold it to.
+
+  Two kinds of workspace package still come from the snapshot, by path:
+  - packages released in the same unit, which are staged before any of them
+    is published;
+  - packages reached only through dev dependencies, which consumers never
+    resolve.
+
+  Every other package comes from pub.dev. Another unit's package is live
+  there before this stage runs (RK-REL-001). rk refuses (RK-PUB-017) when
+  Pub cannot resolve the package that way, or applies an override rk did
+  not write.
+
+  An earlier consumer-resolve probe (RK-PUB-002, retired) failed in two ways:
+  - It path-overrode the package into a consumer under a fixed SDK floor.
+  - It refused a sibling at a new version, which rk's publication order
+    handles.
+
+  This one resolves the package itself under its own constraints, and takes
+  its unit's unreleased siblings from the snapshot.
+
+  `pub deps --json` fails in one layout Pub resolves: a member's pubspec
+  overrides a package that the member's overrides file leaves out. rk then
+  reads the same graph from what `pub get` recorded: the lockfile, and
+  `.dart_tool/package_graph.json` (Dart 3.8 and later).
+
+  With warnings alone, Pub writes the archive, lists them as potential
+  issues, and exits 0. rk reads those findings whatever the exit code
+  (RK-PUB-012).
+
   Pubspecs are read as YAML reads them, or refused where rk's subset stops.
 - **`dart-cli`** (build): `dart compile exe` per platform, then smoke-runs
   what it produced. Capability is resolved per platform and reported:
