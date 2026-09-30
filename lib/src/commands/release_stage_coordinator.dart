@@ -1209,9 +1209,18 @@ final class ReleaseStageCoordinator {
           output: output,
           workspace: stage.workspace,
           sourceRoot: chain.repositoryRoot,
+          // Beside the stages rather than in one, so it outlives them.
+          cacheDirectory: [
+            initialGit.root,
+            '.rk',
+            'cache',
+            unit.name,
+            project.name,
+          ].join(Platform.pathSeparator),
         ).build(
           step,
           project,
+          progress: progress,
           environment: {
             if (stage.identity.headCommit case final commit?)
               'RK_SOURCE_COMMIT': commit,

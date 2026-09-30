@@ -289,6 +289,13 @@ assets = [
 - **What the command is told.** Its environment carries the release's facts:
   `RK_OUT`, `RK_SOURCE_COMMIT`, `RK_REPOSITORY` (`owner/name`), `RK_VERSION`
   and `RK_TAG`.
+- **What it may keep.** `RK_CACHE` is a directory that outlives the stage,
+  `.rk/cache/<unit>/<project>`, for what the next build can reuse, such as a
+  compiler's target directory. Nothing in it reaches a release, and it can be
+  deleted at any time.
+- **While it runs.** The stage shows the command's latest line beside its
+  elapsed time. If it fails, rk prints its last lines, and the diagnosis
+  keeps all of them.
 - **Rust crates.** A directory with a `Cargo.toml` and no `pubspec.yaml` is a
   Rust crate. Its name and version come from the `[package]` table, and it
   is released only this way.

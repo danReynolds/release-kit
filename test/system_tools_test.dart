@@ -1,9 +1,58 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:rk/src/engine/tools.dart';
 import 'package:test/test.dart';
 
 void main() {
+  group('a streaming run', () {
+    test(
+      'hands over each line while it runs, and keeps both streams',
+      () async {
+        if (Platform.isWindows) return;
+        final lines = <String>[];
+        final first = Completer<void>();
+        var ended = false;
+        final running = const SystemTools()
+            .runStreaming(
+              'sh',
+              const [
+                '-c',
+                'echo ready; sleep 1; echo done; printf warned >&2; exit 4',
+              ],
+              onLine: (line) {
+                lines.add(line);
+                if (!first.isCompleted) first.complete();
+              },
+            )
+            .then((result) {
+              ended = true;
+              return result;
+            });
+
+        await first.future;
+        expect(ended, isFalse, reason: 'the first line arrives while it runs');
+        final result = await running;
+        expect(lines, unorderedEquals(['ready', 'done', 'warned']));
+        expect(result.exitCode, 4);
+        expect(result.stdout, 'ready\ndone\n');
+        expect(result.stderr, 'warned', reason: 'each stream stays as written');
+      },
+    );
+
+    test("keeps a bounded instance's bound", () async {
+      if (Platform.isWindows) return;
+      final lines = <String>[];
+
+      final result = await const SystemTools(
+        timeout: Duration(milliseconds: 50),
+      ).runStreaming('sleep', const ['10'], onLine: lines.add);
+
+      expect(result.exitCode, 124);
+      expect(lines, [contains('timed out')]);
+    });
+  });
+
   test('cancelling before a read prevents process creation', () async {
     final cancellation = ToolCancellation()..cancel();
     final result = await SystemTools(

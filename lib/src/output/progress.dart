@@ -94,6 +94,11 @@ final class ProgressHandle {
 
   ProgressActivity? get activity => _rows.firstOrNull?.activity;
 
+  /// This handle's first row alone, for detail the other rows would only
+  /// repeat, such as the latest line of a build that makes them all.
+  ProgressHandle get first =>
+      _rows.length <= 1 ? this : ProgressHandle._(_rows.first);
+
   void begin(ProgressActivity activity, {String? detail}) {
     for (final row in _rows) {
       row._begin(activity, detail: detail);

@@ -281,15 +281,25 @@ printf 'scratch' > "$1/unrelated.txt"
       );
     });
 
-    test('refuses when the build fails', () {
-      final (:repo, :environment) = crate(
-        '#!/bin/bash\necho "no compiler for the target" >&2\nexit 3\n',
-      );
+    test('refuses when the build fails, and shows how it ended', () {
+      final (:repo, :environment) = crate('''#!/bin/bash
+exec >&2
+for i in 1 2 3 4 5 6 7 8 9 10; do echo "step \$i"; done
+echo "no compiler for the target"
+exit 3
+''');
       final run = repo(['stage', 'parser', '--json'], environment: environment);
       expect(run.code, isNot(0));
       final failed = problem(run, 'RK-BUILD-003');
       expect(failed['message'], 'flark_parse: its build failed');
-      expect(failed['remedy'], contains('exited 3'));
+      final remedy = failed['remedy']! as String;
+      expect(remedy, contains('tool/build.sh exited 3, ending:\n  step 4\n'));
+      expect(remedy, contains('  no compiler for the target\nFix the build'));
+      expect(
+        remedy,
+        isNot(contains('step 3')),
+        reason: 'the last eight lines, not the whole transcript',
+      );
       expect(
         repo.diagnoses().expand(
           (diagnosis) => (diagnosis['problems'] as List).map(
@@ -301,6 +311,69 @@ printf 'scratch' > "$1/unrelated.txt"
       expectNoTags(repo);
     });
 
+    test('says when the build cannot start', () {
+      final (:repo, :environment) = crate(
+        '#!/nonexistent/interpreter\nexit 0\n',
+      );
+      final run = repo(['stage', 'parser', '--json'], environment: environment);
+      expect(run.code, isNot(0));
+      final failed = problem(run, 'RK-BUILD-003');
+      expect(failed['message'], 'flark_parse: its build did not start');
+      expect(
+        failed['remedy'],
+        contains('build names a program by its path from native/parser'),
+      );
+      expectNoTags(repo);
+    });
+
+    test('keeps what it caches from one stage to the next', () {
+      final (:repo, :environment) = crate(r'''#!/bin/bash
+set -euo pipefail
+echo built >> "$RK_CACHE/builds"
+mkdir -p "$1/assets"
+printf 'so' > "$1/assets/parser-linux-x64.so"
+printf 'dylib' > "$1/parser-macos-arm64.dylib"
+cp "$RK_CACHE/builds" "$1/src.tar.gz"
+''');
+      final first = repo([
+        'stage',
+        'parser',
+        '--json',
+      ], environment: environment);
+      expect(first.code, 0, reason: first.all);
+      File(
+        '${repo.root}/native/parser/CHANGELOG.md',
+      ).writeAsStringSync('## 0.1.0\n\nThe first release.\n');
+      repo.commit();
+      _git(repo.root, ['push']);
+
+      final second = repo([
+        'stage',
+        'parser',
+        '--json',
+      ], environment: environment);
+      expect(second.code, 0, reason: second.all);
+      expect(
+        stageEvidence(second, 'parser')['stage id'],
+        isNot(stageEvidence(first, 'parser')['stage id']),
+      );
+      final stage =
+          '${repo.root}/${stageEvidence(second, 'parser')['stage path']}';
+      expect(
+        File(
+          '$stage/producers/flark_parse/assets/src.tar.gz',
+        ).readAsStringSync(),
+        'built\nbuilt\n',
+        reason: 'the second build finds what the first one kept',
+      );
+      expect(
+        File(
+          '${repo.root}/.rk/cache/parser/flark_parse/builds',
+        ).readAsStringSync(),
+        'built\nbuilt\n',
+      );
+    });
+
     test('refuses when the build does not write a declared asset', () {
       final (:repo, :environment) = crate(r'''#!/bin/bash
 mkdir -p "$1/assets"
@@ -309,9 +382,16 @@ printf 'dylib' > "$1/parser-macos-arm64.dylib"
 ''');
       final run = repo(['stage', 'parser', '--json'], environment: environment);
       expect(run.code, isNot(0));
+      final missing = problem(run, 'RK-BUILD-004');
       expect(
-        problem(run, 'RK-BUILD-004')['message'],
+        missing['message'],
         'flark_parse: its build did not write src.tar.gz',
+      );
+      expect(
+        missing['remedy'],
+        contains(
+          'it wrote assets/parser-linux-x64.so, parser-macos-arm64.dylib.',
+        ),
       );
     });
   });
