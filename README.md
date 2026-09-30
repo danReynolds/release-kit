@@ -253,12 +253,13 @@ Releasing core 0.3.0
 ```
 
 Each unit then stages, checks and publishes in turn, and reads everything
-again before it acts. A unit asks again only when those reads find
-something the question did not show, such as a name it would claim for the
-first time, or when its build raises a warning. If one unit already cannot
-go ahead, each unit asks for itself. A failure stops the run. Units already
-published stay published, and running `rk release` again carries on from
-there.
+again before it acts. A unit asks again, and says why, when those reads
+find something the question did not show, such as a name it would claim for
+the first time, or when rk warns about it while it stages, as it does for
+Pub's validation warnings. If a unit already cannot go ahead, as far as rk
+can tell before staging, each unit asks for itself. A failure stops the
+run. Units already published stay published, and running `rk release`
+again carries on from there.
 
 ## Release assets your own build makes
 

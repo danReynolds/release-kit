@@ -245,11 +245,9 @@ class ReleaseCommand {
         'Release order: ${ordered.map((unit) => '${unit.name} ${unit.version}').join(' -> ')}',
       );
       output.blank();
-      if (!stageOnly &&
-          confirm != null &&
-          !preauthorized &&
-          !await _askOnce(ordered)) {
-        return ExitCodes.refused;
+      if (!stageOnly && confirm != null && !preauthorized) {
+        _showSourceWarning();
+        if (!await _askOnce(ordered)) return ExitCodes.refused;
       }
     }
     for (final unit in ordered) {
@@ -260,16 +258,28 @@ class ReleaseCommand {
     return ExitCodes.ok;
   }
 
+  /// Says once per run, before anything asks for a yes, that the release
+  /// is of uncommitted work.
+  void _showSourceWarning() {
+    if (sourceWarning == null || _sourceWarningShown) return;
+    _sourceWarningShown = true;
+    output.heading('Warnings');
+    output.warning(sourceWarning!, depth: 1);
+    output.blank();
+  }
+
   /// Shows what a repository release will publish, unit by unit, and asks
   /// once for all of it before the first unit acts. Answers false when the
   /// run was declined.
   ///
-  /// These are the reads each unit makes before it acts, and each makes them
-  /// again: this question discloses, and each unit still checks. A unit whose
-  /// fresh reads find something not shown here, or that warns, asks for
-  /// itself. So does every unit when fewer than two have anything to publish,
-  /// or when one already cannot go ahead: that unit stops the run when it is
-  /// reached, and the units before it should not be released on a yes to it.
+  /// These are the reads and checks each unit makes before it stages, and
+  /// each makes them again: this question discloses, and each unit still
+  /// checks. A unit whose fresh reads find something not shown here, or that
+  /// rk warns about, asks for itself. So does every unit when fewer than two
+  /// have anything to publish, or when one already cannot go ahead: that unit
+  /// stops the run when it is reached, and the units before it should not be
+  /// released on a yes to it. What only staging finds still stops the run
+  /// where it is found.
   Future<bool> _askOnce(List<ResolvedUnit> ordered) async {
     final board = output.progressBoard(
       'Reading what this run publishes',
@@ -290,9 +300,13 @@ class ReleaseCommand {
 
     final stopping = plans.where((plan) => plan.stop != null).firstOrNull;
     if (stopping != null) {
+      final name = '${stopping.unit.name} ${stopping.unit.version}';
       output.say(
-        '${stopping.unit.name} ${stopping.unit.version} cannot go ahead as '
-        'things stand (${stopping.stop}), so each unit asks for itself.',
+        stopping.unread
+            ? '$name could not be read ahead of its turn (${stopping.stop}), '
+                  'so each unit asks for itself.'
+            : '$name cannot go ahead as things stand (${stopping.stop}), so '
+                  'each unit asks for itself.',
       );
       output.blank();
       return true;
@@ -322,14 +336,21 @@ class ReleaseCommand {
     final series = names.length == 2
         ? names.join(' and ')
         : '${names.sublist(0, names.length - 1).join(', ')} and ${names.last}';
+    // The long form each unit's own question would record, since the yes
+    // that accepts it is this one.
     output.report.attach(
       'authorization-disclosures/run',
       [
         'one yes for $series, asked before the first of them acted.',
         for (final plan in asking)
-          '${plan.unit.name} ${plan.unit.version}: '
-              '${plan.remaining.map((target) => target.label).join(', ')}',
-      ].join('\n'),
+          [
+            '${plan.unit.name} ${plan.unit.version}',
+            for (final target in plan.remaining)
+              '  ${target.kindLabel}: '
+                  '${_publication.targetNote(target, plan.claims)}',
+            ..._publication.disclosureFor(plan.remaining, plan.claims),
+          ].join('\n'),
+      ].join('\n\n'),
     );
 
     final answer = await confirm!('Release $series? [y/N] ');
@@ -373,8 +394,8 @@ class ReleaseCommand {
     return true;
   }
 
-  /// What [unit] would publish as things stand, read as its own release reads
-  /// it before acting.
+  /// What [unit] would publish as things stand, read and checked as its own
+  /// release reads and checks it before staging.
   Future<_UnitPlan> _planFor(
     ResolvedUnit unit,
     ProgressRowController row,
@@ -395,40 +416,82 @@ class ReleaseCommand {
         for (final step in checklist.steps)
           if (step.isPublic) step,
       ];
-      final states = await Future.wait([
+      final stageInspection = _stageFor(unit).inspect();
+      // Public destinations only. A prerequisite, such as a provider's
+      // version on pub.dev, is what the units before this one publish.
+      final inspections = await Future.wait([
         for (final step in publicSteps) inspector.inspect(step, unit),
       ]);
-      final remaining = <TargetPlan>[];
-      for (final (index, step) in publicSteps.indexed) {
-        final state = states[index];
-        if (state.isExact) continue;
-        final target = targetByStep[step.id]!;
-        if (!state.isAbsent) {
+      final states = {
+        for (final (index, step) in publicSteps.indexed)
+          step.id: inspections[index],
+      };
+      for (final step in publicSteps) {
+        final state = states[step.id]!;
+        if (!state.isExact && !state.isAbsent) {
           row.fail();
           return _UnitPlan.stopped(
             unit,
-            '${target.label}: ${state.detail ?? state.verdict.name}',
+            '${targetByStep[step.id]!.label}: '
+            '${state.detail ?? state.verdict.name}',
           );
         }
-        remaining.add(target);
       }
-      final history = remaining.isEmpty
-          ? null
-          : await inspector.releaseMonotonicity(unit, targets, problems);
+      final history = await inspector.releaseMonotonicity(
+        unit,
+        targets,
+        problems,
+      );
+      inspector.tagGuards(unit, checklist, states).forEach(problems.report);
       if (problems.isNotEmpty) {
         row.fail();
         return _UnitPlan.stopped(unit, problems.found.first.message);
       }
-      row.complete(note: remaining.isEmpty ? 'already released' : 'read');
+
+      final remaining = [
+        for (final step in publicSteps)
+          if (!states[step.id]!.isExact) targetByStep[step.id]!,
+      ];
+      if (remaining.isNotEmpty) {
+        final recoversWithoutStage = _recoversWithoutStage(
+          stageInspection,
+          remaining,
+          states,
+        );
+        String? refusal;
+        if (_needsLostStage(
+          unit,
+          stageInspection,
+          publicSteps,
+          states,
+          recoversWithoutStage: recoversWithoutStage,
+        )) {
+          refusal = 'the partial release needs its exact stage';
+        } else if (!stageInspection.reusable && !recoversWithoutStage) {
+          refusal =
+              (_refuseIfUnfinishable(unit) ??
+                      _stages.preparationProblem(
+                        unit,
+                        stageInspection,
+                        mayReplaceReviewed: false,
+                      ))
+                  ?.message;
+        }
+        if (refusal != null) {
+          row.fail();
+          return _UnitPlan.stopped(unit, refusal);
+        }
+      }
+      row.complete(note: remaining.isEmpty ? 'already released' : 'checked');
       return _UnitPlan(
         unit,
         publishes: publicSteps.isNotEmpty,
         remaining: remaining,
-        claims: history?.claims ?? const [],
+        claims: history.claims,
       );
     } on Object catch (error) {
       row.fail();
-      return _UnitPlan.stopped(unit, 'it could not be read: $error');
+      return _UnitPlan.stopped(unit, '$error', unread: true);
     }
   }
 
@@ -485,12 +548,7 @@ class ReleaseCommand {
     );
     output.blank();
 
-    if (sourceWarning != null && !_sourceWarningShown) {
-      _sourceWarningShown = true;
-      output.heading('Warnings');
-      output.warning(sourceWarning!, depth: 1);
-      output.blank();
-    }
+    _showSourceWarning();
 
     final problems = Diagnostics();
     _validate(unit, problems);
@@ -652,34 +710,18 @@ class ReleaseCommand {
       for (final step in publicSteps)
         if (!states[step.id]!.isExact) targetByStep[step.id]!,
     ];
-    final recoversWithoutStage =
-        !stageOnly &&
-        !localOnly &&
-        !stageInspection.reusable &&
-        unfinishedTargets.isNotEmpty &&
-        unfinishedTargets.every((target) {
-          final state = states[target.step.id]!;
-          return state.isAbsent &&
-              inspector.targets
-                      .moduleForTarget(target)
-                      .stageRecoveryBinding(state) !=
-                  null;
-        });
-
-    // Once any binary target is exact, the original signed/notarized stage is
-    // recovery-critical until every other target is also proved exact. An
-    // unread forge or tap cannot be treated as permission to rebuild: it may
-    // already contain the bytes bound by the public tag.
-    final partialBinaryRelease =
-        unit.buildsReleaseAssets &&
-        !stageInspection.reusable &&
-        !recoversWithoutStage &&
-        publicSteps.any((step) => states[step.id]!.isExact) &&
-        publicSteps.any((step) {
-          final state = states[step.id]!;
-          return state.isAbsent || state.verdict == Verdict.unknown;
-        });
-    if (partialBinaryRelease) {
+    final recoversWithoutStage = _recoversWithoutStage(
+      stageInspection,
+      unfinishedTargets,
+      states,
+    );
+    if (_needsLostStage(
+      unit,
+      stageInspection,
+      publicSteps,
+      states,
+      recoversWithoutStage: recoversWithoutStage,
+    )) {
       output.halt(HaltKind.unfixableByRerun);
       output.problem(
         Diagnostic(
@@ -871,6 +913,49 @@ class ReleaseCommand {
     return inspector.inspect(step, unit);
   }
 
+  /// Whether the targets a unit has left can all finish from authenticated
+  /// public inputs once its stage is gone, as a moving channel may. One
+  /// versioned publication that still needs bytes keeps the original stage
+  /// recovery-critical for the whole run.
+  bool _recoversWithoutStage(
+    StageInspection stageInspection,
+    List<TargetPlan> unfinished,
+    Map<String, Inspection> states,
+  ) =>
+      !stageOnly &&
+      !stageInspection.reusable &&
+      unfinished.isNotEmpty &&
+      unfinished.every((target) {
+        final state = states[target.step.id]!;
+        return state.isAbsent &&
+            inspector.targets
+                    .moduleForTarget(target)
+                    .stageRecoveryBinding(state) !=
+                null;
+      });
+
+  /// Whether a partly public release of what [unit] builds needs the exact
+  /// stage it no longer has. Once any binary target is exact, the original
+  /// signed or notarized stage is recovery-critical until every other target
+  /// is also proved exact. An unread forge or tap cannot be treated as
+  /// permission to rebuild: it may already contain the bytes bound by the
+  /// public tag.
+  bool _needsLostStage(
+    ResolvedUnit unit,
+    StageInspection stageInspection,
+    List<Step> publicSteps,
+    Map<String, Inspection> states, {
+    required bool recoversWithoutStage,
+  }) =>
+      unit.buildsReleaseAssets &&
+      !stageInspection.reusable &&
+      !recoversWithoutStage &&
+      publicSteps.any((step) => states[step.id]!.isExact) &&
+      publicSteps.any((step) {
+        final state = states[step.id]!;
+        return state.isAbsent || state.verdict == Verdict.unknown;
+      });
+
   /// Refuses what this machine cannot finish, before any work rather than at
   /// the last step.
   Diagnostic? _refuseIfUnfinishable(ResolvedUnit unit) {
@@ -992,9 +1077,10 @@ final class _UnitPlan {
     required this.publishes,
     required this.remaining,
     required this.claims,
-  }) : stop = null;
+  }) : stop = null,
+       unread = false;
 
-  _UnitPlan.stopped(this.unit, String this.stop)
+  _UnitPlan.stopped(this.unit, String this.stop, {this.unread = false})
     : publishes = true,
       remaining = const [],
       claims = const [];
@@ -1003,5 +1089,10 @@ final class _UnitPlan {
   final bool publishes;
   final List<TargetPlan> remaining;
   final List<TargetClaim> claims;
+
+  /// Why the unit cannot go ahead, when it cannot.
   final String? stop;
+
+  /// Whether [stop] is that it could not be read at all.
+  final bool unread;
 }
