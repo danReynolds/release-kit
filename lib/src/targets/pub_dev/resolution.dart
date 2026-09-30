@@ -300,6 +300,169 @@ List<DependencyOverride> maskingOverrides(
       override,
 ];
 
+/// The dependency graph `dart pub get` recorded where it resolved at
+/// [root], in the shape rk reads from `dart pub deps --json`: the edges
+/// from `.dart_tool/package_graph.json`, and each package's source from the
+/// lockfile. `pub deps --json` fails when a workspace member's pubspec
+/// overrides a package that the member's overrides file leaves out: that
+/// command follows the pubspec, and Pub never resolved the package. Pub
+/// writes the graph file from Dart 3.8. Null when either record is missing,
+/// or they do not describe the same packages.
+String? recordedGraph(String root) {
+  final Object? decoded;
+  try {
+    decoded = jsonDecode(
+      File('$root/.dart_tool/package_graph.json').readAsStringSync(),
+    );
+  } on FileSystemException {
+    return null;
+  } on FormatException {
+    return null;
+  }
+  if (decoded is! Map || decoded['packages'] is! List) return null;
+  final roots = _strings(decoded['roots']);
+  if (roots == null) return null;
+  final locked = _read('$root/pubspec.lock').map?['packages'];
+  final packages = <Map<String, Object?>>[];
+  for (final entry in decoded['packages'] as List) {
+    if (entry is! Map || entry['name'] is! String) return null;
+    final name = entry['name'] as String;
+    final dependencies = _strings(entry['dependencies']);
+    if (dependencies == null) return null;
+    if (roots.contains(name)) {
+      final dev = _strings(entry['devDependencies']);
+      if (dev == null) return null;
+      packages.add({
+        'name': name,
+        'kind': 'root',
+        'source': 'root',
+        'dependencies': [...dependencies, ...dev],
+        'directDependencies': dependencies,
+        'devDependencies': dev,
+      });
+      continue;
+    }
+    final source = locked is YamlMap
+        ? locked.map(name)?.string('source')
+        : null;
+    if (source == null) return null;
+    packages.add({
+      'name': name,
+      'kind': 'transitive',
+      'source': source,
+      'dependencies': dependencies,
+      'directDependencies': dependencies,
+    });
+  }
+  return jsonEncode({'packages': packages});
+}
+
+/// The workspace packages in [pubDepsJson], by name.
+Set<String>? workspacePackages(String pubDepsJson) => _packages(
+  pubDepsJson,
+)?.entries.where((e) => e.value['kind'] == 'root').map((e) => e.key).toSet();
+
+/// The workspace packages that resolving [package] the way its consumers do
+/// takes from the snapshot rather than from pub.dev, from [pubDepsJson]:
+/// those it reaches through its dependencies that are released with it
+/// ([releasedWith], its unit's packages, staged before any of them is
+/// published), and those it reaches only through its dev dependencies,
+/// which its consumers never resolve. Any other workspace package it
+/// reaches, its consumers take from pub.dev, and so does the resolution.
+/// Null when the output does not describe the graph completely.
+Set<String>? snapshotPackages(
+  String pubDepsJson,
+  String package,
+  Set<String> releasedWith,
+) {
+  final packages = _packages(pubDepsJson);
+  final start = packages?[package];
+  if (packages == null || start == null) return null;
+  final runtime = runtimeDependencies(pubDepsJson, package);
+  final dev = _strings(start['devDependencies']);
+  if (runtime == null || dev == null) return null;
+  // Everything the dev dependencies bring, as a workspace package brings
+  // its own dependencies but not its dev dependencies.
+  final developed = <String>{};
+  final pending = [...dev];
+  while (pending.isNotEmpty) {
+    final name = pending.removeLast();
+    if (!developed.add(name)) continue;
+    final entry = packages[name];
+    if (entry == null) return null;
+    final edges = _strings(
+      entry['kind'] == 'root'
+          ? entry['directDependencies']
+          : entry['dependencies'],
+    );
+    if (edges == null) return null;
+    pending.addAll(edges);
+  }
+  bool workspace(String name) => packages[name]?['kind'] == 'root';
+  return {
+    for (final name in runtime)
+      if (workspace(name) && releasedWith.contains(name)) name,
+    for (final name in developed)
+      if (workspace(name) && !runtime.contains(name)) name,
+  }..remove(package);
+}
+
+/// Each package's directory, by name, from the package configuration Pub
+/// wrote at [root]. Null when there is none rk reads.
+Map<String, String>? packageDirectories(String root) {
+  final Object? decoded;
+  try {
+    decoded = jsonDecode(
+      File('$root/.dart_tool/package_config.json').readAsStringSync(),
+    );
+  } on FileSystemException {
+    return null;
+  } on FormatException {
+    return null;
+  }
+  if (decoded is! Map || decoded['packages'] is! List) return null;
+  final base = Uri.directory('$root/.dart_tool/');
+  final directories = <String, String>{};
+  for (final entry in decoded['packages'] as List) {
+    if (entry is! Map) return null;
+    final name = entry['name'];
+    final rootUri = entry['rootUri'];
+    if (name is! String || rootUri is! String) return null;
+    final path = base.resolve(rootUri).toFilePath();
+    directories[name] = path.length > 1 && path.endsWith('/')
+        ? path.substring(0, path.length - 1)
+        : path;
+  }
+  return directories;
+}
+
+/// The `pubspec_overrides.yaml` the stage writes over a package's own, so
+/// that Pub resolves the package the way its consumers do. Within a
+/// workspace ([inWorkspace]) the package becomes a root of its own, with no
+/// workspace of its own either. Pub then applies no dependency override but
+/// [fromSnapshot]: the workspace packages the package reaches, by name, each
+/// with its path relative to the package.
+String consumerOverrides(
+  Map<String, String> fromSnapshot, {
+  required bool inWorkspace,
+}) {
+  final names = fromSnapshot.keys.toList()..sort();
+  return [
+    '# Written by rk: resolve this package the way its consumers do.',
+    if (inWorkspace) ...['resolution: null', 'workspace: []'],
+    if (names.isEmpty)
+      'dependency_overrides: {}'
+    else ...[
+      'dependency_overrides:',
+      for (final name in names) ...[
+        '  $name:',
+        '    path: ${jsonEncode(fromSnapshot[name])}',
+      ],
+    ],
+    '',
+  ].join('\n');
+}
+
 /// Whether resolving [packages] (directories) needs the Flutter SDK: one of
 /// them depends on a Flutter SDK package or constrains the Flutter version.
 bool needsFlutter(Iterable<String> packages) {

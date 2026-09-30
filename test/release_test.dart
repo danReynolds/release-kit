@@ -1575,6 +1575,92 @@ publish = ["pub.dev"]
     expect(ran.text, contains('no public target changed'));
   });
 
+  test('warnings Pub reports beside the archive it wrote are shown before '
+      'publishing', () async {
+    // Dart 3.12's Pub, verbatim in form: with warnings alone it writes the
+    // archive, exits 0 and prints no summary. Its hints are not warnings.
+    final registry = _MutableRegistry(<String>['0.1.0']);
+    final ran = await release(
+      registry: registry,
+      results: {
+        'dart pub publish --to-archive <archive>': ToolResult(
+          exitCode: 0,
+          stdout:
+              'Validating package...\n'
+              'Package validation found the following 2 potential issues:\n'
+              '* `dart analyze` found the following issue(s):\n'
+              '  Analyzing lib, pubspec.yaml...\n'
+              '  \n'
+              '    error - lib/keybay.dart:1:13 - A value of type '
+              "'String' can't be assigned to a variable of type 'int'.\n"
+              '  \n'
+              '  1 issue found.\n'
+              '  \n'
+              '\n'
+              "* ./CHANGELOG.md doesn't mention current version (0.2.0).\n"
+              '  Consider updating it with notes on this version prior to '
+              'publication.\n'
+              '\n'
+              'Package validation found the following hint:\n'
+              '* Non-dev dependencies are overridden in '
+              'pubspec_overrides.yaml.\n'
+              '  \n'
+              '  Please be extra careful when publishing.\n'
+              'Wrote package archive at /tmp/keybay.tar.gz\n',
+          stderr: '',
+        ),
+      },
+      onRun: (key) {
+        if (key == 'dart pub publish --from-archive <archive> --force') {
+          registry.goLive('0.2.0');
+          registry.archives['keybay@0.2.0'] = publishedBytes();
+        }
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    final warnings = [
+      for (final warning in ran.report['warnings'] as List)
+        warning as Map<String, Object?>,
+    ];
+    expect(warnings.map((w) => w['code']), everyElement('RK-PUB-012'));
+    expect(warnings.map((w) => w['message']), [
+      'pub validation for keybay: `dart analyze` found the following '
+          'issue(s): 1 issue found.',
+      "pub validation for keybay: ./CHANGELOG.md doesn't mention current "
+          'version (0.2.0).',
+    ]);
+    expect(
+      ran.text,
+      contains('`dart analyze` found the following issue(s)'),
+      reason: 'the operator sees what Pub found before the permanent act',
+    );
+    expect(ran.text, isNot(contains('Non-dev dependencies are overridden')));
+  });
+
+  test('errors Pub reports without a summary block', () async {
+    final ran = await release(
+      results: {
+        'dart pub publish --to-archive <archive>': ToolResult(
+          exitCode: 65,
+          stdout:
+              'Validating package...\n'
+              'Package validation found the following error:\n'
+              '* You must have a LICENSE file in the root directory.\n'
+              '  An open-source license helps ensure people can legally use '
+              'your code.\n'
+              "Sorry, your package is missing a requirement and can't be "
+              'published yet.\n',
+          stderr: '',
+        ),
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(ran.problems.map((p) => p['code']), contains('RK-PUB-001'));
+    expect(ran.calls.where((c) => c.startsWith('git tag')), isEmpty);
+  });
+
   test(
     'a summary rk cannot classify blocks, because it is unrecognised',
     () async {
