@@ -640,6 +640,8 @@ void main() {
       bool signed = true,
       ToolResult? signature,
       String expectedCommit = commit,
+      List<String> sourcePaths = const [],
+      ToolResult? diff,
     }) async {
       final tools = RecordingTools(
         results: {
@@ -654,6 +656,10 @@ void main() {
             'git verify-tag $object':
                 signature ??
                 ToolResult(exitCode: 0, stdout: 'Good', stderr: ''),
+          if (diff != null)
+            'git --literal-pathspecs diff-tree --quiet -r $commit^{commit} '
+                    '$expectedCommit -- ${sourcePaths.join(' ')}':
+                diff,
         },
       );
       final state = await GitTag(tools: tools, root: '/repo')
@@ -662,15 +668,95 @@ void main() {
             expectedCommit: expectedCommit,
             expectedManifestSha256: digest,
             requireSignature: signed,
+            sourcePaths: sourcePaths,
           );
       return (state: state, tools: tools);
     }
+
+    group('a tag on an earlier commit', () {
+      const later = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+      ToolResult exit(int code) =>
+          ToolResult(exitCode: code, stdout: '', stderr: '');
+
+      test('still releases this version while the unit is unchanged', () async {
+        // The tag's manifest describes its own commit, not a stage of this
+        // one, so a different expected digest is no conflict here.
+        final result = await prove(
+          expectedCommit: later,
+          sourcePaths: ['packages/tool'],
+          diff: exit(0),
+          objectBytes: tagObject.replaceFirst(
+            digest,
+            List.filled(64, 'd').join(),
+          ),
+        );
+        expect(result.state.verdict, Verdict.exact);
+        expect(
+          result.state.detail,
+          'origin tag binds bbbbbbb, and nothing this unit releases has '
+          'changed since',
+        );
+        expect(result.state.evidence['source commit'], commit);
+        expect(result.state.releasedFrom, commit);
+      });
+
+      test('is a different source once the unit has changed', () async {
+        final result = await prove(
+          expectedCommit: later,
+          sourcePaths: ['packages/tool'],
+          diff: exit(1),
+        );
+        expect(result.state.verdict, Verdict.conflict);
+        expect(result.state.sourceMismatch?.releasedCommit, commit);
+        expect(result.state.sourceMismatch?.currentCommit, later);
+      });
+
+      test('asks for the tagged commit when this clone lacks it', () async {
+        final result = await prove(
+          expectedCommit: later,
+          sourcePaths: ['packages/tool'],
+          diff: exit(128),
+        );
+        expect(
+          result.state.verdict,
+          Verdict.unknown,
+          reason: 'a commit rk cannot read is not a different source',
+        );
+        expect(result.state.detail, contains('git fetch origin tag v1.0.0'));
+        expect(result.state.releasedFrom, commit);
+      });
+
+      test('still needs its signature', () async {
+        final result = await prove(
+          expectedCommit: later,
+          sourcePaths: ['packages/tool'],
+          diff: exit(0),
+          signature: ToolResult(exitCode: 1, stdout: '', stderr: 'bad'),
+        );
+        expect(result.state.verdict, isNot(Verdict.exact));
+      });
+
+      test('is a different source when no directory is named', () async {
+        // As once this commit is staged: its bytes need a tag of its own.
+        final result = await prove(expectedCommit: later);
+        expect(result.state.verdict, Verdict.conflict);
+        expect(
+          result.tools.calls.where((call) => call.contains('diff-tree')),
+          isEmpty,
+        );
+      });
+    });
 
     test(
       'proves origin object, peel, manifest digest, and signature',
       () async {
         final result = await prove();
         expect(result.state.verdict, Verdict.exact);
+        expect(
+          result.state.releasedFrom,
+          isNull,
+          reason: 'a tag on this commit is released from here',
+        );
         expect(result.state.evidence['manifest sha256'], digest);
         expect(result.state.evidence['signature'], 'verified');
         expect(result.tools.calls, contains('git verify-tag $object'));

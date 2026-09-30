@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-171 codes across 29 families.
+172 codes across 29 families.
 
 
 ## RK-AUTH — Authorization
@@ -149,6 +149,7 @@ fails, and the count below is checked against the rows.
 | `RK-GIT-005` | the tag ${unit.tag} points at ${_short(target)}, and this  release would publish from ${… | `lib/src/engine/inspect.dart` |
 | `RK-GIT-007` | the tag exists, and rk could not read which commit it names | `lib/src/engine/inspect.dart` |
 | `RK-GIT-008` | the worktree state could not be read | `lib/src/engine/git.dart` |
+| `RK-GIT-009` | $tag was released from ${_short(releasedFrom)}, and its release is unfinished | `lib/src/engine/inspect.dart` |
 | `RK-GIT-006` | the repository could not be listed | `lib/src/commands/init.dart` |
 
 ## RK-GITHUB — GitHub Releases

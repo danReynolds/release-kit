@@ -252,11 +252,18 @@ class GitTag {
   /// local ref. Thus the message parsed here is the message origin actually
   /// names. When [requireSignature] is true, Git must also authenticate that
   /// same object before the tag step can be called exact.
+  ///
+  /// A tag on an earlier commit still releases this version when nothing
+  /// under [sourcePaths], the unit's own directories, has changed since:
+  /// later commits elsewhere in the repository change nothing it published.
+  /// Its manifest then describes that earlier commit, so it is not compared
+  /// with a stage made from this one.
   Future<Inspection> inspectReleaseBinding({
     required String tag,
     required String expectedCommit,
     required String? expectedManifestSha256,
     required bool requireSignature,
+    List<String> sourcePaths = const [],
   }) async {
     if (!_isObjectId(expectedCommit) ||
         (expectedManifestSha256 != null &&
@@ -276,7 +283,19 @@ class GitTag {
       );
     }
     final expectedSource = expectedCommit.toLowerCase();
-    final sourceMatches = remote.peeled == expectedSource;
+    final sameCommit = remote.peeled == expectedSource;
+    final (:unchanged, :why) = sameCommit
+        ? (unchanged: true, why: null)
+        : await _unchangedSince(remote.peeled!, expectedSource, sourcePaths);
+    if (unchanged == null) {
+      return Inspection.unknown(
+        'origin\'s tag names ${remote.peeled!.substring(0, 7)}, which could '
+        'not be compared with HEAD ($why). If this clone lacks it, fetch it: '
+        'git fetch origin tag $tag',
+        releasedFrom: remote.peeled!,
+      );
+    }
+    final sourceMatches = unchanged;
 
     final object = await tools.run('git', [
       'cat-file',
@@ -306,7 +325,7 @@ class GitTag {
     }
     final digest = binding.digest;
     final expectedDigest = expectedManifestSha256?.toLowerCase();
-    if (sourceMatches && expectedDigest != null && digest != expectedDigest) {
+    if (sameCommit && expectedDigest != null && digest != expectedDigest) {
       return Inspection.conflict(
         'origin\'s release tag binds a different manifest',
         evidence: {
@@ -345,14 +364,50 @@ class GitTag {
       );
     }
     return Inspection.exact(
-      detail: 'origin tag binds the expected source and release manifest',
+      detail: sameCommit
+          ? 'origin tag binds the expected source and release manifest'
+          : 'origin tag binds ${remote.peeled!.substring(0, 7)}, and nothing '
+                'this unit releases has changed since',
       evidence: {
         'tag object': remote.direct!,
-        'source commit': expectedSource,
+        'source commit': remote.peeled!,
         'manifest sha256': digest,
         'signature': signature,
       },
+      releasedFrom: sameCommit ? null : remote.peeled!,
     );
+  }
+
+  /// Whether nothing under [paths] differs between [released] and
+  /// [current]: false when there are no paths, and null, with Git's reason,
+  /// when Git cannot compare the two, as when the released commit is not in
+  /// this clone.
+  ///
+  /// Plumbing, with literal paths, so no diff configuration or glob in a
+  /// directory's name changes the answer.
+  Future<({bool? unchanged, String? why})> _unchangedSince(
+    String released,
+    String current,
+    List<String> paths,
+  ) async {
+    if (paths.isEmpty || !_isObjectId(released)) {
+      return (unchanged: false, why: null);
+    }
+    final diff = await tools.run('git', [
+      '--literal-pathspecs',
+      'diff-tree',
+      '--quiet',
+      '-r',
+      '$released^{commit}',
+      current,
+      '--',
+      ...paths,
+    ], workingDirectory: root);
+    return switch (diff.exitCode) {
+      0 => (unchanged: true, why: null),
+      1 => (unchanged: false, why: null),
+      _ => (unchanged: null, why: diff.summary),
+    };
   }
 
   /// Whether a local tag is safe to use as the input to the next push.

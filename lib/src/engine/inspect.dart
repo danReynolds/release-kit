@@ -295,6 +295,41 @@ class Inspector {
       throw StateError('a selected git-tag target has no resolved tag');
     }
 
+    // A tag on an earlier commit reads exact while nothing the unit releases
+    // has changed since, which keeps a finished release released. It does not
+    // make this commit the source of an unfinished one: the tag binds what was
+    // staged at its own commit, and publishing the rest from here would put
+    // this commit's bytes under it.
+    final tagStep = checklist.steps.firstWhere(
+      (step) => step.kind == StepKind.tag,
+    );
+    final tagState = states[tagStep.id];
+    final releasedFrom = tagState?.releasedFrom;
+    if (tagState != null &&
+        tagState.isExact &&
+        releasedFrom != null &&
+        checklist.steps.any(
+          (step) =>
+              step.isPublic &&
+              step != tagStep &&
+              (states[step.id]?.isAbsent ?? false),
+        )) {
+      return [
+        Diagnostic(
+          code: 'RK-GIT-009',
+          message:
+              '$tag was released from ${_short(releasedFrom)}, and its '
+              'release is unfinished',
+          remedy:
+              'the tag binds what was staged at that commit, so finish the '
+              'release there, then come back:\n'
+              '  git checkout $releasedFrom\n'
+              '  rk release ${unit.name}\n'
+              '  git checkout -',
+        ),
+      ];
+    }
+
     final publishes = checklist.steps
         .where((step) => step.isPermanent)
         .map((s) => states[s.id])

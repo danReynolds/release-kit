@@ -147,6 +147,10 @@ class ReleasedTagOrigin implements Tools {
     if (executable == 'git' && arguments.first == 'verify-tag') {
       return ToolResult(exitCode: 0, stdout: '', stderr: '');
     }
+    // The unit has changed since the release.
+    if (executable == 'git' && arguments.contains('diff-tree')) {
+      return ToolResult(exitCode: 1, stdout: '', stderr: '');
+    }
     return ToolResult(exitCode: 127, stdout: '', stderr: 'not scripted');
   }
 

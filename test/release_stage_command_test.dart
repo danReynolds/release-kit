@@ -150,6 +150,138 @@ void main() {
     );
   }
 
+  group('a tag on an earlier commit whose files are unchanged', () {
+    // Such a tag reads as this release until this commit is staged. After
+    // that, rk means to publish this commit's bytes, and only a tag on this
+    // commit binds them.
+    setUp(() => harness.tools.diffExit = 0);
+
+    test('that appears while the release runs is refused', () async {
+      var reads = 0;
+      final run = await harness.run(
+        stageOnly: false,
+        confirm: (_) async => fail('the refreshed conflict must not authorize'),
+        onInvocation: (call) {
+          if (call.executable == 'git' &&
+              call.arguments.firstOrNull == 'ls-remote' &&
+              call.arguments.contains('refs/tags/v1.2.3') &&
+              ++reads == 2) {
+            harness.tools
+              ..remoteTags.add('v1.2.3')
+              ..remoteSourceCommit = _otherHead
+              ..tagManifestSha256 = 'a' * 64;
+          }
+        },
+      );
+
+      expect(run.code, ExitCodes.refused, reason: run.text);
+      expect(run.publicMutations, isEmpty);
+    });
+
+    test(
+      'whose forge cannot be read says so, not that a stage was lost',
+      () async {
+        final released = await harness.run(
+          stageOnly: false,
+          confirm: (_) async => 'yes',
+        );
+        expect(released.code, ExitCodes.ok, reason: released.text);
+
+        // A later commit that leaves the unit alone, never staged, while the
+        // forge cannot be read.
+        harness.stage.reset();
+        harness.git = harness.gitAt(
+          head: _otherHead,
+          tags: const ['v1.2.3'],
+          tagObjects: const {'v1.2.3': _tagObject},
+          tagTargets: const {'v1.2.3': _head},
+        );
+        harness.tools._githubPublicUnreadable = true;
+
+        final later = await harness.run(
+          stageOnly: false,
+          confirm: (_) async => fail('an unread forge must not authorize'),
+        );
+
+        expect(later.code, ExitCodes.refused, reason: later.text);
+        expect(
+          later.problemCodes,
+          isNot(contains('RK-STAGE-005')),
+          reason:
+              'the tag binds the stage of the commit it names, not this one',
+        );
+        expect(later.report['rerun_helps'], isTrue, reason: later.text);
+        expect(later.publicMutations, isEmpty);
+      },
+    );
+
+    test('whose commit this clone lacks asks for it to be fetched', () async {
+      final released = await harness.run(
+        stageOnly: false,
+        confirm: (_) async => 'yes',
+      );
+      expect(released.code, ExitCodes.ok, reason: released.text);
+
+      harness.stage.reset();
+      harness.git = harness.gitAt(
+        head: _otherHead,
+        tags: const ['v1.2.3'],
+        tagObjects: const {'v1.2.3': _tagObject},
+        tagTargets: const {'v1.2.3': _head},
+      );
+      harness.tools.diffExit = 128;
+
+      final later = await harness.run(
+        stageOnly: false,
+        confirm: (_) async => fail('an unread tag must not authorize'),
+      );
+
+      expect(later.code, ExitCodes.refused, reason: later.text);
+      expect(later.problemCodes, isNot(contains('RK-STAGE-005')));
+      expect(later.text, contains('git fetch origin tag v1.2.3'));
+    });
+
+    test('that wins the race to origin is refused', () async {
+      bool isTagPush(_Invocation call) =>
+          call.executable == 'git' &&
+          call.arguments.length >= 3 &&
+          call.arguments[0] == 'push' &&
+          call.arguments[2].endsWith(':refs/tags/v1.2.3');
+      harness.tools.runFailure = (call) => isTagPush(call)
+          ? ToolResult(
+              exitCode: 1,
+              stdout: '',
+              stderr: '! [rejected] v1.2.3 (already exists)',
+            )
+          : null;
+      final run = await harness.run(
+        stageOnly: false,
+        confirm: (_) async => 'yes',
+        onInvocation: (call) {
+          if (isTagPush(call)) {
+            harness.tools
+              ..remoteTags.add('v1.2.3')
+              ..remoteSourceCommit = _otherHead
+              ..tagManifestSha256 = 'a' * 64;
+          }
+        },
+      );
+
+      expect(run.code, isNot(ExitCodes.ok), reason: run.text);
+      expect(run.text, contains('origin did not confirm the release binding'));
+      expect(
+        run.publicMutations.where(
+          (call) =>
+              !isTagPush(call) &&
+              !(call.executable == 'git' &&
+                  call.arguments.firstOrNull == 'tag'),
+        ),
+        isEmpty,
+        reason: 'nothing is published under a tag another run pushed',
+      );
+    });
+  });
+
   test(
     'a conflict discovered at the public gate has the same recovery advice',
     () async {
@@ -2970,6 +3102,10 @@ class _WorldTools implements Tools {
   final List<_Invocation> invocations = [];
   final Set<String> remoteTags = {};
   String remoteSourceCommit = _head;
+
+  /// How Git answers whether the unit's files changed since a tag's commit:
+  /// 1 changed, 0 unchanged.
+  int diffExit = 1;
   final Map<String, List<int>> uploadedAssets = {};
   void Function(_Invocation call)? onInvocation;
 
@@ -3177,6 +3313,10 @@ class _WorldTools implements Tools {
       final direct = '$_tagObject\trefs/tags/$tag';
       if (arguments.length == 3) return _ok(stdout: '$direct\n');
       return _ok(stdout: '$direct\n$remoteSourceCommit\trefs/tags/$tag^{}\n');
+    }
+    // Whether the unit's files changed since a tag's commit.
+    if (executable == 'git' && arguments.contains('diff-tree')) {
+      return ToolResult(exitCode: diffExit, stdout: '', stderr: '');
     }
     if (executable == 'git' &&
         arguments.length == 3 &&

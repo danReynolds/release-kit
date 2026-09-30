@@ -29,6 +29,7 @@ class Inspection {
     this.evidence = const {},
     this.authority,
     this.sourceMismatch,
+    this.releasedFrom,
   });
 
   const Inspection.absent({
@@ -46,11 +47,13 @@ class Inspection {
     String? detail,
     Map<String, String> evidence = const {},
     Object? authority,
+    String? releasedFrom,
   }) : this(
          Verdict.exact,
          detail: detail,
          evidence: evidence,
          authority: authority,
+         releasedFrom: releasedFrom,
        );
 
   const Inspection.conflict(
@@ -67,8 +70,8 @@ class Inspection {
        );
 
   /// rk could not determine the state.
-  const Inspection.unknown(String detail)
-    : this(Verdict.unknown, detail: detail);
+  const Inspection.unknown(String detail, {String? releasedFrom})
+    : this(Verdict.unknown, detail: detail, releasedFrom: releasedFrom);
 
   final Verdict verdict;
 
@@ -90,6 +93,13 @@ class Inspection {
   /// source still declares the same version. This is typed because core must
   /// not recover release semantics by parsing a provider evidence map.
   final SourceBindingMismatch? sourceMismatch;
+
+  /// The earlier commit a release tag names: exact when nothing the unit
+  /// releases has changed since it, unknown when rk could not compare the
+  /// two. Either way the version was released from there, not from this
+  /// commit, so nothing this commit stages belongs under that tag. Typed for
+  /// the same reason as [sourceMismatch].
+  final String? releasedFrom;
 
   bool get isAbsent => verdict == Verdict.absent;
   bool get isExact => verdict == Verdict.exact;

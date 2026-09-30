@@ -681,6 +681,7 @@ class ReleaseCommand {
     // RK-STAGE-005 refusal for every remaining target.
     final partialBinaryStageLoss =
         unit.buildsReleaseAssets &&
+        !_releasedElsewhere(publicSteps, states) &&
         !stageInspection.reusable &&
         publicSteps.any((step) => states[step.id]!.isExact);
     final initialBlock = checklist.steps.where((step) {
@@ -964,6 +965,7 @@ class ReleaseCommand {
     required bool recoversWithoutStage,
   }) =>
       unit.buildsReleaseAssets &&
+      !_releasedElsewhere(publicSteps, states) &&
       !stageInspection.reusable &&
       !recoversWithoutStage &&
       publicSteps.any((step) => states[step.id]!.isExact) &&
@@ -971,6 +973,15 @@ class ReleaseCommand {
         final state = states[step.id]!;
         return state.isAbsent || state.verdict == Verdict.unknown;
       });
+
+  /// Whether an earlier commit released this version. It is public from that
+  /// commit's stage, not from one this commit could have lost: what remains
+  /// of it is finished there (RK-GIT-009), and what cannot be read, including
+  /// a tag whose commit this clone has yet to fetch, says so.
+  static bool _releasedElsewhere(
+    List<Step> publicSteps,
+    Map<String, Inspection> states,
+  ) => publicSteps.any((step) => states[step.id]!.releasedFrom != null);
 
   /// Refuses what this machine cannot finish, before any work rather than at
   /// the last step.

@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Keep a released unit released while its own files are unchanged. A bare
+  `rk release` used to stop at any unit whose tag was not on the current
+  commit. It called the unit released from different source and asked for a
+  version bump, even when later commits touched only other units or files
+  outside every unit.
+  - rk now compares the unit's directories between its tag and the current
+    commit. Unchanged, the unit counts as released; changed, rk still asks
+    for a bump (`RK-MONO-004`). Files outside the unit's directories, such
+    as a root toolchain file or a sibling package, do not count: to release
+    a change there, bump the version.
+  - When the tagged commit is not in the clone, rk asks you to fetch the
+    tag rather than calling it different source.
+  - This only decides whether a unit is already released. Once a commit is
+    staged, its bytes still need a tag on that commit.
+  - A release interrupted after its tag is finished from the tagged commit,
+    whose stage the tag binds: rk refuses to finish it from a later one
+    (`RK-GIT-009`) and says how.
 - Ask once for a repository release. A bare `rk release` of several units
   shows what each will publish, marked permanent or first claim, and asks
   one question before any of them acts.
