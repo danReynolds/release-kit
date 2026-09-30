@@ -338,17 +338,31 @@ class ReleaseCommand {
         : '${names.sublist(0, names.length - 1).join(', ')} and ${names.last}';
     // The long form each unit's own question would record, since the yes
     // that accepts it is this one.
+    final firstPermanent = [
+      for (final plan in asking)
+        for (final target in plan.remaining)
+          if (target.step.isPermanent) target,
+    ].firstOrNull;
     output.report.attach(
       'authorization-disclosures/run',
       [
-        'one yes for $series, asked before the first of them acted.',
+        [
+          'one yes for $series, asked before the first of them acted.',
+          if (firstPermanent != null)
+            'everything before this yes re-runs safely. after it, the first '
+                'permanent step is: ${firstPermanent.step.summary}.',
+        ].join('\n'),
         for (final plan in asking)
           [
             '${plan.unit.name} ${plan.unit.version}',
             for (final target in plan.remaining)
               '  ${target.kindLabel}: '
                   '${_publication.targetNote(target, plan.claims)}',
-            ..._publication.disclosureFor(plan.remaining, plan.claims),
+            ..._publication.disclosureFor(
+              plan.remaining,
+              plan.claims,
+              firstStep: false,
+            ),
           ].join('\n'),
       ].join('\n\n'),
     );
@@ -466,7 +480,9 @@ class ReleaseCommand {
           states,
           recoversWithoutStage: recoversWithoutStage,
         )) {
-          refusal = 'the partial release needs its exact stage';
+          refusal = unit.shipsBinaries
+              ? 'the partial binary release needs its exact stage'
+              : 'the partial release needs its exact stage';
         } else if (!stageInspection.reusable && !recoversWithoutStage) {
           refusal =
               (_refuseIfUnfinishable(unit) ??

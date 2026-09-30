@@ -85,11 +85,10 @@ final class RunConsent {
     Iterable<TargetPlan> remaining,
     Iterable<TargetClaim> claims,
   ) {
-    final targets = _targets[unit.name];
-    final named = _claims[unit.name];
-    if (targets == null || named == null) {
-      return ['${unit.name} ${unit.version}'];
-    }
+    // A unit with nothing to publish when the question was asked accepted
+    // none of what it now would.
+    final targets = _targets[unit.name] ?? const {};
+    final named = _claims[unit.name] ?? const {};
     return [
       for (final target in remaining)
         if (!targets.contains(target.step.id)) target.label,
@@ -1380,10 +1379,14 @@ final class ReleasePublicationCoordinator {
 
   /// The long form of what a yes for [remaining] accepts, which travels with
   /// it: what the permanent targets mean, and every name claimed first.
+  ///
+  /// [firstStep] says which permanent step is the first a yes lets happen,
+  /// which only the question itself knows when it covers several units.
   List<String> disclosureFor(
     List<TargetPlan> remaining,
     List<TargetClaim> claims, {
     ReleaseSigningContext? firstSigning,
+    bool firstStep = true,
   }) {
     final permanent = [
       for (final target in remaining)
@@ -1395,9 +1398,12 @@ final class ReleasePublicationCoordinator {
     };
     return [
       if (permanent.isNotEmpty)
-        '${notices.join('\n')}\n'
+        [
+          ...notices,
+          if (firstStep)
             'everything before this yes re-runs safely. after it, the first '
-            'permanent step is: ${permanent.first.step.summary}.',
+                'permanent step is: ${permanent.first.step.summary}.',
+        ].join('\n'),
       ..._recordClaims(claims, firstSigning),
     ];
   }
