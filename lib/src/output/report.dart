@@ -191,6 +191,10 @@ class Report {
     _warnings.add(_record(diagnostic, unit: unit, target: target));
   }
 
+  /// Whether this run has warned about [unit].
+  bool warnedAbout(String unit) =>
+      _warnings.any((warning) => warning['unit'] == unit);
+
   /// Files a finding's own account of what failed beside the document, and
   /// names it on the finding so the two correlate rather than being matched
   /// by eye.

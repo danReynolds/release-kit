@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Ask once for a repository release. A bare `rk release` of several units
+  shows what each will publish, marked permanent or first claim, and asks
+  one question before any of them acts.
+  - Each unit still reads everything again before it acts. It asks for
+    itself, and says why, if those reads show something the question did
+    not, or if rk warns about it while it stages.
+  - If a unit already cannot go ahead, as far as rk can tell before staging,
+    each unit asks for itself, as before. `--yes` reads nothing ahead of the
+    units.
 - Publish release assets that a project's own build makes. A project declares
   `build`, the command, and `assets`, the files that command writes to
   `{out}`, and rk publishes those files as the unit's GitHub release.

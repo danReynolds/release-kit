@@ -4,6 +4,7 @@ import 'inspect.dart';
 import 'resolve.dart';
 import 'targets.dart';
 import 'verdict.dart';
+import '../targets/target_module.dart';
 
 /// One fresh, coherent read of every public coordinate for a release.
 ///
@@ -31,7 +32,7 @@ final class PublicReleaseGate {
     };
 
     final monotonicity = Diagnostics();
-    await inspector.releaseMonotonicity(
+    final history = await inspector.releaseMonotonicity(
       unit,
       targets,
       monotonicity,
@@ -41,6 +42,7 @@ final class PublicReleaseGate {
     return PublicReleaseSnapshot(
       states: states,
       monotonicityProblems: monotonicity.found,
+      claims: history.claims,
       steps: steps,
     );
   }
@@ -50,13 +52,19 @@ final class PublicReleaseSnapshot {
   PublicReleaseSnapshot({
     required Map<String, Inspection> states,
     required Iterable<Diagnostic> monotonicityProblems,
+    Iterable<TargetClaim> claims = const [],
     required Iterable<Step> steps,
   }) : states = Map.unmodifiable(states),
        monotonicityProblems = List.unmodifiable(monotonicityProblems),
+       claims = List.unmodifiable(claims),
        _steps = List.unmodifiable(steps);
 
   final Map<String, Inspection> states;
   final List<Diagnostic> monotonicityProblems;
+
+  /// The names the release would claim for the first time, as this read
+  /// found them.
+  final List<TargetClaim> claims;
   final List<Step> _steps;
 
   List<Step> get remaining => _steps

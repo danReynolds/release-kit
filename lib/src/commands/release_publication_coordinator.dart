@@ -65,6 +65,40 @@ final class PublicationPlan {
   final bool recoversWithoutStage;
 }
 
+/// What one yes, asked before a repository release's first unit acted,
+/// accepted: unit by unit, the targets each was to publish and the names
+/// each was to claim for the first time.
+final class RunConsent {
+  RunConsent({
+    required Map<String, Set<String>> targets,
+    required Map<String, Set<(String, String)>> claims,
+  }) : _targets = targets,
+       _claims = claims;
+
+  final Map<String, Set<String>> _targets;
+  final Map<String, Set<(String, String)>> _claims;
+
+  /// What [unit] is about to do that the yes did not accept. Empty when it
+  /// accepted all of it.
+  List<String> unshown(
+    ResolvedUnit unit,
+    Iterable<TargetPlan> remaining,
+    Iterable<TargetClaim> claims,
+  ) {
+    // A unit with nothing to publish when the question was asked accepted
+    // none of what it now would.
+    final targets = _targets[unit.name] ?? const {};
+    final named = _claims[unit.name] ?? const {};
+    return [
+      for (final target in remaining)
+        if (!targets.contains(target.step.id)) target.label,
+      for (final claim in claims)
+        if (!named.contains((claim.registrar, claim.name)))
+          'the first claim of ${claim.name} on ${claim.registrar}',
+    ];
+  }
+}
+
 /// Owns the late, public half of a release.
 final class ReleasePublicationCoordinator {
   ReleasePublicationCoordinator({
@@ -96,6 +130,10 @@ final class ReleasePublicationCoordinator {
   final Duration confirmInterval;
 
   final Map<String, TargetSessionProvider> _createdSessions = {};
+
+  /// The yes a repository release asked for before its first unit acted,
+  /// when it asked one.
+  RunConsent? runConsent;
 
   /// Gives eventually-consistent providers a bounded chance to become usable
   /// through their consumer-facing path after exact publication read-back.
@@ -363,7 +401,7 @@ final class ReleasePublicationCoordinator {
     );
     releaseInputsRow.handle.begin(CommonProgressActivities.checking);
     final gate = PublicReleaseGate(inspector);
-    var remaining = await _refreshPublicGate(
+    var read = await _refreshPublicGate(
       gate: gate,
       unit: unit,
       publicSteps: publicSteps,
@@ -371,10 +409,11 @@ final class ReleasePublicationCoordinator {
       states: states,
       actions: publicActions,
     );
-    if (remaining == null) {
+    if (read == null) {
       releaseInputs.conclude();
       return ExitCodes.refused;
     }
+    var remaining = read.remaining;
     if (remaining.isEmpty) {
       releaseInputsRow.complete(note: 'checked');
       releaseInputs.discard();
@@ -427,7 +466,7 @@ final class ReleasePublicationCoordinator {
     // Slow reads above can change which targets remain. Authorization may
     // lose work to another actor, but it never silently gains work.
     releaseInputsRow.handle.begin(CommonProgressActivities.checking);
-    remaining = await _refreshPublicGate(
+    read = await _refreshPublicGate(
       gate: gate,
       unit: unit,
       publicSteps: publicSteps,
@@ -435,10 +474,11 @@ final class ReleasePublicationCoordinator {
       states: states,
       actions: publicActions,
     );
-    if (remaining == null) {
+    if (read == null) {
       releaseInputs.conclude();
       return ExitCodes.refused;
     }
+    remaining = read.remaining;
     if (remaining.isEmpty) {
       releaseInputsRow.complete(note: 'checked');
       releaseInputs.discard();
@@ -615,7 +655,9 @@ final class ReleasePublicationCoordinator {
       [for (final step in remaining) targetByStep[step.id]!],
       stage: stage,
       signing: prepared.signing,
-      claims: prepared.claims,
+      // The freshest read of what this release would claim first: the one
+      // the question asked before any unit acted may be older.
+      claims: read.claims,
     )) {
       showActions(targets, publicActions);
       return ExitCodes.refused;
@@ -1171,7 +1213,8 @@ final class ReleasePublicationCoordinator {
     return severity[left]! >= severity[right]! ? left : right;
   }
 
-  Future<List<Step>?> _refreshPublicGate({
+  Future<({List<Step> remaining, List<TargetClaim> claims})?>
+  _refreshPublicGate({
     required PublicReleaseGate gate,
     required ResolvedUnit unit,
     required List<Step> publicSteps,
@@ -1219,7 +1262,7 @@ final class ReleasePublicationCoordinator {
       showActions(targets, actions);
       return null;
     }
-    return snapshot.remaining;
+    return (remaining: snapshot.remaining, claims: snapshot.claims);
   }
 
   void _destinationChanged(
@@ -1295,6 +1338,76 @@ final class ReleasePublicationCoordinator {
     return unprovable;
   }
 
+  /// A row for each of [remaining], saying which are permanent and which
+  /// claim a name for the first time.
+  void showTargets(List<TargetPlan> remaining, List<TargetClaim> claims) {
+    // Grouped by destination, the way status and staging read. What is
+    // permanent is said on the row it belongs to: a paragraph explaining
+    // that publishing is forever tells an operator what they already know,
+    // and buries the one line they do not.
+    for (final target in remaining) {
+      output.line(
+        target.kindLabel,
+        note: targetNote(target, claims),
+        depth: 1,
+        labelWidth: 26,
+        role: VisualRole.releaseTarget,
+        noteState: _marks(target, claims).isEmpty
+            ? RuntimeState.neutral
+            : RuntimeState.attention,
+      );
+    }
+  }
+
+  /// What [target]'s row says: what arrives there, and its marks.
+  String targetNote(TargetPlan target, List<TargetClaim> claims) =>
+      [target.planNote, ..._marks(target, claims)].join(' · ');
+
+  // Keyed by what is claimed, not by where: a unit publishing several
+  // packages to pub.dev has one row each, and marking them all because one
+  // name is new would tell the operator they are permanently taking names
+  // that were taken releases ago.
+  static List<String> _marks(TargetPlan target, List<TargetClaim> claims) => [
+    if (target.step.isPermanent) 'permanent',
+    if (claims.any(
+      (claim) =>
+          claim.registrar == target.kindLabel &&
+          claim.name == target.coordinate,
+    ))
+      'first claim',
+  ];
+
+  /// The long form of what a yes for [remaining] accepts, which travels with
+  /// it: what the permanent targets mean, and every name claimed first.
+  ///
+  /// [firstStep] says which permanent step is the first a yes lets happen,
+  /// which only the question itself knows when it covers several units.
+  List<String> disclosureFor(
+    List<TargetPlan> remaining,
+    List<TargetClaim> claims, {
+    ReleaseSigningContext? firstSigning,
+    bool firstStep = true,
+  }) {
+    final permanent = [
+      for (final target in remaining)
+        if (target.step.isPermanent) target,
+    ];
+    final notices = {
+      for (final target in permanent)
+        if (target.permanenceNotice case final notice?) notice,
+    };
+    return [
+      if (permanent.isNotEmpty)
+        [
+          ...notices,
+          if (firstStep)
+            'everything before this yes re-runs safely. after it, the first '
+                'permanent step is: ${permanent.first.step.summary}.',
+        ].join('\n'),
+      ..._recordClaims(claims, firstSigning),
+    ];
+  }
+
   Future<bool> _authorize(
     ResolvedUnit unit,
     List<TargetPlan> remaining, {
@@ -1302,10 +1415,6 @@ final class ReleasePublicationCoordinator {
     required ReleaseSigningContext? signing,
     required List<TargetClaim> claims,
   }) async {
-    final permanent = remaining.where((target) {
-      return target.step.isPermanent;
-    }).toList();
-
     final disclosed = <String>[];
     output.blank();
     output.line(
@@ -1314,37 +1423,7 @@ final class ReleasePublicationCoordinator {
       strong: true,
     );
 
-    // Grouped by destination, the way status and staging read. What is
-    // permanent is said on the row it belongs to: a paragraph explaining
-    // that publishing is forever tells an operator what they already know,
-    // and buries the one line they do not.
-    // Keyed by what is claimed, not by where: a unit publishing several
-    // packages to pub.dev has one row each, and marking them all because
-    // one name is new would tell the operator they are permanently taking
-    // names that were taken releases ago.
-    final firstClaims = {
-      for (final claim in claims) '${claim.registrar}\u0000${claim.name}',
-    };
-    for (final target in remaining) {
-      final permanence = <String>[
-        if (target.step.isPermanent) 'permanent',
-        if (firstClaims.contains(
-          '${target.kindLabel}\u0000'
-          '${target.coordinate}',
-        ))
-          'first claim',
-      ];
-      output.line(
-        target.kindLabel,
-        note: [target.planNote, ...permanence].join(' · '),
-        depth: 1,
-        labelWidth: 26,
-        role: VisualRole.releaseTarget,
-        noteState: permanence.isEmpty
-            ? RuntimeState.neutral
-            : RuntimeState.attention,
-      );
-    }
+    showTargets(remaining, claims);
     final firstSigning = signing?.firstCertificate == null ? null : signing;
     if (firstSigning != null) {
       // The identifier first: it is what gets sealed into the designated
@@ -1368,19 +1447,9 @@ final class ReleasePublicationCoordinator {
     // the rows already name which destinations mean it. The full wording,
     // and which step is the first that cannot be re-run, stay in the record
     // that travels with the authorization.
-    if (permanent.isNotEmpty) {
-      final notices = {
-        for (final target in permanent)
-          if (target.permanenceNotice case final notice?) notice,
-      };
-      disclosed.add(
-        '${notices.join('\n')}\n'
-        'everything before this yes re-runs safely. after it, the first '
-        'permanent step is: ${permanent.first.step.summary}.',
-      );
-    }
-
-    disclosed.addAll(_recordClaims(claims, firstSigning));
+    disclosed.addAll(
+      disclosureFor(remaining, claims, firstSigning: firstSigning),
+    );
 
     // A weaker build proof belongs on the authorization surface as well as in
     // its durable record. Read the completed receipt rather than this host's
@@ -1421,6 +1490,26 @@ final class ReleasePublicationCoordinator {
     }
 
     if (!requireAuthorizer(unit)) return false;
+
+    // The yes at the start of the run covers this unit while everything it is
+    // about to do was shown then. Anything new, and anything rk warned about
+    // since, whether a build it could not run or what Pub's validation said,
+    // is asked about here.
+    final consent = runConsent;
+    if (consent != null) {
+      final unshown = [
+        ...consent.unshown(unit, remaining, claims),
+        if (firstSigning != null) 'a first signing identity',
+        if (output.report.warnedAbout(unit.name)) 'its warnings',
+      ];
+      if (unshown.isEmpty) {
+        output.say('Authorized at the start of this run.');
+        return true;
+      }
+      output.say(
+        'Not shown when this run was authorized: ${unshown.join(', ')}.',
+      );
+    }
 
     final answer = await confirm!(
       'Release ${unit.name} ${unit.version}? [y/N] ',
