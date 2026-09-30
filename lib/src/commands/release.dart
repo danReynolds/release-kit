@@ -15,6 +15,7 @@ import '../engine/resolve.dart';
 import '../engine/release_stage.dart';
 import '../engine/source_tree.dart';
 import '../engine/stage_inspection.dart';
+import '../engine/targets.dart';
 import '../engine/tools.dart';
 import '../engine/verdict.dart';
 import '../targets/target_module.dart';
@@ -47,6 +48,7 @@ class ReleaseCommand {
     required this.output,
     required this.confirm,
     required this.allowInteractiveTools,
+    this.preauthorized = false,
     this.stageOnly = false,
     ReleaseStage Function(ResolvedUnit unit)? stageFor,
     ReleaseStage Function(ResolvedUnit unit, GitState git)? refreshStage,
@@ -120,6 +122,10 @@ class ReleaseCommand {
   /// login must never write beside the one JSON document or ask a question
   /// whose release context the operator cannot see.
   final bool allowInteractiveTools;
+
+  /// Whether `--yes` answered every authorization before the run began. Such
+  /// a run has nobody to ask once, so it does not read the whole run first.
+  final bool preauthorized;
 
   /// What this host can produce. Detection belongs at the composition edge so
   /// its bounded optional-runtime probes complete before the command is built;
@@ -239,6 +245,12 @@ class ReleaseCommand {
         'Release order: ${ordered.map((unit) => '${unit.name} ${unit.version}').join(' -> ')}',
       );
       output.blank();
+      if (!stageOnly &&
+          confirm != null &&
+          !preauthorized &&
+          !await _askOnce(ordered)) {
+        return ExitCodes.refused;
+      }
     }
     for (final unit in ordered) {
       final result = await _release(unit);
@@ -246,6 +258,178 @@ class ReleaseCommand {
       output.previousUnitActed = output.report.acted;
     }
     return ExitCodes.ok;
+  }
+
+  /// Shows what a repository release will publish, unit by unit, and asks
+  /// once for all of it before the first unit acts. Answers false when the
+  /// run was declined.
+  ///
+  /// These are the reads each unit makes before it acts, and each makes them
+  /// again: this question discloses, and each unit still checks. A unit whose
+  /// fresh reads find something not shown here, or that warns, asks for
+  /// itself. So does every unit when fewer than two have anything to publish,
+  /// or when one already cannot go ahead: that unit stops the run when it is
+  /// reached, and the units before it should not be released on a yes to it.
+  Future<bool> _askOnce(List<ResolvedUnit> ordered) async {
+    final board = output.progressBoard(
+      'Reading what this run publishes',
+      emitSlowToNonTerminal: true,
+    );
+    final List<_UnitPlan> plans;
+    try {
+      plans = await Future.wait([
+        for (final unit in ordered)
+          _planFor(
+            unit,
+            board.addRow(id: unit.name, label: '${unit.name} ${unit.version}'),
+          ),
+      ]);
+    } finally {
+      board.discard();
+    }
+
+    final stopping = plans.where((plan) => plan.stop != null).firstOrNull;
+    if (stopping != null) {
+      output.say(
+        '${stopping.unit.name} ${stopping.unit.version} cannot go ahead as '
+        'things stand (${stopping.stop}), so each unit asks for itself.',
+      );
+      output.blank();
+      return true;
+    }
+    final asking = [
+      for (final plan in plans)
+        if (plan.remaining.isNotEmpty) plan,
+    ];
+    if (asking.length < 2) return true;
+
+    for (final plan in plans) {
+      final name = '${plan.unit.name} ${plan.unit.version}';
+      if (plan.remaining.isEmpty) {
+        output.line(
+          name,
+          mark: Mark.satisfied,
+          note: plan.publishes ? 'already released' : 'nothing to publish',
+        );
+        continue;
+      }
+      output.line(name, role: VisualRole.checkpoint, strong: true);
+      _publication.showTargets(plan.remaining, plan.claims);
+    }
+    final names = [
+      for (final plan in asking) '${plan.unit.name} ${plan.unit.version}',
+    ];
+    final series = names.length == 2
+        ? names.join(' and ')
+        : '${names.sublist(0, names.length - 1).join(', ')} and ${names.last}';
+    output.report.attach(
+      'authorization-disclosures/run',
+      [
+        'one yes for $series, asked before the first of them acted.',
+        for (final plan in asking)
+          '${plan.unit.name} ${plan.unit.version}: '
+              '${plan.remaining.map((target) => target.label).join(', ')}',
+      ].join('\n'),
+    );
+
+    final answer = await confirm!('Release $series? [y/N] ');
+    final accepted = switch (answer?.trim().toLowerCase()) {
+      'y' || 'yes' => true,
+      _ => false,
+    };
+    if (!accepted) {
+      output.blank();
+      output.say(
+        answer == null
+            ? 'No confirmation received for $series.'
+            : 'Cancelled release of $series.',
+      );
+      output.problem(
+        const Diagnostic(
+          code: 'RK-AUTH-002',
+          message: 'the release was not authorized',
+          remedy:
+              'answer yes at the prompt, or pass --yes for an unattended '
+              'release',
+        ),
+      );
+      output.halt(HaltKind.beforeActing);
+      output.next('rk release');
+      return false;
+    }
+    output.blank();
+    _publication.runConsent = RunConsent(
+      targets: {
+        for (final plan in asking)
+          plan.unit.name: {for (final target in plan.remaining) target.step.id},
+      },
+      claims: {
+        for (final plan in asking)
+          plan.unit.name: {
+            for (final claim in plan.claims) (claim.registrar, claim.name),
+          },
+      },
+    );
+    return true;
+  }
+
+  /// What [unit] would publish as things stand, read as its own release reads
+  /// it before acting.
+  Future<_UnitPlan> _planFor(
+    ResolvedUnit unit,
+    ProgressRowController row,
+  ) async {
+    row.handle.begin(CommonProgressActivities.checking);
+    try {
+      final problems = Diagnostics();
+      final checklist = Checklist.derive(unit, resolution, problems);
+      final targets = inspector.targets.derive(
+        unit,
+        checklist,
+        repository: inspector.repository,
+      );
+      final targetByStep = {
+        for (final target in targets) target.step.id: target,
+      };
+      final publicSteps = [
+        for (final step in checklist.steps)
+          if (step.isPublic) step,
+      ];
+      final states = await Future.wait([
+        for (final step in publicSteps) inspector.inspect(step, unit),
+      ]);
+      final remaining = <TargetPlan>[];
+      for (final (index, step) in publicSteps.indexed) {
+        final state = states[index];
+        if (state.isExact) continue;
+        final target = targetByStep[step.id]!;
+        if (!state.isAbsent) {
+          row.fail();
+          return _UnitPlan.stopped(
+            unit,
+            '${target.label}: ${state.detail ?? state.verdict.name}',
+          );
+        }
+        remaining.add(target);
+      }
+      final history = remaining.isEmpty
+          ? null
+          : await inspector.releaseMonotonicity(unit, targets, problems);
+      if (problems.isNotEmpty) {
+        row.fail();
+        return _UnitPlan.stopped(unit, problems.found.first.message);
+      }
+      row.complete(note: remaining.isEmpty ? 'already released' : 'read');
+      return _UnitPlan(
+        unit,
+        publishes: publicSteps.isNotEmpty,
+        remaining: remaining,
+        claims: history?.claims ?? const [],
+      );
+    } on Object catch (error) {
+      row.fail();
+      return _UnitPlan.stopped(unit, 'it could not be read: $error');
+    }
   }
 
   /// Cheap, source-owned refusals for every unit before the first one acts.
@@ -798,4 +982,26 @@ class ReleaseCommand {
   /// team it names.
   static String _shortCertificate(String certificate) =>
       certificate.replaceFirst('Developer ID Application: ', '');
+}
+
+/// What one unit of a repository release would publish, read before the
+/// first unit acts, or why it cannot go ahead.
+final class _UnitPlan {
+  _UnitPlan(
+    this.unit, {
+    required this.publishes,
+    required this.remaining,
+    required this.claims,
+  }) : stop = null;
+
+  _UnitPlan.stopped(this.unit, String this.stop)
+    : publishes = true,
+      remaining = const [],
+      claims = const [];
+
+  final ResolvedUnit unit;
+  final bool publishes;
+  final List<TargetPlan> remaining;
+  final List<TargetClaim> claims;
+  final String? stop;
 }

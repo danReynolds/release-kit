@@ -66,6 +66,34 @@ final class PublicationPlan {
 }
 
 /// Owns the late, public half of a release.
+/// What one yes before a repository release's first unit acted accepted.
+///
+/// Unit by unit: the targets each was to publish, and the names each was to
+/// claim for the first time. A unit goes ahead on that yes only while what it
+/// is about to do is among them.
+final class RunConsent {
+  RunConsent({
+    required Map<String, Set<String>> targets,
+    required Map<String, Set<(String, String)>> claims,
+  }) : _targets = targets,
+       _claims = claims;
+
+  final Map<String, Set<String>> _targets;
+  final Map<String, Set<(String, String)>> _claims;
+
+  bool covers(
+    ResolvedUnit unit,
+    Iterable<TargetPlan> remaining,
+    Iterable<TargetClaim> claims,
+  ) {
+    final targets = _targets[unit.name];
+    final named = _claims[unit.name];
+    if (targets == null || named == null) return false;
+    return remaining.every((target) => targets.contains(target.step.id)) &&
+        claims.every((claim) => named.contains((claim.registrar, claim.name)));
+  }
+}
+
 final class ReleasePublicationCoordinator {
   ReleasePublicationCoordinator({
     required this.inspector,
@@ -96,6 +124,10 @@ final class ReleasePublicationCoordinator {
   final Duration confirmInterval;
 
   final Map<String, TargetSessionProvider> _createdSessions = {};
+
+  /// The yes a repository release asked for before its first unit acted,
+  /// when it asked one.
+  RunConsent? runConsent;
 
   /// Gives eventually-consistent providers a bounded chance to become usable
   /// through their consumer-facing path after exact publication read-back.
@@ -1295,25 +1327,13 @@ final class ReleasePublicationCoordinator {
     return unprovable;
   }
 
-  Future<bool> _authorize(
-    ResolvedUnit unit,
-    List<TargetPlan> remaining, {
-    required ReleaseStage stage,
-    required ReleaseSigningContext? signing,
-    required List<TargetClaim> claims,
-  }) async {
-    final permanent = remaining.where((target) {
-      return target.step.isPermanent;
-    }).toList();
-
-    final disclosed = <String>[];
-    output.blank();
-    output.line(
-      'Release ${unit.name} ${unit.version}',
-      role: VisualRole.checkpoint,
-      strong: true,
-    );
-
+  /// A row for each of [remaining], saying which are permanent and which
+  /// claim a name for the first time.
+  void showTargets(
+    List<TargetPlan> remaining,
+    List<TargetClaim> claims, {
+    int depth = 1,
+  }) {
     // Grouped by destination, the way status and staging read. What is
     // permanent is said on the row it belongs to: a paragraph explaining
     // that publishing is forever tells an operator what they already know,
@@ -1337,7 +1357,7 @@ final class ReleasePublicationCoordinator {
       output.line(
         target.kindLabel,
         note: [target.planNote, ...permanence].join(' · '),
-        depth: 1,
+        depth: depth,
         labelWidth: 26,
         role: VisualRole.releaseTarget,
         noteState: permanence.isEmpty
@@ -1345,6 +1365,28 @@ final class ReleasePublicationCoordinator {
             : RuntimeState.attention,
       );
     }
+  }
+
+  Future<bool> _authorize(
+    ResolvedUnit unit,
+    List<TargetPlan> remaining, {
+    required ReleaseStage stage,
+    required ReleaseSigningContext? signing,
+    required List<TargetClaim> claims,
+  }) async {
+    final permanent = remaining.where((target) {
+      return target.step.isPermanent;
+    }).toList();
+
+    final disclosed = <String>[];
+    output.blank();
+    output.line(
+      'Release ${unit.name} ${unit.version}',
+      role: VisualRole.checkpoint,
+      strong: true,
+    );
+
+    showTargets(remaining, claims);
     final firstSigning = signing?.firstCertificate == null ? null : signing;
     if (firstSigning != null) {
       // The identifier first: it is what gets sealed into the designated
@@ -1421,6 +1463,16 @@ final class ReleasePublicationCoordinator {
     }
 
     if (!requireAuthorizer(unit)) return false;
+
+    // The yes at the start of the run covers this unit while everything it is
+    // about to do was shown then. Anything new, or anything it warns about,
+    // is asked about here.
+    if (firstSigning == null &&
+        unprovable.isEmpty &&
+        (runConsent?.covers(unit, remaining, claims) ?? false)) {
+      output.say('Authorized at the start of this run.');
+      return true;
+    }
 
     final answer = await confirm!(
       'Release ${unit.name} ${unit.version}? [y/N] ',

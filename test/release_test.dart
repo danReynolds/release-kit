@@ -246,6 +246,7 @@ Future<Ran> release({
   String? only = 'core',
   HostCapabilities? capabilities,
   bool allowInteractiveTools = true,
+  bool preauthorized = false,
 }) async {
   final buffer = StringBuffer();
   final diagnostics = Diagnostics();
@@ -451,6 +452,7 @@ Future<Ran> release({
     wait: (_) => Future<void>.delayed(Duration.zero),
     output: Output(sink: buffer.write, isTerminal: false, useColor: false),
     allowInteractiveTools: allowInteractiveTools,
+    preauthorized: preauthorized,
     confirm: typed == null && answerPrompt == null
         ? null
         : (prompt) async {
@@ -558,9 +560,13 @@ publish = ["pub.dev"]
   test(
     'a bare release visits independent units in declaration order',
     () async {
+      final prompts = <String>[];
       final ran = await release(
         only: null,
-        typed: 'no',
+        answerPrompt: (prompt) {
+          prompts.add(prompt);
+          return 'no';
+        },
         config: '''
 schema = 2
 
@@ -592,8 +598,15 @@ publish = ["git-tag", "pub.dev"]
       expect(
         ran.calls.where((call) => call.contains('publish --force')),
         isEmpty,
-        reason: 'declining the first unit must publish neither unit',
+        reason: 'declining the run must publish neither unit',
       );
+      expect(prompts, [
+        'Release core 0.2.0 and other 0.2.0? [y/N] ',
+      ], reason: 'one question for the whole run, before either unit acts');
+      expect(ran.text, contains('Cancelled release of core 0.2.0 and other'));
+      expect(ran.problems.map((problem) => problem['code']), ['RK-AUTH-002']);
+      expect((ran.report['halt'] as Map)['kind'], 'beforeActing');
+      expect(ran.report['next'], ['rk release']);
     },
   );
 
@@ -634,9 +647,9 @@ dependencies:
       expect(ran.exitCode, ExitCodes.refused);
       expect(ran.text, contains('Release order: core 2.0.0 -> cli 3.0.0'));
       expect(
-        ran.text,
-        contains('    core 2.0.0'),
-        reason: 'the provider is the first unit prepared for authorization',
+        ran.text.indexOf('\n  core 2.0.0\n'),
+        allOf(isNonNegative, lessThan(ran.text.indexOf('\n  cli 3.0.0\n'))),
+        reason: 'the provider is the first unit the run shows',
       );
     },
   );
@@ -691,10 +704,15 @@ dependencies:
           'cli': ['2.0.0'],
         });
         var providerPublished = false;
+        final prompts = <String>[];
         final ran = await release(
           only: null,
-          answerPrompt: (prompt) =>
-              decline && prompt == 'Release cli 3.0.0? [y/N] ' ? 'no' : 'yes',
+          answerPrompt: (prompt) {
+            prompts.add(prompt);
+            return decline && prompt == 'Release cli 3.0.0? [y/N] '
+                ? 'no'
+                : 'yes';
+          },
           config: '''
 schema = 2
 
@@ -736,6 +754,13 @@ dependencies:
                 ]),
               );
               registry.forget('core');
+              if (decline) {
+                // Something the run's yes did not cover: pub.dev now answers
+                // that cli was never published, so releasing it would claim
+                // the name. cli asks for itself.
+                registry.published.remove('cli');
+                registry.forget('cli');
+              }
             }
           },
           answers: (key) {
@@ -766,6 +791,16 @@ dependencies:
           ran.problems.map((problem) => problem['code']),
           contains(decline ? 'RK-AUTH-002' : 'RK-PUB-001'),
         );
+        expect(
+          prompts,
+          [
+            'Release core 2.0.0 and cli 3.0.0? [y/N] ',
+            if (decline) 'Release cli 3.0.0? [y/N] ',
+          ],
+          reason:
+              'the run asks once, and a unit asks again only for what '
+              'the run did not show',
+        );
         if (decline) {
           expect(ran.text, contains('Cancelled release of cli 3.0.0.'));
           expect(
@@ -790,6 +825,150 @@ dependencies:
       },
     );
   }
+
+  group('a bare release of independent units', () {
+    const config = """
+schema = 2
+
+[release.core]
+path = "packages/keybay"
+publish = ["pub.dev"]
+
+[release.other]
+path = "packages/other"
+publish = ["pub.dev"]
+""";
+    MemorySourceTree source() => MemorySourceTree({
+      'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
+      'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
+      'packages/other/pubspec.yaml': 'name: other\nversion: 0.2.0\n',
+      'packages/other/CHANGELOG.md': '## 0.2.0\n',
+    }, description: '/repo/keybay');
+
+    /// A registry that takes each publish in release order, as pub.dev
+    /// would.
+    ({FakeRegistry registry, void Function(String key) onRun}) world({
+      String other = '0.1.0',
+    }) {
+      final registry = FakeRegistry({
+        'keybay': ['0.1.0'],
+        'other': [other],
+      });
+      var published = 0;
+      return (
+        registry: registry,
+        onRun: (key) {
+          if (key != 'dart pub publish --from-archive <archive> --force') {
+            return;
+          }
+          final name = ['keybay', 'other'][published++];
+          registry.published[name]!.add('0.2.0');
+          registry.archives['$name@0.2.0'] = ArchiveBuilder.gzip(
+            ArchiveBuilder.tar([
+              ArchiveEntry(
+                name: 'pubspec.yaml',
+                bytes: 'name: $name\nversion: 0.2.0\n'.codeUnits,
+              ),
+              ArchiveEntry(name: 'CHANGELOG.md', bytes: '## 0.2.0\n'.codeUnits),
+            ]),
+          );
+          registry.forget(name);
+        },
+      );
+    }
+
+    test('shows the whole run, and asks once for all of it', () async {
+      final (:registry, :onRun) = world();
+      final prompts = <String>[];
+      final ran = await release(
+        only: null,
+        config: config,
+        source: source(),
+        registry: registry,
+        onRun: onRun,
+        answerPrompt: (prompt) {
+          prompts.add(prompt);
+          return 'yes';
+        },
+      );
+
+      expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+      expect(prompts, ['Release core 0.2.0 and other 0.2.0? [y/N] ']);
+      final asked = ran.text.indexOf('\n  core 0.2.0\n');
+      expect(asked, isNonNegative, reason: ran.text);
+      expect(
+        ran.text.indexOf('\n  other 0.2.0\n'),
+        greaterThan(asked),
+        reason: 'the run is shown in release order',
+      );
+      expect(
+        ran.text.indexOf('\n  other 0.2.0\n'),
+        lessThan(ran.text.indexOf('Releasing core 0.2.0')),
+        reason: 'the whole run is shown before its first unit acts',
+      );
+      expect(
+        'Authorized at the start of this run.'.allMatches(ran.text),
+        hasLength(2),
+        reason: 'each unit still shows what it is about to do',
+      );
+      expect(registry.published['keybay'], contains('0.2.0'));
+      expect(registry.published['other'], contains('0.2.0'));
+      expect(
+        (ran.report['attachments'] as Map)['authorization-disclosures/run'],
+        allOf(contains('core 0.2.0: '), contains('other 0.2.0: ')),
+      );
+    });
+
+    test('--yes reads nothing ahead of the units', () async {
+      final (:registry, :onRun) = world();
+      final prompts = <String>[];
+      final ran = await release(
+        only: null,
+        config: config,
+        source: source(),
+        registry: registry,
+        onRun: onRun,
+        preauthorized: true,
+        answerPrompt: (prompt) {
+          prompts.add(prompt);
+          return 'yes';
+        },
+      );
+
+      expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+      expect(prompts, [
+        'Release core 0.2.0? [y/N] ',
+        'Release other 0.2.0? [y/N] ',
+      ], reason: '--yes answers each unit, as it always has');
+      expect(ran.text, isNot(contains('Authorized at the start of this run')));
+    });
+
+    test('a unit that cannot go ahead has each unit ask for itself', () async {
+      final (:registry, :onRun) = world(other: '0.5.0');
+      final prompts = <String>[];
+      final ran = await release(
+        only: null,
+        config: config,
+        source: source(),
+        registry: registry,
+        onRun: onRun,
+        answerPrompt: (prompt) {
+          prompts.add(prompt);
+          return 'no';
+        },
+      );
+
+      expect(ran.exitCode, ExitCodes.refused);
+      expect(ran.text, contains('other 0.2.0 cannot go ahead as things stand'));
+      expect(
+        prompts,
+        ['Release core 0.2.0? [y/N] '],
+        reason:
+            'a yes for the run would release core only to stop at other; '
+            'core asks for itself, and other refuses when it is reached',
+      );
+    });
+  });
 
   test(
     'a later unit source refusal is found before the first unit acts',

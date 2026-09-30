@@ -235,31 +235,30 @@ path = "packages/cli"
 publish = ["pub.dev"]
 ```
 
-`rk release` orders the units, stages and checks the private work,
-and says what a yes makes permanent — before anything permanent acts:
+`rk release` orders the units, shows what each will publish and what is
+permanent, and asks once, before any of them acts:
 
 ```console
 $ rk release
 Release order: core 0.3.0 -> cli 0.3.0
 
-    pub.dev · example_core                         not published
-core 0.3.0 · staging
-    pub.dev · example_core
-✓     package archive                              staged
-✓   Release inputs · targets · signing · staged bytes checked
-✓   pub.dev · example_core                         signed in
+  core 0.3.0
+    pub.dev                  example_core 0.3.0 · permanent · first claim
+  cli 0.3.0
+    pub.dev                  example_cli 0.3.0 · permanent
+Release core 0.3.0 and cli 0.3.0? [y/N] y
 
-  Release
-    core 0.3.0
-      publish example_core 0.3.0 to pub.dev
-  pub.dev never deletes a version. a version can be retracted, which hides it and removes nothing.
-  everything before this yes re-runs safely. after it, the first permanent step is: publish example_core 0.3.0 to pub.dev.
-
-  this release claims, for the first time:
-    pub.dev          example_core
-                     permanent: a package name cannot be renamed, reassigned, or released back
-Release core 0.3.0? [y/N]
+Releasing core 0.3.0
+  ...
 ```
+
+Each unit then stages, checks and publishes in turn, and reads everything
+again before it acts. A unit asks again only when those reads find
+something the question did not show, such as a name it would claim for the
+first time, or when its build raises a warning. If one unit already cannot
+go ahead, each unit asks for itself. A failure stops the run. Units already
+published stay published, and running `rk release` again carries on from
+there.
 
 ## Release assets your own build makes
 
