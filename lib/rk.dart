@@ -9,5 +9,6 @@
 /// read and resolved, and the collaborators are built.
 ///
 /// The machine surface — the `--json` document, its schema, and the CI gate
-/// rule — is documented in `doc/json.md`. The design is `doc/rfcs/0002-rk-core.md`.
+/// rule — is documented in `doc/json.md`. The original design records are
+/// archived in `doc/archive/`.
 library;

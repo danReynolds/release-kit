@@ -1,7 +1,7 @@
 # RFC 0001: RK, an austere secure release compiler
 
 > Historical. This is the original threat catalog and build-versus-adopt
-> essay. It is not rk's product definition. See the [README](../../README.md)
+> essay. It is not rk's product definition. See the [README](../../../README.md)
 > for what rk is.
 
 - Status: Superseded as build authority by RFC 0002 (rk core, 2026-07-28);
@@ -1976,14 +1976,14 @@ non-published workspace, not either releasable package.
 
 | File | RK role | Important commentary |
 |---|---|---|
-| [`pubspec.yaml`](../../pubspec.yaml) | Workspace membership | Declares only `packages/keybay` and `packages/keybay_cli`; it is not a published package. |
-| [`pubspec.lock`](../../pubspec.lock) | Reviewed dependency resolution | The two packages use one committed root lockfile. There are no package-local release lockfiles. Release builds must enforce this exact resolution. |
-| [`packages/keybay/pubspec.yaml`](../../packages/keybay/pubspec.yaml) | Core native identity | Owns package name, version, repository, SDK constraint, and dependency pins. |
-| [`packages/keybay_cli/pubspec.yaml`](../../packages/keybay_cli/pubspec.yaml) | CLI native identity | Owns `keybay_cli`, its version, exact core dependency, and the single `keybay` executable declaration. |
-| [`packages/keybay_cli/bin/keybay.dart`](../../packages/keybay_cli/bin/keybay.dart) | CLI entry point | The sole production AOT target. The adapter does not scan example `bin/` directories. |
-| [`packages/keybay_cli/lib/src/command.dart`](../../packages/keybay_cli/lib/src/command.dart) | Embedded version contract | `cliVersion` currently must agree with both pubspec versions and the exact core pin. RK validates this Keybay policy through accepted source evidence or a closed project migration, not a generic regex knob. |
+| [`pubspec.yaml`](../../../pubspec.yaml) | Workspace membership | Declares only `packages/keybay` and `packages/keybay_cli`; it is not a published package. |
+| [`pubspec.lock`](../../../pubspec.lock) | Reviewed dependency resolution | The two packages use one committed root lockfile. There are no package-local release lockfiles. Release builds must enforce this exact resolution. |
+| [`packages/keybay/pubspec.yaml`](../../../packages/keybay/pubspec.yaml) | Core native identity | Owns package name, version, repository, SDK constraint, and dependency pins. |
+| [`packages/keybay_cli/pubspec.yaml`](../../../packages/keybay_cli/pubspec.yaml) | CLI native identity | Owns `keybay_cli`, its version, exact core dependency, and the single `keybay` executable declaration. |
+| [`packages/keybay_cli/bin/keybay.dart`](../../../packages/keybay_cli/bin/keybay.dart) | CLI entry point | The sole production AOT target. The adapter does not scan example `bin/` directories. |
+| [`packages/keybay_cli/lib/src/command.dart`](../../../packages/keybay_cli/lib/src/command.dart) | Embedded version contract | `cliVersion` currently must agree with both pubspec versions and the exact core pin. RK validates this Keybay policy through accepted source evidence or a closed project migration, not a generic regex knob. |
 | Core and CLI `README.md`, `CHANGELOG.md`, `LICENSE`, `lib/**`, `bin/**`, `.pubignore`, examples | Native package inventory | Pub's native packager determines the exact package. Changelog/version preparation remains outside RK. |
-| [`packages/keybay_cli/README.md`](../../packages/keybay_cli/README.md) | Consumer verification contract | Documents immutable-release, asset, checksum, workflow provenance, macOS identity, notarization, Homebrew, and pub.dev expectations. Generated future instructions must preserve or deliberately migrate that signer identity. |
+| [`packages/keybay_cli/README.md`](../../../packages/keybay_cli/README.md) | Consumer verification contract | Documents immutable-release, asset, checksum, workflow provenance, macOS identity, notarization, Homebrew, and pub.dev expectations. Generated future instructions must preserve or deliberately migrate that signer identity. |
 
 The local workspace matters: the CLI binary is built from the reviewed sibling
 `packages/keybay` source, not from whatever version a registry happens to
@@ -2043,17 +2043,17 @@ invariants that the closed adapters or normal CI must preserve:
 
 | File | Current responsibility | RK treatment |
 |---|---|---|
-| [`tool/release.dart`](../../tool/release.dart) and [`tool/keybay-release`](../../tool/keybay-release) | Synchronize four version references, prepare release PRs, verify the release signer, and currently push one selected signed tag per command. Core must publish first; only then may a separate CLI command push the paired CLI tag from the same commit. | Retain preparation, status, and credential-free validation. Retire the checkout-hosted `publish` path in favor of the external authorizer, offline signer, and separate tag pusher/verifier; do not copy its product policy into generic author fields. |
-| [`tool/test_release.dart`](../../tool/test_release.dart) | Regression coverage for Keybay's tag and version policy. | Continues to test project release preparation. |
-| [`tool/validate_publish.sh`](../../tool/validate_publish.sh) | Pub dry-run and exact-pin warning policy. | Native Pub validation plus Keybay-specific warning policy must be separated. |
-| [`tool/publish_pubdev.sh`](../../tool/publish_pubdev.sh) | Builds one package archive, publishes it through OIDC, or reconciles an existing archive. | Primary evidence for the Dart package adapter, with the hidden-flag caveat below. |
-| [`tool/compare_pub_archives.py`](../../tool/compare_pub_archives.py) | Safely compares hosted and expected pub contents while ignoring volatile archive timestamps. | Candidate for audited content-exact adapter logic. |
-| [`tool/package_cli_release.sh`](../../tool/package_cli_release.sh) | Freezes the native CLI archive inventory. | The adapter needs a fixed, reviewed bundle inventory; it must not accept arbitrary include globs. |
-| [`tool/verify_cli_binary.sh`](../../tool/verify_cli_binary.sh) and [`tool/verify_cli_archive.sh`](../../tool/verify_cli_archive.sh) | Runtime and structural candidate acceptance. | Move common checks into the closed Dart CLI adapter; retain product-specific behavior in normal CI. |
-| [`tool/verify_macos_release.sh`](../../tool/verify_macos_release.sh) | Freezes identifier, team, hardened runtime, timestamp, entitlements, and designated requirement. | The macOS adapter applies protected identity policy and emits a verification claim/receipt. |
-| [`tool/render_homebrew_formula.py`](../../tool/render_homebrew_formula.py) | Generates the four-platform formula from actual archive hashes. | Closed Homebrew adapter input, not a repository-configured renderer. |
-| [`doc/cli-release.md`](../cli-release.md) | Operator policy and failure runbook. | Human-reviewed migration input for protected policy and future operational documentation. Production policy is never regenerated automatically from the revision being released. |
-| [`.github/workflows/publish.yml`](../../.github/workflows/publish.yml) and [`.github/workflows/release_cli.yml`](../../.github/workflows/release_cli.yml) | Current provider-specific orchestration. | Migration oracle and shadow target; eventually replaced by thin generated/invoked provider glue. |
+| [`tool/release.dart`](../../../tool/release.dart) and [`tool/keybay-release`](../../../tool/keybay-release) | Synchronize four version references, prepare release PRs, verify the release signer, and currently push one selected signed tag per command. Core must publish first; only then may a separate CLI command push the paired CLI tag from the same commit. | Retain preparation, status, and credential-free validation. Retire the checkout-hosted `publish` path in favor of the external authorizer, offline signer, and separate tag pusher/verifier; do not copy its product policy into generic author fields. |
+| [`tool/test_release.dart`](../../../tool/test_release.dart) | Regression coverage for Keybay's tag and version policy. | Continues to test project release preparation. |
+| [`tool/validate_publish.sh`](../../../tool/validate_publish.sh) | Pub dry-run and exact-pin warning policy. | Native Pub validation plus Keybay-specific warning policy must be separated. |
+| [`tool/publish_pubdev.sh`](../../../tool/publish_pubdev.sh) | Builds one package archive, publishes it through OIDC, or reconciles an existing archive. | Primary evidence for the Dart package adapter, with the hidden-flag caveat below. |
+| [`tool/compare_pub_archives.py`](../../../tool/compare_pub_archives.py) | Safely compares hosted and expected pub contents while ignoring volatile archive timestamps. | Candidate for audited content-exact adapter logic. |
+| [`tool/package_cli_release.sh`](../../../tool/package_cli_release.sh) | Freezes the native CLI archive inventory. | The adapter needs a fixed, reviewed bundle inventory; it must not accept arbitrary include globs. |
+| [`tool/verify_cli_binary.sh`](../../../tool/verify_cli_binary.sh) and [`tool/verify_cli_archive.sh`](../../../tool/verify_cli_archive.sh) | Runtime and structural candidate acceptance. | Move common checks into the closed Dart CLI adapter; retain product-specific behavior in normal CI. |
+| [`tool/verify_macos_release.sh`](../../../tool/verify_macos_release.sh) | Freezes identifier, team, hardened runtime, timestamp, entitlements, and designated requirement. | The macOS adapter applies protected identity policy and emits a verification claim/receipt. |
+| [`tool/render_homebrew_formula.py`](../../../tool/render_homebrew_formula.py) | Generates the four-platform formula from actual archive hashes. | Closed Homebrew adapter input, not a repository-configured renderer. |
+| [`doc/cli-release.md`](../../cli-release.md) | Operator policy and failure runbook. | Human-reviewed migration input for protected policy and future operational documentation. Production policy is never regenerated automatically from the revision being released. |
+| [`.github/workflows/publish.yml`](../../../.github/workflows/publish.yml) and [`.github/workflows/release_cli.yml`](../../../.github/workflows/release_cli.yml) | Current provider-specific orchestration. | Migration oracle and shadow target; eventually replaced by thin generated/invoked provider glue. |
 
 ### Keybay-specific security aspects
 
@@ -2081,7 +2081,7 @@ Protected policy must bind at least:
 The secret values themselves remain outside source control.
 
 The current `publish-github` job in
-[`.github/workflows/release_cli.yml`](../../.github/workflows/release_cli.yml)
+[`.github/workflows/release_cli.yml`](../../../.github/workflows/release_cli.yml)
 holds `contents: write`, `id-token: write`, and `attestations: write` together.
 That is migration evidence, not the RK end state: shadowing must prove a split
 between the provenance issuer and the GitHub publisher before this workflow can
