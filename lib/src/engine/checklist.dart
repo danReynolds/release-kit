@@ -228,6 +228,20 @@ class Checklist {
   /// the pipeline's names, order, and dependency edges. The receipt contract
   /// and the coordinator both consume this list; nothing else respells it.
   static List<Step> localProducerSteps(ResolvedUnit unit) {
+    if (unit.assetProject case final built?) {
+      // The project's own build is one step: rk cannot divide a command it
+      // does not know, and its assets are only ever made together.
+      return [
+        Step(
+          id: '${unit.name}/build/${built.name}',
+          kind: StepKind.buildAssets,
+          unit: unit.name,
+          project: built.name,
+          summary: 'build the release assets',
+          needs: const [],
+        ),
+      ];
+    }
     final project = unit.binaryProject;
     return project == null ? const [] : _localBinarySteps(unit, project);
   }
@@ -300,6 +314,9 @@ enum StepKind {
   notarize,
   archive,
 
+  /// Run a project's own build and keep the release assets it declares.
+  buildAssets,
+
   /// The locally validated release receipt exists and is complete.
   completeStage,
   publishRegistry,
@@ -320,6 +337,7 @@ extension StepKindFacts on StepKind {
     StepKind.build ||
     StepKind.notarize ||
     StepKind.archive ||
+    StepKind.buildAssets ||
     StepKind.completeStage => StepPhase.stage,
     StepKind.tag ||
     StepKind.publishRegistry ||

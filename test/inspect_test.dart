@@ -231,6 +231,7 @@ void classificationTables() {
         StepKind.build: false,
         StepKind.notarize: false,
         StepKind.archive: false,
+        StepKind.buildAssets: false,
         StepKind.completeStage: false,
       },
       reason:

@@ -23,6 +23,7 @@ String receiptNameFor(Step step) => switch (step.kind) {
   StepKind.build => 'build:${step.project}:${step.platform}',
   StepKind.notarize => 'notarize:${step.project}:${step.platform}',
   StepKind.archive => 'archive:${step.project}:${step.platform}',
+  StepKind.buildAssets => 'assets:${step.project}',
   _ => throw StateError('${step.kind.name} is not a local producer'),
 };
 
@@ -90,9 +91,30 @@ StageStepContract contractFor(ResolvedUnit unit, Step step) {
         validate: _archiveEvidence,
       );
 
+    case StepKind.buildAssets:
+      return StageStepContract(
+        receiptNameFor(step),
+        inputs: const {'step:source-snapshot'},
+        outputs: ReleaseAssets.assetOutputs(project),
+        validate: _assetEvidence,
+      );
     default:
       throw StateError('${step.kind.name} is not a local producer');
   }
+}
+
+/// A project's build records the command rk ran for it.
+Iterable<StageIssue> _assetEvidence(
+  StageContractContext context,
+  StageStep step,
+) {
+  final command = step.evidence['command'];
+  if (command is List &&
+      command.isNotEmpty &&
+      command.every((argument) => argument is String)) {
+    return const [];
+  }
+  return [_structure('${step.name} does not record the command it ran')];
 }
 
 /// A macOS archive proves the signature on its extracted executable, not

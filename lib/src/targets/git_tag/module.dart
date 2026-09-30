@@ -49,7 +49,7 @@ final class GitTagTargetModule extends TargetModule {
       // that file on GitHub. A pub-only release is recovered directly from
       // its peeled source commit plus pub.dev's archive.
       artifacts: const [],
-      uses: unit.shipsBinaries
+      uses: unit.buildsReleaseAssets
           ? '${ReleaseAssets.manifest} from GitHub Release'
           : null,
     );

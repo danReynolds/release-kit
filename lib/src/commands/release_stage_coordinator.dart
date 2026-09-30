@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import '../asset_build.dart';
 import '../binary_chain.dart';
 import '../builds/capability.dart';
 import '../engine/assets.dart';
@@ -456,7 +457,10 @@ final class ReleaseStageCoordinator {
       String receiptName,
       Step step,
     ) async {
-      final laneName = '${step.project}/${step.platform!}';
+      // A project's own build has no platform; it is one lane of its own.
+      final laneName = step.platform == null
+          ? '${step.project}/build'
+          : '${step.project}/${step.platform!}';
       try {
         final laneSource = laneSources.putIfAbsent(laneName, () {
           final source = ProducerLaneSource(
@@ -1198,6 +1202,25 @@ final class ReleaseStageCoordinator {
         return chain.notarizeStep(step, project);
       case StepKind.archive:
         return chain.archiveStep(step, project);
+      case StepKind.buildAssets:
+        final stage = stageFor(unit).directory;
+        return AssetBuild(
+          tools: tools,
+          output: output,
+          workspace: stage.workspace,
+          sourceRoot: chain.repositoryRoot,
+        ).build(
+          step,
+          project,
+          environment: {
+            if (stage.identity.headCommit case final commit?)
+              'RK_SOURCE_COMMIT': commit,
+            if (initialGit.originUrl case final repository?)
+              'RK_REPOSITORY': repository,
+            'RK_VERSION': project.version.canonical,
+            if (unit.tag case final tag?) 'RK_TAG': tag,
+          },
+        );
       default:
         throw StateError(
           'step ${step.kind.name} is not a local stage producer',
@@ -1232,6 +1255,10 @@ final class ReleaseStageCoordinator {
     StepKind.archive => ProgressActivity(
       running: 'packaging',
       failed: 'packaging failed',
+    ),
+    StepKind.buildAssets => ProgressActivity(
+      running: 'building',
+      failed: 'build failed',
     ),
     _ => throw StateError('${step.kind.name} is not a stage producer'),
   };

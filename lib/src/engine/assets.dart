@@ -71,6 +71,19 @@ abstract final class ReleaseAssets {
   static String formulaPath(ResolvedProject project) =>
       '${producerRoot(project)}/homebrew/${formulaName(project.executable!)}';
 
+  /// The public name of a file a project's own build writes: its file name.
+  static String assetName(String declared) => declared.split('/').last;
+
+  /// Where a declared asset is staged, under its public name.
+  static String assetPath(ResolvedProject project, String declared) =>
+      '${producerRoot(project)}/assets/${assetName(declared)}';
+
+  /// Every staged path a project's own build leaves, with its artifact type.
+  static Map<String, String> assetOutputs(ResolvedProject project) => {
+    for (final declared in project.assets)
+      assetPath(project, declared): 'asset',
+  };
+
   /// Private native package bytes uploaded to pub.dev.
   ///
   /// This is a stage artifact, not a GitHub Release asset. Keeping it under
@@ -136,6 +149,15 @@ abstract final class ReleaseAssets {
 
   /// The complete public inventory excluding the manifest itself.
   static List<ReleaseAssetSpec> bundleFor(ResolvedUnit unit) {
+    if (unit.assetProject case final built?) {
+      return validateReleaseAssetSpecs([
+        for (final declared in built.assets)
+          ReleaseAssetSpec(
+            stagedPath: assetPath(built, declared),
+            publicName: assetName(declared),
+          ),
+      ]);
+    }
     final project = unit.binaryProject;
     if (project == null) return const [];
     return validateReleaseAssetSpecs([

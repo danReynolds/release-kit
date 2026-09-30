@@ -57,10 +57,26 @@ Resolution _resolve(
   return resolution!;
 }
 
-RepositoryReleasePlan _plan() {
+/// A crate whose own build writes the release assets.
+const _assetConfig = '''
+schema = 2
+
+[release.parser]
+tag = "parser-v{version}"
+path = "native/parser"
+publish = ["git-tag", "github-release"]
+build = ["tool/build.sh", "{out}"]
+assets = ["parser-linux-x64.so", "parser-macos-arm64.dylib"]
+''';
+
+final _assetTree = MemorySourceTree({
+  'native/parser/Cargo.toml': '[package]\nname = "parser"\nversion = "0.3.0"\n',
+}, description: '/source/example');
+
+RepositoryReleasePlan _plan({String config = _config, MemorySourceTree? tree}) {
   final diagnostics = Diagnostics();
   final plan = RepositoryReleasePlan.derive(
-    resolution: _resolve(_config, _tree),
+    resolution: _resolve(config, tree ?? _tree),
     repository: 'example/repository',
     targets: TargetCatalog.builtIn(),
     diagnostics: diagnostics,
@@ -324,6 +340,7 @@ dependencies:
         'build',
         'notarize',
         'archive',
+        'buildAssets',
         'completeStage',
         'tag',
         'publishRegistry',
@@ -340,15 +357,17 @@ dependencies:
 
       final json = _plan().toJson();
       final units = (json['units']! as List).cast<Map<String, Object?>>();
-      final allNodes = units
-          .expand(
-            (unit) => (unit['nodes']! as List).cast<Map<String, Object?>>(),
-          )
-          .toList();
+      final built = _plan(config: _assetConfig, tree: _assetTree).toJson();
+      final allNodes =
+          [...units, ...(built['units']! as List).cast<Map<String, Object?>>()]
+              .expand(
+                (unit) => (unit['nodes']! as List).cast<Map<String, Object?>>(),
+              )
+              .toList();
       expect(
         allNodes.map((node) => node['kind']).toSet(),
         kindVocabulary.toSet(),
-        reason: 'the full fixture exercises every frozen node kind',
+        reason: 'the fixtures exercise every frozen node kind',
       );
 
       for (final node in allNodes) {

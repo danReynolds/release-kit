@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Publish release assets that a project's own build makes. A project declares
+  `build`, the command, and `assets`, the files that command writes to
+  `{out}`, and rk publishes those files as the unit's GitHub release.
+  - The command runs from a clean copy of the committed source, once per
+    stage, with the release's facts in `RK_OUT`, `RK_SOURCE_COMMIT`,
+    `RK_REPOSITORY`, `RK_VERSION` and `RK_TAG`.
+  - Only the declared files reach the release, each under its file name. The
+    manifest types them `asset`, whatever their names end in.
+  - A Rust crate (a directory with a `Cargo.toml` and no `pubspec.yaml`) is
+    released this way, named and versioned by its `[package]` table.
+  - The plan and JSON report show the work as a `buildAssets` step.
+  - rk refuses a build that fails (`RK-BUILD-003`) or misses a declared asset
+    (`RK-BUILD-004`), and a unit whose settings do not add up
+    (`RK-CONF-042` to `045`, `RK-RES-016`, `RK-RES-017`, `RK-PKG-003`).
 - Replace `rk release --stage` with `rk stage [unit]` to prepare and validate
   artifacts without publishing. `rk release` still prepares as needed and
   publishes. JSON schema 12 identifies the operation through `command` and

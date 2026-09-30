@@ -78,11 +78,14 @@ class Rk {
 
   static final _bin = File('bin/rk.dart').absolute.path;
 
-  Run call(List<String> args) {
-    final result = Process.runSync(Platform.resolvedExecutable, [
-      _bin,
-      ...args,
-    ], workingDirectory: root);
+  /// Runs rk with [args]; [environment] adds to rk's inherited one.
+  Run call(List<String> args, {Map<String, String>? environment}) {
+    final result = Process.runSync(
+      Platform.resolvedExecutable,
+      [_bin, ...args],
+      workingDirectory: root,
+      environment: environment,
+    );
     return Run(
       code: result.exitCode,
       stdout: result.stdout as String,

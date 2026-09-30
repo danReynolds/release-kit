@@ -89,8 +89,8 @@ in `needs[]`. Optional typed context is `producer`, `project`, `platform`,
 `target`, `coordinate`, `requires_unit`, and `lane`. `phase` is `inspect`,
 `stage`, or `publish`. The `kind` vocabulary is `prerequisite`,
 `sourceSnapshot`, `targetStage`, `build`, `notarize`, `archive`,
-`completeStage`, `tag`, `publishRegistry`, `publishRelease`, and
-`publishHomebrew`.
+`buildAssets`, `completeStage`, `tag`, `publishRegistry`, `publishRelease`,
+and `publishHomebrew`. `buildAssets` runs a project's own declared build.
 
 Node ids and `needs[]` are the machine graph. `lane`, when present, is an
 opaque equality key scoped to one unit and phase: nodes with the same key are

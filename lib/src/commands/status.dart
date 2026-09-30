@@ -259,7 +259,7 @@ class StatusCommand {
     }
 
     final partialBinaryWithoutStage =
-        unit.shipsBinaries &&
+        unit.buildsReleaseAssets &&
         stageResult.inspection?.reusable != true &&
         targets.any((target) => target.inspection.isExact) &&
         targets.any(

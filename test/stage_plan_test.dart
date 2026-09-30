@@ -507,6 +507,72 @@ publish = ["pub.dev"]
     expect(unsigned, isNot(contains('tag_signing')));
   });
 
+  test("a project's own build and its assets key the private stage", () {
+    Map<String, Object?> planFor(String build, String assets) {
+      final source = MemorySourceTree({
+        'release.toml':
+            '''
+schema = 2
+
+[release.parser]
+tag = "parser-v{version}"
+path = "native/parser"
+publish = ["git-tag", "github-release"]
+build = $build
+assets = $assets
+''',
+        'native/parser/Cargo.toml':
+            '[package]\nname = "parser"\nversion = "0.1.0"\n',
+      });
+      final diagnostics = Diagnostics();
+      final config = ReleaseConfig.parse(
+        source.read('release.toml')!,
+        'release.toml',
+        diagnostics,
+      )!;
+      final unit = Resolution.resolve(
+        config,
+        source,
+        diagnostics,
+      )!.units.single;
+      return stagePlanFor(
+        unit,
+        GitState(
+          root: repository.path,
+          head: _head,
+          headTree: _tree,
+          branch: 'main',
+          isClean: true,
+          uncommitted: const [],
+          headIsPushed: true,
+          tags: const [],
+          signingConfigured: false,
+          originUrl: 'example/parser',
+        ),
+        compiler: DartCompilerIdentity.recorded(
+          executable: '/toolchains/dart',
+          version: 'Dart SDK version: fixture',
+          sha256: 'a' * 64,
+        ),
+        rk: RkImplementationIdentity.recorded(
+          version: '0.0.1',
+          stageSchema: stageSchemaVersion,
+          sha256: 'b' * 64,
+        ),
+      );
+    }
+
+    final plan = planFor('["tool/build.sh", "{out}"]', '["a.so"]');
+    final project = (plan['projects']! as List).single as Map;
+    expect(project['build'], ['tool/build.sh', '{out}']);
+    expect(project['assets'], ['a.so']);
+    expect(
+      planFor('["tool/build.sh", "--release", "{out}"]', '["a.so"]'),
+      isNot(plan),
+    );
+    expect(planFor('["tool/build.sh", "{out}"]', '["b.so"]'), isNot(plan));
+  });
+
   test('the effective native registry endpoint keys the private stage', () {
     final pubSource = MemorySourceTree({
       'release.toml': '''

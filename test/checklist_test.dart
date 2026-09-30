@@ -1,6 +1,8 @@
+import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/engine/checklist.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
+import 'package:rk/src/engine/producers.dart';
 import 'package:rk/src/engine/release_dependencies.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
@@ -543,6 +545,84 @@ dependencies:
         resolution,
       ).prerequisites(resolution.unit('mcp')!, diagnostics);
       expect(diagnostics.found.single.code, 'RK-DEP-001');
+    });
+  });
+
+  group("a project's own build", () {
+    Resolution parser() => resolve(
+      '''
+schema = 2
+
+[release.parser]
+tag = "flark_parse-v{version}"
+path = "native/parser"
+publish = ["git-tag", "github-release"]
+build = ["tool/build.sh", "{out}"]
+assets = ["assets/parser-macos-arm64.dylib", "parser-linux-x64.so", "src.tar.gz"]
+''',
+      MemorySourceTree({
+        'native/parser/Cargo.toml':
+            '[package]\nname = "flark_parse"\nversion = "0.1.0"\n',
+      }),
+    );
+    ResolvedUnit unitOf(Resolution resolution) => resolution.unit('parser')!;
+
+    test('is one local step, before the stage completes', () {
+      final resolution = parser();
+      final unit = unitOf(resolution);
+      final checklist = Checklist.derive(unit, resolution, Diagnostics());
+      expect(checklist.steps.map((step) => (step.id, step.kind)), [
+        ('parser/build/flark_parse', StepKind.buildAssets),
+        ('parser/stage/complete', StepKind.completeStage),
+        ('parser/tag/flark_parse-v0.1.0', StepKind.tag),
+        ('parser/github-release/flark_parse-v0.1.0', StepKind.publishRelease),
+      ]);
+      final build = checklist.steps.first;
+      expect(build.project, 'flark_parse');
+      expect(build.platform, isNull);
+      expect(build.kind.phase, StepPhase.stage);
+      expect(checklist.steps[1].needs, [build.id]);
+    });
+
+    test('stages each asset under its file name, and publishes them', () {
+      final unit = unitOf(parser());
+      expect(
+        [
+          for (final asset in ReleaseAssets.bundleFor(unit))
+            (asset.publicName, asset.stagedPath),
+        ],
+        [
+          (
+            'parser-linux-x64.so',
+            'producers/flark_parse/assets/parser-linux-x64.so',
+          ),
+          (
+            'parser-macos-arm64.dylib',
+            'producers/flark_parse/assets/parser-macos-arm64.dylib',
+          ),
+          ('src.tar.gz', 'producers/flark_parse/assets/src.tar.gz'),
+        ],
+      );
+      expect(ReleaseAssets.expectedForUnit(unit), {
+        'parser-linux-x64.so',
+        'parser-macos-arm64.dylib',
+        'src.tar.gz',
+        'release-manifest.json',
+      });
+    });
+
+    test('leaves a receipt of the source it read and the assets it wrote', () {
+      final unit = unitOf(parser());
+      final step = Checklist.localProducerSteps(unit).single;
+      final contract = contractFor(unit, step);
+      expect(receiptNameFor(step), 'assets:flark_parse');
+      expect(contract.name, 'assets:flark_parse');
+      expect(contract.inputs, {'step:source-snapshot'});
+      expect(contract.outputs, {
+        'producers/flark_parse/assets/parser-macos-arm64.dylib': 'asset',
+        'producers/flark_parse/assets/parser-linux-x64.so': 'asset',
+        'producers/flark_parse/assets/src.tar.gz': 'asset',
+      });
     });
   });
 }
