@@ -40,6 +40,49 @@ void main() {
       },
     );
 
+    test(
+      'keeps a character written in two halves, and ends lines at CRLF',
+      () async {
+        if (Platform.isWindows) return;
+        final lines = <String>[];
+
+        await const SystemTools().runStreaming('sh', const [
+          '-c',
+          r"printf '\303'; sleep 0.2; printf '\251\r\nnext\r\n'",
+        ], onLine: lines.add);
+
+        expect(lines, ['\u00e9', 'next']);
+      },
+    );
+
+    test('a program that is not there throws, as run does', () {
+      expect(
+        const SystemTools().runStreaming(
+          'rk-no-such-program',
+          const [],
+          onLine: (_) {},
+        ),
+        throwsA(isA<ProcessException>()),
+      );
+    });
+
+    test('a listener that throws does not stop the reading', () async {
+      if (Platform.isWindows) return;
+      var heard = 0;
+
+      final running = const SystemTools().runStreaming(
+        'sh',
+        const ['-c', r'for i in 1 2 3; do echo $i; done; exit 0'],
+        onLine: (_) {
+          heard++;
+          throw StateError('the listener failed');
+        },
+      );
+
+      await expectLater(running, throwsA(isA<StateError>()));
+      expect(heard, 1, reason: 'the rest of the output is drained, unheard');
+    });
+
     test("keeps a bounded instance's bound", () async {
       if (Platform.isWindows) return;
       final lines = <String>[];

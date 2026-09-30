@@ -53,6 +53,7 @@ assets = ["assets/parser.so", "parser.dylib"]
     ToolResult result, {
     List<String> writes = const [],
     Duration? pause,
+    bool terminal = false,
   }) {
     late final RecordingTools tools;
     void onRun(String call) {
@@ -71,7 +72,12 @@ assets = ["assets/parser.so", "parser.dylib"]
     return (
       build: AssetBuild(
         tools: tools,
-        output: Output(sink: printed.write, isTerminal: false, useColor: false),
+        output: Output(
+          sink: printed.write,
+          isTerminal: terminal,
+          useColor: false,
+          terminalWidth: terminal ? 80 : null,
+        ),
         workspace: Workspace('${scratch.path}/stage'),
         sourceRoot: '${scratch.path}/lane',
         cacheDirectory: '${scratch.path}/cache/parser/parser',
@@ -82,10 +88,15 @@ assets = ["assets/parser.so", "parser.dylib"]
   }
 
   test('shows the latest line of the build on its first row', () async {
+    // Each start of an activity reads a later time, so a row that restarted
+    // would show it.
+    var starts = 0;
     final progress = ProgressModel(
       title: 'stage',
-      clock: () =>
-          () => Duration.zero,
+      clock: () {
+        final at = Duration(seconds: ++starts);
+        return () => at;
+      },
       changed: (_) {},
     );
     final rows = [
@@ -105,6 +116,7 @@ assets = ["assets/parser.so", "parser.dylib"]
         stderr: '',
       ),
       writes: ['assets/parser.so', 'parser.dylib'],
+      terminal: true,
     );
 
     final outcome = await build.build(step, project, progress: handle);
@@ -113,7 +125,11 @@ assets = ["assets/parser.so", "parser.dylib"]
     expect(
       [for (final row in progress.rows) row.activity],
       [activity, activity],
-      reason: 'the rows keep their activity, and so their elapsed time',
+    );
+    expect(
+      [for (final row in progress.rows) row.elapsed],
+      [const Duration(seconds: 1), const Duration(seconds: 2)],
+      reason: 'the rows keep the time they started, and so their elapsed time',
     );
     expect(
       [for (final row in progress.rows) row.detail],
@@ -156,11 +172,88 @@ assets = ["assets/parser.so", "parser.dylib"]
       ToolResult(exitCode: 0, stdout: 'one\ntwo\nthree\n', stderr: ''),
       writes: ['assets/parser.so', 'parser.dylib'],
       pause: const Duration(milliseconds: 400),
+      terminal: true,
     );
 
     await build.build(step, project, progress: row.handle);
 
     expect(progress.rows.single.detail, 'three');
+  });
+
+  test('leaves the row alone without a terminal', () async {
+    final progress = ProgressModel(
+      title: 'stage',
+      clock: () =>
+          () => Duration.zero,
+      changed: (_) {},
+    );
+    final row = progress.addRow(id: 'so', label: 'parser.so');
+    final activity = ProgressActivity(
+      running: 'building',
+      failed: 'build failed',
+    );
+    row.handle.begin(activity);
+    final (:build, tools: _, printed: _) = harness(
+      ToolResult(exitCode: 0, stdout: 'Compiling comrak\n', stderr: ''),
+      writes: ['assets/parser.so', 'parser.dylib'],
+    );
+
+    await build.build(step, project, progress: row.handle);
+
+    expect(
+      progress.rows.single.detail,
+      isNull,
+      reason: 'a log would keep whichever line was current when it printed',
+    );
+  });
+
+  test('ends a failed build with lines that still say what failed', () async {
+    final lane = '${scratch.path}/lane';
+    final (:build, tools: _, :printed) = harness(
+      ToolResult(
+        exitCode: 1,
+        stdout: '',
+        stderr:
+            '\x1b[1m$lane/native/parser/src/parser.c:3:5: \x1b[31merror:'
+            '\x1b[0m expected ;\n'
+            '    return x\n'
+            '           ^\n',
+      ),
+    );
+
+    await build.build(step, project);
+
+    final remedy = problems(build).single['remedy']! as String;
+    expect(
+      remedy,
+      contains('  native/parser/src/parser.c:3:5: error: expected ;\n'),
+      reason: 'escapes go, and a path into the lane reads as the repository\'s',
+    );
+    expect(
+      remedy,
+      contains('      return x\n             ^\n'),
+      reason: 'a caret stays under its column',
+    );
+    expect(printed.toString(), contains('error: expected ;'));
+  });
+
+  test('says when the cache cannot be made', () async {
+    File('${scratch.path}/cache/parser')
+      ..createSync(recursive: true)
+      ..writeAsStringSync('in the way');
+    final (:build, :tools, printed: _) = harness(
+      ToolResult(exitCode: 0, stdout: '', stderr: ''),
+    );
+
+    final outcome = await build.build(step, project);
+
+    expect(outcome.ok, isFalse);
+    expect(tools.calls, isEmpty, reason: 'the build never ran');
+    expect(problems(build).single['code'], 'RK-BUILD-003');
+    expect(
+      problems(build).single['message'],
+      'parser: its build cache could not be made',
+    );
   });
 
   test('tells the build where it writes and what it may keep', () async {
@@ -169,7 +262,7 @@ assets = ["assets/parser.so", "parser.dylib"]
       writes: ['assets/parser.so', 'parser.dylib'],
     );
 
-    await build.build(
+    final outcome = await build.build(
       step,
       project,
       environment: const {'RK_VERSION': '0.1.0'},
@@ -177,6 +270,11 @@ assets = ["assets/parser.so", "parser.dylib"]
 
     final environment = tools.environments.values.single!;
     expect(environment['RK_VERSION'], '0.1.0');
+    expect(
+      outcome.evidence['cache'],
+      '${scratch.path}/cache/parser/parser',
+      reason: 'the stage records that its build could reuse a cache',
+    );
     expect(environment['RK_CACHE'], '${scratch.path}/cache/parser/parser');
     expect(Directory(environment['RK_CACHE']!).existsSync(), isTrue);
     expect(
@@ -243,7 +341,8 @@ assets = ["assets/parser.so", "parser.dylib"]
       text,
       contains(
         'tool/build.sh could not start: Permission denied. build names a '
-        'program by its path from native/parser, or by a name on PATH.',
+        'program by its path from native/parser, or by a name on PATH, and a '
+        'script needs its executable bit',
       ),
     );
   });

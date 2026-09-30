@@ -13,14 +13,12 @@
   - A Rust crate (a directory with a `Cargo.toml` and no `pubspec.yaml`) is
     released this way, named and versioned by its `[package]` table.
   - The plan and JSON report show the work as a `buildAssets` step.
-  - rk refuses a build that fails (`RK-BUILD-003`) or misses a declared asset
-    (`RK-BUILD-004`), and a unit whose settings do not add up
-    (`RK-CONF-042` to `045`, `RK-RES-016`, `RK-RES-017`, `RK-PKG-003`).
-- Make a long asset build easier to follow.
-  - The stage shows the build's latest line beside its elapsed time.
-  - A failed build ends with its last lines, and a missing asset names what
-    the build wrote instead. A build that cannot start says why, where rk
-    used to say only that staging failed.
+  - rk refuses a build that fails or cannot start (`RK-BUILD-003`) or misses
+    a declared asset (`RK-BUILD-004`), and a unit whose settings do not add
+    up (`RK-CONF-042` to `045`, `RK-RES-016`, `RK-RES-017`, `RK-PKG-003`).
+  - On a terminal, the stage shows the build's latest line beside its
+    elapsed time. A failed build's remedy ends with its last lines, and a
+    missing asset's names what the build wrote instead.
   - `RK_CACHE` gives the build a directory that outlives the stage, under
     `.rk/cache`, for what the next build can reuse.
 - Replace `rk release --stage` with `rk stage [unit]` to prepare and validate

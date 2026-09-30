@@ -38,7 +38,7 @@ fails, and the count below is checked against the rows.
 |---|---|---|
 | `RK-BUILD-001` | $platform: the build did not produce a working binary | `lib/src/binary_chain.dart` |
 | `RK-BUILD-002` | $platform was built but not executed | `lib/src/commands/release_publication_coordinator.dart` |
-| `RK-BUILD-003` | a project's own build failed | `lib/src/asset_build.dart` |
+| `RK-BUILD-003` | a project's own build failed, or could not start | `lib/src/asset_build.dart` |
 | `RK-BUILD-004` | a project's own build did not write every asset it declares | `lib/src/asset_build.dart` |
 
 ## RK-CHG — The changelog

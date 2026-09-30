@@ -330,6 +330,20 @@ class SystemTools implements StreamingTools {
     );
     // The same closed stdin as [run], so a command that reads it sees EOF.
     unawaited(process.stdin.close().catchError((Object _) {}));
+    // A listener that fails must not stop the reading: the process would go
+    // on writing into a closed pipe. What it threw is thrown once it ends.
+    Object? failure;
+    StackTrace? failureTrace;
+    void deliver(String line) {
+      if (failure != null) return;
+      try {
+        onLine(line);
+      } on Object catch (error, stackTrace) {
+        failure = error;
+        failureTrace = stackTrace;
+      }
+    }
+
     Future<String> read(Stream<List<int>> stream) async {
       final text = StringBuffer();
       await stream
@@ -339,7 +353,7 @@ class SystemTools implements StreamingTools {
             return chunk;
           })
           .transform(const LineSplitter())
-          .forEach(onLine);
+          .forEach(deliver);
       return text.toString();
     }
 
@@ -348,6 +362,9 @@ class SystemTools implements StreamingTools {
       read(process.stderr),
       process.exitCode,
     ]);
+    if (failure case final failed?) {
+      Error.throwWithStackTrace(failed, failureTrace!);
+    }
     return ToolResult(
       exitCode: exitCode as int,
       stdout: stdout as String,

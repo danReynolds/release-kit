@@ -1077,12 +1077,20 @@ final class LiveProgress {
       row,
       active: true,
     );
-    final status = terminalSafeText(rawStatus);
     final indent = '  ' * depth;
     final left = terminalSafeText(
       [row.label, if (row.coordinate != null) row.coordinate!].join('  '),
     );
     final overhead = _displayWidth(indent) + _displayWidth(glyph) + 3;
+    final status = terminalSafeText(
+      _detailGivesWay(
+        row,
+        rawStatus,
+        available == null
+            ? null
+            : available - overhead - _displayWidth(left) - 2,
+      ),
+    );
     const minimumSubjectWidth = 6;
     final room = available == null ? null : _atLeastZero(available - overhead);
     final wantedStatus = _displayWidth(status);
@@ -1103,6 +1111,28 @@ final class LiveProgress {
     return '$indent${_output._style(glyph, state: glyphState)} '
         '${_output._style(fittedLeft, state: glyphState)}$gap'
         '${_output._style(fittedStatus, state: textState)}';
+  }
+
+  /// [status], with an active row's detail shortened or left out so that it
+  /// fits in [room] beside the whole label. The label and the elapsed time
+  /// say more than a detail does, such as a build's latest line.
+  String _detailGivesWay(ProgressRow row, String status, int? room) {
+    final detail = row.detail;
+    if (room == null ||
+        detail == null ||
+        row.state != ProgressRowState.active ||
+        _displayWidth(terminalSafeText(status)) <= room) {
+      return status;
+    }
+    final elapsed = [if (showElapsed) formatDuration(row.elapsed)];
+    final without = [row.activity!.running, ...elapsed].join(' · ');
+    final detailRoom = room - _displayWidth(without) - 3;
+    if (detailRoom < 10) return without;
+    return [
+      row.activity!.running,
+      _fit(detail, detailRoom),
+      ...elapsed,
+    ].join(' · ');
   }
 
   (String, String, RuntimeState, RuntimeState) _rowPresentation(
