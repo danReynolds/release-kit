@@ -1,7 +1,7 @@
 # RFC 0002: rk core
 
 > Engineering contract from implementation, not the public pitch. See the
-> [README](../../README.md) for what rk is.
+> [README](../../../README.md) for what rk is.
 
 - Status: Approved for implementation
 - Revision: 6 (2026-08-22) — Formula-only Homebrew publication
@@ -14,7 +14,7 @@
 - First production-alpha canary: rk 0.1.0
 
 The staging and status amendments in this revision are the forward contract
-being implemented. [The production-alpha plan](../production-alpha-plan.md)
+being implemented. [The production-alpha plan](../../production-alpha-plan.md)
 tracks the sequence and acceptance evidence; historical build evidence remains
 in `doc/plan.md`.
 
