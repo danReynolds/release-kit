@@ -91,6 +91,12 @@ final class GitTagTargetModule extends TargetModule {
       expectedCommit: context.git.head,
       expectedManifestSha256: manifestSha256,
       requireSignature: context.git.signingConfigured,
+      // Before this commit is staged, the question is whether an unchanged
+      // unit is already released. Once it is staged, rk means to publish its
+      // bytes, which only a tag on this commit can bind.
+      sourcePaths: stage != null
+          ? const []
+          : [for (final project in unit.projects) project.pubspec.directory],
     );
     if (!remote.isAbsent || !context.git.hasTag(tag)) return remote;
 

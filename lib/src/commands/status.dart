@@ -258,9 +258,12 @@ class StatusCommand {
       diagnostics.report(diagnostic);
     }
 
+    // A version an earlier commit released is public from that commit's
+    // stage, not from one this commit could have lost.
     final partialBinaryWithoutStage =
         unit.buildsReleaseAssets &&
         stageResult.inspection?.reusable != true &&
+        !targets.any((target) => target.inspection.releasedFrom != null) &&
         targets.any((target) => target.inspection.isExact) &&
         targets.any(
           (target) =>

@@ -143,9 +143,45 @@ publish = ["git-tag"]
     timeout: const Timeout(Duration(minutes: 2)),
   );
 
+  test('a released unit stays released while its own files are unchanged', () {
+    final repo = repository(multiple: true);
+    final core = repo(['release', 'core', '--yes', '--json']);
+    expect(core.code, 0, reason: core.all);
+
+    // A later commit that changes only the other unit.
+    File(
+      '${repo.root}/packages/tools/CHANGELOG.md',
+    ).writeAsStringSync('## 1.0.0\n\nFirst release, with notes.\n');
+    _git(repo.root, ['commit', '-qam', 'tools notes']);
+    _git(repo.root, ['push', '-q']);
+    final both = repo(['release', '--yes', '--json']);
+    expect(both.code, 0, reason: both.all);
+    expect(
+      _git(repo.root, ['ls-remote', '--tags', 'origin']),
+      allOf(
+        contains('refs/tags/core-v1.0.0'),
+        contains('refs/tags/tools-v1.0.0'),
+      ),
+    );
+
+    // A commit that changes core is new source for a version already out.
+    File(
+      '${repo.root}/packages/core/CHANGELOG.md',
+    ).writeAsStringSync('## 1.0.0\n\nFirst release, amended.\n');
+    _git(repo.root, ['commit', '-qam', 'core amended']);
+    _git(repo.root, ['push', '-q']);
+    final changed = repo(['release', '--yes', '--json']);
+    expect(changed.code, isNot(0));
+    expect(
+      (changed.json['problems'] as List).map((p) => (p as Map)['code']),
+      contains('RK-MONO-004'),
+    );
+  });
+
   group("a crate's own build", () {
     // A stand-in for gh, answering the three reads a stage makes of a
-    // repository that has no releases yet.
+    // repository that has no releases yet, and a signed-in session. It
+    // refuses everything else, so a release gets no further than its tag.
     const gh = r'''#!/bin/bash
 case "$*" in
   "api repos/example/parser/releases/tags/"*)
@@ -153,6 +189,7 @@ case "$*" in
     echo 'gh: Not Found (HTTP 404)' >&2
     exit 1;;
   "repo view example/parser --json name") echo '{"name":"parser"}';;
+  "auth status --active --hostname github.com") ;;
   "api --paginate --slurp repos/example/parser/releases") echo '[[]]';;
   *) echo "unexpected gh $*" >&2; exit 2;;
 esac
@@ -279,6 +316,72 @@ printf 'scratch' > "$1/unrelated.txt"
         stageEvidence(staged, 'parser')['stage id'],
         reason: 'a complete stage is reused, not built again',
       );
+    });
+
+    test('finishes an interrupted release from the commit its tag names', () {
+      final (:repo, :environment) = crate(r'''#!/bin/bash
+set -euo pipefail
+mkdir -p "$1/assets"
+printf 'so' > "$1/assets/parser-linux-x64.so"
+printf 'dylib' > "$1/parser-macos-arm64.dylib"
+printf 'tarball' > "$1/src.tar.gz"
+''');
+      // The tag goes out, and the forge refuses the release.
+      final interrupted = repo([
+        'release',
+        'parser',
+        '--yes',
+        '--json',
+      ], environment: environment);
+      expect(interrupted.code, isNot(0));
+      expect(
+        _git(repo.root, ['ls-remote', '--tags', 'origin']),
+        contains('refs/tags/flark_parse-v0.1.0'),
+      );
+
+      // Later work that leaves the crate alone.
+      File('${repo.root}/NOTES.md').writeAsStringSync('notes\n');
+      _git(repo.root, ['add', 'NOTES.md']);
+      _git(repo.root, ['commit', '-qm', 'notes']);
+      _git(repo.root, ['push', '-q']);
+
+      final resumed = repo([
+        'release',
+        'parser',
+        '--yes',
+        '--json',
+      ], environment: environment);
+      expect(resumed.code, isNot(0));
+      final unfinished = problem(resumed, 'RK-GIT-009');
+      expect(
+        unfinished['message'],
+        startsWith('flark_parse-v0.1.0 was released from '),
+      );
+      final tagged = _git(repo.root, ['rev-parse', 'flark_parse-v0.1.0^{}']);
+      expect(
+        unfinished['remedy'],
+        contains('git checkout $tagged\n'),
+        reason:
+            'the tag binds what was staged at its commit; this commit\'s '
+            'bytes must not be published under it',
+      );
+
+      // The remedy works: from the tagged commit the release carries on, and
+      // gets as far as the forge again.
+      _git(repo.root, ['checkout', '-q', tagged]);
+      final recovered = repo([
+        'release',
+        'parser',
+        '--yes',
+        '--json',
+      ], environment: environment);
+      final codes = [
+        for (final problem in recovered.json['problems'] as List)
+          (problem as Map)['code'],
+      ];
+      expect(codes, isNot(contains('RK-GIT-009')));
+      expect(codes, isNot(contains('RK-STAGE-005')));
+      expect(recovered.all, contains('POST repos/example/parser/releases'));
     });
 
     test('refuses when the build fails, and shows how it ended', () {

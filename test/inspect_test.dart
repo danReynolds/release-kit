@@ -300,6 +300,79 @@ void classificationTables() {
     );
   });
 
+  group('a tag released from an earlier commit', () {
+    Future<List<Diagnostic>> guardsFor({
+      required bool finished,
+      Inspection rest = const Inspection.absent(),
+    }) async {
+      final resolution = await _binaryResolution();
+      final unit = resolution.unit('cli')!; // 1.0.0, tag v1.0.0
+      final git = GitState(
+        root: '/repo',
+        head: 'abc123def456',
+        branch: 'main',
+        isClean: true,
+        uncommitted: const [],
+        headIsPushed: true,
+        tags: const ['v1.0.0'],
+        tagTargets: const {'v1.0.0': 'fedcba9876543210'},
+        signingConfigured: false,
+        originUrl: 'example/tool',
+      );
+      final inspector = Inspector(registry: FakeRegistry({}), git: git);
+      final checklist = Checklist.derive(unit, resolution, Diagnostics());
+      // What the tag inspection answers when the unit's own files are
+      // unchanged since the tagged commit.
+      final states = {
+        for (final s in checklist.steps)
+          s.id: s.kind == StepKind.tag
+              ? const Inspection.exact(
+                  detail: 'nothing this unit releases has changed since',
+                  releasedFrom: 'fedcba9876543210',
+                )
+              : finished
+              ? const Inspection.exact(detail: 'published')
+              : rest,
+      };
+      return inspector.tagGuards(unit, checklist, states);
+    }
+
+    test('is released once everything it publishes is out', () async {
+      expect(await guardsFor(finished: true), isEmpty);
+    });
+
+    test('finishes an unfinished release from that commit, not this '
+        'one', () async {
+      // The tag binds what was staged at its commit. Finishing from HEAD
+      // would publish HEAD's bytes under it.
+      final found = await guardsFor(finished: false);
+
+      final guard = found.singleWhere((d) => d.code == 'RK-GIT-009');
+      expect(
+        guard.message,
+        'v1.0.0 was released from fedcba987654, and its '
+        'release is unfinished',
+      );
+      expect(
+        guard.remedy,
+        contains('git checkout fedcba9876543210\n'),
+        reason: 'the commit origin names, not a local ref that may differ',
+      );
+      expect(guard.remedy, contains('rk release cli'));
+    });
+
+    test('leaves what it cannot read to that target', () async {
+      // Unread is not unfinished: the target's own refusal says what is
+      // wrong, and sending the operator to the tag would not help.
+      final found = await guardsFor(
+        finished: false,
+        rest: const Inspection.unknown('gh is not signed in'),
+      );
+
+      expect(found.map((d) => d.code), isNot(contains('RK-GIT-009')));
+    });
+  });
+
   group('an unread tag target is not agreement', () {
     Future<List<Diagnostic>> guardsFor({
       required Map<String, String> tagTargets,
