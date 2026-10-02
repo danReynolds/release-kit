@@ -1,9 +1,10 @@
 # Dependency-aware repository staging
 
-Status: implementation in progress. The native mechanism proof and initial
-source-only native requirements/candidate projection are implemented and reviewed.
-Artifact binding, native preparation integration, repository execution and final
-Fleury qualification remain. No publication has occurred.
+Status: implementation in progress. The native mechanism proof, initial
+source-only native requirements/candidate projection and staged-provider artifact
+contracts are implemented and reviewed. Frozen-choice lookup/authorization,
+native preparation integration, repository execution and final Fleury
+qualification remain. No publication has occurred.
 
 Baseline: RK main `6e7bb165c8027d8fc5e5293b45432850cf3229f8`, inspected 2026-10-02.
 
@@ -533,7 +534,33 @@ is deliberately the first implementation packet.
 - Resolution ownership is explicit: a transitive declaring package retains its
   provenance, while the enclosing configured root owns preparation/publication
   obligations. This must be exercised end-to-end when native discovery connects.
+- Staged-provider artifact inputs: `StageDependencies` freezes native context,
+  slot, opaque provider coordinate, consuming producers, provider stage/receipt,
+  archive metadata and portable provider proof into the consumer plan. A core
+  producer copies exact verified bytes; canonical contracts compare expected
+  metadata independently of receipt evidence. The coordinator schedules this
+  producer and gives targets the same decorated contracts it inspects.
+  Same-unit dependencies bind producer output hashes when ready, without putting
+  future hashes into unit identity. Consumer verification survives provider-stage
+  deletion. Rebinding preserves identity while refreshing temporary provider
+  handles. Signed-build inspection permits canonical dependency inputs and still
+  requires the source snapshot. The architecture reviewer approved this bounded
+  slice after those last two regressions were fixed.
+- The artifact slice is exercised with a non-Dart native producer through the
+  actual coordinator, including reuse, independent opaque versions/install slots,
+  forged self-consistent receipts, provider/input tampering, cleanup, and an
+  incomplete same-unit provider handoff. This proves the generic receipt path;
+  production Dart preparation does not use the new bindings yet.
+  The focused artifact, existing stage/plan/coordinator, target, Pub resolution
+  and phase-conformance suites pass together: 298 tests with the complete Dart
+  3.12.2 SDK. `dart analyze` is clean. This is focused regression evidence,
+  not the final full-suite or Fleury-stack qualification.
 - Remaining review requirements: frozen real bindings rather than candidate
   selections authorize receipt inputs; full native graph/manifest agreement;
   dev-helper original/back-edge constraints; bounded isolated source discovery;
-  importer provenance, safe extraction, stage lookup/reuse and recovery.
+  safe extraction, stage lookup/reuse and recovery. Restoring dependency JSON
+  verifies consistency with a declaration, not authorization of that declaration.
+  Source/intent lookup must validate the native frozen choices and provider
+  contracts before adopting a restored plan. Hosted fallback graphs, selected
+  versions and integrity still need their own immutable plan binding. The
+  artifact contract does not complete implementation slice 3 on its own.

@@ -75,6 +75,49 @@ void main() {
   tearDown(() => repository.deleteSync(recursive: true));
 
   test(
+    'signed build keeps source proof when it also consumes a dependency archive',
+    () async {
+      final receipt = await _completeEveryArtifactType(
+        release,
+        dependencyInput: true,
+      );
+      expect(release.inspect().issues, isEmpty);
+      final producer = receipt.steps.singleWhere(
+        (step) => step.name == 'build:tool:macos-arm64',
+      );
+      expect(producer.inputs.map((input) => input.name), [
+        'step:source-snapshot',
+        'dependencies/provider/archive',
+      ]);
+      final withoutSource = StageStep(
+        name: producer.name,
+        inputs: producer.inputs.where(
+          (input) => input.name != 'step:source-snapshot',
+        ),
+        outputs: producer.outputs,
+        evidence: producer.evidence,
+      );
+      StageReceiptStore(release.directory).write(
+        StageReceipt(
+          identity: receipt.identity,
+          steps: [
+            for (final step in receipt.steps)
+              if (step.name == producer.name) withoutSource else step,
+          ],
+        ),
+      );
+      expect(
+        release.inspect().issues.any(
+          (issue) => issue.message.contains(
+            'signed build is not bound to the staged source snapshot',
+          ),
+        ),
+        isTrue,
+      );
+    },
+  );
+
+  test(
     'materializes every tracked source byte in deterministic order',
     () async {
       final captured = await release.materializeSource();
@@ -1059,7 +1102,10 @@ Future<void> _complete(ReleaseStage release) async {
   release.finalize(releaseAssets: _fixtureReleaseAssets({_asset}));
 }
 
-Future<StageReceipt> _completeEveryArtifactType(ReleaseStage release) async {
+Future<StageReceipt> _completeEveryArtifactType(
+  ReleaseStage release, {
+  bool dependencyInput = false,
+}) async {
   final sourceArtifacts = await release.materializeSource();
   final source = StageStep(
     name: 'source-snapshot',
@@ -1082,9 +1128,30 @@ Future<StageReceipt> _completeEveryArtifactType(ReleaseStage release) async {
     path: 'macos-arm64/tool',
     type: 'executable',
   );
+  StageStep? dependency;
+  if (dependencyInput) {
+    release.directory.writeBytesAtomically(
+      'dependencies/provider/archive',
+      utf8.encode('provider archive'),
+    );
+    dependency = StageStep(
+      name: 'dependency-inputs',
+      inputs: [StageInput.step(source)],
+      outputs: [
+        StageArtifact.capture(
+          stage: release.directory,
+          path: 'dependencies/provider/archive',
+          type: 'dependency-archive',
+        ),
+      ],
+    );
+  }
   final sign = StageStep(
     name: 'build:tool:macos-arm64',
-    inputs: [StageInput.step(source)],
+    inputs: [
+      StageInput.step(source),
+      if (dependency != null) StageInput.artifact(dependency.outputs.single),
+    ],
     outputs: [binary],
     evidence: {
       'smoke': {'status': 'passed'},
@@ -1201,7 +1268,15 @@ Future<StageReceipt> _completeEveryArtifactType(ReleaseStage release) async {
     ],
   );
 
-  release.writeProgress([source, sign, notarize, archiveStep, notes, formula]);
+  release.writeProgress([
+    source,
+    if (dependency != null) dependency,
+    sign,
+    notarize,
+    archiveStep,
+    notes,
+    formula,
+  ]);
   return release.finalize(
     releaseAssets: _fixtureReleaseAssets({
       _asset,

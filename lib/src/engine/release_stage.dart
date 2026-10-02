@@ -1,8 +1,10 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
 import '../builds/launcher_compiler.dart';
 import '../transforms/digest.dart';
+import 'canonical_json.dart';
 import 'file_mode.dart';
 import 'release_asset.dart';
 import 'assets.dart';
@@ -14,6 +16,7 @@ import 'stage.dart';
 import 'stage_store.dart';
 import 'producers.dart';
 import 'stage_contract.dart';
+import 'stage_dependencies.dart';
 import 'stage_inspection.dart';
 import 'stage_plan.dart';
 import 'stage_receipt.dart';
@@ -51,11 +54,12 @@ class ReleaseStages {
   final RkImplementationIdentity Function() _rkIdentity;
   final Map<String, String> Function() _environment;
   final Map<String, ReleaseStage> _stages = {};
+  final Map<String, StageDependencies> _dependencies = {};
   final String _unboundRunId = _newRunId();
   DartCompilerIdentity? _compiler;
 
   ReleaseStage call(ResolvedUnit unit) => _stages.putIfAbsent(
-    unit.name,
+    '${unit.name}:${CanonicalJson.encode(_dependencies[unit.name]?.toJson())}',
     () => _resolve(
       unit,
       git,
@@ -63,6 +67,20 @@ class ReleaseStages {
       _readRkIdentity(),
     ),
   );
+
+  /// Native discovery supplies frozen artifact choices before consumer
+  /// preparation. Refresh keeps those choices even if providers become public.
+  ReleaseStage bindDependencies(
+    ResolvedUnit unit,
+    StageDependencies dependencies,
+  ) {
+    // The portable identity excludes temporary provider handles. A restored
+    // declaration and a freshly acquired provider may therefore have the same
+    // identity while only the latter can materialize a missing import.
+    _stages.removeWhere((_, stage) => stage.unit.name == unit.name);
+    _dependencies[unit.name] = dependencies;
+    return call(unit);
+  }
 
   /// Resolves the stage again from facts read at the release boundary.
   ///
@@ -96,6 +114,10 @@ class ReleaseStages {
       rk: rk,
       environment: _environment(),
     );
+    final dependencies = _dependencies[unit.name] ?? StageDependencies();
+    if (!dependencies.isEmpty) {
+      plan['dependency_inputs'] = dependencies.toJson();
+    }
     final identity = currentGit.isBound
         ? StageIdentity.forPlan(
             headCommit: currentGit.head,
@@ -119,6 +141,7 @@ class ReleaseStages {
       enforceUnitContract: true,
       directory: directory,
       resolvedPlan: plan,
+      dependencies: dependencies,
       targetContributions: stageContracts(
         unit: unit,
         repository: currentGit.originUrl,
@@ -164,10 +187,21 @@ class ReleaseStage {
     this.repository,
     this.enforceUnitContract = false,
     this.resolvedPlan,
+    StageDependencies? dependencies,
     Iterable<StageContributionContract> targetContributions = const [],
-  }) : targetContributions = List<StageContributionContract>.unmodifiable(
+  }) : dependencies = dependencies ?? StageDependencies(),
+       targetContributions = List<StageContributionContract>.unmodifiable(
          targetContributions,
-       );
+       ) {
+    if (!this.dependencies.isEmpty &&
+        (resolvedPlan == null ||
+            CanonicalJson.encode(resolvedPlan!['dependency_inputs']) !=
+                CanonicalJson.encode(this.dependencies.toJson()) ||
+            Sha256.hex(utf8.encode(CanonicalJson.encode(resolvedPlan))) !=
+                directory.identity.planSha256)) {
+      throw StateError('dependency inputs must be bound to the stage identity');
+    }
+  }
 
   final ResolvedUnit unit;
   final SourceTree source;
@@ -180,6 +214,7 @@ class ReleaseStage {
   /// The stage identity already binds the digest of this exact plan.
   final Map<String, Object?>? resolvedPlan;
   final List<StageContributionContract> targetContributions;
+  final StageDependencies dependencies;
 
   /// Direct construction is used by low-level receipt/atomicity tests whose
   /// deliberately partial producer graphs are not a release plan. Every
@@ -191,15 +226,29 @@ class ReleaseStage {
   /// and the inspector so canonical order and validation cannot drift.
   /// Null exactly when [enforceUnitContract] is off: a deliberately partial
   /// graph has no unit contract to order by or validate against.
-  late final StageReceiptContract? _unitContract = enforceUnitContract
-      ? StageReceiptContract.forUnit(
-          unit: unit,
-          repository: repository,
-          sourceRoot: sourceRoot,
-          targetContributions: targetContributions,
-          localProducers: localProducerContracts(unit),
-        )
-      : null;
+  late final StageReceiptContract? _unitContract = _resolveContract();
+
+  StageReceiptContract? _resolveContract() {
+    if (!enforceUnitContract) return null;
+    final local = localProducerContracts(unit);
+    dependencies.validateProducers(unit.name, [
+      ...targetContributions.map((contribution) => contribution.step),
+      ...local,
+    ]);
+    return StageReceiptContract.forUnit(
+      unit: unit,
+      repository: repository,
+      sourceRoot: sourceRoot,
+      targetContributions: [
+        if (dependencies.imports.isNotEmpty) dependencies.contribution,
+        for (final contribution in targetContributions)
+          StageContributionContract(
+            step: dependencies.decorate(contribution.step),
+          ),
+      ],
+      localProducers: local.map(dependencies.decorate),
+    );
+  }
 
   /// Canonical stage producer IDs and their resolved dependency edges.
   ///
@@ -211,6 +260,54 @@ class ReleaseStage {
   Set<String> producerDependencies(String producer) =>
       _unitContract?.dependenciesOf(producer) ??
       (throw StateError('this partial stage has no producer graph'));
+
+  StageStepContract producerContract(String producer) =>
+      _unitContract?.producerContract(producer) ??
+      (throw StateError('this partial stage has no producer contract'));
+
+  /// Bind every declared input, including same-unit archive edges, to a
+  /// completed producer's receipt. This does not require unit completion.
+  List<StageInput> producerInputs(String producer, Iterable<StageStep> prior) {
+    final steps = {for (final step in prior) 'step:${step.name}': step};
+    final artifacts = {
+      for (final step in prior)
+        for (final artifact in step.outputs) artifact.path: artifact,
+    };
+    return [
+      for (final input in producerContract(producer).inputs)
+        if (steps[input] case final step?)
+          StageInput.step(step)
+        else if (artifacts[input] case final artifact?)
+          StageInput.artifact(artifact)
+        else
+          throw StateError('$producer input $input is not recorded'),
+    ];
+  }
+
+  StageArtifact requireProducerArtifact({
+    required String producer,
+    required String path,
+    required String type,
+  }) {
+    if (!enforceUnitContract ||
+        producerContract(producer).outputs[path] != type) {
+      throw StateError(
+        'dependency artifact does not match the producer contract',
+      );
+    }
+    final inspected = inspect();
+    if (!inspected.reusable && !inspected.validProgress) {
+      throw StateError(
+        'dependency provider stage does not validate: ${inspected.issues.join('; ')}',
+      );
+    }
+    return inspected.receipt!.steps
+        .singleWhere((step) => step.name == producer)
+        .outputs
+        .singleWhere(
+          (artifact) => artifact.path == path && artifact.type == type,
+        );
+  }
 
   String get sourceRoot => directory.resolve('source');
 

@@ -226,6 +226,12 @@ class StageReceiptContract {
   /// order receipts are written in, however the work was scheduled.
   List<String> get producerNames => [for (final step in _steps) step.name];
 
+  StageStepContract producerContract(String producer) => _steps.singleWhere(
+    (step) => step.name == producer,
+    orElse: () =>
+        throw StateError('the stage contract has no producer "$producer"'),
+  );
+
   Set<String> dependenciesOf(String producer) =>
       _dependencies[producer] ??
       (throw StateError('the stage contract has no producer "$producer"'));

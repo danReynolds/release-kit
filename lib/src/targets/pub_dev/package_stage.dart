@@ -69,7 +69,9 @@ Future<TargetStageOutcome> _prepareStage(
   return TargetStageSuccess(
     StageStep(
       name: receiptName,
-      inputs: [StageInput.step(context.sourceStep)],
+      inputs: context.stage.enforceUnitContract
+          ? context.stage.producerInputs(receiptName, context.priorSteps)
+          : [StageInput.step(context.sourceStep)],
       outputs: [
         StageArtifact.capture(
           stage: context.stage.directory,
