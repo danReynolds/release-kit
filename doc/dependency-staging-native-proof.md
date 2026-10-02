@@ -120,3 +120,40 @@ candidate selection; native review additionally required checking the original
 dev-helper version and back-edge constraints before any managed helper override.
 Production integration must retain those assertions. The ninth regression passed
 on all three SDKs after review.
+
+## Production primitives and real Fleury preparation
+
+The production archive reader, hosted discovery and original-registry archive
+replay now replace the fixture implementation for preparation tests. Guarded
+native extraction, full manifest comparison, frozen external bytes and generic
+context/slot contracts have separate regression coverage. These are implemented
+primitives; command orchestration and frozen receipt authorization still require
+integration.
+
+On 2026-10-02, an owned source snapshot of Fleury commit
+`14d76107b6ba468b44e75c120390eddca271b307` was prepared using Dart 3.12.2 and these
+production primitives. All four manifests resolved 55 hosted dependencies.
+MCP, test and web consumed the exact newly prepared Fleury archive through
+native offline replay. Each unchanged manifest was packed with
+`pub publish --to-archive`; no publication or tag was attempted.
+
+| Package | Version | Native archive SHA-256 |
+| --- | --- | --- |
+| fleury | 0.1.0 | `c22d8614ee6c3e05ed2ceed3d68a18b7aa281e6ec8ff4e4b01dd9df3d6b032e2` |
+| fleury_mcp | 0.1.0 | `5b4d806f07cd3dd90b19ae98ec2040c8adbf130c64adc05ea135ad7d758b372d` |
+| fleury_test | 0.1.0 | `4281af913262212d96d85557a5bc8439659220baffb472a077f61afb681125c4` |
+| fleury_web | 0.1.0 | `1cd080cbef95e6e083172946ac1d8ae3ceb797def370b49edf0daba34af38119` |
+
+MCP and web retain Pub's warning about their exact `fleury: 0.1.0` constraint.
+The test does not silently broaden it or label those archives warning-free.
+It proves native artifact preparation, not yet bare `rk stage`, stage recovery,
+public dependency gates or application smoke-test qualification.
+
+Real registry metadata exposed two compatibility requirements now covered by
+regressions: implicit hosted dependencies in old SDK manifests need Pub's legacy
+long hosted syntax in the discovery view, while explicitly written shorthand
+must retain its native SDK gate; unused historical versions with unsupported
+sources must not veto a valid native selection. Selected unsupported sources
+still refuse. External archive downloads bind the native digest and complete
+manifest, limit transferred bytes and lifetime, and redact signed fetch URLs
+from transport/redirect diagnostics and portable evidence.

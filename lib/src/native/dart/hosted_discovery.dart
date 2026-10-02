@@ -216,6 +216,7 @@ final class _Session {
             'native discovery has no unique original metadata for ${package.name}',
           );
         }
+        _requireSupported(matches.single.manifest, isRoot: false);
         selected[package.name] = matches.single;
       }
       final prior = pinned.length;
@@ -313,7 +314,12 @@ final class _Session {
           ...details,
           'hosted': source is Map
               ? {...source, 'url': destination}
-              : destination,
+              : source is String
+              ? destination
+              // Hosted URL shorthand requires a >=2.15 language lower bound.
+              // Use long form when injecting a default source. Preserve an
+              // explicit shorthand's syntax so its native SDK gate still runs.
+              : {'name': entry.key, 'url': destination},
         };
       }
       result[section] = mapped;
@@ -388,7 +394,6 @@ final class _Session {
               );
             }
             final archiveUrl = _url(url, allowQuery: true);
-            _requireSupported(manifest, isRoot: false);
             values.add(
               DartDiscoveredPackage._(
                 registry: registry,
@@ -408,7 +413,6 @@ final class _Session {
         }
       }
       if (candidate != null) {
-        _requireSupported(candidate.manifest, isRoot: false);
         values.add(
           DartDiscoveredPackage._(
             registry: registry,

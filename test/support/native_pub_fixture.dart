@@ -15,6 +15,7 @@ final class NativePubFixture {
   final Map<String, Map<String, _Package>> _packages = {};
   final List<String> requests = [];
   String archiveQuery = '';
+  String? archiveRedirect;
   final Map<String, int> packageStatus = {};
   final Set<Process> _children = {};
 
@@ -294,6 +295,12 @@ final class NativePubFixture {
         );
       }
     } else if (path.length == 2 && path[0] == 'packages') {
+      if (archiveRedirect case final location?) {
+        request.response.statusCode = HttpStatus.found;
+        request.response.headers.set(HttpHeaders.locationHeader, location);
+        await request.response.close();
+        return;
+      }
       _Package? found;
       for (final package in _packages.entries) {
         for (final version in package.value.entries) {

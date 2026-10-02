@@ -6,6 +6,7 @@ import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/native/dart/archive_replay.dart';
 import 'package:rk/src/native/dart/dependencies.dart';
 import 'package:rk/src/native/dart/hosted_discovery.dart';
+import 'package:rk/src/native/dart/hosted_archive.dart';
 import 'package:rk/src/native/dart/package_archive.dart';
 import 'package:rk/src/native/package_archive.dart';
 import 'package:test/test.dart';
@@ -117,15 +118,7 @@ void main() {
             archive: await NativePackageArchive.read(coreFile),
             discoveredManifest: result.packages['rk_fixture_core']!.manifest,
           ),
-          DartReplayArchive(
-            registry: origin.url,
-            archive: await NativePackageArchive.read(
-              origin.hostedArchive('rk_fixture_bridge', '1.0.0'),
-              expectedSha256:
-                  result.packages['rk_fixture_bridge']!.archiveSha256,
-            ),
-            discoveredManifest: result.packages['rk_fixture_bridge']!.manifest,
-          ),
+          await DartHostedArchive.fetch(result.packages['rk_fixture_bridge']!),
         ],
       );
       addTearDown(replay.close);
@@ -312,6 +305,59 @@ void main() {
     },
   );
 
+  test(
+    'an explicit shorthand retains its original native SDK feature gate',
+    () async {
+      origin.host(origin.package('core', 'rk_fixture_core', '0.1.0'));
+      final bad = origin.package(
+        'bad',
+        'rk_fixture_bad',
+        '0.1.0',
+        sdk: '">=2.12.0 <4.0.0"',
+        dependencies:
+            '  rk_fixture_core:\n    hosted: ${origin.url}\n    version: ^0.1.0\n',
+      );
+      final direct = await origin.run(bad, [
+        'pub',
+        'get',
+        '--no-example',
+        '--no-precompile',
+      ]);
+      expect(direct.exitCode, isNot(0));
+      expect(
+        '${direct.stdout}\n${direct.stderr}',
+        contains('minimum SDK constraint of 2.15'),
+      );
+      await expectLater(
+        discover(bad, []),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.toString(),
+            'native SDK gate',
+            contains('minimum SDK constraint of 2.15'),
+          ),
+        ),
+      );
+      origin.host(bad);
+      final consumer = origin.package(
+        'consumer',
+        'rk_fixture_consumer',
+        '0.1.0',
+        dependencies: '  rk_fixture_bad: ^0.1.0\n',
+      );
+      await expectLater(
+        discover(consumer, []),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.toString(),
+            'provider SDK gate',
+            contains('minimum SDK constraint of 2.15'),
+          ),
+        ),
+      );
+    },
+  );
+
   test('signed archive URLs remain temporary fetch details', () async {
     origin.archiveQuery = '?token=temporary-secret&expiry=123';
     origin.host(origin.package('core', 'rk_fixture_core', '0.1.0'));
@@ -327,7 +373,129 @@ void main() {
       contains('temporary-secret'),
     );
     expect(jsonEncode(result.toJson()), isNot(contains('temporary-secret')));
+    final fetched = await DartHostedArchive.fetch(
+      result.packages['rk_fixture_core']!,
+    );
+    expect(
+      fetched.archive.sha256,
+      result.packages['rk_fixture_core']!.archiveSha256,
+    );
   });
+
+  test(
+    'external archive download checks bounds and the preselected integrity',
+    () async {
+      final core = origin.package('core', 'rk_fixture_core', '0.1.0');
+      origin.host(core);
+      final root = origin.package(
+        'consumer',
+        'rk_fixture_consumer',
+        '0.1.0',
+        dependencies: '  rk_fixture_core: ^0.1.0\n',
+      );
+      final selected = (await discover(root, [])).packages['rk_fixture_core']!;
+      await expectLater(
+        DartHostedArchive.fetch(selected, maxCompressedBytes: 1),
+        throwsStateError,
+      );
+      File(
+        '${core.path}/lib/rk_fixture_core.dart',
+      ).writeAsStringSync('different bytes');
+      origin.host(core);
+      await expectLater(
+        DartHostedArchive.fetch(selected),
+        throwsFormatException,
+      );
+    },
+  );
+
+  test(
+    'malformed and unsupported redirects never disclose signed query tokens',
+    () async {
+      origin.archiveQuery = '?token=initial-secret';
+      origin.host(origin.package('core', 'rk_fixture_core', '0.1.0'));
+      final root = origin.package(
+        'consumer',
+        'rk_fixture_consumer',
+        '0.1.0',
+        dependencies: '  rk_fixture_core: ^0.1.0\n',
+      );
+      final selected = (await discover(root, [])).packages['rk_fixture_core']!;
+      for (final redirect in [
+        'https://[invalid?token=redirect-secret',
+        'file:///no-archive?token=redirect-secret',
+      ]) {
+        origin.archiveRedirect = redirect;
+        await expectLater(
+          DartHostedArchive.fetch(selected),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.toString(),
+              'redacted error',
+              allOf(
+                isNot(contains('initial-secret')),
+                isNot(contains('redirect-secret')),
+                contains('rk_fixture_core'),
+              ),
+            ),
+          ),
+        );
+      }
+    },
+  );
+
+  test('historical SDK lower bounds retain compatible hosted syntax', () async {
+    origin.host(origin.package('core', 'rk_fixture_core', '0.1.0'));
+    origin.host(
+      origin.package(
+        'bridge',
+        'rk_fixture_bridge',
+        '1.0.0',
+        sdk: '">=2.12.0 <4.0.0"',
+        dependencies: '  rk_fixture_core: ^0.1.0\n',
+      ),
+    );
+    final root = origin.package(
+      'consumer',
+      'rk_fixture_consumer',
+      '0.1.0',
+      dependencies: '  rk_fixture_bridge: ^1.0.0\n',
+    );
+    final result = await discover(root, []);
+    expect(
+      result.packages['rk_fixture_bridge']!.manifest.fields['environment'],
+      {'sdk': '>=2.12.0 <4.0.0'},
+    );
+    expect(
+      result.graph.packages['rk_fixture_core']!.source,
+      dartRegistryIdentity(origin.url),
+    );
+  });
+
+  test(
+    'unused historical source types do not veto a supported selected version',
+    () async {
+      origin.host(
+        origin.package(
+          'legacy',
+          'rk_fixture_bridge',
+          '0.1.0',
+          dependencies:
+              '  legacy:\n    git: https://unused.invalid/package.git\n',
+        ),
+      );
+      origin.host(origin.package('current', 'rk_fixture_bridge', '1.0.0'));
+      final root = origin.package(
+        'consumer',
+        'rk_fixture_consumer',
+        '0.1.0',
+        dependencies: '  rk_fixture_bridge: ^1.0.0\n',
+      );
+      final result = await discover(root, []);
+      expect(result.packages.keys, ['rk_fixture_bridge']);
+      expect(result.packages['rk_fixture_bridge']!.manifest.version, '1.0.0');
+    },
+  );
 
   test(
     'dependency-only dev metadata cannot acquire registries or affect the solve',
