@@ -1,12 +1,14 @@
 # Dependency-aware repository staging
 
-Status: implementation in progress. Native discovery/replay, source-only
-requirements, receipt-bound archive inputs and the first shared Pub/binary
-producer integration are implemented. Frozen-choice lookup/authorization,
-development-helper and binary-lock discovery policies, repository execution and
-final command-level Fleury qualification remain. No publication has occurred.
+Status: reviewed delivery plan; implementation foundations exist at `f8ecd5b`.
+Native discovery/replay, receipt-bound inputs, shared Pub/binary preparation and
+frozen-choice verification are implemented. Command integration is not complete.
+The remaining work is defined in the implementation packets below; foundation
+proofs do not qualify bare `rk stage` or publication. No publication has occurred.
 
-Baseline: RK main `6e7bb165c8027d8fc5e5293b45432850cf3229f8`, inspected 2026-10-02.
+Baseline: RK main `6e7bb165c8027d8fc5e5293b45432850cf3229f8`, rechecked against
+remote main on 2026-10-02. Continue in the existing `codex/dependency-staging`
+worktree; do not restart the native proof or create another implementation branch.
 
 ## Outcome
 
@@ -26,9 +28,9 @@ published MCP version cannot have its manifest changed. If an unchanged MCP
 still depends on published `fleury 0.1.0`, a local Fleury bump to `0.2.0` must not
 force an MCP bump or cause RK to substitute the incompatible local package.
 
-## Current behavior and code to reuse
+## Baseline behavior and code to reuse
 
-| Existing owner | Present behavior | Planned extension |
+| Existing owner | Main baseline behavior | Extension |
 | --- | --- | --- |
 | `engine/release_dependencies.dart` | Shared package/repository ordering, but reads Dart Pubspecs, requires current sibling versions, and merges dev/runtime publication edges | Separate native requirements from compatible candidate selection and phase-specific edges |
 | `engine/dependency_graph.dart` | Deterministic ordering, cycles, readiness | Reuse for repository preparation as well as existing unit graphs |
@@ -39,7 +41,7 @@ force an MCP bump or cause RK to substitute the incompatible local package.
 | `binary_chain.dart`, `builds/dart_cli.dart` | Native Dart binary production | Share Dart dependency preparation with package validation |
 | `targets/pub_dev/module.dart`, `client.dart` | Publish from archive, compare registry archive hashes, probe availability | Reuse these proofs for staged-provider publication requirements |
 
-The existing same-unit snapshot mechanism uses source directories, not final
+The baseline same-unit snapshot mechanism uses source directories, not final
 archives. It is evidence that private resolution is possible, not proof that the
 new artifact-based contract already holds. The first Pub solve currently runs
 before its consumer overrides are installed; fixing only the second solve would
@@ -58,6 +60,12 @@ leave non-workspace first publications broken.
 No new release groups, root version, lockstep requirement, `--all`, or automatic
 manifest edits. Keep schema-2 release intent. A future version-edit command is
 separate from staging.
+
+Candidate policy for a **new** native resolution follows. An authorized frozen
+stage takes precedence over this policy: repeating a named stage as a bare stage
+reuses its recorded hosted choice even if a compatible local provider is now
+eligible. Report what was actually used; do not claim the new provider combination
+was tested. Command verb and scope do not invalidate an otherwise identical stage.
 
 Candidate policy:
 
@@ -155,6 +163,16 @@ change the consumer's private binding or force a rebuild. A changed provider
 artifact cannot inherit the old consumer receipt merely because its version
 string is unchanged.
 
+Portable provider evidence includes a bounded, deduplicated closure of referenced
+provider plans and receipts, keyed by stage identity. Reject missing, conflicting
+or cyclic proof nodes. Validate each node against current configured source,
+toolchain and canonical producer contracts, including its native frozen contexts.
+The consumer retains the actual archives it uses; it need not retain unused
+ancestor payloads or require a deleted ancestor stage to exist. A provider's
+development/build-only ancestor is included in the proof closure even if absent
+from the final consumer's runtime graph. This extends existing imported proof
+files; it is not a new attestation service or registry.
+
 Within a multi-project unit, a provider and consumer share one stage identity.
 Do not put the provider's not-yet-produced archive hash into that identity. Use
 producer-contract edges inside the unit and bind the archive hash in the
@@ -172,13 +190,22 @@ stage after source/input change, or deliberate cleanup through existing stage
 management, may resolve anew and produce a new identity; add no new refresh flag.
 
 Locate reusable receipts before performing a new hosted solve. Use a deterministic
-source/intent key (source, unit, native requirements, selected candidate identities,
-toolchain and adapter policy) to locate the last completed stage for that intent.
-A small atomic local index is a lookup hint only: inspect its receipt and contract,
+source/intent key (source, unit, native requirements, configured candidate
+identities, toolchain and adapter policy) to locate completed or interrupted stages.
+Exclude command verb, named/bare scope, changing registry availability, live paths
+and signed download URLs. Include the effective default dependency registry even
+for binary-only projects. Scope controls fresh candidate eligibility and actions,
+not the identity of already prepared bytes.
+
+Persist the full frozen plan in a versioned receipt header before any producer
+runs; its digest must equal the stage identity's plan digest. The complete-stage
+step is too late to be the only copy. A small atomic local index maps intent to
+stage ID and is only a lookup hint: inspect the receipt and current contract,
 revalidate frozen binding proofs, and reconstruct the full stage identity before
-reuse. Missing/corrupt hints fall back to bounded receipt discovery or a new stage,
-never unchecked adoption. The index is not a second journal or an authority;
-partial-publication recovery still requires the exact original stage.
+reuse. Missing/corrupt hints fall back to bounded receipt discovery. Absence of a
+prior stage permits a new solve; failed authorization of a found recovery stage
+must not silently substitute one. Preserve existing explicit-stage replacement
+rules and partial-publication lost-stage refusals. No second journal is needed.
 
 Imported inputs must be declared in the canonical producer contract before any
 receipt is trusted. The imported-input producer must prove correspondence with the frozen dependency
@@ -266,10 +293,11 @@ warnings. Do not silently turn every existing warning into a new refusal. A
 missing packaged import must be exposed by native validation, and the native
 compile fixture must fail; a warning-bearing archive cannot be reported as clean.
 Temporary files and resolution overrides must be absent from published archives.
-Package and binary producers must use the same selected staged-package bindings,
-while preserving their operation-specific third-party lockfile/dev policies.
-Record each native resolution graph separately; do not require all third-party
-versions to be identical between Pub packaging and executable compilation.
+Package and binary producers share authorized provider facts and use the same
+verified provider artifact wherever their contexts select that provider. Preserve
+operation-specific lockfile/dev policies and record each native resolution graph
+separately; do not force identical third-party solutions or flatten context slots
+into one repository-global selection.
 
 ## Phase-specific edges and publication
 
@@ -357,96 +385,220 @@ A fallback should be equally visible: `fleury_mcp 0.1.0 uses published fleury
 0.1.0; local fleury 0.2.0 does not satisfy its requirement`.
 
 `plan`, `status`, stage progress and JSON use the same binding facts. Source-only
-plan labels unresolved registry choices as unresolved. JSON reports distinguish
+plan labels unresolved registry choices as unresolved. Status uses a read-only
+lookup to inspect recorded contexts, source contracts and receipt bytes; it does
+not perform fresh solves, materialize caches/inputs, update indexes or execute
+producers. Distinguish a locally verified receipt from any native reauthorization
+still required before stage/release adoption. Parsed bindings alone never grant
+publication authority. JSON reports distinguish
 staged, already public, blocked, and not attempted; no all-green aggregate for a
 partial stage. Update the JSON schema/documentation when fields change.
 
-## Implementation slices and exit criteria
+## Remaining implementation packets and exit criteria
 
-Each slice is reviewable and keeps existing release behavior intact until the
-new path has its proof. Do not enable whole-repository staging by merely deleting
-the CLI refusal.
+Continue from the existing branch. The native mechanism and producer contracts
+have passed their bounded reviews; do not repeat those as new standalone projects.
+Each packet must connect to the next production caller and keep the current
+command behavior until its complete replacement is exercised.
 
-1. **Native resolution proof.** Add a disposable two-package fixture outside the
-   production path and the transitive/backtracking cases below. Prove exact archive
-   extraction, pre-first-solve input injection, unchanged manifests and SDK support.
-   Select the mechanism above and retain regression fixtures. No core refactor yet.
-2. **Requirements and binding selection.** Introduce the minimal native handoff,
-   adapt Dart facts, use native-compatible version matching, and replace the
-   forced-current-sibling rule. Keep static plan source-only. Prove independent
-   versions, old-public fallback, source identity and phase-specific cycles.
-3. **Cross-unit artifact inputs and receipts.** Extend contracts, stage identity,
-   cache/refresh, inspector and imported archive handling. Prove tamper/drift,
-   provider-stage deletion, deterministic reuse and migration behavior.
-4. **Shared Dart preparation.** Integrate the proven mechanism with native Pub
-   archive staging and Dart binary compilation; cover same-unit/workspace and
-   separate-package layouts. Prove native validation exposes missing packaged
-   files, actual consumer compilation fails, and output manifests remain unchanged.
-   Exercise built executables with the staged dependency value.
-5. **Repository stage and release integration.** Reuse the existing graph/coordinator
-   flow to prepare selected scope, preserve named scope and aggregate output,
-   then reuse the publication pipeline and fresh public-resolution checks. Test
-   zero public calls after any preparation failure and unchanged authorization scope.
-6. **Qualification and documentation.** Run focused native fixtures and the full RK
-   suite; dogfood all four Fleury packages without publication; update help,
-   README, codes, JSON docs, pipeline docs and the superseded repository plan.
+| Packet | Primary seams | Required result |
+| --- | --- | --- |
+| 1. Authoritative native inputs | `source_tree.dart`, `native/dart/stage_context.dart`, `hosted_discovery.dart`, `stage_preparation.dart` | Current source authorizes every root/candidate/helper; Pub and binary use explicit native policies |
+| 2. Frozen stage restore | `stage_receipt.dart`, `stage_store.dart`, `release_stage.dart`, `stage_dependencies.dart` | Complete and interrupted stages reuse exactly their recorded choices; portable provider proofs survive cleanup |
+| 3. Repository preparation | `dependency_graph.dart`, `release_stage_coordinator.dart`, `release.dart`, `bin/rk.dart` | One real bare `rk stage` prepares all configured units; named stage retains its scope |
+| 4. Publication integration | `release_publication_coordinator.dart`, `targets/pub_dev/module.dart`, `client.dart` | All private work precedes publication; exact public-provider and fresh consumer checks guard upload |
+| 5. Qualification and DX | CLI/phase tests, help, JSON docs, pipeline docs, isolated Fleury checkout | Real command-level Fleury evidence, full regressions, understandable success/refusal/retry output |
 
-Suggested ownership: slices 1/4 are the Dart preparation seam; slices 2/3/5 are
-shared core. Public target modules change only where typed prepared inputs or
-publication checks require it. Future npm/gem packages can add native semantics
-against the same requirements/bindings; implementing those ecosystems is outside
-this delivery.
+Packets 1 and 2 can share a review boundary, but neither constitutes command
+completion. Packet 3 is the first command-level milestone. Packet 4 is required
+before describing dependency-aware release as complete. No real publication,
+remote tag, release draft or tap write is part of qualification.
 
-### First implementation packet
+### 1. Authoritative native inputs
 
-Start with slice 1 on a new implementation branch from the latest RK main; keep
-this documentation commit available as the design reference. Reconcile later
-upstream changes before editing. Do not start with `ReleaseCommand` or remove
-`RK-CLI-004` first.
+Build a small operation-input description from the selected immutable source.
+For Git-bound runs, use reads at the selected commit, not live `GitSourceTree.read`
+or caller-supplied restored manifests. For unbound runs retain the existing
+single-invocation source checks; do not create reusable cross-run authority.
+Resolve configured provider ownership and canonical source identities once.
+The Dart adapter owns manifest parsing, operation policy and native discovery;
+core receives context/slot bindings and the dependency edges it must schedule.
 
-Suggested new fixture files are `test/native_dependency_staging_test.dart` and
-`test/support/native_pub_fixture.dart`. They are test-owned processes/files, not
-a production registry server or a new release target. Use a disposable Git root,
-isolated Pub cache, credential-free loopback fixture registry, and separate native
-process environments. No `publish` command without `--to-archive`/`--dry-run`, no
-real registry uploads, and no Git tags. Fixture teardown owns every temporary
-directory and local listener it creates.
+Make these policies explicit in the native context and its format:
 
-Concrete cases to implement first:
+- Pub archives use a detached original root without an inherited lockfile.
+- Binary compilation uses the committed applicable lockfile, including the
+  workspace lock when applicable. Native `pub get` keeps compatible locked
+  choices and updates when required; this is not a new strict-lock policy
+  ([native behavior](https://dart.dev/tools/pub/cmd/pub-get)).
+  Seed each discovery refinement pass from a transformed copy of the original
+  effective lock, never the previous pass's selected solution. Install that
+  effective lock at the detached member root for replay; leaving a workspace
+  parent's lock on disk is insufficient. Restore original source identities and
+  verify real external integrity; placeholder discovery archives must not
+  overwrite the authority of committed hashes.
+- Compatible eligible first-party candidate preference remains explicit for a
+  fresh solve. If selecting it changes a locked package, report the change and
+  let native Pub resolve remaining constraints. Pub and binary contexts share
+  eligible provider facts, while retaining their own complete native solutions.
+- An authorized dev-only workspace helper binds its snapshot-relative path,
+  full manifest and source identity to the consumer's existing source-snapshot
+  receipt. Keep that mapping Dart-owned; do not fabricate a hosted artifact or
+  Pub producer for a helper that never publishes. Native discovery checks every
+  original incoming constraint and root back-edge version/source before any
+  managed override. Discovery/replay comparison allows only this declared dev
+  source mapping; every other node and edge must still match. The helper's own
+  dev dependencies remain ignored under native semantics. Reject untracked or
+  out-of-snapshot helpers. Classify runtime reachability first: a runtime-reached
+  helper requires its package archive. Reject unrelated overrides and runtime
+  path/Git substitutions as already specified.
 
-1. **Two unpublished packages:** core `0.2.0` exports a known value; MCP `0.1.0`
-   requires core `0.2.0`. Create the provider with native archive tooling, extract
-   it, package MCP, and compile/run a consumer that prints the expected value.
-2. **Transitive contradiction:** MCP accepts core `^0.2.0`, but its selected
-   hosted bridge requires core `^0.1.0`. The resolution must fail even with local
-   staged core available.
-3. **Valid backtracking:** MCP accepts core `^0.2.0` and bridge `>=1.0.0 <3.0.0`.
-   Hosted bridge `2.0.0` needs core `^0.1.0`; bridge `1.0.0` needs core `^0.2.0`.
-   Correct native resolution selects bridge `1.0.0`. An override-plus-audit that
-   selects bridge `2.0.0` then refuses fails this mechanism gate.
-4. **Source and payload:** repeat with explicit/default hosted syntax, a same-name
-   different registry, and a provider library excluded from the archive. Assert
-   actual selected paths/digests, manifest equality, and compile results.
-5. **Development and consumption:** preserve an unpublished dev-only source
-   helper with a back-edge; prove the external-root consumer probe ignores that
-   helper and still catches an unavailable/incompatible runtime dependency.
-6. **Same-unit production:** feed a verified provider producer output to another
-   producer before the common stage completes; avoid identity/receipt deadlock.
-7. **Transitive discovery:** the consumer names only hosted bridge; bridge accepts
-   a selected unpublished core candidate. Native discovery must identify and
-   expose that artifact dependency before ordering consumer production.
+First implementation action: add failing native cases for a compatible older
+binary lock, a candidate-induced lock update, workspace lock selection, a helper
+with an incompatible back-edge or transitive incoming constraint, and helper
+runtime promotion. Include ignored helper dev dependencies and untracked helpers. Implement the
+smallest policy support that makes those tests and the existing archive replay
+cases pass. Do not accept an override-only success as the back-edge proof.
 
-Record Dart `3.12.2` (the pinned RK formatting/analysis CI SDK), current stable,
-and the declared minimum `3.10.4` capability outcome. Do not require archive
-staging on a SDK that lacks the necessary native flags: it must give the existing
-clear unsupported-SDK refusal. Record the actual Pub revision/mechanism used by
-supported SDKs. Native tools, not mocked success strings, determine the result.
+Exit: root/owner/source/lock/helper tampering refuses before producer work;
+ordinary, workspace and binary fixtures run against the unchanged final
+manifests. The native package cache and checkout remain unmodified.
 
-Deliver a short evidence section with selected mechanism, commands, SDK versions,
-archive and manifest hashes, resolver outcomes, and why rejected alternatives
-failed. Review that result before starting slice 2. This gate is ready to begin;
-the remaining slices are conditional on its success, not a claim that native
-resolution has already been proved.
+### 2. Frozen stage restore and proof authorization
+
+Persist the bound plan in the receipt before source/build/archive producers,
+with an explicit compatible receipt migration. Use `StageStore`'s mutation lock
+for atomic intent hints; bounded no-follow receipt scanning is the fallback.
+Keep `StageHistory` advisory rather than making its unchecked history authoritative.
+
+Adoption order is fixed:
+
+1. Recompute current source intent from packet 1 and current toolchain/config.
+2. Read a bounded candidate receipt and frozen plan; validate their hashes,
+   identity, paths and format. A hint never supplies authoritative intent.
+3. Authenticate root/candidate manifests and the portable provider proof closure
+   against current configuration and canonical contracts. Reuse the existing
+   native frozen verifier for exact metadata and native graph authorization.
+4. Bind the authorized dependencies into the shared `ReleaseStages` instance;
+   require its newly reconstructed full identity to equal the recorded one.
+5. Inspect recorded artifact bytes and completed producer contracts; resume only
+   unfinished work. Refresh temporary download/provider handles without changing
+   the portable plan. Publication requires a completed, strictly verified stage.
+
+Exit tests cover interrupted resume without a new solve, missing/corrupt hints,
+forged self-consistent dependency JSON, changed root/registry/toolchain, newer
+registry versions, stage-to-release and bare-to-named reuse, and named-hosted to
+bare reuse. For A→B→C, delete A and B stages and verify C, including A used only
+by B's development/build environment. A missing proof or changed copied archive
+refuses. Lost recovery-critical public artifacts still yield the existing refusal,
+never a freshly compiled replacement.
+
+### 3. Repository preparation and real command wiring
+
+Add one shared repository preparation coordinator at the existing composition
+root. It receives adapter-authorized contexts and invokes the existing per-unit
+`ReleaseStageCoordinator`; do not introduce another native solver or target
+registry. Use one bound `ReleaseStages` instance for execution, inspection,
+refresh and restored status.
+
+Discover all selected native contexts and transitive provider edges before
+scheduling production. Construct the executable producer graph, diagnose actual
+cycles, then project to serial complete-unit order. An acyclic producer graph
+with cyclic unit grouping gets the explicit interleaved-grouping diagnostic.
+Same-unit producer edges use current verified output receipts. Cross-unit imports
+are finalized after their providers complete, before consumer identity is fixed.
+
+Split the existing unit flow into inspect, prepare and publish phases. Private
+preparation defers selected-provider public availability, while preserving source,
+conflict, monotonicity, endpoint-readiness and lost-stage guards. Do not broadly
+ignore unknown public state. All-units preparation must not create publication
+sessions. Already public exact targets remain publication no-ops. Fresh discovery excludes
+already-exact public packages without an eligible current private archive from
+local producer candidates and uses normal authenticated hosted resolution for
+those coordinates. It must not select a local import then skip its producer as
+already released. Classify package targets individually in mixed multi-project
+units; a unit-level no-op cannot hide a required producer.
+
+Fresh named staging can use a verified current sibling stage, otherwise normal
+hosted resolution. It cannot build the sibling. A frozen imported provider proof
+can remain usable after its original stage is cleaned. Publish scope never grows.
+Use fake non-Dart contexts with opaque versions and multiple install slots to
+exercise this coordinator, in addition to the real native fixture.
+
+| Provider state during a fresh solve | Eligible input and action |
+| --- | --- |
+| Selected unpublished package | Its producer is scheduled; consumer waits for verified artifact |
+| Named command, current compatible verified sibling archive exists | Import it without building or publishing the sibling |
+| Named command, no eligible sibling archive | Normal hosted resolution; native refusal if no compatible public version exists |
+| Already-exact public package, no current private archive | Authenticate hosted metadata/archive; no synthetic local producer or republishing |
+| Restored consumer already binds copied provider proof | Verify and retain that exact binding, regardless of current public appearance or deleted provider stage |
+
+Exit: command tests for all four unpublished packages, transitive-only edges,
+independent versions, hosted fallback, named scope, deterministic ordering,
+interruption, unsupported grouping and truthful partial JSON. Assert zero public
+mutations and zero publication sessions for both successful and failed stage.
+Only then remove `RK-CLI-004` and update bare-stage help.
+
+### 4. Publication boundary
+
+Bare release uses packet 3 to prepare the full frozen scope first. Aggregate
+warnings and exact staged claims, then obtain the one publication confirmation.
+Re-read destination truth and stage/source/toolchain identity at the existing
+boundaries. Do not implement this as two calls to the current `_release`, which
+mixes private and public work and checks public prerequisites too early.
+
+Project public dependencies using the frozen native graph together with original
+runtime requirements and their provenance, including hosted transitive edges.
+Name-based reachability alone is insufficient: Pub root development requirements
+can shadow the same runtime name. If runtime requires core `^0.1.0` but a root
+dev requirement selects private core `^0.2.0`, that private selection must not
+become a public core `0.2.0` prerequisite. The fresh public consumer still has to
+resolve the original runtime `^0.1.0` requirement. A selected provider creates an
+exact-public obligation only for runtime requirements it actually satisfies.
+Dev/build-only inputs do not create package publication prerequisites. Keep
+target-specific Git tag, GitHub and Homebrew ordering in their existing owners.
+
+Before the existing publication coordinator records an attempted/possibly-acted
+operation, run a read-only blocking gate for exact selected first-party public
+archive identity and the fresh external-root runtime resolution described above.
+Use the existing pre-act gate seam; putting these checks inside `module.publish`
+would incorrectly report a no-upload refusal as a possibly acted publication.
+The existing post-publication availability warning is not this blocking gate.
+
+Match every relevant provider's declared registry. Record the public resolution
+separately; it may legally select another compatible version under a broad range.
+After the gate, refresh stage/context and the final destination read, then upload
+the same verified archive. Never repackage after public checks. Named release
+must stop if a required unpublished provider is outside its public scope.
+
+Exit: event-order tests prove every unit is prepared before confirmation or the
+first public mutation; a late preparation failure causes zero public mutations
+and zero publication-session acquisitions.
+Native probes cover mismatched public bytes, propagation lag, dev-helper
+exclusion, workspace metadata, runtime resolution failure, broad ranges, a
+runtime/dev diamond and a same-name dev requirement shadowing runtime.
+Pre-act gate refusals report blocked/not-attempted, never attempted/may-have-acted.
+Partial publication resumes exact completed public work with unchanged bindings;
+source/endpoint/stage drift after confirmation cannot widen the authorized act.
+
+### 5. Qualification and documentation
+
+Run the full RK suite and targeted native cases on CI SDK 3.12.2 and current
+stable. Retain supported minimum 3.10.4 archive/direct-executable coverage; report
+the independently reproduced macOS AOT-bundle limitation separately.
+
+Dogfood the actual CLI in an isolated Fleury checkout with unchanged release
+configuration: one bare stage for four packages, repeat reuse, named consumer
+reuse and provider cleanup, archive inspection, generated-app compilation and
+package/test smoke workflows using the staged bytes. Record source/RK/SDK IDs,
+archive hashes, warnings and selected dependency provenance. Scripted native
+packaging alone is not this acceptance test.
+
+Update help, README, refusal codes, JSON schema/docs, pipeline docs and the
+superseded repository plan in the same delivery. Source-only `rk plan` must still
+perform no network, compiler, cache write or publication-session operation.
+Review the final production diff independently; do not equate prior bounded
+approvals or green focused tests with complete feature approval.
 
 ## Acceptance matrix
 
@@ -474,6 +626,7 @@ resolution has already been proved.
 | Same-unit handoff | Provider output feeds consumer before unit completion, using producer receipts; no stage-identity hash cycle |
 | Interleaved grouping | U=[A,C], V=[B], C→B→A gets an unsupported grouping diagnostic, not a false package-cycle claim |
 | Development helper | Existing unpublished dev-only source helper/back-edge still works; runtime promotion requires artifact proof |
+| Runtime/dev shadow | Private core 0.2 selected by dev constraints does not replace original runtime core ^0.1 public requirements or invent a core 0.2 publication edge |
 | Frozen hosted binding | New compatible registry release does not change a resumed stage's recorded solve or identity |
 | Override policy | Unrelated developer runtime overrides remain refused; only declared preparation bindings/dev-helper exceptions are eligible |
 | Named hosted fallback | Compatible local sibling with no eligible stage does not block named staging when native hosted resolution succeeds |
@@ -517,129 +670,54 @@ functionality.
 Final architecture verdict: revision 3 is ready to start; no remaining
 architectural blocker. Final native-resolution verdict: revision 3 is ready to
 start the native-proof slice; no new blockers or further planning changes.
-Both require the native mechanism evidence before integrating later slices.
-There are no unresolved product-policy questions; the remaining technical choice
-is deliberately the first implementation packet.
+Both required the native mechanism evidence before integrating later slices;
+that mechanism has since passed its gate. The next work is the remaining
+implementation packets above, not a restart of the original proof.
+
+The current remaining-work review found and incorporated durable incomplete
+receipts, transitive portable proof closure, scope-independent frozen reuse,
+already-public provider handling, and separation of private preparation from
+public prerequisites. The native review also tightened effective workspace-lock
+handling, helper source authority, runtime/dev shadow semantics, observational
+status, and placement of public checks before attempted-upload accounting.
+
+Both reviewers reread the revised five-packet plan and approved starting packet 1,
+with no remaining planning blocker. The architecture reviewer requested two final
+wording corrections (baseline labeling and distinguishing public reads from
+mutations); both are incorporated. The native review's final helper/runtime/status
+clarifications are incorporated in packets 1/4 and the output contract. This
+approval covers implementation readiness, not command behavior or publication
+qualification. No user product decision remains pending.
 
 
-## Implementation progress
+## Current implementation evidence
 
-- Native mechanism proof: commit `664a7c1`. Nine chosen-mechanism native cases
-  passed on Dart 3.10.4, 3.12.2 and 3.13.5. Both reviewers approved the mechanism.
-- Source facts and selection: shared native identity/context/slot/phase model,
-  conjunctive candidate compatibility, independent hosted fallback, Pub-native
-  constraints, explicit hosted-source/SDK distinction, and source-only candidate
-  reporting. Checklist edges now consume the same publication projection.
-  Native constraints remain inside the Dart adapter boundary.
-- Resolution ownership is explicit: a transitive declaring package retains its
-  provenance, while the enclosing configured root owns preparation/publication
-  obligations. This must be exercised end-to-end when native discovery connects.
-- Staged-provider artifact inputs: `StageDependencies` freezes native context,
-  slot, opaque provider coordinate, consuming producers, provider stage/receipt,
-  archive metadata and portable provider proof into the consumer plan. A core
-  producer copies exact verified bytes; canonical contracts compare expected
-  metadata independently of receipt evidence. The coordinator schedules this
-  producer and gives targets the same decorated contracts it inspects.
-  Same-unit dependencies bind producer output hashes when ready, without putting
-  future hashes into unit identity. Consumer verification survives provider-stage
-  deletion. Rebinding preserves identity while refreshing temporary provider
-  handles. Signed-build inspection permits canonical dependency inputs and still
-  requires the source snapshot. The architecture reviewer approved this bounded
-  slice after those last two regressions were fixed.
-- The artifact slice is exercised with a non-Dart native producer through the
-  actual coordinator, including reuse, independent opaque versions/install slots,
-  forged self-consistent receipts, provider/input tampering, cleanup, and an
-  incomplete same-unit provider handoff. This proves the generic receipt path;
-  production Dart preparation does not use the new bindings yet.
-  The focused artifact, existing stage/plan/coordinator, target, Pub resolution
-  and phase-conformance suites pass together: 298 tests with the complete Dart
-  3.12.2 SDK. `dart analyze` is clean. This is focused regression evidence,
-  not the final full-suite or Fleury-stack qualification.
-- Remaining review requirements: frozen real bindings rather than candidate
-  selections authorize receipt inputs; full native graph/manifest agreement;
-  dev-helper original/back-edge constraints; bounded isolated source discovery;
-  safe extraction, stage lookup/reuse and recovery. Restoring dependency JSON
-  verifies consistency with a declaration, not authorization of that declaration.
-  Source/intent lookup must validate the native frozen choices and provider
-  contracts before adopting a restored plan. Hosted fallback graphs, selected
-  versions and integrity still need their own immutable plan binding. The
-  artifact contract does not complete implementation slice 3 on its own.
-- Production native preparation primitives now implement bounded hosted shadow
-  discovery and exact archive replay. Discovery uses native backtracking,
-  discovers transitive-only candidates, refines compatible local preference,
-  preserves source identity and hosted fallback, and discards all listeners and
-  caches. Signed archive URLs are temporary fetch details, not serialized
-  identity. Ignored provider dev metadata and failed speculative prefetches do
-  not override a successful native solve.
-- The native archive reader uses Pub's tar library with stricter framing,
-  expansion and path limits. Original manifest equality precedes preload;
-  replay verifies exact graph/source/hash selection, package configuration,
-  root manifest, installed payload inventory and executable modes. Native
-  operations verify this environment before and after running. Review found
-  and closed directory/stacked-metadata framing bypasses, YAML alias expansion,
-  signed-URL refusal, provider-dev remapping and speculative-prefetch failures.
-  Both independently reproduced archive and discovery cases remain regressions.
-- The native reviewer approved this bounded archive/discovery/replay slice.
-  The focused archive/native/digest/graph suite passes 55 tests; the broader
-  archive/native/phase/stage run passed 178 before the final parity fixes.
-  Production discovery plus the original native scenarios also passed on the
-  supported minimum and stable SDKs. Command integration is not enabled yet.
-  Required next work remains native context/hosted archive binding and lookup,
-  dev-helper authorization, shared Pub/binary integration, repository preparation
-  and publication gates, full-suite verification, and four-package Fleury dogfood.
-- Core now binds opaque versioned native contexts and external archive inputs
-  alongside first-party imports and same-unit outputs. Context IDs are unique,
-  complete slot/binding/consumer coverage is checked, and payloads/bytes are
-  deeply frozen. Context-only resolutions affect stage identity. External input
-  metadata is part of canonical producer contracts; restored copies do not need
-  live download handles, while reacquiring handles preserves the identity.
-  The architecture reviewer approved this bounded extension; 302 focused
-  stage/plan/coordinator/Pub/phase regressions pass with clean analysis. Structural
-  deserialization still requires independent adapter source authorization and
-  semantic owner-to-producer validation before adoption. This is not the
-  source/intent lookup or automatic command integration.
-- A Dart context interpreter now checks the root/operation, complete native
-  graph, metadata identities, slot coverage and producer ownership before a
-  producer can open its bound inputs. Pub packaging and BinaryChain compilation
-  share an owned source mirror and archive replay; their receipts record the
-  real graph and archive hashes. This path is used only when native contexts are
-  bound. CLI discovery/binding and frozen restore authorization are still pending.
-- Actual coordinator fixtures package both separate-unit and same-unit providers
-  and consumers, compile the selected value, preserve original manifests, reuse
-  receipts, and consume imported bytes after provider cleanup. A separate fixture
-  executes the real BinaryChain/DartCliBuilder path with a bound binary context.
-  Legacy `^3.0.0` roots remain supported: workspace-detachment overrides are
-  created only when the source declares workspace metadata.
-- Producer input reads now tolerate only canonical, unrecorded outputs of other
-  pending producers while validating every recorded input and its contract.
-  They cannot read those pending outputs as receipt evidence. Unknown files,
-  symlinks and changed recorded bytes still refuse; final/restart inspection
-  remains strict. Launcher source and codesign input plists live in owned scratch
-  directories outside the stage. Native get/preload stay bounded; compilation
-  and packaging preserve the caller's timeout policy.
-- Both reviewers approved this bounded producer integration after the legacy
-  SDK, build timeout and concurrent-output findings were addressed. Analysis is
-  clean and 381 native/stage/producer/Pub/phase regressions passed on Dart 3.12.2.
-  The 20 hosted-discovery and bound-producer tests also passed on Dart 3.13.5.
-  Dart 3.10.4 passes archive/discovery and direct executable preparation, but its
-  macOS `compile aot-snapshot` emits ELF rather than Mach-O, so the existing RK
-  bundle path fails at `install_name_tool`. A dependency-free native probe
-  reproduced this toolchain limitation; minimum-SDK macOS bundle support is not
-  claimed by this evidence. Source authorization, development-helper and binary
-  lock policies, CLI orchestration and publication checks remain open.
-- Native frozen-choice verification now reauthenticates external packages at
-  their exact registry/version metadata endpoints and matches local selections
-  to current caller-supplied candidate identities and complete source manifests.
-  It verifies native resolution against only those frozen versions/sources and
-  compares the full causal graph. New registry releases, refreshed signed fetch
-  URLs, and a later local/public provider do not replace a recorded choice.
-  Corrupt digests, changed registry archives/source manifests and incompatible
-  current requirements refuse. This verifier does not itself authenticate root
-  intent, restore indexes or provider receipt provenance; those remain required
-  before adoption. The native reviewer approved this primitive, and it also
-  reverified all four saved Fleury resolutions (55 packages each) against current
-  exact public metadata without changing their selected local Fleury bindings.
-  All 30 focused native verification/preparation/graph regressions pass; the five
-  frozen-choice cases also pass on minimum Dart 3.10.4 and stable 3.13.5. Native
-  authorization is bounded before the solver starts, so a permanent source or
-  digest refusal does not incur Pub's transient-server retry loop.
+This is a snapshot at `f8ecd5b`, not an additional execution backlog. Earlier
+slice results are superseded by the current evidence below.
+
+| Implemented foundation | Evidence and qualification boundary |
+| --- | --- |
+| Native mechanism | `664a7c1`: real conflict/backtracking, unchanged manifests, archive replay, compile and external-root fixtures across Dart 3.10.4, 3.12.2 and 3.13.5; see the native proof document |
+| Generic dependency facts and receipts | Opaque native identity/context/slot/phase model; independent-version fallback; imports, external archives and same-unit producer handoff; non-Dart coordinator fixture |
+| Native discovery and archive fidelity | Bounded hosted metadata discovery, transitive local candidates, guarded native archive reader, original-registry cache replay, full manifest/graph/hash/payload checks and signed URL redaction |
+| Shared Pub and binary producers | `7b62807`: real packaging and BinaryChain compilation use bound archives, preserve warnings/manifests, and record actual graph/hash evidence; production CLI does not bind these automatically yet |
+| Frozen native verification | `f8ecd5b`: authenticates exact external metadata and current supplied local candidates, then re-solves only frozen choices and compares causal graph; caller still must authorize roots/provider provenance/adoption |
+
+The architecture and native reviewers approved the bounded producer integration;
+the native reviewer approved the frozen verifier primitive. Analysis was clean.
+The broader native/stage/producer/Pub/phase run passed 381 tests, and the latest
+focused verification/preparation/graph run passed 30. Stable SDK passed the 20
+bound native cases; five frozen-choice cases passed on minimum and stable SDKs.
+These recorded runs are not a final full-suite result for the remaining work.
+
+All four Fleury native archives were prepared from committed source
+`14d76107b6ba468b44e75c120390eddca271b307`; the three dependents used the exact
+newly staged Fleury archive. All four saved resolutions were subsequently
+reauthenticated against current registry metadata without changing their choices.
+MCP and web retained native exact-version warnings. No real publication occurred.
+This is native-mechanism evidence, not completed bare-command dogfood.
+
+Dart 3.10.4 passes archive preparation and direct executable cases. Its macOS
+`compile aot-snapshot` emits ELF for the current fixture while RK's existing
+bundle path requires Mach-O; a dependency-free probe reproduced the limitation.
+Minimum-SDK macOS bundle qualification remains explicitly outside the evidence.
