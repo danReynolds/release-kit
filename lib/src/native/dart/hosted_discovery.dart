@@ -14,6 +14,9 @@ import 'package_archive.dart';
 import 'resolution_graph.dart';
 import 'version_constraints.dart';
 
+/// Canonical credential-free registry used by native hosted preparation.
+String dartHostedRegistry(String value) => _registry(value);
+
 /// A caller-authorized provider in the selected preparation scope. A manifest
 /// is solver metadata, not an artifact; production must still supply its exact
 /// verified archive after scheduling the selected provider.
@@ -53,6 +56,53 @@ final class DartDiscoveredPackage {
   final String? archiveSha256;
   final bool retracted;
 
+  /// Restores metadata without a fetch credential or source authorization.
+  /// A frozen external selection must be reauthorized at its exact registry
+  /// coordinate before it is adopted by a later invocation.
+  factory DartDiscoveredPackage.fromJson(Object? value) {
+    if (value is! Map ||
+        value.keys.any(
+          (key) => !const {
+            'registry',
+            'manifest',
+            'manifest_sha256',
+            'candidate',
+            'archive_sha256',
+          }.contains(key),
+        ) ||
+        value['registry'] is! String ||
+        value['manifest'] is! Map) {
+      throw const FormatException('invalid frozen native package');
+    }
+    final registry = _registry(value['registry'] as String);
+    final manifest = DartPackageManifest.fromMap(
+      (value['manifest'] as Map).cast<String, Object?>(),
+    );
+    if (manifest.sha256 != value['manifest_sha256']) {
+      throw const FormatException('frozen native manifest digest differs');
+    }
+    final isCandidate = value.containsKey('candidate');
+    final digest = value['archive_sha256'];
+    if ((isCandidate && value.containsKey('archive_sha256')) ||
+        (!isCandidate &&
+            (digest is! String ||
+                !RegExp(r'^[0-9a-f]{64}$').hasMatch(digest)))) {
+      throw const FormatException('invalid frozen native package provenance');
+    }
+    return DartDiscoveredPackage._(
+      registry: registry,
+      manifest: manifest,
+      candidate: isCandidate
+          ? DartDiscoveryCandidate(
+              provider: NativeCandidate.fromJson(value['candidate']),
+              registry: registry,
+              manifest: manifest,
+            )
+          : null,
+      archiveSha256: digest as String?,
+    );
+  }
+
   Map<String, Object?> toJson() => {
     'registry': registry,
     'manifest': manifest.fields,
@@ -69,6 +119,44 @@ final class DartDiscoveryResult {
     : packages = Map.unmodifiable(packages);
   final DartResolutionGraph graph;
   final Map<String, DartDiscoveredPackage> packages;
+
+  /// Structural restore only; no native solve or registry authentication occurs.
+  factory DartDiscoveryResult.fromJson(Object? value) {
+    if (value is! Map ||
+        value.length != 2 ||
+        !value.containsKey('graph') ||
+        value['packages'] is! Map) {
+      throw const FormatException('invalid frozen native discovery');
+    }
+    final graph = DartResolutionGraph.fromJson(value['graph']);
+    final packages = <String, DartDiscoveredPackage>{};
+    for (final entry in (value['packages'] as Map).entries) {
+      final selected = DartDiscoveredPackage.fromJson(entry.value);
+      final node = graph.packages[entry.key];
+      if (entry.key != selected.manifest.name ||
+          node == null ||
+          node.version != selected.manifest.version ||
+          node.source != dartRegistryIdentity(selected.registry)) {
+        throw const FormatException(
+          'frozen native metadata disagrees with graph',
+        );
+      }
+      packages[entry.key as String] = selected;
+    }
+    for (final node in graph.packages.values) {
+      if (node.archiveSha256 != null ||
+          (node.source.startsWith('hosted:') &&
+              !packages.containsKey(node.name)) ||
+          (!node.source.startsWith('hosted:') &&
+              node.source != 'root' &&
+              !node.source.startsWith('sdk:'))) {
+        throw const FormatException(
+          'unsupported or incomplete frozen discovery graph',
+        );
+      }
+    }
+    return DartDiscoveryResult._(graph, packages);
+  }
 
   Map<String, Object?> toJson() => {
     'graph': graph.toJson(includeIntegrity: false),

@@ -1253,6 +1253,7 @@ final class ReleaseStageCoordinator {
       runtimeSha256: stage.compiler?.runtimeSha256,
       runtimeLicenseSha256: stage.compiler?.runtimeLicenseSha256,
       launcherCompiler: stage.launcherCompiler,
+      stage: stage,
     );
   }
 

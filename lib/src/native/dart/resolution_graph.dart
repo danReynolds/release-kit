@@ -15,6 +15,74 @@ final class DartResolutionGraph {
   final Set<String> roots;
   final Map<String, DartResolvedPackage> packages;
 
+  /// Structural restore of portable native evidence. Source authorization and
+  /// artifact verification remain the caller's responsibility; a serialized
+  /// graph alone never grants access to a reusable stage.
+  factory DartResolutionGraph.fromJson(Object? value) {
+    final map = _fields(value, {'roots', 'packages'});
+    final roots = _names(map['roots'], 'roots');
+    final values = map['packages'];
+    if (roots.isEmpty || values is! Map) {
+      throw const FormatException('invalid frozen native graph');
+    }
+    final packages = <String, DartResolvedPackage>{};
+    for (final entry in values.entries) {
+      final name = _text(entry.key, 'package name');
+      final node = _fields(
+        entry.value,
+        {'name', 'version', 'source', 'dependencies', 'devDependencies'},
+        optional: {'archive_sha256'},
+      );
+      final source = _text(node['source'], '$name source');
+      final hash = node['archive_sha256'];
+      final development = _names(node['devDependencies'], '$name development');
+      if (node['name'] != name ||
+          (source == 'root') != roots.contains(name) ||
+          (source != 'root' &&
+              !RegExp(
+                r'^(hosted|sdk|git|path):[0-9a-f]{64}$',
+              ).hasMatch(source)) ||
+          (!roots.contains(name) && development.isNotEmpty) ||
+          (node.containsKey('archive_sha256') &&
+              (!source.startsWith('hosted:') ||
+                  hash is! String ||
+                  !RegExp(r'^[0-9a-f]{64}$').hasMatch(hash)))) {
+        throw FormatException('invalid frozen native identity for $name');
+      }
+      packages[name] = DartResolvedPackage._(
+        name: name,
+        version: _text(node['version'], '$name version'),
+        source: source,
+        archiveSha256: hash as String?,
+        dependencies: _names(node['dependencies'], '$name dependencies'),
+        development: development,
+      );
+    }
+    if (!packages.keys.toSet().containsAll(roots)) {
+      throw const FormatException('frozen native graph omits its roots');
+    }
+    final reached = <String>{};
+    final pending = roots.toList();
+    while (pending.isNotEmpty) {
+      final name = pending.removeLast();
+      if (!reached.add(name)) continue;
+      final node = packages[name];
+      if (node == null) {
+        throw FormatException('frozen native graph omits $name');
+      }
+      pending.addAll([...node.dependencies, ...node.development]);
+    }
+    if (reached.length != packages.length) {
+      throw const FormatException(
+        'frozen native graph has unreachable packages',
+      );
+    }
+    return DartResolutionGraph._(
+      Set.unmodifiable(roots),
+      Map.unmodifiable(packages),
+    );
+  }
+
   factory DartResolutionGraph.read(
     Directory root, {
     Map<String, String> registryAliases = const {},
@@ -220,3 +288,18 @@ Object? _plain(Object? value) => switch (value) {
   List() => value.map(_plain).toList(),
   _ => value,
 };
+
+Map<String, Object?> _fields(
+  Object? value,
+  Set<String> required, {
+  Set<String> optional = const {},
+}) {
+  if (value is! Map ||
+      !value.keys.toSet().containsAll(required) ||
+      !value.keys.every(
+        (key) => required.contains(key) || optional.contains(key),
+      )) {
+    throw const FormatException('invalid frozen native graph fields');
+  }
+  return value.cast<String, Object?>();
+}

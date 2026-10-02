@@ -40,6 +40,7 @@ class DartCliBuilder {
     required String expectedVersion,
     Map<String, String> defines = const {},
     void Function(DartBuildEvent event)? onProgress,
+    Future<ToolResult> Function(List<String> arguments)? runCompiler,
   }) async {
     // The caller refuses an unproducible platform with a diagnostic before
     // reaching here, so this asks only *how* to produce it.
@@ -52,7 +53,7 @@ class DartCliBuilder {
         ? '$root/lib/${artifact.entryPoint}/app.aot'
         : output;
     if (artifact.isBundle) File(module).parent.createSync(recursive: true);
-    final compiled = await tools.run(compilerExecutable, [
+    final arguments = [
       'compile',
       artifact.isBundle ? 'aot-snapshot' : 'exe',
       for (final name in defines.keys.toList()..sort())
@@ -65,7 +66,14 @@ class DartCliBuilder {
       entryPoint,
       '-o',
       module,
-    ], workingDirectory: workingDirectory);
+    ];
+    final compiled = runCompiler == null
+        ? await tools.run(
+            compilerExecutable,
+            arguments,
+            workingDirectory: workingDirectory,
+          )
+        : await runCompiler(arguments);
 
     if (!compiled.ok) {
       return BuildOutcome.failed(
@@ -165,7 +173,8 @@ class DartCliBuilder {
         'the Dart runtime license changed after the stage was identified',
       );
     }
-    final source = File('$root/.rk-launcher.c');
+    final scratch = Directory.systemTemp.createTempSync('rk-dart-launcher-');
+    final source = File('${scratch.path}/launcher.c');
     try {
       source.writeAsStringSync(dartLauncherSource(artifact.entryPoint));
       if (launcherCompiler != null && !launcherCompiler!.isCurrent) {
@@ -192,7 +201,7 @@ class DartCliBuilder {
         );
       }
     } finally {
-      if (source.existsSync()) source.deleteSync();
+      scratch.deleteSync(recursive: true);
     }
     File(
       '$root/${BinaryArtifact.manifestName}',

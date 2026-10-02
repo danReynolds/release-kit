@@ -119,7 +119,7 @@ final class DartArchiveReplay {
         '--offline',
         '--no-example',
         '--no-precompile',
-      ]);
+      ], timeout: const Duration(minutes: 2));
       _requireSuccess('replaying the discovered dependency graph', get);
       final graph = DartResolutionGraph.read(root);
       graph.requireSameSelection(discovered);
@@ -143,22 +143,22 @@ final class DartArchiveReplay {
     'PUB_SUMMARY_ONLY': '0',
   };
 
-  Future<ToolResult> run(List<String> arguments) {
+  Future<ToolResult> run(List<String> arguments, {Duration? timeout}) {
     if (_closed) throw StateError('native replay environment is closed');
     verify();
-    return _run(arguments).then((result) {
+    return _run(arguments, timeout: timeout).then((result) {
       verify();
       return result;
     });
   }
 
-  Future<ToolResult> _run(List<String> arguments) {
+  Future<ToolResult> _run(List<String> arguments, {Duration? timeout}) {
     return tools.run(
       compiler,
       ['--suppress-analytics', ...arguments],
       workingDirectory: root.path,
       environment: environment,
-      timeout: const Duration(minutes: 2),
+      timeout: timeout,
     );
   }
 

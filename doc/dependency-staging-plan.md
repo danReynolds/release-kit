@@ -1,10 +1,10 @@
 # Dependency-aware repository staging
 
-Status: implementation in progress. The native mechanism proof, initial
-source-only native requirements/candidate projection and staged-provider artifact
-contracts are implemented and reviewed. Frozen-choice lookup/authorization,
-native preparation integration, repository execution and final Fleury
-qualification remain. No publication has occurred.
+Status: implementation in progress. Native discovery/replay, source-only
+requirements, receipt-bound archive inputs and the first shared Pub/binary
+producer integration are implemented. Frozen-choice lookup/authorization,
+development-helper and binary-lock discovery policies, repository execution and
+final command-level Fleury qualification remain. No publication has occurred.
 
 Baseline: RK main `6e7bb165c8027d8fc5e5293b45432850cf3229f8`, inspected 2026-10-02.
 
@@ -598,3 +598,32 @@ is deliberately the first implementation packet.
   deserialization still requires independent adapter source authorization and
   semantic owner-to-producer validation before adoption. This is not the
   source/intent lookup or automatic command integration.
+- A Dart context interpreter now checks the root/operation, complete native
+  graph, metadata identities, slot coverage and producer ownership before a
+  producer can open its bound inputs. Pub packaging and BinaryChain compilation
+  share an owned source mirror and archive replay; their receipts record the
+  real graph and archive hashes. This path is used only when native contexts are
+  bound. CLI discovery/binding and frozen restore authorization are still pending.
+- Actual coordinator fixtures package both separate-unit and same-unit providers
+  and consumers, compile the selected value, preserve original manifests, reuse
+  receipts, and consume imported bytes after provider cleanup. A separate fixture
+  executes the real BinaryChain/DartCliBuilder path with a bound binary context.
+  Legacy `^3.0.0` roots remain supported: workspace-detachment overrides are
+  created only when the source declares workspace metadata.
+- Producer input reads now tolerate only canonical, unrecorded outputs of other
+  pending producers while validating every recorded input and its contract.
+  They cannot read those pending outputs as receipt evidence. Unknown files,
+  symlinks and changed recorded bytes still refuse; final/restart inspection
+  remains strict. Launcher source and codesign input plists live in owned scratch
+  directories outside the stage. Native get/preload stay bounded; compilation
+  and packaging preserve the caller's timeout policy.
+- Both reviewers approved this bounded producer integration after the legacy
+  SDK, build timeout and concurrent-output findings were addressed. Analysis is
+  clean and 381 native/stage/producer/Pub/phase regressions passed on Dart 3.12.2.
+  The 20 hosted-discovery and bound-producer tests also passed on Dart 3.13.5.
+  Dart 3.10.4 passes archive/discovery and direct executable preparation, but its
+  macOS `compile aot-snapshot` emits ELF rather than Mach-O, so the existing RK
+  bundle path fails at `install_name_tool`. A dependency-free native probe
+  reproduced this toolchain limitation; minimum-SDK macOS bundle support is not
+  claimed by this evidence. Source authorization, development-helper and binary
+  lock policies, CLI orchestration and publication checks remain open.

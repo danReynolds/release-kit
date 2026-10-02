@@ -363,11 +363,30 @@ void main() {
       final provider = f.output(stage, 'core', 'core from package', [source]);
       stage.writeProgress([source, provider]);
       expect(stage.inspect().validProgress, isTrue);
+      // A concurrent consumer has started writing its declared output. The
+      // recorded provider remains readable, without adopting pending bytes or
+      // weakening restart/publication inspection of the whole stage.
+      stage.directory.writeBytesAtomically('app.pkg', utf8.encode('in flight'));
+      expect(stage.inspect().validProgress, isFalse);
       final artifact = stage.requireProducerArtifact(
         producer: 'native:core',
         path: 'core.pkg',
         type: 'fixture-package',
       );
+      expect(
+        () => stage.requireProducerArtifact(
+          producer: 'native:app',
+          path: 'app.pkg',
+          type: 'fixture-package',
+        ),
+        throwsStateError,
+      );
+      stage.directory.writeBytesAtomically(
+        'unknown.pkg',
+        utf8.encode('unowned'),
+      );
+      expect(stage.requireProducerProgress, throwsStateError);
+      File(stage.directory.resolve('unknown.pkg')).deleteSync();
       expect(stage.producerDependencies('native:app'), {
         'source-snapshot',
         'native:core',

@@ -299,18 +299,60 @@ class ReleaseStage {
         'dependency artifact does not match the producer contract',
       );
     }
-    final inspected = inspect();
-    if (!inspected.reusable && !inspected.validProgress) {
-      throw StateError(
-        'dependency provider stage does not validate: ${inspected.issues.join('; ')}',
-      );
-    }
-    return inspected.receipt!.steps
+    return requireProducerProgress().steps
         .singleWhere((step) => step.name == producer)
         .outputs
         .singleWhere(
           (artifact) => artifact.path == path && artifact.type == type,
         );
+  }
+
+  /// Validated completed producer inputs during an active preparation run.
+  /// Another producer may already be writing its declared output. Such bytes
+  /// are neither adopted nor returned here: only recorded steps are trusted.
+  /// Persisted inspection and public completion keep their strict inventory.
+  StageReceipt requireProducerProgress() {
+    if (!enforceUnitContract) {
+      throw StateError('producer input reads require a complete unit contract');
+    }
+    final inspected = inspect();
+    final receipt = inspected.receipt;
+    if (inspected.reusable || inspected.validProgress) return receipt!;
+    final pendingFiles = <String>{};
+    if (receipt != null && !receipt.complete) {
+      final recorded = receipt.steps.map((step) => step.name).toSet();
+      for (final name in producerNames.where(
+        (name) => !recorded.contains(name),
+      )) {
+        pendingFiles.addAll(producerContract(name).outputs.keys);
+      }
+    }
+    final pendingDirectories = <String>{};
+    for (final path in pendingFiles) {
+      final parts = StagePath.segments(path);
+      for (var i = 1; i < parts.length; i++) {
+        pendingDirectories.add(parts.take(i).join('/'));
+      }
+    }
+    final remaining = inspected.issues.where((issue) {
+      if (issue.kind != StageIssueKind.extraArtifact || issue.path == null) {
+        return true;
+      }
+      final type = FileSystemEntity.typeSync(
+        directory.resolve(issue.path!),
+        followLinks: false,
+      );
+      return !((type == FileSystemEntityType.file &&
+              pendingFiles.contains(issue.path)) ||
+          (type == FileSystemEntityType.directory &&
+              pendingDirectories.contains(issue.path)));
+    });
+    if (!StageInspection(receipt: receipt, issues: remaining).validProgress) {
+      throw StateError(
+        'dependency provider stage does not validate: ${remaining.join('; ')}',
+      );
+    }
+    return receipt!;
   }
 
   String get sourceRoot => directory.resolve('source');
