@@ -627,3 +627,19 @@ is deliberately the first implementation packet.
   reproduced this toolchain limitation; minimum-SDK macOS bundle support is not
   claimed by this evidence. Source authorization, development-helper and binary
   lock policies, CLI orchestration and publication checks remain open.
+- Native frozen-choice verification now reauthenticates external packages at
+  their exact registry/version metadata endpoints and matches local selections
+  to current caller-supplied candidate identities and complete source manifests.
+  It verifies native resolution against only those frozen versions/sources and
+  compares the full causal graph. New registry releases, refreshed signed fetch
+  URLs, and a later local/public provider do not replace a recorded choice.
+  Corrupt digests, changed registry archives/source manifests and incompatible
+  current requirements refuse. This verifier does not itself authenticate root
+  intent, restore indexes or provider receipt provenance; those remain required
+  before adoption. The native reviewer approved this primitive, and it also
+  reverified all four saved Fleury resolutions (55 packages each) against current
+  exact public metadata without changing their selected local Fleury bindings.
+  All 30 focused native verification/preparation/graph regressions pass; the five
+  frozen-choice cases also pass on minimum Dart 3.10.4 and stable 3.13.5. Native
+  authorization is bounded before the solver starts, so a permanent source or
+  digest refusal does not incur Pub's transient-server retry loop.

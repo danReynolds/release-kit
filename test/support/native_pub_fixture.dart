@@ -294,6 +294,27 @@ final class NativePubFixture {
           }),
         );
       }
+    } else if (path.length == 5 &&
+        path[0] == 'api' &&
+        path[1] == 'packages' &&
+        path[3] == 'versions') {
+      final package = _packages[path[2]]?[path[4]];
+      if (packageStatus[path[2]] case final status?) {
+        request.response.statusCode = status;
+      } else if (package == null) {
+        request.response.statusCode = HttpStatus.notFound;
+      } else {
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(
+          jsonEncode({
+            'version': path[4],
+            'pubspec': package.manifest,
+            'archive_url':
+                '$url/packages/${path[2]}-${path[4]}.tar.gz$archiveQuery',
+            'archive_sha256': Sha256.hex(package.bytes),
+          }),
+        );
+      }
     } else if (path.length == 2 && path[0] == 'packages') {
       if (archiveRedirect case final location?) {
         request.response.statusCode = HttpStatus.found;

@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:tar/tar.dart';
 
 import '../../engine/native_dependencies.dart';
+import '../../engine/canonical_json.dart';
 import '../../engine/pubspec.dart';
 import '../../engine/tools.dart';
 import '../../transforms/digest.dart';
@@ -203,13 +204,53 @@ final class DartHostedDiscovery {
       await session.close();
     }
   }
+
+  /// Reauthorize exact frozen choices against current authoritative source
+  /// candidates and current registry metadata. Native Pub verifies the original
+  /// requirements using only these versions; it cannot select a newer release
+  /// or turn a previously hosted binding into a now-available local candidate.
+  /// The caller must separately authenticate root/source intent and stage proof.
+  Future<DartDiscoveryResult> verifyFrozen({
+    required DartPackageManifest root,
+    required DartDiscoveryResult frozen,
+    Iterable<DartDiscoveryCandidate> candidates = const [],
+  }) async {
+    final current = candidates.toList();
+    final selected = <DartDiscoveryCandidate>[];
+    for (final package in frozen.packages.values) {
+      final provider = package.candidate;
+      if (provider == null) continue;
+      final matches = current.where(
+        (candidate) =>
+            CanonicalJson.encode(candidate.provider.toJson()) ==
+            CanonicalJson.encode(provider.provider.toJson()),
+      );
+      if (matches.length != 1) {
+        throw StateError(
+          'frozen provider ${package.manifest.name} ${package.manifest.version} does not match one current configured candidate',
+        );
+      }
+      final candidate = matches.single;
+      candidate.manifest.requireSameManifest(package.manifest);
+      selected.add(candidate);
+    }
+    final session = _Session(this, root, selected, frozen: frozen);
+    try {
+      final result = await session.resolve();
+      result.graph.requireSameSelection(frozen.graph);
+      return result;
+    } finally {
+      await session.close();
+    }
+  }
 }
 
 final class _Session {
-  _Session(this.options, this.root, this.candidates);
+  _Session(this.options, this.root, this.candidates, {this.frozen});
   final DartHostedDiscovery options;
   final DartPackageManifest root;
   final List<DartDiscoveryCandidate> candidates;
+  final DartDiscoveryResult? frozen;
   final HttpClient client = HttpClient();
   final Directory directory = Directory.systemTemp.createTempSync(
     'rk-dart-discovery-',
@@ -233,9 +274,15 @@ final class _Session {
         throw StateError('multiple eligible native providers for ${key.$2}');
       }
       available[key] = candidate;
+      if (frozen != null) pinned[key] = candidate;
     }
     _requireSupported(root, isRoot: true);
     _selectFrom([root], root: root.name);
+    if (frozen case final recorded?) {
+      // Authenticate before starting Pub. A digest/source refusal is final,
+      // not a transient shadow-server error Pub should retry for half a minute.
+      await _authorizeFrozen(recorded).timeout(const Duration(minutes: 2));
+    }
     final shadow = await _shadow(options.defaultRegistry);
     final mapped = await _remap(root, includeDevelopment: true);
     // A root may be a workspace member in source. The owned discovery root
@@ -317,6 +364,23 @@ final class _Session {
       Directory('${directory.path}/.dart_tool').deleteSync(recursive: true);
     }
     throw StateError('native candidate discovery did not converge');
+  }
+
+  Future<void> _authorizeFrozen(DartDiscoveryResult recorded) async {
+    final registries = {
+      options.defaultRegistry,
+      ...recorded.packages.values.map((package) => package.registry),
+    };
+    if (registries.length > options.maxRegistries) {
+      throw StateError('native verification exceeds the registry limit');
+    }
+    final packages = recorded.packages.values.toList();
+    for (var start = 0; start < packages.length; start += 8) {
+      await Future.wait([
+        for (final package in packages.skip(start).take(8))
+          _listing(package.registry, package.manifest.name),
+      ]);
+    }
   }
 
   void _selectFrom(
@@ -417,6 +481,12 @@ final class _Session {
 
   Future<List<DartDiscoveredPackage>> _listing(String registry, String name) {
     final key = (registry, name);
+    final expected = frozen?.packages[name];
+    if (frozen != null && (expected == null || expected.registry != registry)) {
+      throw StateError(
+        'native verification requested an unfrozen dependency $name',
+      );
+    }
     if (!listings.containsKey(key) && listings.length >= options.maxPackages) {
       throw StateError('native discovery exceeds the package limit');
     }
@@ -427,7 +497,8 @@ final class _Session {
       final values = <DartDiscoveredPackage>[];
       if (!pinned.containsKey(key)) {
         final uri = Uri.parse(
-          '$registry/api/packages/${Uri.encodeComponent(name)}',
+          '$registry/api/packages/${Uri.encodeComponent(name)}'
+          '${expected == null ? '' : '/versions/${Uri.encodeComponent(expected.manifest.version)}'}',
         );
         final request = await client.getUrl(uri).timeout(options.timeout);
         request.headers.set(
@@ -448,14 +519,16 @@ final class _Session {
           }
           final metadata = jsonDecode(utf8.decode(bytes.takeBytes()));
           if (metadata is! Map ||
-              metadata['name'] != name ||
-              metadata['versions'] is! List) {
+              (expected == null &&
+                  (metadata['name'] != name ||
+                      metadata['versions'] is! List))) {
             throw FormatException(
               'registry returned invalid metadata for $name',
             );
           }
           final versions = <String>{};
-          for (final item in metadata['versions'] as List) {
+          for (final item
+              in expected == null ? metadata['versions'] as List : [metadata]) {
             if (item is! Map ||
                 item['version'] is! String ||
                 !versions.add(item['version'] as String)) {
@@ -508,6 +581,21 @@ final class _Session {
             candidate: candidate,
           ),
         );
+      }
+      if (expected != null) {
+        final matches = values
+            .where(
+              (value) => value.manifest.version == expected.manifest.version,
+            )
+            .toList();
+        if (matches.length != 1 ||
+            CanonicalJson.encode(matches.single.toJson()) !=
+                CanonicalJson.encode(expected.toJson())) {
+          throw StateError(
+            'registry or configured source no longer authorizes frozen ${expected.manifest.name} ${expected.manifest.version} with its recorded manifest and archive digest',
+          );
+        }
+        return matches;
       }
       return values;
     });

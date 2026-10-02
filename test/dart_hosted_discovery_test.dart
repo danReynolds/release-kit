@@ -50,6 +50,204 @@ void main() {
     defaultRegistry: origin.url,
   ).resolve(root: manifest(root), candidates: candidates);
 
+  Future<DartDiscoveryResult> verify(
+    Directory root,
+    DartDiscoveryResult frozen,
+    List<DartDiscoveryCandidate> candidates,
+  ) => DartHostedDiscovery(
+    tools: const SystemTools(),
+    compiler: origin.dart,
+    defaultRegistry: origin.url,
+  ).verifyFrozen(root: manifest(root), frozen: frozen, candidates: candidates);
+
+  test(
+    'frozen verification authenticates exact versions without adopting newer registry or provider truth',
+    () async {
+      final core = origin.package('core', 'rk_fixture_core', '0.2.0');
+      final local = candidate(core);
+      origin.host(
+        origin.package(
+          'bridge1',
+          'rk_fixture_bridge',
+          '1.0.0',
+          dependencies: '  rk_fixture_core: ^0.2.0\n',
+        ),
+      );
+      final root = origin.package(
+        'consumer',
+        'rk_fixture_consumer',
+        '0.1.0',
+        dependencies: '  rk_fixture_bridge: ^1.0.0\n',
+      );
+      final original = await discover(root, [local]);
+      final frozen = DartDiscoveryResult.fromJson(original.toJson());
+      origin.host(core);
+      origin.host(
+        origin.package(
+          'bridge2',
+          'rk_fixture_bridge',
+          '1.1.0',
+          dependencies: '  rk_fixture_core: ^0.1.0\n',
+        ),
+      );
+      origin.archiveQuery = '?signed=refreshed-fetch';
+      origin.requests.clear();
+      final verified = await verify(root, frozen, [local]);
+      expect(verified.toJson(), frozen.toJson());
+      expect(verified.packages['rk_fixture_core']!.candidate, same(local));
+      expect(
+        verified.packages['rk_fixture_bridge']!.archiveUrl!.query,
+        'signed=refreshed-fetch',
+      );
+      expect(origin.requests, [
+        'GET /api/packages/rk_fixture_bridge/versions/1.0.0',
+      ]);
+      expect(jsonEncode(verified.toJson()), isNot(contains('refreshed-fetch')));
+    },
+  );
+
+  test(
+    'frozen hosted choice stays hosted when an eligible local stage later appears',
+    () async {
+      final core = origin.package('core', 'rk_fixture_core', '0.2.0');
+      origin.host(core);
+      final root = origin.package(
+        'consumer',
+        'rk_fixture_consumer',
+        '0.1.0',
+        dependencies: '  rk_fixture_core: ^0.2.0\n',
+      );
+      final frozen = DartDiscoveryResult.fromJson(
+        (await discover(root, [])).toJson(),
+      );
+      final verified = await verify(root, frozen, [candidate(core)]);
+      expect(verified.packages['rk_fixture_core']!.candidate, isNull);
+      expect(verified.toJson(), frozen.toJson());
+    },
+  );
+
+  test(
+    'frozen verification rejects forged integrity and changed real registry archives',
+    () async {
+      final core = origin.package('core', 'rk_fixture_core', '0.2.0');
+      origin.host(core);
+      final root = origin.package(
+        'consumer',
+        'rk_fixture_consumer',
+        '0.1.0',
+        dependencies: '  rk_fixture_core: ^0.2.0\n',
+      );
+      final frozen = await discover(root, []);
+      final document =
+          jsonDecode(jsonEncode(frozen.toJson())) as Map<String, dynamic>;
+      document['packages']['rk_fixture_core']['archive_sha256'] = 'a' * 64;
+      await expectLater(
+        verify(root, DartDiscoveryResult.fromJson(document), []),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.toString(),
+            'source proof',
+            contains('no longer authorizes frozen'),
+          ),
+        ),
+      );
+      File(
+        '${core.path}/lib/rk_fixture_core.dart',
+      ).writeAsStringSync('const value = 100;\n');
+      origin.host(core);
+      await expectLater(
+        verify(root, frozen, []),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.toString(),
+            'registry drift',
+            contains('no longer authorizes frozen'),
+          ),
+        ),
+      );
+    },
+  );
+
+  test(
+    'frozen local choice requires current source and native root constraints',
+    () async {
+      final core = origin.package('core', 'rk_fixture_core', '0.2.0');
+      final local = candidate(core);
+      final root = origin.package(
+        'consumer',
+        'rk_fixture_consumer',
+        '0.1.0',
+        dependencies: '  rk_fixture_core: ^0.2.0\n',
+      );
+      final frozen = await discover(root, [local]);
+      await expectLater(verify(root, frozen, []), throwsStateError);
+      final pubspec = File('${core.path}/pubspec.yaml');
+      final original = pubspec.readAsStringSync();
+      pubspec.writeAsStringSync('$original\ncustom: changed\n');
+      await expectLater(
+        verify(root, frozen, [candidate(core)]),
+        throwsFormatException,
+      );
+      pubspec.writeAsStringSync(original);
+      final rootFile = File('${root.path}/pubspec.yaml');
+      rootFile.writeAsStringSync(
+        rootFile.readAsStringSync().replaceFirst(
+          'rk_fixture_core: ^0.2.0',
+          'rk_fixture_core: ^0.1.0',
+        ),
+      );
+      await expectLater(
+        verify(root, frozen, [local]),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.toString(),
+            'native constraint',
+            contains('version solving failed'),
+          ),
+        ),
+      );
+    },
+  );
+
+  test(
+    'frozen verification checks causal edges beyond authenticated coordinates',
+    () async {
+      final core = candidate(
+        origin.package('core', 'rk_fixture_core', '0.2.0'),
+      );
+      origin.host(
+        origin.package(
+          'bridge',
+          'rk_fixture_bridge',
+          '1.0.0',
+          dependencies: '  rk_fixture_core: ^0.2.0\n',
+        ),
+      );
+      final root = origin.package(
+        'consumer',
+        'rk_fixture_consumer',
+        '0.1.0',
+        dependencies:
+            '  rk_fixture_core: ^0.2.0\n  rk_fixture_bridge: ^1.0.0\n',
+      );
+      final resolved = await discover(root, [core]);
+      final document =
+          jsonDecode(jsonEncode(resolved.toJson())) as Map<String, dynamic>;
+      document['graph']['packages']['rk_fixture_bridge']['dependencies'] =
+          <String>[];
+      await expectLater(
+        verify(root, DartDiscoveryResult.fromJson(document), [core]),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.toString(),
+            'graph drift',
+            contains('graph changed'),
+          ),
+        ),
+      );
+    },
+  );
+
   test(
     'production discovery backtracks then real archive replay compiles the selected inputs',
     () async {
@@ -250,6 +448,26 @@ void main() {
     expect(result.packages['rk_fixture_core']!.candidate, isNull);
     expect(result.packages['rk_fixture_core']!.registry, other.url);
     expect(origin.requests, isEmpty);
+    other.requests.clear();
+    await expectLater(
+      DartHostedDiscovery(
+        tools: const SystemTools(),
+        compiler: origin.dart,
+        defaultRegistry: origin.url,
+        maxRegistries: 1,
+      ).verifyFrozen(
+        root: manifest(root),
+        frozen: DartDiscoveryResult.fromJson(result.toJson()),
+      ),
+      throwsA(
+        isA<StateError>().having(
+          (e) => e.toString(),
+          'pre-fetch registry bound',
+          contains('registry limit'),
+        ),
+      ),
+    );
+    expect(other.requests, isEmpty);
   });
 
   test(
