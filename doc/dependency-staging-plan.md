@@ -564,3 +564,26 @@ is deliberately the first implementation packet.
   contracts before adopting a restored plan. Hosted fallback graphs, selected
   versions and integrity still need their own immutable plan binding. The
   artifact contract does not complete implementation slice 3 on its own.
+- Production native preparation primitives now implement bounded hosted shadow
+  discovery and exact archive replay. Discovery uses native backtracking,
+  discovers transitive-only candidates, refines compatible local preference,
+  preserves source identity and hosted fallback, and discards all listeners and
+  caches. Signed archive URLs are temporary fetch details, not serialized
+  identity. Ignored provider dev metadata and failed speculative prefetches do
+  not override a successful native solve.
+- The native archive reader uses Pub's tar library with stricter framing,
+  expansion and path limits. Original manifest equality precedes preload;
+  replay verifies exact graph/source/hash selection, package configuration,
+  root manifest, installed payload inventory and executable modes. Native
+  operations verify this environment before and after running. Review found
+  and closed directory/stacked-metadata framing bypasses, YAML alias expansion,
+  signed-URL refusal, provider-dev remapping and speculative-prefetch failures.
+  Both independently reproduced archive and discovery cases remain regressions.
+- The native reviewer approved this bounded archive/discovery/replay slice.
+  The focused archive/native/digest/graph suite passes 55 tests; the broader
+  archive/native/phase/stage run passed 178 before the final parity fixes.
+  Production discovery plus the original native scenarios also passed on the
+  supported minimum and stable SDKs. Command integration is not enabled yet.
+  Required next work remains native context/hosted archive binding and lookup,
+  dev-helper authorization, shared Pub/binary integration, repository preparation
+  and publication gates, full-suite verification, and four-package Fleury dogfood.

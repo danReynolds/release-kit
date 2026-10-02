@@ -1,5 +1,24 @@
 import 'dart:typed_data';
 
+/// The gzip transport checksum. Artifact identity still uses SHA-256.
+abstract final class Crc32 {
+  static final _table = List<int>.generate(256, (index) {
+    var value = index;
+    for (var bit = 0; bit < 8; bit++) {
+      value = (value & 1) != 0 ? 0xedb88320 ^ (value >> 1) : value >> 1;
+    }
+    return value;
+  });
+
+  static int hash(List<int> bytes) {
+    var crc = 0xffffffff;
+    for (final byte in bytes) {
+      crc = _table[(crc ^ byte) & 0xff] ^ (crc >> 8);
+    }
+    return (crc ^ 0xffffffff) & 0xffffffff;
+  }
+}
+
 /// SHA-256, written rather than imported.
 ///
 /// Release identity uses this small, independently tested implementation.

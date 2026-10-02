@@ -475,8 +475,14 @@ void main() {
               target == 'package:pub_semver/pub_semver.dart') {
             continue;
           }
-          if (entity.path == 'lib/src/native/dart/resolution_graph.dart' &&
+          if ((entity.path == 'lib/src/native/dart/resolution_graph.dart' ||
+                  entity.path == 'lib/src/native/dart/package_archive.dart') &&
               target == 'package:yaml/yaml.dart') {
+            continue;
+          }
+          if ((entity.path == 'lib/src/native/package_archive.dart' ||
+                  entity.path == 'lib/src/native/dart/hosted_discovery.dart') &&
+              target == 'package:tar/tar.dart') {
             continue;
           }
           foreign.add('${entity.path}: $target');

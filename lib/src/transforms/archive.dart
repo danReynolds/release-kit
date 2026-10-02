@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'digest.dart';
+
 /// Builds the tar.gz a platform ships, byte-reproducibly.
 ///
 /// Determinism is a requirement rather than polish: without it, "is this the
@@ -75,7 +77,7 @@ class ArchiveBuilder {
       0x00, // no extra flags
       0xff, // unknown OS, rather than the one that happened to build it
       ...deflated,
-      ..._le32(_crc32(bytes)),
+      ..._le32(Crc32.hash(bytes)),
       ..._le32(bytes.length & 0xffffffff),
     ];
   }
@@ -86,26 +88,6 @@ class ArchiveBuilder {
     (value >> 16) & 0xff,
     (value >> 24) & 0xff,
   ];
-
-  static final _crcTable = () {
-    final table = List<int>.filled(256, 0);
-    for (var i = 0; i < 256; i++) {
-      var c = i;
-      for (var k = 0; k < 8; k++) {
-        c = (c & 1) != 0 ? 0xedb88320 ^ (c >> 1) : c >> 1;
-      }
-      table[i] = c;
-    }
-    return table;
-  }();
-
-  static int _crc32(List<int> bytes) {
-    var crc = 0xffffffff;
-    for (final byte in bytes) {
-      crc = _crcTable[(crc ^ byte) & 0xff] ^ (crc >> 8);
-    }
-    return (crc ^ 0xffffffff) & 0xffffffff;
-  }
 }
 
 class ArchiveEntry {

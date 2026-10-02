@@ -14,6 +14,8 @@ final class NativePubFixture {
   final HttpServer server;
   final Map<String, Map<String, _Package>> _packages = {};
   final List<String> requests = [];
+  String archiveQuery = '';
+  final Map<String, int> packageStatus = {};
   final Set<Process> _children = {};
 
   String get url => 'http://127.0.0.1:${server.port}';
@@ -267,7 +269,9 @@ final class NativePubFixture {
       request.response.statusCode = HttpStatus.methodNotAllowed;
     } else if (path.length == 3 && path[0] == 'api' && path[1] == 'packages') {
       final packages = _packages[path[2]];
-      if (packages == null) {
+      if (packageStatus[path[2]] case final status?) {
+        request.response.statusCode = status;
+      } else if (packages == null) {
         request.response.statusCode = HttpStatus.notFound;
       } else {
         final versions = [
@@ -275,7 +279,8 @@ final class NativePubFixture {
             {
               'version': entry.key,
               'pubspec': entry.value.manifest,
-              'archive_url': '$url/packages/${path[2]}-${entry.key}.tar.gz',
+              'archive_url':
+                  '$url/packages/${path[2]}-${entry.key}.tar.gz$archiveQuery',
               'archive_sha256': Sha256.hex(entry.value.bytes),
             },
         ];

@@ -1,7 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/native/dart/archive_replay.dart';
+import 'package:rk/src/native/dart/package_archive.dart';
 import 'package:rk/src/native/dart/resolution_graph.dart';
+import 'package:rk/src/native/package_archive.dart';
 import 'package:rk/src/transforms/digest.dart';
 import 'package:test/test.dart';
 
@@ -71,12 +75,26 @@ void main() {
   test(
     'shadow native solve backtracks and original-source replay freezes exact archive inputs',
     () async {
+      final longPath = 'lib/${'long_segment/' * 12}été_雪.dart';
       final core = origin.package(
         'core',
         'rk_fixture_core',
         '0.2.0',
         sdk: '^3.0.0',
+        extra: {
+          longPath: 'const longValue = 43;\n',
+          'tool/worker': 'executable\n',
+        },
       );
+      if (!Platform.isWindows) {
+        expect(
+          (await Process.run('chmod', [
+            '755',
+            '${core.path}/tool/worker',
+          ])).exitCode,
+          0,
+        );
+      }
       final coreArchive = await pack(core, 'core');
       origin.host(origin.package('old-core', 'rk_fixture_core', '0.1.0'));
       discovery.discover(core, sources());
@@ -121,22 +139,46 @@ void main() {
         },
       );
       final manifest = File('${consumer.path}/pubspec.yaml').readAsStringSync();
-      await preload(consumer, coreArchive);
-      await preload(
-        consumer,
-        origin.hostedArchive('rk_fixture_bridge', '1.0.0'),
-      );
-      expectOk(await get(consumer, replay: true));
       final expectedGraph = discovery.graph(
         shadow,
         sources: {discovery.url: origin.url},
       );
-      expect(origin.graph(consumer), expectedGraph);
       final nativeDiscovery = DartResolutionGraph.read(
         shadow,
         registryAliases: {discovery.url: origin.url},
       );
-      final replayGraph = DartResolutionGraph.read(consumer);
+      final nativeCore = await NativePackageArchive.read(coreArchive);
+      final nativeBridge = await NativePackageArchive.read(
+        origin.hostedArchive('rk_fixture_bridge', '1.0.0'),
+      );
+      final replay = await DartArchiveReplay.prepare(
+        root: consumer,
+        tools: const SystemTools(),
+        compiler: origin.dart,
+        defaultRegistry: origin.url,
+        discovered: nativeDiscovery,
+        archives: [
+          DartReplayArchive(
+            registry: origin.url,
+            archive: nativeCore,
+            discoveredManifest: DartPackageManifest.parse(
+              File('${core.path}/pubspec.yaml').readAsStringSync(),
+            ),
+          ),
+          DartReplayArchive(
+            registry: origin.url,
+            archive: nativeBridge,
+            discoveredManifest: DartPackageManifest.parse(
+              File(
+                '${origin.directory.path}/bridge1.0.0/pubspec.yaml',
+              ).readAsStringSync(),
+            ),
+          ),
+        ],
+      );
+      addTearDown(replay.close);
+      expect(origin.graph(consumer), expectedGraph);
+      final replayGraph = replay.graph;
       replayGraph.requireSameSelection(nativeDiscovery);
       replayGraph.requireArchives({
         'rk_fixture_core': Sha256.hex(coreArchive.readAsBytesSync()),
@@ -153,13 +195,14 @@ void main() {
       expect((packages['rk_fixture_bridge'] as Map)['version'], '1.0.0');
 
       final archive = File('${origin.directory.path}/consumer.tar.gz');
-      final packed = await origin.run(consumer, [
+      final packed = await replay.run([
         'pub',
         'publish',
         '--to-archive',
         archive.path,
-      ], cache: 'replay');
-      expectOk(packed);
+      ]);
+      expect(packed.ok, isTrue, reason: packed.transcript);
+      replay.verify();
       DartResolutionGraph.read(consumer).requireSameArtifacts(replayGraph);
       DartResolutionGraph.read(consumer).requireArchives({
         'rk_fixture_core': Sha256.hex(coreArchive.readAsBytesSync()),
@@ -183,15 +226,15 @@ void main() {
         '${consumer.path}/.dart_tool/package_config.json',
       ).readAsStringSync();
       expect(config, isNot(contains(discovery.directory.path)));
-      expectOk(
-        await origin.run(consumer, [
-          'compile',
-          'exe',
-          'bin/main.dart',
-          '-o',
-          '${origin.directory.path}/consumer-bin',
-        ], cache: 'replay'),
-      );
+      final compiled = await replay.run([
+        'compile',
+        'exe',
+        'bin/main.dart',
+        '-o',
+        '${origin.directory.path}/consumer-bin',
+      ]);
+      expect(compiled.ok, isTrue, reason: compiled.transcript);
+      replay.verify();
       expect(
         (await Process.run('${origin.directory.path}/consumer-bin', [])).stdout,
         '42\n',
@@ -229,6 +272,52 @@ void main() {
           })}\n',
         );
       }
+      // Native preload is verified against the approved inventory, including
+      // long Unicode filenames and executable modes. A mutable cache cannot
+      // silently replace those inputs after the solve.
+      final configFile = File(
+        '${consumer.path}/.dart_tool/package_config.json',
+      );
+      final nativePackages =
+          (jsonDecode(configFile.readAsStringSync()) as Map)['packages']
+              as List;
+      final coreConfig = nativePackages.cast<Map>().singleWhere(
+        (p) => p['name'] == 'rk_fixture_core',
+      );
+      final installed = Directory.fromUri(
+        configFile.uri.resolve(coreConfig['rootUri'] as String),
+      );
+      final payload = File('${installed.path}/$longPath');
+      expect(payload.readAsStringSync(), 'const longValue = 43;\n');
+      payload.writeAsStringSync('tampered');
+      expect(replay.verify, throwsFormatException);
+      payload.writeAsStringSync('const longValue = 43;\n');
+      replay.verify();
+      if (!Platform.isWindows) {
+        await Process.run('chmod', ['644', '${installed.path}/tool/worker']);
+        expect(replay.verify, throwsFormatException);
+        await Process.run('chmod', ['755', '${installed.path}/tool/worker']);
+      }
+      File('${installed.path}/undeclared.dart').writeAsStringSync('extra');
+      expect(replay.verify, throwsFormatException);
+      File('${installed.path}/undeclared.dart').deleteSync();
+      replay.verify();
+      final originalConfig = configFile.readAsStringSync();
+      final alteredConfig = jsonDecode(originalConfig) as Map;
+      ((alteredConfig['packages'] as List).first as Map)['packageUri'] =
+          'undeclared/';
+      configFile.writeAsStringSync(jsonEncode(alteredConfig));
+      expect(replay.verify, throwsStateError);
+      configFile.writeAsStringSync(originalConfig);
+      final rootManifest = File('${consumer.path}/pubspec.yaml');
+      rootManifest.writeAsStringSync('$manifest\ncustom: changed\n');
+      expect(replay.verify, throwsStateError);
+      rootManifest.writeAsStringSync(manifest);
+      replay.verify();
+      final owned = replay.directory;
+      replay.close();
+      expect(owned.existsSync(), isFalse);
+      expect(() => replay.run(['pub', 'get']), throwsStateError);
     },
     timeout: const Timeout(Duration(minutes: 2)),
   );
