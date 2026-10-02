@@ -1,8 +1,8 @@
 # Dependency-aware repository staging
 
-Status: revision 3, reviewed and ready to start the native-proof implementation
-slice. Integration remains gated on that proof. Planning only; no implementation
-or publication has occurred.
+Status: revision 4. Native mechanism proof implemented and measured on Dart
+3.10.4, 3.12.2 and stable 3.13.5. Both evidence reviewers approved starting requirements/binding implementation.
+No production release behavior changed and no publication occurred.
 
 Baseline: RK main `6e7bb165c8027d8fc5e5293b45432850cf3229f8`, inspected 2026-10-02.
 
@@ -224,11 +224,39 @@ Evaluate the smallest sound mechanism against the cases below:
   registry/source identities in bindings; never redirect publication, forward
   credentials to the wrong destination, or leave global cache/config changes.
 
-The probe must choose one mechanism, document measured behavior and retained
-fixtures, and revise this section before proceeding to integration. If neither
-mechanism meets the constraints, report a design blocker rather than weakening
-the staging claim. This is a technical implementation gate, not a request for
-new product policy or permission.
+The selected mechanism is a **hosted discovery solve followed by native archive
+cache replay**. See [measured native evidence](dependency-staging-native-proof.md).
+Workspaces were rejected because they shadow another registry's same-name
+package and require a newer language lower bound than an otherwise valid
+consumer may declare. Managed runtime overrides are unnecessary.
+
+1. In a private discovery environment, map each canonical original registry to
+   a distinct loopback registry. Rewrite only hosted source locations in the
+   shadow root and registry metadata; preserve native constraints and all other
+   resolution-affecting fields. Default dependencies always refer to the
+   original default registry, not their containing package's registry.
+2. Let Pub solve against manifest-only discovery payloads with examples and
+   precompilation disabled. These payloads are metadata, never stage artifacts.
+   Once selected, a candidate is constrained by restricting its exact source/name
+   listing to the selected version. No override bypasses inbound constraints.
+   Candidate selection must only include compatible reachable candidates; retain
+   native hosted fallback when a candidate is incompatible or outside named scope.
+3. Read native selected identities and dependency edges before producer ordering.
+   After producers complete, verify real archive manifests against the original
+   discovery metadata. Never permit an unplanned edge to appear during production.
+4. Native `dart pub cache preload` installs the exact verified archives into an
+   empty private cache under each **original** registry identity. Resolve the
+   unchanged consumer manifest with `pub get --offline`, using only these frozen
+   versions. Native Pub rechecks original source/version/SDK requirements.
+5. Native `pub publish --to-archive` and compilation use that resolution. Verify
+   the original-source identities, versions, dependency graph and hashes still
+   agree afterward. Only the justified dev-helper exception uses managed overrides.
+
+The dependency plan records discovery metadata hashes separately from archive
+hashes. Loopback URLs and temporary payload hashes do not become package identity
+or authoritative artifact evidence. Production still needs guarded extraction,
+bounded metadata fetching, source mapping, graph comparison and receipt binding;
+the fixture helper is not a production registry implementation.
 
 Validate the actual package payload and the selected dependency graph. Pub hints
 and warnings retain their normal meaning; Pub can report analyzer errors as
@@ -253,8 +281,9 @@ Preserve the existing dev-only workspace-helper path: a helper used exclusively
 for development may come from a receipt-bound source snapshot even when nothing
 publishes it. It is labeled development evidence and can never satisfy a runtime
 artifact requirement. This preserves the common library dev-depends-on-test-helper
-whose runtime dependency points back to the library. If the same helper is also
-runtime-reachable, the runtime artifact rule wins. A path/Git runtime dependency
+whose runtime dependency points back to the library. Check the helper's original version constraints and back-edges in native discovery before
+applying its managed override; Pub may ignore overridden helper back-edges. If
+the same helper is also runtime-reachable, the runtime artifact rule wins. A path/Git runtime dependency
 does not acquire this exception. SDK requirements remain native SDK inputs;
 they are never mistaken for similarly named local/hosted packages.
 
