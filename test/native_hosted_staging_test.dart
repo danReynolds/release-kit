@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:rk/src/native/dart/resolution_graph.dart';
 import 'package:rk/src/transforms/digest.dart';
 import 'package:test/test.dart';
 
@@ -131,6 +132,15 @@ void main() {
         sources: {discovery.url: origin.url},
       );
       expect(origin.graph(consumer), expectedGraph);
+      final nativeDiscovery = DartResolutionGraph.read(
+        shadow,
+        registryAliases: {discovery.url: origin.url},
+      );
+      final replayGraph = DartResolutionGraph.read(consumer);
+      replayGraph.requireSameSelection(nativeDiscovery);
+      replayGraph.requireArchives({
+        'rk_fixture_core': Sha256.hex(coreArchive.readAsBytesSync()),
+      });
       final before = origin.lock(consumer);
       final packages = before['packages'] as Map;
       final bound = packages['rk_fixture_core'] as Map;
@@ -150,6 +160,10 @@ void main() {
         archive.path,
       ], cache: 'replay');
       expectOk(packed);
+      DartResolutionGraph.read(consumer).requireSameArtifacts(replayGraph);
+      DartResolutionGraph.read(consumer).requireArchives({
+        'rk_fixture_core': Sha256.hex(coreArchive.readAsBytesSync()),
+      });
       expect(origin.graph(consumer), expectedGraph);
       expect(
         origin.lock(consumer),
@@ -184,6 +198,7 @@ void main() {
       );
       expect(origin.graph(consumer), expectedGraph);
       expect(origin.lock(consumer), before);
+      DartResolutionGraph.read(consumer).requireSameArtifacts(replayGraph);
       expect(
         File(
           '${consumer.path}/.dart_tool/package_config.json',
@@ -653,6 +668,15 @@ void main() {
       // A successful solve and identical coordinate set do not prove the planned
       // producer graph. Production must reject this full-graph mismatch.
       expect(actualGraph, isNot(equals(expectedGraph)));
+      expect(
+        () => DartResolutionGraph.read(consumer).requireSameSelection(
+          DartResolutionGraph.read(
+            shadow,
+            registryAliases: {discovery.url: origin.url},
+          ),
+        ),
+        throwsStateError,
+      );
     },
   );
 }

@@ -475,6 +475,10 @@ void main() {
               target == 'package:pub_semver/pub_semver.dart') {
             continue;
           }
+          if (entity.path == 'lib/src/native/dart/resolution_graph.dart' &&
+              target == 'package:yaml/yaml.dart') {
+            continue;
+          }
           foreign.add('${entity.path}: $target');
         }
       }
