@@ -80,7 +80,7 @@ object is:
 {
   source_only: true,
   destinations_inspected: false,
-  units: [{name, version, tag, requires_units[], nodes[]}]
+  units: [{name, version, tag, requires_units[], nodes[], dependency_candidates}]
 }
 ```
 
@@ -91,6 +91,21 @@ in `needs[]`. Optional typed context is `producer`, `project`, `platform`,
 `sourceSnapshot`, `targetStage`, `build`, `notarize`, `archive`,
 `buildAssets`, `completeStage`, `tag`, `publishRegistry`, `publishRelease`,
 and `publishHomebrew`. `buildAssets` runs a project's own declared build.
+
+`dependency_candidates` has `preparation` and `publication` lists, projected
+from the same native requirements. Each selection contains `requirements[]`,
+an optional configured `candidate`, and `resolution`. A candidate has native
+`package` identity (`ecosystem`, opaque credential-free `source`, `name`),
+`version`, provider `unit`, `project`, and `producer`. Each requirement records
+its native `context`, owning configured root `owner`, installation `slot`,
+immediate declaring `consumer`, `package`, opaque
+`constraint`, native `kind`, manifest `location`, and applicable `phases`.
+`resolution` is `candidate_requires_native_validation` or
+`native_resolution_required`. Neither is proof of an available registry version
+or staged artifact. An incompatible local candidate leaves hosted resolution
+pending; it does not force the dependent package to change version. Development
+requirements do not become publication edges. Native discovery may add
+transitive requirements when an acting command prepares the scope.
 
 Node ids and `needs[]` are the machine graph. `lane`, when present, is an
 opaque equality key scoped to one unit and phase: nodes with the same key are

@@ -1,8 +1,9 @@
 # Dependency-aware repository staging
 
-Status: revision 4. Native mechanism proof implemented and measured on Dart
-3.10.4, 3.12.2 and stable 3.13.5. Both evidence reviewers approved starting requirements/binding implementation.
-No production release behavior changed and no publication occurred.
+Status: implementation in progress. The native mechanism proof and initial
+source-only native requirements/candidate projection are implemented and reviewed.
+Artifact binding, native preparation integration, repository execution and final
+Fleury qualification remain. No publication has occurred.
 
 Baseline: RK main `6e7bb165c8027d8fc5e5293b45432850cf3229f8`, inspected 2026-10-02.
 
@@ -518,3 +519,21 @@ start the native-proof slice; no new blockers or further planning changes.
 Both require the native mechanism evidence before integrating later slices.
 There are no unresolved product-policy questions; the remaining technical choice
 is deliberately the first implementation packet.
+
+
+## Implementation progress
+
+- Native mechanism proof: commit `664a7c1`. Nine chosen-mechanism native cases
+  passed on Dart 3.10.4, 3.12.2 and 3.13.5. Both reviewers approved the mechanism.
+- Source facts and selection: shared native identity/context/slot/phase model,
+  conjunctive candidate compatibility, independent hosted fallback, Pub-native
+  constraints, explicit hosted-source/SDK distinction, and source-only candidate
+  reporting. Checklist edges now consume the same publication projection.
+  Native constraints remain inside the Dart adapter boundary.
+- Resolution ownership is explicit: a transitive declaring package retains its
+  provenance, while the enclosing configured root owns preparation/publication
+  obligations. This must be exercised end-to-end when native discovery connects.
+- Remaining review requirements: frozen real bindings rather than candidate
+  selections authorize receipt inputs; full native graph/manifest agreement;
+  dev-helper original/back-edge constraints; bounded isolated source discovery;
+  importer provenance, safe extraction, stage lookup/reuse and recovery.

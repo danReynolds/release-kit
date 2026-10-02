@@ -1,45 +1,92 @@
+import '../native/dart/dependencies.dart';
 import 'diagnostic.dart';
+import 'native_dependencies.dart';
 import 'publish_target.dart';
 import 'resolve.dart';
 import 'version.dart';
 
-/// The repository's Dart package dependency graph.
+/// Source-only dependency facts and candidate projections for this repository.
 ///
 /// One instance lives on [Resolution.dependencyPlan] — the single source of
-/// project publication order, cross-unit prerequisites, and repository
-/// release order. Diagnostics are the refusal signal: on a cycle or a bad
-/// constraint the returned order is best-effort so non-refusing readers
-/// (status) still describe every step, and acting sinks refuse on the
-/// problems. Destination state stays out: the checklist and inspector
-/// decide what work remains after this plan.
+/// project publication order, cross-unit prerequisites, and repository order.
+/// Native discovery will validate candidates and add transitive facts before
+/// preparation. Incompatible local candidates remain unresolved hosted
+/// requirements. Destination state stays out of this source-only projection.
 final class ReleaseDependencyPlan {
-  ReleaseDependencyPlan(this.resolution)
-    : _firstParty = {
-        for (final project in resolution.allProjects) project.name: project,
-      };
+  ReleaseDependencyPlan(this.resolution);
 
   final Resolution resolution;
-  final Map<String, ResolvedProject> _firstParty;
+
+  /// Native source facts; no registry/cache/compiler access. Only hosted
+  /// package requirements participate in configured provider selection.
+  List<NativeRequirement> requirements(
+    ResolvedUnit unit,
+    Diagnostics diagnostics,
+  ) {
+    final result = <NativeRequirement>[];
+    for (final project in unit.projects) {
+      try {
+        result.addAll(
+          dartRequirements(
+            project,
+            publicPackage: project.publish.contains(PublishTarget.pubDev),
+          ),
+        );
+      } on InvalidNativeRequirement catch (error) {
+        diagnostics.report(
+          Diagnostic(
+            code: 'RK-DEP-002',
+            message:
+                'Pub cannot parse ${error.requirement.package.name} ${error.requirement.constraint} required by "${project.name}"',
+            source: error.requirement.location,
+            remedy:
+                'correct the native Pub version constraint in this manifest',
+            evidence: error.detail,
+          ),
+        );
+      }
+    }
+    return List.unmodifiable(result);
+  }
+
+  List<NativeCandidateSelection> selections(
+    ResolvedUnit unit,
+    Diagnostics diagnostics, {
+    required DependencyPhase phase,
+  }) => selectNativeCandidates(
+    requirements: requirements(unit, diagnostics),
+    candidates: [
+      for (final project in resolution.allProjects)
+        if (project.publish.contains(PublishTarget.pubDev))
+          dartCandidate(project),
+    ],
+    semantics: const DartDependencySemantics(),
+    phase: phase,
+  );
 
   /// Within [unit], a project that another depends on publishes first, so
-  /// the dependent resolves for consumers the moment it lands. Both
-  /// dependency kinds order publication.
+  /// the dependent resolves for consumers the moment it lands. Development
+  /// inputs do not become publication prerequisites.
   List<ResolvedProject> projects(ResolvedUnit unit, Diagnostics diagnostics) {
     assert(
       resolution.units.contains(unit),
       'the unit must belong to this plan\'s resolution',
     );
-    // Sibling edges resolve through the unit's own projects, not the
-    // repository map, so membership cannot be masked by a name elsewhere.
     final byName = {for (final project in unit.projects) project.name: project};
+    final selected = selections(
+      unit,
+      diagnostics,
+      phase: DependencyPhase.publication,
+    );
     final needs = {
       for (final project in unit.projects)
-        project: [
-          for (final name in [
-            ...project.pubspec.dependencies.keys,
-            ...project.pubspec.devDependencies.keys,
-          ])
-            if (byName[name] case final sibling?) sibling,
+        project: <ResolvedProject>[
+          for (final selection in selected)
+            if (selection.requirements.any(
+              (requirement) => requirement.owner == project.name,
+            ))
+              if (selection.candidate case final provider?)
+                if (provider.unit == unit.name) byName[provider.project]!,
         ],
     };
     return _ordered(
@@ -64,67 +111,30 @@ final class ReleaseDependencyPlan {
     ResolvedUnit unit,
     Diagnostics diagnostics,
   ) {
-    final result = <ExternalPrerequisite>[];
-    for (final project in unit.projects) {
-      // Both kinds: a development dependency orders publication within a
-      // unit, and the consumer resolve a release runs resolves them too, so
-      // a coordinated bump must be refused before the work rather than at
-      // publish.
-      final required = {
-        ...project.pubspec.dependencies,
-        ...project.pubspec.devDependencies,
-      };
-      required.forEach((name, dependency) {
-        final sibling = _firstParty[name];
-        if (sibling == null || // an ordinary third-party dependency
-            sibling.unitName == unit.name || // ordered within the unit
-            !sibling.publish.contains(PublishTarget.pubDev)) {
-          return;
-        }
-
-        final satisfied = dependency.satisfiedBy(sibling.version);
-        if (satisfied == false) {
-          diagnostics.add(
-            'RK-DEP-001',
-            '"${project.name}" requires $name ${dependency.constraint}, and '
-                'this repository releases $name at ${sibling.version}',
-            source: SourceLocation(project.pubspec.path, dependency.line),
-            remedy: 'align the constraint with the version being released',
-          );
-          return;
-        }
-        if (satisfied == null) {
-          // Not knowing is not the same as being satisfied. Treating it as
-          // satisfied would publish against a requirement rk never checked.
-          diagnostics.add(
-            'RK-DEP-002',
-            'rk cannot tell whether "${project.name}" accepts $name '
-                '${sibling.version}: it requires '
-                '${dependency.describeRequirement()}',
-            source: SourceLocation(project.pubspec.path, dependency.line),
-            remedy:
-                'first-party dependencies use an exact or caret version, '
-                'so rk can check the release against them',
-          );
-          return;
-        }
-
-        result.add(
-          ExternalPrerequisite(
-            dependent: project.name,
-            package: name,
-            version: sibling.version,
-            declaredBy: sibling.unitName,
-          ),
-        );
-      });
-    }
-    return result;
+    return [
+      for (final selection in selections(
+        unit,
+        diagnostics,
+        phase: DependencyPhase.publication,
+      ))
+        if (selection.candidate case final provider?)
+          if (provider.unit != unit.name)
+            for (final dependent
+                in selection.requirements
+                    .map((requirement) => requirement.owner)
+                    .toSet())
+              ExternalPrerequisite(
+                dependent: dependent,
+                package: provider.package.name,
+                version: Version.tryParse(provider.version)!,
+                declaredBy: provider.unit,
+              ),
+    ];
   }
 
   /// The repository's units in release order, dependencies first. An
-  /// unsatisfied prerequisite reports RK-DEP-001/002 and drops its edge, so
-  /// the order stays best-effort while the diagnostics refuse the release.
+  /// incompatible local candidate adds no edge: its original requirement is
+  /// left to native hosted resolution, without claiming a public version exists.
   List<ResolvedUnit> units(Diagnostics diagnostics) {
     final needs = {
       for (final unit in resolution.units)

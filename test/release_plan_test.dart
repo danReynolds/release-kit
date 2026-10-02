@@ -459,10 +459,8 @@ executables:
       },
     );
 
-    test(
-      'refuses a dependency constraint that excludes the planned version',
-      () {
-        const incompatible = '''
+    test('leaves an incompatible candidate to native hosted resolution', () {
+      const incompatible = '''
 schema = 2
 
 [release.core]
@@ -473,32 +471,39 @@ publish = ["pub.dev"]
 path = "packages/cli"
 publish = ["pub.dev"]
 ''';
-        final tree = MemorySourceTree({
-          'packages/core/pubspec.yaml': 'name: core\nversion: 2.0.0\n',
-          'packages/cli/pubspec.yaml': '''
+      final tree = MemorySourceTree({
+        'packages/core/pubspec.yaml': 'name: core\nversion: 2.0.0\n',
+        'packages/cli/pubspec.yaml': '''
 name: cli
 version: 1.0.0
 dependencies:
   core: ^1.0.0
 ''',
-        });
-        final resolution = _resolve(incompatible, tree);
-        final diagnostics = Diagnostics();
+      });
+      final resolution = _resolve(incompatible, tree);
+      final diagnostics = Diagnostics();
 
-        final plan = RepositoryReleasePlan.derive(
-          resolution: resolution,
-          repository: 'example/repository',
-          targets: TargetCatalog.builtIn(),
-          diagnostics: diagnostics,
-        );
+      final plan = RepositoryReleasePlan.derive(
+        resolution: resolution,
+        repository: 'example/repository',
+        targets: TargetCatalog.builtIn(),
+        diagnostics: diagnostics,
+      );
 
-        expect(plan, isNull);
-        expect(
-          diagnostics.found.map((item) => item.code),
-          contains('RK-DEP-001'),
-        );
-      },
-    );
+      expect(plan, isNotNull);
+      expect(diagnostics.found, isEmpty);
+      expect(plan!.units.last.requiresUnits, isEmpty);
+      final dependencyCandidates =
+          plan.units.last.toJson()['dependency_candidates'] as Map;
+      final selection =
+          (dependencyCandidates['publication'] as List).single as Map;
+      expect(selection['candidate'], isNull);
+      expect(selection['resolution'], 'native_resolution_required');
+      expect(
+        _render(plan, terminal: false, color: false),
+        contains('native dependency discovery pending'),
+      );
+    });
   });
 
   group('release plan rendering', () {

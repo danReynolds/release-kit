@@ -409,11 +409,12 @@ publish = ["pub.dev"]
           .map((s) => s.project)
           .toList();
 
-      expect(published, [
-        'fleury',
-        'fleury_test',
-        'fleury_widgets',
-      ], reason: 'declaration order was the reverse');
+      expect(
+        published,
+        ['fleury', 'fleury_widgets', 'fleury_test'],
+        reason:
+            'runtime providers publish first; development does not order publication',
+      );
     });
 
     test('a dependent names its sibling as a prerequisite', () {
@@ -516,9 +517,11 @@ dependencies:
       );
     });
 
-    test('a constraint the release cannot satisfy is refused', () {
-      final resolution = resolve(
-        '''
+    test(
+      'an incompatible local version leaves native hosted resolution pending',
+      () {
+        final resolution = resolve(
+          '''
 schema = 2
 
 [release.framework]
@@ -529,23 +532,25 @@ publish = ["pub.dev"]
 path = "packages/fleury_mcp"
 publish = ["pub.dev"]
 ''',
-        MemorySourceTree({
-          'packages/fleury/pubspec.yaml': 'name: fleury\nversion: 0.2.0\n',
-          'packages/fleury_mcp/pubspec.yaml': '''
+          MemorySourceTree({
+            'packages/fleury/pubspec.yaml': 'name: fleury\nversion: 0.2.0\n',
+            'packages/fleury_mcp/pubspec.yaml': '''
 name: fleury_mcp
 version: 0.1.0
 dependencies:
   fleury: ^0.1.0
 ''',
-        }),
-      );
+          }),
+        );
 
-      final diagnostics = Diagnostics();
-      ReleaseDependencyPlan(
-        resolution,
-      ).prerequisites(resolution.unit('mcp')!, diagnostics);
-      expect(diagnostics.found.single.code, 'RK-DEP-001');
-    });
+        final diagnostics = Diagnostics();
+        final prerequisites = ReleaseDependencyPlan(
+          resolution,
+        ).prerequisites(resolution.unit('mcp')!, diagnostics);
+        expect(prerequisites, isEmpty);
+        expect(diagnostics.found, isEmpty);
+      },
+    );
   });
 
   group("a project's own build", () {
@@ -737,7 +742,7 @@ publish = ["pub.dev"]
       expect(remedy, isNot(contains('gamma')));
     });
 
-    test('a devDependency edge appears on the publish step graph', () {
+    test('a devDependency does not become a publication prerequisite', () {
       final resolution = resolve(
         '''
 schema = 2
@@ -770,9 +775,7 @@ publish = ["pub.dev"]
 
       expect(diagnostics.found, isEmpty);
       final publish = checklist['tools/pub.dev/lib@1.0.0']!;
-      // The edge that ordered publication is recorded on the step, so a
-      // graph-driven consumer sees the same constraint the order obeys.
-      expect(publish.needs, contains('tools/pub.dev/lib_test@1.0.0'));
+      expect(publish.needs, isNot(contains('tools/pub.dev/lib_test@1.0.0')));
     });
   });
 }

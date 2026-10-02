@@ -87,8 +87,8 @@ version: 0.1.0
     });
   });
 
-  group('a constraint rk cannot evaluate is not treated as satisfied', () {
-    test('a range pin refuses instead of publishing unchecked', () {
+  group('native dependency constraint evaluation', () {
+    test('a native range pin selects a compatible candidate', () {
       final resolution = _resolve(
         '''
 schema = 2
@@ -113,10 +113,11 @@ dependencies:
       );
 
       final diagnostics = Diagnostics();
-      ReleaseDependencyPlan(
+      final prerequisites = ReleaseDependencyPlan(
         resolution,
       ).prerequisites(resolution.unit('mcp')!, diagnostics);
-      expect(diagnostics.found.single.code, 'RK-DEP-002');
+      expect(diagnostics.found, isEmpty);
+      expect(prerequisites.single.coordinate, 'pub.dev/fleury/0.2.0');
     });
 
     test('an exact pin is still evaluated', () {

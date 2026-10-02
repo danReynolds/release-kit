@@ -467,9 +467,11 @@ void main() {
             continue;
           }
           // Installation eligibility uses Pub's own SDK-constraint semantics.
-          // This exception is exact: publication, signing and the release
-          // engine still cannot import third-party version/UI/archive code.
-          if (entity.path == 'lib/src/targets/pub_dev/installation.dart' &&
+          // Native dependency compatibility also uses Pub semantics. Keep the
+          // exception at this exact native file, outside the shared engine.
+          if ((entity.path == 'lib/src/targets/pub_dev/installation.dart' ||
+                  entity.path ==
+                      'lib/src/native/dart/version_constraints.dart') &&
               target == 'package:pub_semver/pub_semver.dart') {
             continue;
           }
