@@ -9,6 +9,7 @@ import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/native_dependencies.dart';
+import 'package:rk/src/engine/native_stage_context.dart';
 import 'package:rk/src/engine/publish_target.dart';
 import 'package:rk/src/engine/release_stage.dart';
 import 'package:rk/src/engine/resolve.dart';
@@ -22,6 +23,7 @@ import 'package:rk/src/engine/targets.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/targets/target_module.dart';
+import 'package:rk/src/transforms/digest.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -35,9 +37,15 @@ void main() {
       final provider = f.stages(f.core);
       await f.complete(provider, 'provider payload');
       final imported = f.import(provider);
+      final external = f.external();
+      final context = f.context([f.binding(imported.use), external.binding]);
       final stage = f.stages.bindDependencies(
         f.app,
-        StageDependencies(imports: [imported]),
+        StageDependencies(
+          imports: [imported],
+          external: [external],
+          contexts: [context],
+        ),
       );
       final buffer = StringBuffer();
       final output = Output(sink: buffer.write, isTerminal: false);
@@ -81,6 +89,13 @@ void main() {
         prepare: (context) async {
           productions++;
           expect(context.contract.step.inputs, contains(imported.archive.path));
+          expect(context.contract.step.inputs, contains(external.archive.path));
+          expect(
+            File(
+              stage.directory.resolve(external.archive.path),
+            ).readAsStringSync(),
+            'published payload',
+          );
           expect(context.stage.inspect().validProgress, isTrue);
           expect(
             context.priorSteps.map((step) => step.name),
@@ -445,6 +460,179 @@ void main() {
       expect(() => StageDependencies.fromJson(json), throwsFormatException);
     }
   });
+
+  test(
+    'native context data is immutable and affects even an archive-free stage identity',
+    () {
+      final data = <String, Object?>{
+        'graph': <String, Object?>{'choice': 'original'},
+      };
+      final context = f.context([], native: data);
+      final before = StageDependencies(contexts: [context]);
+      final first = f.stages.bindDependencies(f.app, before);
+      (data['graph'] as Map)['choice'] = 'changed';
+      (context.native['graph'] as Map)['choice'] = 'mutated through getter';
+      expect((context.native['graph'] as Map)['choice'], 'original');
+      expect(before.isEmpty, isFalse);
+      expect(before.hasImports, isFalse);
+      final restored = StageDependencies.fromJson(before.toJson());
+      expect(
+        f.resolver().bindDependencies(f.app, restored).directory.identity.id,
+        first.directory.identity.id,
+      );
+      final changed = f.stages.bindDependencies(
+        f.app,
+        StageDependencies(contexts: [f.context([], native: data)]),
+      );
+      expect(changed.directory.identity.id, isNot(first.directory.identity.id));
+    },
+  );
+
+  test(
+    'external archive survives restore and rejects a self-consistent forged receipt',
+    () async {
+      final external = f.external();
+      final dependencies = StageDependencies(
+        external: [external],
+        contexts: [
+          f.context([external.binding]),
+        ],
+      );
+      final stage = f.stages.bindDependencies(f.app, dependencies);
+      await f.complete(stage, 'consumer');
+      final restored = f.resolver().bindDependencies(
+        f.app,
+        StageDependencies.fromJson(dependencies.toJson()),
+      );
+      expect(restored.directory.identity.id, stage.directory.identity.id);
+      expect(
+        restored.inspect().reusable,
+        isTrue,
+        reason: 'existing copies need no expired download handle',
+      );
+      _rewrite(stage, external.archive.path, 'forged external payload');
+      expect(restored.inspect().reusable, isFalse);
+    },
+  );
+
+  test(
+    'external bytes freeze before materialization and handles can be reacquired',
+    () async {
+      final bytes = utf8.encode('published payload');
+      final selected = f.external();
+      final input = ExternalStageDependency.fromBytes(
+        context: selected.context,
+        binding: selected.binding,
+        consumers: selected.consumers,
+        bytes: bytes,
+        expectedSha256: Sha256.hex(bytes),
+      );
+      bytes[0] = 0;
+      final dependencies = StageDependencies(
+        external: [input],
+        contexts: [
+          f.context([input.binding]),
+        ],
+      );
+      final restored = f.stages.bindDependencies(
+        f.app,
+        StageDependencies.fromJson(dependencies.toJson()),
+      );
+      final source = await f.start(restored);
+      expect(
+        () => restored.dependencies.materialize(restored.directory, source),
+        throwsStateError,
+      );
+      final rebound = f.stages.bindDependencies(f.app, dependencies);
+      expect(rebound.directory.identity.id, restored.directory.identity.id);
+      final imported = rebound.dependencies.materialize(
+        rebound.directory,
+        source,
+      );
+      rebound.writeProgress([source, imported]);
+      expect(
+        File(rebound.directory.resolve(input.archive.path)).readAsStringSync(),
+        'published payload',
+      );
+      expect(
+        () => ExternalStageDependency.fromBytes(
+          context: input.context,
+          binding: input.binding,
+          consumers: input.consumers,
+          bytes: [0],
+          expectedSha256: input.archive.sha256,
+        ),
+        throwsStateError,
+      );
+    },
+  );
+
+  test(
+    'native coverage rejects missing, extra, conflicting slots and wrong consumers',
+    () {
+      final external = f.external();
+      final context = f.context([external.binding]);
+      for (final build in <StageDependencies Function()>[
+        () => StageDependencies(contexts: [context]),
+        () =>
+            StageDependencies(external: [external], contexts: [f.context([])]),
+        () => StageDependencies(external: [external]),
+        () => StageDependencies(
+          external: [external, external],
+          contexts: [context],
+        ),
+        () => StageDependencies(
+          external: [external],
+          contexts: [context, context],
+        ),
+        () => StageDependencies(
+          external: [external],
+          contexts: [
+            f.context([external.binding], name: 'other'),
+          ],
+        ),
+        () => StageDependencies(
+          external: [external],
+          contexts: [
+            f.context([external.binding], consumers: ['unknown']),
+          ],
+        ),
+        () => StageDependencies(
+          external: [external],
+          contexts: [
+            f.context([
+              NativeStageBinding(
+                slot: external.binding.slot,
+                package: external.binding.package,
+                version: 'other-version',
+              ),
+            ]),
+          ],
+        ),
+      ]) {
+        expect(build, throwsArgumentError);
+      }
+      final wrongOwner = f.stages.bindDependencies(
+        f.app,
+        StageDependencies(
+          external: [external],
+          contexts: [
+            f.context([external.binding], owner: 'core'),
+          ],
+        ),
+      );
+      expect(() => wrongOwner.producerNames, throwsStateError);
+      final unknownConsumer = f.stages.bindDependencies(
+        f.app,
+        StageDependencies(
+          contexts: [
+            f.context([], consumers: ['unknown']),
+          ],
+        ),
+      );
+      expect(() => unknownConsumer.producerNames, throwsStateError);
+    },
+  );
 }
 
 void _rewrite(ReleaseStage stage, String path, String bytes) {
@@ -596,6 +784,48 @@ publish = ["pub.dev"]
     type: 'fixture-package',
   );
 
+  NativeStageBinding binding(NativeArtifactUse use) => NativeStageBinding(
+    slot: use.slot,
+    package: use.provider.package,
+    version: use.provider.version,
+    provider: use.provider,
+  );
+
+  NativeStageContext context(
+    List<NativeStageBinding> bindings, {
+    String name = 'app/hosted-bridge',
+    String owner = 'app',
+    List<String> consumers = const ['native:app'],
+    Map<String, Object?> native = const {'fixture': 'selected'},
+  }) => NativeStageContext(
+    context: name,
+    ecosystem: 'fixture',
+    owner: owner,
+    format: 1,
+    consumers: consumers,
+    bindings: bindings,
+    native: native,
+  );
+
+  ExternalStageDependency external() {
+    final bytes = utf8.encode('published payload');
+    return ExternalStageDependency.fromBytes(
+      context: 'app/hosted-bridge',
+      binding: NativeStageBinding(
+        slot: 'nested/remote-slot',
+        package: const NativePackage(
+          ecosystem: 'fixture',
+          source: 'remote-registry',
+          name: 'remote/package',
+        ),
+        version: 'release:published',
+      ),
+      consumers: ['native:app'],
+      bytes: bytes,
+      expectedSha256: Sha256.hex(bytes),
+    );
+  }
+
   Future<StageStep> start(ReleaseStage stage) async {
     final artifacts = await stage.materializeSource();
     final step = StageStep(
@@ -635,7 +865,7 @@ publish = ["pub.dev"]
 
   Future<void> finish(ReleaseStage stage, String bytes) async {
     final prior = StageReceiptStore(stage.directory).read()!.steps.toList();
-    if (stage.dependencies.imports.isNotEmpty) {
+    if (stage.dependencies.hasImports) {
       prior.add(stage.dependencies.materialize(stage.directory, prior.first));
       stage.writeProgress(prior);
     }

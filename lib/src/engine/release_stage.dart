@@ -231,16 +231,20 @@ class ReleaseStage {
   StageReceiptContract? _resolveContract() {
     if (!enforceUnitContract) return null;
     final local = localProducerContracts(unit);
-    dependencies.validateProducers(unit.name, [
-      ...targetContributions.map((contribution) => contribution.step),
-      ...local,
-    ]);
+    dependencies.validateProducers(
+      unit.name,
+      [
+        ...targetContributions.map((contribution) => contribution.step),
+        ...local,
+      ],
+      owners: {for (final project in unit.projects) project.name},
+    );
     return StageReceiptContract.forUnit(
       unit: unit,
       repository: repository,
       sourceRoot: sourceRoot,
       targetContributions: [
-        if (dependencies.imports.isNotEmpty) dependencies.contribution,
+        if (dependencies.hasImports) dependencies.contribution,
         for (final contribution in targetContributions)
           StageContributionContract(
             step: dependencies.decorate(contribution.step),

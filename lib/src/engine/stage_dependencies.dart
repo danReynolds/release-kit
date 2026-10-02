@@ -1,10 +1,12 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import '../transforms/digest.dart';
 import 'canonical_json.dart';
 import 'file_mode.dart';
 import 'native_dependencies.dart';
+import 'native_stage_context.dart';
 import 'release_stage.dart';
 import 'stage.dart';
 import 'stage_contract.dart';
@@ -284,6 +286,96 @@ final class ImportedStageDependency {
   }
 }
 
+/// An adapter-verified external archive. There is no provider stage or release
+/// obligation. The caller validates native source/integrity/manifest evidence
+/// first; core freezes exact immutable bytes and their consuming slot.
+final class ExternalStageDependency {
+  ExternalStageDependency._({
+    required this.context,
+    required this.binding,
+    required Iterable<String> consumers,
+    required this.archive,
+    Uint8List? bytes,
+  }) : consumers = List.unmodifiable(consumers.toSet().toList()..sort()),
+       _bytes = bytes {
+    if (context.isEmpty ||
+        this.consumers.isEmpty ||
+        binding.provider != null ||
+        archive.path !=
+            'dependencies/${_digest({'context': context, 'slot': binding.slot})}/archive' ||
+        archive.type != 'dependency-archive' ||
+        archive.mode != '0644') {
+      throw ArgumentError('invalid external native archive declaration');
+    }
+  }
+
+  factory ExternalStageDependency.fromBytes({
+    required String context,
+    required NativeStageBinding binding,
+    required Iterable<String> consumers,
+    required List<int> bytes,
+    required String expectedSha256,
+  }) {
+    final owned = Uint8List.fromList(bytes).asUnmodifiableView();
+    if (Sha256.hex(owned) != expectedSha256) {
+      throw StateError(
+        'external native archive differs from its authorized digest',
+      );
+    }
+    return ExternalStageDependency._(
+      context: context,
+      binding: binding,
+      consumers: consumers,
+      bytes: owned,
+      archive: StageArtifact(
+        path:
+            'dependencies/${_digest({'context': context, 'slot': binding.slot})}/archive',
+        type: 'dependency-archive',
+        mode: '0644',
+        size: owned.length,
+        sha256: expectedSha256,
+      ),
+    );
+  }
+
+  /// Structural restore only. Native source authorization must independently
+  /// validate the frozen coordinate and integrity before binding this plan.
+  factory ExternalStageDependency.fromJson(Object? value) {
+    final map = _map(value, {'context', 'binding', 'consumers', 'archive'});
+    return ExternalStageDependency._(
+      context: _string(map, 'context'),
+      binding: NativeStageBinding.fromJson(map['binding']),
+      consumers: _list(map, 'consumers').cast<String>(),
+      archive: StageArtifact.fromJson(map['archive']),
+    );
+  }
+  final String context;
+  final NativeStageBinding binding;
+  final List<String> consumers;
+  final StageArtifact archive;
+  final Uint8List? _bytes;
+  Map<String, Object?> toJson() => {
+    'context': context,
+    'binding': binding.toJson(),
+    'consumers': consumers,
+    'archive': archive.toJson(),
+  };
+
+  void materialize(StageDirectory destination) {
+    final bytes = _bytes;
+    if (bytes == null) {
+      throw StateError(
+        'external native archive is missing; reacquire its exact authorized bytes before retrying',
+      );
+    }
+    if (bytes.length != archive.size || Sha256.hex(bytes) != archive.sha256) {
+      throw StateError('external native archive changed before import');
+    }
+    destination.writeBytesAtomically(archive.path, bytes);
+    setFileModes({destination.resolve(archive.path): archive.mode});
+  }
+}
+
 /// Frozen private inputs for a unit. The declarations are part of its resolved
 /// plan and canonical contracts, not optional receipt evidence. Copies remain
 /// verifiable after their provider stage is removed.
@@ -291,9 +383,18 @@ final class StageDependencies {
   StageDependencies({
     Iterable<ImportedStageDependency> imports = const [],
     Iterable<LocalStageDependency> local = const [],
+    Iterable<ExternalStageDependency> external = const [],
+    Iterable<NativeStageContext> contexts = const [],
   }) : imports = List.unmodifiable(
          imports.toList()
            ..sort((a, b) => a.archive.path.compareTo(b.archive.path)),
+       ),
+       external = List.unmodifiable(
+         external.toList()
+           ..sort((a, b) => a.archive.path.compareTo(b.archive.path)),
+       ),
+       contexts = List.unmodifiable(
+         contexts.toList()..sort((a, b) => a.context.compareTo(b.context)),
        ),
        local = List.unmodifiable(
          local.toList()..sort(
@@ -303,11 +404,47 @@ final class StageDependencies {
          ),
        ) {
     final slots = <(String, String)>{};
-    for (final use in uses) {
+    for (final use in _allUses) {
       if (!slots.add((use.context, use.slot))) {
         throw ArgumentError(
           'duplicate dependency slot ${use.context}/${use.slot}',
         );
+      }
+    }
+    final byContext = {
+      for (final context in this.contexts) context.context: context,
+    };
+    if (byContext.length != this.contexts.length) {
+      throw ArgumentError('duplicate native resolution context');
+    }
+    if (this.external.isNotEmpty && this.contexts.isEmpty) {
+      throw ArgumentError(
+        'external archives require an authorized native context',
+      );
+    }
+    if (this.contexts.isNotEmpty) {
+      final declared = <(String, String)>{};
+      for (final context in this.contexts) {
+        for (final binding in context.bindings) {
+          declared.add((context.context, binding.slot));
+        }
+      }
+      if (declared.length != slots.length || !declared.containsAll(slots)) {
+        throw ArgumentError(
+          'native context archive coverage has missing or extra slots',
+        );
+      }
+      for (final use in _allUses) {
+        final context = byContext[use.context]!;
+        final binding = context.bindings.singleWhere(
+          (binding) => binding.slot == use.slot,
+        );
+        if (_digest(binding.toJson()) != _digest(use.binding.toJson()) ||
+            _digest(context.consumers) != _digest(use.consumers)) {
+          throw ArgumentError(
+            'native context does not authorize this archive identity or consumers',
+          );
+        }
       }
     }
   }
@@ -315,28 +452,95 @@ final class StageDependencies {
   static const importProducer = 'dependency-inputs';
   final List<ImportedStageDependency> imports;
   final List<LocalStageDependency> local;
+  final List<ExternalStageDependency> external;
+  final List<NativeStageContext> contexts;
 
   factory StageDependencies.fromJson(Object? value) {
-    final map = _map(value, {'imports', 'local'});
+    final map = _map(value, {
+      'imports',
+      'local',
+      if (value is Map && value.containsKey('external')) 'external',
+      if (value is Map && value.containsKey('contexts')) 'contexts',
+    });
     return StageDependencies(
       imports: _list(map, 'imports').map(ImportedStageDependency.fromJson),
       local: _list(map, 'local').map(LocalStageDependency.fromJson),
+      external: map.containsKey('external')
+          ? _list(map, 'external').map(ExternalStageDependency.fromJson)
+          : const [],
+      contexts: map.containsKey('contexts')
+          ? _list(map, 'contexts').map(NativeStageContext.fromJson)
+          : const [],
     );
   }
-  bool get isEmpty => imports.isEmpty && local.isEmpty;
+  bool get isEmpty =>
+      imports.isEmpty && local.isEmpty && external.isEmpty && contexts.isEmpty;
+  bool get hasImports => imports.isNotEmpty || external.isNotEmpty;
   Iterable<NativeArtifactUse> get uses => [
     ...imports.map((input) => input.use),
     ...local.map((input) => input.use),
   ];
 
+  Iterable<
+    ({
+      String context,
+      String slot,
+      List<String> consumers,
+      NativeStageBinding binding,
+    })
+  >
+  get _allUses sync* {
+    for (final use in uses) {
+      yield (
+        context: use.context,
+        slot: use.slot,
+        consumers: use.consumers,
+        binding: NativeStageBinding(
+          slot: use.slot,
+          package: use.provider.package,
+          version: use.provider.version,
+          provider: use.provider,
+        ),
+      );
+    }
+    for (final input in external) {
+      yield (
+        context: input.context,
+        slot: input.binding.slot,
+        consumers: input.consumers,
+        binding: input.binding,
+      );
+    }
+  }
+
   Map<String, Object?> toJson() => {
     'imports': [for (final input in imports) input.toJson()],
     'local': [for (final input in local) input.toJson()],
+    if (external.isNotEmpty)
+      'external': [for (final input in external) input.toJson()],
+    if (contexts.isNotEmpty)
+      'contexts': [for (final context in contexts) context.toJson()],
   };
 
-  void validateProducers(String unit, Iterable<StageStepContract> contracts) {
+  void validateProducers(
+    String unit,
+    Iterable<StageStepContract> contracts, {
+    Set<String>? owners,
+  }) {
     final byName = {for (final contract in contracts) contract.name: contract};
-    for (final use in uses) {
+    for (final context in contexts) {
+      if (owners != null && !owners.contains(context.owner)) {
+        throw StateError('native context owner is outside this release unit');
+      }
+      for (final consumer in context.consumers) {
+        if (!byName.containsKey(consumer)) {
+          throw StateError(
+            'native context names unknown consumer producer "$consumer"',
+          );
+        }
+      }
+    }
+    for (final use in _allUses) {
       for (final consumer in use.consumers) {
         if (!byName.containsKey(consumer)) {
           throw StateError(
@@ -373,6 +577,8 @@ final class StageDependencies {
         if (input.use.consumers.contains(contract.name)) input.archive.path,
       for (final input in local)
         if (input.use.consumers.contains(contract.name)) input.path,
+      for (final input in external)
+        if (input.consumers.contains(contract.name)) input.archive.path,
     },
     outputs: contract.outputs,
     validate: contract.validate,
@@ -411,6 +617,9 @@ final class StageDependencies {
   );
 
   Iterable<StageArtifact> get _outputs sync* {
+    for (final input in external) {
+      yield input.archive;
+    }
     for (final input in imports) {
       yield input.archive;
       yield input.proof;
@@ -422,6 +631,9 @@ final class StageDependencies {
       throw ArgumentError('dependency imports need the source snapshot');
     }
     for (final input in imports) {
+      input.materialize(stage);
+    }
+    for (final input in external) {
       input.materialize(stage);
     }
     return StageStep(

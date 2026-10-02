@@ -230,7 +230,7 @@ final class ReleaseStageCoordinator {
         targetStage.contract.step.name: targetStage,
     };
     final outputsByProducer = <String, Set<String>>{
-      if (stage.dependencies.imports.isNotEmpty)
+      if (stage.dependencies.hasImports)
         StageDependencies.importProducer: stage
             .dependencies
             .contribution
@@ -390,8 +390,7 @@ final class ReleaseStageCoordinator {
     final runnable = {
       ...producersByName.keys,
       ...targetStagesByName.keys,
-      if (stage.dependencies.imports.isNotEmpty)
-        StageDependencies.importProducer,
+      if (stage.dependencies.hasImports) StageDependencies.importProducer,
     };
     final graph = DependencyGraph<String>(
       stage.producerNames,

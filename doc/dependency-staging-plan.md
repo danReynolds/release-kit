@@ -587,3 +587,14 @@ is deliberately the first implementation packet.
   Required next work remains native context/hosted archive binding and lookup,
   dev-helper authorization, shared Pub/binary integration, repository preparation
   and publication gates, full-suite verification, and four-package Fleury dogfood.
+- Core now binds opaque versioned native contexts and external archive inputs
+  alongside first-party imports and same-unit outputs. Context IDs are unique,
+  complete slot/binding/consumer coverage is checked, and payloads/bytes are
+  deeply frozen. Context-only resolutions affect stage identity. External input
+  metadata is part of canonical producer contracts; restored copies do not need
+  live download handles, while reacquiring handles preserves the identity.
+  The architecture reviewer approved this bounded extension; 302 focused
+  stage/plan/coordinator/Pub/phase regressions pass with clean analysis. Structural
+  deserialization still requires independent adapter source authorization and
+  semantic owner-to-producer validation before adoption. This is not the
+  source/intent lookup or automatic command integration.
