@@ -81,6 +81,15 @@ executables:
       targets.map((target) => target.step.id),
       checklist.steps.where((step) => step.isPublic).map((step) => step.id),
     );
+    expect(
+      {for (final target in targets) target.kind: target.packageProducer},
+      {
+        'gitTag': null,
+        'pubDev': 'pub-archive:example_tool',
+        'githubRelease': null,
+        'homebrew': null,
+      },
+    );
     for (final target in targets) {
       expect(
         catalog.moduleForStep(target.step),
@@ -386,6 +395,17 @@ version: 1.2.3
     );
 
     final staged = catalog.stages(unit: unit, targets: pubTargets);
+
+    expect(
+      {
+        for (final target in pubTargets)
+          target.coordinate: target.packageProducer,
+      },
+      {'a_app': 'pub-archive:a_app', 'z_core': 'pub-archive:z_core'},
+    );
+    for (final binding in staged) {
+      expect(binding.target.packageProducer, binding.contract.step.name);
+    }
 
     expect(
       staged.map((binding) => binding.target.coordinate),

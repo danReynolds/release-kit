@@ -56,6 +56,20 @@ class Inspector {
   /// The one closed target catalog shared by status and release.
   final TargetCatalog targets;
 
+  /// A call-local view of the same public readers using observed stage bytes.
+  /// This does not install the candidate into a release-stage resolver or grant
+  /// permission to publish it. Status supplies its locally checked snapshot.
+  Inspector forStages(ReleaseStage Function(ResolvedUnit unit) stageFor) =>
+      Inspector(
+        registry: registry,
+        git: git,
+        pubDev: pubDev,
+        tools: tools,
+        repository: repository,
+        stageFor: stageFor,
+        targets: targets,
+      );
+
   /// The read-only dependencies every target receives.
   TargetReadContext get targetReads => TargetReadContext(
     registry: registry,

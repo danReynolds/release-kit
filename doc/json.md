@@ -11,8 +11,8 @@ supports, end to end:
 ```
 rk plan [unit] --json                   configured topology; source-only
 rk status <unit> --json                 where things stand; read-only
-rk stage [unit] --json                  exact stage; name it with several units
-rk status <unit> --json                 confirm: staged, good to release
+rk stage [unit] --json                  prepare all units, or one named unit
+rk status <unit> --json                 inspect local stage and public state
 rk release [unit] --yes --json          publish and read back without prompting
 rk release [unit] --yes --json          idempotent: already-published, no second act
 rk target list --json                    installed rk's static release choices
@@ -66,6 +66,16 @@ Successful stage-only and local-only releases include `stage id` and
 `stage path` in the `completeStage` step's `evidence`. The path is relative to
 the repository root. These storage details stay out of the human success
 summary; `next[]` contains the publish command when publication is configured.
+
+Status uses read-only intent lookup to recognize a saved dependency-bound stage.
+Its `completeStage` evidence includes the actual `stage id`, `stage path`, and
+`native authorization: "not performed by status"`. An exact local stage verdict
+means the current source/producer contracts and recorded bytes validate locally;
+stage or release must still authorize the frozen native dependency graph before
+adopting it. Status performs no dependency solve, input recovery, producer work,
+index write or resolver adoption. An incomplete saved stage reports only its
+recorded local progress. Ambiguous or unreadable saved work is reported as a
+problem, never as permission to solve again.
 
 ## Release plan
 

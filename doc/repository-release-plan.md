@@ -3,10 +3,11 @@
 Status: reviewed implementation plan for the pre-alpha schema-2 CLI.
 
 Reviewed follow-up: [Dependency-aware repository staging](dependency-staging-plan.md)
-plans full private preparation across units, compatible staged dependency inputs,
-and separate public prerequisites. That extension is not implemented yet; this
-document records the earlier single-unit staging behavior. The follow-up also
-records the current authorization baseline and its planned preparation boundary.
+extends private preparation across units with compatible staged dependency inputs
+and separate public prerequisites. Repository staging is implemented; publication
+integration remains in progress. This document records the earlier single-unit
+staging behavior and authorization baseline; use the follow-up for current scope
+and qualification evidence.
 
 ## Outcome
 

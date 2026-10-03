@@ -1,9 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:rk/src/commands/status.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
+import 'package:rk/src/engine/inspect.dart';
 import 'package:rk/src/engine/native_dependencies.dart';
 import 'package:rk/src/engine/native_stage_authorization.dart';
 import 'package:rk/src/engine/native_stage_context.dart';
@@ -13,12 +15,15 @@ import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage_contract.dart';
 import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/engine/stage_intent.dart';
+import 'package:rk/src/engine/stage_lookup.dart';
 import 'package:rk/src/engine/stage_dependencies.dart';
 import 'package:rk/src/engine/stage_plan.dart';
 import 'package:rk/src/engine/stage_proof.dart';
 import 'package:rk/src/engine/stage_receipt.dart';
 import 'package:rk/src/engine/stage_restoration.dart';
 import 'package:rk/src/engine/stage_source.dart';
+import 'package:rk/src/engine/verdict.dart';
+import 'package:rk/src/output/output.dart';
 import 'package:rk/src/transforms/digest.dart';
 import 'package:test/test.dart';
 
@@ -75,6 +80,757 @@ void main() {
     expect(stage.directory.fingerprint(), before);
     expect(f.authority.authorized, ['app']);
     expect(f.authority.retained, ['app']);
+  });
+
+  group('local observation', () {
+    test('absence stays read-only and does not create the store', () async {
+      final current = f.resolver();
+      final cached = current(f.unit('app'));
+      final observed = await (await f.restorer(current)).observeLocal('app');
+      expect(observed.lookup.kind, StageLookupKind.absent);
+      expect(observed.locallyVerified, isFalse);
+      expect(observed.candidate, isNull);
+      expect(observed.inspection, isNull);
+      expect(observed.problem, isNull);
+      expect(observed.nativeAuthorizationDeferred, isFalse);
+      expect(current(f.unit('app')), same(cached));
+      expect(f.authority.authorized, isEmpty);
+      expect(f.authority.retained, isEmpty);
+      expect(f.authority.recovered, isEmpty);
+      expect(Directory('${f.root.path}/.rk').existsSync(), isFalse);
+    });
+
+    test(
+      'bounded lookup remains inconclusive without inspecting a candidate',
+      () async {
+        for (var i = 0; i < 129; i++) {
+          Directory(
+            '${f.root.path}/.rk/work/stages/${i.toRadixString(16).padLeft(64, '0')}',
+          ).createSync(recursive: true);
+        }
+        final before = _storeState(f.root);
+        final observed = await (await f.restorer(
+          f.resolver(),
+        )).observeLocal('app');
+        expect(observed.lookup.kind, StageLookupKind.inconclusive);
+        expect(observed.locallyVerified, isFalse);
+        expect(observed.candidate, isNull);
+        expect(observed.problem, isNotNull);
+        expect(_storeState(f.root), before);
+        expect(f.authority.authorized, isEmpty);
+      },
+    );
+
+    test(
+      'missing native context is not implicitly authorized by local checks',
+      () async {
+        final unit = f.unit('app');
+        final stage = f.stages.bindDependencies(
+          unit,
+          StageDependencies(),
+          intent: f.intent(f.stages, unit),
+        );
+        await f.complete(stage);
+        f.authority.requireContext = true;
+        final current = f.resolver();
+        final cached = current(unit);
+        final restore = await f.restorer(current);
+        final observed = await restore.observeLocal('app');
+        expect(observed.locallyVerified, isTrue);
+        expect(observed.nativeAuthorizationDeferred, isFalse);
+        expect(f.authority.authorized, isEmpty);
+        expect(current(unit), same(cached));
+        await expectLater(restore.restore('app'), throwsStateError);
+        expect(f.authority.authorized, ['app']);
+        expect(current(unit), same(cached));
+      },
+    );
+
+    test(
+      'complete copied proof needs no ancestor directories or adoption',
+      () async {
+        final a = f.bind('core');
+        await f.complete(a);
+        final b = f.bind('app', imports: [f.import(a, 'app')]);
+        await f.complete(b);
+        final c = f.bind(
+          'third',
+          imports: [f.import(b, 'third')],
+          external: [f.external('third')],
+        );
+        await f.complete(c);
+        Directory(a.directory.path).deleteSync(recursive: true);
+        Directory(b.directory.path).deleteSync(recursive: true);
+        final before = _storeState(f.root);
+        final current = f.resolver();
+        final cached = current(f.unit('third'));
+        final observed = await (await f.restorer(
+          current,
+        )).observeLocal('third');
+        expect(observed.lookup.kind, StageLookupKind.found);
+        expect(observed.locallyVerified, isTrue);
+        expect(observed.problem, isNull);
+        expect(observed.inspection!.reusable, isTrue);
+        expect(
+          observed.candidate!.directory.identity.id,
+          c.directory.identity.id,
+        );
+        expect(observed.nativeAuthorizationDeferred, isTrue);
+        expect(current(f.unit('third')), same(cached));
+        expect(_storeState(f.root), before);
+        expect(f.authority.authorized, isEmpty);
+        expect(f.authority.retained, isEmpty);
+        expect(f.authority.recovered, isEmpty);
+      },
+    );
+
+    for (final progress in [
+      'header',
+      'source-residue',
+      'source-progress',
+      'pending-output',
+    ]) {
+      test('$progress ignores unavailable pending providers', () async {
+        final provider = f.bind('core');
+        await f.complete(provider);
+        final stage = f.bind(
+          'app',
+          imports: [f.import(provider, 'app')],
+          external: [f.external('app')],
+        );
+        f.header(stage);
+        if (progress == 'source-residue') {
+          stage.directory.writeBytesAtomically(
+            'source/app/pubspec.yaml',
+            utf8.encode('untrusted source copy'),
+          );
+        } else if (progress != 'header') {
+          final outputs = await stage.materializeSource();
+          stage.writeProgress([
+            StageStep(
+              name: 'source-snapshot',
+              inputs: [
+                StageInput.commit(stage.directory.identity),
+                StageInput.tree(stage.directory.identity),
+                StageInput.plan(stage.directory.identity),
+              ],
+              outputs: outputs,
+              evidence: {'commit': f.git.head, 'tree': f.git.headTree},
+            ),
+          ]);
+          if (progress == 'pending-output') {
+            stage.directory.writeBytesAtomically(
+              'app.pkg',
+              utf8.encode('partial'),
+            );
+          }
+        }
+        Directory(provider.directory.path).deleteSync(recursive: true);
+        final before = _storeState(f.root);
+        final current = f.resolver();
+        final cached = current(f.unit('app'));
+        final observed = await (await f.restorer(current)).observeLocal('app');
+        expect(observed.lookup.kind, StageLookupKind.found);
+        expect(observed.locallyVerified, isTrue);
+        expect(observed.inspection!.incomplete, isTrue);
+        expect(observed.inspection!.reusable, isFalse);
+        expect(observed.nativeAuthorizationDeferred, isTrue);
+        expect(
+          observed.candidate!.directory.identity.id,
+          stage.directory.identity.id,
+        );
+        expect(
+          observed.inspection!.receipt!.steps.map((step) => step.name),
+          progress == 'source-progress' || progress == 'pending-output'
+              ? ['source-snapshot']
+              : isEmpty,
+        );
+        expect(current(f.unit('app')), same(cached));
+        expect(_storeState(f.root), before);
+        expect(f.authority.authorized, isEmpty);
+        expect(f.authority.retained, isEmpty);
+        expect(f.authority.recovered, isEmpty);
+      });
+    }
+
+    for (final corrupt in ['archive', 'proof', 'external', 'unknown-residue']) {
+      test('$corrupt is not recognized or repaired', () async {
+        final provider = f.bind('core');
+        await f.complete(provider);
+        final imported = f.import(provider, 'app');
+        final external = f.external('app');
+        final stage = f.bind('app', imports: [imported], external: [external]);
+        await f.complete(stage);
+        final path = switch (corrupt) {
+          'proof' => imported.proof.path,
+          'external' => external.archive.path,
+          'unknown-residue' => 'untracked.tmp',
+          _ => 'app.pkg',
+        };
+        File(stage.directory.resolve(path)).writeAsStringSync('unexpected');
+        final before = _storeState(f.root);
+        final current = f.resolver();
+        final cached = current(f.unit('app'));
+        final observed = await (await f.restorer(current)).observeLocal('app');
+        expect(observed.lookup.kind, StageLookupKind.found);
+        expect(observed.locallyVerified, isFalse);
+        expect(observed.candidate, isNull);
+        expect(observed.problem, isNotNull);
+        expect(observed.inspection!.reusable, isFalse);
+        expect(current(f.unit('app')), same(cached));
+        expect(_storeState(f.root), before);
+        expect(f.authority.authorized, isEmpty);
+        expect(f.authority.recovered, isEmpty);
+      });
+    }
+
+    for (final lookup in ['ambiguous', 'unreadable', 'old-schema']) {
+      test('$lookup is not collapsed into absence', () async {
+        final stage = f.bind('app');
+        await f.complete(stage);
+        if (lookup == 'ambiguous') {
+          await f.complete(f.bind('app', native: 'other'));
+        } else if (lookup == 'unreadable') {
+          File(stage.directory.resolve('stage.json')).writeAsStringSync('{}');
+        } else {
+          final receipt = jsonDecode(stage.requireReceipt().encode()) as Map;
+          receipt['schema'] = stageSchemaVersion - 1;
+          File(
+            stage.directory.resolve('stage.json'),
+          ).writeAsStringSync(jsonEncode(receipt));
+        }
+        final before = _storeState(f.root);
+        final observed = await (await f.restorer(
+          f.resolver(),
+        )).observeLocal('app');
+        expect(observed.lookup.kind, isNot(StageLookupKind.absent));
+        expect(observed.lookup.kind, isNot(StageLookupKind.found));
+        expect(observed.locallyVerified, isFalse);
+        expect(observed.candidate, isNull);
+        expect(observed.problem, isNotNull);
+        expect(_storeState(f.root), before);
+        expect(f.authority.authorized, isEmpty);
+      });
+    }
+
+    for (final limit in ['stages', 'edges', 'depth', 'bytes', 'proof-reads']) {
+      test('copied closure respects $limit limits', () async {
+        final a = f.bind('core');
+        await f.complete(a);
+        final b = f.bind('app', imports: [f.import(a, 'app')]);
+        await f.complete(b);
+        final c = f.bind('third', imports: [f.import(b, 'third')]);
+        await f.complete(c);
+        final limits = switch (limit) {
+          'stages' => const StageProofLimits(stages: 2),
+          'edges' => const StageProofLimits(edges: 1),
+          'depth' => const StageProofLimits(depth: 2),
+          'bytes' => StageProofLimits(
+            bytes: utf8.encode(c.requireReceipt().encode()).length,
+          ),
+          _ => const StageProofLimits(expandedBytes: 1),
+        };
+        final before = _storeState(f.root);
+        final observed = await (await f.restorer(
+          f.resolver(),
+          limits: limits,
+        )).observeLocal('third');
+        expect(observed.lookup.kind, StageLookupKind.found);
+        expect(observed.locallyVerified, isFalse);
+        expect(observed.candidate, isNull);
+        expect(observed.problem, isNotNull);
+        expect(_storeState(f.root), before);
+        expect(f.authority.authorized, isEmpty);
+      });
+    }
+
+    for (final change in [
+      'registry',
+      'compiler',
+      'contract',
+      'receipt',
+      'artifact',
+      'git',
+    ]) {
+      test('late $change change prevents successful observation', () async {
+        final provider = f.bind('core');
+        await f.complete(provider);
+        final stage = f.bind('app', imports: [f.import(provider, 'app')]);
+        await f.complete(stage);
+        final current = f.resolver();
+        final cached = current(f.unit('app'));
+        final restore = await StageRestoration.create(
+          stages: current,
+          resolution: f.resolution,
+          currentGit: f.git,
+          authority: f.authority,
+          refreshGit: () async {
+            switch (change) {
+              case 'registry':
+                f.authority.registries['core'] = 'changed';
+              case 'compiler':
+                f.compilerDigest = 'c';
+              case 'contract':
+                f.changedContractUnit = 'core';
+              case 'receipt':
+                File(
+                  stage.directory.resolve('stage.json'),
+                ).writeAsStringSync('{}');
+              case 'artifact':
+                File(
+                  stage.directory.resolve('app.pkg'),
+                ).writeAsStringSync('changed');
+              case 'git':
+                f.gitCommand(['commit', '--allow-empty', '-m', 'moved HEAD']);
+            }
+            return GitState.read(f.root.path);
+          },
+        );
+        final observed = await restore.observeLocal('app');
+        expect(observed.locallyVerified, isFalse);
+        expect(observed.candidate, isNull);
+        expect(observed.problem, isNotNull);
+        expect(current(f.unit('app')), same(cached));
+        expect(f.authority.authorized, isEmpty);
+        expect(f.authority.retained, isEmpty);
+        expect(f.authority.recovered, isEmpty);
+      });
+    }
+
+    test(
+      'changed live facts cannot turn lookup absence into a safe observation',
+      () async {
+        final current = f.resolver();
+        final restore = await StageRestoration.create(
+          stages: current,
+          resolution: f.resolution,
+          currentGit: f.git,
+          authority: f.authority,
+          refreshGit: () async {
+            f.authority.registry = 'changed';
+            return f.git;
+          },
+        );
+        final observed = await restore.observeLocal('app');
+        expect(observed.lookup.kind, StageLookupKind.absent);
+        expect(observed.problem, isNotNull);
+        expect(observed.locallyVerified, isFalse);
+        expect(Directory('${f.root.path}/.rk').existsSync(), isFalse);
+      },
+    );
+  });
+
+  group('status observes frozen stages', () {
+    test(
+      'complete local stage reports its actual identity and deferred native checks',
+      () async {
+        final provider = f.bind('core');
+        await f.complete(provider);
+        final stage = f.bind('app', imports: [f.import(provider, 'app')]);
+        await f.complete(stage);
+        Directory(provider.directory.path).deleteSync(recursive: true);
+        final before = _storeState(f.root);
+        final current = f.resolver();
+        final cached = current(f.unit('app'));
+        final run = await _observeStatus(f, current);
+        final unit = run.snapshot.units.single;
+        expect(unit.stageState.verdict, Verdict.exact);
+        expect(unit.stage!.receipt!.identity.id, stage.directory.identity.id);
+        expect(unit.stage!.reusable, isTrue);
+        expect(unit.nativeAuthorizationDeferred, isTrue);
+        expect(
+          unit.stageState.detail,
+          contains('native dependency checks deferred'),
+        );
+        expect(
+          unit.issues.where(
+            (issue) => issue.diagnostic.code.startsWith('RK-STAGE'),
+          ),
+          isEmpty,
+        );
+        final step = _reportedStage(run.report);
+        expect(step['verdict'], 'exact');
+        expect(
+          (step['evidence'] as Map)['stage id'],
+          stage.directory.identity.id,
+        );
+        expect(
+          (step['evidence'] as Map)['native authorization'],
+          'not performed by status',
+        );
+        expect(run.text, contains('Native dependency checks'));
+        expect(run.text, contains('deferred until stage or release'));
+        expect(run.text, contains('Staged'));
+        expect(current(f.unit('app')), same(cached));
+        expect(_storeState(f.root), before);
+        expect(f.authority.authorized, isEmpty);
+        expect(f.authority.retained, isEmpty);
+        expect(f.authority.recovered, isEmpty);
+      },
+    );
+
+    for (final progress in [
+      'header',
+      'source-residue',
+      'recorded-source',
+      'pending-output',
+    ]) {
+      test(
+        '$progress is recorded work, never exposed as complete artifacts',
+        () async {
+          final provider = f.bind('core');
+          await f.complete(provider);
+          final stage = f.bind('app', imports: [f.import(provider, 'app')]);
+          f.header(stage);
+          if (progress == 'source-residue') {
+            stage.directory.writeBytesAtomically(
+              'source/app/pubspec.yaml',
+              utf8.encode('partial source'),
+            );
+          } else if (progress != 'header') {
+            stage.writeProgress([
+              StageStep(
+                name: 'source-snapshot',
+                inputs: [
+                  StageInput.commit(stage.directory.identity),
+                  StageInput.tree(stage.directory.identity),
+                  StageInput.plan(stage.directory.identity),
+                ],
+                outputs: await stage.materializeSource(),
+                evidence: {'commit': f.git.head, 'tree': f.git.headTree},
+              ),
+            ]);
+            if (progress == 'pending-output') {
+              stage.directory.writeBytesAtomically(
+                'app.pkg',
+                utf8.encode('partial'),
+              );
+            }
+          }
+          Directory(provider.directory.path).deleteSync(recursive: true);
+          final before = _storeState(f.root);
+          final current = f.resolver();
+          final cached = current(f.unit('app'));
+          final run = await _observeStatus(f, current);
+          final unit = run.snapshot.units.single;
+          expect(unit.stageState.verdict, Verdict.absent);
+          expect(
+            unit.stageState.detail,
+            contains('recorded progress verified locally'),
+          );
+          expect(unit.stage!.receipt!.identity.id, stage.directory.identity.id);
+          expect(unit.stage!.reusable, isFalse);
+          expect(unit.nativeAuthorizationDeferred, isTrue);
+          expect(
+            unit.issues.where(
+              (issue) => issue.diagnostic.code.startsWith('RK-STAGE'),
+            ),
+            isEmpty,
+          );
+          final step = _reportedStage(run.report);
+          expect(step['verdict'], 'absent');
+          expect(
+            (step['evidence'] as Map)['stage id'],
+            stage.directory.identity.id,
+          );
+          expect(run.text, contains('Not staged'));
+          expect(run.text, contains('Saved progress'));
+          expect(
+            run.text,
+            contains(
+              progress == 'header' || progress == 'source-residue'
+                  ? 'source preparation incomplete'
+                  : '1 recorded producers; stage incomplete',
+            ),
+          );
+          expect(run.text, contains('deferred until stage or release'));
+          expect(
+            unit.targets
+                .expand((target) => target.artifacts)
+                .where((artifact) => artifact.status.name == 'staged'),
+            isEmpty,
+          );
+          expect(current(f.unit('app')), same(cached));
+          expect(_storeState(f.root), before);
+          expect(f.authority.authorized, isEmpty);
+          expect(f.authority.retained, isEmpty);
+          expect(f.authority.recovered, isEmpty);
+        },
+      );
+    }
+
+    for (final broken in ['archive', 'ambiguous', 'unreadable']) {
+      test(
+        '$broken is reported as unverified work, never ordinary absence',
+        () async {
+          final stage = f.bind('app');
+          await f.complete(stage);
+          if (broken == 'archive') {
+            File(
+              stage.directory.resolve('app.pkg'),
+            ).writeAsStringSync('changed');
+          } else if (broken == 'ambiguous') {
+            await f.complete(f.bind('app', native: 'other choice'));
+          } else {
+            File(stage.directory.resolve('stage.json')).writeAsStringSync('{}');
+          }
+          final before = _storeState(f.root);
+          final current = f.resolver();
+          final cached = current(f.unit('app'));
+          final run = await _observeStatus(f, current);
+          final unit = run.snapshot.units.single;
+          expect(unit.stageState.verdict, isNot(Verdict.absent));
+          expect(unit.stageState.verdict, isNot(Verdict.exact));
+          expect(unit.stage?.reusable, isNot(isTrue));
+          expect(unit.nativeAuthorizationDeferred, isFalse);
+          expect(
+            unit.issues.map((issue) => issue.diagnostic.code),
+            contains('RK-STAGE-002'),
+          );
+          expect(_reportedStage(run.report)['verdict'], isNot('absent'));
+          expect(
+            run.text,
+            contains('saved release stage could not be verified'),
+          );
+          expect(current(f.unit('app')), same(cached));
+          expect(_storeState(f.root), before);
+          expect(f.authority.authorized, isEmpty);
+          expect(f.authority.recovered, isEmpty);
+        },
+      );
+    }
+
+    test(
+      'header whose current intent changed is unknown, not ordinary incomplete work',
+      () async {
+        final stage = f.bind('app');
+        f.header(stage);
+        final before = _storeState(f.root);
+        final current = f.resolver();
+        final cached = current(f.unit('app'));
+        final observer = await StageRestoration.create(
+          stages: current,
+          resolution: f.resolution,
+          currentGit: f.git,
+          authority: f.authority,
+          refreshGit: () async {
+            f.authority.registry = 'changed';
+            return f.git;
+          },
+        );
+        final run = await _observeStatus(f, current, observer: observer);
+        expect(run.snapshot.units.single.stageState.verdict, Verdict.unknown);
+        expect(_reportedStage(run.report)['verdict'], 'unknown');
+        expect(run.text, isNot(contains('Saved progress')));
+        expect(run.text, isNot(contains('Native dependency checks')));
+        expect(
+          run.snapshot.units.single.issues.map(
+            (issue) => issue.diagnostic.code,
+          ),
+          contains('RK-STAGE-002'),
+        );
+        expect(current(f.unit('app')), same(cached));
+        expect(_storeState(f.root), before);
+        expect(f.authority.authorized, isEmpty);
+        expect(f.authority.recovered, isEmpty);
+      },
+    );
+  });
+
+  group('optional completed provider', () {
+    test('missing sibling leaves the shared binding untouched', () async {
+      final current = f.resolver();
+      final cached = current(f.unit('app'));
+      final restore = await f.restorer(current);
+      expect(await restore.restoreCompletedProvider('app'), isNull);
+      expect(current(f.unit('app')), same(cached));
+      expect(f.authority.authorized, isEmpty);
+      expect(f.authority.recovered, isEmpty);
+      expect(Directory('${f.root.path}/.rk').existsSync(), isFalse);
+    });
+
+    for (final progress in ['header', 'source-residue', 'source-progress']) {
+      test('$progress skips native authorization and input recovery', () async {
+        final stage = f.bind('app', external: [f.external('app')]);
+        f.header(stage);
+        if (progress == 'source-residue') {
+          stage.directory.writeBytesAtomically(
+            'source/app/pubspec.yaml',
+            utf8.encode('interrupted copy'),
+          );
+        } else if (progress == 'source-progress') {
+          final artifacts = await stage.materializeSource();
+          stage.writeProgress([
+            StageStep(
+              name: 'source-snapshot',
+              inputs: [
+                StageInput.commit(stage.directory.identity),
+                StageInput.tree(stage.directory.identity),
+                StageInput.plan(stage.directory.identity),
+              ],
+              outputs: artifacts,
+              evidence: {'commit': f.git.head, 'tree': f.git.headTree},
+            ),
+          ]);
+          expect(stage.inspect().validProgress, isTrue);
+        }
+        final before = stage.directory.fingerprint();
+        final current = f.resolver();
+        final cached = current(f.unit('app'));
+        final restore = await f.restorer(current);
+        expect(await restore.restoreCompletedProvider('app'), isNull);
+        expect(current(f.unit('app')), same(cached));
+        expect(stage.directory.fingerprint(), before);
+        expect(f.authority.authorized, isEmpty);
+        expect(f.authority.retained, isEmpty);
+        expect(f.authority.recovered, isEmpty);
+      });
+    }
+
+    test(
+      'complete sibling uses full portable and native authorization',
+      () async {
+        final provider = f.bind('core');
+        await f.complete(provider);
+        final stage = f.bind(
+          'app',
+          imports: [f.import(provider, 'app')],
+          external: [f.external('app')],
+        );
+        await f.complete(stage);
+        Directory(provider.directory.path).deleteSync(recursive: true);
+        final before = stage.directory.fingerprint();
+        final current = f.resolver();
+        final restore = await f.restorer(current);
+        final restored = (await restore.restoreCompletedProvider('app'))!;
+        expect(restored.directory.identity.id, stage.directory.identity.id);
+        expect(restored.inspect().reusable, isTrue);
+        expect(current(f.unit('app')), same(restored));
+        expect(stage.directory.fingerprint(), before);
+        expect(f.authority.authorized.toSet(), {'app', 'core'});
+        expect(f.authority.retained, ['app']);
+        expect(f.authority.recovered, isEmpty);
+        expect(Directory(provider.directory.path).existsSync(), isFalse);
+      },
+    );
+
+    for (final corruption in ['archive', 'receipt']) {
+      test('corrupt complete $corruption declines without writes', () async {
+        final stage = f.bind('app', external: [f.external('app')]);
+        await f.complete(stage);
+        if (corruption == 'archive') {
+          File(stage.directory.resolve('app.pkg')).writeAsStringSync('corrupt');
+        } else {
+          File(stage.directory.resolve('stage.json')).writeAsStringSync('{}');
+        }
+        final before = stage.directory.fingerprint();
+        final current = f.resolver();
+        final cached = current(f.unit('app'));
+        final restore = await f.restorer(current);
+        expect(await restore.restoreCompletedProvider('app'), isNull);
+        expect(current(f.unit('app')), same(cached));
+        expect(stage.directory.fingerprint(), before);
+        expect(f.authority.authorized, isEmpty);
+        expect(f.authority.recovered, isEmpty);
+      });
+    }
+
+    test(
+      'ambiguous sibling choices decline without selecting either',
+      () async {
+        final one = f.bind('app', native: 'one');
+        await f.complete(one);
+        final two = f.bind('app', native: 'two');
+        await f.complete(two);
+        final before = [
+          one.directory.fingerprint(),
+          two.directory.fingerprint(),
+        ];
+        final current = f.resolver();
+        final cached = current(f.unit('app'));
+        final restore = await f.restorer(current);
+        expect(await restore.restoreCompletedProvider('app'), isNull);
+        expect(current(f.unit('app')), same(cached));
+        expect([
+          one.directory.fingerprint(),
+          two.directory.fingerprint(),
+        ], before);
+        expect(f.authority.authorized, isEmpty);
+        expect(f.authority.recovered, isEmpty);
+      },
+    );
+
+    for (final change in ['native-refusal', 'registry', 'compiler', 'git']) {
+      test('$change during native authorization never adopts', () async {
+        final stage = f.bind('app', external: [f.external('app')]);
+        await f.complete(stage);
+        final before = stage.directory.fingerprint();
+        final current = f.resolver();
+        final cached = current(f.unit('app'));
+        f.authority.onAuthorize = () async {
+          switch (change) {
+            case 'native-refusal':
+              throw StateError('native policy rejected the sibling');
+            case 'registry':
+              f.authority.registry = 'changed';
+            case 'compiler':
+              f.compilerDigest = 'd';
+            case 'git':
+              f.gitCommand(['commit', '--allow-empty', '-m', 'moved HEAD']);
+          }
+        };
+        final restore = await f.restorer(current);
+        expect(await restore.restoreCompletedProvider('app'), isNull);
+        expect(current(f.unit('app')), same(cached));
+        expect(stage.directory.fingerprint(), before);
+        expect(f.authority.authorized, ['app']);
+        expect(f.authority.recovered, isEmpty);
+      });
+    }
+
+    test(
+      'completion must remain exact through the pre-install handoff',
+      () async {
+        final stage = f.bind('app');
+        await f.complete(stage);
+        final saved = stage.requireReceipt();
+        final current = f.resolver();
+        final cached = current(f.unit('app'));
+        var finalBoundary = false;
+        var reads = 0;
+        String? changedFingerprint;
+        f.onCompilerRead = () {
+          // The authorizer's final root recheck reads intent and candidate first.
+          // The third read is the adopter's reconstruction before installation.
+          if (finalBoundary && ++reads == 3) {
+            StageReceiptStore(stage.directory).write(
+              StageReceipt(
+                identity: saved.identity,
+                plan: saved.plan,
+                steps: saved.steps.take(saved.steps.length - 1),
+              ),
+            );
+            changedFingerprint = stage.directory.fingerprint();
+          }
+        };
+        final restore = await StageRestoration.create(
+          stages: current,
+          resolution: f.resolution,
+          currentGit: f.git,
+          authority: f.authority,
+          refreshGit: () async {
+            finalBoundary = true;
+            return f.git;
+          },
+        );
+        expect(await restore.restoreCompletedProvider('app'), isNull);
+        expect(changedFingerprint, isNotNull);
+        expect(stage.directory.fingerprint(), changedFingerprint);
+        expect(current(f.unit('app')), same(cached));
+        expect(f.authority.authorized, ['app']);
+        expect(f.authority.recovered, isEmpty);
+      },
+    );
   });
 
   test(
@@ -837,6 +1593,7 @@ final class _Authority implements NativeStageAuthority {
   final registries = <String, String>{};
   bool requireContext = false;
   bool changedRecovery = false;
+  Future<void> Function()? onAuthorize;
   Future<void> Function()? onRecover;
   final authorized = <String>[];
   final retained = <String>[];
@@ -854,6 +1611,8 @@ final class _Authority implements NativeStageAuthority {
     StageReceipt receipt,
   ) async {
     authorized.add(unit.name);
+    final callback = onAuthorize;
+    if (callback != null) await callback();
     if (requireContext && receipt.plan!['dependency_inputs'] == null) {
       throw StateError('missing expected native context');
     }
@@ -890,4 +1649,50 @@ final class _Authorized implements AuthorizedNativeStage {
       expectedSha256: Sha256.hex(bytes),
     );
   }
+}
+
+Map<String, String> _storeState(Directory root) {
+  final store = Directory('${root.path}/.rk');
+  if (!store.existsSync()) return {};
+  return {
+    for (final entry in store.listSync(recursive: true, followLinks: false))
+      entry.path.substring(root.path.length): () {
+        final stat = entry.statSync();
+        final bytes = entry is File ? Sha256.hex(entry.readAsBytesSync()) : '';
+        return '${stat.type}:${stat.mode}:${stat.modified.microsecondsSinceEpoch}:$bytes';
+      }(),
+  };
+}
+
+Future<({StatusSnapshot snapshot, Map<String, Object?> report, String text})>
+_observeStatus(
+  _Fixture f,
+  ReleaseStages stages, {
+  StageRestoration? observer,
+}) async {
+  final observation = observer ?? await f.restorer(stages);
+  final text = StringBuffer();
+  final output = Output(sink: text.write, isTerminal: false);
+  final command = StatusCommand(
+    resolution: f.resolution,
+    tree: stages.source,
+    git: f.git,
+    inspector: Inspector(registry: null, git: f.git, stageFor: stages.call),
+    observeStage: (unit) => observation.observeLocal(unit.name),
+    output: output,
+  );
+  final snapshot = await command.collect(only: 'app');
+  command.render(snapshot);
+  return (
+    snapshot: snapshot,
+    report: jsonDecode(output.report.encode(exit: 0)) as Map<String, Object?>,
+    text: text.toString(),
+  );
+}
+
+Map<String, Object?> _reportedStage(Map<String, Object?> report) {
+  final unit = (report['units'] as List).single as Map;
+  return (unit['steps'] as List).cast<Map<String, Object?>>().singleWhere(
+    (step) => step['kind'] == 'completeStage',
+  );
 }

@@ -524,10 +524,15 @@ void main() {
       // Both verbs must ask it — a phase 3 commit claimed release shared the
       // inspector while release still ran its own copy, and the weaker form
       // of this test (any use outside inspect.dart) passed on status alone.
-      for (final command in ['status.dart', 'release.dart']) {
+      for (final (command, call) in [
+        // Status selects a call-local Inspector view of observed saved bytes.
+        // Native status tests separately prove the public digest comparison.
+        ('status.dart', 'reader.inspect('),
+        ('release.dart', 'inspector.inspect('),
+      ]) {
         expect(
           File('lib/src/commands/$command').readAsStringSync(),
-          contains('inspector.inspect('),
+          contains(call),
           reason: '$command must ask the shared inspector',
         );
       }

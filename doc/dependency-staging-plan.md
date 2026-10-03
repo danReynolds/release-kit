@@ -7,8 +7,9 @@ policies are implemented. Development-source discovery and receipt-bound helper
 replay are implemented. Frozen-stage restoration now composes bounded intent
 lookup, portable provider proof closure, current-source/native authorization,
 and transactional adoption. Schema-13 receipt headers preserve plans across
-source-copy interruptions. Repository scheduling and command integration remain
-packet 3; publication gates remain packet 4.
+source-copy interruptions. Repository scheduling and the stage command now
+compose those primitives. Packet 3 command qualification and status recognition
+remain in progress; publication gates remain packet 4.
 The remaining work is defined in the implementation packets below; foundation
 proofs do not qualify bare `rk stage` or publication. No publication has occurred.
 
@@ -1012,3 +1013,64 @@ app/core prepares in dependency order, imports the exact core archive, then a
 fresh resolver restores unchanged choices after a newer hosted version appears.
 This connects discovery, scheduling, restoration and existing producers; real
 command/status wiring, public gates and bare Fleury qualification remain open.
+
+
+Production `rk stage` now inspects the full selected scope, checks destination
+readiness, resolves private dependency order and prepares each bound unit without
+publication authorization or sessions. Named staging offers only completed,
+currently authorized sibling receipts, otherwise native hosted resolution.
+Selected saved stages still use strict restoration: rejection never means a
+fresh solve. Optional sibling probes neither repair inputs nor accept incomplete
+receipts. Release restores saved choices before its existing per-unit flow; fresh
+repository release orchestration is still packet 4.
+
+Review closed four command findings: unused offered sibling receipts are not
+pinned; all-public and all-restored scopes skip needless discovery/probes;
+destination readiness precedes native discovery; and prerequisite deferral
+requires the actual package producer in its native context rather than any
+context with the same owner. Native resolver failures now include a bounded
+human-readable cause as well as full machine evidence.
+
+Packet 3 is implemented and qualified. Real native command cases pass on Dart
+3.13.5 and the minimum 3.10.4: reverse-selected two- and four-unit preparation,
+independent versions, a transitive-only first-party dependency through a hosted
+bridge, named hosted fallback, named completed-sibling import, named-to-bare
+frozen reuse, mixed public/private package eligibility, missing dependency and
+interleaving refusals before production, public no-op, endpoint policy and
+producer-specific prerequisite coverage. Every staging case asserts zero
+confirmation, publication sessions and public mutation.
+
+Interruption tests exposed a producer retry bug: failed native archive creation
+left unrecorded canonical directories. Pub now builds and validates in owned
+scratch and atomically promotes successful archive bytes. Failed commands,
+partial output and native exceptions all resume on both SDKs without changing
+frozen choices or recorded provider receipts. Canonical collisions still refuse.
+
+Status now observes saved stages through the same current source and portable
+contract checks without native commands, adoption, repair or writes. It displays
+the actual receipt identity, recognizes bounded incomplete progress and states
+that native authorization is deferred until stage or release. Invalid or
+ambiguous saved state remains unknown/conflict, never absent. Seventy-six engine
+restoration/observation cases and nine command cases with the real observer pass;
+native exact-archive comparison also passes on both SDKs. These are overlapping
+focused checks, not additional full-suite counts.
+
+The final affected regression run passed 474 of 475 cases; its sole failure was
+a source-spelling assertion after status gained a call-local Inspector. That
+assertion was updated and its focused rerun passed. All 55 actual CLI/workflow
+cases pass. Analysis, formatting, code-index and diff checks are clean. The
+obsolete single-unit-only stage diagnostic was removed.
+
+Production bare `rk stage --json` then prepared all four Fleury 0.1.0 units from
+current main `882c6642bbc2468f6f2bd9241e4e66a61fe99fe9`, with exact core archive
+imports, no public actions and a clean source worktree. A fresh status invocation
+recognized all four actual stage IDs and preserved all 22,418 local stage-store
+entries, including bytes, modes and mtimes. It correctly continued to report the
+unpublished core as a public release prerequisite. The native-proof document
+records the final archive hashes and the preserved legacy-store refusal.
+
+All-private repository release preparation, aggregate consent, frozen runtime
+publication ordering and pre-act public dependency gates remain packet 4. The
+final full suite and complete release qualification remain packet 5. Packet 3
+establishes whole-stack private staging; it does not yet qualify whole-stack
+publication.

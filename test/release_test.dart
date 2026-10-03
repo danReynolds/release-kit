@@ -1207,7 +1207,7 @@ publish = ["pub.dev"]
     },
   );
 
-  test('repository-wide stage asks for an exact unit', () async {
+  test('repository-wide stage requires its preparation coordinator', () async {
     final ran = await release(
       only: null,
       dryRun: true,
@@ -1230,8 +1230,8 @@ publish = ["pub.dev"]
       }, description: '/repo/two'),
     );
 
-    expect(ran.exitCode, ExitCodes.usage);
-    expect(ran.problems.map((problem) => problem['code']), ['RK-CLI-004']);
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(ran.problems.map((problem) => problem['code']), ['RK-STAGE-001']);
     expect(ran.calls, isEmpty);
   });
 }

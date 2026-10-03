@@ -757,14 +757,34 @@ void main() {
     final packaged = run.invocations.singleWhere(
       (call) => call.arguments.contains('--to-archive'),
     );
-    expect(packaged.arguments, [
-      'pub',
-      'publish',
-      '--to-archive',
-      harness.stage.directory.workspace.pathOf(
-        ReleaseAssets.pubArchivePath(harness.unit.projects.single),
-      ),
-    ]);
+    expect(packaged.arguments.take(3), ['pub', 'publish', '--to-archive']);
+    final archivePath = ReleaseAssets.pubArchivePath(
+      harness.unit.projects.single,
+    );
+    final temporaryArchive = packaged.arguments[3];
+    expect(temporaryArchive, endsWith('/$archivePath'));
+    expect(temporaryArchive, isNot(startsWith(harness.stage.directory.path)));
+    expect(
+      Directory(
+        temporaryArchive.substring(
+          0,
+          temporaryArchive.length - archivePath.length,
+        ),
+      ).existsSync(),
+      isFalse,
+      reason: 'the native archive output is private scratch until accepted',
+    );
+    final recordedArchive = inspected.receipt!.artifacts.singleWhere(
+      (artifact) => artifact.path == archivePath,
+    );
+    expect(recordedArchive.type, 'pub-archive');
+    expect(
+      File(
+        harness.stage.directory.resolve(recordedArchive.path),
+      ).readAsBytesSync(),
+      _publishedPackage(),
+      reason: 'the exact validated native bytes are promoted into the receipt',
+    );
     expect(
       packaged.workingDirectory,
       isNot(startsWith(harness.stage.directory.repositoryRoot)),

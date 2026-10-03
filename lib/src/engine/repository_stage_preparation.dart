@@ -193,7 +193,16 @@ final class RepositoryPreparationPlan {
        _restored = Map.unmodifiable(restored),
        _intents = Map.unmodifiable(intents),
        _pending = Map.unmodifiable(pending),
-       _providers = Map.unmodifiable(providers) {
+       _providers = Map.unmodifiable({
+         for (final entry in providers.entries)
+           if (expected.containsKey(entry.key) ||
+               pending.values.any(
+                 (discovery) => discovery.pending.any(
+                   (request) => request.use.provider.unit == entry.key,
+                 ),
+               ))
+             entry.key: entry.value,
+       }) {
     final nodes = <String, Set<String>>{};
     final unitNeeds = {for (final unit in units) unit.name: <String>{}};
     String node(String unit, String producer) =>

@@ -157,3 +157,41 @@ sources must not veto a valid native selection. Selected unsupported sources
 still refuse. External archive downloads bind the native digest and complete
 manifest, limit transferred bytes and lifetime, and redact signed fetch URLs
 from transport/redirect diagnostics and portable evidence.
+
+## Bare Fleury command qualification
+
+On 2026-10-03, the production `rk stage --json` command prepared current Fleury
+main `882c6642bbc2468f6f2bd9241e4e66a61fe99fe9` in the reused, clean review worktree,
+using Dart 3.13.5. All four units completed with exit 0 and no problems. Every
+public action remained `not_attempted`; no release authorization or publication
+session was requested. MCP and web retained the exact-dependency Pub warnings.
+The source worktree remained clean.
+
+The first run refused an existing schema-12 stage, as designed. Its unpublished
+stage store was preserved separately before the fresh command run. No old receipt
+was upgraded or treated as proof of the new behavior.
+
+| Package | Version | Native archive SHA-256 |
+| --- | --- | --- |
+| fleury | 0.1.0 | `0699e8a5576672e53de44caffaf7b5320f62f1336250df757f32f89dd83473d7` |
+| fleury_mcp | 0.1.0 | `d9810e1361a7e57f14e5484e6294376f165d8c938d2307d5c0f68025d34ddee2` |
+| fleury_test | 0.1.0 | `2820d5b4ebd18f200884e5b024b0fc6e8ca528cb8128adcf62e8358d66d11c5c` |
+| fleury_web | 0.1.0 | `b2b8d7e7c762ee4e6cff4b7ab97fe71007940afc59296fa24353992ab075d14f` |
+
+These hashes are from the final packet-3 rerun after status, retry and command
+fixes settled. Each consumer's copied core archive was hashed from disk and
+matched the core producer's exact `0699e8...73d7` archive; copied proof files also
+matched their recorded size and digest.
+
+A fresh `rk status --json` recognized the four actual bound stage IDs, beginning
+`e0593a455421`, `dee3aeb2ae63`, `9a836788e44d` and `95bdb3734185`, respectively.
+Each stage was locally exact with native authorization explicitly deferred. The
+status command preserved all 22,418 entries in the local stage store byte for
+byte, with modes and mtimes unchanged. Its public observations still correctly
+reported that Fleury must become public before its dependents publish.
+
+The qualification retained full command reports and independently hashed proof
+inventories. It exercised no actual upload, remote tag, GitHub release or tap
+write. This qualifies whole-stack private preparation and read-only status;
+repository release preparation, aggregate consent and public dependency gates
+remain separate required qualification.

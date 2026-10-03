@@ -35,12 +35,18 @@ import 'package:rk/src/output/output.dart';
 import 'package:rk/src/engine/registry.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/release_stage.dart';
+import 'package:rk/src/engine/repository_stage_preparation.dart';
 import 'package:rk/src/engine/release_source.dart';
+import 'package:rk/src/engine/stage_restoration.dart';
 import 'package:rk/src/engine/stage_store.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/source_context.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/targets/catalog.dart';
+import 'package:rk/src/native/dart/stage_authorization.dart';
+import 'package:rk/src/native/dart/stage_authority.dart';
+import 'package:rk/src/native/dart/stage_discovery.dart';
+import 'package:rk/src/native/dart/stage_source.dart';
 import 'package:rk/src/version.dart';
 
 const _usage = '''
@@ -55,7 +61,7 @@ Release this project
   rk clean                        remove this repository's staged release work
   rk target list                  list every release choice this rk supports
   rk target <name>                explain one choice and its configuration
-  rk stage [unit]                 prepare and validate artifacts; publish nothing
+  rk stage [unit]                 prepare all units, or one named unit; publish nothing
   rk release [unit]               release all unfinished units, or one named unit
 
 Run locally
@@ -138,7 +144,9 @@ Runs configured builds, signing, notarization, and package checks.
 May contact private services; does not ask for publication approval.
 
 $_unitHelp
-Omit the unit when the configuration contains only one; otherwise name it.
+Omit the unit to prepare the whole repository in dependency order.
+A named unit may use a verified sibling stage or published dependencies.
+Naming a unit never builds other units. No publication is performed.
 --json    emit one structured report
 
 Example: rk stage tools
@@ -578,6 +586,62 @@ Future<int> _release(
       git: git,
       stageContracts: targets.stageContractResolver(resolution),
     );
+    Future<GitState> readGit() async => git.isBound
+        ? await GitState.read(context.root)
+        : GitState.unbound(context.root);
+    RepositoryStagePreparation? repositoryStages;
+    Future<ReleaseStage?> Function(ResolvedUnit)? completedProvider;
+    try {
+      String defaultRegistry() =>
+          Platform.environment['PUB_HOSTED_URL'] ?? 'https://pub.dev';
+      final compiler = stages(resolution.units.first).compiler!.executable;
+      final nativeSource = DartStageSource(
+        resolution: resolution,
+        source: tree,
+        git: git,
+        defaultRegistry: defaultRegistry,
+      );
+      final native = DartStageDiscovery(
+        nativeSource,
+        tools: const SystemTools(),
+        compiler: compiler,
+      );
+      late final restoration = StageRestoration.create(
+        stages: stages,
+        resolution: resolution,
+        currentGit: git,
+        refreshGit: readGit,
+        authority: DartStageAuthority(
+          DartStageAuthorization(
+            resolution: resolution,
+            source: tree,
+            git: git,
+            tools: const SystemTools(),
+            compiler: compiler,
+            defaultRegistry: defaultRegistry,
+          ),
+        ),
+      );
+      repositoryStages = RepositoryStagePreparation(
+        resolution: resolution,
+        stages: stages,
+        native: native,
+        restore: (unit) async => (await restoration).restore(unit.name),
+        refreshGit: readGit,
+      );
+      completedProvider = (unit) async =>
+          (await restoration).restoreCompletedProvider(unit.name);
+    } on Object catch (error) {
+      output.problem(
+        Diagnostic(
+          code: 'RK-STAGE-001',
+          message: 'native dependency preparation could not be initialized',
+          evidence: '$error',
+          remedy: 'resolve the source or toolchain problem and re-run rk stage',
+        ),
+      );
+      return ExitCodes.refused;
+    }
     const targetTools = SystemTools(timeout: Duration(minutes: 2));
     return await ReleaseCommand(
       resolution: resolution,
@@ -612,11 +676,11 @@ Future<int> _release(
           interactive && stdin.hasTerminal && stdout.hasTerminal,
       preauthorized: yes,
       stageOnly: stageOnly,
+      repositoryStages: repositoryStages,
+      completedProvider: completedProvider,
       stageFor: stages.call,
       refreshStage: stages.refresh,
-      refreshGit: () async => git.isBound
-          ? await GitState.read(context.root)
-          : GitState.unbound(context.root),
+      refreshGit: readGit,
     ).run(only: unit);
   } finally {
     stageLock?.close();
@@ -1080,12 +1144,34 @@ Future<int> _status(Output output, String? unit) async {
       timeout: const Duration(minutes: 2),
       cancellation: cancellation,
     );
+    // Observation shares authoritative source/intent lookup with restoration,
+    // but never invokes its native verifier, recovery or adoption path.
+    late final observation = StageRestoration.create(
+      stages: stages,
+      resolution: resolution,
+      currentGit: git,
+      refreshGit: () async => git.isBound
+          ? await GitState.read(git.root)
+          : GitState.unbound(git.root),
+      authority: DartStageAuthority(
+        DartStageAuthorization(
+          resolution: resolution,
+          source: tree,
+          git: git,
+          tools: targetTools,
+          compiler: stages(resolution.units.first).compiler!.executable,
+          defaultRegistry: () =>
+              Platform.environment['PUB_HOSTED_URL'] ?? 'https://pub.dev',
+        ),
+      ),
+    );
     final command = StatusCommand(
       resolution: resolution,
       tree: tree,
       git: git,
       repositoryGit: source.repository,
       sourceWarning: source.warning,
+      observeStage: (unit) async => (await observation).observeLocal(unit.name),
       inspector: Inspector(
         registry: registry,
         pubDev: PubDevTarget(registry: registry),

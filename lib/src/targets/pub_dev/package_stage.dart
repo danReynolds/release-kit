@@ -117,6 +117,56 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
   Set<String> releasedWith, {
   required void Function(Map<String, Object?> graph) onResolution,
 }) async {
+  final archivePath = ReleaseAssets.pubArchivePath(project);
+  void requireAbsentDestination() {
+    final destination = context.stage.directory.resolve(archivePath);
+    if (FileSystemEntity.typeSync(destination, followLinks: false) !=
+        FileSystemEntityType.notFound) {
+      throw StateError(
+        'refusing to replace an existing Pub archive: $archivePath',
+      );
+    }
+  }
+
+  requireAbsentDestination();
+  // Native validation can fail after opening its output. Keep that output
+  // outside the receipt tree until validation succeeds, so a failed producer
+  // cannot leave partial bytes or empty canonical directories behind.
+  final scratch = Directory.systemTemp.createTempSync('rk-pub-archive-');
+  try {
+    final archive = File(_join(scratch.path, StagePath.segments(archivePath)));
+    archive.parent.createSync(recursive: true);
+    final result = await _packageArchiveTo(
+      context,
+      project,
+      releasedWith,
+      archive: archive,
+      onResolution: onResolution,
+    );
+    if (result.diagnostic == null) {
+      requireAbsentDestination();
+      if (FileSystemEntity.typeSync(archive.path, followLinks: false) !=
+          FileSystemEntityType.file) {
+        throw StateError('native Pub output is not a regular archive file');
+      }
+      context.stage.directory.writeBytesAtomically(
+        archivePath,
+        archive.readAsBytesSync(),
+      );
+    }
+    return result;
+  } finally {
+    scratch.deleteSync(recursive: true);
+  }
+}
+
+Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
+  TargetStageContext context,
+  ResolvedProject project,
+  Set<String> releasedWith, {
+  required File archive,
+  required void Function(Map<String, Object?> graph) onResolution,
+}) async {
   final sourceRoot = context.stage.sourceRoot;
   final sourceDirectory = project.pubspec.directory == '.'
       ? sourceRoot
@@ -146,8 +196,6 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
       : dependencyOverrides(sourceRoot, packages);
 
   final archivePath = ReleaseAssets.pubArchivePath(project);
-  final archive = File(context.workspace.pathOf(archivePath));
-  archive.parent.createSync(recursive: true);
   final frozen = DartStagePreparation.contextFor(
     context.stage,
     project,

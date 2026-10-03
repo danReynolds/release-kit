@@ -308,6 +308,20 @@ void main() {
     });
   }
 
+  test(
+    'unused optional sibling is not pinned by the selected consumer',
+    () async {
+      final provider = f.bindEmpty('core');
+      await f.complete(provider);
+      f.providers.add(PreparedStageProvider.capture(provider));
+      final plan = await f.resolve(['app']);
+      Directory(provider.directory.path).deleteSync(recursive: true);
+      final app = await plan.bind(f.unit('app'));
+      expect(app.dependencies.imports, isEmpty);
+      await f.complete(app);
+    },
+  );
+
   test('rejected saved state never falls through to fresh discovery', () async {
     f.failRestore = 'core';
     await expectLater(f.resolve(['app', 'core']), throwsStateError);

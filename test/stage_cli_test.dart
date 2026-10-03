@@ -100,21 +100,27 @@ publish = ["git-tag"]
   );
 
   test(
-    'stage requires a unit when ambiguous and stages only the named unit',
+    'bare stage prepares all units and named stage preserves its scope',
     () {
       final repo = repository(multiple: true);
-      final refused = repo(['stage', '--json']);
-      expect(refused.code, 2, reason: refused.all);
-      expect(refused.problems.single['code'], 'RK-CLI-004');
-      expect(refused.problems.single['remedy'], contains('rk stage <unit>'));
-      expect(refused.units, isEmpty);
-      expectNoTags(repo);
-
       final named = repo(['stage', 'tools', '--json']);
       expect(named.code, 0, reason: named.all);
       expect(named.units.map((unit) => unit['name']), ['tools']);
       expect(stageEvidence(named, 'tools')['stage id'], isNotEmpty);
       expect(named.json['next'], ['rk release tools']);
+      expectNoTags(repo);
+      expect(
+        Directory('${repo.root}/.rk/work/stages')
+            .listSync()
+            .whereType<Directory>(),
+        hasLength(1),
+      );
+
+      final all = repo(['stage', '--json']);
+      expect(all.code, 0, reason: all.all);
+      expect(all.units.map((unit) => unit['name']), ['core', 'tools']);
+      expect(stageEvidence(all, 'core')['stage id'], isNotEmpty);
+      expect(stageEvidence(all, 'tools'), stageEvidence(named, 'tools'));
       expectNoTags(repo);
     },
     timeout: const Timeout(Duration(minutes: 2)),

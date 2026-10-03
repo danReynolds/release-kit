@@ -11,15 +11,17 @@ import 'resolution_facts.dart';
 import 'source_tree.dart';
 import 'stage_dependencies.dart';
 import 'stage_intent.dart';
+import 'stage_inspection.dart';
 import 'stage_lookup.dart';
 import 'stage_proof.dart';
 import 'stage_receipt.dart';
 import 'stage_source.dart';
 import 'stage_store.dart';
 
-/// Reuses frozen native selections transactionally. The command holds the
-/// store's mutation lock. Only conclusive absence permits a fresh discovery;
-/// every other refusal leaves the shared resolver and stage files unchanged.
+/// Observes frozen local evidence or reuses native selections transactionally.
+/// Restoring commands hold the store's mutation lock; [observeLocal] is read-only.
+/// For a selected consumer, only conclusive absence permits fresh discovery. Optional sibling probes accept only completed
+/// stages. Every refusal leaves the shared resolver and stage files unchanged.
 /// Native semantics are supplied by adapters; this layer owns provenance,
 /// source/contract authority, bounds and installation into [ReleaseStages].
 final class StageRestoration {
@@ -144,12 +146,142 @@ final class StageRestoration {
     readInputs: () => authority.readIntent(unit),
   );
 
+  /// Observes current local evidence without native verification or adoption.
+  /// Only copied, already-recorded provider proofs participate; a pending input
+  /// never causes provider lookup, recovery, production or source cleanup.
+  /// Every returned candidate is uninstalled and carries no native authority.
+  Future<StageObservation> observeLocal(String unitName) async {
+    _requireResolution();
+    final unit = resolution.unit(unitName);
+    if (unit == null) {
+      throw StateError('unknown current release unit: $unitName');
+    }
+    final intent = _intent(unit, git);
+    final found = await lookup.find(intent);
+    if (found.kind != StageLookupKind.found &&
+        found.kind != StageLookupKind.absent) {
+      return StageObservation._(lookup: found, problem: found.message);
+    }
+    StageInspection? inspection;
+    try {
+      if (found.kind == StageLookupKind.absent) {
+        final current = await refreshGit();
+        _requireResolution();
+        _requireBinding(current);
+        intent.requireCurrent(_intent(unit, current).base);
+        return StageObservation._(lookup: found);
+      }
+      final root = found.receipt!;
+      final budget = _ClosureBudget(limits);
+      final nodes = <String, _Node>{};
+      _Node add(StageReceipt receipt) {
+        final id = receipt.identity.id;
+        final previous = nodes[id];
+        if (previous != null) {
+          if (previous.receipt.encode() != receipt.encode()) {
+            throw StateError('conflicting frozen provider receipts');
+          }
+          return previous;
+        }
+        budget.add(receipt);
+        if (id != root.identity.id && !receipt.complete) {
+          throw StateError('dependency proof requires completed providers');
+        }
+        return nodes[id] = _localNode(receipt, git);
+      }
+
+      final consumer = add(root);
+      inspection = consumer.stage.inspect();
+      _requireRetained(consumer);
+      final inputsRecorded = root.steps.any(
+        (step) => step.name == StageDependencies.importProducer,
+      );
+      if (inputsRecorded) {
+        _readCopiedProofs(
+          consumer,
+          budget: budget,
+          proofsRead: <String>{},
+          add: add,
+        );
+        _requireGraph(nodes, limits.depth);
+      }
+      // This is the last await. Reconstruct all current contracts and intents,
+      // then re-read direct bytes and the receipt before exposing the snapshot.
+      final current = await refreshGit();
+      _requireResolution();
+      _requireBinding(current);
+      late _Node checkedRoot;
+      for (final node in nodes.values) {
+        final checked = _localNode(node.receipt, current);
+        if (node.receipt.identity.id == root.identity.id) checkedRoot = checked;
+      }
+      inspection = checkedRoot.stage.inspect();
+      _requireRetained(checkedRoot);
+      return StageObservation._(
+        lookup: found,
+        candidate: checkedRoot.stage,
+        inspection: inspection,
+      );
+    } on Object catch (error) {
+      return StageObservation._(
+        lookup: found,
+        inspection: inspection,
+        problem: '$error',
+      );
+    }
+  }
+
+  _Node _localNode(StageReceipt receipt, GitState current) {
+    final name = (receipt.plan?['unit'] as Map?)?['name'];
+    final unit = name is String ? resolution.unit(name) : null;
+    if (unit == null) throw StateError('proof names an unknown current unit');
+    final intent = _intent(unit, current);
+    intent.requireReceipt(receipt);
+    final candidate = stages.candidateForReceipt(
+      unit,
+      currentGit: current,
+      receipt: receipt,
+      intent: intent,
+    );
+    _requireEcosystems(candidate.dependencies);
+    final issues = candidate.validatePortableReceipt(
+      receipt,
+      authoritativeSource: source,
+    );
+    if (issues.isNotEmpty) {
+      throw StateError(
+        'frozen ${unit.name} has invalid local evidence: ${issues.join('; ')}',
+      );
+    }
+    return _Node(receipt, candidate);
+  }
+
   /// [recoveryStageId] is only for independently authenticated public recovery.
   /// A declared provider reference is instead read and authenticated inside the
   /// closure walk, never passed here as public recovery authority.
-  Future<ReleaseStage?> restore(
+  Future<ReleaseStage?> restore(String unitName, {String? recoveryStageId}) =>
+      _restore(unitName, recoveryStageId: recoveryStageId);
+
+  /// Offers a completed current sibling to fresh named-command discovery.
+  /// Missing, incomplete, ambiguous or unusable siblings are not candidates.
+  /// This must never replace [restore] for a selected consumer: its frozen
+  /// choices cannot be discarded merely because their authorization fails.
+  ///
+  /// Uses the same full source/native/byte authorization and transactional
+  /// adoption, but never recovers pending inputs or writes stage files. The
+  /// repository coordinator separately refuses drift in the overall scope.
+  Future<ReleaseStage?> restoreCompletedProvider(String unitName) async {
+    try {
+      return await _restore(unitName, requireComplete: true);
+    } on Object {
+      return null;
+    }
+  }
+
+  Future<ReleaseStage?> _restore(
     String unitName, {
     String? recoveryStageId,
+    bool requireComplete = false,
   }) async {
     _requireResolution();
     final unit = resolution.unit(unitName);
@@ -170,14 +302,19 @@ final class StageRestoration {
         'cannot restore frozen stage: ${found.message} (${found.path})',
       );
     }
+    final receipt = found.receipt!;
+    if (requireComplete && !receipt.complete) return null;
     late void Function() recheck;
     return stages.adoptFrozen(
       unit,
       currentGit: git,
-      receipt: found.receipt!,
+      receipt: receipt,
       intent: intent,
       authorize: (receipt, _) async {
-        final restored = await _authorize(receipt);
+        final restored = await _authorize(
+          receipt,
+          requireComplete: requireComplete,
+        );
         recheck = restored.recheck;
         return restored.dependencies;
       },
@@ -186,7 +323,10 @@ final class StageRestoration {
   }
 
   Future<({StageDependencies dependencies, void Function() recheck})>
-  _authorize(StageReceipt root) async {
+  _authorize(StageReceipt root, {required bool requireComplete}) async {
+    if (requireComplete && !root.complete) {
+      throw StateError('optional provider requires a completed receipt');
+    }
     final budget = _ClosureBudget(limits);
     final nodes = <String, _Node>{};
     final actual = <String>{};
@@ -203,59 +343,30 @@ final class StageRestoration {
         return previous;
       }
       budget.add(receipt);
-      final name = (receipt.plan?['unit'] as Map?)?['name'];
-      final unit = name is String ? resolution.unit(name) : null;
-      if (unit == null) throw StateError('proof names an unknown current unit');
       if (id != root.identity.id && !receipt.complete) {
         throw StateError('dependency proof requires completed providers');
       }
-      final intent = _intent(unit, git);
-      intent.requireReceipt(receipt);
-      final candidate = stages.candidateForReceipt(
-        unit,
-        currentGit: git,
-        receipt: receipt,
-        intent: intent,
-      );
-      _requireEcosystems(candidate.dependencies);
-      final issues = candidate.validatePortableReceipt(
-        receipt,
-        authoritativeSource: source,
-      );
-      if (issues.isNotEmpty) {
-        throw StateError(
-          'frozen ${unit.name} is not authorized: ${issues.join('; ')}',
-        );
-      }
-      final node = _Node(receipt, candidate);
+      final node = _localNode(receipt, git);
       nodes[id] = node;
       if (retained) actual.add(id);
       return node;
     }
 
-    void readProofs(_Node node) {
-      for (final input in node.stage.dependencies.imports) {
-        final key = '${node.receipt.identity.id}:${input.proof.path}';
-        if (!proofsRead.add(key)) continue;
-        budget.readBytes(input.proof.size);
-        final closure = StageProofClosure.read(
-          node.stage.directory,
-          input.proof,
-          limits: budget.proofLimits,
-        );
-        budget.expand(closure.expandedBytes);
-        closure.requireImport(input);
-        for (final receipt in closure.stages.values) {
-          add(receipt);
-        }
-      }
-    }
+    void readProofs(_Node node) => _readCopiedProofs(
+      node,
+      budget: budget,
+      proofsRead: proofsRead,
+      add: add,
+    );
 
     final consumer = add(root, retained: true);
     final declared = consumer.stage.dependencies;
     final pendingImports = !root.steps.any(
       (step) => step.name == StageDependencies.importProducer,
     );
+    if (requireComplete && pendingImports && declared.hasImports) {
+      throw StateError('optional provider cannot recover pending inputs');
+    }
     if (!pendingImports) {
       // Already-recorded copies are the authority. Missing/corrupt copies must
       // never be repaired from an old provider directory or a registry.
@@ -292,7 +403,7 @@ final class StageRestoration {
       await authorized[id]!.validateRetained(node.stage, node.receipt);
     }
     var recovered = declared;
-    if (pendingImports) {
+    if (pendingImports && !requireComplete) {
       final external = <ExternalStageDependency>[];
       for (final input in declared.external) {
         final restored = await authorized[root.identity.id]!.recoverExternal(
@@ -382,6 +493,63 @@ final class StageRestoration {
       throw StateError(
         'no native authority for ${ecosystems.difference(authority.ecosystems).join(', ')}',
       );
+    }
+  }
+}
+
+/// A read-only snapshot of local evidence, never native authorization.
+/// [candidate] is exposed only after all local checks succeed. [inspection]
+/// retains diagnostics on failure, so callers must check [locallyVerified]
+/// before using its stage or progress as a successful observation.
+final class StageObservation {
+  const StageObservation._({
+    required this.lookup,
+    this.candidate,
+    this.inspection,
+    this.problem,
+  });
+
+  final StageLookupResult lookup;
+  final ReleaseStage? candidate;
+  final StageInspection? inspection;
+  final String? problem;
+
+  bool get locallyVerified =>
+      lookup.kind == StageLookupKind.found &&
+      candidate != null &&
+      inspection != null &&
+      problem == null;
+
+  /// Recognized native facts still need the native stage/release checks.
+  /// False means no recognized native facts, never that checks were performed.
+  bool get nativeAuthorizationDeferred {
+    final dependencies = candidate?.dependencies;
+    return dependencies != null &&
+        (dependencies.contexts.isNotEmpty ||
+            dependencies.uses.isNotEmpty ||
+            dependencies.external.isNotEmpty);
+  }
+}
+
+void _readCopiedProofs(
+  _Node node, {
+  required _ClosureBudget budget,
+  required Set<String> proofsRead,
+  required void Function(StageReceipt) add,
+}) {
+  for (final input in node.stage.dependencies.imports) {
+    final key = '${node.receipt.identity.id}:${input.proof.path}';
+    if (!proofsRead.add(key)) continue;
+    budget.readBytes(input.proof.size);
+    final closure = StageProofClosure.read(
+      node.stage.directory,
+      input.proof,
+      limits: budget.proofLimits,
+    );
+    budget.expand(closure.expandedBytes);
+    closure.requireImport(input);
+    for (final receipt in closure.stages.values) {
+      add(receipt);
     }
   }
 }

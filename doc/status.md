@@ -25,7 +25,9 @@ and local preparation still needed. Publication and staging are separate:
   published version when one is known.
 - **Does not match** means published content conflicts with the candidate.
 - **Could not be read** means a check failed; it is not evidence of absence.
-- **Staged** means the exact local stage is complete and reusable. A missing
+- **Staged** means the exact local stage's recorded bytes and current contracts
+  validate. Status identifies saved dependency choices without running a native
+  solver; it reports deferred native checks before stage/release adopts them. A missing
   stage does not undo an existing publication.
 
 If the checkout has changed since its version was released, the report keeps

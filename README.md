@@ -145,6 +145,13 @@ installation, or release configuration can require a new stage. When recent
 stage metadata explains the change, RK tells you why it is rebuilding. A
 verified stage is reused; interrupted staging resumes from verified work.
 
+Bare `rk stage` prepares all configured units in dependency order. Packages keep
+independent versions, and consumers use the exact compatible dependency archives
+prepared by the same run. `rk stage <unit>` stays within the named scope: it can
+use a verified completed sibling stage or resolve published dependencies, but
+does not build the sibling. Saved stages retain their recorded dependency choices
+across named and repository-wide runs.
+
 Run `rk release` to prepare as needed and publish. Use `rk stage` first when
 you want to inspect the artifacts before publishing; name the unit when the
 repository has several.

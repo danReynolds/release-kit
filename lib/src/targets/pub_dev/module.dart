@@ -44,6 +44,7 @@ final class PubDevTargetModule extends TargetModule {
       targetVersion: project.version.canonical,
       step: step,
       project: project,
+      packageProducer: 'pub-archive:${project.name}',
       permanenceNotice:
           'pub.dev never deletes a version. a version can be retracted, '
           'which hides it and removes nothing.',

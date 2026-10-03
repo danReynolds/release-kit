@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/binary_chain.dart';
+import 'package:rk/src/commands/release.dart';
+import 'package:rk/src/commands/status.dart';
 import 'package:rk/src/commands/release_stage_coordinator.dart';
 import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/engine/checklist.dart';
@@ -11,9 +13,12 @@ import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/file_mode.dart';
 import 'package:rk/src/engine/git.dart';
+import 'package:rk/src/engine/inspect.dart';
 import 'package:rk/src/engine/native_dependencies.dart';
 import 'package:rk/src/engine/native_stage_context.dart';
+import 'package:rk/src/engine/native_stage_discovery.dart';
 import 'package:rk/src/engine/release_stage.dart';
+import 'package:rk/src/engine/registry.dart';
 import 'package:rk/src/engine/repository_stage_preparation.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
@@ -25,6 +30,7 @@ import 'package:rk/src/engine/stage_receipt.dart';
 import 'package:rk/src/engine/stage_restoration.dart';
 import 'package:rk/src/engine/stage_store.dart';
 import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/engine/verdict.dart';
 import 'package:rk/src/native/dart/dependencies.dart';
 import 'package:rk/src/native/dart/hosted_archive.dart';
 import 'package:rk/src/native/dart/hosted_discovery.dart';
@@ -40,6 +46,7 @@ import 'package:rk/src/native/dart/stage_source.dart';
 import 'package:rk/src/native/package_archive.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/targets/catalog.dart';
+import 'package:rk/src/targets/pub_dev/client.dart';
 import 'package:test/test.dart';
 
 import 'support/native_pub_fixture.dart';
@@ -89,6 +96,771 @@ void main() {
     expect(diagnostics.isEmpty, isTrue);
     return result!;
   }
+
+  Future<
+    ({
+      int code,
+      String text,
+      String evidence,
+      String report,
+      ReleaseStages stages,
+      _PrivateStageTools tools,
+      int discoveries,
+      int siblingProbes,
+    })
+  >
+  runStageCommand(
+    _Fixture f, {
+    String? only,
+    ReleaseStages? stages,
+    bool forbidDiscovery = false,
+    bool forbidSiblingProbe = false,
+    Map<String, String> environment = const {},
+    DiscoveredNativeStage Function(DiscoveredNativeStage)? transform,
+    String? interruptArchive,
+    String interruptMode = 'failure',
+  }) async {
+    final selectedStages = stages ?? f.stages;
+    final tools = _PrivateStageTools(
+      f.origin.url,
+      f.origin.dart,
+      interruptArchive: interruptArchive,
+      interruptMode: interruptMode,
+    );
+    final source = DartStageSource(
+      resolution: f.resolution,
+      source: f.source,
+      git: f.git,
+      defaultRegistry: () => f.origin.url,
+    );
+    final native = _ObservedDiscovery(
+      DartStageDiscovery(source, tools: tools, compiler: f.origin.dart),
+      forbid: forbidDiscovery,
+      transform: transform,
+    );
+    final restoration = await StageRestoration.create(
+      stages: selectedStages,
+      resolution: f.resolution,
+      currentGit: f.git,
+      authority: DartStageAuthority(authorizer(f, tools: tools)),
+      refreshGit: () async => f.git,
+    );
+    final repository = RepositoryStagePreparation(
+      resolution: f.resolution,
+      stages: selectedStages,
+      native: native,
+      restore: (unit) => restoration.restore(unit.name),
+      refreshGit: () async => f.git,
+    );
+    final registry = Registry(
+      host: '127.0.0.1:${f.origin.server.port}',
+      secure: false,
+    );
+    final buffer = StringBuffer();
+    final output = Output(
+      sink: buffer.write,
+      isTerminal: false,
+      useColor: false,
+    );
+    var confirmations = 0;
+    var siblingProbes = 0;
+    final command = ReleaseCommand(
+      resolution: f.resolution,
+      tree: source.source,
+      git: f.git,
+      inspector: Inspector(
+        registry: registry,
+        pubDev: PubDevTarget(registry: registry),
+        git: f.git,
+        tools: tools,
+        repository: f.git.originUrl,
+        stageFor: selectedStages.call,
+      ),
+      tools: tools,
+      output: output,
+      confirm: (_) async {
+        confirmations++;
+        fail('private staging must not request release authorization');
+      },
+      allowInteractiveTools: true,
+      stageOnly: true,
+      repositoryStages: repository,
+      completedProvider: (unit) {
+        siblingProbes++;
+        if (forbidSiblingProbe) {
+          throw StateError('unused sibling probe must not run');
+        }
+        return restoration.restoreCompletedProvider(unit.name);
+      },
+      refreshGit: () async => f.git,
+      refreshEnvironment: () => environment,
+      capabilities: HostCapabilities(
+        hostPlatform: 'linux-x64',
+        containerRuntime: null,
+        hasNativeAssets: false,
+      ),
+    );
+    final lock = StageStore(f.origin.directory.path).acquireForMutation();
+    try {
+      final code = await command.run(only: only);
+      expect(confirmations, 0, reason: buffer.toString());
+      expect(output.report.acted, isFalse, reason: buffer.toString());
+      expect(tools.forbidden, isEmpty, reason: buffer.toString());
+      expect(
+        f.origin.requests.every((request) => request.startsWith('GET ')),
+        isTrue,
+      );
+      return (
+        code: code,
+        text: buffer.toString(),
+        evidence: output.report.attachments.values.join('\n'),
+        report: output.report.encode(exit: code),
+        stages: selectedStages,
+        tools: tools,
+        discoveries: native.calls,
+        siblingProbes: siblingProbes,
+      );
+    } finally {
+      lock.close();
+      registry.close();
+    }
+  }
+
+  test(
+    'native stage command prepares a reversed complete stack privately',
+    () async {
+      final f = await _Fixture.create(
+        sameUnit: false,
+        committed: true,
+        authoritativeStages: true,
+        consumerFirst: true,
+      );
+      addTearDown(f.close);
+      expect(f.resolution.units.map((unit) => unit.name), ['app', 'core']);
+      final run = await runStageCommand(f);
+      expect(run.code, ExitCodes.ok, reason: run.text);
+      expect(run.text, contains('Preparation order: core -> app'));
+      final provider = run.stages(f.resolution.unit('core')!);
+      final consumer = run.stages(f.resolution.unit('app')!);
+      final imported = consumer.dependencies.imports.single;
+      expect(
+        imported.providerIdentity.id,
+        provider.requireReceipt().identity.id,
+      );
+      expect(imported.use.provider.version, '0.2.0');
+      expect(consumer.requireReceipt().complete, isTrue);
+      expect(consumer.unit.version.canonical, '0.1.0');
+      expect(run.tools.archives.map((path) => path.split('/').last), [
+        'rk_fixture_core-0.2.0.tar.gz',
+        'rk_fixture_app-0.1.0.tar.gz',
+      ]);
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    'native named stage command uses a published sibling without staging it',
+    () async {
+      final f = await _Fixture.create(
+        sameUnit: false,
+        committed: true,
+        authoritativeStages: true,
+      );
+      addTearDown(f.close);
+      f.origin.host(Directory('${f.origin.directory.path}/core'));
+      final run = await runStageCommand(f, only: 'app');
+      expect(run.code, ExitCodes.ok, reason: run.text);
+      final consumer = run.stages(f.resolution.unit('app')!);
+      expect(consumer.requireReceipt().complete, isTrue);
+      expect(consumer.dependencies.imports, isEmpty);
+      expect(
+        consumer.dependencies.external
+            .map((input) => input.binding.slot)
+            .toSet(),
+        {'rk_fixture_core', 'rk_fixture_remote'},
+      );
+      expect(run.tools.archives.map((path) => path.split('/').last), [
+        'rk_fixture_app-0.1.0.tar.gz',
+      ]);
+      expect(
+        Directory(
+          run.stages(f.resolution.unit('core')!).directory.path,
+        ).existsSync(),
+        isFalse,
+      );
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    'native named stage command imports a verified completed sibling without producing it',
+    () async {
+      final f = await _Fixture.create(
+        sameUnit: false,
+        committed: true,
+        authoritativeStages: true,
+      );
+      addTearDown(f.close);
+      final first = await runStageCommand(f, only: 'core');
+      expect(first.code, ExitCodes.ok, reason: first.text);
+      final provider = first.stages(f.resolution.unit('core')!);
+      final before = provider.directory.fingerprint();
+      final run = await runStageCommand(
+        f,
+        only: 'app',
+        stages: f.newStages(authoritativeSource: true),
+      );
+      expect(run.code, ExitCodes.ok, reason: run.text);
+      final consumer = run.stages(f.resolution.unit('app')!);
+      expect(consumer.requireReceipt().complete, isTrue);
+      expect(
+        consumer.dependencies.imports.single.providerIdentity.id,
+        provider.directory.identity.id,
+      );
+      expect(provider.directory.fingerprint(), before);
+      expect(run.tools.archives.map((path) => path.split('/').last), [
+        'rk_fixture_app-0.1.0.tar.gz',
+      ]);
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    'native stage command refuses a late missing dependency before all production',
+    () async {
+      final f = await _Fixture.create(
+        sameUnit: false,
+        committed: true,
+        authoritativeStages: true,
+        missingHosted: true,
+      );
+      addTearDown(f.close);
+      final run = await runStageCommand(f);
+      expect(run.code, ExitCodes.refused, reason: run.text);
+      expect(run.tools.archives, isEmpty);
+      for (final unit in f.resolution.units) {
+        expect(
+          Directory(run.stages(unit).directory.path).existsSync(),
+          isFalse,
+        );
+      }
+      expect(run.evidence, contains('rk_fixture_missing'));
+      expect(run.text, contains('rk_fixture_missing'), reason: run.evidence);
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  for (final published in [false, true]) {
+    test(
+      'native stage command ${published ? 'public no-op' : 'frozen named reuse'} skips discovery and sibling probes',
+      () async {
+        final f = await _Fixture.create(
+          sameUnit: false,
+          committed: true,
+          authoritativeStages: true,
+        );
+        addTearDown(f.close);
+        final first = await runStageCommand(f);
+        expect(first.code, ExitCodes.ok, reason: first.text);
+        final before = {
+          for (final unit in f.resolution.units)
+            unit.name: first.stages(unit).directory.fingerprint(),
+        };
+        if (published) {
+          for (final unit in f.resolution.units) {
+            final stage = first.stages(unit);
+            final archive = stage.requireReceipt().artifacts.singleWhere(
+              (artifact) => artifact.type == 'pub-archive',
+            );
+            f.origin.hostArchive(File(stage.directory.resolve(archive.path)));
+          }
+        } else {
+          f.origin.host(
+            f.origin.package('newer', 'rk_fixture_remote', '1.1.0'),
+          );
+        }
+        final run = await runStageCommand(
+          f,
+          only: published ? null : 'app',
+          stages: f.newStages(authoritativeSource: true),
+          forbidDiscovery: true,
+          forbidSiblingProbe: true,
+        );
+        expect(run.code, ExitCodes.ok, reason: run.text);
+        expect(run.discoveries, 0);
+        expect(run.siblingProbes, 0);
+        expect(run.tools.archives, isEmpty);
+        for (final unit in f.resolution.units) {
+          expect(first.stages(unit).directory.fingerprint(), before[unit.name]);
+        }
+        if (!published) {
+          final app = run.stages(f.resolution.unit('app')!);
+          expect(
+            DartStageContext.fromEnvelope(
+              app.dependencies.contexts.single,
+            ).discovery.packages['rk_fixture_remote']!.manifest.version,
+            '1.0.0',
+          );
+        }
+      },
+      timeout: const Timeout(Duration(minutes: 3)),
+    );
+  }
+
+  test(
+    'native stage command refuses a redirected destination before discovery',
+    () async {
+      final f = await _Fixture.create(
+        sameUnit: false,
+        committed: true,
+        authoritativeStages: true,
+      );
+      addTearDown(f.close);
+      final run = await runStageCommand(
+        f,
+        environment: {'PUB_HOSTED_URL': f.origin.url},
+        forbidDiscovery: true,
+        forbidSiblingProbe: true,
+      );
+      expect(run.code, ExitCodes.refused, reason: run.text);
+      expect(run.report, contains('RK-PUB-009'));
+      expect(run.discoveries, 0);
+      expect(run.siblingProbes, 0);
+      expect(run.tools.archives, isEmpty);
+      for (final unit in f.resolution.units) {
+        expect(
+          Directory(run.stages(unit).directory.path).existsSync(),
+          isFalse,
+        );
+      }
+    },
+  );
+
+  test(
+    'native stage command cannot defer a Pub prerequisite with only a binary context',
+    () async {
+      final f = await _Fixture.create(
+        sameUnit: false,
+        binary: true,
+        publishBinaryTargets: false,
+        committed: true,
+        authoritativeStages: true,
+      );
+      addTearDown(f.close);
+      // Native resolution can use this patch version, but the configured 0.2.0
+      // public prerequisite stays absent. A binary-only context cannot authorize
+      // the package archive producer to proceed past that prerequisite.
+      f.origin.host(
+        f.origin.package('public-core', 'rk_fixture_core', '0.2.1'),
+      );
+      final run = await runStageCommand(
+        f,
+        only: 'app',
+        transform: (discovery) {
+          final contexts = discovery.contexts
+              .where(
+                (context) =>
+                    DartStageContext.fromEnvelope(context).operation ==
+                    DartStageOperation.binary,
+              )
+              .toList();
+          final ids = contexts.map((context) => context.context).toSet();
+          return DiscoveredNativeStage(
+            contexts: contexts,
+            pending: discovery.pending.where(
+              (request) => ids.contains(request.use.context),
+            ),
+            external: discovery.external.where(
+              (input) => ids.contains(input.context),
+            ),
+          );
+        },
+      );
+      expect(run.code, ExitCodes.refused, reason: run.text);
+      expect(run.report, contains('RK-REL-001'));
+      expect(run.text, contains('rk_fixture_core'));
+      expect(run.discoveries, 1);
+      expect(run.tools.archives, isEmpty);
+      final stage = run.stages(f.resolution.unit('app')!);
+      expect(
+        DartStageContext.fromEnvelope(
+          stage.dependencies.contexts.single,
+        ).operation,
+        DartStageOperation.binary,
+      );
+      expect(Directory(stage.directory.path).existsSync(), isFalse);
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    'native acceptance stages four reverse independent packages through a hosted bridge',
+    () async {
+      final f = await _Fixture.acceptance();
+      addTearDown(f.close);
+      expect(f.resolution.units.map((unit) => unit.name), [
+        'app',
+        'testing',
+        'middle',
+        'core',
+      ]);
+      final run = await runStageCommand(f);
+      expect(run.code, ExitCodes.ok, reason: '${run.text}\n${run.evidence}');
+      expect(
+        run.text,
+        contains('Preparation order: core -> middle -> testing -> app'),
+      );
+      expect(run.tools.archives.map((path) => path.split('/').last), [
+        'rk_fixture_core-0.2.0.tar.gz',
+        'rk_fixture_middle-0.3.0.tar.gz',
+        'rk_fixture_testing-0.4.0.tar.gz',
+        'rk_fixture_app-0.1.0.tar.gz',
+      ]);
+      final core = run.stages(f.resolution.unit('core')!);
+      final middle = run.stages(f.resolution.unit('middle')!);
+      final native = DartStageContext.fromEnvelope(
+        middle.dependencies.contexts.single,
+      );
+      expect((native.root.fields['dependencies'] as Map).keys, [
+        'rk_fixture_bridge',
+      ]);
+      expect(middle.dependencies.imports.single.use.slot, 'rk_fixture_core');
+      expect(
+        middle.dependencies.imports.single.providerIdentity.id,
+        core.directory.identity.id,
+      );
+      expect(
+        middle.dependencies.external.single.binding.slot,
+        'rk_fixture_bridge',
+      );
+      for (final unit in f.resolution.units) {
+        expect(run.stages(unit).requireReceipt().complete, isTrue);
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    'native acceptance preserves named hosted choices when bare staging resumes',
+    () async {
+      final f = await _Fixture.create(
+        sameUnit: false,
+        committed: true,
+        authoritativeStages: true,
+      );
+      addTearDown(f.close);
+      f.origin.host(Directory('${f.origin.directory.path}/core'));
+      final first = await runStageCommand(f, only: 'app');
+      expect(first.code, ExitCodes.ok, reason: first.text);
+      final app = first.stages(f.resolution.unit('app')!);
+      final receipt = app.requireReceipt().encode();
+      final before = app.directory.fingerprint();
+      expect(app.dependencies.imports, isEmpty);
+      f.origin.host(f.origin.package('newer', 'rk_fixture_remote', '1.1.0'));
+      final run = await runStageCommand(
+        f,
+        stages: f.newStages(authoritativeSource: true),
+        forbidDiscovery: true,
+        forbidSiblingProbe: true,
+      );
+      expect(run.code, ExitCodes.ok, reason: '${run.text}\n${run.evidence}');
+      final restored = run.stages(f.resolution.unit('app')!);
+      expect(restored.requireReceipt().encode(), receipt);
+      expect(restored.directory.fingerprint(), before);
+      expect(restored.dependencies.imports, isEmpty);
+      expect(
+        restored.dependencies.external
+            .map((input) => input.binding.slot)
+            .toSet(),
+        {'rk_fixture_core', 'rk_fixture_remote'},
+      );
+      expect(run.discoveries, 0);
+      expect(run.siblingProbes, 0);
+      expect(run.tools.archives, isEmpty);
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  for (final mode in ['failure', 'partial failure', 'exception']) {
+    test(
+      'native acceptance retries an interrupted consumer ($mode) with frozen choices and truthful partial JSON',
+      () async {
+        final f = await _Fixture.acceptance();
+        addTearDown(f.close);
+        final first = await runStageCommand(
+          f,
+          interruptArchive: 'rk_fixture_middle-0.3.0.tar.gz',
+          interruptMode: mode,
+        );
+        expect(first.code, ExitCodes.refused, reason: first.text);
+        expect(first.tools.interrupted, isTrue);
+        final core = first.stages(f.resolution.unit('core')!);
+        final providerReceipt = core.requireReceipt().encode();
+        final providerBytes = core.directory.fingerprint();
+        final middle = first.stages(f.resolution.unit('middle')!);
+        final partial = StageReceiptStore(middle.directory).read()!;
+        expect(partial.complete, isFalse);
+        for (final archive in first.tools.archives) {
+          expect(archive, isNot(startsWith(middle.directory.path)));
+          expect(File(archive).existsSync(), isFalse);
+        }
+        final interrupted = middle.inspect();
+        expect(
+          interrupted.validProgress,
+          isTrue,
+          reason: '${interrupted.issues}\n${first.text}\n${first.evidence}',
+        );
+        expect(
+          partial.steps.map((step) => step.name),
+          contains(StageDependencies.importProducer),
+        );
+        expect(
+          partial.steps.map((step) => step.name),
+          isNot(contains('pub-archive:rk_fixture_middle')),
+        );
+        final frozen = CanonicalJson.encode(middle.dependencies.toJson());
+        final document = jsonDecode(first.report) as Map;
+        final units = {
+          for (final unit in document['units'] as List)
+            unit['name']: unit as Map,
+        };
+        for (final unit in f.resolution.units) {
+          final steps = (units[unit.name]!['steps'] as List).cast<Map>();
+          expect(
+            steps
+                .where((step) => step['public'] == true)
+                .map((step) => step['action']),
+            everyElement('not_attempted'),
+          );
+          final completed = steps.singleWhere(
+            (step) => step['kind'] == 'completeStage',
+          );
+          expect(
+            completed['verdict'],
+            unit.name == 'core' ? 'exact' : isNot('exact'),
+          );
+          if (const {'testing', 'app'}.contains(unit.name)) {
+            expect(
+              Directory(first.stages(unit).directory.path).existsSync(),
+              isFalse,
+            );
+            expect(completed['verdict'], 'absent');
+          }
+        }
+        f.origin.host(
+          f.origin.package(
+            'bridge-newer',
+            'rk_fixture_bridge',
+            '1.1.0',
+            dependencies: '  rk_fixture_core: ^0.2.0\n',
+          ),
+        );
+        final run = await runStageCommand(
+          f,
+          stages: f.newStages(authoritativeSource: true),
+        );
+        expect(run.code, ExitCodes.ok, reason: '${run.text}\n${run.evidence}');
+        final resumed = run.stages(f.resolution.unit('middle')!);
+        expect(resumed.requireReceipt().identity.id, partial.identity.id);
+        expect(CanonicalJson.encode(resumed.dependencies.toJson()), frozen);
+        expect(
+          DartStageContext.fromEnvelope(
+            resumed.dependencies.contexts.single,
+          ).discovery.packages['rk_fixture_bridge']!.manifest.version,
+          '1.0.0',
+        );
+        expect(core.requireReceipt().encode(), providerReceipt);
+        expect(core.directory.fingerprint(), providerBytes);
+        expect(run.tools.archives.map((path) => path.split('/').last), [
+          'rk_fixture_middle-0.3.0.tar.gz',
+          'rk_fixture_testing-0.4.0.tar.gz',
+          'rk_fixture_app-0.1.0.tar.gz',
+        ]);
+      },
+      timeout: const Timeout(Duration(minutes: 3)),
+    );
+  }
+
+  test(
+    'native acceptance filters publication eligibility per package in a mixed unit',
+    () async {
+      final f = await _Fixture.acceptance(mixed: true);
+      addTearDown(f.close);
+      final core = f.resolution.unit('bundle')!.project('rk_fixture_core');
+      final archive = File('${f.origin.directory.path}/public-core.tar.gz');
+      final packed = await f.origin.run(
+        Directory('${f.origin.directory.path}/core'),
+        ['pub', 'publish', '--to-archive', archive.path],
+      );
+      expect(
+        archive.existsSync(),
+        isTrue,
+        reason: '${packed.stdout}\n${packed.stderr}',
+      );
+      f.origin.hostArchive(archive);
+      final run = await runStageCommand(f);
+      expect(run.code, ExitCodes.ok, reason: '${run.text}\n${run.evidence}');
+      final app = run.stages(f.resolution.unit('app')!);
+      expect(app.requireReceipt().complete, isTrue);
+      expect(
+        app.dependencies.imports.map((input) => input.use.provider.project),
+        ['rk_fixture_private'],
+      );
+      final published = app.dependencies.external.singleWhere(
+        (input) => input.binding.slot == core.name,
+      );
+      expect(published.binding.provider, isNull);
+      expect(published.binding.version, '0.2.0');
+      final result = jsonDecode(run.report) as Map;
+      final bundle =
+          (result['units'] as List).singleWhere(
+                (unit) => unit['name'] == 'bundle',
+              )
+              as Map;
+      final publicSteps = (bundle['steps'] as List).cast<Map>().where(
+        (step) => step['public'] == true,
+      );
+      expect(
+        publicSteps.singleWhere(
+          (step) => (step['id'] as String).contains('rk_fixture_core'),
+        )['action'],
+        'already_published',
+      );
+      expect(
+        publicSteps.singleWhere(
+          (step) => (step['id'] as String).contains('rk_fixture_private'),
+        )['action'],
+        'not_attempted',
+      );
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    'native acceptance refuses interleaved units before any producer work',
+    () async {
+      final f = await _Fixture.acceptance(interleaved: true);
+      addTearDown(f.close);
+      final run = await runStageCommand(f);
+      expect(run.code, ExitCodes.refused, reason: run.text);
+      expect(run.text, contains('interleaved release units'));
+      expect(run.tools.archives, isEmpty);
+      final result = jsonDecode(run.report) as Map;
+      expect(
+        (result['units'] as List).map((unit) => unit['name']),
+        f.resolution.units.map((unit) => unit.name),
+      );
+      for (final unit in (result['units'] as List).cast<Map>()) {
+        final steps = (unit['steps'] as List).cast<Map>();
+        expect(
+          steps.singleWhere(
+            (step) => step['kind'] == 'completeStage',
+          )['verdict'],
+          'absent',
+        );
+        expect(
+          steps
+              .where((step) => step['public'] == true)
+              .map((step) => step['action']),
+          everyElement('not_attempted'),
+        );
+      }
+      for (final unit in f.resolution.units) {
+        expect(
+          Directory(run.stages(unit).directory.path).existsSync(),
+          isFalse,
+        );
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    'native status observes exact bound archive without native work or resolver adoption',
+    () async {
+      final f = await _Fixture.create(
+        sameUnit: false,
+        committed: true,
+        authoritativeStages: true,
+      );
+      addTearDown(f.close);
+      final prepared = await runStageCommand(f);
+      expect(prepared.code, ExitCodes.ok, reason: prepared.text);
+      final app = f.resolution.unit('app')!;
+      final staged = prepared.stages(app);
+      final archive = staged.requireReceipt().artifacts.singleWhere(
+        (artifact) => artifact.type == 'pub-archive',
+      );
+      f.origin.hostArchive(File(staged.directory.resolve(archive.path)));
+      final before = {
+        for (final unit in f.resolution.units)
+          unit.name: prepared.stages(unit).directory.fingerprint(),
+      };
+      final current = f.newStages(authoritativeSource: true);
+      final unbound = current(app);
+      expect(
+        unbound.directory.identity.id,
+        isNot(staged.directory.identity.id),
+      );
+      final tools = _RefuseTools();
+      final restoration = await StageRestoration.create(
+        stages: current,
+        resolution: f.resolution,
+        currentGit: f.git,
+        authority: DartStageAuthority(authorizer(f, tools: tools)),
+        refreshGit: () async => f.git,
+      );
+      final registry = Registry(
+        host: '127.0.0.1:${f.origin.server.port}',
+        secure: false,
+      );
+      addTearDown(registry.close);
+      final pub = _ObservedPubDevTarget(registry: registry);
+      final output = StringBuffer();
+      final command = StatusCommand(
+        resolution: f.resolution,
+        tree: f.source,
+        git: f.git,
+        inspector: Inspector(
+          registry: registry,
+          pubDev: pub,
+          git: f.git,
+          tools: tools,
+          repository: f.git.originUrl,
+          stageFor: current.call,
+        ),
+        output: Output(sink: output.write, isTerminal: false, useColor: false),
+        observeStage: (unit) => restoration.observeLocal(unit.name),
+      );
+      final snapshot = await command.collect(only: app.name);
+      command.render(snapshot);
+      final observed = snapshot.units.single;
+      expect(
+        observed.stage!.receipt!.identity.id,
+        staged.directory.identity.id,
+      );
+      expect(observed.nativeAuthorizationDeferred, isTrue);
+      expect(
+        observed.stageState.evidence['stage id'],
+        staged.directory.identity.id,
+      );
+      expect(output.toString(), contains('deferred until stage or release'));
+      expect(observed.targets.single.inspection.isExact, isTrue);
+      expect(pub.expected, [archive.sha256]);
+      expect(tools.calls, 0);
+      expect(current(app), same(unbound));
+      expect(unbound.dependencies.contexts, isEmpty);
+      expect({
+        for (final unit in f.resolution.units)
+          unit.name: prepared.stages(unit).directory.fingerprint(),
+      }, before);
+      expect(
+        f.origin.requests.every((request) => request.startsWith('GET ')),
+        isTrue,
+      );
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
 
   test(
     'repository discovery stages native providers first and restores frozen choices',
@@ -2070,6 +2842,143 @@ final class _Fixture {
     originUrl: 'example/repository',
   );
 
+  /// Separate command acceptance sources leave the existing fixtures unchanged.
+  static Future<_Fixture> acceptance({
+    bool mixed = false,
+    bool interleaved = false,
+  }) async {
+    final origin = await NativePubFixture.create();
+    try {
+      origin.host(origin.package('remote', 'rk_fixture_remote', '1.0.0'));
+      if (!mixed) {
+        origin.host(
+          origin.package(
+            'bridge',
+            'rk_fixture_bridge',
+            '1.0.0',
+            dependencies: '  rk_fixture_core: ^0.2.0\n',
+          ),
+        );
+      }
+      final definitions = <String, ({String version, String dependencies})>{
+        'app': (
+          version: interleaved ? '0.2.0' : '0.1.0',
+          dependencies: mixed
+              ? '  rk_fixture_core: ^0.2.0\n  rk_fixture_private: ^0.2.0\n  rk_fixture_remote: ^1.0.0\n'
+              : '  rk_fixture_testing: ^0.4.0\n  rk_fixture_remote: ^1.0.0\n',
+        ),
+        if (!mixed) ...{
+          'testing': (
+            version: '0.4.0',
+            dependencies: '  rk_fixture_middle: ^0.3.0\n',
+          ),
+          'middle': (
+            version: '0.3.0',
+            dependencies: '  rk_fixture_bridge: ^1.0.0\n',
+          ),
+        },
+        'core': (version: '0.2.0', dependencies: ''),
+        if (mixed) 'private': (version: '0.2.0', dependencies: ''),
+      };
+      final roots = [
+        for (final entry in definitions.entries)
+          origin.package(
+            entry.key,
+            'rk_fixture_${entry.key}',
+            entry.value.version,
+            sdk: '^3.0.0',
+            dependencies: entry.value.dependencies,
+          ),
+      ];
+      final config = interleaved
+          ? '''schema = 2
+[release.bundle]
+[[release.bundle.project]]
+path = "core"
+publish = ["pub.dev"]
+[[release.bundle.project]]
+path = "app"
+publish = ["pub.dev"]
+[release.testing]
+path = "testing"
+publish = ["pub.dev"]
+[release.middle]
+path = "middle"
+publish = ["pub.dev"]
+'''
+          : mixed
+          ? '''schema = 2
+[release.app]
+path = "app"
+publish = ["pub.dev"]
+[release.bundle]
+[[release.bundle.project]]
+path = "core"
+publish = ["pub.dev"]
+[[release.bundle.project]]
+path = "private"
+publish = ["pub.dev"]
+'''
+          : 'schema = 2\n${definitions.keys.map((name) => '[release.$name]\npath = "$name"\npublish = ["pub.dev"]\n').join()}';
+      final source = MemorySourceTree({
+        'release.toml': config,
+        for (final root in roots)
+          for (final file in root.listSync(recursive: true).whereType<File>())
+            file.path.substring(origin.directory.path.length + 1): file
+                .readAsStringSync(),
+      });
+      final diagnostics = Diagnostics();
+      final parsed = ReleaseConfig.parse(config, 'release.toml', diagnostics)!;
+      final resolution = Resolution.resolve(parsed, source, diagnostics);
+      if (resolution == null || diagnostics.isNotEmpty) {
+        throw StateError(
+          'invalid command acceptance fixture: ${diagnostics.found.join('; ')}',
+        );
+      }
+      for (final entry in source.files.entries) {
+        final file = File('${origin.directory.path}/${entry.key}');
+        file.parent.createSync(recursive: true);
+        file.writeAsStringSync(entry.value);
+      }
+      Future<String> git(List<String> args) async {
+        final result = await Process.run(
+          'git',
+          args,
+          workingDirectory: origin.directory.path,
+        );
+        if (result.exitCode != 0) {
+          throw StateError('fixture Git failed: ${result.stderr}');
+        }
+        return '${result.stdout}'.trim();
+      }
+
+      await git(['add', '--', ...source.files.keys]);
+      await git([
+        '-c',
+        'user.name=RK fixture',
+        '-c',
+        'user.email=fixture@example.test',
+        '-c',
+        'commit.gpgsign=false',
+        'commit',
+        '--quiet',
+        '-m',
+        'native command acceptance source',
+      ]);
+      return _Fixture(
+        origin,
+        source,
+        resolution,
+        commit: await git(['rev-parse', 'HEAD']),
+        treeHash: await git(['rev-parse', 'HEAD^{tree}']),
+        authoritativeStages: true,
+      );
+    } on Object {
+      await origin.close();
+      rethrow;
+    }
+  }
+
   static Future<_Fixture> create({
     required bool sameUnit,
     bool binary = false,
@@ -2079,6 +2988,9 @@ final class _Fixture {
     bool helpers = false,
     bool committed = false,
     bool authoritativeStages = false,
+    bool consumerFirst = false,
+    bool missingHosted = false,
+    bool publishBinaryTargets = true,
   }) async {
     final origin = await NativePubFixture.create();
     try {
@@ -2102,7 +3014,8 @@ final class _Fixture {
         sameUnit ? '0.2.0' : '0.1.0',
         sdk: '^3.0.0',
         dependencies:
-            '  rk_fixture_core: ^0.2.0\n  rk_fixture_remote: ^1.0.0\n',
+            '  rk_fixture_core: ^0.2.0\n  rk_fixture_remote: ^1.0.0\n'
+            '${missingHosted ? '  rk_fixture_missing: ^1.0.0\n' : ''}',
         extra: {
           'bin/main.dart':
               "import 'package:rk_fixture_core/rk_fixture_core.dart' as core;\nimport 'package:rk_fixture_remote/rk_fixture_remote.dart' as remote;\nvoid main() => print(core.value + remote.value);\n",
@@ -2169,6 +3082,15 @@ publish = ["pub.dev"]
 path = "app"
 publish = ["pub.dev"]
 '''
+          : consumerFirst
+          ? '''schema = 2
+[release.app]
+path = "app"
+publish = ["pub.dev"]
+[release.core]
+path = "core"
+publish = ["pub.dev"]
+'''
           : '''schema = 2
 [release.core]
 path = "core"
@@ -2180,7 +3102,10 @@ publish = ["pub.dev"]
       if (binary) {
         config = config.replaceFirst(
           '[release.app]\npath = "app"\npublish = ["pub.dev"]',
-          '[release.app]\npath = "app"\npublish = ["pub.dev", "git-tag", "github-release"]\nbinary_platforms = ${jsonEncode(binaryPlatforms ?? [HostCapabilities.inspect().hostPlatform])}',
+          '[release.app]\npath = "app"\npublish = ${jsonEncode([
+            'pub.dev',
+            if (publishBinaryTargets) ...['git-tag', 'github-release'],
+          ])}\nbinary_platforms = ${jsonEncode(binaryPlatforms ?? [HostCapabilities.inspect().hostPlatform])}',
         );
       }
       Directory? helper;
@@ -2535,6 +3460,144 @@ final class _WorkspaceMutatingTools implements Tools {
     List<String> arguments, {
     String? workingDirectory,
   }) => throw StateError('unexpected interactive native operation');
+}
+
+final class _ObservedDiscovery implements NativeStageDiscovery {
+  _ObservedDiscovery(this.delegate, {required this.forbid, this.transform});
+  final NativeStageDiscovery delegate;
+  final bool forbid;
+  final DiscoveredNativeStage Function(DiscoveredNativeStage)? transform;
+  int calls = 0;
+
+  @override
+  Set<String> get ecosystems => delegate.ecosystems;
+
+  @override
+  List<NativeCandidate> configuredCandidates() =>
+      delegate.configuredCandidates();
+
+  @override
+  Map<String, Object?> readIntent(ResolvedUnit unit) =>
+      delegate.readIntent(unit);
+
+  @override
+  Future<DiscoveredNativeStage> discover(
+    ResolvedUnit unit, {
+    required Iterable<NativeCandidate> candidates,
+  }) async {
+    calls++;
+    if (forbid) throw StateError('unused native discovery must not run');
+    final result = await delegate.discover(unit, candidates: candidates);
+    return transform?.call(result) ?? result;
+  }
+}
+
+final class _ObservedPubDevTarget extends PubDevTarget {
+  _ObservedPubDevTarget({required super.registry});
+  final List<String?> expected = [];
+
+  @override
+  Future<Inspection> inspectProject(
+    ResolvedProject project, {
+    String? expectedArchiveSha256,
+  }) {
+    expected.add(expectedArchiveSha256);
+    return super.inspectProject(
+      project,
+      expectedArchiveSha256: expectedArchiveSha256,
+    );
+  }
+}
+
+final class _PrivateStageTools implements Tools {
+  _PrivateStageTools(
+    this.registry,
+    this.compiler, {
+    this.interruptArchive,
+    this.interruptMode = 'failure',
+  });
+  final String registry;
+  final String compiler;
+  final String? interruptArchive;
+  final String interruptMode;
+  bool interrupted = false;
+  final List<String> forbidden = [];
+  final List<String> archives = [];
+
+  @override
+  Future<ToolResult> run(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+    Map<String, String>? environment,
+    Duration? timeout,
+  }) {
+    final tool = executable.split('/').last;
+    final pub = arguments.indexOf('pub');
+    final pubCommand = pub < 0 || pub + 1 >= arguments.length
+        ? null
+        : arguments[pub + 1];
+    final prohibited =
+        const {'login', 'logout', 'token'}.contains(pubCommand) ||
+        arguments.contains('--from-archive') ||
+        (pubCommand == 'publish' &&
+            !arguments.contains('--to-archive') &&
+            !arguments.contains('--dry-run')) ||
+        tool == 'gh' ||
+        (tool == 'git' &&
+            arguments.any(
+              (argument) => const {'push', 'tag'}.contains(argument),
+            ));
+    if (prohibited) {
+      forbidden.add('$executable ${arguments.join(' ')}');
+      throw StateError('unexpected public act or native session operation');
+    }
+    final archive = arguments.indexOf('--to-archive');
+    if (archive >= 0) {
+      final path = arguments[archive + 1];
+      archives.add(path);
+      if (!interrupted && path.split('/').last == interruptArchive) {
+        interrupted = true;
+        if (interruptMode != 'failure') {
+          File(path).writeAsStringSync('unfinished native archive');
+        }
+        if (interruptMode == 'exception') {
+          throw StateError('fixture threw during consumer archive production');
+        }
+        return Future.value(
+          ToolResult(
+            exitCode: 74,
+            stdout: '',
+            stderr: 'fixture interrupted consumer archive producer',
+          ),
+        );
+      }
+    }
+    final availability = pubCommand == 'cache' && arguments.contains('add');
+    return const SystemTools().run(
+      tool == 'dart' ? compiler : executable,
+      arguments,
+      workingDirectory: workingDirectory,
+      environment: {
+        ...?environment,
+        // The injected public inspector uses this fixture registry as well.
+        // Keep read-only post-publication cache probes inside the fixture;
+        // the command's readiness environment intentionally remains separate.
+        if (availability) 'PUB_HOSTED_URL': registry,
+      },
+      timeout: timeout,
+    );
+  }
+
+  @override
+  Future<int> runInteractive(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+  }) {
+    forbidden.add('$executable ${arguments.join(' ')}');
+    throw StateError('unexpected interactive native authorization');
+  }
 }
 
 final class _RefuseTools implements Tools {
