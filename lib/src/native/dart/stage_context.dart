@@ -2,10 +2,12 @@ import '../../engine/canonical_json.dart';
 import '../../engine/native_dependencies.dart';
 import '../../engine/native_stage_context.dart';
 import 'dependencies.dart';
+import 'dependency_lock.dart';
 import 'hosted_discovery.dart';
 import 'package_archive.dart';
+import 'stage_inputs.dart';
 
-enum DartStageOperation { pubArchive, binary }
+export 'stage_inputs.dart' show DartStageOperation;
 
 /// The Dart interpretation of a generic native stage context. The envelope
 /// is portable evidence, not authorization to restore a previous stage. Core
@@ -17,6 +19,7 @@ final class DartStageContext {
     this.defaultRegistry,
     this.operation,
     this.discovery,
+    this.lock,
   );
 
   factory DartStageContext.discovered({
@@ -25,13 +28,14 @@ final class DartStageContext {
     required DartStageOperation operation,
     required Iterable<String> consumers,
     required DartDiscoveryResult discovery,
+    DartDependencyLock? lock,
   }) {
     final context = DartStageContext.fromEnvelope(
       NativeStageContext(
         context: 'dart:${operation.name}:${root.name}',
         ecosystem: 'dart',
         owner: root.name,
-        format: 1,
+        format: 2,
         consumers: consumers,
         bindings: [
           for (final selected in discovery.packages.values)
@@ -51,6 +55,7 @@ final class DartStageContext {
           'default_registry': dartHostedRegistry(defaultRegistry),
           'operation': operation.name,
           'resolution': discovery.toJson(),
+          'lockfile': lock?.binding.toJson(),
         },
       ),
     );
@@ -62,19 +67,21 @@ final class DartStageContext {
       context.defaultRegistry,
       context.operation,
       discovery,
+      context.lock,
     );
   }
 
   factory DartStageContext.fromEnvelope(NativeStageContext envelope) {
     final payload = envelope.native;
     if (envelope.ecosystem != 'dart' ||
-        envelope.format != 1 ||
-        payload.length != 4 ||
+        envelope.format != 2 ||
+        payload.length != 5 ||
         !payload.keys.toSet().containsAll({
           'root_manifest',
           'default_registry',
           'operation',
           'resolution',
+          'lockfile',
         }) ||
         payload['root_manifest'] is! Map ||
         payload['default_registry'] is! String) {
@@ -91,6 +98,14 @@ final class DartStageContext {
       throw const FormatException('unknown Dart stage operation');
     }
     final operation = operations.single;
+    final lock = payload['lockfile'] == null
+        ? null
+        : DartLockBinding.fromJson(payload['lockfile']);
+    if (operation == DartStageOperation.pubArchive && lock != null) {
+      throw const FormatException(
+        'Pub archive context cannot inherit a lockfile',
+      );
+    }
     final discovery = DartDiscoveryResult.fromJson(payload['resolution']);
     final graphRoot = discovery.graph.packages[root.name];
     if (envelope.owner != root.name ||
@@ -146,7 +161,14 @@ final class DartStageContext {
         'Dart context bindings differ from native selection',
       );
     }
-    return DartStageContext._(envelope, root, registry, operation, discovery);
+    return DartStageContext._(
+      envelope,
+      root,
+      registry,
+      operation,
+      discovery,
+      lock,
+    );
   }
 
   final NativeStageContext envelope;
@@ -154,4 +176,5 @@ final class DartStageContext {
   final String defaultRegistry;
   final DartStageOperation operation;
   final DartDiscoveryResult discovery;
+  final DartLockBinding? lock;
 }

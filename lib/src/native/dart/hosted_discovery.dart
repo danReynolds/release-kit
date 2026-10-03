@@ -7,16 +7,15 @@ import 'package:tar/tar.dart';
 
 import '../../engine/native_dependencies.dart';
 import '../../engine/canonical_json.dart';
-import '../../engine/pubspec.dart';
 import '../../engine/tools.dart';
 import '../../transforms/digest.dart';
 import 'dependencies.dart';
+import 'dependency_lock.dart';
 import 'package_archive.dart';
 import 'resolution_graph.dart';
 import 'version_constraints.dart';
 
-/// Canonical credential-free registry used by native hosted preparation.
-String dartHostedRegistry(String value) => _registry(value);
+export 'dependencies.dart' show dartHostedRegistry;
 
 /// A caller-authorized provider in the selected preparation scope. A manifest
 /// is solver metadata, not an artifact; production must still supply its exact
@@ -196,8 +195,9 @@ final class DartHostedDiscovery {
   Future<DartDiscoveryResult> resolve({
     required DartPackageManifest root,
     Iterable<DartDiscoveryCandidate> candidates = const [],
+    DartDependencyLock? lock,
   }) async {
-    final session = _Session(this, root, candidates.toList());
+    final session = _Session(this, root, candidates.toList(), lock: lock);
     try {
       return await session.resolve();
     } finally {
@@ -214,6 +214,7 @@ final class DartHostedDiscovery {
     required DartPackageManifest root,
     required DartDiscoveryResult frozen,
     Iterable<DartDiscoveryCandidate> candidates = const [],
+    DartDependencyLock? lock,
   }) async {
     final current = candidates.toList();
     final selected = <DartDiscoveryCandidate>[];
@@ -234,7 +235,7 @@ final class DartHostedDiscovery {
       candidate.manifest.requireSameManifest(package.manifest);
       selected.add(candidate);
     }
-    final session = _Session(this, root, selected, frozen: frozen);
+    final session = _Session(this, root, selected, frozen: frozen, lock: lock);
     try {
       final result = await session.resolve();
       result.graph.requireSameSelection(frozen.graph);
@@ -246,11 +247,12 @@ final class DartHostedDiscovery {
 }
 
 final class _Session {
-  _Session(this.options, this.root, this.candidates, {this.frozen});
+  _Session(this.options, this.root, this.candidates, {this.frozen, this.lock});
   final DartHostedDiscovery options;
   final DartPackageManifest root;
   final List<DartDiscoveryCandidate> candidates;
   final DartDiscoveryResult? frozen;
+  final DartDependencyLock? lock;
   final HttpClient client = HttpClient();
   final Directory directory = Directory.systemTemp.createTempSync(
     'rk-dart-discovery-',
@@ -299,6 +301,14 @@ final class _Session {
     for (var pass = 0; pass <= candidates.length; pass++) {
       // Each preference refinement starts a fresh native solve. Pub's metadata
       // cache must not retain the unrestricted listing from the previous pass.
+      if (lock case final original?) {
+        File('${directory.path}/pubspec.lock').writeAsStringSync(
+          await original.forDiscovery(
+            (registry) async => (await _shadow(registry)).url,
+            defaultRegistry: options.defaultRegistry,
+          ),
+        );
+      }
       final result = await options.tools.run(
         options.compiler,
         const [
@@ -359,7 +369,19 @@ final class _Session {
         root,
         ...selected.values.map((value) => value.manifest),
       ], root: root.name);
-      if (pinned.length == prior) return DartDiscoveryResult._(graph, selected);
+      if (pinned.length == prior) {
+        for (final package in selected.values) {
+          if (package.candidate == null) {
+            lock?.requireExternalIntegrity(
+              name: package.manifest.name,
+              registry: package.registry,
+              version: package.manifest.version,
+              sha256: package.archiveSha256!,
+            );
+          }
+        }
+        return DartDiscoveryResult._(graph, selected);
+      }
       File('${directory.path}/pubspec.lock').deleteSync();
       Directory('${directory.path}/.dart_tool').deleteSync(recursive: true);
     }
@@ -754,13 +776,7 @@ void _requireSupported(DartPackageManifest manifest, {required bool isRoot}) {
   }
 }
 
-String _registry(String value) {
-  final canonical = canonicalPublishDestination(value);
-  final normalized = canonical == 'https://pub.dartlang.org'
-      ? 'https://pub.dev'
-      : canonical;
-  return _url(normalized).toString().replaceFirst(RegExp(r'/$'), '');
-}
+String _registry(String value) => dartHostedRegistry(value);
 
 Uri _url(String value, {bool allowQuery = false}) {
   final uri = Uri.tryParse(value);

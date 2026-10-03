@@ -1,8 +1,9 @@
 # Dependency-aware repository staging
 
-Status: reviewed delivery plan; implementation foundations exist at `f8ecd5b`.
-Native discovery/replay, receipt-bound inputs, shared Pub/binary preparation and
-frozen-choice verification are implemented. Command integration is not complete.
+Status: reviewed delivery plan; implementation is in progress on
+`codex/dependency-staging`. Native discovery/replay, receipt-bound inputs, shared
+Pub/binary preparation, frozen-choice verification and source-bound binary lock
+policies are implemented. Command integration is not complete.
 The remaining work is defined in the implementation packets below; foundation
 proofs do not qualify bare `rk stage` or publication. No publication has occurred.
 
@@ -453,10 +454,10 @@ Make these policies explicit in the native context and its format:
   helper requires its package archive. Reject unrelated overrides and runtime
   path/Git substitutions as already specified.
 
-First implementation action: add failing native cases for a compatible older
-binary lock, a candidate-induced lock update, workspace lock selection, a helper
-with an incompatible back-edge or transitive incoming constraint, and helper
-runtime promotion. Include ignored helper dev dependencies and untracked helpers. Implement the
+The binary-lock and committed-source cases now pass; see current evidence below.
+The next packet-1 action is the development-helper policy: add native cases for
+an incompatible back-edge or transitive incoming constraint, runtime promotion,
+ignored helper dev dependencies and untracked helpers. Implement the
 smallest policy support that makes those tests and the existing archive replay
 cases pass. Do not accept an override-only success as the back-edge proof.
 
@@ -692,7 +693,8 @@ qualification. No user product decision remains pending.
 
 ## Current implementation evidence
 
-This is a snapshot at `f8ecd5b`, not an additional execution backlog. Earlier
+This is a snapshot after the source/binary-lock integration, not an additional
+execution backlog. Earlier
 slice results are superseded by the current evidence below.
 
 | Implemented foundation | Evidence and qualification boundary |
@@ -702,6 +704,7 @@ slice results are superseded by the current evidence below.
 | Native discovery and archive fidelity | Bounded hosted metadata discovery, transitive local candidates, guarded native archive reader, original-registry cache replay, full manifest/graph/hash/payload checks and signed URL redaction |
 | Shared Pub and binary producers | `7b62807`: real packaging and BinaryChain compilation use bound archives, preserve warnings/manifests, and record actual graph/hash evidence; production CLI does not bind these automatically yet |
 | Frozen native verification | `f8ecd5b`: authenticates exact external metadata and current supplied local candidates, then re-solves only frozen choices and compares causal graph; caller still must authorize roots/provider provenance/adoption |
+| Source and binary lock policies | Native contexts format 2 bind the effective source lock path/hash. Discovery preserves original native preferences through refinements and separately authenticates committed external hashes. Shared preparation installs the ordinary/workspace lock in its detached root. Native workspace listing validates membership and SDK syntax before detachment; bound source reads always use the selected Git commit. Development-helper exceptions remain pending. |
 
 The architecture and native reviewers approved the bounded producer integration;
 the native reviewer approved the frozen verifier primitive. Analysis was clean.
@@ -721,3 +724,17 @@ Dart 3.10.4 passes archive preparation and direct executable cases. Its macOS
 `compile aot-snapshot` emits ELF for the current fixture while RK's existing
 bundle path requires Mach-O; a dependency-free probe reproduced the limitation.
 Minimum-SDK macOS bundle qualification remains explicitly outside the evidence.
+
+The source/lock slice passed 418 broader source/stage/binary/phase regressions,
+followed by 67 affected native tests after the final workspace guard fix. Analysis
+is clean. Twelve lock/source and actual bound binary cases pass on each of Dart
+3.10.4 and 3.13.5; the final excluded/nested/malformed workspace guard also passes
+on both. Review found and closed unsupported legacy lock parsing, unauthenticated
+workspace membership and arbitrary snapshot fallthrough under a Git identity.
+The native reviewer approved this bounded slice. These tests do not qualify
+development helpers, frozen-stage adoption or automatic repository CLI execution.
+
+Context format 1 cannot authorize this new operation policy and is explicitly
+refused; format 2 records even the absence of a binary lock. Normal legacy stages
+without native contexts retain their existing path. Receipt/index adoption and
+its explicit migration behavior remain packet 2.

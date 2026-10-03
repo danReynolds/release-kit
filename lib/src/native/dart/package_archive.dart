@@ -14,10 +14,7 @@ final class DartPackageManifest {
   DartPackageManifest._(this.fields);
 
   factory DartPackageManifest.parse(String yaml) {
-    if (utf8.encode(yaml).length > 1024 * 1024) {
-      throw const FormatException('native Pub manifest is too large');
-    }
-    return DartPackageManifest.fromMap(loadYaml(yaml));
+    return DartPackageManifest.fromMap(readDartYamlDocument(yaml));
   }
 
   factory DartPackageManifest.fromMap(Object? manifest) {
@@ -52,6 +49,21 @@ final class DartPackageManifest {
       );
     }
   }
+}
+
+/// Bounded YAML documents from the selected source, including workspace
+/// manifests without a package version and native lockfiles. Expansion shares
+/// the same alias/depth limits as archive manifests.
+Map<String, Object?> readDartYamlDocument(String yaml) {
+  if (utf8.encode(yaml).length > 1024 * 1024) {
+    throw const FormatException('native Pub document is too large');
+  }
+  final loaded = loadYaml(yaml);
+  final value = _plain(loaded, HashSet.identity(), _ManifestBudget(), 0);
+  if (value is! Map<String, Object?>) {
+    throw const FormatException('native Pub document must be a map');
+  }
+  return value;
 }
 
 final class _ManifestBudget {

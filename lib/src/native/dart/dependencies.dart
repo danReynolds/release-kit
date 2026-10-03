@@ -26,6 +26,29 @@ String dartRegistryIdentity(String registry) {
   return 'hosted:${Sha256.hex(utf8.encode(normalized))}';
 }
 
+/// Canonical, credential-free registry for isolated native preparation.
+String dartHostedRegistry(String value) {
+  final canonical = canonicalPublishDestination(value);
+  final normalized = canonical == 'https://pub.dartlang.org'
+      ? 'https://pub.dev'
+      : canonical;
+  final uri = Uri.tryParse(normalized);
+  if (uri == null ||
+      !uri.hasAuthority ||
+      uri.host.isEmpty ||
+      uri.userInfo.isNotEmpty ||
+      uri.hasQuery ||
+      uri.hasFragment ||
+      (uri.scheme != 'https' &&
+          !(uri.scheme == 'http' &&
+              const {'127.0.0.1', 'localhost', '::1'}.contains(uri.host)))) {
+    throw const FormatException(
+      'unsupported or credential-bearing native registry URL',
+    );
+  }
+  return uri.toString().replaceFirst(RegExp(r'/$'), '');
+}
+
 NativeCandidate dartCandidate(
   ResolvedProject project, {
   String defaultRegistry = 'https://pub.dev',

@@ -4,6 +4,7 @@ import '../../engine/canonical_json.dart';
 import '../../engine/file_mode.dart';
 import '../../engine/release_stage.dart';
 import '../../engine/resolve.dart';
+import '../../engine/source_tree.dart';
 import '../../engine/stage.dart';
 import '../../engine/stage_dependencies.dart';
 import '../../engine/stage_receipt.dart';
@@ -11,8 +12,8 @@ import '../../engine/tools.dart';
 import '../../transforms/digest.dart';
 import '../package_archive.dart';
 import 'archive_replay.dart';
-import 'package_archive.dart';
 import 'stage_context.dart';
+import 'stage_inputs.dart';
 
 /// A private source mirror resolved exclusively from receipt-bound native
 /// archives. Both Pub packaging and binary compilation use this environment.
@@ -106,10 +107,17 @@ final class DartStagePreparation {
       }
       setFileModes(modes);
       final root = Directory(project.directoryIn('${mirror.path}/source'));
-      final manifest = DartPackageManifest.parse(
-        File('${root.path}/pubspec.yaml').readAsStringSync(),
+      final inputs = DartStageInputs.read(
+        source: SnapshotSourceTree('${mirror.path}/source'),
+        project: project,
+        operation: context.operation,
       );
-      manifest.requireSameManifest(context.root);
+      inputs.requireMatches(context.root, context.lock);
+      await inputs.verifyWorkspace(
+        tools: tools,
+        compiler: stage.compiler!.executable,
+      );
+      final manifest = inputs.root;
       // A frozen hosted solve must never be combined with developer overrides.
       // The explicit development-helper binding will supply its own policy.
       if (manifest.fields.containsKey('dependency_overrides')) {
@@ -139,6 +147,16 @@ final class DartStagePreparation {
       if (manifest.fields.containsKey('resolution') ||
           manifest.fields.containsKey('workspace')) {
         overrides.writeAsStringSync('resolution: null\nworkspace: []\n');
+      }
+      if (context.operation == DartStageOperation.binary) {
+        final lock = File('${root.path}/pubspec.lock');
+        if (inputs.lock case final effective?) {
+          lock.writeAsStringSync(effective.contents);
+        } else if (lock.existsSync()) {
+          // A detached member must not inherit a stray member lock when the
+          // effective workspace root did not commit one.
+          lock.deleteSync();
+        }
       }
       final archives = <DartReplayArchive>[];
       for (final binding in context.envelope.bindings) {

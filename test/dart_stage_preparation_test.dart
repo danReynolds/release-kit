@@ -24,6 +24,7 @@ import 'package:rk/src/native/dart/hosted_discovery.dart';
 import 'package:rk/src/native/dart/package_archive.dart';
 import 'package:rk/src/native/dart/resolution_graph.dart';
 import 'package:rk/src/native/dart/stage_context.dart';
+import 'package:rk/src/native/dart/stage_inputs.dart';
 import 'package:rk/src/native/dart/stage_preparation.dart';
 import 'package:rk/src/native/package_archive.dart';
 import 'package:rk/src/output/output.dart';
@@ -249,7 +250,8 @@ void main() {
         discovery: discovery,
       );
       for (final change in <void Function(Map<String, dynamic>)>[
-        (m) => m['format'] = 2,
+        (m) => m['format'] = 1,
+        (m) => m['format'] = 99,
         (m) => m['owner'] = 'other',
         (m) => m['consumers'] = ['pub-archive:other'],
         (m) => m['native']['operation'] = 'binary',
@@ -286,6 +288,91 @@ void main() {
       );
     },
   );
+
+  for (final workspace in [false, true]) {
+    test(
+      'bound binary replays the ${workspace ? 'workspace' : 'ordinary'} source lock independently of Pub',
+      () async {
+        final f = await _Fixture.create(
+          sameUnit: false,
+          binary: true,
+          locked: true,
+          workspace: workspace,
+        );
+        addTearDown(f.close);
+        final provider = await f.bind(f.resolution.unit('core')!);
+        await f.prepare(provider);
+        final stage = await f.bind(f.resolution.unit('app')!);
+        final source = StageStep(
+          name: 'source-snapshot',
+          inputs: [
+            StageInput.commit(stage.directory.identity),
+            StageInput.tree(stage.directory.identity),
+            StageInput.plan(stage.directory.identity),
+          ],
+          outputs: await stage.materializeSource(),
+          evidence: {'commit': f.git.head, 'tree': f.git.headTree},
+        );
+        stage.writeProgress([source]);
+        final imports = stage.dependencies.materialize(stage.directory, source);
+        stage.writeProgress([source, imports]);
+        final project = stage.unit.projects.single;
+        final producer =
+            'build:${project.name}:${project.binaryPlatforms.single}';
+        final context = DartStagePreparation.contextFor(
+          stage,
+          project,
+          DartStageOperation.binary,
+          producer,
+        )!;
+        expect(
+          context.lock!.path,
+          workspace ? 'pubspec.lock' : 'app/pubspec.lock',
+        );
+        expect(
+          context.discovery.packages['rk_fixture_remote']!.manifest.version,
+          '1.0.0',
+        );
+        final pub = DartStagePreparation.contextFor(
+          stage,
+          project,
+          DartStageOperation.pubArchive,
+          'pub-archive:${project.name}',
+        )!;
+        expect(pub.lock, isNull);
+        expect(
+          pub.discovery.packages['rk_fixture_remote']!.manifest.version,
+          '1.1.0',
+        );
+        final preparation = await DartStagePreparation.open(
+          stage: stage,
+          project: project,
+          context: context,
+          producer: producer,
+          tools: const SystemTools(),
+        );
+        try {
+          final output = '${f.origin.directory.path}/locked-bin';
+          final compiled = await preparation.replay.run([
+            'compile',
+            'exe',
+            'bin/main.dart',
+            '-o',
+            output,
+          ]);
+          expect(compiled.ok, isTrue, reason: compiled.transcript);
+          expect((await Process.run(output, [])).stdout, '0.1.0 value=49\n');
+          expect(
+            preparation.replay.graph.packages['rk_fixture_remote']!.version,
+            '1.0.0',
+          );
+        } finally {
+          preparation.close();
+        }
+      },
+      timeout: const Timeout(Duration(minutes: 3)),
+    );
+  }
 }
 
 final class _Fixture {
@@ -324,6 +411,8 @@ final class _Fixture {
   static Future<_Fixture> create({
     required bool sameUnit,
     bool binary = false,
+    bool locked = false,
+    bool workspace = false,
   }) async {
     final origin = await NativePubFixture.create();
     try {
@@ -353,6 +442,44 @@ final class _Fixture {
               "import 'package:rk_fixture_core/rk_fixture_core.dart' as core;\nimport 'package:rk_fixture_remote/rk_fixture_remote.dart' as remote;\nvoid main() => print(core.value + remote.value);\n",
         },
       );
+      String? lock;
+      if (locked) {
+        final seed = origin.package(
+          'lock-seed',
+          'rk_fixture_seed',
+          '0.1.0',
+          dependencies: '  rk_fixture_remote: ^1.0.0\n',
+        );
+        final result = await origin.run(seed, [
+          'pub',
+          'get',
+          '--no-example',
+          '--no-precompile',
+        ]);
+        if (result.exitCode != 0) {
+          throw StateError('${result.stdout}\n${result.stderr}');
+        }
+        lock = File('${seed.path}/pubspec.lock').readAsStringSync();
+        origin.host(
+          origin.package(
+            'remote2',
+            'rk_fixture_remote',
+            '1.1.0',
+            library: 'const value = 100;\n',
+          ),
+        );
+        File('${app.path}/pubspec.lock').writeAsStringSync(
+          workspace ? 'stray member lock must be ignored' : lock,
+        );
+      }
+      if (workspace) {
+        for (final root in [app, core]) {
+          final file = File('${root.path}/pubspec.yaml');
+          file.writeAsStringSync(
+            '${file.readAsStringSync().replaceFirst('^3.0.0', '^3.10.4')}resolution: workspace\n',
+          );
+        }
+      }
       if (binary) {
         File('${app.path}/pubspec.yaml').writeAsStringSync(
           'executables:\n  main: main\n',
@@ -392,6 +519,10 @@ publish = ["pub.dev"]
       }
       final source = MemorySourceTree({
         'release.toml': config,
+        if (workspace)
+          'pubspec.yaml':
+              'name: workspace\nenvironment:\n  sdk: ^3.10.4\nworkspace: [core, app]\n',
+        if (workspace && lock != null) 'pubspec.lock': lock,
         for (final root in [core, app])
           for (final file in root.listSync(recursive: true).whereType<File>())
             file.path.substring(origin.directory.path.length + 1): file
@@ -425,25 +556,30 @@ publish = ["pub.dev"]
         DartStageOperation.pubArchive,
         if (project.binaryPlatforms.isNotEmpty) DartStageOperation.binary,
       ]) {
-        final discovery =
-            await DartHostedDiscovery(
-              tools: const SystemTools(),
-              compiler: origin.dart,
-              defaultRegistry: origin.url,
-            ).resolve(
-              root: manifest(project),
-              candidates: [
-                for (final p in resolution.allProjects)
-                  if (p.name != project.name)
-                    DartDiscoveryCandidate(
-                      provider: dartCandidate(p, defaultRegistry: origin.url),
-                      registry: origin.url,
-                      manifest: manifest(p),
-                    ),
-              ],
-            );
+        final inputs = DartStageInputs.read(
+          source: source,
+          project: project,
+          operation: operation,
+        );
+        final discovery = await inputs.discover(
+          discovery: DartHostedDiscovery(
+            tools: const SystemTools(),
+            compiler: origin.dart,
+            defaultRegistry: origin.url,
+          ),
+          candidates: [
+            for (final p in resolution.allProjects)
+              if (p.name != project.name)
+                DartDiscoveryCandidate(
+                  provider: dartCandidate(p, defaultRegistry: origin.url),
+                  registry: origin.url,
+                  manifest: manifest(p),
+                ),
+          ],
+        );
         final context = DartStageContext.discovered(
-          root: manifest(project),
+          root: inputs.root,
+          lock: inputs.lock,
           defaultRegistry: origin.url,
           operation: operation,
           consumers: operation == DartStageOperation.pubArchive
