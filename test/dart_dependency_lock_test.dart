@@ -15,6 +15,7 @@ import 'package:rk/src/native/dart/hosted_archive.dart';
 import 'package:rk/src/native/dart/hosted_discovery.dart';
 import 'package:rk/src/native/dart/package_archive.dart';
 import 'package:rk/src/native/dart/stage_inputs.dart';
+import 'package:rk/src/transforms/digest.dart';
 import 'package:test/test.dart';
 
 import 'support/native_pub_fixture.dart';
@@ -386,6 +387,27 @@ void main() {
       project: project(source),
       operation: operation,
     );
+
+    test('lock binding and materialization preserve original BOM bytes', () {
+      final source = MemorySourceTree({
+        'packages/app/pubspec.yaml': root,
+        'packages/app/pubspec.lock': '\uFEFF$lock',
+      });
+      final captured = inputs(source).lock!;
+      final original = source.readBytes('packages/app/pubspec.lock')!;
+      expect(captured.bytes, original);
+      expect(captured.binding.sha256, Sha256.hex(original));
+      expect(captured.contents, lock);
+      expect(captured.binding.sha256, isNot(Sha256.hex(utf8.encode(lock))));
+      expect(() => captured.bytes[0] = 0, throwsUnsupportedError);
+      source.files['packages/app/pubspec.lock'] = lock;
+      expect(
+        () => inputs(
+          source,
+        ).requireMatches(inputs(source).root, captured.binding),
+        throwsStateError,
+      );
+    });
 
     test(
       'ordinary binary uses its source lock while Pub ignores inherited lock',

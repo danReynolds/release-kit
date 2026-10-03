@@ -51,3 +51,30 @@ final class DartDevelopmentSource {
     }
   }
 }
+
+/// Original runtime declarations remain authoritative when a serialized graph
+/// omits an edge or a root also declares the name as a dev dependency.
+Map<String, List<String>> dartRuntimeDependencyPaths(
+  DartPackageManifest root,
+  Iterable<DartPackageManifest> packages,
+) {
+  final manifests = {
+    for (final package in packages) package.name: package,
+    root.name: root,
+  };
+  final paths = <String, List<String>>{
+    root.name: [root.name],
+  };
+  final pending = [root.name];
+  while (pending.isNotEmpty) {
+    final name = pending.removeLast();
+    final dependencies = manifests[name]?.fields['dependencies'];
+    if (dependencies is! Map) continue;
+    for (final dependency in dependencies.keys.cast<String>()) {
+      if (paths.containsKey(dependency)) continue;
+      paths[dependency] = [...paths[name]!, dependency];
+      pending.add(dependency);
+    }
+  }
+  return paths;
+}

@@ -197,8 +197,27 @@ final class DartResolutionGraph {
 
   /// Discovery archive hashes describe metadata-only payloads. Compare native
   /// identities and full causal edges separately from real archive integrity.
-  void requireSameSelection(DartResolutionGraph discovery) {
-    if (CanonicalJson.encode(toJson(includeIntegrity: false)) !=
+  void requireSameSelection(
+    DartResolutionGraph discovery, {
+    Map<String, String> verifiedDevelopmentSources = const {},
+  }) {
+    final normalized = toJson(includeIntegrity: false);
+    for (final entry in verifiedDevelopmentSources.entries) {
+      final actual = packages[entry.key];
+      final original = discovery.packages[entry.key];
+      if (actual == null ||
+          !actual.source.startsWith('path:') ||
+          original == null ||
+          original.source != entry.value ||
+          !entry.value.startsWith('hosted:')) {
+        throw StateError(
+          'native development source mapping differs from discovery',
+        );
+      }
+      ((normalized['packages'] as Map)[entry.key] as Map)['source'] =
+          entry.value;
+    }
+    if (CanonicalJson.encode(normalized) !=
         CanonicalJson.encode(discovery.toJson(includeIntegrity: false))) {
       throw StateError(
         'native dependency graph changed between discovery and artifact replay',

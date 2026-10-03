@@ -461,7 +461,7 @@ void main() {
   });
 
   test(
-    'archive-only stage contexts refuse helper evidence until receipt-bound replay exists',
+    'helper contexts require format 3 and never invent an archive slot',
     () async {
       final root = origin.package(
         'core',
@@ -479,17 +479,20 @@ void main() {
       final refusal = isA<FormatException>().having(
         (e) => '$e',
         'replay boundary',
-        contains('source-helper contexts require receipt-bound replay support'),
+        contains('source-helper contexts require format 3'),
       );
+      final context = DartStageContext.discovered(
+        root: manifest(root),
+        defaultRegistry: origin.url,
+        operation: DartStageOperation.pubArchive,
+        consumers: ['pub-archive:rk_fixture_core'],
+        discovery: selected,
+      );
+      expect(context.envelope.format, 3);
+      expect(context.envelope.bindings, isEmpty);
       expect(
-        () => DartStageContext.discovered(
-          root: manifest(root),
-          defaultRegistry: origin.url,
-          operation: DartStageOperation.pubArchive,
-          consumers: ['pub-archive:rk_fixture_core'],
-          discovery: selected,
-        ),
-        throwsA(refusal),
+        context.developmentSources.single.manifest.name,
+        'rk_fixture_helper',
       );
       final serialized = NativeStageContext(
         context: 'dart:pubArchive:rk_fixture_core',

@@ -37,9 +37,17 @@ final class DartLockBinding {
 /// Pub's ordinary get preferences, not an RK solver or --enforce-lockfile.
 /// The original bytes also authorize hashes for unchanged external coordinates.
 final class DartDependencyLock {
-  DartDependencyLock._(this.binding, this.contents, this.document);
+  DartDependencyLock._(this.binding, this.bytes, this.contents, this.document);
 
-  factory DartDependencyLock.parse(String contents, {required String path}) {
+  factory DartDependencyLock.parse(String contents, {required String path}) =>
+      DartDependencyLock.fromBytes(utf8.encode(contents), path: path);
+
+  factory DartDependencyLock.fromBytes(
+    List<int> source, {
+    required String path,
+  }) {
+    final bytes = List<int>.unmodifiable(source);
+    final contents = utf8.decode(bytes);
     final original = contents.trim().isEmpty
         ? const <String, Object?>{}
         : readDartYamlDocument(contents);
@@ -76,13 +84,15 @@ final class DartDependencyLock {
       }
     }
     return DartDependencyLock._(
-      DartLockBinding(path: path, sha256: Sha256.hex(utf8.encode(contents))),
+      DartLockBinding(path: path, sha256: Sha256.hex(bytes)),
+      bytes,
       contents,
       document,
     );
   }
 
   final DartLockBinding binding;
+  final List<int> bytes;
   final String contents;
   final Map<String, Object?> document;
 

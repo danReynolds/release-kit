@@ -17,7 +17,13 @@ enum DartStageOperation { pubArchive, binary }
 /// Operation inputs read from the selected source, rather than deserialized
 /// solver evidence. Reuse this reader before discovery, restore and replay.
 final class DartStageInputs {
-  DartStageInputs._(this.root, this.lock, this._source, this._projectPath);
+  DartStageInputs._(
+    this.root,
+    this.lock,
+    this.lockPath,
+    this._source,
+    this._projectPath,
+  );
 
   static SourceTree authoritativeSource(SourceTree source, GitState git) {
     if (git.isBound) {
@@ -59,16 +65,22 @@ final class DartStageInputs {
       throw StateError('native source has unauthorized dependency overrides');
     }
     DartDependencyLock? lock;
+    String? lockPath;
     if (operation == DartStageOperation.binary) {
-      final path = _effectiveLock(source, root, prefix);
-      final text = source.read(path);
-      if (text != null) lock = DartDependencyLock.parse(text, path: path);
+      lockPath = _effectiveLock(source, root, prefix);
+      final bytes = source.readBytes(lockPath);
+      if (bytes != null) {
+        lock = DartDependencyLock.fromBytes(bytes, path: lockPath);
+      }
     }
-    return DartStageInputs._(root, lock, source, prefix);
+    return DartStageInputs._(root, lock, lockPath, source, prefix);
   }
 
   final DartPackageManifest root;
   final DartDependencyLock? lock;
+
+  /// Effective source path even when the selected binary source has no lock.
+  final String? lockPath;
   final SourceTree _source;
   final String _projectPath;
 
@@ -209,8 +221,44 @@ final class DartStageInputs {
     required DartHostedDiscovery discovery,
     Iterable<DartDiscoveryCandidate> candidates = const [],
   }) async {
-    await verifyWorkspace(tools: discovery.tools, compiler: discovery.compiler);
-    return discovery.resolve(root: root, lock: lock, candidates: candidates);
+    final helpers = await developmentSources(
+      tools: discovery.tools,
+      compiler: discovery.compiler,
+      defaultRegistry: discovery.defaultRegistry,
+    );
+    return discovery.resolve(
+      root: root,
+      lock: lock,
+      candidates: candidates,
+      developmentSources: helpers,
+    );
+  }
+
+  Future<List<DartDevelopmentSource>> authorizeDevelopmentSources(
+    Iterable<DartDevelopmentSource> recorded, {
+    required Tools tools,
+    required String compiler,
+    required String defaultRegistry,
+  }) async {
+    final current = await developmentSources(
+      tools: tools,
+      compiler: compiler,
+      defaultRegistry: defaultRegistry,
+    );
+    final selected = <DartDevelopmentSource>[];
+    for (final previous in recorded) {
+      final matches = current.where(
+        (source) => source.manifest.name == previous.manifest.name,
+      );
+      if (matches.length != 1) {
+        throw StateError(
+          'frozen development source is not in the selected workspace',
+        );
+      }
+      matches.single.requireSameSource(previous);
+      selected.add(matches.single);
+    }
+    return selected;
   }
 
   void requireMatches(

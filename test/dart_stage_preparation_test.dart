@@ -130,14 +130,246 @@ void main() {
     );
   }
 
+  for (final helpers in [false, true]) {
+    test(
+      'bound binary producer uses verified archives ${helpers ? 'and source helpers' : 'with a legacy language root'}',
+      () async {
+        final f = await _Fixture.create(
+          sameUnit: false,
+          binary: true,
+          workspace: helpers,
+          helpers: helpers,
+        );
+        addTearDown(f.close);
+        final provider = await f.bind(f.resolution.unit('core')!);
+        await f.prepare(provider);
+        final stage = await f.bind(f.resolution.unit('app')!);
+        final source = StageStep(
+          name: 'source-snapshot',
+          inputs: [
+            StageInput.commit(stage.directory.identity),
+            StageInput.tree(stage.directory.identity),
+            StageInput.plan(stage.directory.identity),
+          ],
+          outputs: await stage.materializeSource(),
+          evidence: {'commit': f.git.head, 'tree': f.git.headTree},
+        );
+        stage.writeProgress([source]);
+        final imports = stage.dependencies.materialize(stage.directory, source);
+        stage.writeProgress([source, imports]);
+        final project = stage.unit.projects.single;
+        final capabilities = HostCapabilities.inspect();
+        final step = Checklist.derive(
+          stage.unit,
+          f.resolution,
+          Diagnostics(),
+        ).steps.singleWhere((s) => s.kind == StepKind.build);
+        final output = Output(sink: f.log.write, isTerminal: false);
+        final tools = _ObservedTools();
+        final built = await BinaryChain(
+          tools: tools,
+          output: output,
+          workspace: stage.directory.workspace,
+          repositoryRoot: stage.sourceRoot,
+          capabilities: capabilities,
+          compilerExecutable: f.origin.dart,
+          launcherCompiler: stage.launcherCompiler,
+          stage: stage,
+        ).buildStep(step, project);
+        expect(built.ok, isTrue, reason: f.log.toString());
+        expect(
+          tools.compileTimeouts,
+          [null],
+          reason: 'archive replay must not impose a new build timeout',
+        );
+        expect(
+          tools.launcherSources.every(
+            (path) => !path.startsWith(stage.directory.path),
+          ),
+          isTrue,
+        );
+        final binary = stage.directory.resolve(
+          ReleaseAssets.binaryPath(project, capabilities.hostPlatform),
+        );
+        expect(
+          (await Process.run(binary, [])).stdout,
+          helpers ? '0.1.0 value=93\n' : '0.1.0 value=49\n',
+        );
+        final graph = DartResolutionGraph.fromJson(
+          built.evidence['native_resolution'],
+        );
+        expect(
+          graph.packages['rk_fixture_core']!.archiveSha256,
+          provider
+              .requireReceipt()
+              .steps
+              .singleWhere((s) => s.name == 'pub-archive:rk_fixture_core')
+              .outputs
+              .single
+              .sha256,
+        );
+        // The unsigned build is deliberately not recorded as a signed/completed
+        // macOS stage. Its pending canonical outputs must not block Pub preparation.
+        final context = DartStagePreparation.contextFor(
+          stage,
+          project,
+          DartStageOperation.pubArchive,
+          'pub-archive:${project.name}',
+        )!;
+        final concurrent = await DartStagePreparation.open(
+          stage: stage,
+          project: project,
+          context: context,
+          producer: 'pub-archive:${project.name}',
+          tools: const SystemTools(),
+        );
+        concurrent.close();
+        expect(stage.inspect().reusable, isFalse);
+      },
+      timeout: const Timeout(Duration(minutes: 3)),
+    );
+  }
+
   test(
-    'bound binary producer uses verified archives with a legacy language root',
+    'receipt-bound Pub replay packages and compiles two helpers including a workspace ancestor',
     () async {
-      final f = await _Fixture.create(sameUnit: false, binary: true);
+      final f = await _Fixture.create(
+        sameUnit: false,
+        workspace: true,
+        helpers: true,
+      );
       addTearDown(f.close);
       final provider = await f.bind(f.resolution.unit('core')!);
       await f.prepare(provider);
       final stage = await f.bind(f.resolution.unit('app')!);
+      await f.prepare(stage);
+      expect(stage.inspect().reusable, isTrue, reason: f.log.toString());
+      final project = stage.unit.projects.single;
+      final producer = 'pub-archive:${project.name}';
+      final context = DartStagePreparation.contextFor(
+        stage,
+        project,
+        DartStageOperation.pubArchive,
+        producer,
+      )!;
+      expect(context.envelope.format, 3);
+      expect(context.developmentSources.map((s) => s.manifestPath).toSet(), {
+        'pubspec.yaml',
+        'support/helper/pubspec.yaml',
+      });
+      expect(
+        context.envelope.bindings.map((b) => b.slot),
+        isNot(contains('rk_fixture_helper')),
+      );
+      final requests = f.origin.requests.length;
+      final prepared = await DartStagePreparation.open(
+        stage: stage,
+        project: project,
+        context: context,
+        producer: producer,
+        tools: const SystemTools(),
+      );
+      try {
+        expect(
+          f.origin.requests.length,
+          requests,
+          reason:
+              'prepared constraint gate uses verified metadata without public reads',
+        );
+        final sources = prepared.replay.developmentSources!;
+        expect(sources.bindings.length, 2);
+        expect(
+          sources.directoryFor('rk_fixture_workspace_helper').path,
+          sources.root.path,
+        );
+        final executable = '${f.origin.directory.path}/helper-consumer';
+        final compiled = await prepared.replay.run([
+          'compile',
+          'exe',
+          'test/uses_helpers.dart',
+          '-o',
+          executable,
+        ]);
+        expect(compiled.ok, isTrue, reason: compiled.transcript);
+        expect((await Process.run(executable, [])).stdout, '44\n');
+        File(
+          '${prepared.replay.root.path}/generated-by-consumer.txt',
+        ).writeAsStringSync('scratch');
+        prepared.replay.verify();
+        expect(
+          File(
+            '${sources.root.path}/app/generated-by-consumer.txt',
+          ).existsSync(),
+          isFalse,
+        );
+        final archive = await NativePackageArchive.read(
+          File(stage.directory.resolve(ReleaseAssets.pubArchivePath(project))),
+        );
+        DartPackageManifest.fromArchive(
+          archive,
+        ).requireSameManifest(f.manifest(project));
+        expect(
+          archive.files.keys.any(
+            (name) => name.endsWith('pubspec_overrides.yaml'),
+          ),
+          isFalse,
+        );
+        final helperFile = File(
+          '${sources.root.path}/support/helper/lib/rk_fixture_helper.dart',
+        );
+        final original = helperFile.readAsStringSync();
+        helperFile.writeAsStringSync(original.replaceFirst('+ 1', '+ 9'));
+        expect(prepared.replay.verify, throwsStateError);
+        helperFile.writeAsStringSync(original);
+        prepared.replay.verify();
+        final extra = File('${sources.root.path}/extra.dart')
+          ..writeAsStringSync('extra');
+        expect(prepared.replay.verify, throwsStateError);
+        extra.deleteSync();
+        final overrides = File(
+          '${sources.root.path}/support/helper/pubspec_overrides.yaml',
+        );
+        final originalOverrides = overrides.readAsStringSync();
+        overrides.writeAsStringSync('resolution: workspace\n');
+        expect(prepared.replay.verify, throwsStateError);
+        overrides.writeAsStringSync(originalOverrides);
+        if (!Platform.isWindows) {
+          final mode = helperFile.statSync().mode & 0xfff;
+          await Process.run('chmod', ['755', helperFile.path]);
+          expect(prepared.replay.verify, throwsStateError);
+          await Process.run('chmod', [mode.toRadixString(8), helperFile.path]);
+        }
+        prepared.replay.verify();
+      } finally {
+        prepared.close();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    'bound preparation refuses a helper path not authorized by its source receipt',
+    () async {
+      final f = await _Fixture.create(
+        sameUnit: false,
+        workspace: true,
+        helpers: true,
+      );
+      addTearDown(f.close);
+      f.source.files['spare/helper/pubspec.yaml'] = f.source.read(
+        'support/helper/pubspec.yaml',
+      )!;
+      final provider = await f.bind(f.resolution.unit('core')!);
+      await f.prepare(provider);
+      final stage = await f.bind(
+        f.resolution.unit('app')!,
+        transform: (envelope) {
+          final document = jsonDecode(jsonEncode(envelope.toJson())) as Map;
+          document['native']['resolution']['packages']['rk_fixture_helper']['development_source']['manifest_path'] =
+              'spare/helper/pubspec.yaml';
+          return NativeStageContext.fromJson(document);
+        },
+      );
       final source = StageStep(
         name: 'source-snapshot',
         inputs: [
@@ -152,73 +384,113 @@ void main() {
       final imports = stage.dependencies.materialize(stage.directory, source);
       stage.writeProgress([source, imports]);
       final project = stage.unit.projects.single;
-      final capabilities = HostCapabilities.inspect();
-      final step = Checklist.derive(
-        stage.unit,
-        f.resolution,
-        Diagnostics(),
-      ).steps.singleWhere((s) => s.kind == StepKind.build);
-      final output = Output(sink: f.log.write, isTerminal: false);
-      final tools = _ObservedTools();
-      final built = await BinaryChain(
-        tools: tools,
-        output: output,
-        workspace: stage.directory.workspace,
-        repositoryRoot: stage.sourceRoot,
-        capabilities: capabilities,
-        compilerExecutable: f.origin.dart,
-        launcherCompiler: stage.launcherCompiler,
-        stage: stage,
-      ).buildStep(step, project);
-      expect(built.ok, isTrue, reason: f.log.toString());
-      expect(
-        tools.compileTimeouts,
-        [null],
-        reason: 'archive replay must not impose a new build timeout',
-      );
-      expect(
-        tools.launcherSources.every(
-          (path) => !path.startsWith(stage.directory.path),
-        ),
-        isTrue,
-      );
-      final binary = stage.directory.resolve(
-        ReleaseAssets.binaryPath(project, capabilities.hostPlatform),
-      );
-      expect((await Process.run(binary, [])).stdout, '0.1.0 value=49\n');
-      final graph = DartResolutionGraph.fromJson(
-        built.evidence['native_resolution'],
-      );
-      expect(
-        graph.packages['rk_fixture_core']!.archiveSha256,
-        provider
-            .requireReceipt()
-            .steps
-            .singleWhere((s) => s.name == 'pub-archive:rk_fixture_core')
-            .outputs
-            .single
-            .sha256,
-      );
-      // The unsigned build is deliberately not recorded as a signed/completed
-      // macOS stage. Its pending canonical outputs must not block Pub preparation.
+      final producer = 'pub-archive:${project.name}';
       final context = DartStagePreparation.contextFor(
         stage,
         project,
         DartStageOperation.pubArchive,
-        'pub-archive:${project.name}',
+        producer,
       )!;
-      final concurrent = await DartStagePreparation.open(
-        stage: stage,
-        project: project,
-        context: context,
-        producer: 'pub-archive:${project.name}',
-        tools: const SystemTools(),
+      await expectLater(
+        DartStagePreparation.open(
+          stage: stage,
+          project: project,
+          context: context,
+          producer: producer,
+          tools: const SystemTools(),
+        ),
+        throwsA(
+          isA<StateError>().having(
+            (e) => '$e',
+            'source authority',
+            contains('differs from the selected snapshot'),
+          ),
+        ),
       );
-      concurrent.close();
-      expect(stage.inspect().reusable, isFalse);
     },
-    timeout: const Timeout(Duration(minutes: 3)),
   );
+
+  for (final changed in ['helper', 'manifest', 'lock', 'absent lock']) {
+    test(
+      'preparation refuses $changed mutation during workspace authorization',
+      () async {
+        final binary = changed != 'helper';
+        final f = await _Fixture.create(
+          sameUnit: false,
+          workspace: true,
+          helpers: true,
+          binary: binary,
+          locked: changed == 'lock',
+        );
+        addTearDown(f.close);
+        f.source.files['fixture-marker'] = f.origin.directory.path;
+        final provider = await f.bind(f.resolution.unit('core')!);
+        await f.prepare(provider);
+        final stage = await f.bind(f.resolution.unit('app')!);
+        final source = StageStep(
+          name: 'source-snapshot',
+          inputs: [
+            StageInput.commit(stage.directory.identity),
+            StageInput.tree(stage.directory.identity),
+            StageInput.plan(stage.directory.identity),
+          ],
+          outputs: await stage.materializeSource(),
+          evidence: {'commit': f.git.head, 'tree': f.git.headTree},
+        );
+        stage.writeProgress([source]);
+        final imports = stage.dependencies.materialize(stage.directory, source);
+        stage.writeProgress([source, imports]);
+        final project = stage.unit.projects.single;
+        final producer = binary
+            ? 'build:${project.name}:${project.binaryPlatforms.single}'
+            : 'pub-archive:${project.name}';
+        final context = DartStagePreparation.contextFor(
+          stage,
+          project,
+          binary ? DartStageOperation.binary : DartStageOperation.pubArchive,
+          producer,
+        )!;
+        final tools = _WorkspaceMutatingTools(f.origin.directory.path, (
+          mirror,
+        ) {
+          final file = File(switch (changed) {
+            'helper' =>
+              '${mirror.path}/helpers/support/helper/lib/rk_fixture_helper.dart',
+            'manifest' => '${mirror.path}/source/app/pubspec.yaml',
+            _ => '${mirror.path}/source/pubspec.lock',
+          });
+          file.writeAsStringSync(
+            changed == 'helper'
+                ? 'const value = 999;\n'
+                : '${file.existsSync() ? file.readAsStringSync() : 'packages: {}\n'}# changed during authorization\n',
+          );
+        });
+        await expectLater(
+          DartStagePreparation.open(
+            stage: stage,
+            project: project,
+            context: context,
+            producer: producer,
+            tools: tools,
+          ),
+          throwsA(
+            isA<StateError>().having(
+              (e) => '$e',
+              'source freeze',
+              contains(
+                changed == 'helper'
+                    ? 'native development'
+                    : changed == 'manifest'
+                    ? 'source root changed'
+                    : 'source lock changed',
+              ),
+            ),
+          ),
+        );
+        expect(tools.changed, isTrue);
+      },
+    );
+  }
 
   test(
     'portable native context refuses inconsistent roots, slots and consumers',
@@ -289,9 +561,12 @@ void main() {
     },
   );
 
-  for (final workspace in [false, true]) {
+  for (final (workspace, bom) in [
+    for (final workspace in [false, true])
+      for (final bom in [false, true]) (workspace, bom),
+  ]) {
     test(
-      'bound binary replays the ${workspace ? 'workspace' : 'ordinary'} source lock independently of Pub',
+      'bound binary replays the ${workspace ? 'workspace' : 'ordinary'} source lock independently of Pub${bom ? ' with BOM' : ''}',
       () async {
         final f = await _Fixture.create(
           sameUnit: false,
@@ -300,6 +575,10 @@ void main() {
           workspace: workspace,
         );
         addTearDown(f.close);
+        if (bom) {
+          final path = workspace ? 'pubspec.lock' : 'app/pubspec.lock';
+          f.source.files[path] = '\uFEFF${f.source.files[path]}';
+        }
         final provider = await f.bind(f.resolution.unit('core')!);
         await f.prepare(provider);
         final stage = await f.bind(f.resolution.unit('app')!);
@@ -413,6 +692,7 @@ final class _Fixture {
     bool binary = false,
     bool locked = false,
     bool workspace = false,
+    bool helpers = false,
   }) async {
     final origin = await NativePubFixture.create();
     try {
@@ -517,13 +797,55 @@ publish = ["pub.dev"]
           '[release.app]\npath = "app"\npublish = ["pub.dev", "git-tag", "github-release"]\nbinary_platforms = ["${HostCapabilities.inspect().hostPlatform}"]',
         );
       }
+      Directory? helper;
+      if (helpers) {
+        if (!workspace) {
+          throw ArgumentError('helper fixture requires workspace');
+        }
+        File('${app.path}/pubspec.yaml').writeAsStringSync(
+          'dev_dependencies:\n  rk_fixture_helper: any\n  rk_fixture_workspace_helper: any\n',
+          mode: FileMode.append,
+        );
+        if (binary) {
+          final main = File('${app.path}/bin/main.dart');
+          main.writeAsStringSync(
+            "import 'package:rk_fixture_workspace_helper/rk_fixture_workspace_helper.dart' as helper;\n${main.readAsStringSync().replaceAll('core.value + remote.value', 'core.value + remote.value + helper.value')}",
+          );
+        }
+        helper = origin.package(
+          'support/helper',
+          'rk_fixture_helper',
+          '0.0.0',
+          dependencies: '  rk_fixture_app: ^${sameUnit ? '0.2.0' : '0.1.0'}\n',
+          development: '  deliberately_missing: any\n',
+          library:
+              "import 'package:rk_fixture_app/rk_fixture_app.dart' as app;\nconst value = app.value + 1;\n",
+        );
+        final manifest = File('${helper.path}/pubspec.yaml');
+        manifest.writeAsStringSync(
+          manifest.readAsStringSync().replaceFirst(
+            'version: 0.0.0\n',
+            'publish_to: none\nresolution: workspace\n',
+          ),
+        );
+        File(
+          '${app.path}/test/uses_helpers.dart',
+        ).parent.createSync(recursive: true);
+        File('${app.path}/test/uses_helpers.dart').writeAsStringSync(
+          "import 'package:rk_fixture_workspace_helper/rk_fixture_workspace_helper.dart';\nvoid main() => print(value);\n",
+        );
+      }
       final source = MemorySourceTree({
         'release.toml': config,
         if (workspace)
-          'pubspec.yaml':
-              'name: workspace\nenvironment:\n  sdk: ^3.10.4\nworkspace: [core, app]\n',
+          'pubspec.yaml': helpers
+              ? 'name: rk_fixture_workspace_helper\npublish_to: none\nenvironment:\n  sdk: ^3.10.4\nworkspace: [core, app, support/helper]\ndependencies:\n  rk_fixture_helper: any\n'
+              : 'name: workspace\nenvironment:\n  sdk: ^3.10.4\nworkspace: [core, app]\n',
+        if (helpers)
+          'lib/rk_fixture_workspace_helper.dart':
+              "import 'package:rk_fixture_helper/rk_fixture_helper.dart' as helper;\nconst value = helper.value + 1;\n",
         if (workspace && lock != null) 'pubspec.lock': lock,
-        for (final root in [core, app])
+        for (final root in [core, app, if (helper != null) helper])
           for (final file in root.listSync(recursive: true).whereType<File>())
             file.path.substring(origin.directory.path.length + 1): file
                 .readAsStringSync(),
@@ -546,7 +868,10 @@ publish = ["pub.dev"]
   DartPackageManifest manifest(ResolvedProject project) =>
       DartPackageManifest.parse(source.read(project.pubspec.path)!);
 
-  Future<ReleaseStage> bind(ResolvedUnit unit) async {
+  Future<ReleaseStage> bind(
+    ResolvedUnit unit, {
+    NativeStageContext Function(NativeStageContext)? transform,
+  }) async {
     final contexts = <DartStageContext>[];
     final imports = <ImportedStageDependency>[];
     final local = <LocalStageDependency>[];
@@ -577,7 +902,7 @@ publish = ["pub.dev"]
                 ),
           ],
         );
-        final context = DartStageContext.discovered(
+        var context = DartStageContext.discovered(
           root: inputs.root,
           lock: inputs.lock,
           defaultRegistry: origin.url,
@@ -590,6 +915,9 @@ publish = ["pub.dev"]
                 ],
           discovery: discovery,
         );
+        if (transform != null) {
+          context = DartStageContext.fromEnvelope(transform(context.envelope));
+        }
         contexts.add(context);
         for (final binding in context.envelope.bindings) {
           final selected = discovery.packages[binding.slot]!;
@@ -718,4 +1046,55 @@ final class _ObservedTools implements Tools {
     List<String> arguments, {
     String? workingDirectory,
   }) => throw StateError('native fixture must not authenticate or publish');
+}
+
+/// The unique marker confines this mutation to this fixture's private mirror.
+final class _WorkspaceMutatingTools implements Tools {
+  _WorkspaceMutatingTools(this.marker, this.mutate);
+  final String marker;
+  final void Function(Directory) mutate;
+  bool changed = false;
+  @override
+  Future<ToolResult> run(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+    Map<String, String>? environment,
+    Duration? timeout,
+  }) async {
+    final result = await const SystemTools().run(
+      executable,
+      arguments,
+      workingDirectory: workingDirectory,
+      environment: environment,
+      timeout: timeout,
+    );
+    if (!changed && arguments.contains('workspace')) {
+      for (final entry
+          in Directory.systemTemp
+              .listSync(followLinks: false)
+              .whereType<Directory>()) {
+        if (!entry.path
+            .split(Platform.pathSeparator)
+            .last
+            .startsWith('rk-dart-source-')) {
+          continue;
+        }
+        final file = File('${entry.path}/helpers/fixture-marker');
+        if (file.existsSync() && file.readAsStringSync() == marker) {
+          mutate(entry);
+          changed = true;
+          break;
+        }
+      }
+    }
+    return result;
+  }
+
+  @override
+  Future<int> runInteractive(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+  }) => throw StateError('unexpected interactive native operation');
 }

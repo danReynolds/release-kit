@@ -319,6 +319,63 @@ final class DartHostedDiscovery {
       await session.close();
     }
   }
+
+  /// Recheck original native constraints from verified archive and source
+  /// inputs before installing path overrides. This does not acquire registry
+  /// authorization for restoring a stage; verifyFrozen owns that separate gate.
+  /// No public metadata or payload is fetched by this solve.
+  Future<void> verifyPrepared({
+    required DartPackageManifest root,
+    required DartDiscoveryResult frozen,
+    required Iterable<
+      ({String registry, DartPackageManifest manifest, String sha256})
+    >
+    archives,
+    required Iterable<DartDevelopmentSource> developmentSources,
+    DartDependencyLock? lock,
+  }) async {
+    final seen = <String>{};
+    for (final archive in archives) {
+      final selected = frozen.packages[archive.manifest.name];
+      if (!seen.add(archive.manifest.name) ||
+          selected == null ||
+          selected.developmentSource != null ||
+          selected.registry != _registry(archive.registry) ||
+          (selected.archiveSha256 != null &&
+              selected.archiveSha256 != archive.sha256)) {
+        throw StateError('prepared archive differs from frozen discovery');
+      }
+      selected.manifest.requireSameManifest(archive.manifest);
+    }
+    final helpers = developmentSources.toList();
+    for (final helper in helpers) {
+      final selected = frozen.packages[helper.manifest.name]?.developmentSource;
+      if (!seen.add(helper.manifest.name) || selected == null) {
+        throw StateError(
+          'prepared development source differs from frozen discovery',
+        );
+      }
+      helper.requireSameSource(selected);
+    }
+    if (seen.length != frozen.packages.length) {
+      throw StateError('prepared inputs omit frozen dependencies');
+    }
+    final session = _Session(
+      this,
+      root,
+      const [],
+      developmentSources: helpers,
+      frozen: frozen,
+      lock: lock,
+      prepared: frozen.packages,
+    );
+    try {
+      final result = await session.resolve();
+      result.graph.requireSameSelection(frozen.graph);
+    } finally {
+      await session.close();
+    }
+  }
 }
 
 final class _Session {
@@ -329,6 +386,7 @@ final class _Session {
     required this.developmentSources,
     this.frozen,
     this.lock,
+    this.prepared,
   });
   final DartHostedDiscovery options;
   final DartPackageManifest root;
@@ -336,6 +394,7 @@ final class _Session {
   final List<DartDevelopmentSource> developmentSources;
   final DartDiscoveryResult? frozen;
   final DartDependencyLock? lock;
+  final Map<String, DartDiscoveredPackage>? prepared;
   final HttpClient client = HttpClient();
   final Directory directory = Directory.systemTemp.createTempSync(
     'rk-dart-discovery-',
@@ -511,21 +570,7 @@ final class _Session {
   }
 
   void _requireNoRuntimeSources(Iterable<DartPackageManifest> manifests) {
-    final byName = {for (final manifest in manifests) manifest.name: manifest};
-    final paths = <String, List<String>>{
-      root.name: [root.name],
-    };
-    final pending = [root.name];
-    while (pending.isNotEmpty) {
-      final name = pending.removeLast();
-      final dependencies = byName[name]?.fields['dependencies'];
-      if (dependencies is! Map) continue;
-      for (final dependency in dependencies.keys.cast<String>()) {
-        if (paths.containsKey(dependency)) continue;
-        paths[dependency] = [...paths[name]!, dependency];
-        pending.add(dependency);
-      }
-    }
+    final paths = dartRuntimeDependencyPaths(root, manifests);
     final promoted = <String, List<String>>{
       for (final source in developmentSources)
         if (paths.containsKey(source.manifest.name))
@@ -666,6 +711,15 @@ final class _Session {
       throw StateError('native discovery exceeds the package limit');
     }
     return listings.putIfAbsent(key, () async {
+      if (prepared case final inputs?) {
+        final input = inputs[name];
+        if (input == null || input.registry != registry) {
+          throw StateError(
+            'native verification requested an unprepared dependency',
+          );
+        }
+        return [input];
+      }
       final candidate = available[key];
       // A pinned provider is authoritative for this private solve. No public
       // listing is needed, including for an entirely unpublished package.
@@ -783,7 +837,9 @@ final class _Session {
           throw const FormatException('invalid native package name');
         }
         final versions = await _listing(shadow.registry, name);
-        final chosen = pinned[(shadow.registry, name)];
+        final chosen = prepared == null
+            ? pinned[(shadow.registry, name)]
+            : null;
         final visible = chosen == null
             ? versions
             : versions.where((value) => identical(value, chosen)).toList();

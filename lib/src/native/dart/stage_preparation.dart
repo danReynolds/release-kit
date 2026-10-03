@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 
 import '../../engine/canonical_json.dart';
 import '../../engine/file_mode.dart';
@@ -13,6 +14,7 @@ import '../../transforms/digest.dart';
 import '../package_archive.dart';
 import 'archive_replay.dart';
 import 'stage_context.dart';
+import 'replay_sources.dart';
 import 'stage_inputs.dart';
 
 /// A private source mirror resolved exclusively from receipt-bound native
@@ -82,6 +84,7 @@ final class DartStagePreparation {
     final snapshot = stage.requireProducerProgress().steps.singleWhere(
       (step) => step.name == 'source-snapshot',
     );
+    final recordedHelpers = context.developmentSources;
     final mirror = Directory.systemTemp.createTempSync('rk-dart-source-');
     try {
       _requireOutsideGit(mirror);
@@ -104,6 +107,18 @@ final class DartStagePreparation {
         file.parent.createSync(recursive: true);
         file.writeAsBytesSync(bytes);
         modes[file.path] = artifact.mode;
+        if (recordedHelpers.isNotEmpty) {
+          final helper = File(
+            [
+              mirror.path,
+              'helpers',
+              ...parts.skip(1),
+            ].join(Platform.pathSeparator),
+          );
+          helper.parent.createSync(recursive: true);
+          helper.writeAsBytesSync(bytes);
+          modes[helper.path] = artifact.mode;
+        }
       }
       setFileModes(modes);
       final root = Directory(project.directoryIn('${mirror.path}/source'));
@@ -113,13 +128,58 @@ final class DartStagePreparation {
         operation: context.operation,
       );
       inputs.requireMatches(context.root, context.lock);
-      await inputs.verifyWorkspace(
+      final originalRootSha256 = Sha256.hex(
+        File('${root.path}/pubspec.yaml').readAsBytesSync(),
+      );
+      DartReplaySources? helperSnapshot;
+      if (recordedHelpers.isNotEmpty) {
+        final helperRoot = Directory('${mirror.path}/helpers');
+        for (final helper in recordedHelpers) {
+          final parts = StagePath.segments(helper.manifestPath);
+          final directory = [
+            helperRoot.path,
+            ...parts.take(parts.length - 1),
+          ].join(Platform.pathSeparator);
+          File('$directory/pubspec_overrides.yaml').writeAsStringSync(
+            jsonEncode({'resolution': null, 'workspace': <String>[]}),
+          );
+        }
+        helperSnapshot = DartReplaySources.capture(
+          root: helperRoot,
+          bindings: recordedHelpers,
+        );
+      }
+      await inputs.authorizeDevelopmentSources(
+        recordedHelpers,
         tools: tools,
         compiler: stage.compiler!.executable,
+        defaultRegistry: context.defaultRegistry,
       );
+      helperSnapshot?.verify();
+      void requireOriginalInputs() {
+        if (Sha256.hex(File('${root.path}/pubspec.yaml').readAsBytesSync()) !=
+            originalRootSha256) {
+          throw StateError('Dart source root changed during preparation');
+        }
+        if (inputs.lockPath case final path?) {
+          final file = File('${mirror.path}/source/$path');
+          final type = FileSystemEntity.typeSync(file.path, followLinks: false);
+          final expected = inputs.lock?.binding.sha256;
+          if (expected == null
+              ? type != FileSystemEntityType.notFound
+              : type != FileSystemEntityType.file ||
+                    Sha256.hex(file.readAsBytesSync()) != expected) {
+            throw StateError(
+              'Dart effective source lock changed during preparation',
+            );
+          }
+        }
+      }
+
+      requireOriginalInputs();
       final manifest = inputs.root;
-      // A frozen hosted solve must never be combined with developer overrides.
-      // The explicit development-helper binding will supply its own policy.
+      // Only the recorded development-source mappings may introduce overrides
+      // later, after original constraints have passed native verification.
       if (manifest.fields.containsKey('dependency_overrides')) {
         throw StateError(
           'Dart archive preparation does not authorize dependency overrides',
@@ -151,7 +211,7 @@ final class DartStagePreparation {
       if (context.operation == DartStageOperation.binary) {
         final lock = File('${root.path}/pubspec.lock');
         if (inputs.lock case final effective?) {
-          lock.writeAsStringSync(effective.contents);
+          lock.writeAsBytesSync(effective.bytes);
         } else if (lock.existsSync()) {
           // A detached member must not inherit a stray member lock when the
           // effective workspace root did not commit one.
@@ -184,6 +244,8 @@ final class DartStagePreparation {
           ),
         );
       }
+      requireOriginalInputs();
+      helperSnapshot?.verify();
       final replay = await DartArchiveReplay.prepare(
         root: root,
         tools: tools,
@@ -191,6 +253,9 @@ final class DartStagePreparation {
         defaultRegistry: context.defaultRegistry,
         discovered: context.discovery.graph,
         archives: archives,
+        developmentSources: helperSnapshot,
+        discovery: context.discovery,
+        discoveryLock: inputs.lock,
       );
       return DartStagePreparation._(mirror, replay, context);
     } on Object {

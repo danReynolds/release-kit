@@ -2,6 +2,7 @@ import '../../engine/canonical_json.dart';
 import '../../engine/native_dependencies.dart';
 import '../../engine/native_stage_context.dart';
 import 'dependencies.dart';
+import 'development_source.dart';
 import 'dependency_lock.dart';
 import 'hosted_discovery.dart';
 import 'package_archive.dart';
@@ -35,20 +36,21 @@ final class DartStageContext {
         context: 'dart:${operation.name}:${root.name}',
         ecosystem: 'dart',
         owner: root.name,
-        format: 2,
+        format: 3,
         consumers: consumers,
         bindings: [
           for (final selected in discovery.packages.values)
-            NativeStageBinding(
-              slot: selected.manifest.name,
-              package: NativePackage(
-                ecosystem: 'dart',
-                source: dartRegistryIdentity(selected.registry),
-                name: selected.manifest.name,
+            if (selected.developmentSource == null)
+              NativeStageBinding(
+                slot: selected.manifest.name,
+                package: NativePackage(
+                  ecosystem: 'dart',
+                  source: dartRegistryIdentity(selected.registry),
+                  name: selected.manifest.name,
+                ),
+                version: selected.manifest.version,
+                provider: selected.candidate?.provider,
               ),
-              version: selected.manifest.version,
-              provider: selected.candidate?.provider,
-            ),
         ],
         native: {
           'root_manifest': root.fields,
@@ -74,7 +76,7 @@ final class DartStageContext {
   factory DartStageContext.fromEnvelope(NativeStageContext envelope) {
     final payload = envelope.native;
     if (envelope.ecosystem != 'dart' ||
-        envelope.format != 2 ||
+        !const {2, 3}.contains(envelope.format) ||
         payload.length != 5 ||
         !payload.keys.toSet().containsAll({
           'root_manifest',
@@ -107,12 +109,27 @@ final class DartStageContext {
       );
     }
     final discovery = DartDiscoveryResult.fromJson(payload['resolution']);
-    if (discovery.packages.values.any(
-      (package) => package.developmentSource != null,
-    )) {
+    final helpers = discovery.packages.values
+        .map((package) => package.developmentSource)
+        .whereType<DartDevelopmentSource>()
+        .toList();
+    if (helpers.isNotEmpty && envelope.format != 3) {
       throw const FormatException(
-        'Dart source-helper contexts require receipt-bound replay support',
+        'Dart source-helper contexts require format 3',
       );
+    }
+    final runtime = dartRuntimeDependencyPaths(
+      root,
+      discovery.packages.values.map((package) => package.manifest),
+    );
+    final helperPaths = <String>{};
+    for (final helper in helpers) {
+      if (runtime.containsKey(helper.manifest.name) ||
+          !helperPaths.add(helper.manifestPath)) {
+        throw const FormatException(
+          'Dart development source is runtime reachable or duplicated',
+        );
+      }
     }
     final graphRoot = discovery.graph.packages[root.name];
     if (envelope.owner != root.name ||
@@ -139,6 +156,7 @@ final class DartStageContext {
     }
     final expected = <String, NativeStageBinding>{};
     for (final selected in discovery.packages.values) {
+      if (selected.developmentSource != null) continue;
       final provider = selected.candidate?.provider;
       if (provider != null &&
           (provider.project != selected.manifest.name ||
@@ -184,4 +202,8 @@ final class DartStageContext {
   final DartStageOperation operation;
   final DartDiscoveryResult discovery;
   final DartLockBinding? lock;
+  List<DartDevelopmentSource> get developmentSources => [
+    for (final package in discovery.packages.values)
+      if (package.developmentSource case final source?) source,
+  ];
 }
