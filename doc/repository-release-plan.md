@@ -52,7 +52,8 @@ refuse. Stage, local-only work and an entirely exact public scope need no
 publication confirmation. `rk stage --yes` remains a usage error.
 
 Consent binds exact receipt content and stage identity, authenticated public
-recovery bindings, disclosed signing and warnings, and each remaining target and first-name claim. The work may shrink
+recovery bindings, disclosed signing and warnings, and each remaining target and
+first-name claim. The work may shrink
 when another actor completes a target. Changed or expanded inputs/disclosures
 refuse instead of asking a second, broader question. Already-public targets,
 including whole no-op units, remain under repository-wide exactness checks
@@ -146,6 +147,8 @@ invocation evidence, not a replacement stage plan.
 Focused tests cover all-selected preparation before consent, no-public-action
 failure boundaries, immutable consent, no-op drift, native projection and exact
 archive/public consumer checks. Native fixtures use owned loopback registries;
-they do not publish to public registries. Final full-suite, current Fleury release
-command qualification and independent final review are still required. No real
-upload, remote tag, release draft or tap write is authorized by this qualification.
+they do not publish to public registries. Full suites, independent reviews and
+actual Fleury command/archive-consumer qualification completed; the
+[native evidence record](dependency-staging-native-proof.md#final-qualification--2026-10-03)
+records their scope. No real upload, remote tag, release draft or tap write was
+performed.
