@@ -97,6 +97,42 @@ class ReleaseStages {
     return candidate;
   }
 
+  /// Installs freshly discovered choices only if the caller's observed binding
+  /// and live intent still agree. Discovery may await native tools or providers;
+  /// those waits cannot grant permission to overwrite a newer binding or reuse
+  /// the resolver's cached compiler identity.
+  ReleaseStage bindDiscovered(
+    ResolvedUnit unit, {
+    required StageDependencies dependencies,
+    required StageIntent intent,
+    required GitState currentGit,
+    required ReleaseStage expectedBinding,
+    required void Function() beforeInstall,
+  }) {
+    void requireExpected() {
+      if (!identical(call(unit), expectedBinding)) {
+        throw StateError('stage binding changed after native discovery');
+      }
+    }
+
+    requireExpected();
+    final candidate = _resolve(
+      unit,
+      currentGit,
+      _readCompilerIdentity(),
+      _readRkIdentity(),
+      dependencies,
+      intent,
+    );
+    // Force the canonical producer graph and native coverage checks before any
+    // resolver mutation. Invalid requests must never install a partial plan.
+    candidate.producerNames;
+    beforeInstall();
+    requireExpected();
+    _install(unit, dependencies, candidate);
+    return candidate;
+  }
+
   /// Adopts an existing frozen receipt without changing choices or disk bytes.
   /// The caller holds the stage-store mutation lock and supplies current Git
   /// state. Native source/registry/provider authorization must happen in

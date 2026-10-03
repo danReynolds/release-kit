@@ -11,8 +11,10 @@ import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/file_mode.dart';
 import 'package:rk/src/engine/git.dart';
+import 'package:rk/src/engine/native_dependencies.dart';
 import 'package:rk/src/engine/native_stage_context.dart';
 import 'package:rk/src/engine/release_stage.dart';
+import 'package:rk/src/engine/repository_stage_preparation.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage.dart';
@@ -32,6 +34,7 @@ import 'package:rk/src/native/dart/stage_context.dart';
 import 'package:rk/src/native/dart/stage_authorization.dart';
 import 'package:rk/src/native/dart/stage_authority.dart';
 import 'package:rk/src/native/dart/stage_inputs.dart';
+import 'package:rk/src/native/dart/stage_discovery.dart';
 import 'package:rk/src/native/dart/stage_preparation.dart';
 import 'package:rk/src/native/dart/stage_source.dart';
 import 'package:rk/src/native/package_archive.dart';
@@ -56,6 +59,382 @@ void main() {
     tools: tools,
     compiler: f.origin.dart,
     defaultRegistry: registry ?? () => f.origin.url,
+  );
+
+  DartStageDiscovery discoverer(
+    _Fixture f, {
+    Tools tools = const SystemTools(),
+    String Function()? registry,
+    bool unbound = false,
+    Resolution? resolution,
+  }) => DartStageDiscovery(
+    DartStageSource(
+      resolution: resolution ?? f.resolution,
+      source: f.source,
+      git: unbound ? GitState.unbound(f.origin.directory.path) : f.git,
+      defaultRegistry: registry ?? () => f.origin.url,
+    ),
+    tools: tools,
+    compiler: f.origin.dart,
+  );
+
+  Resolution resolveFixture(_Fixture f) {
+    final diagnostics = Diagnostics();
+    final config = ReleaseConfig.parse(
+      f.source.read('release.toml')!,
+      'release.toml',
+      diagnostics,
+    )!;
+    final result = Resolution.resolve(config, f.source, diagnostics);
+    expect(diagnostics.isEmpty, isTrue);
+    return result!;
+  }
+
+  test(
+    'repository discovery stages native providers first and restores frozen choices',
+    () async {
+      final f = await _Fixture.create(
+        sameUnit: false,
+        committed: true,
+        authoritativeStages: true,
+      );
+      addTearDown(f.close);
+      final unit = f.resolution.unit('app')!;
+      final providerUnit = f.resolution.unit('core')!;
+      final source = DartStageSource(
+        resolution: f.resolution,
+        source: f.source,
+        git: f.git,
+        defaultRegistry: () => f.origin.url,
+      );
+      final facade = DartStageDiscovery(
+        source,
+        tools: const SystemTools(),
+        compiler: f.origin.dart,
+      );
+      Future<RepositoryStagePreparation> repository(
+        ReleaseStages stages,
+        DartStageDiscovery native,
+      ) async {
+        final restoration = await StageRestoration.create(
+          stages: stages,
+          resolution: f.resolution,
+          currentGit: f.git,
+          authority: DartStageAuthority(authorizer(f)),
+          refreshGit: () async => f.git,
+        );
+        return RepositoryStagePreparation(
+          resolution: f.resolution,
+          stages: stages,
+          native: native,
+          restore: (unit) => restoration.restore(unit.name),
+          refreshGit: () async => f.git,
+        );
+      }
+
+      final lock = StageStore(f.origin.directory.path).acquireForMutation();
+      try {
+        final coordinator = await repository(f.stages, facade);
+        final plan = await coordinator.resolve(
+          selected: [unit, providerUnit],
+          eligibility: (_) async => RepositoryStageCandidates(
+            candidates: facade.configuredCandidates(),
+          ),
+        );
+        expect(plan.order.map((unit) => unit.name), ['core', 'app']);
+        for (final next in plan.order) {
+          final stage = await plan.bind(next);
+          await f.prepare(stage);
+        }
+        final provider = f.stages(providerUnit);
+        final consumer = f.stages(unit);
+        final original = consumer.requireReceipt();
+        final imported = consumer.dependencies.imports.single;
+        final providerArchive = provider.requireReceipt().artifacts.singleWhere(
+          (artifact) => artifact.type == 'pub-archive',
+        );
+        expect(unit.version.canonical, '0.1.0');
+        expect(providerUnit.version.canonical, '0.2.0');
+        expect(imported.original.toJson(), providerArchive.toJson());
+        expect(imported.archive.sha256, providerArchive.sha256);
+        expect(
+          File(
+            consumer.directory.resolve(imported.archive.path),
+          ).readAsBytesSync(),
+          File(
+            provider.directory.resolve(providerArchive.path),
+          ).readAsBytesSync(),
+        );
+        final fingerprints = {
+          for (final stage in [provider, consumer])
+            stage.unit.name: stage.directory.fingerprint(),
+        };
+        f.origin.host(f.origin.package('newer', 'rk_fixture_remote', '1.1.0'));
+        final nextStages = f.newStages(authoritativeSource: true);
+        final refuse = _RefuseTools();
+        final noRediscovery = DartStageDiscovery(
+          source,
+          tools: refuse,
+          compiler: f.origin.dart,
+        );
+        final resumed = await repository(nextStages, noRediscovery);
+        final restoredPlan = await resumed.resolve(
+          selected: [unit, providerUnit],
+          eligibility: (_) async => RepositoryStageCandidates(
+            candidates: noRediscovery.configuredCandidates(),
+          ),
+        );
+        for (final next in restoredPlan.order) {
+          final stage = await restoredPlan.bind(next);
+          await f.prepare(stage, resolver: nextStages);
+          expect(stage.directory.fingerprint(), fingerprints[next.name]);
+        }
+        final restored = nextStages(unit);
+        expect(restored.requireReceipt().encode(), original.encode());
+        expect(
+          DartStageContext.fromEnvelope(
+            restored.dependencies.contexts.single,
+          ).discovery.packages['rk_fixture_remote']!.manifest.version,
+          '1.0.0',
+        );
+        expect(refuse.calls, 0);
+      } finally {
+        lock.close();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  for (final transitive in [false, true]) {
+    test(
+      'fresh Dart discovery selects independent versions${transitive ? ' through a hosted bridge' : ' from committed source'}',
+      () async {
+        final f = await _Fixture.create(
+          sameUnit: false,
+          committed: !transitive,
+        );
+        addTearDown(f.close);
+        var resolution = f.resolution;
+        if (transitive) {
+          f.origin.host(
+            f.origin.package(
+              'bridge',
+              'rk_fixture_bridge',
+              '1.0.0',
+              dependencies:
+                  '  rk_fixture_core: ^0.2.0\n  rk_fixture_remote: ^1.0.0\n',
+            ),
+          );
+          f.source.files['app/pubspec.yaml'] = f
+              .source
+              .files['app/pubspec.yaml']!
+              .replaceFirst(
+                '  rk_fixture_core: ^0.2.0\n  rk_fixture_remote: ^1.0.0\n',
+                '  rk_fixture_bridge: ^1.0.0\n',
+              );
+          resolution = resolveFixture(f);
+        }
+        final facade = discoverer(
+          f,
+          resolution: resolution,
+          unbound: transitive,
+        );
+        final candidates = facade.configuredCandidates();
+        if (!transitive) {
+          f.source.files['core/pubspec.yaml'] = 'not a manifest';
+          File(
+            '${f.origin.directory.path}/core/pubspec.yaml',
+          ).writeAsStringSync('not a manifest');
+        }
+        final result = await facade.discover(
+          resolution.unit('app')!,
+          candidates: candidates,
+        );
+        final context = DartStageContext.fromEnvelope(result.contexts.single);
+        expect(context.root.version, '0.1.0');
+        expect(result.pending.single.use.provider.version, '0.2.0');
+        expect(result.pending.single.use.provider.unit, 'core');
+        expect(result.pending.single.type, 'pub-archive');
+        expect(
+          result.pending.single.path,
+          ReleaseAssets.pubArchivePath(
+            resolution.unit('core')!.projects.single,
+          ),
+        );
+        expect(result.external.map((input) => input.binding.slot).toSet(), {
+          'rk_fixture_remote',
+          if (transitive) 'rk_fixture_bridge',
+        });
+        for (final input in result.external) {
+          expect(
+            input.archive.sha256,
+            context.discovery.packages[input.binding.slot]!.archiveSha256,
+          );
+        }
+        expect(
+          Directory('${f.origin.directory.path}/.rk/work/stages').existsSync(),
+          isFalse,
+        );
+        final own = await facade.discover(
+          resolution.unit('core')!,
+          candidates: candidates,
+        );
+        expect(own.contexts.single.bindings, isEmpty);
+        expect(own.pending, isEmpty);
+        expect(own.external, isEmpty);
+      },
+      timeout: const Timeout(Duration(minutes: 3)),
+    );
+  }
+
+  for (final incompatible in [false, true]) {
+    test(
+      'fresh Dart discovery uses hosted archives when local candidate is ${incompatible ? 'incompatible' : 'excluded'}',
+      () async {
+        final f = await _Fixture.create(sameUnit: false);
+        addTearDown(f.close);
+        var resolution = f.resolution;
+        if (incompatible) {
+          f.origin.host(
+            f.origin.package('older-core', 'rk_fixture_core', '0.1.5'),
+          );
+          f.source.files['app/pubspec.yaml'] = f
+              .source
+              .files['app/pubspec.yaml']!
+              .replaceFirst(
+                'rk_fixture_core: ^0.2.0',
+                'rk_fixture_core: ^0.1.0',
+              );
+          resolution = resolveFixture(f);
+        } else {
+          f.origin.host(Directory('${f.origin.directory.path}/core'));
+        }
+        final facade = discoverer(f, resolution: resolution, unbound: true);
+        final result = await facade.discover(
+          resolution.unit('app')!,
+          candidates: incompatible ? facade.configuredCandidates() : const [],
+        );
+        expect(result.pending, isEmpty);
+        final core = result.external.singleWhere(
+          (input) => input.binding.slot == 'rk_fixture_core',
+        );
+        expect(core.binding.provider, isNull);
+        expect(core.binding.version, incompatible ? '0.1.5' : '0.2.0');
+      },
+      timeout: const Timeout(Duration(minutes: 3)),
+    );
+  }
+
+  test(
+    'fresh Dart discovery validates offered source identities before work',
+    () async {
+      final f = await _Fixture.create(sameUnit: false, committed: true);
+      addTearDown(f.close);
+      final tools = _RefuseTools();
+      final facade = discoverer(f, tools: tools);
+      final candidate = facade.configuredCandidates().first;
+      final requests = f.origin.requests.length;
+      for (final field in [
+        'ecosystem',
+        'source',
+        'name',
+        'version',
+        'unit',
+        'project',
+        'producer',
+      ]) {
+        final value = candidate.toJson();
+        if (const {'ecosystem', 'source', 'name'}.contains(field)) {
+          (value['package'] as Map)[field] = 'another-$field';
+        } else {
+          value[field] = 'another-$field';
+        }
+        await expectLater(
+          facade.discover(
+            f.resolution.unit('app')!,
+            candidates: [NativeCandidate.fromJson(value)],
+          ),
+          throwsStateError,
+        );
+      }
+      await expectLater(
+        facade.discover(
+          f.resolution.unit('app')!,
+          candidates: [candidate, candidate],
+        ),
+        throwsStateError,
+      );
+      expect(tools.calls, 0);
+      expect(f.origin.requests.length, requests);
+    },
+  );
+
+  test(
+    'fresh Dart discovery refuses a registry change during native work',
+    () async {
+      final f = await _Fixture.create(sameUnit: false, committed: true);
+      addTearDown(f.close);
+      var registry = f.origin.url;
+      final tools = _MutatingTools(() => registry = 'https://pub.dev');
+      final facade = discoverer(f, tools: tools, registry: () => registry);
+      final candidates = facade.configuredCandidates();
+      await expectLater(
+        facade.discover(f.resolution.unit('app')!, candidates: candidates),
+        throwsA(
+          isA<StateError>().having(
+            (error) => '$error',
+            'live registry',
+            contains('intent changed'),
+          ),
+        ),
+      );
+      expect(tools.changed, isTrue);
+      expect(
+        Directory('${f.origin.directory.path}/.rk/work/stages').existsSync(),
+        isFalse,
+      );
+    },
+  );
+
+  test(
+    'fresh Dart discovery keeps binary locks and development helpers out of archive slots',
+    () async {
+      final f = await _Fixture.create(
+        sameUnit: false,
+        binary: true,
+        locked: true,
+        workspace: true,
+        helpers: true,
+        committed: true,
+      );
+      addTearDown(f.close);
+      final facade = discoverer(f);
+      final result = await facade.discover(
+        f.resolution.unit('app')!,
+        candidates: facade.configuredCandidates(),
+      );
+      expect(result.contexts, hasLength(2));
+      for (final envelope in result.contexts) {
+        final context = DartStageContext.fromEnvelope(envelope);
+        expect(context.developmentSources, hasLength(2));
+        expect(
+          context.discovery.packages['rk_fixture_remote']!.manifest.version,
+          context.operation == DartStageOperation.pubArchive
+              ? '1.1.0'
+              : '1.0.0',
+        );
+        expect(envelope.bindings.map((binding) => binding.slot).toSet(), {
+          'rk_fixture_core',
+          'rk_fixture_remote',
+        });
+      }
+      expect(result.pending, hasLength(2));
+      expect(result.external, hasLength(2));
+      expect(() => result.contexts.clear(), throwsUnsupportedError);
+      expect(() => result.pending.clear(), throwsUnsupportedError);
+      expect(() => result.external.clear(), throwsUnsupportedError);
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
   );
 
   test(

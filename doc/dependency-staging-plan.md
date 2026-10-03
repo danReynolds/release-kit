@@ -488,7 +488,13 @@ manifests. The native package cache and checkout remain unmodified.
 
 ### 2. Frozen stage restore and proof authorization
 
-Persist the bound plan in the receipt before source/build/archive producers.
+Persist each unit's bound plan in its receipt before that unit's first
+source/build/archive producer. Repository discovery freezes every selected
+context for the current invocation; a consumer's durable identity is finalized
+only after its cross-unit providers have completed. A consumer interrupted before
+its header exists has no staged work to preserve and may discover again on retry.
+Once a header exists, its choices are reused or rejected, never silently solved
+again. This uses the existing per-unit receipts without a second discovery store.
 Schema 13 adds the deep-frozen plan header and explicitly refuses schema 12;
 never reinterpret an old identity with the new schema constant. Retain old stage
 directories and direct recovery-critical releases to the RK version that wrote
@@ -976,3 +982,33 @@ and phase-conformance cases, and 54 native preparation/lock/helper cases on the
 working Dart 3.13.5 SDK. Analysis and diff checks are clean; architecture review
 approved the phase split. These changes do not yet alter bare stage scope or move
 repository publication consent after all private preparation.
+
+Fresh discovery now has an adapter-owned `NativeStageDiscovery` handoff with
+immutable, exactly covered native contexts, verified external inputs and pending
+first-party artifact requests. Dart uses the shared source model and real native
+resolution, validates offered provider identities before commands, and refuses
+intent drift across asynchronous work. It does not read first-party artifacts,
+bind stages or expand command scope.
+
+`RepositoryStagePreparation` restores selected units before eligibility, discovers
+all absent contexts before production, validates actual producer edges, and
+returns deterministic complete-unit order. True producer cycles and unsupported
+unit interleaving remain distinct. Completed providers are pinned to authorized
+receipts; incomplete selected providers must finish before consumer binding.
+Copied frozen inputs need no new live-provider edge. Fresh binding rechecks the
+whole parsed configuration, source intent, Git/toolchain, expected resolver
+bindings and exact provider receipts/bytes before transactional installation.
+
+Architecture and native boundary reviews approved this bounded composition.
+Review tightened resolve-time checks for reserved producer names and unsupported
+ecosystems. Twenty-five generic scheduler cases pass, including independent unit
+versions, multiple versions of one opaque native package in different slots,
+named scope, interrupted providers, copied imports, graph diagnostics and drift.
+The broader 111-case core/dependency/restoration run passed before the final two
+configuration/multiple-version cases were added. Native discovery passed 63
+affected stable cases; its nine new cases also passed minimum Dart 3.10.4.
+A composed real native test additionally passes on both SDKs: reverse-selected
+app/core prepares in dependency order, imports the exact core archive, then a
+fresh resolver restores unchanged choices after a newer hosted version appears.
+This connects discovery, scheduling, restoration and existing producers; real
+command/status wiring, public gates and bare Fleury qualification remain open.
