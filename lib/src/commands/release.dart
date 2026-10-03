@@ -534,6 +534,16 @@ class ReleaseCommand {
   }
 
   Future<int> _release(ResolvedUnit unit) async {
+    final inspected = await _inspectRelease(unit);
+    if (inspected == null) return ExitCodes.refused;
+    final prepared = await _prepareRelease(inspected);
+    if (prepared.publication case final plan?) {
+      return _publication.publish(plan);
+    }
+    return prepared.code;
+  }
+
+  Future<_InspectedUnit?> _inspectRelease(ResolvedUnit unit) async {
     // The machine surface carries the same identity facts on every verb:
     // doc/json.md promises repository and the unit's version and tag, and
     // the production-alpha retry checkpoint reads both from this document.
@@ -571,14 +581,14 @@ class ReleaseCommand {
     if (problems.isNotEmpty) {
       output.halt(HaltKind.beforeActing);
       output.problems(problems.found);
-      return ExitCodes.refused;
+      return null;
     }
 
     final checklist = Checklist.derive(unit, resolution, problems);
     if (problems.isNotEmpty) {
       output.halt(HaltKind.beforeActing);
       output.problems(problems.found);
-      return ExitCodes.refused;
+      return null;
     }
     final publicSteps = checklist.steps.where((step) => step.isPublic).toList();
     final localOnly = publicSteps.isEmpty;
@@ -594,7 +604,7 @@ class ReleaseCommand {
         unit: unit.name,
       );
       output.halt(HaltKind.beforeActing);
-      return ExitCodes.refused;
+      return null;
     }
     final targets = inspector.targets.derive(
       unit,
@@ -620,10 +630,10 @@ class ReleaseCommand {
         ),
       );
       output.halt(HaltKind.beforeActing);
-      return ExitCodes.refused;
+      return null;
     }
 
-    var stageInspection = stage.inspect();
+    final stageInspection = stage.inspect();
 
     // Destinations are independent, so they are read together: every row
     // says what it is doing at once, and the wait is the slowest read
@@ -672,7 +682,94 @@ class ReleaseCommand {
     if (problems.isNotEmpty) {
       output.halt(HaltKind.beforeActing);
       output.problems(problems.found);
-      return ExitCodes.refused;
+      return null;
+    }
+
+    return _InspectedUnit(
+      unit: unit,
+      checklist: checklist,
+      targets: targets,
+      states: states,
+      history: releaseHistory,
+      stageId: stage.directory.identity.id,
+      stageReceipt: stageInspection.receipt?.encode(),
+      stageReusable: stageInspection.reusable,
+    );
+  }
+
+  Future<({int code, PublicationPlan? publication})> _prepareRelease(
+    _InspectedUnit inspected,
+  ) async {
+    final unit = inspected.unit;
+    final checklist = inspected.checklist;
+    final targets = inspected.targets;
+    var states = inspected.states;
+    var releaseHistory = inspected.history;
+    final publicSteps = checklist.steps.where((step) => step.isPublic).toList();
+    final localOnly = publicSteps.isEmpty;
+    final targetByStep = {for (final target in targets) target.step.id: target};
+    // Repository discovery may have frozen native dependencies since inspection.
+    // Always prepare the current shared binding, never the preliminary stage.
+    final ReleaseStage stage;
+    try {
+      stage = _stageFor(unit);
+    } on Object catch (error) {
+      output.problem(
+        Diagnostic(
+          code: 'RK-STAGE-001',
+          message: 'the release stage identity could not be resolved',
+          remedy: '$error',
+        ),
+      );
+      output.halt(HaltKind.beforeActing);
+      return (code: ExitCodes.refused, publication: null);
+    }
+    var stageInspection = stage.inspect();
+    if (stage.directory.identity.id != inspected.stageId ||
+        stageInspection.receipt?.encode() != inspected.stageReceipt ||
+        stageInspection.reusable != inspected.stageReusable) {
+      // Discovery can replace a preliminary dependency-free binding. Public
+      // inspection may compare its archive too, so every affected observation
+      // and its conflict/recovery guards must use the newly bound stage.
+      // Refresh target-owned caches before exact observations, and invalidate
+      // prerequisite caches separately since those packages are other targets.
+      final problems = Diagnostics();
+      releaseHistory = await inspector.releaseMonotonicity(
+        unit,
+        targets,
+        problems,
+        refreshRegistry: true,
+      );
+      inspector.invalidatePrerequisites(checklist.steps);
+      final refreshed = await Future.wait([
+        for (final step in checklist.steps)
+          _observeForRelease(step, unit, stageInspection),
+      ]);
+      states = {
+        for (final (index, step) in checklist.steps.indexed)
+          step.id: refreshed[index],
+      };
+      for (final step in checklist.steps) {
+        final state = states[step.id]!;
+        output.step(
+          step,
+          verdict: state.verdict,
+          detail: state.detail,
+          evidence: state.evidence,
+          action: step.isPublic
+              ? (state.isExact
+                    ? ReleaseAction.alreadyPublished.wire
+                    : ReleaseAction.notAttempted.wire)
+              : null,
+          show: false,
+        );
+      }
+      inspector.tagGuards(unit, checklist, states).forEach(problems.report);
+      if (problems.isNotEmpty) {
+        output.halt(HaltKind.beforeActing);
+        output.problems(problems.found);
+        return (code: ExitCodes.refused, publication: null);
+      }
     }
 
     // Unknown public state never grants permission to perform local work.
@@ -699,7 +796,7 @@ class ReleaseCommand {
         states[initialBlock.id]!,
         target: targetByStep[initialBlock.id],
       );
-      return ExitCodes.refused;
+      return (code: ExitCodes.refused, publication: null);
     }
 
     final publicActions = {
@@ -716,7 +813,7 @@ class ReleaseCommand {
         note: 'already released',
       );
       await _publication.verifyAvailability(unit: unit, targets: targets);
-      return ExitCodes.ok;
+      return (code: ExitCodes.ok, publication: null);
     }
 
     // A moving channel may be able to finish from authenticated public
@@ -753,7 +850,7 @@ class ReleaseCommand {
         ),
       );
       if (!stageOnly) _publication.showActions(targets, publicActions);
-      return ExitCodes.refused;
+      return (code: ExitCodes.refused, publication: null);
     }
     if (!stageInspection.reusable && !recoversWithoutStage) {
       final refusal = _refuseIfUnfinishable(unit);
@@ -761,7 +858,7 @@ class ReleaseCommand {
         output.halt(HaltKind.beforeActing);
         output.problem(refusal);
         if (!stageOnly) _publication.showActions(targets, publicActions);
-        return ExitCodes.refused;
+        return (code: ExitCodes.refused, publication: null);
       }
     }
 
@@ -780,11 +877,11 @@ class ReleaseCommand {
         output.problem(stageProblem, unit: unit.name);
         output.halt(HaltKind.beforeActing);
         _publication.showActions(targets, publicActions);
-        return ExitCodes.refused;
+        return (code: ExitCodes.refused, publication: null);
       }
       if (!localOnly && !_publication.requireAuthorizer(unit)) {
         _publication.showActions(targets, publicActions);
-        return ExitCodes.refused;
+        return (code: ExitCodes.refused, publication: null);
       }
     }
 
@@ -798,7 +895,9 @@ class ReleaseCommand {
       actions: publicActions,
       stageOnly: stageOnly,
     );
-    if (endpointBaselines == null) return ExitCodes.refused;
+    if (endpointBaselines == null) {
+      return (code: ExitCodes.refused, publication: null);
+    }
 
     final reusedStage = stageInspection.reusable;
     final PreparedRelease prepared;
@@ -820,7 +919,7 @@ class ReleaseCommand {
       );
       if (result == null) {
         if (!stageOnly) _publication.showActions(targets, publicActions);
-        return ExitCodes.refused;
+        return (code: ExitCodes.refused, publication: null);
       }
       prepared = result;
       stageInspection = stage.inspect();
@@ -834,7 +933,7 @@ class ReleaseCommand {
         );
         output.halt(HaltKind.beforeActing);
         if (!stageOnly) _publication.showActions(targets, publicActions);
-        return ExitCodes.refused;
+        return (code: ExitCodes.refused, publication: null);
       }
     }
 
@@ -848,7 +947,7 @@ class ReleaseCommand {
       changed: 'after staging',
       halt: HaltKind.beforeActing,
     )) {
-      return ExitCodes.refused;
+      return (code: ExitCodes.refused, publication: null);
     }
 
     if (stageOnly || localOnly) {
@@ -893,11 +992,12 @@ class ReleaseCommand {
           role: VisualRole.operatorAction,
         );
       }
-      return ExitCodes.ok;
+      return (code: ExitCodes.ok, publication: null);
     }
 
-    return _publication.publish(
-      PublicationPlan(
+    return (
+      code: ExitCodes.ok,
+      publication: PublicationPlan(
         unit: unit,
         steps: checklist.steps,
         publicSteps: publicSteps,
@@ -1122,4 +1222,30 @@ final class _UnitPlan {
 
   /// Whether [stop] is that it could not be read at all.
   final bool unread;
+}
+
+/// Provisional destination/source observations for scope discovery. Preparation
+/// refreshes them when the stage binding changes. This record contains no
+/// session or permission to perform a public operation.
+final class _InspectedUnit {
+  _InspectedUnit({
+    required this.unit,
+    required this.checklist,
+    required Iterable<TargetPlan> targets,
+    required Map<String, Inspection> states,
+    required this.history,
+    required this.stageId,
+    required this.stageReceipt,
+    required this.stageReusable,
+  }) : targets = List.unmodifiable(targets),
+       states = Map.unmodifiable(states);
+
+  final ResolvedUnit unit;
+  final Checklist checklist;
+  final List<TargetPlan> targets;
+  final Map<String, Inspection> states;
+  final ReleaseHistoryCheck history;
+  final String stageId;
+  final String? stageReceipt;
+  final bool stageReusable;
 }

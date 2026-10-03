@@ -1,20 +1,16 @@
 import '../../engine/assets.dart';
 import '../../engine/canonical_json.dart';
-import '../../engine/config.dart';
-import '../../engine/diagnostic.dart';
 import '../../engine/git.dart';
-import '../../engine/publish_target.dart';
 import '../../engine/resolve.dart';
 import '../../engine/source_tree.dart';
 import '../../engine/stage_dependencies.dart';
 import '../../engine/stage_receipt.dart';
 import '../../engine/tools.dart';
-import '../../transforms/digest.dart';
 import 'dependencies.dart';
 import 'hosted_discovery.dart';
 import 'resolution_graph.dart';
 import 'stage_context.dart';
-import 'stage_inputs.dart';
+import 'stage_source.dart';
 
 /// Current source authority for the Dart part of a release. Availability and
 /// command scope never enter these facts: a saved hosted choice stays hosted.
@@ -28,94 +24,29 @@ final class DartStageAuthorization {
     required Tools tools,
     required String compiler,
     required String Function() defaultRegistry,
-  }) {
-    final selected = DartStageInputs.authoritativeSource(source, git);
-    final diagnostics = Diagnostics();
-    final configText = selected.read('release.toml');
-    final config = configText == null
-        ? null
-        : ReleaseConfig.parse(configText, 'release.toml', diagnostics);
-    final current = config == null
-        ? null
-        : Resolution.resolve(config, selected, diagnostics);
-    if (current == null || diagnostics.isNotEmpty) {
-      throw StateError(
-        'native authorization requires valid configuration from the selected source',
-      );
-    }
-    if (CanonicalJson.encode(_nativeResolution(current)) !=
-        CanonicalJson.encode(_nativeResolution(resolution))) {
-      throw StateError('native configuration differs from the selected source');
-    }
-    return DartStageAuthorization._(
-      current,
-      selected,
-      tools,
-      compiler,
-      defaultRegistry,
-    );
-  }
-
-  DartStageAuthorization._(
-    this.resolution,
-    this.source,
-    this.tools,
-    this.compiler,
-    this._defaultRegistry,
+  }) => DartStageAuthorization._(
+    DartStageSource(
+      resolution: resolution,
+      source: source,
+      git: git,
+      defaultRegistry: defaultRegistry,
+    ),
+    tools,
+    compiler,
   );
 
-  final Resolution resolution;
-  final SourceTree source;
+  DartStageAuthorization._(this._stageSource, this.tools, this.compiler);
+
+  final DartStageSource _stageSource;
   final Tools tools;
   final String compiler;
-  final String Function() _defaultRegistry;
 
-  String get defaultRegistry => dartHostedRegistry(_defaultRegistry());
+  Resolution get resolution => _stageSource.resolution;
+  SourceTree get source => _stageSource.source;
+  String get defaultRegistry => _stageSource.defaultRegistry;
 
-  /// Suitable for StageIntent's live reader. Helper membership is established
-  /// natively during authorization; here its source manifests/configuration are
-  /// bound without a solve or workspace command. Git already binds all source
-  /// bytes, and unbound snapshots retain only single-invocation authority.
-  Map<String, Object?> readIntent(ResolvedUnit unit) {
-    final registry = defaultRegistry;
-    final operations = _operations(unit);
-    return {
-      'format': 1,
-      'default_registry': registry,
-      'operations': {
-        for (final entry in operations.entries)
-          entry.key: {
-            'root': entry.value.inputs.root.fields,
-            'lockfile': entry.value.inputs.lock?.binding.toJson(),
-            'lock_path': entry.value.inputs.lockPath,
-            'consumers': entry.value.consumers,
-          },
-      },
-      'configured_candidates': {
-        for (final candidate in _candidates(registry))
-          candidate.manifest.name: {
-            'provider': candidate.provider.toJson(),
-            'manifest': candidate.manifest.fields,
-          },
-      },
-      'workspace_manifests': {
-        if (operations.values.any(
-          (operation) =>
-              operation.inputs.root.fields.containsKey('workspace') ||
-              operation.inputs.root.fields.containsKey('resolution'),
-        ))
-          for (final path in [...source.trackedFiles()]..sort())
-            if (path == 'pubspec.yaml' ||
-                path.endsWith('/pubspec.yaml') ||
-                path == 'pubspec_overrides.yaml' ||
-                path.endsWith('/pubspec_overrides.yaml'))
-              path: Sha256.hex(
-                source.readBytes(path) ??
-                    (throw StateError('native workspace source disappeared')),
-              ),
-      },
-    };
-  }
+  Map<String, Object?> readIntent(ResolvedUnit unit) =>
+      _stageSource.readIntent(unit);
 
   /// Reauthorizes original envelopes without upgrading their format or solving
   /// new choices. The returned discovery objects carry transient fetch handles;
@@ -133,7 +64,7 @@ final class DartStageAuthorization {
         : StageDependencies.fromJson(plan['dependency_inputs']);
     final before = CanonicalJson.encode(readIntent(unit));
     final registry = defaultRegistry;
-    final operations = _operations(unit);
+    final operations = _stageSource.operations(unit);
     final contexts = {
       for (final envelope in dependencies.contexts.where(
         (c) => c.ecosystem == 'dart',
@@ -146,7 +77,7 @@ final class DartStageAuthorization {
         'frozen Dart contexts omit or add a configured operation',
       );
     }
-    final candidates = _candidates(registry);
+    final candidates = _stageSource.candidates(defaultRegistry: registry);
     // Validate all source/operation/archive declarations before a native command
     // or registry request. One missing binary context cannot silently fall back.
     for (final entry in contexts.entries) {
@@ -337,83 +268,4 @@ final class DartStageAuthorization {
       }
     }
   }
-
-  Map<String, _Operation> _operations(ResolvedUnit unit) {
-    final current = resolution.unit(unit.name);
-    if (current == null ||
-        CanonicalJson.encode(_nativeUnit(current)) !=
-            CanonicalJson.encode(_nativeUnit(unit))) {
-      throw StateError(
-        'native operation unit differs from current configuration',
-      );
-    }
-    return {
-      for (final project in current.projects)
-        if (_isDart(project))
-          for (final operation in [
-            if (project.publish.contains(PublishTarget.pubDev))
-              DartStageOperation.pubArchive,
-            if (project.binaryPlatforms.isNotEmpty) DartStageOperation.binary,
-          ])
-            'dart:${operation.name}:${project.name}': _Operation(
-              DartStageInputs.read(
-                source: source,
-                project: project,
-                operation: operation,
-              ),
-              (operation == DartStageOperation.pubArchive
-                    ? ['pub-archive:${project.name}']
-                    : [
-                        for (final platform in project.binaryPlatforms)
-                          'build:${project.name}:$platform',
-                      ])
-                ..sort(),
-            ),
-    };
-  }
-
-  List<DartDiscoveryCandidate> _candidates(String registry) => [
-    for (final project in resolution.allProjects)
-      if (_isDart(project) && project.publish.contains(PublishTarget.pubDev))
-        DartDiscoveryCandidate(
-          provider: dartCandidate(project, defaultRegistry: registry),
-          registry: project.pubspec.publishTo ?? registry,
-          manifest: DartStageInputs.read(
-            source: source,
-            project: project,
-            operation: DartStageOperation.pubArchive,
-          ).root,
-        ),
-  ];
 }
-
-bool _isDart(ResolvedProject project) =>
-    project.pubspec.path == 'pubspec.yaml' ||
-    project.pubspec.path.endsWith('/pubspec.yaml');
-
-final class _Operation {
-  const _Operation(this.inputs, this.consumers);
-  final DartStageInputs inputs;
-  final List<String> consumers;
-}
-
-// Only the facts this adapter uses to select roots, candidates and producers.
-// Canonical release-plan/source/toolchain authorization remains core-owned.
-Map<String, Object?> _nativeResolution(Resolution resolution) => {
-  for (final unit in resolution.units) unit.name: _nativeUnit(unit),
-};
-
-Map<String, Object?> _nativeUnit(ResolvedUnit unit) => {
-  'unit': unit.name,
-  'projects': {
-    for (final project in unit.projects)
-      project.name: {
-        'owner': project.unitName,
-        'manifest': project.pubspec.path,
-        'version': project.version.canonical,
-        'publish_to': project.pubspec.publishTo,
-        'pub_archive': project.publish.contains(PublishTarget.pubDev),
-        'binary_platforms': [...project.binaryPlatforms]..sort(),
-      },
-  },
-};

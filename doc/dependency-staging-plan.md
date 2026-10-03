@@ -4,11 +4,11 @@ Status: reviewed delivery plan; implementation is in progress on
 `codex/dependency-staging`. Native discovery/replay, receipt-bound inputs, shared
 Pub/binary preparation, frozen-choice verification and source-bound binary lock
 policies are implemented. Development-source discovery and receipt-bound helper
-replay are implemented; frozen-stage restore and command integration are not complete.
-Schema-13 receipt headers now preserve plans across source-copy interruptions,
-and core adoption installs bindings only after successful authorization and
-inspection. Intent lookup, native authorization wiring and portable proof closure
-remain packet 2.
+replay are implemented. Frozen-stage restoration now composes bounded intent
+lookup, portable provider proof closure, current-source/native authorization,
+and transactional adoption. Schema-13 receipt headers preserve plans across
+source-copy interruptions. Repository scheduling and command integration remain
+packet 3; publication gates remain packet 4.
 The remaining work is defined in the implementation packets below; foundation
 proofs do not qualify bare `rk stage` or publication. No publication has occurred.
 
@@ -960,3 +960,19 @@ access; no product change was needed for that retry. All seven new native
 authority cases also pass on the minimum Dart 3.10.4. Analysis, formatting and
 diff checks are clean. These 422 affected cases are not a substitute for the
 final full-suite and real bare Fleury command runs.
+
+The unit command now separates inspection, private preparation and publication,
+while retaining the existing invocation flow. Preparation reacquires the shared
+stage after discovery; a changed binding refreshes target history and prerequisite
+caches before exact observations and recovery/conflict guards. Independent review
+caught and closed an initially cached history recheck. Both the late-newer-version
+command regression and delayed-prerequisite regression now pass without fixture
+cache eviction. The shared `DartStageSource` extraction gives new discovery and
+frozen authorization one source for original operations, effective locks, workspace
+intent and configured providers; existing serialized formats are unchanged.
+
+This bounded extraction passed 129 inspection/stage-command cases, 172 release
+and phase-conformance cases, and 54 native preparation/lock/helper cases on the
+working Dart 3.13.5 SDK. Analysis and diff checks are clean; architecture review
+approved the phase split. These changes do not yet alter bare stage scope or move
+repository publication consent after all private preparation.

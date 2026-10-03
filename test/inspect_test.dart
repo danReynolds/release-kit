@@ -94,6 +94,30 @@ dependencies:
   );
 
   group('a prerequisite is read from the registry, never assumed', () {
+    test(
+      'delayed preparation discards a cached prerequisite observation',
+      () async {
+        final registry = FakeRegistry({
+          'example_core': ['0.2.0'],
+        });
+        final reader = inspector(registry);
+        expect(
+          (await reader.inspect(prerequisite, cli)).verdict,
+          Verdict.absent,
+        );
+        registry.published['example_core']!.add('0.3.0');
+        expect(
+          (await reader.inspect(prerequisite, cli)).verdict,
+          Verdict.absent,
+        );
+        reader.invalidatePrerequisites([prerequisite]);
+        expect(
+          (await reader.inspect(prerequisite, cli)).verdict,
+          Verdict.exact,
+        );
+      },
+    );
+
     test('live when the exact version is published', () async {
       final state = await inspector(
         FakeRegistry({

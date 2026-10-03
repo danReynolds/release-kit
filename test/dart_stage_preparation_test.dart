@@ -33,6 +33,7 @@ import 'package:rk/src/native/dart/stage_authorization.dart';
 import 'package:rk/src/native/dart/stage_authority.dart';
 import 'package:rk/src/native/dart/stage_inputs.dart';
 import 'package:rk/src/native/dart/stage_preparation.dart';
+import 'package:rk/src/native/dart/stage_source.dart';
 import 'package:rk/src/native/package_archive.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/targets/catalog.dart';
@@ -56,6 +57,96 @@ void main() {
     compiler: f.origin.dart,
     defaultRegistry: registry ?? () => f.origin.url,
   );
+
+  test(
+    'shared Dart source exposes original operations and all configured candidates',
+    () async {
+      final f = await _Fixture.create(
+        sameUnit: false,
+        binary: true,
+        binaryPlatforms: ['macos-arm64', 'linux-x64'],
+        locked: true,
+        workspace: true,
+        helpers: true,
+        committed: true,
+      );
+      addTearDown(f.close);
+      final source = DartStageSource(
+        resolution: f.resolution,
+        source: f.source,
+        git: f.git,
+        defaultRegistry: () => f.origin.url,
+      );
+      final unit = f.resolution.unit('app')!;
+      final requests = f.origin.requests.length;
+      final operations = source.operations(unit);
+      expect(operations.keys, [
+        'dart:pubArchive:rk_fixture_app',
+        'dart:binary:rk_fixture_app',
+      ]);
+      final pub = operations['dart:pubArchive:rk_fixture_app']!;
+      final binary = operations['dart:binary:rk_fixture_app']!;
+      expect(pub.project.name, 'rk_fixture_app');
+      expect(pub.project.unitName, 'app');
+      expect(pub.operation, DartStageOperation.pubArchive);
+      expect(pub.inputs.root.fields, f.manifest(pub.project).fields);
+      expect(pub.inputs.lock, isNull);
+      expect(pub.consumers, ['pub-archive:rk_fixture_app']);
+      expect(binary.project, same(pub.project));
+      expect(binary.operation, DartStageOperation.binary);
+      expect(binary.inputs.root.fields, pub.inputs.root.fields);
+      expect(binary.inputs.lockPath, 'pubspec.lock');
+      expect(binary.inputs.lock, isNotNull);
+      expect(binary.consumers, [
+        'build:rk_fixture_app:linux-x64',
+        'build:rk_fixture_app:macos-arm64',
+      ]);
+      expect(() => operations.clear(), throwsUnsupportedError);
+      expect(() => binary.consumers.clear(), throwsUnsupportedError);
+      final candidates = source.candidates();
+      expect(candidates.map((c) => c.provider.unit), ['core', 'app']);
+      expect(candidates.map((c) => c.manifest.name), [
+        'rk_fixture_core',
+        'rk_fixture_app',
+      ]);
+      expect(() => candidates.clear(), throwsUnsupportedError);
+      final intent = source.readIntent(unit);
+      expect(intent, authorizer(f).readIntent(unit));
+      expect(
+        (intent['workspace_manifests'] as Map).keys,
+        contains('support/helper/pubspec.yaml'),
+      );
+      expect(f.origin.requests.length, requests);
+    },
+  );
+
+  test('shared Dart source captures one live registry per intent', () async {
+    final f = await _Fixture.create(sameUnit: false, committed: true);
+    addTearDown(f.close);
+    var reads = 0;
+    final source = DartStageSource(
+      resolution: f.resolution,
+      source: f.source,
+      git: f.git,
+      defaultRegistry: () =>
+          reads++ == 0 ? 'https://pub.dartlang.org/' : f.origin.url,
+    );
+    final intent = source.readIntent(f.resolution.unit('app')!);
+    expect(reads, 1);
+    expect(intent['default_registry'], 'https://pub.dev');
+    for (final candidate in (intent['configured_candidates'] as Map).values) {
+      expect(
+        candidate['provider']['package']['source'],
+        dartRegistryIdentity('https://pub.dev'),
+      );
+    }
+    final captured = source.candidates(defaultRegistry: 'https://pub.dev');
+    expect(reads, 1);
+    expect(captured.every((c) => c.registry == 'https://pub.dev'), isTrue);
+    final current = source.candidates();
+    expect(reads, 2);
+    expect(current.every((c) => c.registry == f.origin.url), isTrue);
+  });
 
   test(
     'Dart authority restores a complete cross-unit stage after its provider was deleted',
@@ -1021,11 +1112,9 @@ void main() {
           stage: stage,
         ).buildStep(step, project);
         expect(built.ok, isTrue, reason: f.log.toString());
-        expect(
-          tools.compileTimeouts,
-          [null],
-          reason: 'archive replay must not impose a new build timeout',
-        );
+        expect(tools.compileTimeouts, [
+          null,
+        ], reason: 'archive replay must not impose a new build timeout');
         expect(
           tools.launcherSources.every(
             (path) => !path.startsWith(stage.directory.path),

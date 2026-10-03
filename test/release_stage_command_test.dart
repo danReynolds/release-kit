@@ -11,6 +11,8 @@ import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/file_mode.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
+import 'package:rk/src/engine/native_stage_context.dart';
+import 'package:rk/src/engine/stage_dependencies.dart';
 import 'package:rk/src/engine/release_stage.dart';
 import 'package:rk/src/engine/registry.dart';
 import 'package:rk/src/engine/release_manifest.dart';
@@ -782,6 +784,44 @@ void main() {
       isEmpty,
       reason: 'stage mode may inspect targets, but cannot mutate any of them',
     );
+  });
+
+  test('refreshes public history after dependency binding changes', () async {
+    var resolutions = 0;
+    final run = await harness.run(
+      stageOnly: true,
+      confirm: (_) async => fail('private preparation must not authorize'),
+      stageFor: (unit) {
+        if (++resolutions == 2) {
+          harness.registry.published['tool']!.add('2.0.0');
+          return harness.stages.bindDependencies(
+            unit,
+            StageDependencies(
+              contexts: [
+                NativeStageContext(
+                  context: 'fixture:tool',
+                  ecosystem: 'fixture',
+                  owner: 'tool',
+                  format: 1,
+                  consumers: const ['pub-archive:tool'],
+                  bindings: const [],
+                  native: const {'selection': 'frozen'},
+                ),
+              ],
+            ),
+          );
+        }
+        return harness.stages(unit);
+      },
+    );
+    expect(resolutions, 2);
+    expect(run.code, ExitCodes.refused, reason: run.text);
+    expect(run.text, contains('2.0.0'));
+    expect(
+      run.keys,
+      isNot(contains('dart pub publish --to-archive <archive>')),
+    );
+    expect(run.publicMutations, isEmpty);
   });
 
   test('native Pub packaging escapes a repository that ignores .rk', () async {
@@ -2921,6 +2961,7 @@ class _Harness {
     required Future<String?> Function(String prompt)? confirm,
     Future<GitState> Function()? refreshGit,
     ReleaseStage Function(ResolvedUnit unit, GitState git)? refreshStage,
+    ReleaseStage Function(ResolvedUnit unit)? stageFor,
     HostCapabilities? capabilities,
     void Function(_Invocation call)? onInvocation,
     void Function()? onRegistryRead,
@@ -2969,7 +3010,7 @@ class _Harness {
               return answer == '1.2.3' ? 'yes' : answer;
             },
       stageOnly: stageOnly,
-      stageFor: stages.call,
+      stageFor: stageFor ?? stages.call,
       refreshStage: refreshStage ?? stages.refresh,
       refreshGit: refreshGit ?? () async => git,
       wait: (_) => Future<void>.delayed(Duration.zero),
