@@ -817,3 +817,19 @@ reviewer approved the API and final implementation after a file-at-source-root
 regression closed an invalid resumable-state classification. The broader run
 passed 279 tests including real native preparation; 265 core/coordinator/status
 tests passed after that final guard. Lookup and proof-closure wiring remain next.
+
+Saved-stage lookup now records an unsolved native-input intent beside the frozen
+plan. Its live reader is retained through adoption/refresh so registry or policy
+changes outside an ordinary binary release plan still invalidate reuse. Advisory
+hints affect read order only; a bounded no-follow scan detects conflicting choices
+and opaque corruption. A complete scan after explicit cleanup can prove absence,
+while a separately authenticated recovery stage ID cannot fall through to a fresh
+solve. Historical schema-12 identities are classified using their original hash
+formula, never adopted under schema 13. Unclassifiable or same-unit legacy work
+requires explicit recovery/cleanup. Hints follow the durable header and optional
+filesystem failures cannot prevent staging; receipt/intent mismatches remain fatal.
+The architecture reviewer approved this bounded slice after malformed intent and
+pre-intent coordinate cases were tightened. Analysis is clean and 330 affected
+stage/receipt/coordinator/status/cleanup tests passed. Native intent composition,
+portable proof closure and production lookup/adoption wiring remain required;
+this evidence does not establish command-level frozen restoration yet.

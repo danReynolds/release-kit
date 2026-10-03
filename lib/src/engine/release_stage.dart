@@ -18,6 +18,8 @@ import 'producers.dart';
 import 'stage_contract.dart';
 import 'stage_dependencies.dart';
 import 'stage_inspection.dart';
+import 'stage_intent.dart';
+import 'stage_lookup.dart';
 import 'stage_plan.dart';
 import 'stage_receipt.dart';
 import 'git.dart';
@@ -55,18 +57,20 @@ class ReleaseStages {
   final Map<String, String> Function() _environment;
   final Map<String, ReleaseStage> _stages = {};
   final Map<String, StageDependencies> _dependencies = {};
+  final Map<String, StageIntent> _intents = {};
   final Map<String, int> _bindingGenerations = {};
   final String _unboundRunId = _newRunId();
   DartCompilerIdentity? _compiler;
 
   ReleaseStage call(ResolvedUnit unit) => _stages.putIfAbsent(
-    '${unit.name}:${CanonicalJson.encode(_dependencies[unit.name]?.toJson())}',
+    _cacheKey(unit),
     () => _resolve(
       unit,
       git,
       _compiler ??= _readCompilerIdentity(),
       _readRkIdentity(),
       _dependencies[unit.name] ?? StageDependencies(),
+      _intents[unit.name],
     ),
   );
 
@@ -74,8 +78,9 @@ class ReleaseStages {
   /// preparation. Refresh keeps those choices even if providers become public.
   ReleaseStage bindDependencies(
     ResolvedUnit unit,
-    StageDependencies dependencies,
-  ) {
+    StageDependencies dependencies, {
+    StageIntent? intent,
+  }) {
     // The portable identity excludes temporary provider handles. A restored
     // declaration and a freshly acquired provider may therefore have the same
     // identity while only the latter can materialize a missing import.
@@ -85,6 +90,7 @@ class ReleaseStages {
       _compiler ??= _readCompilerIdentity(),
       _readRkIdentity(),
       dependencies,
+      intent,
     );
     _install(unit, dependencies, candidate);
     return candidate;
@@ -100,6 +106,7 @@ class ReleaseStages {
     ResolvedUnit unit, {
     required GitState currentGit,
     required StageReceipt receipt,
+    StageIntent? intent,
     required Future<StageDependencies> Function(
       StageReceipt receipt,
       GitState currentGit,
@@ -125,6 +132,7 @@ class ReleaseStages {
       _readCompilerIdentity(),
       _readRkIdentity(),
       authorized,
+      intent,
     );
     if (candidate.directory.identity.id != receipt.identity.id) {
       throw StateError('frozen stage differs from the current release inputs');
@@ -152,9 +160,36 @@ class ReleaseStages {
   ) {
     _stages.removeWhere((_, stage) => stage.unit.name == unit.name);
     _dependencies[unit.name] = dependencies;
-    _stages['${unit.name}:${CanonicalJson.encode(dependencies.toJson())}'] =
-        stage;
+    if (stage.intent case final intent?) {
+      _intents[unit.name] = intent;
+    } else {
+      _intents.remove(unit.name);
+    }
+    _stages[_cacheKey(unit)] = stage;
     _bindingGenerations[unit.name] = (_bindingGenerations[unit.name] ?? 0) + 1;
+  }
+
+  String _cacheKey(ResolvedUnit unit) =>
+      '${unit.name}:${_intents[unit.name]?.sha256}:${CanonicalJson.encode(_dependencies[unit.name]?.toJson())}';
+
+  StageIntent intentFor(
+    ResolvedUnit unit, {
+    required GitState currentGit,
+    required Map<String, Object?> Function() readInputs,
+  }) {
+    final base = _resolve(
+      unit,
+      currentGit,
+      _readCompilerIdentity(),
+      _readRkIdentity(),
+      StageDependencies(),
+      null,
+    );
+    return StageIntent.capture(
+      base: base.directory.identity,
+      basePlan: base.resolvedPlan!,
+      readInputs: readInputs,
+    );
   }
 
   /// Resolves the stage again from facts read at the release boundary.
@@ -169,6 +204,7 @@ class ReleaseStages {
     _readCompilerIdentity(),
     _readRkIdentity(),
     _dependencies[unit.name] ?? StageDependencies(),
+    _intents[unit.name],
   );
 
   ReleaseStage _resolve(
@@ -177,6 +213,7 @@ class ReleaseStages {
     DartCompilerIdentity compiler,
     RkImplementationIdentity rk,
     StageDependencies dependencies,
+    StageIntent? intent,
   ) {
     final launcher =
         Platform.isMacOS &&
@@ -195,19 +232,24 @@ class ReleaseStages {
       rk: rk,
       environment: _environment(),
     );
-    if (!dependencies.isEmpty) {
-      plan['dependency_inputs'] = dependencies.toJson();
-    }
-    final identity = currentGit.isBound
+    StageIdentity identityFor(Map<String, Object?> value) => currentGit.isBound
         ? StageIdentity.forPlan(
             headCommit: currentGit.head,
             headTree: currentGit.headTree,
-            resolvedPlan: plan,
+            resolvedPlan: value,
           )
         : StageIdentity.forUnboundPlan(
             runId: _unboundRunId,
-            resolvedPlan: plan,
+            resolvedPlan: value,
           );
+    if (intent != null) {
+      intent.requireCurrent(identityFor(plan));
+      plan[StageIntent.planKey] = intent.sha256;
+    }
+    if (!dependencies.isEmpty) {
+      plan['dependency_inputs'] = dependencies.toJson();
+    }
+    final identity = identityFor(plan);
     final directory = StageDirectory(
       repositoryRoot: repositoryRoot,
       identity: identity,
@@ -222,6 +264,7 @@ class ReleaseStages {
       directory: directory,
       resolvedPlan: plan,
       dependencies: dependencies,
+      intent: intent,
       targetContributions: stageContracts(
         unit: unit,
         repository: currentGit.originUrl,
@@ -267,6 +310,7 @@ class ReleaseStage {
     this.repository,
     this.enforceUnitContract = false,
     Map<String, Object?>? resolvedPlan,
+    this.intent,
     StageDependencies? dependencies,
     Iterable<StageContributionContract> targetContributions = const [],
   }) : resolvedPlan = resolvedPlan == null
@@ -298,6 +342,7 @@ class ReleaseStage {
   final Map<String, Object?>? resolvedPlan;
   final List<StageContributionContract> targetContributions;
   final StageDependencies dependencies;
+  final StageIntent? intent;
 
   /// Direct construction is used by low-level receipt/atomicity tests whose
   /// deliberately partial producer graphs are not a release plan. Every
@@ -1082,6 +1127,11 @@ class ReleaseStage {
         steps: ordered,
       ),
     );
+    if (ordered.isEmpty && intent != null) {
+      StageLookup(
+        StageStore(directory.repositoryRoot),
+      ).record(intent!, directory);
+    }
   }
 
   /// Steps in contract order; names outside the contract keep their given

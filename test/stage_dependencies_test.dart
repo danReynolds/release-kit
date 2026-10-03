@@ -17,6 +17,9 @@ import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/engine/stage_contract.dart';
+import 'package:rk/src/engine/stage_intent.dart';
+import 'package:rk/src/engine/stage_lookup.dart';
+import 'package:rk/src/engine/stage_store.dart';
 import 'package:rk/src/engine/stage_dependencies.dart';
 import 'package:rk/src/engine/stage_plan.dart';
 import 'package:rk/src/engine/stage_receipt.dart';
@@ -41,6 +44,198 @@ void main() {
       ],
     );
   }
+
+  test(
+    'header intent lookup and authorized adoption restore the same stage',
+    () async {
+      final nativeFacts = <String, Object?>{
+        'registry': 'fixture-registry',
+        'policy': 1,
+      };
+      final intent = f.stages.intentFor(
+        f.app,
+        currentGit: f.git,
+        readInputs: () => nativeFacts,
+      );
+      final stage = f.stages.bindDependencies(
+        f.app,
+        externalDependencies(),
+        intent: intent,
+      );
+      final store = StageStore(f.root.path);
+      expect(store.intentHintPath(intent.sha256), isNull);
+      stage.writeProgress(const []);
+      expect(File(store.intentHintPath(intent.sha256)!).existsSync(), isTrue);
+      final before = stage.directory.fingerprint();
+      final restarted = f.resolver();
+      final current = restarted.intentFor(
+        f.app,
+        currentGit: f.git,
+        readInputs: () => nativeFacts,
+      );
+      final lookup = await StageLookup(store).find(current);
+      expect(lookup.kind, StageLookupKind.found);
+      var authorizations = 0;
+      final adopted = await restarted.adoptFrozen(
+        f.app,
+        currentGit: f.git,
+        receipt: lookup.receipt!,
+        intent: current,
+        authorize: (saved, git) async {
+          authorizations++;
+          return StageDependencies.fromJson(saved.plan!['dependency_inputs']);
+        },
+      );
+      expect(authorizations, 1);
+      expect(adopted.directory.identity.id, stage.directory.identity.id);
+      expect(
+        restarted.refresh(f.app, f.git).directory.identity.id,
+        stage.directory.identity.id,
+      );
+      expect(stage.directory.fingerprint(), before);
+      expect(adopted.inspect().canRestartSource, isTrue);
+      expect(adopted.inspect().validProgress, isFalse);
+      expect(adopted.requireProducerProgress, throwsStateError);
+    },
+  );
+
+  for (final obstruction in ['file', 'directory', 'symlink']) {
+    test(
+      'unavailable advisory hint ($obstruction) does not prevent a durable header',
+      () async {
+        final intent = f.stages.intentFor(
+          f.app,
+          currentGit: f.git,
+          readInputs: () => {},
+        );
+        final store = StageStore(f.root.path);
+        final hint = store.intentHintPath(intent.sha256, create: true)!;
+        final sentinel = File('${f.root.path}/sentinel')
+          ..writeAsStringSync('unchanged');
+        switch (obstruction) {
+          case 'file':
+            Directory(File(hint).parent.path).deleteSync();
+            File(File(hint).parent.path).writeAsStringSync('not a directory');
+          case 'directory':
+            Directory(hint).createSync();
+          case 'symlink':
+            Link(hint).createSync(sentinel.path);
+        }
+        final stage = f.stages.bindDependencies(
+          f.app,
+          externalDependencies(),
+          intent: intent,
+        );
+        stage.writeProgress(const []);
+        expect(stage.inspect().canRestartSource, isTrue);
+        expect(
+          (await StageLookup(store).find(intent)).receipt!.identity.id,
+          stage.directory.identity.id,
+        );
+        expect(sentinel.readAsStringSync(), 'unchanged');
+        if (obstruction == 'directory') {
+          expect(Directory(hint).existsSync(), isTrue);
+        }
+        if (obstruction == 'symlink') {
+          expect(Link(hint).targetSync(), sentinel.path);
+        }
+      },
+    );
+  }
+
+  test('refresh rereads native facts not present in the base binary plan', () {
+    final binary = _Fixture(binaryOnly: true);
+    addTearDown(binary.close);
+    var registry = 'https://first.example';
+    final intent = binary.stages.intentFor(
+      binary.app,
+      currentGit: binary.git,
+      readInputs: () => {'registry': registry},
+    );
+    expect(CanonicalJson.encode(intent.basePlan), isNot(contains(registry)));
+    final stage = binary.stages.bindDependencies(
+      binary.app,
+      StageDependencies(contexts: [binary.context([])]),
+      intent: intent,
+    );
+    registry = 'https://second.example';
+    final changed = binary.stages.intentFor(
+      binary.app,
+      currentGit: binary.git,
+      readInputs: () => {'registry': registry},
+    );
+    expect(changed.base.id, intent.base.id);
+    expect(changed.sha256, isNot(intent.sha256));
+    expect(
+      () => binary.stages.refresh(binary.app, binary.git),
+      throwsStateError,
+    );
+    expect(binary.stages(binary.app), same(stage));
+  });
+
+  test(
+    'native input drift during authorization cannot adopt saved intent',
+    () async {
+      var registry = 'first-registry';
+      final intent = f.stages.intentFor(
+        f.app,
+        currentGit: f.git,
+        readInputs: () => {'registry': registry},
+      );
+      final stage = f.stages.bindDependencies(
+        f.app,
+        externalDependencies(),
+        intent: intent,
+      );
+      stage.writeProgress(const []);
+      final restarted = f.resolver();
+      final baseline = restarted(f.app);
+      final current = restarted.intentFor(
+        f.app,
+        currentGit: f.git,
+        readInputs: () => {'registry': registry},
+      );
+      await expectLater(
+        restarted.adoptFrozen(
+          f.app,
+          currentGit: f.git,
+          receipt: StageReceiptStore(stage.directory).read()!,
+          intent: current,
+          authorize: (saved, git) async {
+            registry = 'second-registry';
+            return StageDependencies.fromJson(saved.plan!['dependency_inputs']);
+          },
+        ),
+        throwsStateError,
+      );
+      expect(restarted(f.app), same(baseline));
+    },
+  );
+
+  test('fresh source or compiler identity invalidates captured intent', () {
+    final intent = f.stages.intentFor(
+      f.app,
+      currentGit: f.git,
+      readInputs: () => {},
+    );
+    expect(
+      () => f
+          .resolver(compilerDigest: () => 'c')
+          .bindDependencies(f.app, externalDependencies(), intent: intent),
+      throwsStateError,
+    );
+    final saved = f.stages.bindDependencies(
+      f.app,
+      externalDependencies(),
+      intent: intent,
+    );
+    expect(
+      () => f.stages.refresh(f.app, f.gitAt(head: '3' * 40)),
+      throwsStateError,
+    );
+    expect(f.stages(f.app), same(saved));
+    expect(saved.resolvedPlan![StageIntent.planKey], intent.sha256);
+  });
 
   for (final state in [
     'complete',
@@ -942,7 +1137,16 @@ void _rewrite(ReleaseStage stage, String path, String bytes) {
 }
 
 final class _Fixture {
-  _Fixture({String appVersion = '0.1.0'}) {
+  _Fixture({String appVersion = '0.1.0', bool binaryOnly = false}) {
+    if (binaryOnly) {
+      source.files['release.toml'] = source.files['release.toml']!.replaceFirst(
+        '[release.app]\npath = "app"\npublish = ["pub.dev"]',
+        '[release.app]\npath = "app"\npublish = ["git-tag", "github-release"]\nbinary_platforms = ["linux-x64"]',
+      );
+      source.files['app/pubspec.yaml'] =
+          '${source.files['app/pubspec.yaml']}publish_to: none\nexecutables:\n  app: app\n';
+      source.files['app/bin/app.dart'] = 'void main() {}\n';
+    }
     source.files['app/pubspec.yaml'] = source.files['app/pubspec.yaml']!
         .replaceFirst('0.1.0', appVersion);
     final diagnostics = Diagnostics();
