@@ -262,14 +262,15 @@ Future<Ran> release({
   final stageCache = <String, ReleaseStage>{};
   ReleaseStage stageFor(ResolvedUnit unit) =>
       stageCache.putIfAbsent(unit.name, () {
+        final plan = <String, Object?>{
+          'unit': unit.name,
+          'version': unit.version.canonical,
+          'fixture_head': effectiveGit.head,
+        };
         final identity = StageIdentity.forPlan(
           headCommit: '1111111111111111111111111111111111111111',
           headTree: '2222222222222222222222222222222222222222',
-          resolvedPlan: {
-            'unit': unit.name,
-            'version': unit.version.canonical,
-            'fixture_head': effectiveGit.head,
-          },
+          resolvedPlan: plan,
         );
         final directory = StageDirectory(
           repositoryRoot: stageRoot.path,
@@ -281,6 +282,7 @@ Future<Ran> release({
           directory: directory,
           repository: effectiveGit.originUrl,
           enforceUnitContract: true,
+          resolvedPlan: plan,
           targetContributions:
               TargetCatalog.builtIn().stageContractResolver(resolution)(
                 unit: unit,

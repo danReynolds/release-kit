@@ -67,6 +67,15 @@ class StageInspection {
   /// the deliberately incomplete barrier remains.
   bool get validProgress =>
       receipt?.complete == false &&
+      receipt!.steps.isNotEmpty &&
+      issues.isNotEmpty &&
+      issues.every((issue) => issue.kind == StageIssueKind.incompleteReceipt);
+
+  /// Frozen choices survived, but source production has not completed. This
+  /// grants no producer inputs and is never a completed or reusable stage.
+  bool get planRecorded =>
+      receipt?.plan != null &&
+      receipt!.steps.isEmpty &&
       issues.isNotEmpty &&
       issues.every((issue) => issue.kind == StageIssueKind.incompleteReceipt);
 
@@ -293,7 +302,12 @@ class StageInspector {
     final completeIndexes = <int>[];
 
     if (receipt.steps.isEmpty) {
-      _structure(issues, 'receipt has no producer steps');
+      if (receipt.plan == null) {
+        _structure(
+          issues,
+          'receipt has neither a frozen plan nor producer steps',
+        );
+      }
       return;
     }
 

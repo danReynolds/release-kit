@@ -186,16 +186,19 @@ class ReleaseStage {
     this.launcherCompiler,
     this.repository,
     this.enforceUnitContract = false,
-    this.resolvedPlan,
+    Map<String, Object?>? resolvedPlan,
     StageDependencies? dependencies,
     Iterable<StageContributionContract> targetContributions = const [],
-  }) : dependencies = dependencies ?? StageDependencies(),
+  }) : resolvedPlan = resolvedPlan == null
+           ? null
+           : CanonicalJson.normalize(resolvedPlan) as Map<String, Object?>,
+       dependencies = dependencies ?? StageDependencies(),
        targetContributions = List<StageContributionContract>.unmodifiable(
          targetContributions,
        ) {
     if (!this.dependencies.isEmpty &&
         (resolvedPlan == null ||
-            CanonicalJson.encode(resolvedPlan!['dependency_inputs']) !=
+            CanonicalJson.encode(resolvedPlan['dependency_inputs']) !=
                 CanonicalJson.encode(this.dependencies.toJson()) ||
             Sha256.hex(utf8.encode(CanonicalJson.encode(resolvedPlan))) !=
                 directory.identity.planSha256)) {
@@ -210,8 +213,8 @@ class ReleaseStage {
   final LauncherCompiler? launcherCompiler;
   final String? repository;
 
-  /// Recorded for explaining future rebuilds, never for authorizing reuse.
-  /// The stage identity already binds the digest of this exact plan.
+  /// Recorded before production for restoration and rebuild explanations.
+  /// Its digest alone cannot authorize reuse of source or provider artifacts.
   final Map<String, Object?>? resolvedPlan;
   final List<StageContributionContract> targetContributions;
   final StageDependencies dependencies;
@@ -390,6 +393,19 @@ class ReleaseStage {
     final inspected = const StageInspector().inspect(directory);
     final receipt = inspected.receipt;
     final issues = [...inspected.issues];
+    if (receipt != null &&
+        enforceUnitContract &&
+        (receipt.plan == null ||
+            CanonicalJson.encode(receipt.plan) !=
+                CanonicalJson.encode(resolvedPlan))) {
+      issues.add(
+        const StageIssue(
+          StageIssueKind.wrongStage,
+          'the receipt does not record this resolved release plan',
+          path: 'stage.json',
+        ),
+      );
+    }
     if (receipt?.complete == true &&
         !issues.any(
           (issue) =>
@@ -478,6 +494,34 @@ class ReleaseStage {
         directory.path,
       );
     }
+  }
+
+  /// Retains the frozen header across interrupted source-copy recovery. Only
+  /// unrecorded source residue may be discarded; never delete stage.json.
+  void discardUnrecordedSource() {
+    final inspected = inspect();
+    final receipt = inspected.receipt;
+    if (receipt?.plan == null ||
+        receipt!.steps.isNotEmpty ||
+        receipt.identity.id != directory.identity.id ||
+        inspected.issues.any(
+          (issue) =>
+              issue.kind != StageIssueKind.incompleteReceipt &&
+              !(issue.kind == StageIssueKind.extraArtifact &&
+                  (issue.path == 'source' ||
+                      issue.path?.startsWith('source/') == true)),
+        )) {
+      throw StateError('source retry requires an intact frozen plan header');
+    }
+    final type = FileSystemEntity.typeSync(sourceRoot, followLinks: false);
+    if (type == FileSystemEntityType.notFound) return;
+    if (type != FileSystemEntityType.directory) {
+      throw FileSystemException(
+        'source residue is not a directory',
+        sourceRoot,
+      );
+    }
+    Directory(sourceRoot).deleteSync(recursive: true);
   }
 
   /// Removes declared producer outputs that were written but never receipted.
@@ -876,6 +920,7 @@ class ReleaseStage {
     };
     final receipt = StageReceipt(
       identity: directory.identity,
+      plan: resolvedPlan,
       steps: [
         ...progress.steps,
         StageStep(
@@ -893,7 +938,6 @@ class ReleaseStage {
             },
             'homebrew_binding': homebrewBinding?.toEvidence(),
             if (compiler != null) 'dart_compiler': compiler!.toJson(),
-            if (resolvedPlan != null) 'release_plan': resolvedPlan,
           },
         ),
       ],
@@ -946,6 +990,9 @@ class ReleaseStage {
   /// canonical. Steps are written in contract order so the receipt reads
   /// the same however the work interleaved.
   void writeProgress(Iterable<StageStep> steps) {
+    if (enforceUnitContract && resolvedPlan == null) {
+      throw StateError('production receipts require their frozen release plan');
+    }
     if (steps.any((step) => step.name == 'complete-stage')) {
       throw StateError('only finalize may complete a stage');
     }
@@ -956,9 +1003,13 @@ class ReleaseStage {
     final ordered = contract == null
         ? List<StageStep>.of(steps)
         : _contractOrdered(steps, contract.producerNames);
-    StageReceiptStore(
-      directory,
-    ).write(StageReceipt(identity: directory.identity, steps: ordered));
+    StageReceiptStore(directory).write(
+      StageReceipt(
+        identity: directory.identity,
+        plan: resolvedPlan,
+        steps: ordered,
+      ),
+    );
   }
 
   /// Steps in contract order; names outside the contract keep their given

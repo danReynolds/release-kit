@@ -100,6 +100,7 @@ void main() {
       StageReceiptStore(release.directory).write(
         StageReceipt(
           identity: receipt.identity,
+          plan: receipt.plan,
           steps: [
             for (final step in receipt.steps)
               if (step.name == producer.name) withoutSource else step,
@@ -725,9 +726,13 @@ executables:
         final file = File(release.directory.resolve(artifact.path));
         if (file.existsSync()) file.deleteSync();
       }
-      StageReceiptStore(
-        release.directory,
-      ).write(StageReceipt(identity: complete.identity, steps: prefix));
+      StageReceiptStore(release.directory).write(
+        StageReceipt(
+          identity: complete.identity,
+          plan: complete.plan,
+          steps: prefix,
+        ),
+      );
       final prefixReceipt = File(
         release.directory.resolve('stage.json'),
       ).readAsBytesSync();
@@ -740,6 +745,7 @@ executables:
       }
       final candidate = StageReceipt(
         identity: complete.identity,
+        plan: complete.plan,
         steps: [...prefix, next],
       );
 

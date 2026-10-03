@@ -311,15 +311,15 @@ executables:
   });
 
   test(
-    'legacy receipts explain source and SDK changes with bounded metadata',
+    'partial receipts without a header supply advisory history but cannot be adopted',
     () async {
       final first = historyStage();
       await _complete(first);
       final file = File(first.directory.resolve('stage.json'));
       final json = jsonDecode(file.readAsStringSync()) as Map;
-      ((json['steps'] as List).last['evidence'] as Map).remove('release_plan');
+      json['plan'] = null;
       file.writeAsStringSync('${CanonicalJson.encode(json)}\n');
-      expect(first.inspect().reusable, isTrue);
+      expect(first.inspect().reusable, isFalse);
       expect(StageHistory.rebuildReasons(historyStage(commit: '3' * 40)), [
         'source commit changed (1111111 → 3333333)',
       ]);
@@ -337,9 +337,7 @@ executables:
       final file = File(first.directory.resolve('stage.json'));
       final original = file.readAsStringSync();
       final json = jsonDecode(original) as Map;
-      (json['steps'] as List)
-              .last['evidence']['release_plan']['toolchain']['rk']['sha256'] =
-          'f' * 64;
+      json['plan']['toolchain']['rk']['sha256'] = 'f' * 64;
       file.writeAsStringSync('${CanonicalJson.encode(json)}\n');
       final current = historyStage(commit: '3' * 40);
       expect(StageHistory.rebuildReasons(current), isEmpty);
@@ -406,6 +404,7 @@ executables:
     StageReceiptStore(first.directory).write(
       StageReceipt(
         identity: receipt.identity,
+        plan: receipt.plan,
         steps: [
           ...receipt.steps.take(receipt.steps.length - 1),
           StageStep(

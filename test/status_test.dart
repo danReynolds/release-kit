@@ -2208,7 +2208,11 @@ publish = ["pub.dev"]
     );
     final receipt = made.requireReceipt();
     StageReceiptStore(made.directory).write(
-      StageReceipt(identity: receipt.identity, steps: receipt.steps.take(2)),
+      StageReceipt(
+        identity: receipt.identity,
+        plan: receipt.plan,
+        steps: receipt.steps.take(2),
+      ),
     );
 
     final run = await statusRun(

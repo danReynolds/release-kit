@@ -96,6 +96,98 @@ void main() {
   setUp(() => harness = _Harness());
   tearDown(() => harness.close());
 
+  for (final copied in [0, 2]) {
+    test(
+      'source retry preserves its frozen header after $copied copied files',
+      () async {
+        var reads = 0;
+        harness.source.beforeReadBytes = (path) {
+          final header = StageReceiptStore(harness.stage.directory).read();
+          if (header != null && header.steps.isEmpty && reads++ == copied) {
+            expect(header.plan, harness.stage.resolvedPlan);
+            throw StateError('fixture source interruption');
+          }
+        };
+        final failed = await harness.run(stageOnly: true, confirm: null);
+        expect(failed.code, ExitCodes.refused, reason: failed.text);
+        expect(failed.publicMutations, isEmpty);
+        final file = File(harness.stage.directory.resolve('stage.json'));
+        final bytes = file.readAsBytesSync();
+        final modified = file.lastModifiedSync();
+        final header = StageReceipt.parse(utf8.decode(bytes));
+        expect(header.steps, isEmpty);
+        expect(header.plan, harness.stage.resolvedPlan);
+        expect(harness.stage.inspect().validProgress, isFalse);
+        expect(harness.stage.requireProducerProgress, throwsStateError);
+
+        // Recreate the resolver to prove the header survives a new process's
+        // stage object. Native intent lookup is tested separately when wired.
+        harness.stages = ReleaseStages(
+          source: harness.source,
+          git: harness.git,
+          stageContracts: TargetCatalog.builtIn().stageContractResolver(
+            harness.resolution,
+          ),
+          repositoryRoot: harness.root.path,
+        );
+        reads = 0;
+        final failedAgain = await harness.run(stageOnly: true, confirm: null);
+        expect(failedAgain.code, ExitCodes.refused, reason: failedAgain.text);
+        expect(failedAgain.publicMutations, isEmpty);
+        expect(file.readAsBytesSync(), bytes);
+        expect(
+          file.lastModifiedSync(),
+          modified,
+          reason: 'retry must never replace the frozen header',
+        );
+
+        harness.source.beforeReadBytes = null;
+        final resumed = await harness.run(stageOnly: true, confirm: null);
+        expect(resumed.code, ExitCodes.ok, reason: resumed.text);
+        expect(resumed.publicMutations, isEmpty);
+        final complete = harness.stage.requireReceipt();
+        expect(complete.identity.id, header.identity.id);
+        expect(complete.plan, header.plan);
+        expect(complete.steps.last.evidence, isNot(contains('release_plan')));
+      },
+    );
+  }
+
+  test(
+    'source retry refuses unknown residue without removing the frozen header',
+    () async {
+      final stage = harness.stage;
+      stage.writeProgress(const []);
+      final file = File(stage.directory.resolve('stage.json'));
+      final bytes = file.readAsBytesSync();
+      final extra = File(stage.directory.resolve('unowned'))
+        ..writeAsStringSync('keep');
+      final run = await harness.run(stageOnly: true, confirm: null);
+      expect(run.code, ExitCodes.refused, reason: run.text);
+      expect(
+        run.text,
+        contains('frozen source plan could not be resumed safely'),
+      );
+      expect(run.publicMutations, isEmpty);
+      expect(file.readAsBytesSync(), bytes);
+      expect(extra.readAsStringSync(), 'keep');
+    },
+  );
+
+  test('a production receipt cannot omit its frozen plan', () {
+    final stage = harness.stage;
+    StageReceiptStore(
+      stage.directory,
+    ).write(StageReceipt(identity: stage.directory.identity));
+    expect(stage.inspect().planRecorded, isFalse);
+    expect(
+      stage.inspect().issues.any(
+        (issue) => issue.kind == StageIssueKind.wrongStage,
+      ),
+      isTrue,
+    );
+  });
+
   for (final stageOnly in [true, false]) {
     test(
       'a released source conflict gives recovery advice (stage: $stageOnly)',
@@ -2317,6 +2409,7 @@ void main() {
     StageReceiptStore(harness.stage.directory).write(
       StageReceipt(
         identity: receipt.identity,
+        plan: receipt.plan,
         steps: receipt.steps.where((step) => step.name != 'pub-archive:tool'),
       ),
     );
@@ -2350,6 +2443,7 @@ void main() {
       StageReceiptStore(harness.stage.directory).write(
         StageReceipt(
           identity: receipt.identity,
+          plan: receipt.plan,
           steps: [
             for (final step in receipt.steps)
               if (step.name == build.name) renamed else step,
@@ -2378,9 +2472,13 @@ void main() {
     final terminal = steps.removeLast();
     expect(terminal.name, 'complete-stage');
     steps.insert(steps.length - 1, terminal);
-    StageReceiptStore(
-      harness.stage.directory,
-    ).write(StageReceipt(identity: receipt.identity, steps: steps));
+    StageReceiptStore(harness.stage.directory).write(
+      StageReceipt(
+        identity: receipt.identity,
+        plan: receipt.plan,
+        steps: steps,
+      ),
+    );
 
     final released = await harness.run(
       stageOnly: false,
@@ -2422,6 +2520,7 @@ void main() {
     StageReceiptStore(harness.stage.directory).write(
       StageReceipt(
         identity: receipt.identity,
+        plan: receipt.plan,
         steps: [
           for (final step in receipt.steps)
             if (step.name == build.name) noSmoke else step,
@@ -2712,9 +2811,9 @@ void _interruptAfter(ReleaseStage stage, String stepName) {
   for (final directory in directories) {
     if (directory.listSync(followLinks: false).isEmpty) directory.deleteSync();
   }
-  StageReceiptStore(
-    stage.directory,
-  ).write(StageReceipt(identity: complete.identity, steps: kept));
+  StageReceiptStore(stage.directory).write(
+    StageReceipt(identity: complete.identity, plan: complete.plan, steps: kept),
+  );
 }
 
 bool _compilesFor(_Invocation call, String platform) =>
@@ -2736,7 +2835,7 @@ class _Harness {
         : unbound
         ? _pubOnlyConfig
         : _config;
-    source = MemorySourceTree({
+    source = _InterruptibleSourceTree({
       '.gitignore': '.rk/\n',
       'release.toml': config,
       'packages/tool/pubspec.yaml': _pubspec,
@@ -2780,11 +2879,11 @@ class _Harness {
   /// what rk has actually said rather than on a guessed delay.
   StringBuffer? liveOutput;
 
-  late final MemorySourceTree source;
+  late final _InterruptibleSourceTree source;
   late final Resolution resolution;
   late final ResolvedUnit unit;
   late GitState git;
-  late final ReleaseStages stages;
+  late ReleaseStages stages;
   late final _ReleaseRegistry registry;
   late final _WorldTools tools;
 
@@ -2898,6 +2997,18 @@ class _Harness {
 
   void close() {
     if (root.existsSync()) root.deleteSync(recursive: true);
+  }
+}
+
+class _InterruptibleSourceTree extends MemorySourceTree {
+  _InterruptibleSourceTree(super.files, {required super.description});
+
+  void Function(String path)? beforeReadBytes;
+
+  @override
+  List<int>? readBytes(String path) {
+    beforeReadBytes?.call(path);
+    return super.readBytes(path);
   }
 }
 

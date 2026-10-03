@@ -2299,16 +2299,17 @@ executables:
     final stageCache = <String, ReleaseStage>{};
     ReleaseStage stageFor(ResolvedUnit unit) =>
         stageCache.putIfAbsent(unit.name, () {
+          final plan = <String, Object?>{
+            'unit': unit.name,
+            'version': unit.version.canonical,
+            'fixture': label,
+          };
           final directory = StageDirectory(
             repositoryRoot: root.path,
             identity: StageIdentity.forPlan(
               headCommit: git.head,
               headTree: '2222222222222222222222222222222222222222',
-              resolvedPlan: {
-                'unit': unit.name,
-                'version': unit.version.canonical,
-                'fixture': label,
-              },
+              resolvedPlan: plan,
             ),
           );
           return ReleaseStage(
@@ -2317,6 +2318,7 @@ executables:
             repository: git.originUrl,
             directory: directory,
             enforceUnitContract: true,
+            resolvedPlan: plan,
             targetContributions:
                 TargetCatalog.builtIn().stageContractResolver(resolution)(
                   unit: unit,

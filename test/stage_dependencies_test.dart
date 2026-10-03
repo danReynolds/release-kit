@@ -689,9 +689,13 @@ void _rewrite(ReleaseStage stage, String path, String bytes) {
       ),
     );
   }
-  StageReceiptStore(
-    stage.directory,
-  ).write(StageReceipt(identity: previous.identity, steps: rewritten));
+  StageReceiptStore(stage.directory).write(
+    StageReceipt(
+      identity: previous.identity,
+      plan: previous.plan,
+      steps: rewritten,
+    ),
+  );
 }
 
 final class _Fixture {

@@ -75,6 +75,19 @@ final class ReleaseStageCoordinator {
       );
     }
 
+    if (inspected.receipt?.plan != null &&
+        inspected.receipt!.steps.isEmpty &&
+        !inspected.planRecorded) {
+      return Diagnostic(
+        code: 'RK-STAGE-003',
+        message: 'the frozen source plan could not be resumed safely',
+        remedy:
+            '${inspected.issues.join('\n')}\n'
+            'Resolve the recorded source-copy residue, then re-run '
+            'rk stage ${unit.name}. The frozen receipt has been preserved.',
+      );
+    }
+
     final completedOrCorrupt =
         inspected.claimsCompletion ||
         inspected.issues.any(
@@ -313,7 +326,7 @@ final class ReleaseStageCoordinator {
       return null;
     }
 
-    if (inspected.validProgress) {
+    if (inspected.validProgress || inspected.planRecorded) {
       output.say('Resuming interrupted staging.', role: VisualRole.secondary);
     } else if (!stage.directory.identity.isGitBound) {
       output.say(
@@ -344,7 +357,12 @@ final class ReleaseStageCoordinator {
       sourceArtifacts = List<StageArtifact>.from(sourceStep.outputs);
     } else {
       try {
-        stage.reset();
+        if (inspected.planRecorded) {
+          stage.discardUnrecordedSource();
+        } else {
+          stage.reset();
+          stage.writeProgress(const []);
+        }
       } on Object catch (error) {
         stageProgress.discard();
         output.problem(
@@ -672,8 +690,19 @@ final class ReleaseStageCoordinator {
     StageInspection inspected,
     Set<String> declaredOutputs,
   ) {
-    if (inspected.receipt?.complete != false || inspected.validProgress) {
+    if (inspected.receipt?.complete != false ||
+        inspected.validProgress ||
+        inspected.planRecorded) {
       return inspected;
+    }
+    if (inspected.receipt?.plan != null && inspected.receipt!.steps.isEmpty) {
+      try {
+        stage.discardUnrecordedSource();
+        final recovered = stage.inspect();
+        return recovered.planRecorded ? recovered : inspected;
+      } on Object {
+        return inspected;
+      }
     }
     final allowedExtras = <String>{};
     for (final output in declaredOutputs) {

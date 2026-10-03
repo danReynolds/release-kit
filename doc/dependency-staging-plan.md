@@ -5,6 +5,8 @@ Status: reviewed delivery plan; implementation is in progress on
 Pub/binary preparation, frozen-choice verification and source-bound binary lock
 policies are implemented. Development-source discovery and receipt-bound helper
 replay are implemented; frozen-stage restore and command integration are not complete.
+Schema-13 receipt headers now preserve plans across source-copy interruptions;
+intent lookup, transactional adoption and portable proof closure remain packet 2.
 The remaining work is defined in the implementation packets below; foundation
 proofs do not qualify bare `rk stage` or publication. No publication has occurred.
 
@@ -484,8 +486,14 @@ manifests. The native package cache and checkout remain unmodified.
 
 ### 2. Frozen stage restore and proof authorization
 
-Persist the bound plan in the receipt before source/build/archive producers,
-with an explicit compatible receipt migration. Use `StageStore`'s mutation lock
+Persist the bound plan in the receipt before source/build/archive producers.
+Schema 13 adds the deep-frozen plan header and explicitly refuses schema 12;
+never reinterpret an old identity with the new schema constant. Retain old stage
+directories and direct recovery-critical releases to the RK version that wrote
+them. Because the schema changes the stage path, command recovery must check
+public history before treating a missing new-schema path as permission to build;
+the existing binary lost-stage guard alone does not cover Pub-only dependencies.
+Use `StageStore`'s mutation lock
 for atomic intent hints; bounded no-follow receipt scanning is the fallback.
 Keep `StageHistory` advisory rather than making its unchecked history authoritative.
 
@@ -497,11 +505,19 @@ Adoption order is fixed:
 3. Authenticate root/candidate manifests and the portable provider proof closure
    against current configuration and canonical contracts. Reuse the existing
    native frozen verifier for exact metadata and native graph authorization.
-4. Bind the authorized dependencies into the shared `ReleaseStages` instance;
-   require its newly reconstructed full identity to equal the recorded one.
-5. Inspect recorded artifact bytes and completed producer contracts; resume only
+4. Reconstruct a candidate stage without mutating the shared resolver; require
+   its full identity to equal the recorded one.
+5. Inspect recorded artifact bytes and completed producer contracts, then install
+   the accepted dependencies into the shared `ReleaseStages` instance. A failed
+   hint or authorization must leave resolver state unchanged. Resume only
    unfinished work. Refresh temporary download/provider handles without changing
    the portable plan. Publication requires a completed, strictly verified stage.
+
+An authenticated header-only receipt is a distinct state from verified producer
+progress. Retain `stage.json` continuously when removing interrupted source-copy
+residue; reset-then-rewrite creates a crash window that loses frozen choices.
+Header-only receipts never supply source artifacts to producers. Keep one plan
+authority in the header, not another copy in completion evidence.
 
 Exit tests cover interrupted resume without a new solve, missing/corrupt hints,
 forged self-consistent dependency JSON, changed root/registry/toolchain, newer
@@ -775,3 +791,14 @@ manifests, source-copy immutability and exact package locations; it caught and
 closed mutation during workspace authorization and BOM lockfile mismatch. The
 native reviewer approved this slice and analysis is clean. This is producer
 qualification, not frozen-stage adoption or bare repository command qualification.
+
+The initial frozen-restore slice records a schema-13 plan header before source
+production, preserves it through every progress/completion write, and keeps it
+continuously present during repeated source-copy failures. Plan-only receipts
+cannot supply producer inputs. Unknown residue refuses without deleting the
+header. Completion evidence no longer duplicates the plan. The architecture
+reviewer approved this bounded change; 259 receipt/staging/status/cleanup tests
+and 217 broader CLI/phase/native/release tests passed after upgrading two hand-built
+production-contract fixtures. Schema-12 parsing refuses without deleting bytes.
+Recovery across old identity paths and public history remains required in the
+lookup/command work; this does not yet qualify end-to-end frozen restoration.
