@@ -521,6 +521,188 @@ void main() {
     );
   }
 
+  for (final when in ['after-yes', 'session', 'native-gate', 'final-read']) {
+    test('pending public unit remains guarded at $when', () async {
+      final later = f.plans.last;
+      var nativeFinished = false;
+      void tamper() => File(
+        later.stage.directory.resolve('source/beta/pubspec.yaml'),
+      ).writeAsStringSync('changed later private output');
+      final first = f.copy(
+        f.plans.first,
+        checks: {
+          f.plans.first.targets.single.step.id: _Check(() async {
+            if (when == 'native-gate') tamper();
+            nativeFinished = true;
+            return NativePublicationReady(evidence: const {});
+          }),
+        },
+      );
+      expect(await f.coordinator.authorizeRepository([first, later]), isTrue);
+      switch (when) {
+        case 'after-yes':
+          tamper();
+        case 'session':
+          f.onSession = tamper;
+        case 'final-read':
+          f.onRead = (_) {
+            if (nativeFinished) tamper();
+          };
+      }
+      expect(await f.coordinator.publish(first), ExitCodes.refused);
+      expect(f.problemCodes, contains('RK-STAGE-002'));
+      expect(first.actions.values, everyElement(ReleaseAction.notAttempted));
+      expect(f.calls.where((call) => call.startsWith('publish:')), isEmpty);
+      expect(f.output.report.acted, isFalse);
+      if (when == 'after-yes') expect(f.sessionCalls, isEmpty);
+    });
+  }
+
+  for (final when in ['native-gate', 'final-read']) {
+    test('late $when warning cannot expand consent', () async {
+      var nativeFinished = false;
+      final original = f.plans.first;
+      final plan = f.copy(
+        original,
+        checks: {
+          original.targets.single.step.id: _Check(() async {
+            if (when == 'native-gate') f.warning('alpha', 'new warning');
+            nativeFinished = true;
+            return NativePublicationReady(evidence: const {});
+          }),
+        },
+      );
+      expect(await f.coordinator.authorizeRepository([plan]), isTrue);
+      if (when == 'final-read') {
+        f.onRead = (_) {
+          if (nativeFinished) f.warning('alpha', 'new warning');
+        };
+      }
+      expect(await f.coordinator.publish(plan), ExitCodes.refused);
+      expect(f.problemCodes, contains('RK-AUTH-003'));
+      expect(plan.actions.values, everyElement(ReleaseAction.notAttempted));
+      expect(f.calls.where((call) => call.startsWith('publish:')), isEmpty);
+      expect(f.output.report.acted, isFalse);
+    });
+  }
+
+  test(
+    'native gate cannot replace a valid reviewed receipt and archive',
+    () async {
+      final original = f.plans.first;
+      final reviewed = original.stage.requireReceipt().encode();
+      final plan = f.copy(
+        original,
+        checks: {
+          original.targets.single.step.id: _Check(() async {
+            // Native archives can encode different timestamps with identical
+            // contents. A rebuilt, valid stage still needs fresh consent.
+            f.archiveStamp = 1;
+            original.stage.reset();
+            await f.prepare(original.unit);
+            f.plans.removeLast();
+            expect(original.stage.inspect().reusable, isTrue);
+            expect(original.stage.requireReceipt().encode(), isNot(reviewed));
+            return NativePublicationReady(evidence: const {});
+          }),
+        },
+      );
+      expect(await f.coordinator.authorizeRepository([plan]), isTrue);
+      expect(await f.coordinator.publish(plan), ExitCodes.refused);
+      expect(f.problemCodes, contains('RK-AUTH-003'));
+      expect(plan.actions.values, everyElement(ReleaseAction.notAttempted));
+      expect(f.calls.where((call) => call.startsWith('publish:')), isEmpty);
+      expect(f.output.report.acted, isFalse);
+    },
+  );
+
+  test(
+    'completed public unit may lose its private stage after consent',
+    () async {
+      final first = f.plans.first;
+      final later = f.plans.last;
+      expect(await f.coordinator.authorizeRepository(f.plans), isTrue);
+      f.makePublic('beta');
+      later.stage.reset();
+      expect(
+        await f.coordinator.publish(first),
+        ExitCodes.ok,
+        reason: f.text.toString(),
+      );
+      expect(
+        await f.coordinator.publish(later),
+        ExitCodes.ok,
+        reason: f.text.toString(),
+      );
+      expect(f.calls.where((call) => call.startsWith('publish:')), [
+        'publish:alpha',
+      ]);
+      expect(
+        f.calls.where((call) => call.startsWith('confirm:')),
+        hasLength(1),
+      );
+    },
+  );
+
+  test(
+    'scope that became public cannot disappear before another act',
+    () async {
+      final later = f.plans.last;
+      final first = f.copy(
+        f.plans.first,
+        checks: {
+          f.plans.first.targets.single.step.id: _Check(() async {
+            f.registry.published.remove('beta');
+            f.registry.forget('beta');
+            return NativePublicationReady(evidence: const {});
+          }),
+        },
+      );
+      expect(await f.coordinator.authorizeRepository([first, later]), isTrue);
+      f.makePublic('beta');
+      later.stage.reset();
+      expect(await f.coordinator.publish(first), ExitCodes.refused);
+      expect(f.problemCodes, contains('RK-AUTH-003'));
+      expect(first.actions.values, everyElement(ReleaseAction.notAttempted));
+      expect(f.calls.where((call) => call.startsWith('publish:')), isEmpty);
+      expect(f.output.report.acted, isFalse);
+    },
+  );
+
+  for (final change in ['endpoint', 'compiler']) {
+    test('final provider read cannot hide changed $change', () async {
+      var nativeFinished = false;
+      final original = f.plans.first;
+      final plan = f.copy(
+        original,
+        checks: {
+          original.targets.single.step.id: _Check(() async {
+            nativeFinished = true;
+            return NativePublicationReady(evidence: const {});
+          }),
+        },
+      );
+      expect(await f.coordinator.authorizeRepository([plan]), isTrue);
+      f.onRead = (_) {
+        if (!nativeFinished) return;
+        switch (change) {
+          case 'endpoint':
+            f.environment['PUB_HOSTED_URL'] = 'https://elsewhere.invalid';
+          case 'compiler':
+            f.compiler = 'e';
+        }
+      };
+      expect(await f.coordinator.publish(plan), ExitCodes.refused);
+      expect(
+        f.problemCodes,
+        contains(change == 'endpoint' ? 'RK-DEST-001' : 'RK-STAGE-004'),
+      );
+      expect(plan.actions.values, everyElement(ReleaseAction.notAttempted));
+      expect(f.calls.where((call) => call.startsWith('publish:')), isEmpty);
+      expect(f.output.report.acted, isFalse);
+    });
+  }
+
   test('warning facts include globals and deduplicate evidence by content', () {
     final report = Report('release');
     const warning = Diagnostic(
@@ -607,6 +789,7 @@ final class _Fixture {
   final inspections = <String, Inspection Function()>{};
   final environment = <String, String>{};
   String compiler = 'c';
+  int archiveStamp = 0;
   String? answer = 'yes';
   void Function(String)? onRead;
   void Function()? onSession;
@@ -698,6 +881,7 @@ final class _Fixture {
           ),
         ]),
       );
+      bytes[4] = archiveStamp;
       stage.directory.writeBytesAtomically(path, bytes);
       final name = 'pub-archive:${project.name}';
       steps.add(

@@ -1,10 +1,26 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
+import 'dart:typed_data';
 
 import '../transforms/digest.dart';
 import 'canonical_json.dart';
 import 'file_mode.dart';
 import 'stage.dart';
+
+/// A persisted receipt must remain readable by inspection and frozen lookup.
+/// Apply the same bound before writes so progress cannot outgrow its reader.
+const maxStageReceiptBytes = 4 * 1024 * 1024;
+
+final class StageReceiptLimit implements Exception {
+  const StageReceiptLimit(this.limit);
+  final int limit;
+
+  @override
+  String toString() =>
+      'stage receipt byte limit exceeded ($limit bytes); reduce the source '
+      'inventory or native dependency metadata before staging';
+}
 
 /// One digest-bearing input to a completed release step.
 class StageInput {
@@ -189,6 +205,22 @@ class StageStep {
     );
   }
 
+  factory StageStep.sourceSnapshot(
+    StageIdentity identity,
+    Iterable<StageArtifact> artifacts,
+  ) => StageStep(
+    name: 'source-snapshot',
+    inputs: [
+      if (identity.isGitBound) StageInput.commit(identity),
+      if (identity.isGitBound) StageInput.tree(identity),
+      StageInput.plan(identity),
+    ],
+    outputs: artifacts,
+    evidence: identity.isGitBound
+        ? {'commit': identity.headCommit, 'tree': identity.headTree}
+        : const {'source_binding': 'unbound'},
+  );
+
   final String name;
   final List<StageInput> inputs;
   final List<StageArtifact> outputs;
@@ -287,6 +319,14 @@ class StageReceipt {
   };
 
   String encode() => '${CanonicalJson.encode(toJson())}\n';
+
+  /// Validates the exact persisted representation before artifacts or an
+  /// existing receipt are changed. Portable proof encoding remains separate.
+  List<int> encodeForStorage({int maxBytes = maxStageReceiptBytes}) {
+    final bytes = utf8.encode(encode());
+    if (bytes.length > maxBytes) throw StageReceiptLimit(maxBytes);
+    return bytes;
+  }
 }
 
 Map<String, Object?> _plan(Object? value) {
@@ -298,9 +338,14 @@ Map<String, Object?> _plan(Object? value) {
 
 /// Atomic persistence for `stage.json`.
 class StageReceiptStore {
-  StageReceiptStore(this.stage);
+  StageReceiptStore(this.stage, {this.maxBytes = maxStageReceiptBytes}) {
+    if (maxBytes < 1) {
+      throw ArgumentError('receipt byte limit must be positive');
+    }
+  }
 
   final StageDirectory stage;
+  final int maxBytes;
 
   /// Writes only after every referenced output matches the record. The
   /// receipt rename is the final operation, so a crash cannot make partial
@@ -309,6 +354,7 @@ class StageReceiptStore {
     if (receipt.identity.id != stage.identity.id) {
       throw StateError('receipt belongs to a different stage');
     }
+    final bytes = receipt.encodeForStorage(maxBytes: maxBytes);
     for (final expected in receipt.artifacts) {
       final actual = StageArtifact.confirm(expected, stage: stage);
       if (!_sameArtifact(expected, actual)) {
@@ -317,18 +363,51 @@ class StageReceiptStore {
         );
       }
     }
-    stage.writeReceiptBytes(utf8.encode(receipt.encode()));
+    stage.writeReceiptBytes(bytes);
   }
 
   /// Reads without creating the stage or changing any bytes.
   StageReceipt? read() {
-    final path = stage.resolve('stage.json');
+    final document = readDocument(
+      stage.resolve('stage.json'),
+      maxBytes: maxBytes,
+    );
+    return document == null ? null : StageReceipt.parse(document);
+  }
+
+  /// Shared bounded, no-follow file read. Lookup also accounts these bytes
+  /// against its aggregate scan budget. A growing file is never read past the
+  /// initial allowed size, and a changed size refuses the result.
+  static String? readDocument(
+    String path, {
+    int maxBytes = maxStageReceiptBytes,
+    void Function(int)? consume,
+  }) {
     final type = FileSystemEntity.typeSync(path, followLinks: false);
     if (type == FileSystemEntityType.notFound) return null;
     if (type != FileSystemEntityType.file) {
       throw const FormatException('stage.json is not a regular file');
     }
-    return StageReceipt.parse(File(path).readAsStringSync());
+    final file = File(path).openSync();
+    try {
+      final size = file.lengthSync();
+      if (size > maxBytes) throw StageReceiptLimit(maxBytes);
+      final bytes = BytesBuilder(copy: false);
+      while (bytes.length < size) {
+        final chunk = file.readSync(min(64 * 1024, size - bytes.length));
+        consume?.call(chunk.length);
+        if (chunk.isEmpty) {
+          throw const FormatException('receipt changed while reading');
+        }
+        bytes.add(chunk);
+      }
+      if (file.lengthSync() != size) {
+        throw const FormatException('receipt changed while reading');
+      }
+      return utf8.decode(bytes.takeBytes());
+    } finally {
+      file.closeSync();
+    }
   }
 }
 

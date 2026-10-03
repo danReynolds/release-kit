@@ -379,6 +379,48 @@ void main() {
       );
     });
 
+    test('receipt byte limits preserve the last readable progress', () {
+      final header = StageReceipt(identity: stage.identity);
+      final bytes = utf8.encode(header.encode());
+      final store = StageReceiptStore(stage, maxBytes: bytes.length);
+      store.write(header);
+      expect(store.read()!.encode(), header.encode());
+      final file = File(stage.resolve('stage.json'));
+      final before = file.readAsBytesSync();
+      final modified = file.lastModifiedSync();
+      final larger = StageReceipt(
+        identity: stage.identity,
+        steps: [
+          StageStep(name: 'build', evidence: {'detail': 'more progress'}),
+        ],
+      );
+      expect(() => store.write(larger), throwsA(isA<StageReceiptLimit>()));
+      expect(file.readAsBytesSync(), before);
+      expect(file.lastModifiedSync(), modified);
+
+      // Inspection must enforce the same limit even if an external writer
+      // bypassed the atomic store. Exact-boundary receipts remain readable.
+      file.writeAsStringSync(larger.encode());
+      expect(store.read, throwsA(isA<StageReceiptLimit>()));
+    });
+
+    test('default receipt limit rejects oversized evidence before writing', () {
+      final receipt = StageReceipt(
+        identity: stage.identity,
+        steps: [
+          StageStep(
+            name: 'build',
+            evidence: {'detail': 'x' * maxStageReceiptBytes},
+          ),
+        ],
+      );
+      expect(
+        () => StageReceiptStore(stage).write(receipt),
+        throwsA(isA<StageReceiptLimit>()),
+      );
+      expect(Directory(stage.path).existsSync(), isFalse);
+    });
+
     test('lives at the content-addressed stages path', () {
       expect(
         stage.path,

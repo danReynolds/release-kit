@@ -523,6 +523,84 @@ void main() {
     },
   );
 
+  for (final destination in ['default', 'custom', 'none']) {
+    test('root back-edge uses its $destination publication source', () async {
+      final custom = await NativePubFixture.create();
+      addTearDown(custom.close);
+      final rootRegistry = destination == 'custom' ? custom.url : origin.url;
+      final root = origin.package(
+        'consumer',
+        'rk_fixture_consumer',
+        '1.0.0',
+        dependencies:
+            '  rk_fixture_bridge:\n    hosted: ${custom.url}\n    version: ^1.0.0\n',
+      );
+      if (destination != 'default') {
+        File('${root.path}/pubspec.yaml').writeAsStringSync(
+          'publish_to: ${destination == 'custom' ? custom.url : 'none'}\n',
+          mode: FileMode.append,
+        );
+      }
+      custom.host(
+        custom.package(
+          'bridge',
+          'rk_fixture_bridge',
+          '1.0.0',
+          dependencies:
+              '  rk_fixture_consumer:\n    hosted: $rootRegistry\n    version: ^1.0.0\n',
+        ),
+      );
+      final direct = await origin.run(root, [
+        'pub',
+        'get',
+        '--no-example',
+        '--no-precompile',
+      ]);
+      expect(direct.exitCode, 0, reason: '${direct.stdout}\n${direct.stderr}');
+      final result = await discover(root, []);
+      expect(result.graph.packages['rk_fixture_bridge']!.dependencies, {
+        'rk_fixture_consumer',
+      });
+      final frozen = DartDiscoveryResult.fromJson(result.toJson());
+      expect((await verify(root, frozen, [])).toJson(), frozen.toJson());
+    });
+  }
+
+  test(
+    'custom publication source cannot acquire a default-registry back-edge',
+    () async {
+      final custom = await NativePubFixture.create();
+      addTearDown(custom.close);
+      final root = origin.package(
+        'consumer',
+        'rk_fixture_consumer',
+        '1.0.0',
+        dependencies: '  rk_fixture_bridge: ^1.0.0\n',
+      );
+      File(
+        '${root.path}/pubspec.yaml',
+      ).writeAsStringSync('publish_to: ${custom.url}\n', mode: FileMode.append);
+      origin.host(
+        origin.package(
+          'bridge',
+          'rk_fixture_bridge',
+          '1.0.0',
+          dependencies: '  rk_fixture_consumer: ^1.0.0\n',
+        ),
+      );
+      await expectLater(
+        discover(root, []),
+        throwsA(
+          isA<StateError>().having(
+            (error) => '$error',
+            'source guard',
+            contains('root back-edge with a different source'),
+          ),
+        ),
+      );
+    },
+  );
+
   test(
     'an explicit shorthand retains its original native SDK feature gate',
     () async {
@@ -599,6 +677,56 @@ void main() {
       result.packages['rk_fixture_core']!.archiveSha256,
     );
   });
+
+  for (final malformed in ['json', 'utf8']) {
+    test(
+      'malformed $malformed metadata fails once without disclosing signed URLs',
+      () async {
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() => server.close(force: true));
+        server.listen((request) async {
+          request.response.headers.contentType = ContentType.json;
+          request.response.add([
+            ...utf8.encode(
+              '{"url":"https://cdn.test/a?token=temporary-secret",',
+            ),
+            if (malformed == 'utf8') 0xff,
+            ...utf8.encode('bad}'),
+          ]);
+          await request.response.close();
+        });
+        final root = manifest(
+          origin.package(
+            'consumer',
+            'rk_fixture_consumer',
+            '1.0.0',
+            dependencies: '  rk_fixture_dependency: any\n',
+          ),
+        );
+        await expectLater(
+          DartHostedDiscovery(
+            tools: const SystemTools(),
+            compiler: origin.dart,
+            defaultRegistry: 'http://127.0.0.1:${server.port}',
+          ).resolve(root: root),
+          throwsA(
+            isA<StateError>()
+                .having(
+                  (error) => '$error',
+                  'safe diagnostic',
+                  isNot(contains('temporary-secret')),
+                )
+                .having(
+                  (error) =>
+                      RegExp('malformed metadata').allMatches('$error').length,
+                  'terminal shadow failure is not retried',
+                  1,
+                ),
+          ),
+        );
+      },
+    );
+  }
 
   test(
     'external archive download checks bounds and the preselected integrity',

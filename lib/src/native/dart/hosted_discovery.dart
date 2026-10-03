@@ -440,6 +440,10 @@ final class _Session {
 
   Future<DartDiscoveryResult> resolve() async {
     client.connectionTimeout = options.timeout;
+    final publishTo = root.fields['publish_to'];
+    final rootRegistry = publishTo is String && publishTo != 'none'
+        ? _registry(publishTo)
+        : options.defaultRegistry;
     for (final candidate in candidates) {
       final key = (candidate.registry, candidate.manifest.name);
       if (available.containsKey(key)) {
@@ -560,8 +564,7 @@ final class _Session {
             dependencies[root.name],
             options.defaultRegistry,
           );
-          if (backEdge == null ||
-              backEdge.registry != options.defaultRegistry) {
+          if (backEdge == null || backEdge.registry != rootRegistry) {
             throw StateError(
               'native package ${chosen.manifest.name} has a root back-edge with a different source',
             );
@@ -780,7 +783,16 @@ final class _Session {
             }
             bytes.add(chunk);
           }
-          final metadata = jsonDecode(utf8.decode(bytes.takeBytes()));
+          Object? metadata;
+          try {
+            metadata = jsonDecode(utf8.decode(bytes.takeBytes()));
+          } on FormatException {
+            // Decoder errors quote their input, which may contain signed
+            // archive URLs. Keep temporary credentials out of diagnostics.
+            throw FormatException(
+              'registry returned malformed metadata for $name',
+            );
+          }
           if (metadata is! Map ||
               (expected == null &&
                   (metadata['name'] != name ||
@@ -799,34 +811,28 @@ final class _Session {
                 'registry returned invalid or duplicate versions for $name',
               );
             }
-            final manifest = DartPackageManifest.fromMap(item['pubspec']);
-            if (manifest.name != name || manifest.version != item['version']) {
+            // Ignore the public copy of a configured candidate coordinate.
+            // Only its declared source manifest can stand for this release.
+            if (candidate?.manifest.version == item['version']) {
+              final manifest = DartPackageManifest.fromMap(item['pubspec']);
+              if (manifest.name != name ||
+                  manifest.version != item['version']) {
+                throw FormatException(
+                  'registry manifest coordinate disagrees for $name',
+                );
+              }
+              continue;
+            }
+            final selected = DartDiscoveredPackage.fromHostedMetadata(
+              registry: registry,
+              metadata: item,
+            );
+            if (selected.manifest.name != name) {
               throw FormatException(
                 'registry manifest coordinate disagrees for $name',
               );
             }
-            // Ignore the public copy of a configured candidate coordinate.
-            // Only its declared source manifest can stand for this release.
-            if (candidate?.manifest.version == manifest.version) continue;
-            final hash = item['archive_sha256'];
-            final url = item['archive_url'];
-            if (hash is! String ||
-                !RegExp(r'^[a-f0-9]{64}$').hasMatch(hash) ||
-                url is! String) {
-              throw FormatException(
-                'registry omits native archive integrity for $name',
-              );
-            }
-            final archiveUrl = _url(url, allowQuery: true);
-            values.add(
-              DartDiscoveredPackage._(
-                registry: registry,
-                manifest: manifest,
-                archiveUrl: archiveUrl,
-                archiveSha256: hash,
-                retracted: item['retracted'] == true,
-              ),
-            );
+            values.add(selected);
           }
         } else if (response.statusCode == HttpStatus.notFound) {
           await response.drain<void>().timeout(options.timeout);
@@ -908,7 +914,10 @@ final class _Session {
       }
     } on Object catch (error) {
       errors.add(error);
-      request.response.statusCode = HttpStatus.badGateway;
+      // A failed listing is cached for this solve. Retrying this shadow cannot
+      // recover it, even when the origin failure was transient. Report a terminal
+      // response so Pub does not spend its retry budget repeating the same error.
+      request.response.statusCode = HttpStatus.badRequest;
     } finally {
       await request.response.close();
     }

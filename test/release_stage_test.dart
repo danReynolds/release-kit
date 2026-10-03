@@ -118,6 +118,27 @@ void main() {
     },
   );
 
+  test('oversized source inventory refuses before copying any source', () async {
+    // The inventory, not source payload size, crosses the persisted-receipt
+    // bound. Previously this completed successfully but could not be restored.
+    for (var i = 0; i < 15000; i++) {
+      source.files['source_${i.toString().padLeft(5, '0')}_${'a' * 140}.txt'] =
+          'x';
+    }
+    release.writeProgress(const []);
+    final receiptFile = File(release.directory.resolve('stage.json'));
+    final before = receiptFile.readAsBytesSync();
+    final modified = receiptFile.lastModifiedSync();
+    await expectLater(
+      release.materializeSource(),
+      throwsA(isA<StageReceiptLimit>()),
+    );
+    expect(Directory(release.sourceRoot).existsSync(), isFalse);
+    expect(receiptFile.readAsBytesSync(), before);
+    expect(receiptFile.lastModifiedSync(), modified);
+    expect(StageReceiptStore(release.directory).read()!.steps, isEmpty);
+  });
+
   test(
     'materializes every tracked source byte in deterministic order',
     () async {

@@ -675,7 +675,6 @@ Future<int> _release(
           : null,
       allowInteractiveTools:
           interactive && stdin.hasTerminal && stdout.hasTerminal,
-      preauthorized: yes,
       stageOnly: stageOnly,
       repositoryStages: repositoryStages,
       nativePublication: DartPublication(tools: const SystemTools()),

@@ -246,7 +246,6 @@ Future<Ran> release({
   String? only = 'core',
   HostCapabilities? capabilities,
   bool allowInteractiveTools = true,
-  bool preauthorized = false,
   Diagnostic? sourceWarning,
 }) async {
   final buffer = StringBuffer();
@@ -455,7 +454,6 @@ Future<Ran> release({
     wait: (_) => Future<void>.delayed(Duration.zero),
     output: Output(sink: buffer.write, isTerminal: false, useColor: false),
     allowInteractiveTools: allowInteractiveTools,
-    preauthorized: preauthorized,
     sourceWarning: sourceWarning,
     confirm: typed == null && answerPrompt == null
         ? null
@@ -824,7 +822,6 @@ publish = ["pub.dev"]
           source: source(),
           registry: registry,
           onRun: onRun,
-          preauthorized: true,
           answerPrompt: (prompt) {
             prompts.add(prompt);
             return 'yes';

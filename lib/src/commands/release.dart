@@ -52,7 +52,6 @@ class ReleaseCommand {
     required this.output,
     required this.confirm,
     required this.allowInteractiveTools,
-    this.preauthorized = false,
     this.stageOnly = false,
     this.repositoryStages,
     this.nativePublication,
@@ -131,10 +130,6 @@ class ReleaseCommand {
   /// login must never write beside the one JSON document or ask a question
   /// whose release context the operator cannot see.
   final bool allowInteractiveTools;
-
-  /// Whether the caller supplied --yes. It still reviews the complete private
-  /// scope; the supplied confirmation callback accepts the same disclosure.
-  final bool preauthorized;
 
   /// What this host can produce. Detection belongs at the composition edge so
   /// its bounded optional-runtime probes complete before the command is built;

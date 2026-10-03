@@ -66,9 +66,11 @@ void main() {
         intent: intent,
       );
       final store = StageStore(f.root.path);
-      expect(store.intentHintPath(intent.sha256), isNull);
       stage.writeProgress(const []);
-      expect(File(store.intentHintPath(intent.sha256)!).existsSync(), isTrue);
+      expect(
+        Directory('${f.root.path}/.rk/work/stage-intents').existsSync(),
+        isFalse,
+      );
       final before = stage.directory.fingerprint();
       final restarted = f.resolver();
       final current = restarted.intentFor(
@@ -101,50 +103,6 @@ void main() {
       expect(adopted.requireProducerProgress, throwsStateError);
     },
   );
-
-  for (final obstruction in ['file', 'directory', 'symlink']) {
-    test(
-      'unavailable advisory hint ($obstruction) does not prevent a durable header',
-      () async {
-        final intent = f.stages.intentFor(
-          f.app,
-          currentGit: f.git,
-          readInputs: () => {},
-        );
-        final store = StageStore(f.root.path);
-        final hint = store.intentHintPath(intent.sha256, create: true)!;
-        final sentinel = File('${f.root.path}/sentinel')
-          ..writeAsStringSync('unchanged');
-        switch (obstruction) {
-          case 'file':
-            Directory(File(hint).parent.path).deleteSync();
-            File(File(hint).parent.path).writeAsStringSync('not a directory');
-          case 'directory':
-            Directory(hint).createSync();
-          case 'symlink':
-            Link(hint).createSync(sentinel.path);
-        }
-        final stage = f.stages.bindDependencies(
-          f.app,
-          externalDependencies(),
-          intent: intent,
-        );
-        stage.writeProgress(const []);
-        expect(stage.inspect().canRestartSource, isTrue);
-        expect(
-          (await StageLookup(store).find(intent)).receipt!.identity.id,
-          stage.directory.identity.id,
-        );
-        expect(sentinel.readAsStringSync(), 'unchanged');
-        if (obstruction == 'directory') {
-          expect(Directory(hint).existsSync(), isTrue);
-        }
-        if (obstruction == 'symlink') {
-          expect(Link(hint).targetSync(), sentinel.path);
-        }
-      },
-    );
-  }
 
   test('refresh rereads native facts not present in the base binary plan', () {
     final binary = _Fixture(binaryOnly: true);

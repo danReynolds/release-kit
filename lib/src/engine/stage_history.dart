@@ -30,7 +30,7 @@ abstract final class StageHistory {
           continue;
         }
         final stat = file.statSync();
-        if (stat.size > 4 * 1024 * 1024) continue;
+        if (stat.size > maxStageReceiptBytes) continue;
         candidates.add((receipt: file, modified: stat.modified));
       }
       candidates.sort((a, b) {

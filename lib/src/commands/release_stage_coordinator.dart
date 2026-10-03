@@ -381,7 +381,10 @@ final class ReleaseStageCoordinator {
 
       try {
         sourceArtifacts = await stage.materializeSource();
-        sourceStep = _sourceStageStep(stage, sourceArtifacts);
+        sourceStep = StageStep.sourceSnapshot(
+          stage.directory.identity,
+          sourceArtifacts,
+        );
         progress.add(sourceStep);
         _persistStageProgress(stage, sourceArtifacts, progress);
       } on Object catch (error) {
@@ -771,27 +774,6 @@ final class ReleaseStageCoordinator {
     output.halt(HaltKind.beforeActing);
     return false;
   }
-
-  StageStep _sourceStageStep(
-    ReleaseStage stage,
-    List<StageArtifact> sourceArtifacts,
-  ) => StageStep(
-    name: 'source-snapshot',
-    inputs: [
-      if (stage.directory.identity.isGitBound)
-        StageInput.commit(stage.directory.identity),
-      if (stage.directory.identity.isGitBound)
-        StageInput.tree(stage.directory.identity),
-      StageInput.plan(stage.directory.identity),
-    ],
-    outputs: sourceArtifacts,
-    evidence: stage.directory.identity.isGitBound
-        ? {
-            'commit': stage.directory.identity.headCommit,
-            'tree': stage.directory.identity.headTree,
-          }
-        : const {'source_binding': 'unbound'},
-  );
 
   void _persistStageProgress(
     ReleaseStage stage,

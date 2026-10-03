@@ -35,20 +35,6 @@ final class StageStore {
     return _join(directory, 'stage.json');
   }
 
-  /// Advisory hints live outside strict stage artifact inventories. Creation
-  /// uses the mutation lock already held by the command, never a nested lock.
-  String? intentHintPath(String intent, {bool create = false}) {
-    if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(intent)) {
-      throw ArgumentError('invalid stage intent digest');
-    }
-    final root = _fixedDirectory(const [
-      '.rk',
-      'work',
-      'stage-intents',
-    ], create: create);
-    return root == null ? null : _join(root, '$intent.json');
-  }
-
   /// Includes non-stage residue in the enumeration budget. Early cancellation
   /// avoids materializing the entire directory before a limit can take effect.
   Future<({List<StageEntry> entries, bool complete})> inventoryBounded(

@@ -18,7 +18,6 @@ import 'stage_binary_evidence.dart';
 import 'stage_dependencies.dart';
 import 'stage_inspection.dart';
 import 'stage_intent.dart';
-import 'stage_lookup.dart';
 import 'stage_plan.dart';
 import 'stage_receipt.dart';
 import 'stage_receipt_structure.dart';
@@ -863,6 +862,14 @@ class ReleaseStage {
       source,
       commit: directory.identity.headCommit,
     );
+    // Source inventories usually dominate receipt size. Refuse an oversized
+    // inventory before copying any files or running producers, preserving the
+    // intact frozen header for a clear diagnostic on retry.
+    StageReceipt(
+      identity: directory.identity,
+      plan: resolvedPlan,
+      steps: [StageStep.sourceSnapshot(directory.identity, snapshot.artifacts)],
+    ).encodeForStorage();
     return snapshot.materialize(directory);
   }
 
@@ -1186,11 +1193,6 @@ class ReleaseStage {
         steps: ordered,
       ),
     );
-    if (ordered.isEmpty && intent != null) {
-      StageLookup(
-        StageStore(directory.repositoryRoot),
-      ).record(intent!, directory);
-    }
   }
 
   /// Steps in contract order; names outside the contract keep their given

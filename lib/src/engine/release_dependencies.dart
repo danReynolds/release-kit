@@ -7,11 +7,10 @@ import 'version.dart';
 
 /// Source-only dependency facts and candidate projections for this repository.
 ///
-/// One instance lives on [Resolution.dependencyPlan] — the single source of
-/// project publication order, cross-unit prerequisites, and repository order.
-/// Native discovery will validate candidates and add transitive facts before
-/// preparation. Incompatible local candidates remain unresolved hosted
-/// requirements. Destination state stays out of this source-only projection.
+/// One instance lives on [Resolution.dependencyPlan]. Source-only readers use
+/// this provisional projection; preparation and publication derive their actual
+/// orders from adapter-validated native contexts. Incompatible local candidates
+/// remain unresolved hosted requirements. Destination state stays out.
 final class ReleaseDependencyPlan {
   ReleaseDependencyPlan(this.resolution);
 

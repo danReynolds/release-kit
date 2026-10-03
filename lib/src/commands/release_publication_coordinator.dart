@@ -81,24 +81,6 @@ final class PublicationPlan {
 /// accepted: unit by unit, the targets each was to publish and the names
 /// each was to claim for the first time.
 final class RunConsent {
-  RunConsent({
-    required Map<String, Set<String>> targets,
-    required Map<String, Set<(String, String)>> claims,
-  }) : _targets = Map.unmodifiable({
-         for (final entry in targets.entries)
-           entry.key: Set<String>.unmodifiable(entry.value),
-       }),
-       _claims = Map.unmodifiable({
-         for (final entry in claims.entries)
-           entry.key: Set<(String, String)>.unmodifiable(entry.value),
-       }),
-       _inputs = null,
-       _omitted = const [],
-       _localReviews = const [],
-       _recoveryBindings = const {},
-       _targetFacts = const {},
-       _claimFacts = const {};
-
   RunConsent._reviewed(
     List<_PublicationReview> reviews,
     Map<String, String> inputs,
@@ -116,8 +98,11 @@ final class RunConsent {
       }),
       _inputs = Map.unmodifiable(inputs),
       _omitted = List.unmodifiable(reviews.expand((review) => review.omitted)),
-      _localReviews = List.unmodifiable(
-        reviews.where((review) => review.plan.publicSteps.isEmpty),
+      _preparedReviews = List.unmodifiable(
+        reviews.where(
+          (review) =>
+              review.remaining.isNotEmpty || review.plan.publicSteps.isEmpty,
+        ),
       ),
       _recoveryBindings = Map.unmodifiable({
         for (final review in reviews)
@@ -142,17 +127,14 @@ final class RunConsent {
 
   final Map<String, Set<String>> _targets;
   final Map<String, Set<(String, String)>> _claims;
-  final Map<String, String>? _inputs;
+  final Map<String, String> _inputs;
   final List<_OmittedTarget> _omitted;
-  final List<_PublicationReview> _localReviews;
+  final List<_PublicationReview> _preparedReviews;
   final Map<String, Map<String, String>> _recoveryBindings;
   final Map<String, Map<String, String>> _targetFacts;
   final Map<String, Map<(String, String), String>> _claimFacts;
 
-  bool get reviewedRepository => _inputs != null;
-
   bool recoveryStillMatches(String unit, Map<String, String> bindings) =>
-      !reviewedRepository ||
       bindings.entries.every(
         (entry) => _recoveryBindings[unit]?[entry.key] == entry.value,
       );
@@ -172,17 +154,15 @@ final class RunConsent {
     return [
       for (final target in remaining)
         if (!targets.contains(target.step.id) ||
-            (reviewedRepository &&
-                _targetFacts[unit.name]?[target.step.id] !=
-                    _targetDisclosure(target)))
+            _targetFacts[unit.name]?[target.step.id] !=
+                _targetDisclosure(target))
           target.label,
       for (final claim in claims)
         if (!named.contains((claim.registrar, claim.name)) ||
-            (reviewedRepository &&
-                _claimFacts[unit.name]?[(claim.registrar, claim.name)] !=
-                    claim.consequence))
+            _claimFacts[unit.name]?[(claim.registrar, claim.name)] !=
+                claim.consequence)
           'the first claim of ${claim.name} on ${claim.registrar}',
-      if (reviewedRepository && _inputs![unit.name] != inputs)
+      if (_inputs[unit.name] != inputs)
         'its reviewed staged inputs or disclosures',
     ];
   }
@@ -232,6 +212,12 @@ final class ReleasePublicationCoordinator {
   /// The yes a repository release asked for before its first unit acted,
   /// when it asked one.
   RunConsent? runConsent;
+
+  // Observation of scope shrinking is separate from immutable consent. A unit
+  // proved entirely public no longer needs private bytes, but its destinations
+  // join the global omission checks before any later session or public act.
+  final Set<String> _completedReviewUnits = {};
+  GitState? _reviewedScopeGit;
 
   /// Gives eventually-consistent providers a bounded chance to become usable
   /// through their consumer-facing path after exact publication read-back.
@@ -583,6 +569,8 @@ final class ReleasePublicationCoordinator {
     });
     if (asking.isEmpty) {
       runConsent = consent;
+      _completedReviewUnits.clear();
+      _reviewedScopeGit = null;
       return true;
     }
     if (!requireAuthorizer(asking.first.plan.unit)) return false;
@@ -643,6 +631,8 @@ final class ReleasePublicationCoordinator {
       return false;
     }
     runConsent = consent;
+    _completedReviewUnits.clear();
+    _reviewedScopeGit = null;
     output.blank();
     return true;
   }
@@ -832,8 +822,8 @@ final class ReleasePublicationCoordinator {
 
   bool _repositoryConsentStillValid(_PublicationReview review) {
     final consent = runConsent;
-    if (consent?.reviewedRepository != true) return true;
-    if (!consent!.recoveryStillMatches(
+    if (consent == null) return true;
+    if (!consent.recoveryStillMatches(
       review.plan.unit.name,
       review.recoveryBindings,
     )) {
@@ -920,25 +910,108 @@ final class ReleasePublicationCoordinator {
     return true;
   }
 
-  Future<bool> _repositoryScopeStillValid() async {
-    final consent = runConsent;
-    if (!await _omittedTargetsStillExact(consent?._omitted ?? const [])) {
+  Iterable<_PublicationReview> get _pendingReviews =>
+      (runConsent?._preparedReviews ?? const <_PublicationReview>[]).where(
+        (review) => !_completedReviewUnits.contains(review.plan.unit.name),
+      );
+
+  Future<bool> _reviewBecamePublic(_PublicationReview review) async {
+    final plan = review.plan;
+    if (plan.publicSteps.isEmpty) return false;
+    final snapshot = await PublicReleaseGate(
+      inspector,
+    ).refresh(unit: plan.unit, steps: plan.publicSteps, targets: plan.targets);
+    if (snapshot.monotonicityProblems.isNotEmpty ||
+        snapshot.states.values.any((state) => !state.isExact)) {
       return false;
     }
-    final local = consent?._localReviews ?? const <_PublicationReview>[];
-    if (local.isEmpty) return true;
+    _completedReviewUnits.add(plan.unit.name);
+    return true;
+  }
+
+  /// Cheap local checks after the last awaited provider read. A different valid
+  /// receipt is still different consent; mere stage validity is insufficient.
+  bool _repositoryInputsStillValid() {
     final halt = output.report.acted
         ? HaltKind.stoppedPartway
         : HaltKind.beforeActing;
-    for (final review in local) {
+    for (final review in _pendingReviews) {
       final plan = review.plan;
-      if (!await stages.signingStillValid(plan.unit, plan.prepared) ||
-          !await stages.contextStillValid(
-            plan.stage,
-            plan.unit,
-            changed: 'after repository authorization',
-            halt: halt,
-          )) {
+      final currentGit = _reviewedScopeGit;
+      if (currentGit != null) {
+        try {
+          if ((currentGit.isBound && !currentGit.isClean) ||
+              (plan.unit.publish.contains(PublishTarget.gitTag) &&
+                  !currentGit.headIsPushed) ||
+              stages
+                      .refreshStage(plan.unit, currentGit)
+                      .directory
+                      .identity
+                      .id !=
+                  plan.stage.directory.identity.id) {
+            throw StateError(
+              '${plan.unit.name}: the reviewed release context changed',
+            );
+          }
+        } on Object catch (error) {
+          _reviewChanged('$error');
+          return false;
+        }
+        if (!_endpointsStillMatch(review, currentGit)) return false;
+      }
+      if ((!plan.recoversWithoutStage &&
+              !stages.stageStillValid(
+                plan.stage,
+                plan.unit,
+                changed: 'after repository authorization',
+                halt: halt,
+              )) ||
+          !_repositoryConsentStillValid(review)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  Future<bool> _repositoryScopeStillValid() async {
+    final consent = runConsent;
+    if (!await _omittedTargetsStillExact([
+      ...?consent?._omitted,
+      for (final review
+          in consent?._preparedReviews ?? const <_PublicationReview>[])
+        if (_completedReviewUnits.contains(review.plan.unit.name))
+          for (final target in review.plan.targets)
+            _OmittedTarget(review.plan, target),
+    ])) {
+      return false;
+    }
+    final pending = _pendingReviews.toList();
+    if (pending.isEmpty) return true;
+    // If private inputs changed, first allow the work to shrink when all of
+    // this unit's public targets have independently completed. Otherwise every
+    // selected pending unit remains part of the reviewed private scope.
+    for (final review in pending) {
+      final plan = review.plan;
+      final inputsChanged =
+          consent!._inputs[plan.unit.name] !=
+          _authorizationInputs(plan.stage, plan.prepared.signing);
+      if ((inputsChanged ||
+              (!plan.recoversWithoutStage && !plan.stage.inspect().reusable)) &&
+          await _reviewBecamePublic(review)) {
+        continue;
+      }
+      if (!plan.recoversWithoutStage &&
+          !await stages.signingStillValid(plan.unit, plan.prepared)) {
+        return false;
+      }
+      if (!await stages.contextStillValid(
+        plan.stage,
+        plan.unit,
+        changed: 'after repository authorization',
+        halt: output.report.acted
+            ? HaltKind.stoppedPartway
+            : HaltKind.beforeActing,
+      )) {
         return false;
       }
     }
@@ -949,33 +1022,11 @@ final class ReleasePublicationCoordinator {
       _reviewChanged('$error');
       return false;
     }
-    // The last asynchronous context read must not hide drift in an earlier
-    // local-only unit whose outputs were part of the selected preparation.
-    for (final review in local) {
-      final plan = review.plan;
-      try {
-        if ((currentGit.isBound && !currentGit.isClean) ||
-            stages.refreshStage(plan.unit, currentGit).directory.identity.id !=
-                plan.stage.directory.identity.id) {
-          throw StateError(
-            '${plan.unit.name}: the local release context changed',
-          );
-        }
-      } on Object catch (error) {
-        _reviewChanged('$error');
-        return false;
-      }
-      if (!stages.stageStillValid(
-            plan.stage,
-            plan.unit,
-            changed: 'after repository authorization',
-            halt: halt,
-          ) ||
-          !_repositoryConsentStillValid(review)) {
-        return false;
-      }
-    }
-    return true;
+    // Re-read synchronous identities, endpoints and bytes after the last await.
+    // Artifact digests are reused only while file metadata remains unchanged.
+    // No native discovery or public dependency solving is repeated here.
+    _reviewedScopeGit = currentGit;
+    return _repositoryInputsStillValid();
   }
 
   Future<int> publish(PublicationPlan plan) async {
@@ -1431,8 +1482,8 @@ final class ReleasePublicationCoordinator {
     }
 
     final consent = runConsent;
-    if (consent?.reviewedRepository == true) {
-      final changed = consent!.unshown(
+    if (consent != null) {
+      final changed = consent.unshown(
         unit,
         [target],
         historyCheck.claims,
@@ -1502,33 +1553,37 @@ final class ReleasePublicationCoordinator {
       }
     }
 
-    final validationHalt = output.report.acted
-        ? HaltKind.stoppedPartway
-        : HaltKind.beforeActing;
-    if (!recoversWithoutStage &&
-        !stages.stageStillValid(
-          stage,
-          unit,
-          changed: 'before ${step.summary}',
-          halt: validationHalt,
-        )) {
-      releaseProgress.fail(target);
-      return _PublicTargetCompletion.failed(
-        step,
-        _PublicationFailure.reported(step),
-      );
-    }
-    if (!await stages.contextStillValid(
-      stage,
-      unit,
-      changed: 'before ${step.summary}',
-      halt: validationHalt,
-    )) {
-      releaseProgress.fail(target);
-      return _PublicTargetCompletion.failed(
-        step,
-        _PublicationFailure.reported(step),
-      );
+    // Repository consent validates every selected pending stage together below.
+    // Preserve the direct per-unit caller's boundary when no run was reviewed.
+    if (runConsent == null) {
+      final validationHalt = output.report.acted
+          ? HaltKind.stoppedPartway
+          : HaltKind.beforeActing;
+      if (!recoversWithoutStage &&
+          !stages.stageStillValid(
+            stage,
+            unit,
+            changed: 'before ${step.summary}',
+            halt: validationHalt,
+          )) {
+        releaseProgress.fail(target);
+        return _PublicTargetCompletion.failed(
+          step,
+          _PublicationFailure.reported(step),
+        );
+      }
+      if (!await stages.contextStillValid(
+        stage,
+        unit,
+        changed: 'before ${step.summary}',
+        halt: validationHalt,
+      )) {
+        releaseProgress.fail(target);
+        return _PublicTargetCompletion.failed(
+          step,
+          _PublicationFailure.reported(step),
+        );
+      }
     }
 
     if (!await _repositoryScopeStillValid()) {
@@ -1590,6 +1645,14 @@ final class ReleasePublicationCoordinator {
               ? HaltKind.stoppedPartway
               : HaltKind.beforeActing,
         ),
+      );
+    }
+
+    if (!_repositoryInputsStillValid()) {
+      releaseProgress.fail(target, activity: CommonProgressActivities.checking);
+      return _PublicTargetCompletion.failed(
+        step,
+        _PublicationFailure.reported(step),
       );
     }
 
@@ -2071,8 +2134,8 @@ final class ReleasePublicationCoordinator {
     required List<TargetClaim> claims,
   }) async {
     final consent = runConsent;
-    if (consent?.reviewedRepository == true) {
-      final unshown = consent!.unshown(
+    if (consent != null) {
+      final unshown = consent.unshown(
         unit,
         remaining,
         claims,
@@ -2094,25 +2157,6 @@ final class ReleasePublicationCoordinator {
     );
 
     if (!requireAuthorizer(unit)) return false;
-
-    // The yes at the start of the run covers this unit while everything it is
-    // about to do was shown then. Anything new, and anything rk warned about
-    // since, whether a build it could not run or what Pub's validation said,
-    // is asked about here.
-    if (consent != null) {
-      final unshown = [
-        ...consent.unshown(unit, remaining, claims),
-        if (signing?.firstCertificate != null) 'a first signing identity',
-        if (output.report.warnedAbout(unit.name)) 'its warnings',
-      ];
-      if (unshown.isEmpty) {
-        output.say('Authorized at the start of this run.');
-        return true;
-      }
-      output.say(
-        'Not shown when this run was authorized: ${unshown.join(', ')}.',
-      );
-    }
 
     final answer = await confirm!(
       'Release ${unit.name} ${unit.version}? [y/N] ',

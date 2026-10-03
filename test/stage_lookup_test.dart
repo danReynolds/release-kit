@@ -43,40 +43,27 @@ void main() {
     },
   );
 
-  for (final hint in ['missing', 'corrupt', 'dangling', 'valid']) {
-    test(
-      '$hint hint still finds the unique frozen header without writes',
-      () async {
-        final intent = f.intent();
-        final stage = f.write(intent);
-        switch (hint) {
-          case 'corrupt':
-            File(
-              f.store.intentHintPath(intent.sha256, create: true)!,
-            ).writeAsStringSync('corrupt hint');
-          case 'dangling':
-            f.hint(intent, 'f' * 64);
-          case 'valid':
-            f.lookup.record(intent, stage);
-        }
-        final before = f.snapshot();
-        final found = await f.lookup.find(f.intent());
-        expect(found.kind, StageLookupKind.found);
-        expect(found.receipt!.identity.id, stage.identity.id);
-        expect(found.receipt!.steps, isEmpty);
-        expect(f.snapshot(), before);
-      },
-    );
-  }
+  test('legacy hint residue is ignored without modifying it', () async {
+    final intent = f.intent();
+    final stage = f.write(intent);
+    final path = f.legacyHintPath(intent);
+    File(path).writeAsStringSync('corrupt legacy hint');
+    final before = f.snapshot();
+    final found = await f.lookup.find(f.intent());
+    expect(found.kind, StageLookupKind.found);
+    expect(found.receipt!.identity.id, stage.identity.id);
+    expect(found.receipt!.steps, isEmpty);
+    expect(f.snapshot(), before);
+  });
 
   test(
-    'a valid hint never selects between conflicting frozen choices',
+    'stale legacy hints never select between conflicting frozen choices',
     () async {
       final intent = f.intent();
       final first = f.write(intent);
       final second = f.write(intent, choice: 'green');
       expect(first.identity.id, isNot(second.identity.id));
-      f.lookup.record(intent, first);
+      f.hint(intent, first.identity.id);
       final before = f.snapshot();
       final result = await f.lookup.find(intent);
       expect(result.kind, StageLookupKind.rejected);
@@ -89,7 +76,7 @@ void main() {
     final intent = f.intent();
     final first = f.write(intent);
     final second = f.write(intent, choice: 'green');
-    f.lookup.record(intent, first);
+    f.hint(intent, first.identity.id);
     final before = f.snapshot();
     final recovered = await f.lookup.find(
       intent,
@@ -127,39 +114,16 @@ void main() {
     final stage = f.write(intent);
     final lock = f.store.acquireForMutation();
     try {
-      // Also exercises recording inside the existing lock: no nested lock.
-      f.lookup.record(intent, stage);
+      f.hint(intent, stage.identity.id);
       expect(f.store.deleteEntry(f.store.inventory().single), isTrue);
     } finally {
       lock.close();
     }
-    expect(File(f.store.intentHintPath(intent.sha256)!).existsSync(), isTrue);
+    expect(File(f.legacyHintPath(intent)).existsSync(), isTrue);
     final before = f.snapshot();
     expect((await f.lookup.find(intent)).kind, StageLookupKind.absent);
     expect(f.snapshot(), before);
   });
-
-  test(
-    'hint cannot be recorded before the receipt or for a different repository',
-    () {
-      final intent = f.intent();
-      final receipt = f.receipt(intent);
-      final stage = f.directory(receipt);
-      expect(() => f.lookup.record(intent, stage), throwsStateError);
-      expect(f.root.listSync(), isEmpty);
-      expect(
-        () => f.lookup.record(
-          intent,
-          StageDirectory(
-            repositoryRoot: '${f.root.path}/other',
-            identity: receipt.identity,
-          ),
-        ),
-        throwsStateError,
-      );
-      expect(f.root.listSync(), isEmpty);
-    },
-  );
 
   test('valid unrelated receipts do not block lookup', () async {
     final intent = f.intent();
@@ -179,31 +143,28 @@ void main() {
     'missing receipt',
     'no plan',
   ]) {
-    test(
-      '$corruption is inconclusive even with a matching hinted stage',
-      () async {
-        final intent = f.intent();
-        f.lookup.record(intent, f.write(intent));
-        final other = f.write(f.intent(unit: 'other'));
-        switch (corruption) {
-          case 'invalid JSON':
-            File(other.resolve('stage.json')).writeAsStringSync('{}\n');
-          case 'wrong directory':
-            Directory(other.path).renameSync('${f.store.path}/${'f' * 64}');
-          case 'missing receipt':
-            File(other.resolve('stage.json')).deleteSync();
-          case 'no plan':
-            StageReceiptStore(
-              other,
-            ).write(StageReceipt(identity: other.identity));
-        }
-        final before = f.snapshot();
-        final result = await f.lookup.find(intent);
-        expect(result.kind, StageLookupKind.inconclusive);
-        expect(result.path, endsWith('/stage.json'));
-        expect(f.snapshot(), before);
-      },
-    );
+    test('$corruption is inconclusive even with a matching stage', () async {
+      final intent = f.intent();
+      f.write(intent);
+      final other = f.write(f.intent(unit: 'other'));
+      switch (corruption) {
+        case 'invalid JSON':
+          File(other.resolve('stage.json')).writeAsStringSync('{}\n');
+        case 'wrong directory':
+          Directory(other.path).renameSync('${f.store.path}/${'f' * 64}');
+        case 'missing receipt':
+          File(other.resolve('stage.json')).deleteSync();
+        case 'no plan':
+          StageReceiptStore(
+            other,
+          ).write(StageReceipt(identity: other.identity));
+      }
+      final before = f.snapshot();
+      final result = await f.lookup.find(intent);
+      expect(result.kind, StageLookupKind.inconclusive);
+      expect(result.path, endsWith('/stage.json'));
+      expect(f.snapshot(), before);
+    });
   }
 
   for (final marker in [null, <String, Object?>{}, 'not-a-digest']) {
@@ -253,42 +214,12 @@ void main() {
     });
   }
 
-  test('unsafe hint is ignored on read and left unchanged on write', () async {
-    final intent = f.intent();
-    final stage = f.write(intent);
-    final path = f.store.intentHintPath(intent.sha256, create: true)!;
-    final outside = File('${f.root.path}/outside')
-      ..writeAsStringSync('do not modify');
-    Link(path).createSync(outside.path);
-    final before = f.snapshot();
-    expect((await f.lookup.find(intent)).kind, StageLookupKind.found);
-    expect(f.lookup.record(intent, stage), isFalse);
-    expect(f.snapshot(), before);
-  });
-
-  test(
-    'enumeration bounds include non-stage residue and cannot be bypassed by hints',
-    () async {
-      final intent = f.intent();
-      f.lookup.record(intent, f.write(intent));
-      File('${f.store.path}/residue').writeAsStringSync('not a stage');
-      final lookup = StageLookup(f.store, maxEntries: 1);
-      final before = f.snapshot();
-      expect((await lookup.find(intent)).kind, StageLookupKind.inconclusive);
-      expect(f.snapshot(), before);
-      final bounded = await f.store.inventoryBounded(1);
-      expect(bounded.entries.length, 1);
-      expect(bounded.complete, isFalse);
-      expect((await f.store.inventoryBounded(2)).complete, isTrue);
-    },
-  );
-
   test(
     'per-receipt and aggregate byte limits refuse incomplete scans',
     () async {
       final intent = f.intent();
       final stage = f.write(intent);
-      f.lookup.record(intent, stage);
+      f.hint(intent, stage.identity.id);
       final size = File(stage.resolve('stage.json')).lengthSync();
       expect(
         (await StageLookup(
@@ -494,10 +425,16 @@ final class _Fixture {
     return stage;
   }
 
+  String legacyHintPath(StageIntent intent) {
+    final directory = Directory('${root.path}/.rk/work/stage-intents')
+      ..createSync(recursive: true);
+    return '${directory.path}/${intent.sha256}.json';
+  }
+
   void hint(
     StageIntent intent,
     String stage,
-  ) => File(store.intentHintPath(intent.sha256, create: true)!).writeAsStringSync(
+  ) => File(legacyHintPath(intent)).writeAsStringSync(
     '${CanonicalJson.encode({'format': 1, 'intent': intent.sha256, 'stage': stage})}\n',
   );
 

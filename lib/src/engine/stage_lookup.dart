@@ -1,10 +1,7 @@
 import 'dart:convert';
-import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
 
 import '../transforms/digest.dart';
-import 'atomic_file.dart';
 import 'canonical_json.dart';
 import 'stage.dart';
 import 'stage_intent.dart';
@@ -22,14 +19,15 @@ final class StageLookupResult {
 }
 
 /// Finds frozen choices without solving, adopting, writing or reading artifacts.
-/// Hints affect read order only. A candidate still needs native authorization
-/// and transactional adoption. Only a conclusive [StageLookupKind.absent] permits
-/// a fresh solve; public recovery checks may independently forbid that solve.
+/// A candidate still needs native authorization and transactional adoption.
+/// Only a conclusive [StageLookupKind.absent] permits a fresh solve; public
+/// recovery checks may independently forbid that solve. A complete bounded
+/// scan also detects conflicting choices, so no separate index is required.
 final class StageLookup {
   StageLookup(
     this.store, {
     this.maxEntries = 128,
-    this.maxReceiptBytes = 4 * 1024 * 1024,
+    this.maxReceiptBytes = maxStageReceiptBytes,
     this.maxTotalBytes = 32 * 1024 * 1024,
   }) {
     if (maxEntries < 1 || maxReceiptBytes < 1 || maxTotalBytes < 1) {
@@ -48,7 +46,7 @@ final class StageLookup {
   /// this operation never searches for a replacement.
   StageReceipt readExact(String id, {int? maxBytes}) {
     if (maxBytes != null && maxBytes < 1) {
-      throw const _LookupLimit();
+      throw const StageReceiptLimit(0);
     }
     final text = _readStage(
       id,
@@ -63,7 +61,7 @@ final class StageLookup {
   }
 
   /// [recoveryStageId] must come from separately authenticated recovery facts,
-  /// never an intent hint or a newest-receipt heuristic. It takes precedence
+  /// never a lookup hint or a newest-receipt heuristic. It takes precedence
   /// over ordinary lookup and never falls through to another stage or absence.
   Future<StageLookupResult> find(
     StageIntent intent, {
@@ -95,27 +93,6 @@ final class StageLookup {
       }
     }
 
-    // A stale/corrupt hint cannot prove absence, but a complete scan can. This
-    // also lets an explicitly cleaned store start fresh without deleting hints.
-    String? hint;
-    try {
-      final path = store.intentHintPath(intent.sha256);
-      final text = path == null ? null : _readBounded(path, 1024);
-      if (text != null) {
-        final value = CanonicalJson.decodeDocument(text);
-        if (value is Map &&
-            value.length == 3 &&
-            value['format'] == 1 &&
-            value['intent'] == intent.sha256 &&
-            value['stage'] is String &&
-            _isId(value['stage'] as String)) {
-          hint = value['stage'] as String;
-        }
-      }
-    } on Object {
-      // Hints are optional and never selection authority.
-    }
-
     final List<StageEntry> entries;
     try {
       final inventory = await store.inventoryBounded(maxEntries);
@@ -126,12 +103,7 @@ final class StageLookup {
           store.path,
         );
       }
-      entries = [...inventory.entries]
-        ..sort((a, b) {
-          if (a.name == hint) return -1;
-          if (b.name == hint) return 1;
-          return a.name.compareTo(b.name);
-        });
+      entries = inventory.entries;
     } on Object catch (error) {
       return _problem(StageLookupKind.inconclusive, '$error', store.path);
     }
@@ -209,7 +181,7 @@ final class StageLookup {
           }
         }
       } on Object catch (error) {
-        if (error is _LookupLimit) {
+        if (error is StageReceiptLimit) {
           return _problem(
             StageLookupKind.inconclusive,
             '$error; inspect or clean obsolete stages before retrying',
@@ -236,51 +208,15 @@ final class StageLookup {
         : StageLookupResult._(StageLookupKind.found, receipt: matches.single);
   }
 
-  /// Caller holds the existing command mutation lock. The receipt must already
-  /// exist, so interruption before this advisory write still permits a scan.
-  /// Authoritative checks throw; an unavailable or unsafe hint path returns
-  /// false without overwriting it. Index persistence is always optional.
-  bool record(StageIntent intent, StageDirectory stage) {
-    if (stage.repositoryRoot != store.repositoryRoot) {
-      throw StateError('intent hint belongs to another repository');
-    }
-    final text = _readStage(stage.identity.id, _ReadBudget(maxTotalBytes));
-    if (text == null) {
-      throw StateError('cannot hint a stage without its receipt');
-    }
-    final receipt = StageReceipt.parse(text);
-    if (receipt.identity.id != stage.identity.id) {
-      throw StateError('intent receipt does not name its stage directory');
-    }
-    intent.requireCurrent(intent.base);
-    intent.requireReceipt(receipt);
-    try {
-      final path = store.intentHintPath(intent.sha256, create: true)!;
-      final type = FileSystemEntity.typeSync(path, followLinks: false);
-      if (type != FileSystemEntityType.notFound &&
-          type != FileSystemEntityType.file) {
-        return false;
-      }
-      AtomicFile.write(
-        path,
-        utf8.encode(
-          '${CanonicalJson.encode({'format': 1, 'intent': intent.sha256, 'stage': stage.identity.id})}\n',
-        ),
-      );
-      return true;
-    } on StageStoreUnsafe {
-      return false;
-    } on FileSystemException {
-      return false;
-    }
-  }
-
   String? _readStage(String id, _ReadBudget budget) {
     final path = store.receiptPath(id);
     if (path == null) return null;
     final allowance = min(maxReceiptBytes, budget.remaining);
-    final text = _readBounded(path, allowance, consume: budget.consume);
-    return text;
+    return StageReceiptStore.readDocument(
+      path,
+      maxBytes: allowance,
+      consume: budget.consume,
+    );
   }
 }
 
@@ -296,42 +232,6 @@ bool _isLabel(Object? value) =>
     value is String &&
     value.trim().isNotEmpty &&
     !value.contains(RegExp(r'[\u0000-\u001f]'));
-
-String? _readBounded(String path, int limit, {void Function(int)? consume}) {
-  final type = FileSystemEntity.typeSync(path, followLinks: false);
-  if (type == FileSystemEntityType.notFound) return null;
-  if (type != FileSystemEntityType.file) {
-    throw StageStoreUnsafe('receipt or hint is not a regular file', path);
-  }
-  final file = File(path).openSync();
-  try {
-    final size = file.lengthSync();
-    if (size > limit) throw const _LookupLimit();
-    final bytes = BytesBuilder(copy: false);
-    // Account for actual reads and handle short reads without interpreting a
-    // truncated document. Never read past either the per-file or total budget.
-    while (bytes.length < size) {
-      final chunk = file.readSync(min(64 * 1024, size - bytes.length));
-      consume?.call(chunk.length);
-      if (chunk.isEmpty) {
-        throw const FormatException('receipt changed while reading');
-      }
-      bytes.add(chunk);
-    }
-    if (file.lengthSync() != size) {
-      throw const FormatException('receipt changed while reading');
-    }
-    return utf8.decode(bytes.takeBytes());
-  } finally {
-    file.closeSync();
-  }
-}
-
-final class _LookupLimit implements Exception {
-  const _LookupLimit();
-  @override
-  String toString() => 'stage lookup byte limit exceeded';
-}
 
 final class _ReadBudget {
   _ReadBudget(this.remaining);

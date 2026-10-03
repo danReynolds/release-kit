@@ -36,28 +36,10 @@ final class NativeArtifactUse {
 
   factory NativeArtifactUse.fromJson(Object? value) {
     final map = _map(value, {'context', 'slot', 'provider', 'consumers'});
-    final provider = _map(map['provider'], {
-      'package',
-      'version',
-      'unit',
-      'project',
-      'producer',
-    });
-    final package = _map(provider['package'], {'ecosystem', 'source', 'name'});
     return NativeArtifactUse(
       context: _string(map, 'context'),
       slot: _string(map, 'slot'),
-      provider: NativeCandidate(
-        package: NativePackage(
-          ecosystem: _string(package, 'ecosystem'),
-          source: _string(package, 'source'),
-          name: _string(package, 'name'),
-        ),
-        version: _string(provider, 'version'),
-        unit: _string(provider, 'unit'),
-        project: _string(provider, 'project'),
-        producer: _string(provider, 'producer'),
-      ),
+      provider: NativeCandidate.fromJson(map['provider']),
       consumers: _list(map, 'consumers').cast<String>(),
     );
   }
