@@ -23,6 +23,8 @@ import 'package:rk/src/engine/stage_store.dart';
 import 'package:rk/src/engine/stage_dependencies.dart';
 import 'package:rk/src/engine/stage_plan.dart';
 import 'package:rk/src/engine/stage_receipt.dart';
+import 'package:rk/src/engine/stage_proof.dart';
+import 'package:rk/src/engine/stage_receipt_structure.dart';
 import 'package:rk/src/engine/targets.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/output/output.dart';
@@ -629,6 +631,371 @@ void main() {
     },
   );
 
+  ImportedStageDependency importFor(ReleaseStage provider, String consumer) =>
+      ImportedStageDependency.fromProvider(
+        use: f.use(
+          unit: provider.unit.name,
+          project: provider.unit.name,
+          producer: 'native:${provider.unit.name}',
+          slot: provider.unit.name,
+          consumers: ['native:$consumer'],
+        ),
+        provider: provider,
+        path: '${provider.unit.name}.pkg',
+        type: 'fixture-package',
+      );
+
+  Future<({ReleaseStage a, ReleaseStage b, ImportedStageDependency ab})>
+  proofChain() async {
+    final a = f.stages(f.core);
+    await f.complete(a, 'A used only for B build');
+    final ab = importFor(a, 'app');
+    final b = f.stages.bindDependencies(
+      f.app,
+      StageDependencies(imports: [ab]),
+    );
+    await f.complete(b, 'B artifact does not embed A');
+    return (a: a, b: b, ab: ab);
+  }
+
+  test(
+    'C retains B build dependency A proof after both provider stages are removed',
+    () async {
+      f.close();
+      f = _Fixture(extraProjects: ['third']);
+      final chain = await proofChain();
+      final bc = importFor(chain.b, 'third');
+      final unit = f.resolution.unit('third')!;
+      final c = f.stages.bindDependencies(
+        unit,
+        StageDependencies(imports: [bc]),
+      );
+      await f.complete(c, 'C artifact');
+      final proof = bc.readProof(c.directory);
+      expect(proof.stages.keys.toSet(), {
+        chain.a.directory.identity.id,
+        chain.b.directory.identity.id,
+      });
+      expect(proof.root, chain.b.directory.identity.id);
+      expect(
+        File(c.directory.resolve(chain.ab.archive.path)).existsSync(),
+        isFalse,
+      );
+      Directory(chain.a.directory.path).deleteSync(recursive: true);
+      Directory(chain.b.directory.path).deleteSync(recursive: true);
+      final before = c.directory.fingerprint();
+      expect(c.inspect().issues, isEmpty);
+      final restored = await f.resolver().adoptFrozen(
+        unit,
+        currentGit: f.git,
+        receipt: c.requireReceipt(),
+        authorize: (saved, _) async =>
+            StageDependencies.fromJson(saved.plan!['dependency_inputs']),
+      );
+      expect(restored.inspect().reusable, isTrue);
+      expect(bc.readProof(c.directory).encode(), proof.encode());
+      expect(c.directory.fingerprint(), before);
+    },
+  );
+
+  test(
+    'diamond proof deduplicates the shared ancestor and canonicalizes merge order',
+    () async {
+      f.close();
+      f = _Fixture(extraProjects: ['third', 'fourth']);
+      final chain = await proofChain();
+      final ac = importFor(chain.a, 'third');
+      final c = f.stages.bindDependencies(
+        f.resolution.unit('third')!,
+        StageDependencies(imports: [ac]),
+      );
+      await f.complete(c, 'C');
+      final bd = importFor(chain.b, 'fourth');
+      final cd = importFor(c, 'fourth');
+      final d = f.stages.bindDependencies(
+        f.resolution.unit('fourth')!,
+        StageDependencies(imports: [bd, cd]),
+      );
+      await f.complete(d, 'D');
+      final ancestors = [bd.readProof(d.directory), cd.readProof(d.directory)];
+      final proof = StageProofClosure.fromReceipt(
+        d.requireReceipt(),
+        ancestors,
+      );
+      expect(proof.stages.length, 4);
+      expect(
+        StageProofClosure.fromReceipt(
+          d.requireReceipt(),
+          ancestors.reversed,
+        ).encode(),
+        proof.encode(),
+      );
+      expect(StageProofClosure.parse(proof.encode()).encode(), proof.encode());
+      for (final stage in [chain.a, chain.b, c, d]) {
+        Directory(stage.directory.path).deleteSync(recursive: true);
+      }
+      expect(StageProofClosure.parse(proof.encode()).stages.length, 4);
+      expect(
+        () => StageProofClosure.parse(
+          proof.encode(),
+          limits: const StageProofLimits(edges: 3),
+        ),
+        throwsFormatException,
+      );
+    },
+  );
+
+  test(
+    'portable proofs require exact frozen input metadata despite consistent causal hashes',
+    () async {
+      final chain = await proofChain();
+      final original = chain.b.requireReceipt();
+      final forged = _changeReceiptArtifact(
+        original,
+        chain.ab.archive.path,
+        'f' * 64,
+      );
+      expect(StageReceiptStructure.validate(forged), isEmpty);
+      final ancestor = chain.ab.readProof(chain.b.directory);
+      expect(
+        () => StageProofClosure.fromReceipt(forged, [ancestor]),
+        throwsA(
+          isA<FormatException>().having(
+            (error) => error.message,
+            'frozen inputs',
+            contains('frozen release plan'),
+          ),
+        ),
+      );
+    },
+  );
+
+  test('nested proof metadata must equal canonical reconstruction', () async {
+    final chain = await proofChain();
+    final original = chain.b.requireReceipt();
+    final plan = jsonDecode(jsonEncode(original.plan)) as Map<String, Object?>;
+    final imported = (plan['dependency_inputs'] as Map)['imports'] as List;
+    (imported.single['proof'] as Map)['sha256'] = 'f' * 64;
+    final identity = StageIdentity.forPlan(
+      headCommit: original.identity.headCommit!,
+      headTree: original.identity.headTree!,
+      resolvedPlan: plan,
+    );
+    final changed = _changeReceiptArtifact(
+      original,
+      chain.ab.proof.path,
+      'f' * 64,
+    );
+    final forged = StageReceipt(
+      identity: identity,
+      plan: plan,
+      steps: [
+        for (final step in changed.steps)
+          StageStep(
+            name: step.name,
+            outputs: step.outputs,
+            evidence: step.evidence,
+            inputs: [
+              for (final input in step.inputs)
+                input.name == 'stage:plan' ? StageInput.plan(identity) : input,
+            ],
+          ),
+      ],
+    );
+    expect(StageReceiptStructure.validate(forged), isEmpty);
+    expect(
+      StageDependencies.fromJson(
+        plan['dependency_inputs'],
+      ).validateRecordedInputs(forged),
+      isEmpty,
+    );
+    expect(
+      () => StageProofClosure.fromReceipt(forged, [
+        chain.ab.readProof(chain.b.directory),
+      ]),
+      throwsA(
+        isA<FormatException>().having(
+          (error) => error.message,
+          'nested hash',
+          contains('nested dependency proof'),
+        ),
+      ),
+    );
+  });
+
+  test(
+    'missing and unrelated proof ancestors refuse before adoption',
+    () async {
+      final chain = await proofChain();
+      final ancestor = chain.ab.readProof(chain.b.directory);
+      final proof = StageProofClosure.fromReceipt(chain.b.requireReceipt(), [
+        ancestor,
+      ]);
+      final document = jsonDecode(proof.encode()) as Map<String, Object?>;
+      (document['stages'] as Map).remove(chain.a.directory.identity.id);
+      expect(
+        () => StageProofClosure.parse('${CanonicalJson.encode(document)}\n'),
+        throwsA(
+          isA<FormatException>().having(
+            (error) => error.message,
+            'missing ancestor',
+            contains('missing ancestor'),
+          ),
+        ),
+      );
+      expect(
+        () => StageProofClosure.fromReceipt(chain.a.requireReceipt(), [proof]),
+        throwsA(
+          isA<FormatException>().having(
+            (error) => error.message,
+            'extra ancestor',
+            contains('unrelated stages'),
+          ),
+        ),
+      );
+    },
+  );
+
+  test(
+    'conflicting receipts for the same ancestor identity cannot merge',
+    () async {
+      final chain = await proofChain();
+      final ancestor = chain.ab.readProof(chain.b.directory);
+      final receipt = chain.a.requireReceipt();
+      final changed = StageReceipt(
+        identity: receipt.identity,
+        plan: receipt.plan,
+        steps: [
+          for (final step in receipt.steps)
+            StageStep(
+              name: step.name,
+              inputs: step.inputs,
+              outputs: step.outputs,
+              evidence: {
+                ...step.evidence,
+                if (step.name == 'native:core') 'different': true,
+              },
+            ),
+        ],
+      );
+      final conflict = StageProofClosure.fromReceipt(changed, []);
+      expect(
+        () => StageProofClosure.fromReceipt(chain.b.requireReceipt(), [
+          ancestor,
+          conflict,
+        ]),
+        throwsA(
+          isA<FormatException>().having(
+            (error) => error.message,
+            'conflict',
+            contains('conflicting'),
+          ),
+        ),
+      );
+    },
+  );
+
+  test(
+    'proof traversal and expansion honor their independent bounds',
+    () async {
+      final chain = await proofChain();
+      final proof = StageProofClosure.fromReceipt(chain.b.requireReceipt(), [
+        chain.ab.readProof(chain.b.directory),
+      ]);
+      for (final limits in [
+        const StageProofLimits(stages: 1),
+        const StageProofLimits(depth: 1),
+        const StageProofLimits(bytes: 1),
+        const StageProofLimits(expandedBytes: 1),
+      ]) {
+        expect(
+          () => StageProofClosure.parse(proof.encode(), limits: limits),
+          throwsFormatException,
+        );
+      }
+      expect(
+        () => StageProofClosure.parse(
+          proof.encode(),
+          limits: const StageProofLimits(stages: 0),
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        () => StageProofClosure.read(
+          chain.b.directory,
+          chain.ab.proof,
+          limits: const StageProofLimits(bytes: 1),
+        ),
+        throwsFormatException,
+      );
+    },
+  );
+
+  test(
+    'proof roots need complete receipts and matching stage identities',
+    () async {
+      final chain = await proofChain();
+      final receipt = chain.a.requireReceipt();
+      expect(
+        () => StageProofClosure.fromReceipt(
+          StageReceipt(identity: receipt.identity, plan: receipt.plan),
+          [],
+        ),
+        throwsFormatException,
+      );
+      final proof = StageProofClosure.fromReceipt(receipt, []);
+      final document = jsonDecode(proof.encode()) as Map<String, Object?>;
+      final nodes = document['stages'] as Map;
+      nodes['f' * 64] = nodes.remove(receipt.identity.id);
+      document['root'] = 'f' * 64;
+      expect(
+        () => StageProofClosure.parse('${CanonicalJson.encode(document)}\n'),
+        throwsFormatException,
+      );
+      expect(
+        () => StageProofClosure.parse(
+          '${CanonicalJson.encode({'plan': receipt.plan, 'receipt': receipt.toJson()})}\n',
+        ),
+        throwsFormatException,
+      );
+    },
+  );
+
+  test('portable proof cannot omit a declared consumer archive edge', () async {
+    final chain = await proofChain();
+    final receipt = chain.b.requireReceipt();
+    final changed = StageReceipt(
+      identity: receipt.identity,
+      plan: receipt.plan,
+      steps: [
+        for (final step in receipt.steps)
+          StageStep(
+            name: step.name,
+            outputs: step.outputs,
+            evidence: step.evidence,
+            inputs: step.inputs.where(
+              (input) =>
+                  step.name != 'native:app' ||
+                  input.name != chain.ab.archive.path,
+            ),
+          ),
+      ],
+    );
+    expect(StageReceiptStructure.validate(changed), isEmpty);
+    expect(
+      () => StageProofClosure.fromReceipt(changed, [
+        chain.ab.readProof(chain.b.directory),
+      ]),
+      throwsA(
+        isA<FormatException>().having(
+          (error) => error.message,
+          'consumer edge',
+          contains('does not bind'),
+        ),
+      ),
+    );
+  });
+
   test(
     'changed dependency bytes produce a different consumer identity',
     () async {
@@ -844,6 +1211,22 @@ void main() {
       stage.finalize(releaseAssets: const []);
       expect(stage.inspect().reusable, isTrue);
       expect(stage.directory.identity.id, identity);
+      final receipt = stage.requireReceipt();
+      expect(StageProofClosure.fromReceipt(receipt, []).stages.length, 1);
+      for (final field in ['unit', 'producer']) {
+        final plan =
+            jsonDecode(jsonEncode(receipt.plan)) as Map<String, Object?>;
+        final local =
+            ((plan['dependency_inputs'] as Map)['local'] as List).single as Map;
+        ((local['use'] as Map)['provider'] as Map)[field] = 'unknown';
+        expect(
+          () => StageProofClosure.fromReceipt(
+            _receiptWithPlan(receipt, plan),
+            [],
+          ),
+          throwsFormatException,
+        );
+      }
     },
   );
 
@@ -1092,6 +1475,69 @@ void main() {
   );
 }
 
+StageReceipt _receiptWithPlan(StageReceipt receipt, Map<String, Object?> plan) {
+  final identity = StageIdentity.forPlan(
+    headCommit: receipt.identity.headCommit!,
+    headTree: receipt.identity.headTree!,
+    resolvedPlan: plan,
+  );
+  return StageReceipt(
+    identity: identity,
+    plan: plan,
+    steps: [
+      for (final step in receipt.steps)
+        StageStep(
+          name: step.name,
+          outputs: step.outputs,
+          evidence: step.evidence,
+          inputs: [
+            for (final input in step.inputs)
+              input.name == 'stage:plan' ? StageInput.plan(identity) : input,
+          ],
+        ),
+    ],
+  );
+}
+
+StageReceipt _changeReceiptArtifact(
+  StageReceipt receipt,
+  String path,
+  String sha256,
+) {
+  final steps = <StageStep>[];
+  for (final step in receipt.steps) {
+    final previous = {
+      for (final prior in steps) 'step:${prior.name}': prior.outputSha256,
+      for (final prior in steps)
+        for (final output in prior.outputs) output.path: output.sha256,
+    };
+    steps.add(
+      StageStep(
+        name: step.name,
+        evidence: step.evidence,
+        inputs: [
+          for (final input in step.inputs)
+            StageInput(
+              name: input.name,
+              sha256: previous[input.name] ?? input.sha256,
+            ),
+        ],
+        outputs: [
+          for (final output in step.outputs)
+            output.path == path
+                ? StageArtifact.fromJson({...output.toJson(), 'sha256': sha256})
+                : output,
+        ],
+      ),
+    );
+  }
+  return StageReceipt(
+    identity: receipt.identity,
+    plan: receipt.plan,
+    steps: steps,
+  );
+}
+
 void _rewrite(ReleaseStage stage, String path, String bytes) {
   final previous = stage.requireReceipt();
   File(stage.directory.resolve(path)).writeAsStringSync(bytes);
@@ -1137,7 +1583,17 @@ void _rewrite(ReleaseStage stage, String path, String bytes) {
 }
 
 final class _Fixture {
-  _Fixture({String appVersion = '0.1.0', bool binaryOnly = false}) {
+  _Fixture({
+    String appVersion = '0.1.0',
+    bool binaryOnly = false,
+    List<String> extraProjects = const [],
+  }) {
+    for (final project in extraProjects) {
+      source.files['release.toml'] =
+          '${source.files['release.toml']}[release.$project]\npath = "$project"\npublish = ["pub.dev"]\n';
+      source.files['$project/pubspec.yaml'] =
+          'name: $project\nversion: 0.1.0\nenvironment:\n  sdk: ^3.10.4\n';
+    }
     if (binaryOnly) {
       source.files['release.toml'] = source.files['release.toml']!.replaceFirst(
         '[release.app]\npath = "app"\npublish = ["pub.dev"]',

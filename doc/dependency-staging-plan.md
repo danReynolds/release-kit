@@ -833,3 +833,31 @@ pre-intent coordinate cases were tightened. Analysis is clean and 330 affected
 stage/receipt/coordinator/status/cleanup tests passed. Native intent composition,
 portable proof closure and production lookup/adoption wiring remain required;
 this evidence does not establish command-level frozen restoration yet.
+
+Portable provider proofs now use a versioned, bounded flattened closure keyed by
+stage identity. Each completed receipt retains its plan only in the header.
+Construction merges actual retained proofs, deduplicates shared ancestors and
+rejects conflicts; parsing rejects missing, unrelated, incomplete or inconsistent
+nodes. Every edge checks frozen provider receipt/output hashes and archive
+metadata. Each nested proof commitment is reconstructed canonically with memoized
+size/hash results and independent node/edge/depth/byte/expansion limits. The proof
+reader is bounded and does not follow symbolic links. C keeps its actual direct B
+archive plus B/A receipt provenance, without retaining A's unused payload.
+
+Pure causal/source/completion shape checks are shared with the unchanged on-disk
+artifact inspection path. `StageDependencies.validateRecordedInputs` likewise
+checks exact frozen archive/proof metadata, source input, consumer inputs and
+same-unit ownership in both paths. `StageReceiptContract.validateDeclarations`
+exposes canonical producer shape only: it does not substitute for complete-stage
+semantic evidence or adapter-specific evidence authorization. The upcoming
+portable authorizer must validate those semantics against current source/native
+facts; it must not call the shape helper and claim all contract checks ran.
+
+The architecture reviewer approved this bounded closure/extraction slice. Analysis
+is clean; 456 affected stage, receipt, status, cleanup, binary bundle, actual native
+Dart preparation and command-phase tests passed. New cases include a diamond,
+C-to-B-to-A with A used only in B's build, deletion of A/B provider directories,
+causally consistent frozen-metadata tampering, nested proof commitment tampering,
+missing/extra/conflicting nodes, independent bounds and same-unit ownership.
+This is portable provenance evidence, not production native authorization or
+completed bare Fleury CLI qualification.

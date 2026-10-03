@@ -236,7 +236,9 @@ class StageReceiptContract {
       _dependencies[producer] ??
       (throw StateError('the stage contract has no producer "$producer"'));
 
-  List<StageIssue> validate(StageDirectory stage, StageReceipt receipt) {
+  /// Pure canonical producer shape checks. Byte and semantic evidence checks
+  /// still require [validate]; this method alone cannot authorize a provider.
+  List<StageIssue> validateDeclarations(StageReceipt receipt) {
     final issues = <StageIssue>[];
     final names = receipt.steps.map((step) => step.name).toList();
     final expected = producerNames;
@@ -258,13 +260,6 @@ class StageReceiptContract {
     }
 
     final contracts = {for (final step in _steps) step.name: step};
-    final context = StageContractContext(
-      unit: unit,
-      repository: repository,
-      sourceRoot: sourceRoot,
-      stage: stage,
-      receipt: receipt,
-    );
     for (final step in receipt.steps) {
       final contract = contracts[step.name];
       if (contract == null) continue;
@@ -279,7 +274,22 @@ class StageReceiptContract {
       if (!_outputsMatch(step, contract)) {
         _issue(issues, '${step.name} has the wrong output inventory');
       }
-      if (contract.validate case final validate?) {
+    }
+    return issues;
+  }
+
+  List<StageIssue> validate(StageDirectory stage, StageReceipt receipt) {
+    final issues = validateDeclarations(receipt);
+    final context = StageContractContext(
+      unit: unit,
+      repository: repository,
+      sourceRoot: sourceRoot,
+      stage: stage,
+      receipt: receipt,
+    );
+    final contracts = {for (final step in _steps) step.name: step};
+    for (final step in receipt.steps) {
+      if (contracts[step.name]?.validate case final validate?) {
         issues.addAll(validate(context, step));
       }
     }

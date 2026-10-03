@@ -12,6 +12,7 @@ import 'stage.dart';
 import 'stage_contract.dart';
 import 'stage_inspection.dart';
 import 'stage_receipt.dart';
+import 'stage_proof.dart';
 
 /// A native-selected artifact occurrence. Native discovery, not this class,
 /// establishes compatibility and archive identity. Core keeps its context and
@@ -138,8 +139,10 @@ final class ImportedStageDependency {
       throw StateError('dependency provider plan does not match its identity');
     }
     final key = _digest({'context': use.context, 'slot': use.slot});
-    final proofText =
-        '${CanonicalJson.encode({'plan': plan, 'receipt': receipt.toJson()})}\n';
+    final proofText = StageProofClosure.fromReceipt(receipt, [
+      for (final input in provider.dependencies.imports)
+        input.readProof(provider.directory),
+    ]).encode();
     return ImportedStageDependency._(
       use: use,
       providerIdentity: receipt.identity,
@@ -256,22 +259,27 @@ final class ImportedStageDependency {
     });
   }
 
-  void validateProof(StageDirectory stage) {
-    final document = _map(
-      CanonicalJson.decodeDocument(
-        File(stage.resolve(proof.path)).readAsStringSync(),
-      ),
-      {'plan', 'receipt'},
-    );
-    final receipt = StageReceipt.parse(
-      '${CanonicalJson.encode(document['receipt'])}\n',
-    );
-    final producer = receipt.steps.singleWhere(
-      (step) => step.name == use.provider.producer,
-    );
+  StageProofClosure readProof(StageDirectory stage) {
+    final closure = StageProofClosure.read(stage, proof);
+    closure.requireImport(this);
+    return closure;
+  }
+
+  void validateProof(StageDirectory stage) => readProof(stage);
+
+  /// Causal receipt/metadata check only. Source and native authorization remain
+  /// the caller's responsibility; no provider filesystem is needed here.
+  void requireProviderReceipt(StageReceipt receipt) {
+    final producer = receipt.steps
+        .where((step) => step.name == use.provider.producer)
+        .singleOrNull;
+    final unit = receipt.plan?['unit'];
     if (!receipt.complete ||
+        receipt.plan == null ||
+        producer == null ||
         receipt.identity.id != providerIdentity.id ||
-        _digest(document['plan']) != providerIdentity.planSha256 ||
+        unit is! Map ||
+        unit['name'] != use.provider.unit ||
         Sha256.hex(utf8.encode(receipt.encode())) != providerReceiptSha256 ||
         producer.outputSha256 != providerOutputSha256 ||
         !producer.outputs.any(
@@ -590,17 +598,7 @@ final class StageDependencies {
       inputs: const {'step:source-snapshot'},
       outputs: {for (final artifact in _outputs) artifact.path: artifact.type},
       validate: (context, step) sync* {
-        final actual = {for (final output in step.outputs) output.path: output};
-        for (final expected in _outputs) {
-          if (CanonicalJson.encode(actual[expected.path]?.toJson()) !=
-              CanonicalJson.encode(expected.toJson())) {
-            yield StageIssue(
-              StageIssueKind.invalidStructure,
-              'dependency input differs from the frozen release plan',
-              path: expected.path,
-            );
-          }
-        }
+        yield* validateRecordedInputs(context.receipt);
         for (final input in imports) {
           try {
             input.validateProof(context.stage);
@@ -615,6 +613,105 @@ final class StageDependencies {
       },
     ),
   );
+
+  /// Checks the exact frozen imports and their consumer bindings from receipt
+  /// declarations. This is shared with portable proof verification; it neither
+  /// reads files nor substitutes for native/current-plan authorization.
+  List<StageIssue> validateRecordedInputs(StageReceipt receipt) {
+    final issues = <StageIssue>[];
+    void reject(String message, [String? path]) => issues.add(
+      StageIssue(StageIssueKind.invalidStructure, message, path: path),
+    );
+    final unit = receipt.plan?['unit'];
+    final unitName = unit is Map ? unit['name'] : null;
+    if ((imports.isNotEmpty || local.isNotEmpty) &&
+        (unitName is! String || unitName.isEmpty)) {
+      reject('dependency receipt has no unit ownership');
+    }
+    for (final input in imports) {
+      if (input.use.provider.unit == unitName) {
+        reject('same-unit dependency must use a producer artifact edge');
+      }
+    }
+    for (final input in local) {
+      if (input.use.provider.unit != unitName) {
+        reject('local dependency names another unit');
+      }
+    }
+    final steps = {for (final step in receipt.steps) step.name: step};
+    final step = steps[importProducer];
+    if (step == null) {
+      if (hasImports && receipt.complete) {
+        reject('missing dependency input producer');
+      }
+    } else {
+      final source = steps['source-snapshot'];
+      if (!hasImports ||
+          source == null ||
+          step.inputs.length != 1 ||
+          step.inputs.single.name != 'step:source-snapshot' ||
+          step.inputs.single.sha256 != source.outputSha256) {
+        reject('dependency input producer is not bound to its source');
+      }
+      final actual = {for (final output in step.outputs) output.path: output};
+      final expected = _outputs.toList();
+      if (actual.length != expected.length) {
+        reject('dependency input inventory differs from the frozen plan');
+      }
+      for (final artifact in expected) {
+        if (CanonicalJson.encode(actual[artifact.path]?.toJson()) !=
+            CanonicalJson.encode(artifact.toJson())) {
+          reject(
+            'dependency input differs from the frozen release plan',
+            artifact.path,
+          );
+        }
+      }
+    }
+    void requireConsumer(String consumer, StageArtifact artifact) {
+      final consuming = steps[consumer];
+      if (consuming == null) {
+        if (receipt.complete) reject('missing dependency consumer $consumer');
+      } else if (!consuming.inputs.any(
+        (input) =>
+            input.name == artifact.path && input.sha256 == artifact.sha256,
+      )) {
+        reject(
+          'dependency consumer $consumer does not bind the frozen archive',
+          artifact.path,
+        );
+      }
+    }
+
+    for (final input in imports) {
+      for (final consumer in input.use.consumers) {
+        requireConsumer(consumer, input.archive);
+      }
+    }
+    for (final input in external) {
+      for (final consumer in input.consumers) {
+        requireConsumer(consumer, input.archive);
+      }
+    }
+    for (final input in local) {
+      final producer = steps[input.use.provider.producer];
+      final artifact = producer?.outputs
+          .where(
+            (output) => output.path == input.path && output.type == input.type,
+          )
+          .singleOrNull;
+      if (artifact == null) {
+        if (receipt.complete || input.use.consumers.any(steps.containsKey)) {
+          reject('local dependency lacks its provider artifact', input.path);
+        }
+      } else {
+        for (final consumer in input.use.consumers) {
+          requireConsumer(consumer, artifact);
+        }
+      }
+    }
+    return issues;
+  }
 
   Iterable<StageArtifact> get _outputs sync* {
     for (final input in external) {
