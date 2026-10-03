@@ -107,6 +107,13 @@ final class DartStageContext {
       );
     }
     final discovery = DartDiscoveryResult.fromJson(payload['resolution']);
+    if (discovery.packages.values.any(
+      (package) => package.developmentSource != null,
+    )) {
+      throw const FormatException(
+        'Dart source-helper contexts require receipt-bound replay support',
+      );
+    }
     final graphRoot = discovery.graph.packages[root.name];
     if (envelope.owner != root.name ||
         envelope.context != 'dart:${operation.name}:${root.name}' ||

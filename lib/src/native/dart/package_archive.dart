@@ -37,9 +37,22 @@ final class DartPackageManifest {
     return DartPackageManifest.parse(utf8.decode(manifest.bytes));
   }
 
+  /// Source-only development packages may omit their version. Preserve that
+  /// absence in the manifest; native Pub assigns the effective version 0.0.0.
+  /// Archive/provider constructors above still require an explicit version.
+  factory DartPackageManifest.developmentSource(Object? manifest) {
+    final value = _plain(manifest, HashSet.identity(), _ManifestBudget(), 0);
+    if (value is! Map<String, Object?> ||
+        value['name'] is! String ||
+        (value.containsKey('version') && value['version'] is! String)) {
+      throw const FormatException('invalid development source manifest');
+    }
+    return DartPackageManifest._(value);
+  }
+
   final Map<String, Object?> fields;
   String get name => fields['name']! as String;
-  String get version => fields['version']! as String;
+  String get version => fields['version'] as String? ?? '0.0.0';
   String get sha256 => Sha256.hex(utf8.encode(CanonicalJson.encode(fields)));
 
   void requireSameManifest(DartPackageManifest discovered) {

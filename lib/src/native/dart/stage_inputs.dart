@@ -9,6 +9,7 @@ import '../../engine/stage.dart';
 import '../../engine/tools.dart';
 import 'hosted_discovery.dart';
 import 'dependency_lock.dart';
+import 'development_source.dart';
 import 'package_archive.dart';
 
 enum DartStageOperation { pubArchive, binary }
@@ -73,13 +74,13 @@ final class DartStageInputs {
 
   /// Pub owns original nested/glob membership and SDK gates. This command
   /// reads manifests; it does not solve or acquire package archives.
-  Future<void> verifyWorkspace({
+  Future<Map<String, String>> verifyWorkspace({
     required Tools tools,
     required String compiler,
   }) async {
     if (!root.fields.containsKey('resolution') &&
         !root.fields.containsKey('workspace')) {
-      return;
+      return {root.name: '${_projectPath}pubspec.yaml'};
     }
     final mirror = Directory.systemTemp.createTempSync('rk-dart-workspace-');
     try {
@@ -129,6 +130,7 @@ final class DartStageInputs {
         throw StateError('native workspace did not return package membership');
       }
       final paths = <String>{};
+      final members = <String, String>{};
       var found = false;
       final boundary =
           '${mirror.resolveSymbolicLinksSync()}${Platform.pathSeparator}';
@@ -136,6 +138,7 @@ final class DartStageInputs {
         if (package is! Map ||
             package['name'] is! String ||
             package['path'] is! String ||
+            members.containsKey(package['name']) ||
             !paths.add(package['path'] as String)) {
           throw StateError('native workspace returned invalid membership');
         }
@@ -145,13 +148,61 @@ final class DartStageInputs {
           throw StateError('native workspace escapes the selected source');
         }
         if (path == selected && package['name'] == root.name) found = true;
+        final relative = path == boundary.substring(0, boundary.length - 1)
+            ? 'pubspec.yaml'
+            : '${path.substring(boundary.length)}/pubspec.yaml';
+        StagePath.segments(relative);
+        members[package['name'] as String] = relative;
       }
       if (!found) {
         throw StateError('native root is not a member of its source workspace');
       }
+      return Map.unmodifiable(members);
     } finally {
       mirror.deleteSync(recursive: true);
     }
+  }
+
+  /// Membership alone is not a dependency selection. Discovery still decides
+  /// whether a member is needed and whether runtime reachability requires an
+  /// archive instead. The source reader must already be authoritative.
+  Future<List<DartDevelopmentSource>> developmentSources({
+    required Tools tools,
+    required String compiler,
+    required String defaultRegistry,
+  }) async {
+    final members = await verifyWorkspace(tools: tools, compiler: compiler);
+    final tracked = _source.trackedFiles().toSet();
+    final helpers = <DartDevelopmentSource>[];
+    for (final member in members.entries) {
+      if (member.key == root.name) continue;
+      if (!tracked.contains(member.value)) {
+        throw StateError('development source is absent from the snapshot');
+      }
+      final text = _source.read(member.value);
+      if (text == null) {
+        throw StateError('development source manifest is missing');
+      }
+      final fields = readDartYamlDocument(text);
+      final manifest = DartPackageManifest.developmentSource(fields);
+      final overrides = member.value.replaceFirst(
+        RegExp(r'pubspec\.yaml$'),
+        'pubspec_overrides.yaml',
+      );
+      if (manifest.name != member.key ||
+          fields.containsKey('dependency_overrides') ||
+          _source.exists(overrides)) {
+        throw StateError('development source has unauthorized manifest inputs');
+      }
+      helpers.add(
+        DartDevelopmentSource(
+          manifestPath: member.value,
+          registry: defaultRegistry,
+          manifest: manifest,
+        ),
+      );
+    }
+    return List.unmodifiable(helpers);
   }
 
   Future<DartDiscoveryResult> discover({

@@ -3,7 +3,8 @@
 Status: reviewed delivery plan; implementation is in progress on
 `codex/dependency-staging`. Native discovery/replay, receipt-bound inputs, shared
 Pub/binary preparation, frozen-choice verification and source-bound binary lock
-policies are implemented. Command integration is not complete.
+policies are implemented. Development-source discovery is implemented; helper
+replay and command integration are not complete.
 The remaining work is defined in the implementation packets below; foundation
 proofs do not qualify bare `rk stage` or publication. No publication has occurred.
 
@@ -453,13 +454,29 @@ Make these policies explicit in the native context and its format:
   out-of-snapshot helpers. Classify runtime reachability first: a runtime-reached
   helper requires its package archive. Reject unrelated overrides and runtime
   path/Git substitutions as already specified.
+- Private helpers may omit `version`; retain that absence in their source
+  manifest and use native Pub's effective `0.0.0` for discovery. Published
+  archive manifests still require an explicit version.
+- Helper eligibility is provisional until complete native discovery. A newly
+  discovered runtime path removes source-helper eligibility and starts a fresh
+  solve from the original lock using ordinary archive/hosted policy. Do not
+  relabel source bytes as an archive. Promotion is monotonic and bounded: RK
+  does not search older bridge versions solely to regain helper eligibility.
+  If archive resolution fails, show the runtime path and this limitation, rather
+  than presenting the refusal as proof that no native solution exists.
 
 The binary-lock and committed-source cases now pass; see current evidence below.
-The next packet-1 action is the development-helper policy: add native cases for
-an incompatible back-edge or transitive incoming constraint, runtime promotion,
-ignored helper dev dependencies and untracked helpers. Implement the
-smallest policy support that makes those tests and the existing archive replay
-cases pass. Do not accept an override-only success as the back-edge proof.
+Development-source discovery now has native cases for incompatible back-edges
+and transitive incoming constraints, versionless helpers, runtime promotion,
+ignored helper dev dependencies and source membership. The next packet-1 action
+is receipt-bound helper replay: exclude helpers from generic archive slots,
+reauthorize their current snapshot paths/manifests, apply managed mappings only
+inside the owned source mirror, and verify each helper's source bytes plus exact
+native package location before and after operations. Allow only those declared
+source changes when comparing the replay graph; retain every other node and
+edge. Then wire `StageInputs.discover` and bound Pub/binary producers together
+and exercise actual packaging/compilation with unchanged published manifests.
+Do not accept an override-only success as the back-edge proof.
 
 Exit: root/owner/source/lock/helper tampering refuses before producer work;
 ordinary, workspace and binary fixtures run against the unchanged final
@@ -705,6 +722,7 @@ slice results are superseded by the current evidence below.
 | Shared Pub and binary producers | `7b62807`: real packaging and BinaryChain compilation use bound archives, preserve warnings/manifests, and record actual graph/hash evidence; production CLI does not bind these automatically yet |
 | Frozen native verification | `f8ecd5b`: authenticates exact external metadata and current supplied local candidates, then re-solves only frozen choices and compares causal graph; caller still must authorize roots/provider provenance/adoption |
 | Source and binary lock policies | Native contexts format 2 bind the effective source lock path/hash. Discovery preserves original native preferences through refinements and separately authenticates committed external hashes. Shared preparation installs the ordinary/workspace lock in its detached root. Native workspace listing validates membership and SDK syntax before detachment; bound source reads always use the selected Git commit. Development-helper exceptions remain pending. |
+| Development-source discovery | Dart-owned helper provenance binds verified workspace manifest paths, original manifests and registry identity, including versionless helpers. Native discovery validates original constraints before overrides, ignores helper dev dependencies, freezes source provenance and re-solves with archive policy on runtime promotion. Receipt-bound replay is not wired yet. |
 
 The architecture and native reviewers approved the bounded producer integration;
 the native reviewer approved the frozen verifier primitive. Analysis was clean.
@@ -738,3 +756,12 @@ Context format 1 cannot authorize this new operation policy and is explicitly
 refused; format 2 records even the absence of a binary lock. Normal legacy stages
 without native contexts retain their existing path. Receipt/index adoption and
 its explicit migration behavior remain packet 2.
+
+The development-source discovery slice passed 79 native/source/archive/producer
+regressions and all 12 new cases on both Dart 3.10.4 and 3.13.5. Analysis is clean.
+It deliberately does not enable source helpers in the production producer path
+until receipt-bound replay is implemented; new and restored stage contexts
+explicitly refuse helper provenance at that boundary. Review also extended the
+root-source audit through hosted bridges, since native root-by-name unification
+can hide indirect other-registry back-edges. That case, versionless helpers and
+bounded runtime promotion are now native regressions.

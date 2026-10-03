@@ -11,6 +11,7 @@ import '../../engine/tools.dart';
 import '../../transforms/digest.dart';
 import 'dependencies.dart';
 import 'dependency_lock.dart';
+import 'development_source.dart';
 import 'package_archive.dart';
 import 'resolution_graph.dart';
 import 'version_constraints.dart';
@@ -45,6 +46,7 @@ final class DartDiscoveredPackage {
     required this.registry,
     required this.manifest,
     this.candidate,
+    this.developmentSource,
     this.archiveUrl,
     this.archiveSha256,
     this.retracted = false,
@@ -52,6 +54,7 @@ final class DartDiscoveredPackage {
   final String registry;
   final DartPackageManifest manifest;
   final DartDiscoveryCandidate? candidate;
+  final DartDevelopmentSource? developmentSource;
   final Uri? archiveUrl;
   final String? archiveSha256;
   final bool retracted;
@@ -67,6 +70,7 @@ final class DartDiscoveredPackage {
             'manifest',
             'manifest_sha256',
             'candidate',
+            'development_source',
             'archive_sha256',
           }.contains(key),
         ) ||
@@ -75,16 +79,30 @@ final class DartDiscoveredPackage {
       throw const FormatException('invalid frozen native package');
     }
     final registry = _registry(value['registry'] as String);
-    final manifest = DartPackageManifest.fromMap(
-      (value['manifest'] as Map).cast<String, Object?>(),
-    );
+    final development = value.containsKey('development_source')
+        ? DartDevelopmentSource.fromJson(value['development_source'])
+        : null;
+    final manifest = development == null
+        ? DartPackageManifest.fromMap(value['manifest'])
+        : DartPackageManifest.developmentSource(value['manifest']);
+    if (development != null) {
+      development.manifest.requireSameManifest(manifest);
+      if (development.registry != registry) {
+        throw const FormatException('development source registry differs');
+      }
+    }
     if (manifest.sha256 != value['manifest_sha256']) {
       throw const FormatException('frozen native manifest digest differs');
     }
     final isCandidate = value.containsKey('candidate');
     final digest = value['archive_sha256'];
-    if ((isCandidate && value.containsKey('archive_sha256')) ||
-        (!isCandidate &&
+    if ([
+              isCandidate,
+              development != null,
+              value.containsKey('archive_sha256'),
+            ].where((present) => present).length !=
+            1 ||
+        (value.containsKey('archive_sha256') &&
             (digest is! String ||
                 !RegExp(r'^[0-9a-f]{64}$').hasMatch(digest)))) {
       throw const FormatException('invalid frozen native package provenance');
@@ -99,6 +117,7 @@ final class DartDiscoveredPackage {
               manifest: manifest,
             )
           : null,
+      developmentSource: development,
       archiveSha256: digest as String?,
     );
   }
@@ -108,6 +127,8 @@ final class DartDiscoveredPackage {
     'manifest': manifest.fields,
     'manifest_sha256': manifest.sha256,
     if (candidate case final local?) 'candidate': local.provider.toJson(),
+    if (developmentSource case final source?)
+      'development_source': source.toJson(),
     // Signed archive URLs expire; freeze the registry coordinate and digest,
     // never a temporary fetch credential.
     if (archiveSha256 case final hash?) 'archive_sha256': hash,
@@ -195,13 +216,43 @@ final class DartHostedDiscovery {
   Future<DartDiscoveryResult> resolve({
     required DartPackageManifest root,
     Iterable<DartDiscoveryCandidate> candidates = const [],
+    Iterable<DartDevelopmentSource> developmentSources = const [],
     DartDependencyLock? lock,
   }) async {
-    final session = _Session(this, root, candidates.toList(), lock: lock);
-    try {
-      return await session.resolve();
-    } finally {
-      await session.close();
+    final helpers = developmentSources.toList();
+    final providers = candidates.toList();
+    final promotedPaths = <String, List<String>>{};
+    while (true) {
+      final session = _Session(
+        this,
+        root,
+        providers,
+        developmentSources: helpers,
+        lock: lock,
+      );
+      try {
+        return await session.resolve();
+      } on _RuntimeDevelopmentSources catch (promotion) {
+        // Re-solve from the original lock with fresh metadata/cache. A source
+        // helper never gets relabeled as archive evidence when a runtime path
+        // appears; ordinary candidate/hosted policy must supply real bytes.
+        promotedPaths.addAll(promotion.paths);
+        final count = helpers.length;
+        helpers.removeWhere(
+          (source) => promotion.names.contains(source.manifest.name),
+        );
+        if (count == helpers.length) rethrow;
+      } on StateError catch (error) {
+        if (promotedPaths.isEmpty) rethrow;
+        throw StateError(
+          'development source requires a runtime archive on '
+          '${promotedPaths.values.map((path) => path.join(' -> ')).join('; ')}. '
+          'Archive resolution failed after removing source-helper eligibility. '
+          'RK does not search older bridge versions to restore that eligibility.\n$error',
+        );
+      } finally {
+        await session.close();
+      }
     }
   }
 
@@ -214,11 +265,28 @@ final class DartHostedDiscovery {
     required DartPackageManifest root,
     required DartDiscoveryResult frozen,
     Iterable<DartDiscoveryCandidate> candidates = const [],
+    Iterable<DartDevelopmentSource> developmentSources = const [],
     DartDependencyLock? lock,
   }) async {
     final current = candidates.toList();
     final selected = <DartDiscoveryCandidate>[];
+    final helpers = <DartDevelopmentSource>[];
+    final currentHelpers = developmentSources.toList();
     for (final package in frozen.packages.values) {
+      if (package.developmentSource case final recorded?) {
+        final matches = currentHelpers.where(
+          (source) =>
+              source.manifest.name == recorded.manifest.name &&
+              source.registry == recorded.registry,
+        );
+        if (matches.length != 1) {
+          throw StateError(
+            'frozen development source is not a current workspace member',
+          );
+        }
+        matches.single.requireSameSource(recorded);
+        helpers.add(matches.single);
+      }
       final provider = package.candidate;
       if (provider == null) continue;
       final matches = current.where(
@@ -235,7 +303,14 @@ final class DartHostedDiscovery {
       candidate.manifest.requireSameManifest(package.manifest);
       selected.add(candidate);
     }
-    final session = _Session(this, root, selected, frozen: frozen, lock: lock);
+    final session = _Session(
+      this,
+      root,
+      selected,
+      developmentSources: helpers,
+      frozen: frozen,
+      lock: lock,
+    );
     try {
       final result = await session.resolve();
       result.graph.requireSameSelection(frozen.graph);
@@ -247,10 +322,18 @@ final class DartHostedDiscovery {
 }
 
 final class _Session {
-  _Session(this.options, this.root, this.candidates, {this.frozen, this.lock});
+  _Session(
+    this.options,
+    this.root,
+    this.candidates, {
+    required this.developmentSources,
+    this.frozen,
+    this.lock,
+  });
   final DartHostedDiscovery options;
   final DartPackageManifest root;
   final List<DartDiscoveryCandidate> candidates;
+  final List<DartDevelopmentSource> developmentSources;
   final DartDiscoveryResult? frozen;
   final DartDependencyLock? lock;
   final HttpClient client = HttpClient();
@@ -260,8 +343,8 @@ final class _Session {
   final Map<String, Future<_Shadow>> shadows = {};
   final Map<(String, String), Future<List<DartDiscoveredPackage>>> listings =
       {};
-  final Map<(String, String), DartDiscoveryCandidate> available = {};
-  final Map<(String, String), DartDiscoveryCandidate> pinned = {};
+  final Map<(String, String), DartDiscoveredPackage> available = {};
+  final Map<(String, String), DartDiscoveredPackage> pinned = {};
   final Map<String, String> aliases = {};
   final List<Object> errors = [];
   final Set<Future<void>> responses = {};
@@ -275,9 +358,27 @@ final class _Session {
       if (available.containsKey(key)) {
         throw StateError('multiple eligible native providers for ${key.$2}');
       }
-      available[key] = candidate;
-      if (frozen != null) pinned[key] = candidate;
+      available[key] = DartDiscoveredPackage._(
+        registry: candidate.registry,
+        manifest: candidate.manifest,
+        candidate: candidate,
+      );
+      if (frozen != null) pinned[key] = available[key]!;
     }
+    final helperKeys = <(String, String)>{};
+    for (final source in developmentSources) {
+      final key = (source.registry, source.manifest.name);
+      if (!helperKeys.add(key) || source.manifest.name == root.name) {
+        throw StateError('duplicate or root development source');
+      }
+      available[key] = DartDiscoveredPackage._(
+        registry: source.registry,
+        manifest: source.manifest,
+        developmentSource: source,
+      );
+      if (frozen != null) pinned[key] = available[key]!;
+    }
+    _requireNoRuntimeSources([root]);
     _requireSupported(root, isRoot: true);
     _selectFrom([root], root: root.name);
     if (frozen case final recorded?) {
@@ -298,7 +399,7 @@ final class _Session {
         '${directory.path}/pubspec_overrides.yaml',
       ).writeAsStringSync('resolution: null\nworkspace: []\n');
     }
-    for (var pass = 0; pass <= candidates.length; pass++) {
+    for (var pass = 0; pass <= available.length; pass++) {
       // Each preference refinement starts a fresh native solve. Pub's metadata
       // cache must not retain the unrestricted listing from the previous pass.
       if (lock case final original?) {
@@ -362,8 +463,29 @@ final class _Session {
           );
         }
         _requireSupported(matches.single.manifest, isRoot: false);
-        selected[package.name] = matches.single;
+        final chosen = matches.single;
+        // Pub can unify a root by name regardless of the incoming registry.
+        // Inspect original edges in every selected manifest: a helper may
+        // reach the root indirectly through an ordinary hosted bridge.
+        final dependencies = chosen.manifest.fields['dependencies'];
+        if (dependencies is Map && dependencies.containsKey(root.name)) {
+          final backEdge = _hosted(
+            dependencies[root.name],
+            options.defaultRegistry,
+          );
+          if (backEdge == null ||
+              backEdge.registry != options.defaultRegistry) {
+            throw StateError(
+              'native package ${chosen.manifest.name} has a root back-edge with a different source',
+            );
+          }
+        }
+        selected[package.name] = chosen;
       }
+      _requireNoRuntimeSources([
+        root,
+        ...selected.values.map((value) => value.manifest),
+      ]);
       final prior = pinned.length;
       _selectFrom([
         root,
@@ -371,7 +493,7 @@ final class _Session {
       ], root: root.name);
       if (pinned.length == prior) {
         for (final package in selected.values) {
-          if (package.candidate == null) {
+          if (package.candidate == null && package.developmentSource == null) {
             lock?.requireExternalIntegrity(
               name: package.manifest.name,
               registry: package.registry,
@@ -386,6 +508,37 @@ final class _Session {
       Directory('${directory.path}/.dart_tool').deleteSync(recursive: true);
     }
     throw StateError('native candidate discovery did not converge');
+  }
+
+  void _requireNoRuntimeSources(Iterable<DartPackageManifest> manifests) {
+    final byName = {for (final manifest in manifests) manifest.name: manifest};
+    final paths = <String, List<String>>{
+      root.name: [root.name],
+    };
+    final pending = [root.name];
+    while (pending.isNotEmpty) {
+      final name = pending.removeLast();
+      final dependencies = byName[name]?.fields['dependencies'];
+      if (dependencies is! Map) continue;
+      for (final dependency in dependencies.keys.cast<String>()) {
+        if (paths.containsKey(dependency)) continue;
+        paths[dependency] = [...paths[name]!, dependency];
+        pending.add(dependency);
+      }
+    }
+    final promoted = <String, List<String>>{
+      for (final source in developmentSources)
+        if (paths.containsKey(source.manifest.name))
+          source.manifest.name: paths[source.manifest.name]!,
+    };
+    if (promoted.isNotEmpty) {
+      if (frozen != null) {
+        throw StateError(
+          'frozen development source is runtime reachable: ${promoted.keys.join(', ')}',
+        );
+      }
+      throw _RuntimeDevelopmentSources(promoted);
+    }
   }
 
   Future<void> _authorizeFrozen(DartDiscoveryResult recorded) async {
@@ -596,13 +749,7 @@ final class _Session {
         }
       }
       if (candidate != null) {
-        values.add(
-          DartDiscoveredPackage._(
-            registry: registry,
-            manifest: candidate.manifest,
-            candidate: candidate,
-          ),
-        );
+        values.add(candidate);
       }
       if (expected != null) {
         final matches = values
@@ -639,7 +786,7 @@ final class _Session {
         final chosen = pinned[(shadow.registry, name)];
         final visible = chosen == null
             ? versions
-            : versions.where((value) => value.candidate == chosen).toList();
+            : versions.where((value) => identical(value, chosen)).toList();
         if (visible.isEmpty) {
           request.response.statusCode = HttpStatus.notFound;
           return;
@@ -692,6 +839,12 @@ final class _Session {
     ).timeout(options.timeout, onTimeout: () => const <void>[]);
     directory.deleteSync(recursive: true);
   }
+}
+
+final class _RuntimeDevelopmentSources implements Exception {
+  _RuntimeDevelopmentSources(this.paths);
+  final Map<String, List<String>> paths;
+  Set<String> get names => paths.keys.toSet();
 }
 
 final class _Shadow {
