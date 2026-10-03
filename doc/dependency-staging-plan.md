@@ -861,3 +861,20 @@ causally consistent frozen-metadata tampering, nested proof commitment tampering
 missing/extra/conflicting nodes, independent bounds and same-unit ownership.
 This is portable provenance evidence, not production native authorization or
 completed bare Fleury CLI qualification.
+
+The Dart native authorizer now re-resolves configuration from authoritative
+source, reads scope-independent intent, and requires exact operation/context and
+consumer coverage even for empty roots. It checks canonical provider archive
+declarations, external digests, effective raw locks and recorded producer graphs
+before native commands. Current workspace membership reauthorizes development
+helpers, and `verifyFrozen` refreshes only transient fetch handles. Original
+serialized contexts, including archive-only format 2, remain unchanged. A live
+intent recheck rejects registry changes during authorization.
+
+The native reviewer found no material blocker in this bounded slice and requested
+completed helper/archive and actual binary evidence coverage, which was added.
+The affected native/receipt/adoption/lookup run passed 170 tests. Twelve new cases
+passed on both Dart 3.10.4 and 3.13.5. This authorizes native facts and evidence;
+portable current-source/contract authorization, retained archive bytes, exact
+pending input recovery and production command wiring remain separate required
+work. It does not yet establish complete frozen-stage restoration.
