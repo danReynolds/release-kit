@@ -1,11 +1,9 @@
 # Repository release contract
 
-Status: packet 4 implementation is under qualification on
-`codex/dependency-staging`. Whole-stack private staging and read-only status have
-command evidence. Focused consent and native publication checks pass; the final
-full suite and complete release qualification remain open. See the
-[delivery plan](dependency-staging-plan.md) and
-[native evidence](dependency-staging-native-proof.md).
+Status: implemented and qualified. Full suites pass on Dart 3.13.5 and 3.12.2;
+actual Fleury private preparation and archive-consumer workflows pass. No public
+release was performed. See the [delivery plan](dependency-staging-plan.md) and
+[native evidence](dependency-staging-native-proof.md) for exact evidence and limits.
 
 ## Scope
 

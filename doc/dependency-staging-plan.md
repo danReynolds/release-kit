@@ -1,16 +1,13 @@
 # Dependency-aware repository staging
 
-Status: reviewed delivery plan; implementation is in progress on
-`codex/dependency-staging`. Packets 1–3 are implemented: authoritative native
-inputs, frozen restoration, repository staging and read-only status. Actual bare
-Fleury staging and status preservation are recorded below. Packet 4 now has
-all-selected private preparation, aggregate immutable consent, frozen runtime
-publication ordering and blocking native public checks; command/native regression
-qualification is still in progress. Final full-suite and complete release
-qualification remain packet 5. No real publication has occurred.
+Status: implemented and qualified on `codex/dependency-staging`. All five delivery
+packets are complete. Independent reviews and the full Dart 3.13.5/3.12.2 suites
+pass. Actual Fleury preparation, frozen reuse, read-only status, provider cleanup
+and archive-consumer workflows pass; final evidence is recorded at the end.
+Publication was exercised only through local fixtures. No public release occurred.
 
 Baseline: RK main `6e7bb165c8027d8fc5e5293b45432850cf3229f8`, rechecked against
-remote main on 2026-10-02. Continue in the existing `codex/dependency-staging`
+remote main on 2026-10-03. Continue in the existing `codex/dependency-staging`
 worktree; do not restart the native proof or create another implementation branch.
 
 ## Outcome
@@ -1153,3 +1150,24 @@ recovery for a partial binary release even when its only remaining moving target
 can recover from authenticated public inputs. Release retains that recovery path;
 this status presentation caveat was not introduced by dependency staging and is
 not changed in this packet.
+
+## Delivery complete — 2026-10-03
+
+All five implementation packets are complete. Both full suites pass **1,885 tests
+with one opt-in local skip** on Dart 3.13.5 and 3.12.2. Minimum native cases, static
+analysis, pinned formatting, code-index validation and independent production
+reviews pass. The exact final [native proof and Fleury acceptance](dependency-staging-native-proof.md#final-qualification--2026-10-03)
+records source/toolchain identities and archive hashes.
+
+The final actual CLI prepared all four Fleury packages before refusing missing
+release confirmation; all public actions stayed not attempted. Bare/named stage
+reuse preserved exact recorded files, status preserved all 44,832 stage-store
+entries, and named consumer reuse succeeded after its original provider stage was
+removed and then restored. Extracted archives passed generated-app tests,
+native/MCP and web compilation, and a live MCP Increment interaction. No public
+package, tag, GitHub release/draft or tap write was made.
+
+The shared/native split, schema-13 migration, unsupported SDK-mediated proof and
+mixed-unit immutable archive limitations are part of the documented contract.
+Neither green local fixtures nor this dogfood run claim a real registry upload or
+browser rendering qualification.

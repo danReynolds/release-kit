@@ -1,11 +1,11 @@
 # Native dependency staging proof
 
 The initial mechanism was measured 2026-10-02 on macOS arm64, before production
-integration. Later sections record production primitives, packet-3 Fleury command
-qualification and packet-4 public-boundary fixtures. Their evidence is scoped:
-final release/full-suite qualification remains open. Native registry fixtures use
-disposable loopback services; no real uploads, tags, drafts or publication
-credentials are part of these proofs.
+integration. Later sections record production primitives and command qualification;
+the final section records completed full-suite and Fleury qualification on
+2026-10-03. Registry fixtures use disposable loopback services and local Git
+remotes. No public package upload, public repository tag, GitHub release/draft,
+or tap write occurred.
 
 ## Decision
 
@@ -198,7 +198,7 @@ write. This qualifies whole-stack private preparation and read-only status;
 repository release preparation, aggregate consent and public dependency gates
 require the separate packet-4 qualification below.
 
-## Packet 4 public boundary: implemented, qualification in progress
+## Packet 4 public boundary fixtures
 
 Dart publication now projects original runtime constraints through frozen selected
 manifests. Development-only providers and private helpers impose no public edge;
@@ -236,8 +236,8 @@ The blocking gate runs before the target's attempted/acted boundary and returns
 stage, context and destination and uploads the unchanged archive. Thirty-one
 focused coordinator cases pass on stable, including consent drift, exact public
 recovery binding, local-only output preservation and global no-op guards. These
-are local fixture results, not live-registry publication or final full-suite/
-release qualification.
+are local fixture results, not live-registry publication or the final full-suite/
+release qualification recorded below.
 
 Mixed-unit qualification also distinguishes provider eligibility from output
 reproduction. An already-public package is a hosted dependency input, but the
@@ -250,3 +250,78 @@ and prepare the remaining members separately. Regrouping does not bypass an
 existing frozen-stage or tagged-unit recovery requirement. A tagless mixed package-only unit may attempt fresh
 preparation on either verb; built-asset progress or an exact configured unit tag
 still makes a missing original stage recovery-critical.
+
+## Final qualification — 2026-10-03
+
+Implementation commit `f5b2c46` completes packet 4. Qualification-only documentation
+and CI-formatter cleanup follow it without changing the RK implementation digest.
+Both independent reviewers approved the production boundaries after iterating on
+recovery consent, local-only scope guards and mixed-package unit progress.
+
+- Full `dart test`: **1,885 passed, one opt-in Homebrew installation test skipped**
+  on each of Dart **3.13.5** and CI SDK **3.12.2**, on macOS arm64. These are two
+  executions of the same suite, not additive coverage. CI's disposable macOS
+  runner separately enables its real Homebrew installation check.
+- Pinned 3.12.2 formatting, whole-repository analysis, diagnostic-index validation
+  and `git diff --check` pass.
+- Minimum 3.10.4 native archive/replay and public-consumer checks pass, including
+  the final four tagged/mixed recovery cases. The independently reproduced
+  minimum-SDK macOS AOT-bundle limitation remains outside this qualification;
+  archive and direct-executable support are qualified.
+- Native command fixtures prove all private work precedes one confirmation and
+  publication sessions; later preparation failure produces no public action;
+  four independent package versions publish in native runtime order to a local
+  fixture; named scope never expands; exact saved partial stages resume without
+  discovery or repackaging; public-proof failure remains not attempted.
+
+Actual Fleury source is `882c6642bbc2468f6f2bd9241e4e66a61fe99fe9`, verified against
+remote main on 2026-10-03. RK upstream remains
+`6e7bb165c8027d8fc5e5293b45432850cf3229f8`. The final source-run RK digest is
+`39f74aeae4ef9efcdc79f3ade4ab7763929e8fb068fd1b22ff9d47d27b84c5a5`, stage schema 13,
+using Dart 3.13.5 on macOS arm64. The isolated Fleury checkout and its release
+configuration remain unchanged.
+
+The actual `rk release --json` with closed stdin and no `--yes` completed all four
+private stages, then stopped only at `RK-AUTH-001`. Every public action remained
+`not_attempted`. The MCP/web exact-version Pub warnings remained visible.
+Subsequent bare `rk stage`, named `rk stage fleury_mcp`, and named staging after
+reversible removal of the core provider stage all succeeded with the same saved
+identities, bytes, modes and mtimes. The provider was not rebuilt and was restored
+after the check. `rk status --json` preserved **44,832** stage-store entries and
+explicitly deferred native/public readiness authorization.
+
+Each consumer's imported core archive and copied proof were independently hashed
+and checked for their recorded size/mode. The imports match the exact core
+archive below. Every archive retains its source `pubspec.yaml` byte for byte and
+contains no workspace override file.
+
+| Package | Version | Final native archive SHA-256 |
+| --- | --- | --- |
+| fleury | 0.1.0 | `decfa39bc785b03232b5f0b32f6aed95f5b00acdbd4fc61d7e190dfb6e791253` |
+| fleury_mcp | 0.1.0 | `a82e328a82f382f2792e9e66399b2b78a4fafdd8c1c26969b759011ee06eb915` |
+| fleury_test | 0.1.0 | `bbaa07e97a322975c0c8b733dabd3f8bc1f3ff4323e9638a1ab2fb416869b8b9` |
+| fleury_web | 0.1.0 | `ad6947d40d216f07f663089635abcf5318e61af113589d9a7e01213031080982` |
+
+The exact extracted archives then supplied an isolated consumer. The staged
+Fleury CLI generated an application with `fleury create --no-pub`; app-local
+overrides selected the extracted archives without altering their manifests.
+Dependency resolution, analysis, both generated widget tests, native application
+compilation, MCP executable compilation and browser JavaScript compilation all
+passed. The compiled MCP server launched the compiled generated app, read its
+semantic tree, activated Increment and observed Count changing from 0 to 1.
+This is native/MCP interaction and web compilation evidence, not browser rendering
+or real registry-publication qualification.
+
+Reproducible fixtures are committed in the native stage, publication, consent,
+restoration and command test suites. Full local transcripts were retained as
+`rk-dependency-staging-qualified-{stable,ci-sdk}.log`,
+`rk-fleury-qualified-20261003-*.json` and the final archive-consumer report.
+Earlier packet evidence above remains historical; this section is the final
+implementation qualification.
+
+Known boundaries remain explicit: SDK-mediated first-party runtime constraints
+without original SDK manifest proof refuse; arbitrary path/Git runtime substitution
+is unsupported; mixed-unit fresh repackaging can differ from immutable public
+bytes because of tar timestamps. Retain the original stage for exact recovery, or
+use separate units for genuinely fresh already-public and pending packages.
+Existing frozen/tagged recovery requirements cannot be bypassed by regrouping.

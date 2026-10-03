@@ -1046,12 +1046,18 @@ executables:
       (text) => text.contains('Release targets'),
     );
     final checking = _afterLastTransientErase(terminalBuffer.toString());
-    expect(checking.split('\n').where((line) => line.isNotEmpty), [
-      'Release targets',
-      matches(RegExp(r'^  . Git tag\s+checking$')),
-      matches(RegExp(r'^  . pub\.dev · keybay\s+checking$')),
-      matches(RegExp(r'^  . GitHub Release · danReynolds/keybay\s+checking$')),
-    ], reason: 'one fixed list makes the parallel reads visible together');
+    expect(
+      checking.split('\n').where((line) => line.isNotEmpty),
+      [
+        'Release targets',
+        matches(RegExp(r'^  . Git tag\s+checking$')),
+        matches(RegExp(r'^  . pub\.dev · keybay\s+checking$')),
+        matches(
+          RegExp(r'^  . GitHub Release · danReynolds/keybay\s+checking$'),
+        ),
+      ],
+      reason: 'one fixed list makes the parallel reads visible together',
+    );
 
     terminalInspector.finish(StepKind.tag);
     await _waitForStatusText(
