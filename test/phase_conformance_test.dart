@@ -655,6 +655,8 @@ void main() {
       required Map<String, List<String>> published,
       required Map<String, List<int>> archives,
       required Set<String> tags,
+      Directory? retainedStageRoot,
+      bool stageOnly = false,
       Map<String, ToolResult> results = const {},
       Map<String, String> sourceFiles = const {},
       String? config,
@@ -828,7 +830,9 @@ publish = ["git-tag", "pub.dev"]
       var code = ExitCodes.refused;
       Object? died;
       try {
-        final stageRoot = Directory.systemTemp.createTempSync('rk-drive-');
+        final stageRoot =
+            retainedStageRoot ??
+            Directory.systemTemp.createTempSync('rk-drive-');
         addTearDown(() {
           if (stageRoot.existsSync()) stageRoot.deleteSync(recursive: true);
         });
@@ -843,6 +847,7 @@ publish = ["git-tag", "pub.dev"]
         );
         code = await ReleaseCommand(
           allowInteractiveTools: true,
+          stageOnly: stageOnly,
           resolution: resolution,
           tree: tree,
           git: git,
@@ -1920,6 +1925,7 @@ publish = ["git-tag", "pub.dev"]
 
     test('DONE WHEN, resume half: killed after the tag, a re-run finishes '
         'without re-tagging', () async {
+      final retained = Directory.systemTemp.createTempSync('rk-resume-');
       final published = {
         'keybay': ['0.1.0'],
       };
@@ -1927,6 +1933,7 @@ publish = ["git-tag", "pub.dev"]
       final tags = <String>{};
 
       final first = await drive(
+        retainedStageRoot: retained,
         published: published,
         archives: archives,
         tags: tags,
@@ -1945,6 +1952,7 @@ publish = ["git-tag", "pub.dev"]
       expect(tags, contains('v0.2.0'), reason: 'the tag landed before death');
 
       final second = await drive(
+        retainedStageRoot: retained,
         published: published,
         archives: archives,
         tags: tags,
@@ -1973,13 +1981,24 @@ publish = ["git-tag", "pub.dev"]
 
     test('DONE WHEN, resume half: killed after the publish, a re-run '
         'confirms without publishing twice', () async {
+      final retained = Directory.systemTemp.createTempSync('rk-resume-');
       final published = {
         'keybay': ['0.1.0'],
       };
       final archives = <String, List<int>>{};
-      final tags = <String>{'v0.2.0'};
+      final tags = <String>{};
+      final staged = await drive(
+        retainedStageRoot: retained,
+        stageOnly: true,
+        published: published,
+        archives: archives,
+        tags: tags,
+      );
+      expect(staged.code, ExitCodes.ok, reason: staged.text);
+      tags.add('v0.2.0');
 
       final first = await drive(
+        retainedStageRoot: retained,
         published: published,
         archives: archives,
         tags: tags,
@@ -1995,6 +2014,7 @@ publish = ["git-tag", "pub.dev"]
       expect(first.code, ExitCodes.ok, reason: first.text);
 
       final second = await drive(
+        retainedStageRoot: retained,
         published: published,
         archives: archives,
         tags: tags,

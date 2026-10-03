@@ -129,7 +129,7 @@ release-kit · main@888444b
       Homebrew                   rk.rb
 ```
 
-The release itself — ordered, staged, disclosed, one yes per unit — is
+The release itself — prepared, disclosed, then authorized with one yes — is
 shown in [Two packages, one release](#two-packages-one-release).
 
 `rk stage` opens with the project version and checkout it will use:
@@ -152,9 +152,11 @@ use a verified completed sibling stage or resolve published dependencies, but
 does not build the sibling. Saved stages retain their recorded dependency choices
 across named and repository-wide runs.
 
-Run `rk release` to prepare as needed and publish. Use `rk stage` first when
-you want to inspect the artifacts before publishing; name the unit when the
-repository has several.
+`rk release` completes private preparation for every selected unit before one
+confirmation, publication login or public action. Use `rk stage` first to inspect
+the artifacts separately. Name a unit to keep both preparation and publication
+within that scope; an unpublished sibling may supply verified staged bytes but
+must become public before a dependent package can publish.
 
 ## Install
 
@@ -242,31 +244,40 @@ path = "packages/cli"
 publish = ["pub.dev"]
 ```
 
-`rk release` orders the units, shows what each will publish and what is
-permanent, and asks once, before any of them acts:
+`rk release` prepares both units first, using compatible staged dependency
+archives. Each keeps its own version. RK then shows the remaining targets,
+first claims, signing identities and preparation warnings, and asks once:
 
 ```console
 $ rk release
-Release order: core 0.3.0 -> cli 0.3.0
+Preparing: core -> cli
+  ...
+Release order: core -> cli
 
   core 0.3.0
     pub.dev                  example_core 0.3.0 · permanent · first claim
-  cli 0.3.0
-    pub.dev                  example_cli 0.3.0 · permanent
-Release core 0.3.0 and cli 0.3.0? [y/N] y
-
-Releasing core 0.3.0
-  ...
+  cli 0.1.0
+    pub.dev                  example_cli 0.1.0 · permanent
+Release core 0.3.0 and cli 0.1.0? [y/N] y
 ```
 
-Each unit then stages, checks and publishes in turn, and reads everything
-again before it acts. A unit asks again, and says why, when those reads
-find something the question did not show, such as a name it would claim for
-the first time, or when rk warns about it while it stages, as it does for
-Pub's validation warnings. If a unit already cannot go ahead, as far as rk
-can tell before staging, each unit asks for itself. A failure stops the
-run. Units already published stay published, and running `rk release`
-again carries on from there.
+A preparation failure leaves any completed private stages available for retry
+and acquires no publication session. After consent, RK checks each public act
+again. The reviewed stage receipts, signing identities, warnings, targets and
+first claims cannot change or expand; a changed plan stops for a fresh run.
+This includes targets that were already public when reviewed.
+
+Staging and publication have separate dependency orders. Private development
+helpers can be needed for preparation without becoming public prerequisites.
+Before uploading a Dart archive, RK verifies the exact staged runtime-provider
+archives at their declared registries and resolves a fresh prospective consumer
+using public runtime dependencies. It then uploads the unchanged staged archive.
+A named release never publishes a sibling to satisfy this check.
+
+Public releases are not atomic. If a later publication fails, earlier completed
+targets remain public; rerunning rechecks them and resumes with the recorded
+stage. See the [repository release contract](doc/repository-release-plan.md)
+for recovery and native limitations.
 
 ## Release assets your own build makes
 
@@ -350,17 +361,28 @@ $ rk status --json | jq .problems
 ]
 ```
 
-Without a terminal, a needed answer stops the current unit before its remaining
-targets are published. Earlier completed units stay published. `--yes` is the
-unattended yes, and it skips no inspection. Exit codes: 0 report or
+Without a terminal, a needed answer stops the selected release after private
+preparation and before publication sessions or public actions. `--yes` is the
+unattended yes to the same reviewed plan, and it skips no inspection. Exit codes: 0 report or
 completed command, 1 refused or failed, 2 usage, 3 rk itself crashed —
 `--json` mirrors it in `exit`.
 
 ## Behavior
 
-Stages live under `.rk/work/stages`. Keep them while a binary release is
+Stages live under `.rk/work/stages`. Keep them while a package or binary release is
 partly public so the remaining targets receive the exact staged bytes
-the public ones already pinned; `rk clean` removes this repository's
+and frozen dependency choices. Built-asset progress or an exact configured unit
+tag requires the original stage when remaining targets need it. An independently
+public package in a tagless package-only unit does not prove its siblings were
+previously staged; both `rk stage` and `rk release` may prepare those siblings
+fresh. The current unit contract still packages all configured outputs: if a
+fresh repack differs from an already-public archive, release refuses before
+consent. Native archive timestamps can cause this even with unchanged source;
+preserve or restore the original matching stage. For a fresh tagless setup that
+never had an RK stage,
+place the already-public package in its own release unit and prepare the remaining
+packages separately. Regrouping does not recover an existing frozen or tagged
+release. `rk clean` removes this repository's
 stages, lists their recorded identities, and asks first. Receipt metadata helps
 identify a stage; it does not prove that its bytes are no longer needed.
 

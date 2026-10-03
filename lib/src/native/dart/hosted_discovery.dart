@@ -13,6 +13,7 @@ import 'dependencies.dart';
 import 'dependency_lock.dart';
 import 'development_source.dart';
 import 'package_archive.dart';
+import 'hosted_requirement.dart';
 import 'resolution_graph.dart';
 import 'version_constraints.dart';
 
@@ -58,6 +59,33 @@ final class DartDiscoveredPackage {
   final Uri? archiveUrl;
   final String? archiveSha256;
   final bool retracted;
+
+  /// One authoritative hosted coordinate response. The fetch URL stays live
+  /// only in this invocation; it is omitted by [toJson].
+  factory DartDiscoveredPackage.fromHostedMetadata({
+    required String registry,
+    required Object? metadata,
+  }) {
+    if (metadata is! Map || metadata['version'] is! String) {
+      throw const FormatException('invalid hosted coordinate metadata');
+    }
+    final manifest = DartPackageManifest.fromMap(metadata['pubspec']);
+    final hash = metadata['archive_sha256'];
+    final url = metadata['archive_url'];
+    if (manifest.version != metadata['version'] ||
+        hash is! String ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(hash) ||
+        url is! String) {
+      throw const FormatException('hosted coordinate omits native integrity');
+    }
+    return DartDiscoveredPackage._(
+      registry: _registry(registry),
+      manifest: manifest,
+      archiveUrl: _url(url, allowQuery: true),
+      archiveSha256: hash,
+      retracted: metadata['retracted'] == true,
+    );
+  }
 
   /// Restores metadata without a fetch credential or source authorization.
   /// A frozen external selection must be reauthorized at its exact registry
@@ -528,7 +556,7 @@ final class _Session {
         // reach the root indirectly through an ordinary hosted bridge.
         final dependencies = chosen.manifest.fields['dependencies'];
         if (dependencies is Map && dependencies.containsKey(root.name)) {
-          final backEdge = _hosted(
+          final backEdge = dartHostedRequirement(
             dependencies[root.name],
             options.defaultRegistry,
           );
@@ -614,7 +642,10 @@ final class _Session {
         includeDevelopment: manifest.name == root,
       );
       for (final dependency in dependencies.entries) {
-        final hosted = _hosted(dependency.value, options.defaultRegistry);
+        final hosted = dartHostedRequirement(
+          dependency.value,
+          options.defaultRegistry,
+        );
         if (hosted == null) continue;
         (incoming[(hosted.registry, dependency.key)] ??= []).add(
           hosted.constraint,
@@ -672,7 +703,10 @@ final class _Session {
       }
       final mapped = <String, Object?>{};
       for (final entry in original.entries) {
-        final hosted = _hosted(entry.value, options.defaultRegistry);
+        final hosted = dartHostedRequirement(
+          entry.value,
+          options.defaultRegistry,
+        );
         if (hosted == null) {
           mapped[entry.key] = entry.value;
           continue;
@@ -935,35 +969,6 @@ Map<String, Object?> _dependencies(
         case final Map<String, Object?> development)
       ...development,
 };
-
-({String registry, String constraint})? _hosted(
-  Object? dependency,
-  String defaultRegistry,
-) {
-  if (dependency is Map && ['path', 'git', 'sdk'].any(dependency.containsKey)) {
-    return null;
-  }
-  if (dependency == null || dependency is String) {
-    return (
-      registry: defaultRegistry,
-      constraint: dependency as String? ?? 'any',
-    );
-  }
-  if (dependency is! Map) {
-    throw const FormatException('invalid native dependency');
-  }
-  final source = dependency['hosted'];
-  final url = source is Map ? source['url'] : source;
-  final version = dependency['version'];
-  if ((url != null && url is! String) ||
-      (version != null && version is! String)) {
-    throw const FormatException('invalid native hosted requirement');
-  }
-  return (
-    registry: _registry(url as String? ?? defaultRegistry),
-    constraint: version as String? ?? 'any',
-  );
-}
 
 void _requireSupported(DartPackageManifest manifest, {required bool isRoot}) {
   final overrides = manifest.fields['dependency_overrides'];

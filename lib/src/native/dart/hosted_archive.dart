@@ -1,14 +1,94 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import '../package_archive.dart';
 import 'archive_replay.dart';
 import 'hosted_discovery.dart';
+import 'package_archive.dart';
 
 /// Downloads one already-selected external coordinate. Native metadata fixes
 /// its digest and complete original manifest before any bytes can enter a
 /// stage. A signed fetch URL is transient and never part of archive identity.
 abstract final class DartHostedArchive {
+  /// Verifies an exact public coordinate against the original staged manifest
+  /// and compressed bytes. This never populates a consumer's native cache.
+  static Future<DartReplayArchive> fetchPublic({
+    required String registry,
+    required DartPackageManifest manifest,
+    required String expectedSha256,
+    Duration timeout = const Duration(minutes: 2),
+    int maxMetadataBytes = 16 * 1024 * 1024,
+    int maxCompressedBytes = 128 * 1024 * 1024,
+  }) async {
+    final source = dartHostedRegistry(registry);
+    final client = HttpClient()..connectionTimeout = timeout;
+    final deadline = Timer(timeout, () => client.close(force: true));
+    late final DartDiscoveredPackage selected;
+    try {
+      final uri = Uri.parse(
+        '$source/api/packages/${Uri.encodeComponent(manifest.name)}'
+        '/versions/${Uri.encodeComponent(manifest.version)}',
+      );
+      final request = await client.getUrl(uri).timeout(timeout);
+      request.headers.set(
+        HttpHeaders.acceptHeader,
+        'application/vnd.pub.v2+json',
+      );
+      request.followRedirects = false;
+      final response = await request.close().timeout(timeout);
+      if (response.statusCode != HttpStatus.ok) {
+        throw StateError(
+          'public coordinate ${manifest.name} ${manifest.version} at $source '
+          'answered ${response.statusCode}',
+        );
+      }
+      final bytes = <int>[];
+      await for (final chunk in response.timeout(timeout)) {
+        if (bytes.length + chunk.length > maxMetadataBytes) {
+          throw StateError('public coordinate metadata exceeds the byte limit');
+        }
+        bytes.addAll(chunk);
+      }
+      Object? metadata;
+      try {
+        metadata = jsonDecode(utf8.decode(bytes));
+      } on FormatException {
+        throw const FormatException('public coordinate metadata is malformed');
+      }
+      selected = DartDiscoveredPackage.fromHostedMetadata(
+        registry: source,
+        metadata: metadata,
+      );
+      selected.manifest.requireSameManifest(manifest);
+      if (selected.archiveSha256 != expectedSha256) {
+        throw StateError(
+          'public archive bytes differ from staged ${manifest.name} ${manifest.version}',
+        );
+      }
+    } on HttpException {
+      throw StateError(
+        'public coordinate HTTP request failed for ${manifest.name}',
+      );
+    } on SocketException {
+      throw StateError(
+        'public coordinate connection failed for ${manifest.name}',
+      );
+    } on TimeoutException {
+      throw StateError(
+        'public coordinate request timed out for ${manifest.name}',
+      );
+    } finally {
+      deadline.cancel();
+      client.close(force: true);
+    }
+    return fetch(
+      selected,
+      timeout: timeout,
+      maxCompressedBytes: maxCompressedBytes,
+    );
+  }
+
   static Future<DartReplayArchive> fetch(
     DartDiscoveredPackage selected, {
     Duration timeout = const Duration(minutes: 2),

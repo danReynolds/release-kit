@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../engine/canonical_json.dart';
 import '../engine/diagnostic.dart';
 
 /// The machine surface: what a run found, keyed by step id.
@@ -194,6 +195,24 @@ class Report {
   /// Whether this run has warned about [unit].
   bool warnedAbout(String unit) =>
       _warnings.any((warning) => warning['unit'] == unit);
+
+  /// Stable warning facts disclosed to this unit, including repository-wide
+  /// warnings. Evidence is its content, not an attachment's incidental name.
+  /// Repeated rendering does not grow consent; changed warning content does.
+  List<Map<String, Object?>> warningEvidenceFor(String unit) {
+    final unique = <String, Map<String, Object?>>{};
+    for (final warning in _warnings) {
+      if (warning['unit'] != null && warning['unit'] != unit) continue;
+      final value = <String, Object?>{
+        ...warning,
+        if (warning['evidence'] case final String name)
+          'evidence': attachments[name] ?? name,
+      };
+      unique[CanonicalJson.encode(value)] = Map.unmodifiable(value);
+    }
+    final keys = unique.keys.toList()..sort();
+    return List.unmodifiable([for (final key in keys) unique[key]!]);
+  }
 
   /// Files a finding's own account of what failed beside the document, and
   /// names it on the finding so the two correlate rather than being matched

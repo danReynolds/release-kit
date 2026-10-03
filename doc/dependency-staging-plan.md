@@ -1,17 +1,13 @@
 # Dependency-aware repository staging
 
 Status: reviewed delivery plan; implementation is in progress on
-`codex/dependency-staging`. Native discovery/replay, receipt-bound inputs, shared
-Pub/binary preparation, frozen-choice verification and source-bound binary lock
-policies are implemented. Development-source discovery and receipt-bound helper
-replay are implemented. Frozen-stage restoration now composes bounded intent
-lookup, portable provider proof closure, current-source/native authorization,
-and transactional adoption. Schema-13 receipt headers preserve plans across
-source-copy interruptions. Repository scheduling and the stage command now
-compose those primitives. Packet 3 command qualification and status recognition
-remain in progress; publication gates remain packet 4.
-The remaining work is defined in the implementation packets below; foundation
-proofs do not qualify bare `rk stage` or publication. No publication has occurred.
+`codex/dependency-staging`. Packets 1–3 are implemented: authoritative native
+inputs, frozen restoration, repository staging and read-only status. Actual bare
+Fleury staging and status preservation are recorded below. Packet 4 now has
+all-selected private preparation, aggregate immutable consent, frozen runtime
+publication ordering and blocking native public checks; command/native regression
+qualification is still in progress. Final full-suite and complete release
+qualification remain packet 5. No real publication has occurred.
 
 Baseline: RK main `6e7bb165c8027d8fc5e5293b45432850cf3229f8`, rechecked against
 remote main on 2026-10-02. Continue in the existing `codex/dependency-staging`
@@ -61,7 +57,7 @@ leave non-workspace first publications broken.
 | `rk plan [unit]` | Remains source-only. Shows candidate dependency edges and requirements requiring native/registry resolution; makes no claim that a registry version exists |
 | `rk stage` | Stages all configured units in a stable dependency order; publishes nothing |
 | `rk stage <unit>` | Keeps the named scope. May consume an existing verified compatible sibling stage matching the current configured source/toolchain/contract; otherwise uses native hosted resolution. Does not build other units or select arbitrary historical cached versions. If neither path resolves, point to `rk stage` or the provider unit |
-| `rk release` | Resolves the scope, completes its private preparation, then uses the existing authorization and publication lifecycle |
+| `rk release` | Completes private preparation for the selected scope, reviews exact artifacts and disclosures once, then acquires publication sessions and publishes in native runtime order |
 | `rk release <unit>` | Publishes only that unit; an unpublished provider outside the public scope still blocks publication |
 
 No new release groups, root version, lockstep requirement, `--all`, or automatic
@@ -500,8 +496,12 @@ Schema 13 adds the deep-frozen plan header and explicitly refuses schema 12;
 never reinterpret an old identity with the new schema constant. Retain old stage
 directories and direct recovery-critical releases to the RK version that wrote
 them. Because the schema changes the stage path, command recovery must check
-public history before treating a missing new-schema path as permission to build;
-the existing binary lost-stage guard alone does not cover Pub-only dependencies.
+public unit progress before treating a missing new-schema path as permission to
+build. Preserve built-asset recovery and extend it to package-only units whose
+configured Git tag is exact. A public package alone does not establish that a
+tagless unit's siblings were previously staged; with conclusive stage absence,
+both stage and release may prepare such a mixed unit fresh. Retained old receipts
+still refuse, and exact public archive comparisons remain mandatory.
 Use `StageStore`'s mutation lock
 for atomic intent hints; bounded no-follow receipt scanning is the fallback.
 Keep `StageHistory` advisory rather than making its unchecked history authoritative.
@@ -557,10 +557,24 @@ conflict, monotonicity, endpoint-readiness and lost-stage guards. Do not broadly
 ignore unknown public state. All-units preparation must not create publication
 sessions. Already public exact targets remain publication no-ops. Fresh discovery excludes
 already-exact public packages without an eligible current private archive from
-local producer candidates and uses normal authenticated hosted resolution for
+private provider candidates and uses normal authenticated hosted resolution for
 those coordinates. It must not select a local import then skip its producer as
 already released. Classify package targets individually in mixed multi-project
 units; a unit-level no-op cannot hide a required producer.
+
+This eligibility rule concerns dependency providers. The current complete-unit
+contract still privately packages every configured package output in a mixed
+unit. Release compares the raw archive digest for an already-public member with
+that newly staged output. Native tar entry mtimes can change even when source
+contents do not, so fresh mixed-unit staging can succeed while release refuses
+an immutable archive mismatch before consent. Keep or restore the original
+matching stage to finish that release; a fresh solve or repack cannot replace
+the public bytes. For a fresh tagless setup where that public package never had
+an RK stage, regroup it into its own fully-public unit and prepare the remaining
+members separately. This does not bypass recovery for an existing frozen stage
+or tagged unit.
+Excluding those outputs from complete-unit preparation is a
+separate contract change, not implemented here.
 
 Fresh named staging can use a verified current sibling stage, otherwise normal
 hosted resolution. It cannot build the sibling. A frozen imported provider proof
@@ -573,7 +587,7 @@ exercise this coordinator, in addition to the real native fixture.
 | Selected unpublished package | Its producer is scheduled; consumer waits for verified artifact |
 | Named command, current compatible verified sibling archive exists | Import it without building or publishing the sibling |
 | Named command, no eligible sibling archive | Normal hosted resolution; native refusal if no compatible public version exists |
-| Already-exact public package, no current private archive | Authenticate hosted metadata/archive; no synthetic local producer or republishing |
+| Already-exact public package, no current private archive | Authenticate hosted metadata/archive as a dependency input; do not select a private provider or republish it |
 | Restored consumer already binds copied provider proof | Verify and retain that exact binding, regardless of current public appearance or deleted provider stage |
 
 Exit: command tests for all four unpublished packages, transitive-only edges,
@@ -585,7 +599,12 @@ Only then remove `RK-CLI-004` and update bare-stage help.
 ### 4. Publication boundary
 
 Bare release uses packet 3 to prepare the full frozen scope first. Aggregate
-warnings and exact staged claims, then obtain the one publication confirmation.
+warnings and exact staged claims, then obtain the one publication confirmation
+before acquiring any publication session. Consent binds stage identities and
+receipt content, signing disclosures, normalized warning content, remaining
+targets and first-name claims. Changed or expanded consent refuses without a
+second prompt. Retain whole-unit no-ops and omitted exact targets in the reviewed
+scope; recheck their public exactness before consent, sessions and public acts.
 Re-read destination truth and stage/source/toolchain identity at the existing
 boundaries. Do not implement this as two calls to the current `_release`, which
 mixes private and public work and checks public prerequisites too early.
@@ -607,6 +626,21 @@ archive identity and the fresh external-root runtime resolution described above.
 Use the existing pre-act gate seam; putting these checks inside `module.publish`
 would incorrectly report a no-upload refusal as a possibly acted publication.
 The existing post-publication availability warning is not this blocking gate.
+
+For Dart, preload only the prospective consumer archive under its original hosted
+identity into a fresh cache; its runtime dependencies must come from public
+sources. A synthetic lock pins only that consumer. Verify its source, version,
+archive digest, package location and extracted inventory after native resolution;
+a same-version public replacement is not the proposed consumer. Recheck selected
+first-party public archives after the solve, even if a broad range selected a
+newer compatible public version. Private source helpers and workspace mappings
+never enter this public environment.
+
+An SDK runtime branch reaching a staged first-party provider explicitly refuses
+as unsupported: the frozen SDK graph does not contain original hosted constraints
+needed to authorize that exact-public edge. A public-only SDK branch remains
+covered by native consumer resolution. Do not misreport this proof limitation as
+native unsatisfiability.
 
 Match every relevant provider's declared registry. Record the public resolution
 separately; it may legally select another compatible version under a broad range.
@@ -734,6 +768,11 @@ qualification. No user product decision remains pending.
 
 
 ## Current implementation evidence
+
+The entries below record successive bounded reviews. Statements about the next
+packet describe that review's historical boundary; the status at the top and the
+packet-4 update at the end describe current work. Earlier passing subsets do not
+replace final command and full-suite qualification.
 
 This is a snapshot after the source/binary-lock integration, not an additional
 execution backlog. Earlier
@@ -1069,8 +1108,48 @@ entries, including bytes, modes and mtimes. It correctly continued to report the
 unpublished core as a public release prerequisite. The native-proof document
 records the final archive hashes and the preserved legacy-store refusal.
 
-All-private repository release preparation, aggregate consent, frozen runtime
-publication ordering and pre-act public dependency gates remain packet 4. The
-final full suite and complete release qualification remain packet 5. Packet 3
-establishes whole-stack private staging; it does not yet qualify whole-stack
-publication.
+Packet 3 establishes whole-stack private staging. Packet 4 implementation now
+uses one repository path for all selected private preparation before aggregate
+review, confirmation, publication sessions and public actions. Recovery-critical
+stage loss includes package-only units with an exact configured Git tag, while
+tagless mixed package-only units may prepare fresh on both verbs. A public
+package binds its own archive, not prior staging of its siblings; the tag is a
+unit-progress marker, not a proof of the frozen Pub graph. Authenticated public-only recovery
+skips discovery/production and cannot offer private providers.
+
+The generic publication graph replaces source guesses with adapter-projected
+frozen runtime requirements. It verifies producer coverage and exact consumer
+archive commitments, retains target lifecycle edges, and refuses cycles or
+unsupported unit interleaving. Private helpers and development-shadowed selections
+do not become public obligations. Native checks verify exact public provider
+archives and a prospective hosted consumer in a fresh cache before upload;
+receipt bindings and archive bytes remain unchanged.
+
+Thirty-one focused consent/gate cases pass on Dart 3.13.5. They cover final
+all-plan drift, exact signing/warning/claim disclosures, global no-op drift during
+review/session/native checks, pre-act refusal action state, and fresh-history
+cache invalidation before exact observations. Review also fixed exact public
+recovery bindings changing after consent and local-only stages being dropped
+from selected-scope guards. The 144 status/restoration cases pass, including
+tagged package-only partial-release loss and suppression of source guesses for recognized
+native-bound stages. Final mixed-unit qualification exposed the distinction
+between provider eligibility and complete-unit outputs above: tagless mixed
+preparation is permitted on both verbs, but a fresh repack with different raw
+archive bytes safely refuses publication. Analysis and diff checks pass for those slices. Command-level
+integration and final release qualification are still in progress; this evidence
+is not approval of complete packet 4. Full-suite and complete release
+qualification remain packet 5.
+
+The shared unit-progress refinement passes seven focused command/status cases:
+exact configured package tags retain lost-stage refusal; tagless mixed packages
+do not imply prior unit staging; an unread mixed destination refuses before any
+tool, consent or producer on both stage and release. The combined status,
+release and aggregate-consent suites pass 169 cases, with analysis, code-index
+and diff checks clean. Native command and full-suite qualification continue
+separately.
+
+A separate baseline follow-up remains: status conservatively reports lost-stage
+recovery for a partial binary release even when its only remaining moving target
+can recover from authenticated public inputs. Release retains that recovery path;
+this status presentation caveat was not introduced by dependency staging and is
+not changed in this packet.

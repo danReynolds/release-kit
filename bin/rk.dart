@@ -46,6 +46,7 @@ import 'package:rk/src/targets/catalog.dart';
 import 'package:rk/src/native/dart/stage_authorization.dart';
 import 'package:rk/src/native/dart/stage_authority.dart';
 import 'package:rk/src/native/dart/stage_discovery.dart';
+import 'package:rk/src/native/dart/publication.dart';
 import 'package:rk/src/native/dart/stage_source.dart';
 import 'package:rk/src/version.dart';
 
@@ -677,6 +678,7 @@ Future<int> _release(
       preauthorized: yes,
       stageOnly: stageOnly,
       repositoryStages: repositoryStages,
+      nativePublication: DartPublication(tools: const SystemTools()),
       completedProvider: completedProvider,
       stageFor: stages.call,
       refreshStage: stages.refresh,

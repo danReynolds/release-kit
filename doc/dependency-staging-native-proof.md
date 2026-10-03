@@ -1,9 +1,11 @@
 # Native dependency staging proof
 
-Measured 2026-10-02 on macOS arm64. This qualifies a native mechanism, not the
-repository staging implementation. RK production paths are unchanged in this
-slice. All registry activity used disposable loopback fixtures; no uploads,
-tags, drafts or publication credentials were used.
+The initial mechanism was measured 2026-10-02 on macOS arm64, before production
+integration. Later sections record production primitives, packet-3 Fleury command
+qualification and packet-4 public-boundary fixtures. Their evidence is scoped:
+final release/full-suite qualification remains open. Native registry fixtures use
+disposable loopback services; no real uploads, tags, drafts or publication
+credentials are part of these proofs.
 
 ## Decision
 
@@ -60,7 +62,7 @@ SDK revisions come from each tagged SDK's `DEPS`. For 3.12.2 see the pinned
 [Pub publication implementation](https://github.com/dart-lang/pub/blob/74408212b5348003381bc63f3b59274aaa23cfa3/lib/src/command/lish.dart)
 and [native hosted archive preload](https://github.com/dart-lang/pub/blob/74408212b5348003381bc63f3b59274aaa23cfa3/lib/src/source/hosted.dart).
 `--from-archive` implies skipped validation, so public consumer resolution is
-still an explicit future preupload gate. `pub get --dry-run` downloads packages;
+an explicit preupload gate, implemented in packet 4 and qualified separately below. `pub get --dry-run` downloads packages;
 it is not a metadata-only primitive. Discovery therefore serves clearly marked
 manifest-only payloads that cannot be adopted as runtime artifacts.
 
@@ -89,7 +91,7 @@ for the full backtracking/packaging/compile case. The measured 3.12.2 run record
 Archive hashes are evidence from one run, not a cross-SDK byte-stability promise.
 The replay lockfile's provider hash is asserted equal to the input archive hash.
 
-## Rejected alternatives and remaining implementation work
+## Rejected alternatives and initial implementation boundary
 
 `test/native_dependency_staging_test.dart` retains the workspace investigation.
 A native workspace preserves version constraints and backtracking, but shadows
@@ -126,9 +128,9 @@ on all three SDKs after review.
 The production archive reader, hosted discovery and original-registry archive
 replay now replace the fixture implementation for preparation tests. Guarded
 native extraction, full manifest comparison, frozen external bytes and generic
-context/slot contracts have separate regression coverage. These are implemented
-primitives; command orchestration and frozen receipt authorization still require
-integration.
+context/slot contracts have separate regression coverage. At this review boundary,
+command orchestration and frozen receipt authorization still required integration;
+the later command section records that work.
 
 On 2026-10-02, an owned source snapshot of Fleury commit
 `14d76107b6ba468b44e75c120390eddca271b307` was prepared using Dart 3.12.2 and these
@@ -194,4 +196,57 @@ The qualification retained full command reports and independently hashed proof
 inventories. It exercised no actual upload, remote tag, GitHub release or tap
 write. This qualifies whole-stack private preparation and read-only status;
 repository release preparation, aggregate consent and public dependency gates
-remain separate required qualification.
+require the separate packet-4 qualification below.
+
+## Packet 4 public boundary: implemented, qualification in progress
+
+Dart publication now projects original runtime constraints through frozen selected
+manifests. Development-only providers and private helpers impose no public edge;
+a dev requirement shadowing a runtime name does not lend that selection's
+transitive dependencies to runtime. Public checks preserve the staged bindings.
+
+Each pre-act check fetches exact selected first-party archives from their original
+registries and validates digest and manifest. A fresh public environment preloads
+only the prospective consumer archive, using its original hosted identity and a
+consumer-only synthetic lock. Native Pub resolves every runtime dependency from
+public sources. Post-solve checks bind the consumer's source, version, digest,
+package location and full extracted inventory; a publicly available replacement
+under the same version cannot stand in for the proposed archive. Relevant public
+provider bytes are checked again after solving. A broad compatible range may
+select a newer public version, recorded only as transient invocation evidence.
+
+The fixtures cover absent/changed provider archives, same-version consumer
+replacement, public resolution failure, development helper/workspace exclusion
+and broad-range selection. The final native run passed 52 affected archive,
+public-boundary, projection, discovery and helper cases on Dart 3.13.5. The 25 new standalone cases and three composed real-package
+cases pass on both stable 3.13.5 and minimum 3.10.4, including racing-provider
+checks. An SDK-only case proves that standalone Dart attempts the public native
+solve and reports the unavailable Flutter SDK; projection never bypasses it.
+These subsets do not qualify the complete repository release command.
+
+Current limitation: an SDK runtime branch that reaches a staged first-party
+provider refuses as unsupported. The frozen SDK graph lacks the original hosted
+constraints needed to prove the exact-public obligation. A branch containing only
+public dependencies remains in native consumer resolution. This distinguishes
+unsupported proof from a native unsatisfiable graph; runtime path/Git substitutions
+also remain unsupported.
+
+The blocking gate runs before the target's attempted/acted boundary and returns
+`RK-PUB-018` on native public-proof failure. The coordinator then rechecks the
+stage, context and destination and uploads the unchanged archive. Thirty-one
+focused coordinator cases pass on stable, including consent drift, exact public
+recovery binding, local-only output preservation and global no-op guards. These
+are local fixture results, not live-registry publication or final full-suite/
+release qualification.
+
+Mixed-unit qualification also distinguishes provider eligibility from output
+reproduction. An already-public package is a hosted dependency input, but the
+current complete-unit contract still packages every configured output. Native
+tar entry mtimes can change raw archive bytes despite identical file contents;
+release correctly refuses that immutable mismatch before consent. Preserve or
+restore the original matching stage, or, for a fresh tagless setup where the
+public package never had an RK stage, regroup it into its own fully-public unit
+and prepare the remaining members separately. Regrouping does not bypass an
+existing frozen-stage or tagged-unit recovery requirement. A tagless mixed package-only unit may attempt fresh
+preparation on either verb; built-asset progress or an exact configured unit tag
+still makes a missing original stage recovery-critical.

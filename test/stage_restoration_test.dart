@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:rk/src/commands/status.dart';
 import 'package:rk/src/engine/config.dart';
+import 'package:rk/src/engine/checklist.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
@@ -421,6 +422,48 @@ void main() {
   });
 
   group('status observes frozen stages', () {
+    test(
+      'recognized native choices suppress source-only prerequisite guesses',
+      () async {
+        f.root.deleteSync(recursive: true);
+        f = await _Fixture.create(appDependency: true);
+        expect(
+          Checklist.derive(
+            f.unit('app'),
+            f.resolution,
+            Diagnostics(),
+          ).steps.where((step) => step.kind == StepKind.prerequisite),
+          isNotEmpty,
+        );
+        final stage = f.bind('app', native: 'hosted fallback');
+        await f.complete(stage);
+        final before = _storeState(f.root);
+        final current = f.resolver();
+        final cached = current(f.unit('app'));
+        final run = await _observeStatus(f, current);
+        final unit = run.snapshot.units.single;
+        expect(unit.stageState.verdict, Verdict.exact);
+        expect(
+          unit.checklist.steps.where(
+            (step) => step.kind == StepKind.prerequisite,
+          ),
+          isEmpty,
+        );
+        expect(
+          unit.stageState.evidence['native public readiness'],
+          'not performed by status',
+        );
+        expect(run.text, contains('Public dependency checks'));
+        expect(run.text, contains('deferred until release'));
+        expect(run.text, isNot(contains('core 0.2.0 must be live')));
+        expect(current(f.unit('app')), same(cached));
+        expect(_storeState(f.root), before);
+        expect(f.authority.authorized, isEmpty);
+        expect(f.authority.retained, isEmpty);
+        expect(f.authority.recovered, isEmpty);
+      },
+    );
+
     test(
       'complete local stage reports its actual identity and deferred native checks',
       () async {
@@ -1349,7 +1392,10 @@ void main() {
 
 final class _Fixture {
   _Fixture(this.root, this.files, this.git, this.resolution);
-  static Future<_Fixture> create({String? extraSource}) async {
+  static Future<_Fixture> create({
+    String? extraSource,
+    bool appDependency = false,
+  }) async {
     final root = Directory.systemTemp.createTempSync('rk-restoration-');
     final files = <String, String>{
       'release.toml': '''schema = 2
@@ -1365,7 +1411,8 @@ publish = ["pub.dev"]
 ''',
       for (final name in ['core', 'app', 'third'])
         '$name/pubspec.yaml':
-            'name: $name\nversion: ${name == 'core' ? '0.2.0' : '0.1.0'}\nenvironment:\n  sdk: ^3.10.4\n',
+            'name: $name\nversion: ${name == 'core' ? '0.2.0' : '0.1.0'}\nenvironment:\n  sdk: ^3.10.4\n'
+            '${appDependency && name == 'app' ? 'dependencies:\n  core: ^0.2.0\n' : ''}',
       if (extraSource != null) 'extra.txt': extraSource,
     };
     for (final entry in files.entries) {

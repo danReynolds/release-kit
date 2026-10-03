@@ -41,11 +41,19 @@ final class RepositoryStageCandidates {
   RepositoryStageCandidates({
     required Iterable<NativeCandidate> candidates,
     Iterable<PreparedStageProvider> providers = const [],
+    Iterable<String> withoutPreparation = const [],
   }) : candidates = List.unmodifiable(candidates),
-       providers = List.unmodifiable(providers);
+       providers = List.unmodifiable(providers),
+       withoutPreparation = Set.unmodifiable(withoutPreparation);
 
   final List<NativeCandidate> candidates;
   final List<PreparedStageProvider> providers;
+
+  /// Selected units whose remaining destinations can recover entirely from
+  /// authenticated public inputs. They receive no discovery or producer work
+  /// and cannot be offered as private providers. The command must recheck that
+  /// recovery binding before consent and the eventual public operation.
+  final Set<String> withoutPreparation;
 }
 
 /// Resolves one repository preparation scope without running its producers.
@@ -105,6 +113,11 @@ final class RepositoryStagePreparation {
         ),
     };
     final scope = await eligibility(Map.unmodifiable(restored));
+    if (!names.containsAll(scope.withoutPreparation)) {
+      throw StateError(
+        'public recovery names a unit outside preparation scope',
+      );
+    }
     final providers = <String, PreparedStageProvider>{};
     for (final provider in scope.providers) {
       final name = provider.stage.unit.name;
@@ -129,7 +142,8 @@ final class RepositoryStagePreparation {
     final eligible = <String>{};
     for (final candidate in scope.candidates) {
       final key = CanonicalJson.encode(candidate.toJson());
-      if (!native.ecosystems.contains(candidate.package.ecosystem) ||
+      if (scope.withoutPreparation.contains(candidate.unit) ||
+          !native.ecosystems.contains(candidate.package.ecosystem) ||
           !configured.contains(key) ||
           !eligible.add(key)) {
         throw StateError(
@@ -145,7 +159,10 @@ final class RepositoryStagePreparation {
     }
     final pending = <String, DiscoveredNativeStage>{};
     for (final unit in units) {
-      if (restored.containsKey(unit.name)) continue;
+      if (restored.containsKey(unit.name) ||
+          scope.withoutPreparation.contains(unit.name)) {
+        continue;
+      }
       pending[unit.name] = await native.discover(
         unit,
         candidates: scope.candidates,
@@ -163,6 +180,7 @@ final class RepositoryStagePreparation {
       units: units,
       expected: expected,
       restored: restored,
+      withoutPreparation: scope.withoutPreparation,
       intents: intents,
       pending: pending,
       providers: providers,
@@ -184,6 +202,7 @@ final class RepositoryPreparationPlan {
     required List<ResolvedUnit> units,
     required Map<String, ReleaseStage> expected,
     required Map<String, ReleaseStage> restored,
+    required Set<String> withoutPreparation,
     required Map<String, StageIntent> intents,
     required Map<String, DiscoveredNativeStage> pending,
     required Map<String, PreparedStageProvider> providers,
@@ -191,6 +210,7 @@ final class RepositoryPreparationPlan {
     required this.refreshGit,
   }) : _expected = Map.of(expected),
        _restored = Map.unmodifiable(restored),
+       withoutPreparation = Set.unmodifiable(withoutPreparation),
        _intents = Map.unmodifiable(intents),
        _pending = Map.unmodifiable(pending),
        _providers = Map.unmodifiable({
@@ -297,6 +317,7 @@ final class RepositoryPreparationPlan {
   final String resolvedFacts;
   final Future<GitState> Function() refreshGit;
   late final List<ResolvedUnit> order;
+  final Set<String> withoutPreparation;
   final Map<String, ReleaseStage> _expected;
   final Map<String, ReleaseStage> _restored;
   final Map<String, StageIntent> _intents;
@@ -336,7 +357,9 @@ final class RepositoryPreparationPlan {
     }
     final git = await refreshGit();
     _requireCurrent(git);
-    if (_restored.containsKey(unit.name) || _bound.contains(unit.name)) {
+    if (_restored.containsKey(unit.name) ||
+        withoutPreparation.contains(unit.name) ||
+        _bound.contains(unit.name)) {
       return _expected[unit.name]!;
     }
     final discovery = _pending[unit.name]!;

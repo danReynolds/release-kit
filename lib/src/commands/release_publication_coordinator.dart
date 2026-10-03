@@ -1,8 +1,12 @@
+import 'dart:convert';
+
+import '../engine/canonical_json.dart';
 import '../engine/checklist.dart';
 import '../engine/dependency_graph.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
 import '../engine/inspect.dart';
+import '../engine/native_publication.dart';
 import '../engine/publish_target.dart';
 import '../engine/public_release_gate.dart';
 import '../engine/release_stage.dart';
@@ -13,6 +17,7 @@ import '../engine/verdict.dart';
 import '../output/output.dart';
 import '../output/progress.dart';
 import '../targets/target_module.dart';
+import '../transforms/digest.dart';
 import 'release_preparation.dart';
 import 'release_progress.dart';
 import 'release_stage_coordinator.dart';
@@ -46,7 +51,10 @@ final class PublicationPlan {
     required this.prepared,
     required this.stage,
     required this.recoversWithoutStage,
-  }) : steps = List.unmodifiable(steps),
+    this.preparedNoop = false,
+    Map<String, NativePublicationCheck> nativeChecks = const {},
+  }) : nativeChecks = Map.unmodifiable(nativeChecks),
+       steps = List.unmodifiable(steps),
        publicSteps = List.unmodifiable(publicSteps),
        targets = List.unmodifiable(targets),
        states = Map.of(states),
@@ -63,6 +71,10 @@ final class PublicationPlan {
   final PreparedRelease prepared;
   final ReleaseStage stage;
   final bool recoversWithoutStage;
+
+  /// Preparation proved every public target exact; this plan cannot gain work.
+  final bool preparedNoop;
+  final Map<String, NativePublicationCheck> nativeChecks;
 }
 
 /// What one yes, asked before a repository release's first unit acted,
@@ -72,32 +84,118 @@ final class RunConsent {
   RunConsent({
     required Map<String, Set<String>> targets,
     required Map<String, Set<(String, String)>> claims,
-  }) : _targets = targets,
-       _claims = claims;
+  }) : _targets = Map.unmodifiable({
+         for (final entry in targets.entries)
+           entry.key: Set<String>.unmodifiable(entry.value),
+       }),
+       _claims = Map.unmodifiable({
+         for (final entry in claims.entries)
+           entry.key: Set<(String, String)>.unmodifiable(entry.value),
+       }),
+       _inputs = null,
+       _omitted = const [],
+       _localReviews = const [],
+       _recoveryBindings = const {},
+       _targetFacts = const {},
+       _claimFacts = const {};
+
+  RunConsent._reviewed(
+    List<_PublicationReview> reviews,
+    Map<String, String> inputs,
+  ) : _targets = Map.unmodifiable({
+        for (final review in reviews)
+          review.plan.unit.name: Set<String>.unmodifiable(
+            review.remaining.map((step) => step.id),
+          ),
+      }),
+      _claims = Map.unmodifiable({
+        for (final review in reviews)
+          review.plan.unit.name: Set<(String, String)>.unmodifiable(
+            review.claims.map((claim) => (claim.registrar, claim.name)),
+          ),
+      }),
+      _inputs = Map.unmodifiable(inputs),
+      _omitted = List.unmodifiable(reviews.expand((review) => review.omitted)),
+      _localReviews = List.unmodifiable(
+        reviews.where((review) => review.plan.publicSteps.isEmpty),
+      ),
+      _recoveryBindings = Map.unmodifiable({
+        for (final review in reviews)
+          review.plan.unit.name: Map<String, String>.unmodifiable(
+            review.recoveryBindings,
+          ),
+      }),
+      _targetFacts = Map.unmodifiable({
+        for (final review in reviews)
+          review.plan.unit.name: Map<String, String>.unmodifiable({
+            for (final target in review.remainingTargets)
+              target.step.id: _targetDisclosure(target),
+          }),
+      }),
+      _claimFacts = Map.unmodifiable({
+        for (final review in reviews)
+          review.plan.unit.name: Map<(String, String), String>.unmodifiable({
+            for (final claim in review.claims)
+              (claim.registrar, claim.name): claim.consequence,
+          }),
+      });
 
   final Map<String, Set<String>> _targets;
   final Map<String, Set<(String, String)>> _claims;
+  final Map<String, String>? _inputs;
+  final List<_OmittedTarget> _omitted;
+  final List<_PublicationReview> _localReviews;
+  final Map<String, Map<String, String>> _recoveryBindings;
+  final Map<String, Map<String, String>> _targetFacts;
+  final Map<String, Map<(String, String), String>> _claimFacts;
+
+  bool get reviewedRepository => _inputs != null;
+
+  bool recoveryStillMatches(String unit, Map<String, String> bindings) =>
+      !reviewedRepository ||
+      bindings.entries.every(
+        (entry) => _recoveryBindings[unit]?[entry.key] == entry.value,
+      );
 
   /// What [unit] is about to do that the yes did not accept. Empty when it
   /// accepted all of it.
   List<String> unshown(
     ResolvedUnit unit,
     Iterable<TargetPlan> remaining,
-    Iterable<TargetClaim> claims,
-  ) {
+    Iterable<TargetClaim> claims, {
+    String? inputs,
+  }) {
     // A unit with nothing to publish when the question was asked accepted
     // none of what it now would.
     final targets = _targets[unit.name] ?? const {};
     final named = _claims[unit.name] ?? const {};
     return [
       for (final target in remaining)
-        if (!targets.contains(target.step.id)) target.label,
+        if (!targets.contains(target.step.id) ||
+            (reviewedRepository &&
+                _targetFacts[unit.name]?[target.step.id] !=
+                    _targetDisclosure(target)))
+          target.label,
       for (final claim in claims)
-        if (!named.contains((claim.registrar, claim.name)))
+        if (!named.contains((claim.registrar, claim.name)) ||
+            (reviewedRepository &&
+                _claimFacts[unit.name]?[(claim.registrar, claim.name)] !=
+                    claim.consequence))
           'the first claim of ${claim.name} on ${claim.registrar}',
+      if (reviewedRepository && _inputs![unit.name] != inputs)
+        'its reviewed staged inputs or disclosures',
     ];
   }
 }
+
+String _targetDisclosure(TargetPlan target) => CanonicalJson.encode({
+  'id': target.step.id,
+  'coordinate': target.coordinate,
+  'version': target.targetVersion,
+  'kind': target.kind,
+  'note': target.planNote,
+  'permanence': target.permanenceNotice,
+});
 
 /// Owns the late, public half of a release.
 final class ReleasePublicationCoordinator {
@@ -375,11 +473,515 @@ final class ReleasePublicationCoordinator {
     );
   }
 
+  /// Reviews the completed private scope before asking once. No session is
+  /// acquired here. The same confirm callback handles interactive and --yes
+  /// invocations, and the resulting consent cannot grow during publication.
+  Future<bool> authorizeRepository(List<PublicationPlan> plans) async {
+    if (plans.isEmpty) return true;
+    if (_createdSessions.isNotEmpty ||
+        plans.any(
+          (plan) => plan.actions.values.any(
+            (action) =>
+                action == ReleaseAction.attempted ||
+                action == ReleaseAction.completed,
+          ),
+        ) ||
+        plans.map((plan) => plan.unit.name).toSet().length != plans.length) {
+      throw StateError(
+        'repository authorization needs an unacted unique scope',
+      );
+    }
+    final reviews = <_PublicationReview>[];
+    for (final plan in plans) {
+      final review = await _reviewForConsent(plan);
+      if (review == null) return false;
+      reviews.add(review);
+    }
+    final asking = reviews
+        .where((review) => review.remaining.isNotEmpty)
+        .toList();
+    for (final review in asking) {
+      _showAuthorization(
+        review.plan.unit,
+        review.remainingTargets,
+        stage: review.plan.stage,
+        signing: review.plan.prepared.signing,
+        claims: review.claims,
+      );
+    }
+    final checked = reviews.where(
+      (review) =>
+          review.remaining.isNotEmpty || review.plan.publicSteps.isEmpty,
+    );
+    // A later unit's slow review may invalidate an earlier unit. Recheck all
+    // contexts, then all local identities/bytes/endpoints synchronously after
+    // the last await, before capturing what the confirmation will accept.
+    for (final review in checked) {
+      final plan = review.plan;
+      if (!plan.recoversWithoutStage &&
+          !await stages.signingStillValid(plan.unit, plan.prepared)) {
+        return false;
+      }
+      if (!await stages.contextStillValid(
+        plan.stage,
+        plan.unit,
+        changed: 'before repository authorization',
+        halt: HaltKind.beforeActing,
+      )) {
+        return false;
+      }
+    }
+    if (!await _omittedTargetsStillExact(
+      reviews.expand((review) => review.omitted),
+      beforeAuthorization: true,
+    )) {
+      return false;
+    }
+    final GitState finalGit;
+    try {
+      finalGit = await refreshGit();
+    } on Object catch (error) {
+      _reviewChanged('$error');
+      return false;
+    }
+    for (final review in checked) {
+      final plan = review.plan;
+      if ((finalGit.isBound && !finalGit.isClean) ||
+          (plan.unit.publish.contains(PublishTarget.gitTag) &&
+              !finalGit.headIsPushed)) {
+        _reviewChanged(
+          '${plan.unit.name}: the repository is no longer clean and publishable',
+        );
+        return false;
+      }
+      try {
+        final current = stages.refreshStage(plan.unit, finalGit);
+        if (current.directory.identity.id != plan.stage.directory.identity.id) {
+          throw StateError('${plan.unit.name}: the release context changed');
+        }
+      } on Object catch (error) {
+        _reviewChanged('$error');
+        return false;
+      }
+      if (!plan.recoversWithoutStage &&
+          !stages.stageStillValid(
+            plan.stage,
+            plan.unit,
+            changed: 'before repository authorization',
+            halt: HaltKind.beforeActing,
+          )) {
+        return false;
+      }
+      if (!_endpointsStillMatch(review, finalGit)) return false;
+    }
+    final consent = RunConsent._reviewed(reviews, {
+      for (final review in reviews)
+        review.plan.unit.name: _authorizationInputs(
+          review.plan.stage,
+          review.plan.prepared.signing,
+        ),
+    });
+    if (asking.isEmpty) {
+      runConsent = consent;
+      return true;
+    }
+    if (!requireAuthorizer(asking.first.plan.unit)) return false;
+    final names = [
+      for (final review in asking)
+        '${review.plan.unit.name} ${review.plan.unit.version}',
+    ];
+    final series = names.length <= 2
+        ? names.join(' and ')
+        : '${names.sublist(0, names.length - 1).join(', ')} and ${names.last}';
+    output.report.attach(
+      'authorization-disclosures/run',
+      [
+        'Private preparation completed for the selected release scope.',
+        for (final review in asking)
+          [
+            '${review.plan.unit.name} ${review.plan.unit.version}',
+            'stage ${review.plan.stage.directory.identity.id}',
+            if (review.recoveryBindings.isNotEmpty)
+              'public recovery ${CanonicalJson.encode(review.recoveryBindings)}',
+            ...review.remainingTargets.map(
+              (target) =>
+                  '  ${target.kindLabel}: ${targetNote(target, review.claims)}',
+            ),
+            output
+                    .report
+                    .attachments['authorization-disclosures/${review.plan.unit.name}'] ??
+                '',
+            CanonicalJson.encode(
+              output.report.warningEvidenceFor(review.plan.unit.name),
+            ),
+          ].join('\n'),
+      ].join('\n\n'),
+    );
+    final answer = await confirm!('Release $series? [y/N] ');
+    final accepted = const {'y', 'yes'}.contains(answer?.trim().toLowerCase());
+    if (!accepted) {
+      output.blank();
+      output.say(
+        answer == null
+            ? 'No confirmation received for $series.'
+            : 'Cancelled release of $series.',
+      );
+      output.problem(
+        const Diagnostic(
+          code: 'RK-AUTH-002',
+          message: 'the release was not authorized',
+          remedy:
+              'answer yes at the prompt, or pass --yes for an unattended release',
+        ),
+      );
+      output.halt(HaltKind.beforeActing);
+      output.next(
+        plans.length == 1
+            ? 'rk release ${plans.single.unit.name}'
+            : 'rk release',
+      );
+      return false;
+    }
+    runConsent = consent;
+    output.blank();
+    return true;
+  }
+
+  void _reviewChanged(String detail) {
+    output.problem(
+      Diagnostic(
+        code: 'RK-STAGE-004',
+        message: 'the release context changed before repository authorization',
+        remedy:
+            'inspect the changed inputs, then prepare and review the release again',
+        evidence: detail,
+      ),
+    );
+    output.halt(HaltKind.beforeActing);
+  }
+
+  Future<_PublicationReview?> _reviewForConsent(PublicationPlan plan) async {
+    final unit = plan.unit;
+    final gate = PublicReleaseGate(inspector);
+    Future<({List<Step> remaining, List<TargetClaim> claims})?> read() =>
+        _refreshPublicGate(
+          gate: gate,
+          unit: unit,
+          publicSteps: plan.publicSteps,
+          targets: plan.targets,
+          states: plan.states,
+          actions: plan.actions,
+        );
+    var snapshot = await read();
+    if (snapshot == null) return null;
+    if (plan.preparedNoop && snapshot.remaining.isNotEmpty) {
+      final step = snapshot.remaining.first;
+      _haltForAuthorizationGrowth(
+        step,
+        plan.states[step.id]!,
+        unit,
+        plan.targets,
+        plan.actions,
+        beforeAuthorization: runConsent == null,
+      );
+      return null;
+    }
+    if (snapshot.remaining.isEmpty && plan.publicSteps.isNotEmpty) {
+      return _PublicationReview(
+        plan,
+        snapshot.remaining,
+        snapshot.claims,
+        const {},
+      );
+    }
+    final endpoints = await prepareDestinations(
+      unit: unit,
+      targets: plan.targets,
+      states: plan.states,
+      actions: plan.actions,
+      stageOnly: false,
+    );
+    if (endpoints == null) return null;
+    for (final target in plan.targets.where(
+      (target) => endpoints.containsKey(target.step.id),
+    )) {
+      if (endpoints[target.step.id] != plan.endpointBaselines[target.step.id]) {
+        _destinationChanged(target.target, plan.targets, plan.actions);
+        return null;
+      }
+    }
+    final progress = output.progressBoard(
+      '${unit.name} ${unit.version} · preparing release',
+      emitSlowToNonTerminal: true,
+    );
+    final row = progress.addRow(
+      id: '${unit.name}/release-inputs',
+      label: 'Release inputs',
+      coordinate: 'targets · signing · staged bytes',
+    );
+    row.handle.begin(CommonProgressActivities.checking);
+    try {
+      if (!plan.recoversWithoutStage &&
+          !await stages.signingStillValid(unit, plan.prepared)) {
+        return null;
+      }
+      if (!await stages.contextStillValid(
+        plan.stage,
+        unit,
+        changed: 'before authorization',
+        halt: HaltKind.beforeActing,
+      )) {
+        return null;
+      }
+      if (!plan.recoversWithoutStage &&
+          !stages.stageStillValid(
+            plan.stage,
+            unit,
+            changed: 'before authorization',
+            halt: HaltKind.beforeActing,
+          )) {
+        return null;
+      }
+      snapshot = await read();
+      if (snapshot == null) return null;
+      final recovery = <String, String>{};
+      final byId = {for (final target in plan.targets) target.step.id: target};
+      for (final step in snapshot.remaining) {
+        final target = byId[step.id]!;
+        if (!endpoints.containsKey(step.id)) {
+          _destinationChanged(target.target, plan.targets, plan.actions);
+          return null;
+        }
+        if (!plan.recoversWithoutStage) continue;
+        final binding = inspector.targets
+            .moduleForTarget(target)
+            .stageRecoveryBinding(plan.states[step.id]!);
+        if (binding == null) {
+          output.problem(
+            Diagnostic(
+              code: 'RK-STAGE-005',
+              message:
+                  '${target.step.summary} can no longer recover without its stage',
+              remedy:
+                  'public inputs changed before authorization; re-run to inspect the release and restore ${plan.stage.directory.path} if its original bytes remain necessary',
+            ),
+          );
+          output.halt(HaltKind.beforeActing);
+          showActions(plan.targets, plan.actions);
+          return null;
+        }
+        recovery[step.id] = binding;
+      }
+      row.complete(note: 'checked');
+      return _PublicationReview(
+        plan,
+        snapshot.remaining,
+        snapshot.claims,
+        recovery,
+      );
+    } finally {
+      if (output.report.halted) {
+        progress.conclude();
+      } else {
+        progress.discard();
+      }
+    }
+  }
+
+  bool _endpointsStillMatch(_PublicationReview review, GitState git) {
+    final plan = review.plan;
+    final context = TargetReadinessContext(
+      tools: tools,
+      git: git,
+      environment: refreshEnvironment(),
+    );
+    for (final target in review.remainingTargets) {
+      final current = inspector.targets
+          .moduleForTarget(target)
+          .destinationBinding(context, plan.unit, [target]);
+      if (current != plan.endpointBaselines[target.step.id]) {
+        _destinationChanged(target.target, plan.targets, plan.actions);
+        return false;
+      }
+    }
+    return true;
+  }
+
+  String _authorizationInputs(
+    ReleaseStage stage,
+    ReleaseSigningContext? signing,
+  ) => Sha256.hex(
+    utf8.encode(
+      CanonicalJson.encode({
+        'stage': stage.directory.identity.id,
+        'receipt': stage.inspect().receipt?.encode(),
+        'signing': signing == null
+            ? null
+            : {
+                'requirement': signing.publishedRequirement,
+                'first': signing.firstIdentity,
+                'certificate': signing.certificateName,
+                'code_id': signing.codeId,
+                'certificate_sha256': signing.certificateSha256,
+                'designated_requirement': signing.designatedRequirement,
+              },
+        'warnings': output.report.warningEvidenceFor(stage.unit.name),
+      }),
+    ),
+  );
+
+  bool _repositoryConsentStillValid(_PublicationReview review) {
+    final consent = runConsent;
+    if (consent?.reviewedRepository != true) return true;
+    if (!consent!.recoveryStillMatches(
+      review.plan.unit.name,
+      review.recoveryBindings,
+    )) {
+      output.problem(
+        Diagnostic(
+          code: 'RK-STAGE-005',
+          message: 'public recovery inputs changed after authorization',
+          remedy:
+              'inspect the changed public inputs and review a fresh release; '
+              'the previous confirmation does not authorize replacement bytes',
+        ),
+        unit: review.plan.unit.name,
+      );
+      output.halt(
+        output.report.acted ? HaltKind.stoppedPartway : HaltKind.beforeActing,
+      );
+      showActions(review.plan.targets, review.plan.actions);
+      return false;
+    }
+    final changed = consent.unshown(
+      review.plan.unit,
+      review.remainingTargets,
+      review.claims,
+      inputs: _authorizationInputs(
+        review.plan.stage,
+        review.plan.prepared.signing,
+      ),
+    );
+    if (changed.isEmpty) return true;
+    _refuseChangedConsent(review.plan.unit, changed);
+    showActions(review.plan.targets, review.plan.actions);
+    return false;
+  }
+
+  void _refuseChangedConsent(ResolvedUnit unit, List<String> changed) {
+    output.problem(
+      Diagnostic(
+        code: 'RK-AUTH-003',
+        message: 'the reviewed release changed after authorization',
+        remedy:
+            'review a fresh plan; the previous confirmation did not accept ${changed.join(', ')}',
+      ),
+      unit: unit.name,
+    );
+    output.halt(
+      output.report.acted ? HaltKind.stoppedPartway : HaltKind.beforeActing,
+    );
+  }
+
+  Future<bool> _omittedTargetsStillExact(
+    Iterable<_OmittedTarget> omitted, {
+    bool beforeAuthorization = false,
+  }) async {
+    for (final entry in omitted) {
+      // Refresh native registry caches before the exact read. A previous
+      // exact observation is not current evidence after a later unit awaits.
+      final problems = Diagnostics();
+      await inspector.releaseMonotonicity(
+        entry.plan.unit,
+        [entry.target],
+        problems,
+        refreshRegistry: true,
+      );
+      final state = await inspector.inspect(entry.target.step, entry.plan.unit);
+      if (!state.isExact) {
+        _haltForAuthorizationGrowth(
+          entry.target.step,
+          state,
+          entry.plan.unit,
+          entry.plan.targets,
+          entry.plan.actions,
+          beforeAuthorization: beforeAuthorization,
+        );
+        return false;
+      }
+      if (problems.isNotEmpty) {
+        output.problems(problems.found);
+        output.halt(
+          output.report.acted ? HaltKind.stoppedPartway : HaltKind.beforeActing,
+        );
+        return false;
+      }
+    }
+    return true;
+  }
+
+  Future<bool> _repositoryScopeStillValid() async {
+    final consent = runConsent;
+    if (!await _omittedTargetsStillExact(consent?._omitted ?? const [])) {
+      return false;
+    }
+    final local = consent?._localReviews ?? const <_PublicationReview>[];
+    if (local.isEmpty) return true;
+    final halt = output.report.acted
+        ? HaltKind.stoppedPartway
+        : HaltKind.beforeActing;
+    for (final review in local) {
+      final plan = review.plan;
+      if (!await stages.signingStillValid(plan.unit, plan.prepared) ||
+          !await stages.contextStillValid(
+            plan.stage,
+            plan.unit,
+            changed: 'after repository authorization',
+            halt: halt,
+          )) {
+        return false;
+      }
+    }
+    final GitState currentGit;
+    try {
+      currentGit = await refreshGit();
+    } on Object catch (error) {
+      _reviewChanged('$error');
+      return false;
+    }
+    // The last asynchronous context read must not hide drift in an earlier
+    // local-only unit whose outputs were part of the selected preparation.
+    for (final review in local) {
+      final plan = review.plan;
+      try {
+        if ((currentGit.isBound && !currentGit.isClean) ||
+            stages.refreshStage(plan.unit, currentGit).directory.identity.id !=
+                plan.stage.directory.identity.id) {
+          throw StateError(
+            '${plan.unit.name}: the local release context changed',
+          );
+        }
+      } on Object catch (error) {
+        _reviewChanged('$error');
+        return false;
+      }
+      if (!stages.stageStillValid(
+            plan.stage,
+            plan.unit,
+            changed: 'after repository authorization',
+            halt: halt,
+          ) ||
+          !_repositoryConsentStillValid(review)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   Future<int> publish(PublicationPlan plan) async {
     final unit = plan.unit;
     final publicSteps = plan.publicSteps;
     final targets = plan.targets;
-    final states = plan.states;
     final endpointBaselines = plan.endpointBaselines;
     final publicActions = plan.actions;
     final prepared = plan.prepared;
@@ -387,37 +989,12 @@ final class ReleasePublicationCoordinator {
     final recoversWithoutStage = plan.recoversWithoutStage;
     final targetByStep = {for (final target in targets) target.step.id: target};
 
-    // Consent is based on fresh public truth and the same private stage that
-    // was reviewed. These reads intentionally happen here, immediately before
-    // sessions and authorization, rather than in the outer command.
-    final releaseInputs = output.progressBoard(
-      '${unit.name} ${unit.version} · preparing release',
-      emitSlowToNonTerminal: true,
-    );
-    final releaseInputsRow = releaseInputs.addRow(
-      id: '${unit.name}/release-inputs',
-      label: 'Release inputs',
-      coordinate: 'targets · signing · staged bytes',
-    );
-    releaseInputsRow.handle.begin(CommonProgressActivities.checking);
-    final gate = PublicReleaseGate(inspector);
-    var read = await _refreshPublicGate(
-      gate: gate,
-      unit: unit,
-      publicSteps: publicSteps,
-      targets: targets,
-      states: states,
-      actions: publicActions,
-    );
-    if (read == null) {
-      releaseInputs.conclude();
-      return ExitCodes.refused;
-    }
-    var remaining = read.remaining;
+    final review = await _reviewForConsent(plan);
+    if (review == null) return ExitCodes.refused;
+    final remaining = review.remaining;
+    if (!await _repositoryScopeStillValid()) return ExitCodes.refused;
     if (remaining.isEmpty) {
-      releaseInputsRow.complete(note: 'checked');
-      releaseInputs.discard();
-      output.blank();
+      if (plan.publicSteps.isEmpty) return ExitCodes.ok;
       output.line(
         '${unit.name} ${unit.version}',
         mark: Mark.satisfied,
@@ -426,109 +1003,9 @@ final class ReleasePublicationCoordinator {
       await verifyAvailability(unit: unit, targets: targets);
       return ExitCodes.ok;
     }
-
-    if (!recoversWithoutStage && prepared.signing != null) {
-      releaseInputsRow.handle.begin(
-        ProgressActivity(
-          running: 'checking signing',
-          failed: 'signing check failed',
-        ),
-      );
-    }
-    if (!recoversWithoutStage &&
-        !await stages.signingStillValid(unit, prepared)) {
-      releaseInputs.conclude();
-      showActions(targets, publicActions);
-      return ExitCodes.refused;
-    }
-    if (!await stages.contextStillValid(
-      stage,
-      unit,
-      changed: 'before authorization',
-      halt: HaltKind.beforeActing,
-    )) {
-      releaseInputs.conclude();
-      showActions(targets, publicActions);
-      return ExitCodes.refused;
-    }
-    if (!recoversWithoutStage &&
-        !stages.stageStillValid(
-          stage,
-          unit,
-          changed: 'before authorization',
-          halt: HaltKind.beforeActing,
-        )) {
-      releaseInputs.conclude();
-      showActions(targets, publicActions);
-      return ExitCodes.refused;
-    }
-
-    // Slow reads above can change which targets remain. Authorization may
-    // lose work to another actor, but it never silently gains work.
-    releaseInputsRow.handle.begin(CommonProgressActivities.checking);
-    read = await _refreshPublicGate(
-      gate: gate,
-      unit: unit,
-      publicSteps: publicSteps,
-      targets: targets,
-      states: states,
-      actions: publicActions,
-    );
-    if (read == null) {
-      releaseInputs.conclude();
-      return ExitCodes.refused;
-    }
-    remaining = read.remaining;
-    if (remaining.isEmpty) {
-      releaseInputsRow.complete(note: 'checked');
-      releaseInputs.discard();
-      output.blank();
-      output.line(
-        '${unit.name} ${unit.version}',
-        mark: Mark.satisfied,
-        note: 'already released',
-      );
-      await verifyAvailability(unit: unit, targets: targets);
-      return ExitCodes.ok;
-    }
-    // Native sessions are deliberately late: package validation, builds,
-    // signing, notarization, bundle assembly, and exact remote reads have all
-    // completed. The operator is not asked to refresh credentials for bytes
-    // rk may later refuse. Each adapter's effective endpoint is frozen before
-    // staging and re-read after acquisition so ambient config cannot redirect
-    // the authorized publication.
-    final remainingTargets = [
-      for (final step in remaining) targetByStep[step.id]!,
-    ];
-    final recoveryBindings = <String, String>{};
-    if (recoversWithoutStage) {
-      for (final target in remainingTargets) {
-        final module = inspector.targets.moduleForTarget(target);
-        final binding = module.stageRecoveryBinding(states[target.step.id]!);
-        if (binding == null) {
-          releaseInputs.conclude();
-          output.problem(
-            Diagnostic(
-              code: 'RK-STAGE-005',
-              message:
-                  '${target.step.summary} can no longer recover without '
-                  'its stage',
-              remedy:
-                  'public inputs changed before authorization. Re-run so '
-                  'rk can inspect the release again; restore '
-                  '${stage.directory.path} if the target still needs the '
-                  'original bytes.',
-            ),
-          );
-          output.halt(HaltKind.beforeActing);
-          showActions(targets, publicActions);
-          return ExitCodes.refused;
-        }
-        recoveryBindings[target.step.id] = binding;
-      }
-    }
-    releaseInputsRow.complete(note: 'checked');
-    releaseInputs.discard();
+    if (!_repositoryConsentStillValid(review)) return ExitCodes.refused;
+    final remainingTargets = review.remainingTargets;
+    final recoveryBindings = review.recoveryBindings;
     final sessionProgress = TargetReleaseProgress(
       output,
       title: '${unit.name} ${unit.version} · preparing release',
@@ -606,6 +1083,13 @@ final class ReleasePublicationCoordinator {
       final established = _createdSessions.containsKey(requirement.key)
           ? false
           : await requirement.provider.established(before);
+      if (!await _repositoryScopeStillValid()) {
+        sessionProgress
+          ..failAll(grouped, activity: requirement.provider.activity)
+          ..notAttemptedPending()
+          ..settle();
+        return ExitCodes.refused;
+      }
       final acquired = await requirement.provider.acquire(
         before,
         unit,
@@ -657,7 +1141,7 @@ final class ReleasePublicationCoordinator {
       signing: prepared.signing,
       // The freshest read of what this release would claim first: the one
       // the question asked before any unit acted may be older.
-      claims: read.claims,
+      claims: review.claims,
     )) {
       showActions(targets, publicActions);
       return ExitCodes.refused;
@@ -743,6 +1227,8 @@ final class ReleasePublicationCoordinator {
             stage: stage,
             recoversWithoutStage: recoversWithoutStage,
             recoveryBinding: recoveryBindings[step.id],
+            nativeCheck: plan.nativeChecks[step.id],
+            signing: prepared.signing,
           );
         }
       }
@@ -865,6 +1351,8 @@ final class ReleasePublicationCoordinator {
     required ReleaseStage stage,
     required bool recoversWithoutStage,
     required String? recoveryBinding,
+    ReleaseSigningContext? signing,
+    NativePublicationCheck? nativeCheck,
   }) async {
     final module = inspector.targets.moduleForTarget(target);
     releaseProgress.begin(target, CommonProgressActivities.checking);
@@ -942,6 +1430,78 @@ final class ReleasePublicationCoordinator {
       }
     }
 
+    final consent = runConsent;
+    if (consent?.reviewedRepository == true) {
+      final changed = consent!.unshown(
+        unit,
+        [target],
+        historyCheck.claims,
+        inputs: _authorizationInputs(stage, signing),
+      );
+      if (changed.isNotEmpty) {
+        _refuseChangedConsent(unit, changed);
+        releaseProgress.fail(
+          target,
+          activity: CommonProgressActivities.checking,
+        );
+        return _PublicTargetCompletion.failed(
+          step,
+          _PublicationFailure.reported(step),
+        );
+      }
+    }
+
+    if (nativeCheck != null) {
+      final NativePublicationOutcome outcome;
+      try {
+        outcome = await nativeCheck.verify();
+      } on Object catch (error) {
+        releaseProgress.fail(
+          target,
+          activity: CommonProgressActivities.checking,
+        );
+        return _PublicTargetCompletion.failed(
+          step,
+          _PublicationFailure(
+            step: step,
+            diagnostics: [
+              Diagnostic(
+                code: 'RK-REL-001',
+                message:
+                    '${step.summary}: native public dependency verification failed',
+                remedy:
+                    'restore readable public dependencies and re-run; no upload was attempted for this target',
+                evidence: '$error',
+              ),
+            ],
+            halt: output.report.acted
+                ? HaltKind.stoppedPartway
+                : HaltKind.beforeActing,
+          ),
+        );
+      }
+      output.report.attach(
+        'native-publication/${step.id}',
+        CanonicalJson.encode(outcome.evidence),
+      );
+      if (outcome case NativePublicationBlocked(:final diagnostic)) {
+        releaseProgress.fail(
+          target,
+          activity: CommonProgressActivities.checking,
+        );
+        return _PublicTargetCompletion.failed(
+          step,
+          _PublicationFailure(
+            step: step,
+            diagnostics: [diagnostic],
+            halt: output.report.acted
+                ? HaltKind.stoppedPartway
+                : HaltKind.beforeActing,
+          ),
+        );
+      }
+    }
+
     final validationHalt = output.report.acted
         ? HaltKind.stoppedPartway
         : HaltKind.beforeActing;
@@ -965,6 +1525,14 @@ final class ReleasePublicationCoordinator {
       halt: validationHalt,
     )) {
       releaseProgress.fail(target);
+      return _PublicTargetCompletion.failed(
+        step,
+        _PublicationFailure.reported(step),
+      );
+    }
+
+    if (!await _repositoryScopeStillValid()) {
+      releaseProgress.fail(target, activity: CommonProgressActivities.checking);
       return _PublicTargetCompletion.failed(
         step,
         _PublicationFailure.reported(step),
@@ -1292,8 +1860,9 @@ final class ReleasePublicationCoordinator {
     Inspection state,
     ResolvedUnit unit,
     List<TargetPlan> targets,
-    Map<String, ReleaseAction> actions,
-  ) {
+    Map<String, ReleaseAction> actions, {
+    bool beforeAuthorization = false,
+  }) {
     actions[step.id] = ReleaseAction.notAttempted;
     output.step(
       step,
@@ -1306,11 +1875,15 @@ final class ReleasePublicationCoordinator {
     output.problem(
       Diagnostic(
         code: 'RK-AUTH-003',
-        message: 'the release plan grew after authorization',
-        remedy:
-            '${step.summary} was not work when the plan was shown. RK '
-            'will not add it after the yes; inspect the changed destination '
-            'and authorize a fresh plan.',
+        message: beforeAuthorization
+            ? 'the selected release gained work after preparation'
+            : 'the release plan grew after authorization',
+        remedy: beforeAuthorization
+            ? '${step.summary} was already published during preparation; '
+                  'inspect the changed destination and prepare a fresh plan.'
+            : '${step.summary} was not work when the plan was shown. RK '
+                  'will not add it after the yes; inspect the changed destination '
+                  'and authorize a fresh plan.',
       ),
       unit: unit.name,
       target: step.id,
@@ -1408,13 +1981,13 @@ final class ReleasePublicationCoordinator {
     ];
   }
 
-  Future<bool> _authorize(
+  void _showAuthorization(
     ResolvedUnit unit,
     List<TargetPlan> remaining, {
     required ReleaseStage stage,
     required ReleaseSigningContext? signing,
     required List<TargetClaim> claims,
-  }) async {
+  }) {
     final disclosed = <String>[];
     output.blank();
     output.line(
@@ -1488,6 +2061,37 @@ final class ReleasePublicationCoordinator {
         disclosed.join('\n\n'),
       );
     }
+  }
+
+  Future<bool> _authorize(
+    ResolvedUnit unit,
+    List<TargetPlan> remaining, {
+    required ReleaseStage stage,
+    required ReleaseSigningContext? signing,
+    required List<TargetClaim> claims,
+  }) async {
+    final consent = runConsent;
+    if (consent?.reviewedRepository == true) {
+      final unshown = consent!.unshown(
+        unit,
+        remaining,
+        claims,
+        inputs: _authorizationInputs(stage, signing),
+      );
+      if (unshown.isNotEmpty) {
+        _refuseChangedConsent(unit, unshown);
+        return false;
+      }
+      output.say('Authorized in the reviewed repository plan.');
+      return true;
+    }
+    _showAuthorization(
+      unit,
+      remaining,
+      stage: stage,
+      signing: signing,
+      claims: claims,
+    );
 
     if (!requireAuthorizer(unit)) return false;
 
@@ -1495,11 +2099,10 @@ final class ReleasePublicationCoordinator {
     // about to do was shown then. Anything new, and anything rk warned about
     // since, whether a build it could not run or what Pub's validation said,
     // is asked about here.
-    final consent = runConsent;
     if (consent != null) {
       final unshown = [
         ...consent.unshown(unit, remaining, claims),
-        if (firstSigning != null) 'a first signing identity',
+        if (signing?.firstCertificate != null) 'a first signing identity',
         if (output.report.warnedAbout(unit.name)) 'its warnings',
       ];
       if (unshown.isEmpty) {
@@ -1585,6 +2188,28 @@ final class ReleasePublicationCoordinator {
       certificate.replaceFirst('Developer ID Application: ', '');
 }
 
+final class _PublicationReview {
+  _PublicationReview(
+    this.plan,
+    Iterable<Step> remaining,
+    Iterable<TargetClaim> claims,
+    Map<String, String> recoveryBindings,
+  ) : remaining = List.unmodifiable(remaining),
+      claims = List.unmodifiable(claims),
+      recoveryBindings = Map.unmodifiable(recoveryBindings);
+  final PublicationPlan plan;
+  final List<Step> remaining;
+  final List<TargetClaim> claims;
+  final Map<String, String> recoveryBindings;
+  Iterable<_OmittedTarget> get omitted => plan.targets
+      .where((target) => !remaining.any((step) => step.id == target.step.id))
+      .map((target) => _OmittedTarget(plan, target));
+  List<TargetPlan> get remainingTargets => [
+    for (final step in remaining)
+      plan.targets.singleWhere((target) => target.step.id == step.id),
+  ];
+}
+
 final class _PublicTargetCompletion {
   const _PublicTargetCompletion.completed(this.step) : failure = null;
 
@@ -1631,4 +2256,11 @@ final class _PublicationFailure {
 
   bool get rerunHelps =>
       halt != HaltKind.unfixableByRerun && halt != HaltKind.actedAndUnfixable;
+}
+
+/// Exact targets deliberately excluded from one immutable repository consent.
+final class _OmittedTarget {
+  const _OmittedTarget(this.plan, this.target);
+  final PublicationPlan plan;
+  final TargetPlan target;
 }

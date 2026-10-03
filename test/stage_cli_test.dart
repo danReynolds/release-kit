@@ -110,9 +110,9 @@ publish = ["git-tag"]
       expect(named.json['next'], ['rk release tools']);
       expectNoTags(repo);
       expect(
-        Directory('${repo.root}/.rk/work/stages')
-            .listSync()
-            .whereType<Directory>(),
+        Directory(
+          '${repo.root}/.rk/work/stages',
+        ).listSync().whereType<Directory>(),
         hasLength(1),
       );
 

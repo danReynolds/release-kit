@@ -5,6 +5,7 @@ import '../engine/assets.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
 import '../engine/inspect.dart';
+import '../engine/public_release_gate.dart';
 import '../engine/publish_target.dart';
 import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
@@ -189,7 +190,16 @@ class StatusCommand {
     required String? group,
   }) async {
     final diagnostics = Diagnostics();
-    final checklist = Checklist.derive(unit, resolution, diagnostics);
+    final stageResult = await _inspectStage(unit);
+    // A recognized native-bound receipt has its own recorded choices. Source
+    // candidate edges are not proof of its runtime publication obligations.
+    // Status leaves those native checks deferred without solving or adopting.
+    final checklist = Checklist.derive(
+      unit,
+      resolution,
+      diagnostics,
+      sourceDependencies: !stageResult.nativeAuthorizationDeferred,
+    );
 
     for (final project in unit.projects) {
       Changelog.check(
@@ -201,7 +211,6 @@ class StatusCommand {
       );
     }
 
-    final stageResult = await _inspectStage(unit);
     final reader = observeStage == null
         ? inspector
         : inspector.forStages((requested) {
@@ -279,17 +288,19 @@ class StatusCommand {
 
     // A version an earlier commit released is public from that commit's
     // stage, not from one this commit could have lost.
-    final partialBinaryWithoutStage =
-        unit.buildsReleaseAssets &&
+    final partialReleaseWithoutStage =
         stageResult.inspection?.reusable != true &&
         !targets.any((target) => target.inspection.releasedFrom != null) &&
-        targets.any((target) => target.inspection.isExact) &&
+        hasRecoveryCriticalPublicProgress(unit, [
+          for (final target in targets)
+            (target.expectation.step, target.inspection),
+        ]) &&
         targets.any(
           (target) =>
               target.inspection.isAbsent ||
               target.inspection.verdict == Verdict.unknown,
         );
-    if (partialBinaryWithoutStage) {
+    if (partialReleaseWithoutStage) {
       targets = [
         for (final target in targets)
           TargetObservation(
@@ -373,27 +384,27 @@ class StatusCommand {
         if (Inspector.blocks(step, states[step.id]!))
           _prerequisiteIssue(unit, step, states[step.id]!),
       if (stageResult.issue != null &&
-          !partialBinaryWithoutStage &&
+          !partialReleaseWithoutStage &&
           (targets.any((target) => !target.inspection.isExact) ||
               localOutputPending))
         stageResult.issue!,
-      if (partialBinaryWithoutStage)
+      if (partialReleaseWithoutStage)
         StatusIssue(
           unit: unit.name,
           diagnostic: Diagnostic(
             code: 'RK-STAGE-005',
-            message:
-                '${unit.name}: the partial binary release needs its '
-                'exact stage',
+            message: unit.shipsBinaries
+                ? '${unit.name}: the partial binary release needs its exact stage'
+                : '${unit.name}: the partial release needs its exact stage',
             remedy:
                 'restore ${stageResult.path ?? '.rk/work/stages/<stage-id>'} '
-                'from the machine that staged this release. Signed or '
-                'notarized bytes cannot be recreated byte-for-byte after a '
-                'public target has bound them.',
+                'from the machine that staged this release. '
+                '${unit.shipsBinaries ? 'Signed or notarized bytes' : 'Recorded archive bytes and frozen dependency choices'} '
+                'cannot be recreated byte-for-byte after a public target has bound them.',
           ),
         ),
       if (artifactProblems.isNotEmpty &&
-          !partialBinaryWithoutStage &&
+          !partialReleaseWithoutStage &&
           stageResult.inspection?.reusable != true &&
           (targets.any((target) => !target.inspection.isExact) ||
               localOutputPending))
@@ -575,6 +586,8 @@ class StatusCommand {
                   'stage path':
                       '.rk/work/stages/${stage.directory.identity.id}',
                   'native authorization': 'not performed by status',
+                  if (nativeAuthorizationDeferred)
+                    'native public readiness': 'not performed by status',
                 },
               ),
         path: stage.directory.path,
@@ -982,6 +995,12 @@ class StatusCommand {
       output.line(
         'Native dependency checks',
         note: 'deferred until stage or release',
+        depth: 1,
+        role: VisualRole.secondary,
+      );
+      output.line(
+        'Public dependency checks',
+        note: 'deferred until release',
         depth: 1,
         role: VisualRole.secondary,
       );

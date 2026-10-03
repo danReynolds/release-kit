@@ -10,6 +10,7 @@ import 'dependency_lock.dart';
 import 'hosted_discovery.dart';
 import 'replay_sources.dart';
 import 'package_archive.dart';
+import 'package_configuration.dart';
 import 'resolution_graph.dart';
 
 /// One real native archive, selected during discovery and verified against its
@@ -281,7 +282,7 @@ final class DartArchiveReplay {
     if (_readPackageConfiguration() != _packageConfiguration) {
       throw StateError('native replay package configuration changed');
     }
-    final locations = _locations();
+    final locations = dartPackageLocations(root);
     final cache = Directory(
       '${directory.path}/cache',
     ).resolveSymbolicLinksSync();
@@ -301,40 +302,11 @@ final class DartArchiveReplay {
     }
   }
 
-  Map<String, ({Uri root, String packageUri})> _locations() {
-    final configFile = File('${root.path}/.dart_tool/package_config.json');
-    final config = jsonDecode(configFile.readAsStringSync());
-    if (config is! Map ||
-        config['configVersion'] != 2 ||
-        config['packages'] is! List) {
-      throw const FormatException(
-        'native replay has no supported package configuration',
-      );
-    }
-    final locations = <String, ({Uri root, String packageUri})>{};
-    for (final package in config['packages'] as List) {
-      if (package is! Map ||
-          package['name'] is! String ||
-          package['rootUri'] is! String ||
-          package['packageUri'] is! String ||
-          locations.containsKey(package['name'])) {
-        throw const FormatException(
-          'invalid native replay package configuration',
-        );
-      }
-      locations[package['name'] as String] = (
-        root: configFile.uri.resolve(package['rootUri'] as String),
-        packageUri: package['packageUri'] as String,
-      );
-    }
-    return locations;
-  }
-
   void _verifyDevelopmentLocations() {
     final sources = developmentSources;
     if (sources == null) return;
     sources.verify();
-    final locations = _locations();
+    final locations = dartPackageLocations(root);
     for (final name in sources.bindings.keys) {
       final location = locations[name];
       if (location == null ||

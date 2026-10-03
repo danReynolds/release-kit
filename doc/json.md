@@ -22,13 +22,23 @@ rk clean --yes --json                    remove the reviewed local stages
 
 For `release`, `--yes` answers only the ordinary publication question. The
 unit versions and remaining targets are still reported, and every inspection
-and refusal still runs. A bare release may cover several independently
+and refusal still runs. Every selected private stage is prepared before the
+aggregate confirmation, publication session acquisition or public action. A bare release may cover several independently
 versioned units; name a unit when an automation caller needs the narrowest
 scope. For `clean`, it authorizes only the repository-local stage set shown by
 that run.
 
 `command` identifies the operation: `"stage"` prepares without publishing;
 `"release"` prepares as needed and publishes. There is no separate mode field.
+
+Release consent freezes exact stage receipts, public recovery bindings, signing
+and warning disclosures,
+remaining targets and first claims. New or changed disclosures refuse with
+`RK-AUTH-003`; already-public targets and whole no-op units cannot silently become
+work. `authorization-disclosures/run` retains the aggregate disclosure in
+`attachments`. A later public failure can leave earlier targets completed;
+preparation/review failures acquire no publication sessions and change no public
+targets.
 
 ## Top level
 
@@ -69,7 +79,9 @@ summary; `next[]` contains the publish command when publication is configured.
 
 Status uses read-only intent lookup to recognize a saved dependency-bound stage.
 Its `completeStage` evidence includes the actual `stage id`, `stage path`, and
-`native authorization: "not performed by status"`. An exact local stage verdict
+`native authorization: "not performed by status"`. A recognized native-bound
+stage also reports `native public readiness: "not performed by status"` and
+suppresses source-only prerequisite guesses. An exact local stage verdict
 means the current source/producer contracts and recorded bytes validate locally;
 stage or release must still authorize the frozen native dependency graph before
 adopting it. Status performs no dependency solve, input recovery, producer work,
@@ -174,6 +186,14 @@ It is an execution result, not another target-state vocabulary; `verdict`
 remains the shared status/release observation. Native login is not a target
 action. A pub.dev action is `completed` only after publish and exact public
 read-back; an idempotent retry records `already_published`.
+
+The native publication gate runs before `attempted`. Missing or different exact
+provider archives, or a failed fresh prospective-consumer resolution, report
+`RK-PUB-018` while the package target remains `not_attempted`. The
+`native-publication/<step-id>` attachment contains transient public-check
+evidence; it never replaces the frozen receipt or private dependency choices.
+The actual public runtime order can differ from source-only `plan` candidate
+edges and from private development/build dependencies.
 
 `verdict` is one of, frozen:
 

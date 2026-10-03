@@ -27,8 +27,8 @@ and local preparation still needed. Publication and staging are separate:
 - **Could not be read** means a check failed; it is not evidence of absence.
 - **Staged** means the exact local stage's recorded bytes and current contracts
   validate. Status identifies saved dependency choices without running a native
-  solver; it reports deferred native checks before stage/release adopts them. A missing
-  stage does not undo an existing publication.
+  solver; it reports deferred native checks before stage/release adopts them. A
+  missing stage does not undo an existing publication.
 
 If the checkout has changed since its version was released, the report keeps
 that publication visible and explains that the source now differs. The release
@@ -36,7 +36,24 @@ issue asks for a new version rather than replacing the existing tag.
 
 Issues include the affected target, evidence and a remedy. When the checks can
 identify a next step, the report prints the command. `rk release` rechecks its
-prerequisites before publishing; status itself changes nothing.
+prerequisites before publishing; status itself changes nothing. A locally valid
+stage does not establish that its exact runtime providers are publicly available
+or that a prospective consumer resolves. For a recognized native-bound receipt,
+status suppresses source-only candidate prerequisite guesses and reports public
+dependency checks as deferred. It does not present a guessed sibling version as
+the receipt's authoritative public requirement. Those blocking native checks run
+during release before upload, with private helpers excluded. Status does not run that
+native solve or authorize publication.
+
+Built-asset progress or an exact configured unit tag makes the original stage
+required when remaining targets need its bytes or frozen dependency choices;
+status reports `RK-STAGE-005` if it is missing. An independently public package
+in a tagless package-only unit does not establish that its siblings were staged.
+Status can recommend fresh preparation for that mixed unit when all public
+destinations are readable. An unread destination remains a blocking issue.
+Fresh preparation is not a promise of publishability: the complete-unit archive
+for an already-public package must still match its exact public bytes, and
+native archive timestamps can make a repack differ from the original stage.
 
 ## Scripts and redirected output
 

@@ -19,8 +19,8 @@ import 'package:rk/src/engine/stage_receipt.dart';
 import 'package:test/test.dart';
 
 void main() {
-  late _Fixture f;
-  setUp(() => f = _Fixture());
+  late RepositoryStageFixture f;
+  setUp(() => f = RepositoryStageFixture());
   tearDown(() => f.root.deleteSync(recursive: true));
 
   test(
@@ -62,6 +62,34 @@ void main() {
         );
       }
       expect(() => plan.order.clear(), throwsUnsupportedError);
+    },
+  );
+
+  test(
+    'authenticated public recovery does not discover or offer a provider',
+    () async {
+      f.withoutPreparation.add('app');
+      f.eligible.removeWhere((candidate) => candidate.unit == 'app');
+      f.failDiscovery = 'app';
+      final plan = await f.resolve(['app']);
+      expect(plan.withoutPreparation, {'app'});
+      final stage = f.stages(f.unit('app'));
+      expect(await plan.bind(f.unit('app')), same(stage));
+      expect(f.events, ['restore:app', 'eligibility']);
+      expect(Directory('${f.root.path}/.rk').existsSync(), isFalse);
+    },
+  );
+
+  test(
+    'public recovery cannot authorize an outside unit or private candidate',
+    () async {
+      f.withoutPreparation.add('third');
+      await expectLater(f.resolve(['app']), throwsStateError);
+      f.withoutPreparation
+        ..clear()
+        ..add('app');
+      await expectLater(f.resolve(['app']), throwsStateError);
+      expect(f.events.where((event) => event.startsWith('discover:')), isEmpty);
     },
   );
 
@@ -154,7 +182,7 @@ void main() {
   test(
     'acyclic producer graph with cyclic unit grouping is explicit',
     () async {
-      final grouped = _Fixture(grouped: true);
+      final grouped = RepositoryStageFixture(grouped: true);
       addTearDown(() => grouped.root.deleteSync(recursive: true));
       grouped.needs('core', 'core', [('app', 'app')]);
       grouped.needs('app', 'app', [('helper', 'helper')]);
@@ -174,7 +202,7 @@ void main() {
   test(
     'same-unit requests bind producer outputs without import identity cycles',
     () async {
-      final grouped = _Fixture(grouped: true);
+      final grouped = RepositoryStageFixture(grouped: true);
       addTearDown(() => grouped.root.deleteSync(recursive: true));
       grouped.needs('core', 'core', [('helper', 'helper')]);
       final plan = await grouped.resolve(['core']);
@@ -329,8 +357,8 @@ void main() {
   });
 }
 
-final class _Fixture implements NativeStageDiscovery {
-  _Fixture({bool grouped = false}) {
+final class RepositoryStageFixture implements NativeStageDiscovery {
+  RepositoryStageFixture({bool grouped = false}) {
     final projects = grouped
         ? {
             'core': ['core', 'helper'],
@@ -401,6 +429,7 @@ final class _Fixture implements NativeStageDiscovery {
   final restored = <String, ReleaseStage>{};
   final discoveries = <String, DiscoveredNativeStage>{};
   final providers = <PreparedStageProvider>[];
+  final withoutPreparation = <String>{};
   late List<NativeCandidate> eligible;
   String? failDiscovery;
   String? failRestore;
@@ -542,6 +571,7 @@ final class _Fixture implements NativeStageDiscovery {
                   ),
             ),
             providers: providers,
+            withoutPreparation: withoutPreparation,
           );
         },
       );
@@ -556,7 +586,10 @@ final class _Fixture implements NativeStageDiscovery {
     ),
   );
 
-  Future<void> complete(ReleaseStage stage) async {
+  Future<void> complete(
+    ReleaseStage stage, {
+    String artifactSuffix = '',
+  }) async {
     final artifacts = await stage.materializeSource();
     final prior = [
       StageStep(
@@ -581,7 +614,7 @@ final class _Fixture implements NativeStageDiscovery {
       final project = producer.substring('native:'.length);
       stage.directory.writeBytesAtomically(
         '$project.pkg',
-        utf8.encode('$project artifact'),
+        utf8.encode('$project artifact$artifactSuffix'),
       );
       prior.add(
         StageStep(
