@@ -158,6 +158,11 @@ final class StageProofClosure {
 
   final String root;
   final Map<String, StageReceipt> stages;
+
+  /// Work spent reconstructing nested commitments during validation, for a
+  /// caller applying one expansion budget across several copied closures.
+  int get expandedBytes => _expandedBytes;
+  int _expandedBytes = 0;
   final StageProofLimits limits;
   final Map<String, List<ImportedStageDependency>> _imports = {};
 
@@ -218,15 +223,14 @@ final class StageProofClosure {
       throw const FormatException('dependency proof byte limit exceeded');
     }
     final commitments = <String, ({int size, String sha256})>{};
-    var expandedBytes = 0;
     for (final imports in _imports.values) {
       for (final input in imports) {
         final id = input.providerIdentity.id;
         input.requireProviderReceipt(stages[id]!);
         final commitment = commitments.putIfAbsent(id, () {
           final bytes = utf8.encode(_encode(id, _reachable(id)));
-          expandedBytes += bytes.length;
-          if (expandedBytes > limits.expandedBytes) {
+          _expandedBytes += bytes.length;
+          if (_expandedBytes > limits.expandedBytes) {
             throw const FormatException(
               'dependency proof expansion limit exceeded',
             );

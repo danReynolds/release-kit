@@ -9,6 +9,7 @@ import 'package:rk/src/engine/checklist.dart';
 import 'package:rk/src/engine/canonical_json.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
+import 'package:rk/src/engine/file_mode.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/native_stage_context.dart';
 import 'package:rk/src/engine/release_stage.dart';
@@ -16,8 +17,11 @@ import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/engine/stage_dependencies.dart';
+import 'package:rk/src/engine/stage_intent.dart';
 import 'package:rk/src/engine/stage_plan.dart';
 import 'package:rk/src/engine/stage_receipt.dart';
+import 'package:rk/src/engine/stage_restoration.dart';
+import 'package:rk/src/engine/stage_store.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/native/dart/dependencies.dart';
 import 'package:rk/src/native/dart/hosted_archive.dart';
@@ -26,6 +30,7 @@ import 'package:rk/src/native/dart/package_archive.dart';
 import 'package:rk/src/native/dart/resolution_graph.dart';
 import 'package:rk/src/native/dart/stage_context.dart';
 import 'package:rk/src/native/dart/stage_authorization.dart';
+import 'package:rk/src/native/dart/stage_authority.dart';
 import 'package:rk/src/native/dart/stage_inputs.dart';
 import 'package:rk/src/native/dart/stage_preparation.dart';
 import 'package:rk/src/native/package_archive.dart';
@@ -50,6 +55,411 @@ void main() {
     tools: tools,
     compiler: f.origin.dart,
     defaultRegistry: registry ?? () => f.origin.url,
+  );
+
+  test(
+    'Dart authority restores a complete cross-unit stage after its provider was deleted',
+    () async {
+      final f = await _Fixture.create(
+        sameUnit: false,
+        committed: true,
+        authoritativeStages: true,
+      );
+      addTearDown(f.close);
+      final bridge = DartStageAuthority(authorizer(f));
+      StageIntent intent(ResolvedUnit unit) => f.stages.intentFor(
+        unit,
+        currentGit: f.git,
+        readInputs: () => bridge.readIntent(unit),
+      );
+      final providerUnit = f.resolution.unit('core')!;
+      final provider = await f.bind(providerUnit, intent: intent(providerUnit));
+      await f.prepare(provider);
+      final unit = f.resolution.unit('app')!;
+      final stage = await f.bind(unit, intent: intent(unit));
+      await f.prepare(stage);
+      final original = stage.requireReceipt();
+      final bytesBefore = stage.directory.fingerprint();
+      f.origin.hostArchive(
+        File(
+          provider.directory.resolve(
+            ReleaseAssets.pubArchivePath(providerUnit.projects.single),
+          ),
+        ),
+      );
+      Directory(provider.directory.path).deleteSync(recursive: true);
+      f.origin.host(f.origin.package('newer', 'rk_fixture_remote', '1.1.0'));
+      final current = f.newStages(authoritativeSource: true);
+      final restoration = await StageRestoration.create(
+        stages: current,
+        resolution: f.resolution,
+        currentGit: f.git,
+        authority: bridge,
+        refreshGit: () async => f.git,
+      );
+      final requests = f.origin.requests.length;
+      final lock = StageStore(f.origin.directory.path).acquireForMutation();
+      try {
+        final restored = await restoration.restore(unit.name);
+        expect(restored, isNotNull);
+        expect(restored!.directory.identity.id, stage.directory.identity.id);
+        expect(restored.requireReceipt().encode(), original.encode());
+        expect(restored.dependencies.toJson(), stage.dependencies.toJson());
+        expect(stage.directory.fingerprint(), bytesBefore);
+        expect(Directory(provider.directory.path).existsSync(), isFalse);
+        expect(
+          DartStageContext.fromEnvelope(
+            restored.dependencies.contexts.single,
+          ).discovery.packages['rk_fixture_remote']!.manifest.version,
+          '1.0.0',
+        );
+        expect(
+          f.origin.requests
+              .skip(requests)
+              .any((request) => request.startsWith('GET /packages/')),
+          isFalse,
+        );
+      } finally {
+        lock.close();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  for (final exactPublication in [true, false]) {
+    test(
+      'Dart authority restores a header ${exactPublication ? 'and resumes exact' : 'but refuses conflicting public'} native imports',
+      () async {
+        final f = await _Fixture.create(
+          sameUnit: false,
+          committed: true,
+          authoritativeStages: true,
+        );
+        addTearDown(f.close);
+        final bridge = DartStageAuthority(authorizer(f));
+        StageIntent intent(ResolvedUnit unit) => f.stages.intentFor(
+          unit,
+          currentGit: f.git,
+          readInputs: () => bridge.readIntent(unit),
+        );
+        final providerUnit = f.resolution.unit('core')!;
+        final provider = await f.bind(
+          providerUnit,
+          intent: intent(providerUnit),
+        );
+        await f.prepare(provider);
+        final unit = f.resolution.unit('app')!;
+        final stage = await f.bind(unit, intent: intent(unit));
+        stage.writeProgress(const []);
+        final header = StageReceiptStore(stage.directory).read()!;
+        expect(header.steps, isEmpty);
+        final before = stage.directory.fingerprint();
+        final frozen = CanonicalJson.encode(stage.dependencies.toJson());
+        if (exactPublication) {
+          f.origin.hostArchive(
+            File(
+              provider.directory.resolve(
+                ReleaseAssets.pubArchivePath(providerUnit.projects.single),
+              ),
+            ),
+          );
+        } else {
+          f.origin.host(Directory('${f.origin.directory.path}/core'));
+        }
+        f.origin.host(f.origin.package('newer', 'rk_fixture_remote', '1.1.0'));
+        f.origin.archiveQuery = '?renewed=resume';
+        // A separate resolver starts with no retained provider/fetch handles.
+        final current = f.newStages(authoritativeSource: true);
+        final restoration = await StageRestoration.create(
+          stages: current,
+          resolution: f.resolution,
+          currentGit: f.git,
+          authority: bridge,
+          refreshGit: () async => f.git,
+        );
+        final requests = f.origin.requests.length;
+        final lock = StageStore(f.origin.directory.path).acquireForMutation();
+        try {
+          final restored = await restoration.restore(unit.name);
+          expect(restored, isNotNull);
+          expect(restored!.directory.identity.id, header.identity.id);
+          expect(
+            StageReceiptStore(restored.directory).read()!.encode(),
+            header.encode(),
+          );
+          expect(stage.directory.fingerprint(), before);
+          expect(CanonicalJson.encode(restored.dependencies.toJson()), frozen);
+          expect(
+            restored.dependencies.imports.single.use.provider.unit,
+            'core',
+          );
+          expect(
+            f.origin.requests
+                .skip(requests)
+                .where((request) => request.startsWith('GET /packages/'))
+                .toList(),
+            ['GET /packages/rk_fixture_remote-1.0.0.tar.gz'],
+          );
+          final downloads = f.origin.requests.length;
+          // Use only the adopted resolver, so the old live bindings cannot hide
+          // missing restored transient handles during real package preparation.
+          final report = await f.prepare(
+            restored,
+            resolver: current,
+            expectedSuccess: exactPublication,
+          );
+          final progress = StageReceiptStore(restored.directory).read()!;
+          expect(progress.identity.id, header.identity.id);
+          expect(progress.complete, exactPublication);
+          expect(CanonicalJson.encode(restored.dependencies.toJson()), frozen);
+          expect(
+            restored.dependencies.imports.single
+                .readProof(restored.directory)
+                .stages
+                .containsKey(provider.directory.identity.id),
+            isTrue,
+          );
+          if (exactPublication) {
+            expect(
+              f.origin.requests
+                  .skip(downloads)
+                  .any((request) => request.startsWith('GET /packages/')),
+              isFalse,
+            );
+          } else {
+            expect(
+              report,
+              contains('native dependency artifacts changed after replay'),
+            );
+            expect(
+              progress.steps.any(
+                (step) => step.name == 'pub-archive:rk_fixture_app',
+              ),
+              isFalse,
+            );
+          }
+        } finally {
+          lock.close();
+        }
+      },
+      timeout: const Timeout(Duration(minutes: 3)),
+    );
+  }
+
+  for (final sameUnit in [false, true]) {
+    test(
+      'Dart authority checks retained own, ${sameUnit ? 'local' : 'imported'} and external archives',
+      () async {
+        final f = await _Fixture.create(sameUnit: sameUnit, committed: true);
+        addTearDown(f.close);
+        ReleaseStage? provider;
+        if (!sameUnit) {
+          provider = await f.bind(f.resolution.unit('core')!);
+          await f.prepare(provider);
+        }
+        final unit = f.resolution.units.last;
+        final stage = await f.bind(unit);
+        final bridge = DartStageAuthority(authorizer(f));
+        expect(bridge.ecosystems, {'dart'});
+        expect(bridge.readIntent(unit), authorizer(f).readIntent(unit));
+        final pending = _nativeReceipt(stage);
+        final pendingAuthority = await bridge.authorize(unit, pending);
+        // No producer has recorded an output, so no payload is claimed yet.
+        await pendingAuthority.validateRetained(stage, pending);
+        await f.prepare(stage);
+        final receipt = stage.requireReceipt();
+        final authorized = await bridge.authorize(unit, receipt);
+        if (provider != null) {
+          Directory(provider.directory.path).deleteSync(recursive: true);
+        }
+        await authorized.validateRetained(stage, receipt);
+        final app = unit.projects.singleWhere(
+          (p) => p.name == 'rk_fixture_app',
+        );
+        final paths = [
+          ReleaseAssets.pubArchivePath(app),
+          if (sameUnit)
+            stage.dependencies.local.single.path
+          else
+            stage.dependencies.imports.single.archive.path,
+          stage.dependencies.external.single.archive.path,
+        ];
+        for (final path in paths) {
+          final file = File(stage.directory.resolve(path));
+          final bytes = file.readAsBytesSync();
+          for (final change in ['bytes', 'missing', 'mode']) {
+            switch (change) {
+              case 'bytes':
+                file.writeAsBytesSync([...bytes, 0]);
+              case 'missing':
+                file.deleteSync();
+              case 'mode':
+                setFileModes({file.path: '0755'});
+            }
+            await expectLater(
+              authorized.validateRetained(stage, receipt),
+              throwsA(anyOf(isA<StateError>(), isA<FileSystemException>())),
+              reason: '$path $change',
+            );
+            file.writeAsBytesSync(bytes);
+            setFileModes({file.path: '0644'});
+          }
+        }
+        await authorized.validateRetained(stage, receipt);
+        final duringRead = authorized.validateRetained(stage, receipt);
+        final ownFile = stage.directory.resolve(paths.first);
+        setFileModes({ownFile: '0755'});
+        await expectLater(duringRead, throwsStateError);
+        setFileModes({ownFile: '0644'});
+        await expectLater(
+          authorized.recoverExternal(stage.dependencies.external.single),
+          throwsStateError,
+        );
+      },
+      timeout: const Timeout(Duration(minutes: 3)),
+    );
+  }
+
+  test(
+    'Dart authority interprets own Pub archive and checks its complete manifest',
+    () async {
+      final f = await _Fixture.create(sameUnit: false, committed: true);
+      addTearDown(f.close);
+      final unit = f.resolution.unit('core')!;
+      final stage = await f.bind(unit);
+      await f.prepare(stage);
+      final original = stage.requireReceipt();
+      final project = unit.projects.single;
+      final path = ReleaseAssets.pubArchivePath(project);
+      final file = File(stage.directory.resolve(path));
+      final missingOutput = StageReceipt(
+        identity: original.identity,
+        plan: original.plan,
+        steps: [
+          for (final step in original.steps)
+            StageStep(
+              name: step.name,
+              inputs: step.inputs,
+              evidence: step.evidence,
+              outputs: step.outputs.where((output) => output.path != path),
+            ),
+        ],
+      );
+      final missingAuthority = await DartStageAuthority(
+        authorizer(f),
+      ).authorize(unit, missingOutput);
+      await expectLater(
+        missingAuthority.validateRetained(stage, missingOutput),
+        throwsStateError,
+      );
+      final wrong = f.origin.package('wrong-core', project.name, '0.2.0');
+      File('${wrong.path}/pubspec.yaml').writeAsStringSync(
+        jsonEncode({
+          ...f.manifest(project).fields,
+          'description': 'Same name and version, different original metadata',
+        }),
+      );
+      f.origin.host(wrong);
+      final wrongManifest = f.origin
+          .hostedArchive(project.name, '0.2.0')
+          .readAsBytesSync();
+      for (final bytes in [utf8.encode('not an archive'), wrongManifest]) {
+        file.writeAsBytesSync(bytes);
+        final recaptured = StageArtifact.capture(
+          stage: stage.directory,
+          path: path,
+          type: 'pub-archive',
+        );
+        final receipt = StageReceipt(
+          identity: original.identity,
+          plan: original.plan,
+          steps: [
+            for (final step in original.steps)
+              StageStep(
+                name: step.name,
+                inputs: step.inputs,
+                evidence: step.evidence,
+                outputs: [
+                  for (final output in step.outputs)
+                    output.path == path ? recaptured : output,
+                ],
+              ),
+          ],
+        );
+        final authorized = await DartStageAuthority(
+          authorizer(f),
+        ).authorize(unit, receipt);
+        await expectLater(
+          authorized.validateRetained(stage, receipt),
+          throwsA(isA<FormatException>()),
+        );
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    'Dart authority recovers only exact pending frozen external handles',
+    () async {
+      final f = await _Fixture.create(sameUnit: false, committed: true);
+      addTearDown(f.close);
+      f.origin.host(Directory('${f.origin.directory.path}/core'));
+      final unit = f.resolution.unit('app')!;
+      final stage = await f.bind(unit, localCandidates: false);
+      final receipt = _nativeReceipt(stage);
+      final original = CanonicalJson.encode(stage.dependencies.toJson());
+      f.origin.host(
+        f.origin.package('new-remote', 'rk_fixture_remote', '1.1.0'),
+      );
+      f.origin.archiveQuery = '?fresh-token=bridge';
+      final authorized = await DartStageAuthority(
+        authorizer(f),
+      ).authorize(unit, receipt);
+      final frozen = stage.dependencies.external.singleWhere(
+        (input) => input.binding.slot == 'rk_fixture_remote',
+      );
+      final requests = f.origin.requests.length;
+      final recovered = await authorized.recoverExternal(
+        ExternalStageDependency.fromJson(frozen.toJson()),
+      );
+      expect(recovered.toJson(), frozen.toJson());
+      expect(CanonicalJson.encode(stage.dependencies.toJson()), original);
+      final fetches = f.origin.requests.skip(requests).toList();
+      expect(fetches, hasLength(1));
+      expect(fetches.single, contains('rk_fixture_remote-1.0.0'));
+      expect(fetches.single, isNot(contains('1.1.0')));
+      expect(
+        CanonicalJson.encode(recovered.toJson()),
+        isNot(contains('fresh-token')),
+      );
+      recovered.materialize(stage.directory);
+      final actual = StageArtifact.capture(
+        stage: stage.directory,
+        path: frozen.archive.path,
+        type: frozen.archive.type,
+      );
+      expect(actual.toJson(), frozen.archive.toJson());
+      final changed = ExternalStageDependency.fromJson({
+        ...frozen.toJson(),
+        'consumers': ['pub-archive:somewhere_else'],
+      });
+      final afterFetch = f.origin.requests.length;
+      await expectLater(authorized.recoverExternal(changed), throwsStateError);
+      expect(f.origin.requests.length, afterFetch);
+      // A changed upstream payload is refused, without selecting the newer
+      // available version or consulting a fresh metadata endpoint.
+      f.origin.host(
+        f.origin.package('changed-remote', 'rk_fixture_remote', '1.0.0'),
+      );
+      await expectLater(
+        authorized.recoverExternal(frozen),
+        throwsA(isA<FormatException>()),
+      );
+      expect(f.origin.requests.skip(afterFetch).toList(), [
+        'GET /packages/rk_fixture_remote-1.0.0.tar.gz',
+      ]);
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
   );
 
   test(
@@ -1155,19 +1565,22 @@ final class _Fixture {
     this.resolution, {
     this.commit,
     this.treeHash,
+    bool authoritativeStages = false,
   }) {
-    stages = ReleaseStages(
-      source: source,
-      git: git,
-      stageContracts: catalog.stageContractResolver(resolution),
-      compilerIdentity: () => DartCompilerIdentity.readResolved(origin.dart),
-      rkIdentity: () => RkImplementationIdentity.recorded(
-        version: '0.1.0',
-        stageSchema: stageSchemaVersion,
-        sha256: 'b' * 64,
-      ),
-    );
+    stages = newStages(authoritativeSource: authoritativeStages);
   }
+
+  ReleaseStages newStages({bool authoritativeSource = false}) => ReleaseStages(
+    source: authoritativeSource ? GitSourceTree(origin.directory.path) : source,
+    git: git,
+    stageContracts: catalog.stageContractResolver(resolution),
+    compilerIdentity: () => DartCompilerIdentity.readResolved(origin.dart),
+    rkIdentity: () => RkImplementationIdentity.recorded(
+      version: '0.1.0',
+      stageSchema: stageSchemaVersion,
+      sha256: 'b' * 64,
+    ),
+  );
   final String? commit;
   final String? treeHash;
   final NativePubFixture origin;
@@ -1197,6 +1610,7 @@ final class _Fixture {
     bool workspace = false,
     bool helpers = false,
     bool committed = false,
+    bool authoritativeStages = false,
   }) async {
     final origin = await NativePubFixture.create();
     try {
@@ -1404,6 +1818,7 @@ publish = ["pub.dev"]
         resolution,
         commit: commit,
         treeHash: treeHash,
+        authoritativeStages: authoritativeStages,
       );
     } on Object {
       await origin.close();
@@ -1418,6 +1833,7 @@ publish = ["pub.dev"]
     ResolvedUnit unit, {
     NativeStageContext Function(NativeStageContext)? transform,
     bool localCandidates = true,
+    StageIntent? intent,
   }) async {
     final contexts = <DartStageContext>[];
     final imports = <ImportedStageDependency>[];
@@ -1516,10 +1932,16 @@ publish = ["pub.dev"]
         local: local,
         external: external,
       ),
+      intent: intent,
     );
   }
 
-  Future<void> prepare(ReleaseStage stage) async {
+  Future<String> prepare(
+    ReleaseStage stage, {
+    ReleaseStages? resolver,
+    bool expectedSuccess = true,
+  }) async {
+    final selectedStages = resolver ?? stages;
     final diagnostics = Diagnostics();
     final checklist = Checklist.derive(stage.unit, resolution, diagnostics);
     expect(diagnostics.isEmpty, isTrue);
@@ -1533,14 +1955,14 @@ publish = ["pub.dev"]
       initialGit: git,
       output: output,
       refreshGit: () async => git,
-      refreshStage: stages.refresh,
+      refreshStage: selectedStages.refresh,
       tools: const SystemTools(),
       capabilities: HostCapabilities(
         hostPlatform: 'linux-x64',
         containerRuntime: null,
         hasNativeAssets: false,
       ),
-      stageFor: stages.call,
+      stageFor: selectedStages.call,
       stageOnly: true,
     );
     final result = await coordinator.prepare(
@@ -1552,12 +1974,13 @@ publish = ["pub.dev"]
       inspected: stage.inspect(),
       claims: const [],
     );
+    final report = output.report.encode(exit: result == null ? 1 : 0);
     expect(
       result,
-      isNotNull,
-      reason:
-          '${log.toString()}\n${output.report.encode(exit: result == null ? 1 : 0)}',
+      expectedSuccess ? isNotNull : isNull,
+      reason: '${log.toString()}\n$report',
     );
+    return report;
   }
 
   Future<void> close() => origin.close();

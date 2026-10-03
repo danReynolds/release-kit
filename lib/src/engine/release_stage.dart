@@ -113,6 +113,7 @@ class ReleaseStages {
       GitState currentGit,
     )
     authorize,
+    void Function()? beforeInstall,
   }) async {
     final generation = _bindingGenerations[unit.name] ?? 0;
     final plan = receipt.plan;
@@ -150,6 +151,10 @@ class ReleaseStages {
     if ((_bindingGenerations[unit.name] ?? 0) != generation) {
       throw StateError('stage binding changed during frozen authorization');
     }
+    // A closure authorizer may have validated additional retained providers.
+    // Recheck them synchronously after the async handoff, before any binding
+    // changes. This callback must be observational and must not yield.
+    beforeInstall?.call();
     _install(unit, authorized, candidate);
     return candidate;
   }

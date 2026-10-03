@@ -42,6 +42,26 @@ final class StageLookup {
   final int maxReceiptBytes;
   final int maxTotalBytes;
 
+  /// Reads one provisional frozen reference without selecting or authorizing it.
+  /// The caller must verify its receipt commitment and current source/native
+  /// facts before treating it as a provider. Missing/corrupt references throw;
+  /// this operation never searches for a replacement.
+  StageReceipt readExact(String id, {int? maxBytes}) {
+    if (maxBytes != null && maxBytes < 1) {
+      throw const _LookupLimit();
+    }
+    final text = _readStage(
+      id,
+      _ReadBudget(min(maxTotalBytes, maxBytes ?? maxTotalBytes)),
+    );
+    if (text == null) throw StateError('the referenced stage is missing: $id');
+    final receipt = StageReceipt.parse(text);
+    if (receipt.identity.id != id) {
+      throw StateError('referenced receipt does not name its stage directory');
+    }
+    return receipt;
+  }
+
   /// [recoveryStageId] must come from separately authenticated recovery facts,
   /// never an intent hint or a newest-receipt heuristic. It takes precedence
   /// over ordinary lookup and never falls through to another stage or absence.

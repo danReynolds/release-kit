@@ -20,6 +20,29 @@ void main() {
     expect(f.root.listSync(), isEmpty);
   });
 
+  test(
+    'exact provisional reads are bounded, read-only and never fall through',
+    () {
+      final stage = f.write(f.intent());
+      final before = f.snapshot();
+      final receipt = f.lookup.readExact(stage.identity.id);
+      expect(receipt.identity.id, stage.identity.id);
+      expect(f.snapshot(), before);
+      expect(
+        () => f.lookup.readExact(stage.identity.id, maxBytes: 1),
+        throwsA(anything),
+      );
+      expect(() => f.lookup.readExact('f' * 64), throwsStateError);
+      expect(() => f.lookup.readExact('../escape'), throwsArgumentError);
+      final file = File(stage.resolve('stage.json'));
+      file.deleteSync();
+      final outside = File('${f.root.path}/outside.json')
+        ..writeAsStringSync(receipt.encode());
+      Link(file.path).createSync(outside.path);
+      expect(() => f.lookup.readExact(stage.identity.id), throwsA(anything));
+    },
+  );
+
   for (final hint in ['missing', 'corrupt', 'dangling', 'valid']) {
     test(
       '$hint hint still finds the unique frozen header without writes',

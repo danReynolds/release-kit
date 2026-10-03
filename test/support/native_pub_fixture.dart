@@ -98,6 +98,25 @@ final class NativePubFixture {
     );
   }
 
+  /// Simulates publishing the exact bytes produced by native Pub, including
+  /// their original compression and manifest. Repacking a source directory
+  /// would invent a different public archive digest for the same version.
+  void hostArchive(File file) {
+    final bytes = file.readAsBytesSync();
+    final contents = TarDecoder().decodeBytes(GZipDecoder().decodeBytes(bytes));
+    final manifestFile = contents.files.singleWhere(
+      (entry) =>
+          entry.isFile &&
+          entry.name.replaceFirst(RegExp(r'^(\./)+'), '') == 'pubspec.yaml',
+    );
+    final manifest =
+        _plain(loadYaml(utf8.decode(manifestFile.content)))
+            as Map<String, Object?>;
+    final name = manifest['name']! as String;
+    final version = manifest['version']! as String;
+    (_packages[name] ??= {})[version] = _Package(manifest, bytes);
+  }
+
   /// Deliberately contains no runtime payload. These packages are only native
   /// solver metadata and cannot be used for packaging or compilation.
   void discover(Directory root, Map<String, String> sources) {

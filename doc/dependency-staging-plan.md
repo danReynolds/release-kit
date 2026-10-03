@@ -913,3 +913,50 @@ Separate focused runs covered 119 binary/source/completion cases, 55 source and
 dependency-proof cases, and 128 producer/target evidence cases. Those overlap and
 are not additional unique-test counts. This is foundation qualification, not the
 final full-suite or bare Fleury command qualification required by the plan.
+
+Frozen restoration now composes those checks in `StageRestoration`, with native
+semantics supplied by `NativeStageAuthority`. It verifies the existing parsed
+resolution against the selected immutable source, retaining the unit objects
+used by the shared contract resolver. Only conclusive lookup absence permits new
+discovery. Rejected, ambiguous, corrupt or missing recovery-bound stages refuse.
+Unbound reuse stays within the resolver's invocation and its owned snapshot.
+
+Copied proofs authorize completed ancestors without their old directories.
+Pending imports instead require the exact retained provider receipt and payload.
+Every node receives current source, plan, contract and native authorization;
+actual retained stages also receive complete file inspection and native archive
+validation. A missing recorded input is never refetched. All future import
+handles must reproduce the complete frozen declaration. Node, edge, depth,
+receipt-byte, cumulative-read and nested-proof expansion bounds apply across the
+combined graph. Providers remain read-only until the root is adopted.
+
+Adoption rechecks current Git, resolution, intents, contracts and retained bytes
+after the final asynchronous operation, then checks every node synchronously
+again immediately before installation into the shared resolver. Tests cover
+changes to earlier providers, proof-only native inputs and provider contracts
+while a later authorization or root reconstruction runs. Failure leaves existing
+bindings and stage files untouched.
+
+The Dart bridge verifies original complete manifests for retained Pub outputs
+and selected local, imported and hosted archives. It recovers only genuinely
+pending external inputs from refreshed exact-version handles. Real native cases
+exercise a deleted provider directory and a header-only consumer restored by a
+separate resolver, followed by resumed Pub packaging. A newly available external
+version does not change selection. Simulated first-party publication uses the
+exact staged archive; a differently repacked public archive under the same
+version is refused, with no consumer Pub output recorded.
+
+Architecture review approved this bounded composition after depth, shared read
+budgets and the final installation boundary were tightened. Native review
+approved the bridge. Repository scheduling, production command/status wiring,
+publication gates and the final bare Fleury qualification remain the next
+required packets. This evidence does not yet establish that bare `rk stage`
+prepares the full stack.
+
+Final verification for this slice passed 142 stage/lookup/plan cases, 98 native
+cases on Dart 3.13.5, and 182 command/phase cases. One native command fixture
+initially failed under restricted cache/network access and passed with normal
+access; no product change was needed for that retry. All seven new native
+authority cases also pass on the minimum Dart 3.10.4. Analysis, formatting and
+diff checks are clean. These 422 affected cases are not a substitute for the
+final full-suite and real bare Fleury command runs.
