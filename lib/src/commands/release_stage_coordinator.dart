@@ -15,6 +15,8 @@ import '../engine/publish_target.dart';
 import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
 import '../engine/stage.dart';
+import '../engine/stage_contract.dart';
+import '../engine/stage_dependencies.dart';
 import '../engine/stage_board.dart';
 import '../engine/stage_inspection.dart';
 import '../engine/stage_history.dart';
@@ -70,6 +72,19 @@ final class ReleaseStageCoordinator {
         code: 'RK-STAGE-001',
         message: 'the release stage path is unsafe',
         remedy: unsafe.toString(),
+      );
+    }
+
+    if (inspected.receipt?.plan != null &&
+        inspected.receipt!.steps.isEmpty &&
+        !inspected.planRecorded) {
+      return Diagnostic(
+        code: 'RK-STAGE-003',
+        message: 'the frozen source plan could not be resumed safely',
+        remedy:
+            '${inspected.issues.join('\n')}\n'
+            'Resolve the recorded source-copy residue, then re-run '
+            'rk stage ${unit.name}. The frozen receipt has been preserved.',
       );
     }
 
@@ -228,6 +243,14 @@ final class ReleaseStageCoordinator {
         targetStage.contract.step.name: targetStage,
     };
     final outputsByProducer = <String, Set<String>>{
+      if (stage.dependencies.hasImports)
+        StageDependencies.importProducer: stage
+            .dependencies
+            .contribution
+            .step
+            .outputs
+            .keys
+            .toSet(),
       for (final step in producerSteps)
         receiptNameFor(step): contractFor(unit, step).outputs.keys.toSet(),
       for (final entry in targetStagesByName.entries)
@@ -303,7 +326,7 @@ final class ReleaseStageCoordinator {
       return null;
     }
 
-    if (inspected.validProgress) {
+    if (inspected.validProgress || inspected.planRecorded) {
       output.say('Resuming interrupted staging.', role: VisualRole.secondary);
     } else if (!stage.directory.identity.isGitBound) {
       output.say(
@@ -334,7 +357,12 @@ final class ReleaseStageCoordinator {
       sourceArtifacts = List<StageArtifact>.from(sourceStep.outputs);
     } else {
       try {
-        stage.reset();
+        if (inspected.planRecorded) {
+          stage.discardUnrecordedSource();
+        } else {
+          stage.reset();
+          stage.writeProgress(const []);
+        }
       } on Object catch (error) {
         stageProgress.discard();
         output.problem(
@@ -353,7 +381,10 @@ final class ReleaseStageCoordinator {
 
       try {
         sourceArtifacts = await stage.materializeSource();
-        sourceStep = _sourceStageStep(stage, sourceArtifacts);
+        sourceStep = StageStep.sourceSnapshot(
+          stage.directory.identity,
+          sourceArtifacts,
+        );
         progress.add(sourceStep);
         _persistStageProgress(stage, sourceArtifacts, progress);
       } on Object catch (error) {
@@ -377,7 +408,11 @@ final class ReleaseStageCoordinator {
     final producersByName = {
       for (final step in producerSteps) receiptNameFor(step): step,
     };
-    final runnable = {...producersByName.keys, ...targetStagesByName.keys};
+    final runnable = {
+      ...producersByName.keys,
+      ...targetStagesByName.keys,
+      if (stage.dependencies.hasImports) StageDependencies.importProducer,
+    };
     final graph = DependencyGraph<String>(
       stage.producerNames,
       idOf: (producer) => producer,
@@ -408,7 +443,9 @@ final class ReleaseStageCoordinator {
       try {
         final result = await targetStage.prepare(
           TargetStageContext(
-            contract: targetStage.contract,
+            contract: StageContributionContract(
+              step: stage.producerContract(receiptName),
+            ),
             tools: tools,
             git: initialGit,
             attach: output.report.attach,
@@ -527,6 +564,18 @@ final class ReleaseStageCoordinator {
     }
 
     Future<_StageWorkCompletion> runWork(String name) {
+      if (name == StageDependencies.importProducer) {
+        try {
+          record(stage.dependencies.materialize(stage.directory, sourceStep));
+          return Future.value(_StageWorkCompletion.succeeded(name));
+        } on Object catch (error) {
+          _discardInterruptedOutputs(stage, outputsByProducer[name]!);
+          _stageOperationProblem('dependency archive import', error);
+          return Future.value(
+            _StageWorkCompletion.failed(name, HaltKind.beforeActing),
+          );
+        }
+      }
       final targetStage = targetStagesByName[name];
       if (targetStage != null) return runTargetStage(name, targetStage);
       final producer = producersByName[name];
@@ -644,8 +693,19 @@ final class ReleaseStageCoordinator {
     StageInspection inspected,
     Set<String> declaredOutputs,
   ) {
-    if (inspected.receipt?.complete != false || inspected.validProgress) {
+    if (inspected.receipt?.complete != false ||
+        inspected.validProgress ||
+        inspected.planRecorded) {
       return inspected;
+    }
+    if (inspected.receipt?.plan != null && inspected.receipt!.steps.isEmpty) {
+      try {
+        stage.discardUnrecordedSource();
+        final recovered = stage.inspect();
+        return recovered.planRecorded ? recovered : inspected;
+      } on Object {
+        return inspected;
+      }
     }
     final allowedExtras = <String>{};
     for (final output in declaredOutputs) {
@@ -714,27 +774,6 @@ final class ReleaseStageCoordinator {
     output.halt(HaltKind.beforeActing);
     return false;
   }
-
-  StageStep _sourceStageStep(
-    ReleaseStage stage,
-    List<StageArtifact> sourceArtifacts,
-  ) => StageStep(
-    name: 'source-snapshot',
-    inputs: [
-      if (stage.directory.identity.isGitBound)
-        StageInput.commit(stage.directory.identity),
-      if (stage.directory.identity.isGitBound)
-        StageInput.tree(stage.directory.identity),
-      StageInput.plan(stage.directory.identity),
-    ],
-    outputs: sourceArtifacts,
-    evidence: stage.directory.identity.isGitBound
-        ? {
-            'commit': stage.directory.identity.headCommit,
-            'tree': stage.directory.identity.headTree,
-          }
-        : const {'source_binding': 'unbound'},
-  );
 
   void _persistStageProgress(
     ReleaseStage stage,
@@ -820,34 +859,10 @@ final class ReleaseStageCoordinator {
     List<StageStep> progress,
     LocalProducerOutcome outcome,
   ) {
-    final contract = contractFor(unit, step);
-    final recorded = {
-      for (final record in progress)
-        for (final artifact in record.outputs) artifact.path: artifact,
-    };
+    final contract = stage.producerContract(receiptNameFor(step));
     return StageStep(
       name: contract.name,
-      inputs: [
-        for (final input in contract.inputs)
-          if (input.startsWith('step:'))
-            StageInput.step(
-              input == 'step:source-snapshot'
-                  ? sourceStep
-                  : progress.singleWhere(
-                      (step) => 'step:${step.name}' == input,
-                      orElse: () => throw StateError(
-                        '${contract.name} input $input is not recorded',
-                      ),
-                    ),
-            )
-          else
-            StageInput.artifact(
-              recorded[input] ??
-                  (throw StateError(
-                    '${contract.name} input $input is not recorded',
-                  )),
-            ),
-      ],
+      inputs: stage.producerInputs(contract.name, progress),
       outputs: [
         for (final artifact in outcome.outputs)
           StageArtifact.capture(
@@ -1249,6 +1264,7 @@ final class ReleaseStageCoordinator {
       runtimeSha256: stage.compiler?.runtimeSha256,
       runtimeLicenseSha256: stage.compiler?.runtimeLicenseSha256,
       launcherCompiler: stage.launcherCompiler,
+      stage: stage,
     );
   }
 

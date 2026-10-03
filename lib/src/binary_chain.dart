@@ -10,10 +10,13 @@ import 'engine/diagnostic.dart';
 import 'output/output.dart';
 import 'output/progress.dart';
 import 'engine/resolve.dart';
+import 'engine/release_stage.dart';
 import 'engine/stage_archive.dart';
 import 'engine/tools.dart';
 import 'engine/verdict.dart';
 import 'engine/workspace.dart';
+import 'native/dart/stage_context.dart';
+import 'native/dart/stage_preparation.dart';
 import 'transforms/archive.dart';
 import 'transforms/digest.dart';
 import 'transforms/macos.dart';
@@ -56,6 +59,7 @@ class BinaryChain {
     this.runtimeSha256,
     this.runtimeLicenseSha256,
     this.launcherCompiler,
+    this.stage,
   });
 
   final Tools tools;
@@ -67,6 +71,7 @@ class BinaryChain {
   final String? runtimeSha256;
   final String? runtimeLicenseSha256;
   final LauncherCompiler? launcherCompiler;
+  final ReleaseStage? stage;
 
   // ---- workspace-internal names ----
   //
@@ -116,29 +121,59 @@ class BinaryChain {
     final name = ReleaseAssets.binaryPath(project, platform);
 
     File(workspace.pathOf(name)).parent.createSync(recursive: true);
-    final built =
-        await DartCliBuilder(
-          tools: tools,
-          capabilities: capabilities,
-          compilerExecutable: compilerExecutable,
-          runtimeSha256: runtimeSha256,
-          runtimeLicenseSha256: runtimeLicenseSha256,
-          launcherCompiler: launcherCompiler,
-        ).build(
-          platform: platform,
-          entryPoint: 'bin/$executable.dart',
-          output: workspace.pathOf(name),
-          workingDirectory: project.directoryIn(repositoryRoot),
-          expectedVersion: project.version.canonical,
-          defines: project.dartDefines,
-          onProgress: (event) {
-            if (event == DartBuildEvent.testing) {
-              progress?.begin(
-                ProgressActivity(running: 'testing', failed: 'test failed'),
-              );
-            }
-          },
+    DartStagePreparation? prepared;
+    Map<String, Object?>? nativeResolution;
+    late final BuildOutcome built;
+    try {
+      final stage = this.stage;
+      if (stage != null) {
+        final producer = 'build:${project.name}:$platform';
+        final frozen = DartStagePreparation.contextFor(
+          stage,
+          project,
+          DartStageOperation.binary,
+          producer,
         );
+        if (frozen != null) {
+          prepared = await DartStagePreparation.open(
+            stage: stage,
+            project: project,
+            context: frozen,
+            producer: producer,
+            tools: tools,
+          );
+        }
+      }
+      built =
+          await DartCliBuilder(
+            tools: tools,
+            capabilities: capabilities,
+            compilerExecutable: compilerExecutable,
+            runtimeSha256: runtimeSha256,
+            runtimeLicenseSha256: runtimeLicenseSha256,
+            launcherCompiler: launcherCompiler,
+          ).build(
+            platform: platform,
+            entryPoint: 'bin/$executable.dart',
+            output: workspace.pathOf(name),
+            workingDirectory:
+                prepared?.replay.root.path ??
+                project.directoryIn(repositoryRoot),
+            runCompiler: prepared?.replay.run,
+            expectedVersion: project.version.canonical,
+            defines: project.dartDefines,
+            onProgress: (event) {
+              if (event == DartBuildEvent.testing) {
+                progress?.begin(
+                  ProgressActivity(running: 'testing', failed: 'test failed'),
+                );
+              }
+            },
+          );
+      nativeResolution = prepared?.replay.graph.toJson();
+    } finally {
+      prepared?.close();
+    }
     if (!built.ok) {
       output.problem(
         Diagnostic(
@@ -179,6 +214,7 @@ class BinaryChain {
         ],
         evidence: {
           'smoke': smoke,
+          if (nativeResolution != null) 'native_resolution': nativeResolution,
           'artifact': ReleaseAssets.binaryArtifact(project, platform).toJson(),
         },
       );
@@ -187,7 +223,7 @@ class BinaryChain {
     progress?.begin(
       ProgressActivity(running: 'signing', failed: 'signing failed'),
     );
-    return _sign(step, project, smoke, signing);
+    return _sign(step, project, smoke, signing, nativeResolution);
   }
 
   /// The signing half of a macOS build.
@@ -202,6 +238,7 @@ class BinaryChain {
     ResolvedProject project,
     Map<String, Object?> smoke,
     MacSigning signing,
+    Map<String, Object?>? nativeResolution,
   ) async {
     final platform = step.platform!;
     final artifact = ReleaseAssets.binaryArtifact(project, platform);
@@ -380,6 +417,7 @@ class BinaryChain {
         'artifact': artifact.toJson(),
         'smoke': smoke,
         'signed_smoke': {'status': 'pass', 'command': '--version'},
+        if (nativeResolution != null) 'native_resolution': nativeResolution,
         // Keep the process identity at the same receipt location for recovery.
         'signature': signatures[artifact.identityFile],
         'signatures': signatures,

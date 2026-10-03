@@ -138,13 +138,18 @@ SHA-1 hash: $_sha1
       () async {
         String? call;
         String? constraint;
+        String? constraintPath;
         final tools = _tools(
           certificateOutput: 'SHA-256 hash: $_sha256\nSHA-1 hash: $_sha1\n',
           onSign: (key) {
             call = key;
-            constraint = File(
-              key.split(' --library-constraint ').last.split(' --sign ').first,
-            ).readAsStringSync();
+            constraintPath = key
+                .split(' --library-constraint ')
+                .last
+                .split(' --sign ')
+                .first;
+            expect(constraintPath, isNot(startsWith('/tmp/runtime.')));
+            constraint = File(constraintPath!).readAsStringSync();
           },
         );
 
@@ -172,7 +177,7 @@ SHA-1 hash: $_sha1
           contains('<data>Dw8PDw8PDw8PDw8PDw8PDw8PDw8=</data>'),
         );
         expect(
-          File('/tmp/runtime.library-constraint.plist').existsSync(),
+          File(constraintPath!).existsSync(),
           isFalse,
           reason: 'a codesign input must not survive into the workspace',
         );

@@ -239,13 +239,13 @@ Usage
       if (receipt.identity.id != entry.name) {
         return 'stage receipt belongs to another stage';
       }
-      final plan = receipt.steps.lastOrNull?.evidence['release_plan'];
+      final plan = receipt.plan;
       if (plan != null &&
           Sha256.hex(utf8.encode(CanonicalJson.encode(plan))) !=
               receipt.identity.planSha256) {
         return 'recorded release plan does not match this stage';
       }
-      final unit = plan is Map ? plan['unit'] : null;
+      final unit = plan?['unit'];
       final commit = receipt.identity.headCommit;
       return [
         if (unit is Map && unit['name'] is String && unit['version'] is String)

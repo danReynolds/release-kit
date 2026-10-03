@@ -56,6 +56,20 @@ class Inspector {
   /// The one closed target catalog shared by status and release.
   final TargetCatalog targets;
 
+  /// A call-local view of the same public readers using observed stage bytes.
+  /// This does not install the candidate into a release-stage resolver or grant
+  /// permission to publish it. Status supplies its locally checked snapshot.
+  Inspector forStages(ReleaseStage Function(ResolvedUnit unit) stageFor) =>
+      Inspector(
+        registry: registry,
+        git: git,
+        pubDev: pubDev,
+        tools: tools,
+        repository: repository,
+        stageFor: stageFor,
+        targets: targets,
+      );
+
   /// The read-only dependencies every target receives.
   TargetReadContext get targetReads => TargetReadContext(
     registry: registry,
@@ -156,19 +170,35 @@ class Inspector {
     }
   }
 
+  /// Discard public prerequisite observations before a delayed preparation
+  /// phase. The inspector owns their native coordinates and registry cache;
+  /// command orchestration only supplies the checklist it will observe again.
+  void invalidatePrerequisites(Iterable<Step> steps) {
+    for (final step in steps) {
+      if (step.kind != StepKind.prerequisite) continue;
+      final coordinate = _prerequisiteCoordinate(step);
+      if (coordinate != null) registry?.forget(coordinate.name);
+    }
+  }
+
+  static ({String name, String version})? _prerequisiteCoordinate(Step step) {
+    // The coordinate is carried by the step so nothing here has to know how an
+    // id is spelled: `pub.dev/<package>/<version>`.
+    final parts = step.coordinate?.split('/');
+    if (parts == null || parts.length < 3) return null;
+    return (name: parts[parts.length - 2], version: parts.last);
+  }
+
   /// A package another unit publishes, which must already be live.
   Future<Inspection> _prerequisite(Step step) async {
     if (registry == null) {
       return const Inspection.unknown('the registry reader is not configured');
     }
-    // The coordinate is carried by the step so nothing here has to know how an
-    // id is spelled: `pub.dev/<package>/<version>`.
-    final parts = step.coordinate!.split('/');
-    if (parts.length < 3) {
+    final coordinate = _prerequisiteCoordinate(step);
+    if (coordinate == null) {
       return const Inspection.unknown('the prerequisite could not be read');
     }
-    final name = parts[parts.length - 2];
-    final version = parts.last;
+    final (:name, :version) = coordinate;
 
     final RegistryPackage? package;
     try {

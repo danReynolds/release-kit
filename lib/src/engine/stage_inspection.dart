@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import '../builds/binary_artifact.dart';
@@ -8,11 +7,10 @@ import 'release_manifest.dart';
 import 'producers.dart';
 import 'stage.dart';
 import 'stage_archive.dart';
+import 'stage_binary_evidence.dart';
 import 'stage_receipt.dart';
+import 'stage_receipt_structure.dart';
 import 'verdict.dart';
-
-final _sha256 = RegExp(r'^[0-9a-f]{64}$');
-final _cdhash = RegExp(r'^[0-9a-f]{40}$');
 
 enum StageIssueKind {
   missingReceipt,
@@ -67,8 +65,32 @@ class StageInspection {
   /// the deliberately incomplete barrier remains.
   bool get validProgress =>
       receipt?.complete == false &&
+      receipt!.steps.isNotEmpty &&
       issues.isNotEmpty &&
       issues.every((issue) => issue.kind == StageIssueKind.incompleteReceipt);
+
+  /// Frozen choices survived, but source production has not completed. This
+  /// grants no producer inputs and is never a completed or reusable stage.
+  bool get planRecorded =>
+      receipt?.plan != null &&
+      receipt!.steps.isEmpty &&
+      issues.isNotEmpty &&
+      issues.every((issue) => issue.kind == StageIssueKind.incompleteReceipt);
+
+  /// Read-only classification of an intact header with unrecorded source-copy
+  /// residue. The coordinator can discard that residue after adoption. It
+  /// remains untrusted and is never part of reusable producer progress.
+  bool get canRestartSource =>
+      receipt?.plan != null &&
+      receipt!.steps.isEmpty &&
+      issues.isNotEmpty &&
+      issues.every(
+        (issue) =>
+            issue.kind == StageIssueKind.incompleteReceipt ||
+            (issue.kind == StageIssueKind.extraArtifact &&
+                (issue.path == 'source' ||
+                    issue.path?.startsWith('source/') == true)),
+      );
 
   /// The shared verdict used by status and release for the stage barrier.
   ///
@@ -288,95 +310,33 @@ class StageInspector {
     StageReceipt receipt,
     List<StageIssue> issues,
   ) {
-    final priorSteps = <String, StageStep>{};
-    final priorArtifacts = <String, StageArtifact>{};
-    final completeIndexes = <int>[];
-
+    issues.addAll(StageReceiptStructure.validate(receipt));
+    issues.addAll(StageBinaryEvidence.validate(receipt));
     if (receipt.steps.isEmpty) {
-      _structure(issues, 'receipt has no producer steps');
-      return;
-    }
-
-    for (var index = 0; index < receipt.steps.length; index++) {
-      final step = receipt.steps[index];
-      if (step.name == 'complete-stage') completeIndexes.add(index);
-
-      for (final input in step.inputs) {
-        final expected = _inputDigest(
-          receipt.identity,
-          input.name,
-          priorSteps,
-          priorArtifacts,
+      if (receipt.plan != null) {
+        final type = FileSystemEntity.typeSync(
+          stage.resolve('source'),
+          followLinks: false,
         );
-        if (expected == null) {
-          _structure(
-            issues,
-            '${step.name} names an input no earlier step produced: '
-            '${input.name}',
-          );
-        } else if (expected != input.sha256) {
-          _structure(
-            issues,
-            '${step.name} input digest differs from its producer: '
-            '${input.name}',
+        if (type != FileSystemEntityType.notFound &&
+            type != FileSystemEntityType.directory) {
+          issues.add(
+            const StageIssue(
+              StageIssueKind.wrongType,
+              'unrecorded source residue is not a directory',
+              path: 'source',
+            ),
           );
         }
       }
-      for (final output in step.outputs) {
-        priorArtifacts[output.path] = output;
-      }
-      priorSteps[step.name] = step;
+      return;
     }
-
-    final source = receipt.steps.first;
-    if (source.name != 'source-snapshot') {
-      _structure(issues, 'source-snapshot must be the first receipt step');
-    } else {
-      final expectedInputs = {
-        if (receipt.identity.isGitBound)
-          'stage:commit': Sha256.hex(utf8.encode(receipt.identity.headCommit!)),
-        if (receipt.identity.isGitBound)
-          'stage:tree': Sha256.hex(utf8.encode(receipt.identity.headTree!)),
-        'stage:plan': receipt.identity.planSha256,
-      };
-      final actualInputs = {
-        for (final input in source.inputs) input.name: input.sha256,
-      };
-      if (!_sameMap(expectedInputs, actualInputs)) {
-        _structure(
-          issues,
-          receipt.identity.isGitBound
-              ? 'source-snapshot is not bound to commit, tree, and plan'
-              : 'source-snapshot is not bound to its plan',
-        );
-      }
-      if (source.outputs.isEmpty ||
-          source.outputs.any(
-            (output) =>
-                output.type != 'source' || !output.path.startsWith('source/'),
-          )) {
-        _structure(issues, 'source-snapshot must record its source files');
-      }
-      final expectedEvidence = receipt.identity.isGitBound
-          ? <String, Object?>{
-              'commit': receipt.identity.headCommit,
-              'tree': receipt.identity.headTree,
-            }
-          : <String, Object?>{'source_binding': 'unbound'};
-      if (!_sameMap(expectedEvidence, source.evidence)) {
-        _structure(
-          issues,
-          'source-snapshot evidence disagrees with the stage identity',
-        );
-      }
-    }
-
     // Progress is reusable only if semantic producer evidence validates too;
     // otherwise a crash after a bad archive was receipted would turn that
     // false claim into a trusted input on the next run.
     for (final step in receipt.steps) {
       if (isMacosBuildReceipt(step.name)) {
-        _inspectSignature(stage, step, issues);
+        _inspectBundleManifest(stage, step, issues);
       }
       if (step.name.startsWith('archive:')) {
         for (final output in step.outputs.where(
@@ -387,51 +347,14 @@ class StageInspector {
       }
     }
 
-    if (!receipt.complete) {
-      // Completion is derived from the terminal step, and step names are
-      // unique by construction, so the one damaged shape left to name is a
-      // finalizing step that is no longer terminal.
-      if (completeIndexes.isNotEmpty) {
-        _structure(issues, 'complete-stage must be the terminal step');
+    if (receipt.complete) {
+      final complete = receipt.steps.last;
+      if (complete.outputs.length == 1 &&
+          complete.outputs.single.path == 'release-manifest.json' &&
+          complete.outputs.single.type == 'manifest') {
+        _inspectManifest(stage, receipt, complete, issues);
       }
-      return;
     }
-
-    final complete = receipt.steps.last;
-    if (complete.outputs.length != 1 ||
-        complete.outputs.single.path != 'release-manifest.json' ||
-        complete.outputs.single.type != 'manifest') {
-      _structure(
-        issues,
-        'complete-stage must produce only release-manifest.json',
-      );
-      return;
-    }
-    _inspectManifest(stage, receipt, complete, issues);
-  }
-
-  static String? _inputDigest(
-    StageIdentity identity,
-    String name,
-    Map<String, StageStep> priorSteps,
-    Map<String, StageArtifact> priorArtifacts,
-  ) {
-    switch (name) {
-      case 'stage:commit':
-        return identity.headCommit == null
-            ? null
-            : Sha256.hex(utf8.encode(identity.headCommit!));
-      case 'stage:tree':
-        return identity.headTree == null
-            ? null
-            : Sha256.hex(utf8.encode(identity.headTree!));
-      case 'stage:plan':
-        return identity.planSha256;
-    }
-    if (name.startsWith('step:')) {
-      return priorSteps[name.substring('step:'.length)]?.outputSha256;
-    }
-    return priorArtifacts[name]?.sha256;
   }
 
   static void _inspectManifest(
@@ -596,38 +519,10 @@ class StageInspector {
         producer.evidence['inventory'],
       );
       StageArchiveInventory.requireSame(expected, actual);
-      if (contents.artifact.isBundle) {
-        final parts = producer.name.split(':');
-        final root = 'producers/${parts[1]}/${parts[2]}';
-        for (final file in contents.artifact.files) {
-          final input = producer.inputs
-              .where((input) => input.name == '$root/${file.path}')
-              .firstOrNull;
-          final entry = actual.singleWhere((entry) => entry.name == file.path);
-          if (input == null || input.sha256 != entry.sha256) {
-            throw FormatException(
-              'archived ${file.path} differs from its producer input',
-            );
-          }
-        }
-      }
-      if (isMacosArchiveReceipt(producer.name)) {
-        final signature = producer.evidence['signature'];
-        if (signature is! Map ||
-            signature['status'] != 'valid' ||
-            signature['scope'] != 'archive-extracted' ||
-            (contents.artifact.isBundle &&
-                (signature['smoke'] != 'passed' ||
-                    CanonicalJson.encode(signature['files']) !=
-                        CanonicalJson.encode([
-                          for (final file in contents.artifact.signedFiles)
-                            file.path,
-                        ])))) {
-          throw const FormatException(
-            'macOS archive has no final signature verification evidence',
-          );
-        }
-      }
+      StageBinaryEvidence.requireArchiveEvidence(
+        producer,
+        artifact: contents.artifact,
+      );
     } on Object catch (error) {
       issues.add(
         StageIssue(
@@ -639,45 +534,27 @@ class StageInspector {
     }
   }
 
-  static void _inspectSignature(
+  static void _inspectBundleManifest(
     StageDirectory stage,
     StageStep producer,
     List<StageIssue> issues,
   ) {
-    final signature = producer.evidence['signature'];
-    BinaryArtifact? artifact;
-    String? root;
     try {
-      if (producer.evidence.containsKey('artifact')) {
-        artifact = BinaryArtifact.fromJson(producer.evidence['artifact']);
-        final parts = producer.name.split(':');
-        root = 'producers/${parts[1]}/${parts[2]}';
-        final expected = {
-          for (final file in artifact.files) '$root/${file.path}': file,
-        };
-        if (producer.outputs.length != expected.length ||
-            producer.outputs.any(
-              (output) =>
-                  expected[output.path]?.mode != output.mode ||
-                  expected[output.path]?.type != output.type,
-            )) {
-          throw const FormatException(
-            'signed build has an incomplete artifact inventory',
-          );
-        }
-        if (artifact.isBundle) {
-          final manifest = CanonicalJson.decodeDocument(
-            File(
-              stage.resolve('$root/${BinaryArtifact.manifestName}'),
-            ).readAsStringSync(),
-          );
-          if (CanonicalJson.encode(manifest) !=
-              CanonicalJson.encode(artifact.toJson())) {
-            throw const FormatException(
-              'signed build manifest differs from its receipt',
-            );
-          }
-        }
+      if (!producer.evidence.containsKey('artifact')) return;
+      final artifact = BinaryArtifact.fromJson(producer.evidence['artifact']);
+      if (!artifact.isBundle) return;
+      final parts = producer.name.split(':');
+      final root = 'producers/${parts[1]}/${parts[2]}';
+      final manifest = CanonicalJson.decodeDocument(
+        File(
+          stage.resolve('$root/${BinaryArtifact.manifestName}'),
+        ).readAsStringSync(),
+      );
+      if (CanonicalJson.encode(manifest) !=
+          CanonicalJson.encode(artifact.toJson())) {
+        throw const FormatException(
+          'signed build manifest differs from its receipt',
+        );
       }
     } on Object catch (error) {
       issues.add(
@@ -687,136 +564,7 @@ class StageInspector {
           path: 'stage.json',
         ),
       );
-      return;
     }
-    final binary = artifact != null
-        ? producer.outputs
-              .where(
-                (output) => output.path == '$root/${artifact!.identityFile}',
-              )
-              .firstOrNull
-        : producer.outputs.length == 1 &&
-              producer.outputs.single.type == 'executable'
-        ? producer.outputs.single
-        : null;
-    String? problem;
-    if (binary == null) {
-      problem = 'signed build does not produce exactly one executable';
-    } else if (producer.inputs.length != 1 ||
-        producer.inputs.single.name != 'step:source-snapshot') {
-      problem = 'signed build is not bound to the staged source snapshot';
-    } else if (signature is! Map) {
-      problem = 'signed build has no signature evidence';
-    } else {
-      final signedSmoke = producer.evidence['signed_smoke'];
-      final certificate = signature['certificate'];
-      final fingerprint = signature['certificate_sha256'];
-      final firstIdentity = signature['first_identity'];
-      final hasPublishedRequirement = signature.containsKey(
-        'published_requirement',
-      );
-      final publishedRequirement = signature['published_requirement'];
-      final designatedRequirement = signature['designated_requirement'];
-      final codeId = signature['code_id'];
-      final unsigned = signature['unsigned_sha256'];
-      final signed = signature['signed_sha256'];
-      final verifiedAfterSmoke = signature['verified_after_smoke'];
-      if (signedSmoke is! Map ||
-          signedSmoke['status'] != 'pass' ||
-          signedSmoke['command'] != '--version') {
-        problem = 'signed build has no successful signed smoke-test evidence';
-      } else if (certificate is! String || certificate.trim().isEmpty) {
-        problem = 'signature evidence has no certificate identity';
-      } else if (fingerprint is! String || !_sha256.hasMatch(fingerprint)) {
-        problem = 'signature evidence has no certificate SHA-256 fingerprint';
-      } else if (firstIdentity is! bool) {
-        problem = 'signature evidence does not say whether identity is first';
-      } else if (!hasPublishedRequirement ||
-          (firstIdentity && publishedRequirement != null) ||
-          (!firstIdentity &&
-              (publishedRequirement is! String ||
-                  publishedRequirement.trim().isEmpty))) {
-        problem = 'signature evidence has an inconsistent published baseline';
-      } else if (codeId is! String || codeId.trim().isEmpty) {
-        problem = 'signature evidence has no code identifier';
-      } else if (designatedRequirement is! String ||
-          designatedRequirement.trim().isEmpty) {
-        problem = 'signature evidence has no designated requirement';
-      } else if (unsigned is! String || !_sha256.hasMatch(unsigned)) {
-        problem = 'signature evidence has no unsigned input digest';
-      } else if (signed != binary.sha256) {
-        problem = 'signature evidence is not bound to the signed bytes';
-      } else if (verifiedAfterSmoke != true) {
-        problem = 'signature was not verified after the signed smoke test';
-      }
-    }
-    if (problem == null && artifact != null) {
-      final signatures = producer.evidence['signatures'];
-      if (signatures is! Map ||
-          signatures.length != artifact.signedFiles.length ||
-          CanonicalJson.encode(signatures[artifact.identityFile]) !=
-              CanonicalJson.encode(signature)) {
-        problem = 'signed build has no complete per-file signature evidence';
-      } else {
-        for (final file in artifact.signedFiles) {
-          final record = signatures[file.path];
-          final output = producer.outputs.singleWhere(
-            (output) => output.path == '$root/${file.path}',
-          );
-          if (record is! Map ||
-              signature is! Map ||
-              record['code_id'] !=
-                  '${signature['code_id']}${file.codeSuffix}' ||
-              record['certificate'] != signature['certificate'] ||
-              record['certificate_sha256'] != signature['certificate_sha256'] ||
-              record['designated_requirement'] is! String ||
-              (record['designated_requirement'] as String).trim().isEmpty ||
-              record['unsigned_sha256'] is! String ||
-              !_sha256.hasMatch(record['unsigned_sha256'] as String) ||
-              record['signed_sha256'] != output.sha256 ||
-              record['verified_after_smoke'] != true) {
-            problem =
-                'signature evidence for ${file.path} is missing or not bound to its bytes and identity';
-            break;
-          }
-        }
-        if (problem == null && artifact.libraries.isNotEmpty) {
-          problem = _pinProblem(artifact, signatures);
-        }
-      }
-    }
-    if (problem != null) {
-      issues.add(
-        StageIssue(
-          StageIssueKind.invalidStructure,
-          problem,
-          path: 'stage.json',
-        ),
-      );
-    }
-  }
-
-  /// Why a bundle's receipt does not show its runtime admitting exactly the
-  /// modules it ships, or null when it does. Without the pin, the signed
-  /// runtime would run any module signed by the same team.
-  static String? _pinProblem(BinaryArtifact artifact, Map signatures) {
-    final shipped = <String>{};
-    for (final file in artifact.libraries) {
-      final hashes = (signatures[file.path] as Map)['cdhashes'];
-      if (hashes is! List ||
-          hashes.isEmpty ||
-          hashes.any((hash) => hash is! String || !_cdhash.hasMatch(hash))) {
-        return 'signature evidence for ${file.path} records no code hash';
-      }
-      shipped.addAll(hashes.cast<String>());
-    }
-    final pinned =
-        (signatures[artifact.identityFile] as Map)['pinned_library_cdhashes'];
-    if (CanonicalJson.encode(pinned) !=
-        CanonicalJson.encode(shipped.toList()..sort())) {
-      return 'signed runtime does not pin exactly the modules it ships with';
-    }
-    return null;
   }
 
   static void _inspectInventory(
@@ -905,20 +653,6 @@ class StageInspector {
       );
     }
   }
-}
-
-void _structure(List<StageIssue> issues, String message) {
-  issues.add(
-    StageIssue(StageIssueKind.invalidStructure, message, path: 'stage.json'),
-  );
-}
-
-bool _sameMap(Map<String, Object?> left, Map<String, Object?> right) {
-  if (left.length != right.length) return false;
-  for (final entry in left.entries) {
-    if (right[entry.key] != entry.value) return false;
-  }
-  return true;
 }
 
 String _relative(String root, String path) {

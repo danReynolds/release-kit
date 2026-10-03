@@ -64,7 +64,7 @@ StageStepContract contractFor(ResolvedUnit unit, Step step) {
         receiptNameFor(step),
         inputs: const {'step:source-snapshot'},
         outputs: binaries,
-        validate: _buildEvidence,
+        validateEvidence: _buildEvidence,
       );
 
     case StepKind.notarize:
@@ -76,7 +76,8 @@ StageStepContract contractFor(ResolvedUnit unit, Step step) {
           ReleaseAssets.notaryLogPath(project, platform): 'notary',
           ReleaseAssets.notaryInputPath(project, platform): 'notary-input',
         },
-        validate: _notaryEvidence,
+        validateEvidence: _notaryEvidence,
+        validate: _notaryFiles,
       );
 
     case StepKind.archive:
@@ -88,7 +89,7 @@ StageStepContract contractFor(ResolvedUnit unit, Step step) {
             'step:notarize:${project.name}:$platform',
         },
         outputs: {ReleaseAssets.archivePath(project, platform): 'archive'},
-        validate: _archiveEvidence,
+        validateEvidence: _archiveEvidence,
       );
 
     case StepKind.buildAssets:
@@ -96,7 +97,7 @@ StageStepContract contractFor(ResolvedUnit unit, Step step) {
         receiptNameFor(step),
         inputs: const {'step:source-snapshot'},
         outputs: ReleaseAssets.assetOutputs(project),
-        validate: _assetEvidence,
+        validateEvidence: _assetEvidence,
       );
     default:
       throw StateError('${step.kind.name} is not a local producer');
@@ -105,7 +106,7 @@ StageStepContract contractFor(ResolvedUnit unit, Step step) {
 
 /// A project's build records the command rk ran for it.
 Iterable<StageIssue> _assetEvidence(
-  StageContractContext context,
+  StageEvidenceContext context,
   StageStep step,
 ) {
   final command = step.evidence['command'];
@@ -120,7 +121,7 @@ Iterable<StageIssue> _assetEvidence(
 /// A macOS archive proves the signature on its extracted executable, not
 /// merely on the source file that entered the archive builder.
 Iterable<StageIssue> _archiveEvidence(
-  StageContractContext context,
+  StageEvidenceContext context,
   StageStep step,
 ) {
   if (!isMacosArchiveReceipt(step.name)) return const [];
@@ -135,7 +136,7 @@ Iterable<StageIssue> _archiveEvidence(
 
 /// A build proves its smoke outcome, and a macOS build its signature too.
 Iterable<StageIssue> _buildEvidence(
-  StageContractContext context,
+  StageEvidenceContext context,
   StageStep step,
 ) {
   final issues = <StageIssue>[];
@@ -167,7 +168,30 @@ Iterable<StageIssue> _buildEvidence(
 /// Notarization is an identified Accepted submission whose published files
 /// are digest-bound to the receipt.
 Iterable<StageIssue> _notaryEvidence(
+  StageEvidenceContext context,
+  StageStep step,
+) => _notarySubmission(step) == null ? [_invalidNotary(step)] : const [];
+
+/// The metadata can be checked after provider cleanup; the files themselves
+/// must additionally be read whenever the actual stage is inspected.
+Iterable<StageIssue> _notaryFiles(
   StageContractContext context,
+  StageStep step,
+) {
+  final submission = _notarySubmission(step);
+  if (submission == null) return const []; // Evidence validation owns this.
+  if (!_acceptedNotaryFile(
+        context.stage,
+        submission.result.path,
+        submission.id,
+      ) ||
+      !_logNamesSubmission(context.stage, submission.log.path, submission.id)) {
+    return [_invalidNotary(step)];
+  }
+  return const [];
+}
+
+({String id, StageArtifact result, StageArtifact log})? _notarySubmission(
   StageStep step,
 ) {
   final notary = step.evidence['notary'];
@@ -185,19 +209,17 @@ Iterable<StageIssue> _notaryEvidence(
       result == null ||
       log == null ||
       notary['result_sha256'] != result.sha256 ||
-      notary['log_sha256'] != log.sha256 ||
-      !_acceptedNotaryFile(context.stage, result.path, submission) ||
-      !_logNamesSubmission(context.stage, log.path, submission)) {
-    return [
-      StageIssue(
-        StageIssueKind.invalidNotary,
-        '${step.name} has invalid Accepted-submission evidence',
-        path: 'stage.json',
-      ),
-    ];
+      notary['log_sha256'] != log.sha256) {
+    return null;
   }
-  return const [];
+  return (id: submission, result: result, log: log);
 }
+
+StageIssue _invalidNotary(StageStep step) => StageIssue(
+  StageIssueKind.invalidNotary,
+  '${step.name} has invalid Accepted-submission evidence',
+  path: 'stage.json',
+);
 
 /// Apple's log carries the submission under `id` or `jobId`; when it names
 /// one, it must be the submission the result named — a log for different

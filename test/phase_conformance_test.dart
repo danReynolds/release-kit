@@ -9,6 +9,7 @@ import 'package:rk/src/targets/pub_dev/client.dart';
 import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
+import 'package:rk/src/engine/file_mode.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
 import 'package:rk/src/output/output.dart';
@@ -467,10 +468,22 @@ void main() {
             continue;
           }
           // Installation eligibility uses Pub's own SDK-constraint semantics.
-          // This exception is exact: publication, signing and the release
-          // engine still cannot import third-party version/UI/archive code.
-          if (entity.path == 'lib/src/targets/pub_dev/installation.dart' &&
+          // Native dependency compatibility also uses Pub semantics. Keep the
+          // exception at this exact native file, outside the shared engine.
+          if ((entity.path == 'lib/src/targets/pub_dev/installation.dart' ||
+                  entity.path ==
+                      'lib/src/native/dart/version_constraints.dart') &&
               target == 'package:pub_semver/pub_semver.dart') {
+            continue;
+          }
+          if ((entity.path == 'lib/src/native/dart/resolution_graph.dart' ||
+                  entity.path == 'lib/src/native/dart/package_archive.dart') &&
+              target == 'package:yaml/yaml.dart') {
+            continue;
+          }
+          if ((entity.path == 'lib/src/native/package_archive.dart' ||
+                  entity.path == 'lib/src/native/dart/hosted_discovery.dart') &&
+              target == 'package:tar/tar.dart') {
             continue;
           }
           foreign.add('${entity.path}: $target');
@@ -511,10 +524,15 @@ void main() {
       // Both verbs must ask it — a phase 3 commit claimed release shared the
       // inspector while release still ran its own copy, and the weaker form
       // of this test (any use outside inspect.dart) passed on status alone.
-      for (final command in ['status.dart', 'release.dart']) {
+      for (final (command, call) in [
+        // Status selects a call-local Inspector view of observed saved bytes.
+        // Native status tests separately prove the public digest comparison.
+        ('status.dart', 'reader.inspect('),
+        ('release.dart', 'inspector.inspect('),
+      ]) {
         expect(
           File('lib/src/commands/$command').readAsStringSync(),
-          contains('inspector.inspect('),
+          contains(call),
           reason: '$command must ask the shared inspector',
         );
       }
@@ -637,6 +655,8 @@ void main() {
       required Map<String, List<String>> published,
       required Map<String, List<int>> archives,
       required Set<String> tags,
+      Directory? retainedStageRoot,
+      bool stageOnly = false,
       Map<String, ToolResult> results = const {},
       Map<String, String> sourceFiles = const {},
       String? config,
@@ -810,7 +830,9 @@ publish = ["git-tag", "pub.dev"]
       var code = ExitCodes.refused;
       Object? died;
       try {
-        final stageRoot = Directory.systemTemp.createTempSync('rk-drive-');
+        final stageRoot =
+            retainedStageRoot ??
+            Directory.systemTemp.createTempSync('rk-drive-');
         addTearDown(() {
           if (stageRoot.existsSync()) stageRoot.deleteSync(recursive: true);
         });
@@ -825,6 +847,7 @@ publish = ["git-tag", "pub.dev"]
         );
         code = await ReleaseCommand(
           allowInteractiveTools: true,
+          stageOnly: stageOnly,
           resolution: resolution,
           tree: tree,
           git: git,
@@ -1902,6 +1925,7 @@ publish = ["git-tag", "pub.dev"]
 
     test('DONE WHEN, resume half: killed after the tag, a re-run finishes '
         'without re-tagging', () async {
+      final retained = Directory.systemTemp.createTempSync('rk-resume-');
       final published = {
         'keybay': ['0.1.0'],
       };
@@ -1909,6 +1933,7 @@ publish = ["git-tag", "pub.dev"]
       final tags = <String>{};
 
       final first = await drive(
+        retainedStageRoot: retained,
         published: published,
         archives: archives,
         tags: tags,
@@ -1927,6 +1952,7 @@ publish = ["git-tag", "pub.dev"]
       expect(tags, contains('v0.2.0'), reason: 'the tag landed before death');
 
       final second = await drive(
+        retainedStageRoot: retained,
         published: published,
         archives: archives,
         tags: tags,
@@ -1955,13 +1981,24 @@ publish = ["git-tag", "pub.dev"]
 
     test('DONE WHEN, resume half: killed after the publish, a re-run '
         'confirms without publishing twice', () async {
+      final retained = Directory.systemTemp.createTempSync('rk-resume-');
       final published = {
         'keybay': ['0.1.0'],
       };
       final archives = <String, List<int>>{};
-      final tags = <String>{'v0.2.0'};
+      final tags = <String>{};
+      final staged = await drive(
+        retainedStageRoot: retained,
+        stageOnly: true,
+        published: published,
+        archives: archives,
+        tags: tags,
+      );
+      expect(staged.code, ExitCodes.ok, reason: staged.text);
+      tags.add('v0.2.0');
 
       final first = await drive(
+        retainedStageRoot: retained,
         published: published,
         archives: archives,
         tags: tags,
@@ -1977,6 +2014,7 @@ publish = ["git-tag", "pub.dev"]
       expect(first.code, ExitCodes.ok, reason: first.text);
 
       final second = await drive(
+        retainedStageRoot: retained,
         published: published,
         archives: archives,
         tags: tags,
@@ -2287,16 +2325,17 @@ executables:
     final stageCache = <String, ReleaseStage>{};
     ReleaseStage stageFor(ResolvedUnit unit) =>
         stageCache.putIfAbsent(unit.name, () {
+          final plan = <String, Object?>{
+            'unit': unit.name,
+            'version': unit.version.canonical,
+            'fixture': label,
+          };
           final directory = StageDirectory(
             repositoryRoot: root.path,
             identity: StageIdentity.forPlan(
               headCommit: git.head,
               headTree: '2222222222222222222222222222222222222222',
-              resolvedPlan: {
-                'unit': unit.name,
-                'version': unit.version.canonical,
-                'fixture': label,
-              },
+              resolvedPlan: plan,
             ),
           );
           return ReleaseStage(
@@ -2305,6 +2344,7 @@ executables:
             repository: git.originUrl,
             directory: directory,
             enforceUnitContract: true,
+            resolvedPlan: plan,
             targetContributions:
                 TargetCatalog.builtIn().stageContractResolver(resolution)(
                   unit: unit,
@@ -2412,6 +2452,7 @@ executables:
           File(out)
             ..parent.createSync(recursive: true)
             ..writeAsBytesSync('BINARY 1.0.0'.codeUnits);
+          setFileModes({out: '0755'});
         }
         if (key.startsWith('ditto')) {
           final zip = key.split(' ').last;

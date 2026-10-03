@@ -1,4 +1,5 @@
 import 'diagnostic.dart';
+import '../native/dart/version_constraints.dart';
 import 'version.dart';
 import 'yaml.dart';
 
@@ -177,10 +178,16 @@ class Pubspec {
         result[name] = Dependency.git(table.lineOf(name));
         continue;
       }
+      if (nested.string('sdk') case final sdk?) {
+        result[name] = Dependency.sdk(sdk, table.lineOf(name));
+        continue;
+      }
       // A hosted dependency written the long way.
       result[name] = Dependency.hosted(
         nested.string('version') ?? 'any',
         table.lineOf(name),
+        hostedUrl:
+            nested.string('hosted') ?? nested.map('hosted')?.string('url'),
       );
     }
     return result;
@@ -213,21 +220,29 @@ bool isPubDevDestination(String value) {
       !uri.hasFragment;
 }
 
-enum DependencyKind { hosted, path, git }
+enum DependencyKind { hosted, path, git, sdk }
 
 /// How one package requires another. A path or git dependency is what makes a
 /// project non-hermetic: its bytes come from somewhere the release does not
 /// describe.
 class Dependency {
-  const Dependency._(this.kind, this.constraint, this.location, this.line);
+  const Dependency._(
+    this.kind,
+    this.constraint,
+    this.location,
+    this.line, [
+    this.hostedUrl,
+  ]);
 
-  const Dependency.hosted(String constraint, int line)
-    : this._(DependencyKind.hosted, constraint, null, line);
+  const Dependency.hosted(String constraint, int line, {String? hostedUrl})
+    : this._(DependencyKind.hosted, constraint, null, line, hostedUrl);
 
   const Dependency.path(String location, int line)
     : this._(DependencyKind.path, null, location, line);
 
   const Dependency.git(int line) : this._(DependencyKind.git, null, null, line);
+  const Dependency.sdk(String sdk, int line)
+    : this._(DependencyKind.sdk, null, sdk, line);
 
   final DependencyKind kind;
 
@@ -236,46 +251,36 @@ class Dependency {
 
   /// The directory, for a path dependency.
   final String? location;
+  final String? hostedUrl;
 
   final int line;
 
   /// Whether this dependency's bytes come from outside the repository's own
   /// history, which is what makes a project impossible to release
   /// reproducibly.
-  bool get escapesRepository => kind != DependencyKind.hosted;
+  bool get escapesRepository =>
+      kind == DependencyKind.path || kind == DependencyKind.git;
 
   /// How the requirement reads, for a message about it.
   String describeRequirement() => switch (kind) {
     DependencyKind.hosted => constraint ?? 'any version',
     DependencyKind.path => 'a directory at $location',
     DependencyKind.git => 'a git repository',
+    DependencyKind.sdk => 'the $location SDK',
   };
 
   /// Whether [version] satisfies this dependency's constraint.
   ///
-  /// Supports the constraint forms a first-party dependency is written with:
-  /// `any`, an exact version, and a caret. Anything more elaborate is reported
-  /// as unknown rather than guessed at.
+  /// Uses Pub's native version semantics, including ranges and prereleases.
+  /// Malformed syntax and non-hosted sources remain unknown.
   bool? satisfiedBy(Version version) {
+    if (kind != DependencyKind.hosted) return null;
     final text = constraint?.trim();
     if (text == null || text.isEmpty) return null;
-    if (text == 'any') return true;
-
-    if (text.startsWith('^')) {
-      final base = Version.tryParse(text.substring(1));
-      if (base == null) return null;
-      if (version < base) return false;
-      // Caret allows up to the next breaking version, where a leading zero
-      // makes the first non-zero component the breaking one.
-      if (base.major > 0) return version.major == base.major;
-      if (base.minor > 0) {
-        return version.major == 0 && version.minor == base.minor;
-      }
-      return version.major == 0 && version.minor == 0;
+    try {
+      return dartConstraintAllows(text, version.canonical);
+    } on FormatException {
+      return null;
     }
-
-    final exact = Version.tryParse(text);
-    if (exact != null) return version == exact;
-    return null;
   }
 }

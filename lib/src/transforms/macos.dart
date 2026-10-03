@@ -209,8 +209,9 @@ class MacOsSigner {
     // The bundle maps a separately signed AOT module. Clear any entitlements
     // on the SDK runtime; no executable-memory or library-validation exception
     // is needed or inherited from the upstream Dart binary.
-    final entitlements = File('$binary.entitlements.plist');
-    final constraint = File('$binary.library-constraint.plist');
+    final scratch = Directory.systemTemp.createTempSync('rk-codesign-inputs-');
+    final entitlements = File('${scratch.path}/entitlements.plist');
+    final constraint = File('${scratch.path}/library-constraint.plist');
     final ToolResult signed;
     try {
       try {
@@ -248,8 +249,7 @@ class MacOsSigner {
     } finally {
       // Inputs to codesign, never artifacts: they must not survive into the
       // staged workspace, even when writing them or signing fails.
-      if (entitlements.existsSync()) entitlements.deleteSync();
-      if (constraint.existsSync()) constraint.deleteSync();
+      scratch.deleteSync(recursive: true);
     }
     if (!signed.ok) {
       return SignOutcome.failed(signed.summary, transcript: signed.transcript);

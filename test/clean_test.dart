@@ -278,14 +278,10 @@ StageEntry _writeReceipt(StageStore store, {required bool complete}) {
     ..createSync(recursive: true);
   final receipt = StageReceipt(
     identity: identity,
+    plan: plan,
     steps: [
       if (complete)
-        StageStep(
-          name: 'complete-stage',
-          inputs: const [],
-          outputs: const [],
-          evidence: {'release_plan': plan},
-        ),
+        StageStep(name: 'complete-stage', inputs: const [], outputs: const []),
     ],
   );
   File('${directory.path}/stage.json').writeAsStringSync(receipt.encode());

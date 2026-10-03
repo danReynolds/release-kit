@@ -11,8 +11,8 @@ supports, end to end:
 ```
 rk plan [unit] --json                   configured topology; source-only
 rk status <unit> --json                 where things stand; read-only
-rk stage [unit] --json                  exact stage; name it with several units
-rk status <unit> --json                 confirm: staged, good to release
+rk stage [unit] --json                  prepare all units, or one named unit
+rk status <unit> --json                 inspect local stage and public state
 rk release [unit] --yes --json          publish and read back without prompting
 rk release [unit] --yes --json          idempotent: already-published, no second act
 rk target list --json                    installed rk's static release choices
@@ -22,13 +22,23 @@ rk clean --yes --json                    remove the reviewed local stages
 
 For `release`, `--yes` answers only the ordinary publication question. The
 unit versions and remaining targets are still reported, and every inspection
-and refusal still runs. A bare release may cover several independently
+and refusal still runs. Every selected private stage is prepared before the
+aggregate confirmation, publication session acquisition or public action. A bare release may cover several independently
 versioned units; name a unit when an automation caller needs the narrowest
 scope. For `clean`, it authorizes only the repository-local stage set shown by
 that run.
 
 `command` identifies the operation: `"stage"` prepares without publishing;
 `"release"` prepares as needed and publishes. There is no separate mode field.
+
+Release consent freezes exact stage receipts, public recovery bindings, signing
+and warning disclosures,
+remaining targets and first claims. New or changed disclosures refuse with
+`RK-AUTH-003`; already-public targets and whole no-op units cannot silently become
+work. `authorization-disclosures/run` retains the aggregate disclosure in
+`attachments`. A later public failure can leave earlier targets completed;
+preparation/review failures acquire no publication sessions and change no public
+targets.
 
 ## Top level
 
@@ -67,6 +77,18 @@ Successful stage-only and local-only releases include `stage id` and
 the repository root. These storage details stay out of the human success
 summary; `next[]` contains the publish command when publication is configured.
 
+Status uses read-only intent lookup to recognize a saved dependency-bound stage.
+Its `completeStage` evidence includes the actual `stage id`, `stage path`, and
+`native authorization: "not performed by status"`. A recognized native-bound
+stage also reports `native public readiness: "not performed by status"` and
+suppresses source-only prerequisite guesses. An exact local stage verdict
+means the current source/producer contracts and recorded bytes validate locally;
+stage or release must still authorize the frozen native dependency graph before
+adopting it. Status performs no dependency solve, input recovery, producer work,
+index write or resolver adoption. An incomplete saved stage reports only its
+recorded local progress. Ambiguous or unreadable saved work is reported as a
+problem, never as permission to solve again.
+
 ## Release plan
 
 `rk plan [unit] --json` derives topology from the configured source and native
@@ -80,7 +102,7 @@ object is:
 {
   source_only: true,
   destinations_inspected: false,
-  units: [{name, version, tag, requires_units[], nodes[]}]
+  units: [{name, version, tag, requires_units[], nodes[], dependency_candidates}]
 }
 ```
 
@@ -91,6 +113,21 @@ in `needs[]`. Optional typed context is `producer`, `project`, `platform`,
 `sourceSnapshot`, `targetStage`, `build`, `notarize`, `archive`,
 `buildAssets`, `completeStage`, `tag`, `publishRegistry`, `publishRelease`,
 and `publishHomebrew`. `buildAssets` runs a project's own declared build.
+
+`dependency_candidates` has `preparation` and `publication` lists, projected
+from the same native requirements. Each selection contains `requirements[]`,
+an optional configured `candidate`, and `resolution`. A candidate has native
+`package` identity (`ecosystem`, opaque credential-free `source`, `name`),
+`version`, provider `unit`, `project`, and `producer`. Each requirement records
+its native `context`, owning configured root `owner`, installation `slot`,
+immediate declaring `consumer`, `package`, opaque
+`constraint`, native `kind`, manifest `location`, and applicable `phases`.
+`resolution` is `candidate_requires_native_validation` or
+`native_resolution_required`. Neither is proof of an available registry version
+or staged artifact. An incompatible local candidate leaves hosted resolution
+pending; it does not force the dependent package to change version. Development
+requirements do not become publication edges. Native discovery may add
+transitive requirements when an acting command prepares the scope.
 
 Node ids and `needs[]` are the machine graph. `lane`, when present, is an
 opaque equality key scoped to one unit and phase: nodes with the same key are
@@ -149,6 +186,14 @@ It is an execution result, not another target-state vocabulary; `verdict`
 remains the shared status/release observation. Native login is not a target
 action. A pub.dev action is `completed` only after publish and exact public
 read-back; an idempotent retry records `already_published`.
+
+The native publication gate runs before `attempted`. Missing or different exact
+provider archives, or a failed fresh prospective-consumer resolution, report
+`RK-PUB-018` while the package target remains `not_attempted`. The
+`native-publication/<step-id>` attachment contains transient public-check
+evidence; it never replaces the frozen receipt or private dependency choices.
+The actual public runtime order can differ from source-only `plan` candidate
+edges and from private development/build dependencies.
 
 `verdict` is one of, frozen:
 

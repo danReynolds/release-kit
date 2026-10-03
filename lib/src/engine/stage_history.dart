@@ -30,7 +30,7 @@ abstract final class StageHistory {
           continue;
         }
         final stat = file.statSync();
-        if (stat.size > 4 * 1024 * 1024) continue;
+        if (stat.size > maxStageReceiptBytes) continue;
         candidates.add((receipt: file, modified: stat.modified));
       }
       candidates.sort((a, b) {
@@ -51,16 +51,8 @@ abstract final class StageHistory {
               directory.unsafeFixedPath() != null) {
             continue;
           }
-          final evidence = receipt.steps.last.evidence;
-          final encodedPlan = evidence['release_plan'];
-          Map? plan;
-          if (encodedPlan != null) {
-            if (encodedPlan is! Map ||
-                Sha256.hex(utf8.encode(CanonicalJson.encode(encodedPlan))) !=
-                    receipt.identity.planSha256) {
-              continue;
-            }
-            plan = encodedPlan;
+          final plan = receipt.plan;
+          if (plan != null) {
             final unit = plan['unit'];
             if (unit is! Map ||
                 unit['name'] != current.unit.name ||

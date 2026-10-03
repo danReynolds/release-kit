@@ -174,6 +174,7 @@ class FakeRegistry implements RegistryReader, PublicationInspector {
   FakeRegistry(
     this.published, {
     this.unreachable = false,
+    this.unavailableVersions = const {},
     this.conflicting = const {},
     this.repositories = const {},
     Map<String, List<int>>? archives,
@@ -190,6 +191,8 @@ class FakeRegistry implements RegistryReader, PublicationInspector {
 
   /// Packages whose published content differs from this source.
   final Set<String> conflicting;
+
+  final Set<String> unavailableVersions;
 
   /// Package name to the repository declared by its published pubspec.
   final Map<String, String> repositories;
@@ -238,8 +241,12 @@ class FakeRegistry implements RegistryReader, PublicationInspector {
   }
 
   @override
-  Future<PublishedVersion?> lookupVersion(String name, Version version) async =>
-      (await lookup(name))?.at(version);
+  Future<PublishedVersion?> lookupVersion(String name, Version version) async {
+    if (unavailableVersions.contains('$name@$version')) {
+      throw RegistryUnavailable('public package read unavailable: $name');
+    }
+    return (await lookup(name))?.at(version);
+  }
 
   @override
   Future<Inspection> inspectProject(
@@ -695,7 +702,7 @@ publish = ["pub.dev"]
   test('names staging as the next command when local is ahead', () async {
     final run = await statusRun(
       source: tree(),
-      state: git(tags: ['v0.2.0']),
+      state: git(tags: ['v0.1.0']),
       registry: FakeRegistry({
         'keybay': ['0.1.0'],
       }),
@@ -2208,7 +2215,11 @@ publish = ["pub.dev"]
     );
     final receipt = made.requireReceipt();
     StageReceiptStore(made.directory).write(
-      StageReceipt(identity: receipt.identity, steps: receipt.steps.take(2)),
+      StageReceipt(
+        identity: receipt.identity,
+        plan: receipt.plan,
+        steps: receipt.steps.take(2),
+      ),
     );
 
     final run = await statusRun(
@@ -2298,6 +2309,97 @@ publish = ["pub.dev"]
       );
     },
   );
+
+  for (final pending in [
+    const Inspection.absent(),
+    const Inspection.unknown('public package read unavailable'),
+  ]) {
+    test(
+      'an exact configured tag makes a package stage required with ${pending.verdict.name} publication',
+      () async {
+        final registry = FakeRegistry(const {});
+        final run = await statusRun(
+          withConfig: config,
+          source: tree(),
+          state: git(),
+          registry: registry,
+          inspectorBuilder: (git, _) => FixedInspector(
+            registry: registry,
+            git: git,
+            answer: pending,
+            answers: const {
+              StepKind.tag: Inspection.exact(detail: 'release tag is public'),
+            },
+          ),
+        );
+        expect(run.text, contains('the partial release needs its exact stage'));
+        expect(run.text, contains('frozen dependency choices'));
+        expect(run.report['next'], isEmpty);
+        final problems = (run.report['problems'] as List).cast<Map>();
+        expect(
+          problems.where((p) => p['code'] == 'RK-STAGE-005'),
+          hasLength(1),
+        );
+      },
+    );
+  }
+
+  for (final unreadPrivate in [false, true]) {
+    test(
+      'tagless mixed packages do not imply lost stage with unread private $unreadPrivate',
+      () async {
+        const mixedConfig = '''
+schema = 2
+[release.bundle]
+[[release.bundle.project]]
+path = "core"
+publish = ["pub.dev"]
+[[release.bundle.project]]
+path = "private"
+publish = ["pub.dev"]
+''';
+        final source = MemorySourceTree({
+          for (final name in ['core', 'private']) ...{
+            '$name/pubspec.yaml':
+                'name: rk_fixture_$name\n'
+                'version: 0.2.0\n'
+                'repository: https://github.com/example/mixed\n',
+            '$name/CHANGELOG.md': '## 0.2.0\n\nNew release.\n',
+          },
+        }, description: '/repo/mixed');
+        final run = await statusRun(
+          withConfig: mixedConfig,
+          source: source,
+          state: git(),
+          registry: FakeRegistry(
+            {
+              'rk_fixture_core': ['0.2.0'],
+            },
+            unavailableVersions: {
+              if (unreadPrivate) 'rk_fixture_private@0.2.0',
+            },
+          ),
+        );
+        final problems = (run.report['problems'] as List).cast<Map>();
+        expect(
+          problems.map((problem) => problem['code']),
+          isNot(contains('RK-STAGE-005')),
+        );
+        if (unreadPrivate) {
+          expect(run.text, contains('public package read unavailable'));
+          expect(run.report['next'], isEmpty);
+        } else {
+          expect(run.text, contains('rk stage bundle'));
+        }
+        final unit = (run.report['units'] as List).single as Map;
+        final targets = (unit['targets'] as List).cast<Map>();
+        expect(
+          targets.map((target) => target['verdict']),
+          containsAll(['exact', unreadPrivate ? 'unknown' : 'absent']),
+        );
+      },
+    );
+  }
 
   test(
     'a partial binary release without its exact stage is an issue',
@@ -2642,7 +2744,7 @@ void _phase23Fixes() {
     () async {
       final text = await statusOf(
         source: tree(),
-        state: git(tags: ['v0.2.0']),
+        state: git(tags: ['v0.1.0']),
         registry: FakeRegistry({
           'keybay': ['0.1.0'],
         }),

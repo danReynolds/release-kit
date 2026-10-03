@@ -19,9 +19,31 @@ class TargetPlan {
     required this.planNote,
     required Iterable<String> artifacts,
     this.project,
+    this.packageProducer,
     this.uses,
     this.permanenceNotice,
   }) : artifacts = List<String>.unmodifiable(artifacts);
+
+  /// Preserve destination identity while orchestration replaces graph edges.
+  TargetPlan withStep(Step step) {
+    if (step.id != this.step.id || step.target != this.step.target) {
+      throw ArgumentError('a target step cannot change destination identity');
+    }
+    return TargetPlan(
+      label: label,
+      coordinate: coordinate,
+      targetVersion: targetVersion,
+      step: step,
+      kindLabel: kindLabel,
+      identity: identity,
+      planNote: planNote,
+      artifacts: artifacts,
+      project: project,
+      packageProducer: packageProducer,
+      uses: uses,
+      permanenceNotice: permanenceNotice,
+    );
+  }
 
   PublishTarget get target => step.target!;
 
@@ -34,6 +56,11 @@ class TargetPlan {
   final Step step;
   final ResolvedProject? project;
   final List<String> artifacts;
+
+  /// Native package archive producer whose coordinate this target publishes.
+  /// Other targets leave this null. The producer's existing artifact contract
+  /// and native candidate retain ownership of its archive and source identity.
+  final String? packageProducer;
 
   /// The destination kind, and the one thing this target points at. Derived
   /// from the label by string-splitting once, which produced a GitHub row

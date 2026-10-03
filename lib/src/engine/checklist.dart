@@ -1,7 +1,9 @@
 import 'assets.dart';
 import 'dependency_graph.dart';
 import 'diagnostic.dart';
+import 'native_dependencies.dart';
 import 'publish_target.dart';
+import 'release_dependencies.dart';
 import 'resolve.dart';
 
 /// The ordered set of steps a release performs.
@@ -25,8 +27,9 @@ class Checklist {
   static Checklist derive(
     ResolvedUnit unit,
     Resolution resolution,
-    Diagnostics diagnostics,
-  ) {
+    Diagnostics diagnostics, {
+    bool sourceDependencies = true,
+  }) {
     final dependencies = resolution.dependencyPlan;
     final steps = <Step>[];
 
@@ -40,7 +43,10 @@ class Checklist {
     final byCoordinate = <String, Step>{};
     final waitsOn = <String, List<String>>{};
 
-    for (final prerequisite in dependencies.prerequisites(unit, diagnostics)) {
+    for (final prerequisite
+        in sourceDependencies
+            ? dependencies.prerequisites(unit, diagnostics)
+            : const <ExternalPrerequisite>[]) {
       final id = '${unit.name}/requires/${prerequisite.coordinate}';
       final step = byCoordinate.putIfAbsent(
         prerequisite.coordinate,
@@ -59,7 +65,16 @@ class Checklist {
     }
     steps.addAll(byCoordinate.values);
 
-    final publicationOrder = dependencies.projects(unit, diagnostics);
+    final publicationOrder = sourceDependencies
+        ? dependencies.projects(unit, diagnostics)
+        : unit.projects;
+    final publicationSelections = sourceDependencies
+        ? dependencies.selections(
+            unit,
+            diagnostics,
+            phase: DependencyPhase.publication,
+          )
+        : const <NativeCandidateSelection>[];
 
     // Every local producer runs before a public identity exists. Their output
     // is not permission to publish until the complete-stage barrier has
@@ -111,15 +126,20 @@ class Checklist {
       if (step == null) continue;
       final needs = <String>[tag?.id ?? completeStage.id];
 
-      // Both dependency kinds: the same edges that ordered publication are
-      // recorded on the step graph, so a graph-driven consumer sees every
-      // constraint the linear order obeys.
-      for (final name in [
-        ...project.pubspec.dependencies.keys,
-        ...project.pubspec.devDependencies.keys,
-      ]) {
-        final sibling = published[name];
-        if (sibling != null && sibling.id != step.id) needs.add(sibling.id);
+      // Use the same native projection as ordering; do not reconstruct edges
+      // from names or turn private development inputs into public prerequisites.
+      for (final selection in publicationSelections) {
+        if (!selection.requirements.any(
+          (requirement) => requirement.owner == project.name,
+        )) {
+          continue;
+        }
+        final sibling = published[selection.candidate?.project];
+        if (sibling != null &&
+            sibling.id != step.id &&
+            !needs.contains(sibling.id)) {
+          needs.add(sibling.id);
+        }
       }
       needs.addAll(waitsOn[project.name] ?? const []);
 

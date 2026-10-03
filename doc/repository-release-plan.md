@@ -1,158 +1,154 @@
-# Repository release plan
+# Repository release contract
 
-Status: reviewed implementation plan for the pre-alpha schema-2 CLI.
+Status: implemented and qualified. Full suites pass on Dart 3.13.5 and 3.12.2;
+actual Fleury private preparation and archive-consumer workflows pass. No public
+release was performed. See the [delivery plan](dependency-staging-plan.md) and
+[native evidence](dependency-staging-native-proof.md) for exact evidence and limits.
 
-## Outcome
+## Scope
 
-One root `release.toml` may describe independently versioned units. A bare
-release visits every unit that still has work, in dependency order; naming a
-unit narrows the operation to exactly that unit.
+One root `release.toml` describes independently versioned units:
 
 ```text
-rk plan [unit]              show the configured graph; inspect no destination
-rk stage [unit]             prepare one unit; name it when several exist
-rk release                 release unfinished units in dependency order
-rk release <unit>          release exactly one unit
-rk release --yes           show the same plans; skip their yes/no prompts
+rk plan [unit]              show source-only candidate topology
+rk stage [unit]             prepare all units, or exactly one named unit
+rk release [unit]           prepare the selected scope, then publish it
+rk release --yes            accept the same reviewed publication disclosure
 rk release -y              alias of --yes
 ```
 
-This adds no release group, shared version, root version, changeset file,
-`--all`, or version inference. Each unit keeps the version declared by its
-native project manifest.
+There is no shared version, release group, automatic manifest edit or `--all`.
+A compatible Fleury 0.2.0 can supply an MCP 0.1.0 build without changing MCP's
+version. An incompatible local version does not replace its native requirement.
 
-## Scope and order
+Bare staging discovers the complete selected native graph before producers run.
+Providers produce exact archives before consumers use them. A named command may
+use a current verified completed sibling stage, or ordinary hosted resolution;
+it never builds or publishes the sibling. An authorized saved consumer retains
+its frozen choices across bare/named and stage/release commands, even after a
+provider stage is cleaned. Ambiguous, corrupt or unauthorized saved choices
+refuse rather than silently solving again.
 
-`rk release <unit>` never broadens. If that unit needs an unpublished sibling,
-its existing prerequisite check refuses and names the sibling.
+## Preparation, review and publication
 
-Bare `rk release` derives cross-unit edges from the same first-party native
-dependency facts that already produce `ExternalPrerequisite` steps. Providers
-come before dependants; unrelated units retain `release.toml` order. A cycle or
-invalid first-party constraint refuses before any unit acts.
+For `core 0.2.0 -> cli 0.1.0`, a repository release:
 
-Every ordered unit then uses the existing unit pipeline. Exact targets skip;
-absent targets are work; unknown or conflicting targets refuse. A unit whose
-public targets are already published is skipped unless a configured local output
-still needs a reusable stage. Consequently Binary remains an independent
-output rather than becoming conditional on a publisher.
+1. inspects source, public destinations, monotonicity and recovery requirements;
+2. restores or discovers selected native contexts and prepares every required
+   private stage, including the consumer against exact provider archives;
+3. reviews all remaining targets, receipts, signing identities, first claims,
+   warnings and effective endpoints;
+4. asks once, then acquires publication sessions and publishes in public
+   dependency order, checking each operation again before acting.
 
-Bare `rk stage` is intentionally not a repository coordinator. In a repository
-with several units it asks for a unit name. A dependent's native Pub archive
-validation can require the provider version to be public, so claiming to stage
-the whole repository before publication would be false.
+A failure during preparation or review causes no publication session acquisition
+or public mutation. Completed private stages remain available for retry. Local
+build/signing credentials are separate from publication sessions.
 
-## Why release is sequential
+`--yes` accepts this invocation's disclosure. It does not bypass preparation,
+inspection or refusal, and it is not a reusable approval of an earlier JSON
+report. Only `y` or `yes` accepts an interactive prompt; No, empty input and EOF
+refuse. Stage, local-only work and an entirely exact public scope need no
+publication confirmation. `rk stage --yes` remains a usage error.
 
-Repository release is not atomic: registries and Git cannot roll back public
-acts. More importantly, native Pub archive staging resolves dependencies. A
-package pinned to a newly bumped sibling may not complete its exact stage
-until that sibling is live on pub.dev.
+Consent binds exact receipt content and stage identity, authenticated public
+recovery bindings, disclosed signing and warnings, and each remaining target and
+first-name claim. The work may shrink
+when another actor completes a target. Changed or expanded inputs/disclosures
+refuse instead of asking a second, broader question. Already-public targets,
+including whole no-op units, remain under repository-wide exactness checks
+before consent, sessions and public acts. A disappeared target cannot become
+new work under the previous review. Selected local-only outputs remain under
+receipt/context checks too, without adding a publication prompt or target.
 
-For `core 2.0.0 -> cli 3.0.0`, RK therefore does this:
+## Separate native dependency projections
 
-1. validate the repository dependency graph and show the stable release order;
-2. prepare, inspect, authorize, and settle `core 2.0.0` through the existing
-   unit pipeline;
-3. only after the provider coordinate reads exact, prepare and release
-   `cli 3.0.0`;
-4. stop on the first refusal and preserve completed public truth.
+Private preparation and public publication reuse native facts, but have distinct
+edges. Core schedules opaque provider/consumer identities; adapters own version,
+source, constraint and runtime semantics. Git tag, GitHub Release and Homebrew
+retain their target lifecycle edges.
 
-A rerun reconstructs the order, skips exact work, and resumes. If a binary unit
-stopped partway, it may resume only with the exact reusable stage that produced
-the already-public bytes; RK retains the existing RK-STAGE-005 refusal rather
-than rebuilding or re-signing them.
+Dart publication projects original runtime requirements through the frozen
+selected manifests. A private development helper or development-only selection
+creates no public obligation. A development constraint that shadows a runtime
+package name cannot donate that selection's transitive edges to the runtime
+projection. Source-only `rk plan` shows candidates and pending native discovery;
+it is not a frozen publication solution.
 
-## Authorization
+Immediately before a package is marked attempted, the native gate:
 
-Remove `--confirm=<version>` completely; compatibility is unnecessary
-pre-alpha. Add `--yes` and `-y` to `release` only. There is still no `--force`.
+- fetches every relevant selected first-party provider from its declared public
+  registry and verifies the exact staged archive digest and full manifest;
+- resolves a fresh external consumer with only the prospective consumer archive
+  preloaded under its original hosted identity, fetching runtime dependencies
+  publicly and excluding private helpers and workspace source mappings;
+- checks that the prospective consumer's source, version, archive and extracted
+  package remain exact, and verifies the staged providers again after the solve.
 
-Immediately before each unit's authorization, print its exact version and
-remaining target summaries, followed by the existing permanence, first-name,
-signing-identity, and unprovable-platform disclosures. Ask:
+A broad runtime range may select a newer compatible public dependency. That
+solution is recorded separately and cannot replace the frozen private binding.
+If it selects the staged coordinate, the archive must match. Same-version
+repacking, unavailable provider bytes, propagation lag and an unresolvable
+runtime graph stop before upload with `RK-PUB-018`; the target remains
+`not_attempted`. The existing post-publication availability warning has a
+different role and cannot substitute for this blocking gate. The coordinator
+rechecks stage/context and destination, then uploads the same staged archive.
 
-```text
-Release fleury_widgets 0.4.2? [y/N]
-```
+An SDK runtime branch that reaches a staged first-party provider is explicitly
+unsupported: current frozen SDK evidence lacks the original hosted constraints
+needed to prove that obligation. This is a proof limitation, not a claim that
+Pub cannot solve it. An SDK branch containing only public dependencies remains
+part of the fresh native consumer solve. Runtime path/Git substitutions remain
+unsupported.
 
-Only case-insensitive `y` or `yes` proceeds. EOF, empty input, or any other
-answer refuses. `--yes` skips only these prompts: it still prints every unit
-plan and disclosure, runs every inspection, and honours every refusal. It is
-blanket authorization for the versions and targets resolved by that invocation,
-not a digest-bound preapproval from an earlier JSON run; an agent wanting the
-narrowest scope should name the unit.
+## Ordering and recovery
 
-Native session acquisition remains before the prompt. The current pipeline
-freezes the effective endpoint, acquires the native session, rechecks the
-endpoint, and only then asks for consent. Login must not silently redirect what
-the operator authorizes.
+Preparation and publication each diagnose their actual dependency graph before
+serial unit execution. An acyclic package/producer graph that requires units to
+interleave gets an explicit regrouping refusal. Public acts are not a transaction;
+a failure preserves earlier public truth and exact saved stages.
 
-The authorized target-step IDs are frozen at the prompt. Subsequent inspection
-may shrink the set when a target becomes exact, but may never grow it. A target
-that was omitted as exact and later becomes absent, unknown, or conflicting
-refuses and requires a fresh plan.
+A partial release with built assets, or a package-only unit with an exact
+configured Git tag, needs its original stage when remaining targets need those
+bytes (`RK-STAGE-005`). The tag is a conservative unit-progress marker, not a
+cryptographic commitment to the Pub dependency graph. One independently public
+package does not establish prior staging of its siblings: a tagless mixed
+package-only unit may prepare fresh on either command when no saved stage exists.
+Retained stages still require strict restoration, and existing public archives
+must still match any staged archive used for comparison. Unread public targets
+refuse before fresh preparation. A missing new-schema directory cannot bypass
+authenticated unit-progress or old-stage recovery requirements.
 
-Already-exact and local-only units require no authorization. Supplying `--yes`
-to an idempotent exact run remains harmless. `rk stage --yes` is a usage error
-because staging has no public act to authorize.
+Fresh mixed-unit preparation uses already-public packages as hosted dependency
+inputs, while the complete-unit contract still packages all configured outputs.
+Before release, those outputs must match the exact already-public archives.
+Native tar mtimes can make a fresh archive differ despite unchanged source
+contents; in that case release refuses before consent. Preserve or restore the
+original matching stage to finish the unit. If the public package never had an
+RK stage in a fresh tagless setup, regroup it into its own fully-public unit and
+prepare the remaining members separately. Regrouping does not bypass recovery
+for an existing frozen stage or tagged unit. Provider eligibility does not waive
+this raw archive comparison or remove outputs from the complete-unit contract.
 
-## Output
+A remaining moving target may recover entirely from authenticated public inputs.
+That narrow path does no native discovery, package production or private-provider
+selection, and its recovery binding is checked again before consent and acting.
+An absent package upload is never such a recovery target. Completely public
+units need no local stage but remain covered by the no-op growth guard.
 
-Bare release starts with one compact line:
+## Evidence and remaining qualification
 
-```text
-Release order: fleury 0.3.0 -> fleury_test 0.2.1 -> fleury_widgets 0.4.2
-```
+The existing JSON schema reports per-unit verdicts/actions, issues, warnings and
+attachments; no repository journal or new release group is introduced.
+`authorization-disclosures/run` retains the aggregate disclosure, and
+`native-publication/<step-id>` retains transient native gate evidence. These are
+invocation evidence, not a replacement stage plan.
 
-Each unit then retains the existing stage board, destination rows, safety
-disclosures, and completion output. `rk release` does not repeat the static
-topology: `rk plan` is the separate source-only view of the same canonical
-stage and public edges. It adds no batch state model and makes no claim about
-what is already complete.
-
-The existing `units[]`, step verdicts/actions, `halt`, and `next[]` represent a
-multi-unit run in deterministic order. Authorization disclosures are qualified
-by unit so sequential releases cannot overwrite one another. If an earlier
-unit acted and a later unit refuses, the repository-level halt is
-`stoppedPartway`, never `beforeActing`.
-
-`--yes` is invocation input and is not recorded as release evidence. No report
-schema bump is needed unless implementation adds or changes a serialized key.
-
-## Implementation shape
-
-Keep the change deliberately small:
-
-1. add a short stable topological ordering helper over
-   `ExternalPrerequisite.declaredBy`;
-2. have `ReleaseCommand.run` resolve the requested scope and call the existing
-   one-unit pipeline in that order, stopping at the first refusal;
-3. replace typed-version authorization with a yes/no callback and `--yes`;
-4. freeze the unit's authorized step IDs across post-consent revalidation; and
-5. make halt wording respect public acts performed by an earlier unit.
-
-Do not add a repository coordinator object, mutable per-unit batch context,
-wave abstraction, public group/transaction model, or new TOML.
-
-## Acceptance
-
-Focused tests prove:
-
-- stable dependency order and cycle refusal before acting;
-- a named dependent never broadens and refuses an absent sibling;
-- a provider settles before its dependent begins staging;
-- a later-unit refusal reports `stoppedPartway` and a rerun skips exact work;
-- a partial binary unit still requires its exact reusable stage;
-- each unit displays version, remaining targets, and existing disclosures;
-- `y`, `yes`, `--yes`, and `-y` authorize while No/empty/EOF do not;
-- `--yes` never bypasses conflicts, drift, source, stage, signing, or endpoint
-  checks;
-- post-consent work may shrink but never grow;
-- multi-unit `rk stage` requires a unit and never publishes;
-- multi-unit JSON is deterministic; and
-- the existing single-unit release safety suite stays green on the same path.
-
-Dogfood discovery, status, plan rendering, and a declined release against a
-Fleury-shaped repository without publishing it. Live publication remains a
-separately authorized receipt.
+Focused tests cover all-selected preparation before consent, no-public-action
+failure boundaries, immutable consent, no-op drift, native projection and exact
+archive/public consumer checks. Native fixtures use owned loopback registries;
+they do not publish to public registries. Full suites, independent reviews and
+actual Fleury command/archive-consumer qualification completed; the
+[native evidence record](dependency-staging-native-proof.md#final-qualification--2026-10-03)
+records their scope. No real upload, remote tag, release draft or tap write was
+performed.

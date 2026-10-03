@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:io';
 
 import '../../engine/assets.dart';
 import '../../engine/diagnostic.dart';
@@ -11,6 +10,7 @@ import '../../engine/stage_inspection.dart';
 import '../../engine/stage_receipt.dart';
 import '../../engine/targets.dart';
 import '../../output/progress.dart';
+import '../../transforms/digest.dart';
 import '../target_module.dart';
 import 'client.dart';
 
@@ -35,7 +35,7 @@ TargetStage homebrewFormulaStage({
       'homebrew-formula:${project.name}',
       inputs: archives,
       outputs: {ReleaseAssets.formulaPath(project): 'formula'},
-      validate: (context, step) {
+      validateEvidence: (context, step) {
         final repository = context.repository;
         if (repository == null) {
           return const [
@@ -46,24 +46,32 @@ TargetStage homebrewFormulaStage({
             ),
           ];
         }
-        final publicArchives = {
-          for (final platform in project.binaryPlatforms)
-            platform: PlatformAsset(
-              name: ReleaseAssets.archiveName(
-                executable,
-                project.version.canonical,
-                platform,
-              ),
-              sha256: context.receipt.steps
-                  .singleWhere(
-                    (item) =>
-                        item.name == archiveReceiptName(project.name, platform),
-                  )
-                  .outputs
-                  .single
-                  .sha256,
+        final publicArchives = <String, PlatformAsset>{};
+        for (final platform in project.binaryPlatforms) {
+          final archive = context.receipt.steps
+              .where(
+                (item) =>
+                    item.name == archiveReceiptName(project.name, platform),
+              )
+              .singleOrNull
+              ?.outputs
+              .where(
+                (output) =>
+                    output.path ==
+                        ReleaseAssets.archivePath(project, platform) &&
+                    output.type == 'archive',
+              )
+              .singleOrNull;
+          if (archive == null) return [_formulaMismatch()];
+          publicArchives[platform] = PlatformAsset(
+            name: ReleaseAssets.archiveName(
+              executable,
+              project.version.canonical,
+              platform,
             ),
-        };
+            sha256: archive.sha256,
+          );
+        }
         final expected = HomebrewFormula.renderRelease(
           className: ReleaseAssets.formulaClass(executable),
           version: project.version.canonical,
@@ -72,19 +80,20 @@ TargetStage homebrewFormulaStage({
           executable: executable,
           assets: publicArchives,
         );
-        final actual = File(
-          context.stage.resolve(ReleaseAssets.formulaPath(project)),
-        );
-        if (actual.existsSync() && actual.readAsStringSync() == expected) {
+        final bytes = utf8.encode(expected);
+        final actual = step.outputs
+            .where(
+              (output) =>
+                  output.path == ReleaseAssets.formulaPath(project) &&
+                  output.type == 'formula',
+            )
+            .singleOrNull;
+        if (actual != null &&
+            actual.size == bytes.length &&
+            actual.sha256 == Sha256.hex(bytes)) {
           return const [];
         }
-        return const [
-          StageIssue(
-            StageIssueKind.invalidStructure,
-            'homebrew-formula does not match the staged archives',
-            path: 'stage.json',
-          ),
-        ];
+        return [_formulaMismatch()];
       },
     ),
   );
@@ -102,6 +111,12 @@ TargetStage homebrewFormulaStage({
     prepare: (context) => _prepareStage(context, unit, target),
   );
 }
+
+StageIssue _formulaMismatch() => const StageIssue(
+  StageIssueKind.invalidStructure,
+  'homebrew-formula does not match the staged archives',
+  path: 'stage.json',
+);
 
 Future<TargetStageOutcome> _prepareStage(
   TargetStageContext context,

@@ -29,6 +29,57 @@ const _commit = '1111111111111111111111111111111111111111';
 const _tree = '2222222222222222222222222222222222222222';
 
 void main() {
+  group('frozen receipt plan', () {
+    test(
+      'deep freezes and authenticates its complete plan before any producer',
+      () {
+        final plan = <String, Object?>{
+          'choices': [
+            {'version': '1.0.0'},
+          ],
+        };
+        final identity = _identity(plan);
+        final receipt = StageReceipt(identity: identity, plan: plan);
+        final encoded = receipt.encode();
+        ((plan['choices'] as List).single as Map)['version'] = '2.0.0';
+        expect(receipt.encode(), encoded);
+        expect(
+          () => ((receipt.plan!['choices'] as List).single as Map)['version'] =
+              '3.0.0',
+          throwsUnsupportedError,
+        );
+        final parsed = StageReceipt.parse(encoded);
+        expect(parsed.plan, receipt.plan);
+        expect(parsed.steps, isEmpty);
+        expect(parsed.complete, isFalse);
+        expect(
+          () => StageReceipt(identity: identity, plan: plan),
+          throwsFormatException,
+        );
+        final tampered = jsonDecode(encoded) as Map;
+        tampered['plan']['choices'][0]['version'] = '2.0.0';
+        expect(
+          () => StageReceipt.parse('${CanonicalJson.encode(tampered)}\n'),
+          throwsFormatException,
+        );
+      },
+    );
+
+    test('does not allow a second plan in completion evidence', () {
+      const plan = <String, Object?>{'unit': 'tool'};
+      expect(
+        () => StageReceipt(
+          identity: _identity(plan),
+          plan: plan,
+          steps: [
+            StageStep(name: 'complete-stage', evidence: {'release_plan': plan}),
+          ],
+        ),
+        throwsFormatException,
+      );
+    });
+  });
+
   group('atomic file replacement', () {
     late Directory root;
 
@@ -180,6 +231,44 @@ void main() {
 
     tearDown(() => repository.deleteSync(recursive: true));
 
+    test(
+      'a recorded plan is distinct from producer progress and completion',
+      () {
+        final plan = <String, Object?>{'unit': 'tool'};
+        final directory = StageDirectory(
+          repositoryRoot: repository.path,
+          identity: _identity(plan),
+        );
+        StageReceiptStore(
+          directory,
+        ).write(StageReceipt(identity: directory.identity, plan: plan));
+        final inspected = const StageInspector().inspect(directory);
+        expect(inspected.planRecorded, isTrue, reason: '${inspected.issues}');
+        expect(inspected.validProgress, isFalse);
+        expect(inspected.reusable, isFalse);
+        expect(inspected.claimsCompletion, isFalse);
+        expect(inspected.issues.single.kind, StageIssueKind.incompleteReceipt);
+        final original = File(
+          directory.resolve('stage.json'),
+        ).readAsStringSync();
+        final old = jsonDecode(original) as Map;
+        old['schema'] = 12;
+        old.remove('plan');
+        final encoded = '${CanonicalJson.encode(old)}\n';
+        File(directory.resolve('stage.json')).writeAsStringSync(encoded);
+        final refused = const StageInspector().inspect(directory);
+        expect(refused.planRecorded, isFalse);
+        expect(
+          refused.issues.single.message,
+          contains('RK version that created it'),
+        );
+        expect(
+          File(directory.resolve('stage.json')).readAsStringSync(),
+          encoded,
+        );
+      },
+    );
+
     test('a file that moved while being read is not remembered', () {
       stage.ensureExists();
       final artifact = File(stage.resolve('out/tool'))
@@ -288,6 +377,48 @@ void main() {
           ),
         ),
       );
+    });
+
+    test('receipt byte limits preserve the last readable progress', () {
+      final header = StageReceipt(identity: stage.identity);
+      final bytes = utf8.encode(header.encode());
+      final store = StageReceiptStore(stage, maxBytes: bytes.length);
+      store.write(header);
+      expect(store.read()!.encode(), header.encode());
+      final file = File(stage.resolve('stage.json'));
+      final before = file.readAsBytesSync();
+      final modified = file.lastModifiedSync();
+      final larger = StageReceipt(
+        identity: stage.identity,
+        steps: [
+          StageStep(name: 'build', evidence: {'detail': 'more progress'}),
+        ],
+      );
+      expect(() => store.write(larger), throwsA(isA<StageReceiptLimit>()));
+      expect(file.readAsBytesSync(), before);
+      expect(file.lastModifiedSync(), modified);
+
+      // Inspection must enforce the same limit even if an external writer
+      // bypassed the atomic store. Exact-boundary receipts remain readable.
+      file.writeAsStringSync(larger.encode());
+      expect(store.read, throwsA(isA<StageReceiptLimit>()));
+    });
+
+    test('default receipt limit rejects oversized evidence before writing', () {
+      final receipt = StageReceipt(
+        identity: stage.identity,
+        steps: [
+          StageStep(
+            name: 'build',
+            evidence: {'detail': 'x' * maxStageReceiptBytes},
+          ),
+        ],
+      );
+      expect(
+        () => StageReceiptStore(stage).write(receipt),
+        throwsA(isA<StageReceiptLimit>()),
+      );
+      expect(Directory(stage.path).existsSync(), isFalse);
     });
 
     test('lives at the content-addressed stages path', () {
@@ -399,6 +530,7 @@ void main() {
         () => StageReceiptStore(stage).write(
           StageReceipt(
             identity: previous.identity,
+            plan: previous.plan,
             steps: [
               ...previous.steps,
               StageStep(name: 'candidate', outputs: [candidate]),
@@ -549,6 +681,7 @@ void main() {
       StageReceiptStore(stage).write(
         StageReceipt(
           identity: receipt.identity,
+          plan: receipt.plan,
           steps: [receipt.steps.first, sign, receipt.steps.last],
         ),
       );
@@ -590,6 +723,7 @@ void main() {
       StageReceiptStore(stage).write(
         StageReceipt(
           identity: receipt.identity,
+          plan: receipt.plan,
           steps: [receipt.steps.first, sign, receipt.steps.last],
         ),
       );

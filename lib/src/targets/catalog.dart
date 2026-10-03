@@ -115,7 +115,12 @@ final class TargetCatalog {
         required String sourceRoot,
       }) {
         final diagnostics = Diagnostics();
-        final checklist = Checklist.derive(unit, resolution, diagnostics);
+        final checklist = Checklist.derive(
+          unit,
+          resolution,
+          diagnostics,
+          sourceDependencies: false,
+        );
         if (diagnostics.isNotEmpty) {
           throw StateError(
             'target stage contract could not be derived: '
