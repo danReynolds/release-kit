@@ -55,6 +55,7 @@ class ReleaseStages {
   final Map<String, String> Function() _environment;
   final Map<String, ReleaseStage> _stages = {};
   final Map<String, StageDependencies> _dependencies = {};
+  final Map<String, int> _bindingGenerations = {};
   final String _unboundRunId = _newRunId();
   DartCompilerIdentity? _compiler;
 
@@ -65,6 +66,7 @@ class ReleaseStages {
       git,
       _compiler ??= _readCompilerIdentity(),
       _readRkIdentity(),
+      _dependencies[unit.name] ?? StageDependencies(),
     ),
   );
 
@@ -77,9 +79,82 @@ class ReleaseStages {
     // The portable identity excludes temporary provider handles. A restored
     // declaration and a freshly acquired provider may therefore have the same
     // identity while only the latter can materialize a missing import.
+    final candidate = _resolve(
+      unit,
+      git,
+      _compiler ??= _readCompilerIdentity(),
+      _readRkIdentity(),
+      dependencies,
+    );
+    _install(unit, dependencies, candidate);
+    return candidate;
+  }
+
+  /// Adopts an existing frozen receipt without changing choices or disk bytes.
+  /// The caller holds the stage-store mutation lock and supplies current Git
+  /// state. Native source/registry/provider authorization must happen in
+  /// [authorize]; deserialized dependency declarations alone are not authority.
+  /// It may attach temporary handles, but may not select different dependencies.
+  /// Refusal throws, never returning an absent-stage result that invites a solve.
+  Future<ReleaseStage> adoptFrozen(
+    ResolvedUnit unit, {
+    required GitState currentGit,
+    required StageReceipt receipt,
+    required Future<StageDependencies> Function(
+      StageReceipt receipt,
+      GitState currentGit,
+    )
+    authorize,
+  }) async {
+    final generation = _bindingGenerations[unit.name] ?? 0;
+    final plan = receipt.plan;
+    if (plan == null) {
+      throw StateError('frozen stage adoption requires its recorded plan');
+    }
+    final declared = plan['dependency_inputs'] == null
+        ? StageDependencies()
+        : StageDependencies.fromJson(plan['dependency_inputs']);
+    final authorized = await authorize(receipt, currentGit);
+    if (CanonicalJson.encode(authorized.toJson()) !=
+        CanonicalJson.encode(declared.toJson())) {
+      throw StateError('authorization changed the frozen dependency choices');
+    }
+    final candidate = _resolve(
+      unit,
+      currentGit,
+      _readCompilerIdentity(),
+      _readRkIdentity(),
+      authorized,
+    );
+    if (candidate.directory.identity.id != receipt.identity.id) {
+      throw StateError('frozen stage differs from the current release inputs');
+    }
+    final inspected = candidate.inspect();
+    if (inspected.receipt?.encode() != receipt.encode()) {
+      throw StateError('frozen receipt changed during stage authorization');
+    }
+    if (!inspected.reusable && !inspected.canRestartSource) {
+      // Permits only verified progress with declared pending producer outputs.
+      // Unrecorded bytes are never returned as artifacts or cleaned here.
+      candidate.requireProducerProgress();
+    }
+    if ((_bindingGenerations[unit.name] ?? 0) != generation) {
+      throw StateError('stage binding changed during frozen authorization');
+    }
+    _install(unit, authorized, candidate);
+    return candidate;
+  }
+
+  void _install(
+    ResolvedUnit unit,
+    StageDependencies dependencies,
+    ReleaseStage stage,
+  ) {
     _stages.removeWhere((_, stage) => stage.unit.name == unit.name);
     _dependencies[unit.name] = dependencies;
-    return call(unit);
+    _stages['${unit.name}:${CanonicalJson.encode(dependencies.toJson())}'] =
+        stage;
+    _bindingGenerations[unit.name] = (_bindingGenerations[unit.name] ?? 0) + 1;
   }
 
   /// Resolves the stage again from facts read at the release boundary.
@@ -88,14 +163,20 @@ class ReleaseStages {
   /// the initial Git state. Publication must notice a PATH-selected compiler,
   /// signing policy, origin, commit, tree, platform, or plan change that
   /// happened while private preparation or authorization was in progress.
-  ReleaseStage refresh(ResolvedUnit unit, GitState currentGit) =>
-      _resolve(unit, currentGit, _readCompilerIdentity(), _readRkIdentity());
+  ReleaseStage refresh(ResolvedUnit unit, GitState currentGit) => _resolve(
+    unit,
+    currentGit,
+    _readCompilerIdentity(),
+    _readRkIdentity(),
+    _dependencies[unit.name] ?? StageDependencies(),
+  );
 
   ReleaseStage _resolve(
     ResolvedUnit unit,
     GitState currentGit,
     DartCompilerIdentity compiler,
     RkImplementationIdentity rk,
+    StageDependencies dependencies,
   ) {
     final launcher =
         Platform.isMacOS &&
@@ -114,7 +195,6 @@ class ReleaseStages {
       rk: rk,
       environment: _environment(),
     );
-    final dependencies = _dependencies[unit.name] ?? StageDependencies();
     if (!dependencies.isEmpty) {
       plan['dependency_inputs'] = dependencies.toJson();
     }
@@ -501,16 +581,8 @@ class ReleaseStage {
   void discardUnrecordedSource() {
     final inspected = inspect();
     final receipt = inspected.receipt;
-    if (receipt?.plan == null ||
-        receipt!.steps.isNotEmpty ||
-        receipt.identity.id != directory.identity.id ||
-        inspected.issues.any(
-          (issue) =>
-              issue.kind != StageIssueKind.incompleteReceipt &&
-              !(issue.kind == StageIssueKind.extraArtifact &&
-                  (issue.path == 'source' ||
-                      issue.path?.startsWith('source/') == true)),
-        )) {
+    if (!inspected.canRestartSource ||
+        receipt!.identity.id != directory.identity.id) {
       throw StateError('source retry requires an intact frozen plan header');
     }
     final type = FileSystemEntity.typeSync(sourceRoot, followLinks: false);

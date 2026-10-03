@@ -79,6 +79,21 @@ class StageInspection {
       issues.isNotEmpty &&
       issues.every((issue) => issue.kind == StageIssueKind.incompleteReceipt);
 
+  /// Read-only classification of an intact header with unrecorded source-copy
+  /// residue. The coordinator can discard that residue after adoption. It
+  /// remains untrusted and is never part of reusable producer progress.
+  bool get canRestartSource =>
+      receipt?.plan != null &&
+      receipt!.steps.isEmpty &&
+      issues.isNotEmpty &&
+      issues.every(
+        (issue) =>
+            issue.kind == StageIssueKind.incompleteReceipt ||
+            (issue.kind == StageIssueKind.extraArtifact &&
+                (issue.path == 'source' ||
+                    issue.path?.startsWith('source/') == true)),
+      );
+
   /// The shared verdict used by status and release for the stage barrier.
   ///
   /// A missing or interrupted receipt is ordinary work. A receipt that once
@@ -307,6 +322,21 @@ class StageInspector {
           issues,
           'receipt has neither a frozen plan nor producer steps',
         );
+      } else {
+        final type = FileSystemEntity.typeSync(
+          stage.resolve('source'),
+          followLinks: false,
+        );
+        if (type != FileSystemEntityType.notFound &&
+            type != FileSystemEntityType.directory) {
+          issues.add(
+            const StageIssue(
+              StageIssueKind.wrongType,
+              'unrecorded source residue is not a directory',
+              path: 'source',
+            ),
+          );
+        }
       }
       return;
     }

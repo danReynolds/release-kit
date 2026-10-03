@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -30,6 +31,243 @@ void main() {
   late _Fixture f;
   setUp(() => f = _Fixture());
   tearDown(() => f.close());
+
+  StageDependencies externalDependencies() {
+    final external = f.external();
+    return StageDependencies(
+      external: [external],
+      contexts: [
+        f.context([external.binding]),
+      ],
+    );
+  }
+
+  for (final state in [
+    'complete',
+    'source',
+    'header',
+    'source residue',
+    'pending output',
+  ]) {
+    test(
+      'transactional adoption restores $state without writing disk',
+      () async {
+        final stage = f.stages.bindDependencies(f.app, externalDependencies());
+        if (state == 'complete') {
+          await f.complete(stage, 'complete consumer');
+        } else if (state == 'source' || state == 'pending output') {
+          await f.start(stage);
+          if (state == 'pending output') {
+            stage.directory.writeBytesAtomically(
+              'app.pkg',
+              utf8.encode('unfinished'),
+            );
+          }
+        } else {
+          stage.writeProgress(const []);
+          if (state == 'source residue') {
+            stage.directory.writeBytesAtomically(
+              'source/partial',
+              utf8.encode('unfinished'),
+            );
+          }
+        }
+        final receipt = StageReceiptStore(stage.directory).read()!;
+        final before = stage.directory.fingerprint();
+        final restarted = f.resolver();
+        final baseline = restarted(f.app);
+        var authorizations = 0;
+        final restored = await restarted.adoptFrozen(
+          f.app,
+          currentGit: f.git,
+          receipt: receipt,
+          authorize: (frozen, currentGit) async {
+            authorizations++;
+            expect(frozen.encode(), receipt.encode());
+            expect(currentGit.head, f.git.head);
+            expect(restarted(f.app), same(baseline));
+            return StageDependencies.fromJson(
+              frozen.plan!['dependency_inputs'],
+            );
+          },
+        );
+        expect(authorizations, 1);
+        expect(restored.directory.identity.id, receipt.identity.id);
+        expect(restarted(f.app), same(restored));
+        expect(
+          restarted.refresh(f.app, f.git).directory.identity.id,
+          receipt.identity.id,
+        );
+        expect(
+          stage.directory.fingerprint(),
+          before,
+          reason: 'adoption cannot clean or materialize bytes',
+        );
+        if (state == 'header' || state == 'source residue') {
+          expect(restored.inspect().canRestartSource, isTrue);
+          expect(restored.requireProducerProgress, throwsStateError);
+        } else if (state == 'pending output') {
+          expect(restored.requireProducerProgress().steps.map((s) => s.name), [
+            'source-snapshot',
+          ]);
+        }
+      },
+    );
+  }
+
+  for (final failure in [
+    'native authorization',
+    'new selection',
+    'Git',
+    'toolchain',
+    'contract',
+    'receipt',
+    'receipt progress',
+    'artifact',
+  ]) {
+    test('$failure rejection preserves the current resolver binding', () async {
+      final stage = f.stages.bindDependencies(f.app, externalDependencies());
+      await f.complete(stage, 'complete consumer');
+      final receipt = stage.requireReceipt();
+      var compilerDigest = 'a';
+      final restarted = f.resolver(
+        compilerDigest: () => compilerDigest,
+        changedContract: failure == 'contract',
+      );
+      final baseline = restarted.bindDependencies(
+        f.app,
+        StageDependencies(
+          contexts: [
+            f.context([], native: {'fixture': 'previous'}),
+          ],
+        ),
+      );
+      final before = CanonicalJson.encode(baseline.dependencies.toJson());
+      await expectLater(
+        restarted.adoptFrozen(
+          f.app,
+          currentGit: failure == 'Git' ? f.gitAt(head: '3' * 40) : f.git,
+          receipt: receipt,
+          authorize: (frozen, currentGit) async {
+            switch (failure) {
+              case 'native authorization':
+                throw StateError('fixture native authorization rejected');
+              case 'new selection':
+                return StageDependencies();
+              case 'toolchain':
+                compilerDigest = 'c';
+              case 'receipt':
+                File(
+                  stage.directory.resolve('stage.json'),
+                ).writeAsStringSync('{}\n');
+              case 'receipt progress':
+                StageReceiptStore(stage.directory).write(
+                  StageReceipt(
+                    identity: frozen.identity,
+                    plan: frozen.plan,
+                    steps: frozen.steps.take(1),
+                  ),
+                );
+              case 'artifact':
+                File(
+                  stage.directory.resolve('app.pkg'),
+                ).writeAsStringSync('changed consumer');
+            }
+            return StageDependencies.fromJson(
+              frozen.plan!['dependency_inputs'],
+            );
+          },
+        ),
+        throwsStateError,
+      );
+      expect(restarted(f.app), same(baseline));
+      expect(
+        CanonicalJson.encode(restarted(f.app).dependencies.toJson()),
+        before,
+      );
+      expect(
+        restarted.refresh(f.app, f.git).dependencies.toJson(),
+        baseline.dependencies.toJson(),
+      );
+    });
+  }
+
+  test('slow authorization cannot overwrite a newer binding', () async {
+    final stage = f.stages.bindDependencies(f.app, externalDependencies());
+    await f.complete(stage, 'complete consumer');
+    final restarted = f.resolver();
+    final started = Completer<void>();
+    final continueAuthorization = Completer<void>();
+    final adopting = restarted.adoptFrozen(
+      f.app,
+      currentGit: f.git,
+      receipt: stage.requireReceipt(),
+      authorize: (frozen, currentGit) async {
+        started.complete();
+        await continueAuthorization.future;
+        return StageDependencies.fromJson(frozen.plan!['dependency_inputs']);
+      },
+    );
+    final refused = expectLater(
+      adopting,
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'binding generation',
+          contains('stage binding changed'),
+        ),
+      ),
+    );
+    await started.future;
+    final newer = restarted.bindDependencies(
+      f.app,
+      StageDependencies(
+        contexts: [
+          f.context([], native: {'fixture': 'newer'}),
+        ],
+      ),
+    );
+    continueAuthorization.complete();
+    await refused;
+    expect(restarted(f.app), same(newer));
+    expect(
+      restarted.refresh(f.app, f.git).directory.identity.id,
+      newer.directory.identity.id,
+    );
+  });
+
+  test(
+    'file at source root refuses adoption without changing the binding',
+    () async {
+      final stage = f.stages.bindDependencies(f.app, externalDependencies());
+      stage.writeProgress(const []);
+      stage.directory.writeBytesAtomically(
+        'source',
+        utf8.encode('not a directory'),
+      );
+      final receipt = StageReceiptStore(stage.directory).read()!;
+      final before = stage.directory.fingerprint();
+      final restarted = f.resolver();
+      final baseline = restarted(f.app);
+      expect(stage.inspect().canRestartSource, isFalse);
+      await expectLater(
+        restarted.adoptFrozen(
+          f.app,
+          currentGit: f.git,
+          receipt: receipt,
+          authorize: (frozen, _) async =>
+              StageDependencies.fromJson(frozen.plan!['dependency_inputs']),
+        ),
+        throwsStateError,
+      );
+      expect(restarted(f.app), same(baseline));
+      expect(
+        restarted.refresh(f.app, f.git).directory.identity.id,
+        baseline.directory.identity.id,
+      );
+      expect(stage.directory.fingerprint(), before);
+    },
+  );
 
   test(
     'coordinator imports before invoking the consuming native producer',
@@ -180,7 +418,12 @@ void main() {
       final restored = StageDependencies.fromJson(
         jsonDecode(jsonEncode(dependencies.toJson())),
       );
-      final fresh = f.resolver().bindDependencies(f.app, restored);
+      final fresh = await f.resolver().adoptFrozen(
+        f.app,
+        currentGit: f.git,
+        receipt: consumer.requireReceipt(),
+        authorize: (_, _) async => restored,
+      );
       expect(fresh.directory.identity.id, consumer.directory.identity.id);
       expect(fresh.inspect().issues, isEmpty);
       expect(fresh.inspect().reusable, isTrue);
@@ -733,9 +976,10 @@ publish = ["pub.dev"]
   late final ReleaseStages stages;
   ResolvedUnit get core => resolution.unit('core')!;
   ResolvedUnit get app => resolution.unit('app')!;
-  GitState get git => GitState(
+  GitState get git => gitAt();
+  GitState gitAt({String? head}) => GitState(
     root: root.path,
-    head: '1' * 40,
+    head: head ?? '1' * 40,
     headTree: '2' * 40,
     branch: 'main',
     isClean: true,
@@ -746,7 +990,10 @@ publish = ["pub.dev"]
     originUrl: 'example/repository',
   );
 
-  ReleaseStages resolver() => ReleaseStages(
+  ReleaseStages resolver({
+    String Function()? compilerDigest,
+    bool changedContract = false,
+  }) => ReleaseStages(
     source: source,
     git: git,
     stageContracts:
@@ -756,14 +1003,17 @@ publish = ["pub.dev"]
               step: StageStepContract(
                 'native:${project.name}',
                 inputs: const {'step:source-snapshot'},
-                outputs: {'${project.name}.pkg': 'fixture-package'},
+                outputs: {
+                  '${project.name}${changedContract ? '.different' : ''}.pkg':
+                      'fixture-package',
+                },
               ),
             ),
         ],
     compilerIdentity: () => DartCompilerIdentity.recorded(
       executable: '/sdk/dart',
       version: 'fixture',
-      sha256: 'a' * 64,
+      sha256: (compilerDigest?.call() ?? 'a') * 64,
     ),
     rkIdentity: () => RkImplementationIdentity.recorded(
       version: '0.1.0',

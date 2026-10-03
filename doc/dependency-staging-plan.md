@@ -5,8 +5,10 @@ Status: reviewed delivery plan; implementation is in progress on
 Pub/binary preparation, frozen-choice verification and source-bound binary lock
 policies are implemented. Development-source discovery and receipt-bound helper
 replay are implemented; frozen-stage restore and command integration are not complete.
-Schema-13 receipt headers now preserve plans across source-copy interruptions;
-intent lookup, transactional adoption and portable proof closure remain packet 2.
+Schema-13 receipt headers now preserve plans across source-copy interruptions,
+and core adoption installs bindings only after successful authorization and
+inspection. Intent lookup, native authorization wiring and portable proof closure
+remain packet 2.
 The remaining work is defined in the implementation packets below; foundation
 proofs do not qualify bare `rk stage` or publication. No publication has occurred.
 
@@ -802,3 +804,16 @@ and 217 broader CLI/phase/native/release tests passed after upgrading two hand-b
 production-contract fixtures. Schema-12 parsing refuses without deleting bytes.
 Recovery across old identity paths and public history remains required in the
 lookup/command work; this does not yet qualify end-to-end frozen restoration.
+
+Core transactional adoption now accepts explicit current Git state and an
+injected asynchronous authorizer. It refuses any changed serialized dependency
+choice, reconstructs identity with fresh toolchain/environment facts, verifies
+the unchanged on-disk receipt and recorded bytes/contracts, and only then installs
+the candidate. Per-unit generations prevent a slow authorization from overwriting
+a newer binding. Adoption classifies resumable source/producer residue without
+mutating disk. Native source/registry/provider authorization remains a required
+caller responsibility; parsing a context is not authorization. The architecture
+reviewer approved the API and final implementation after a file-at-source-root
+regression closed an invalid resumable-state classification. The broader run
+passed 279 tests including real native preparation; 265 core/coordinator/status
+tests passed after that final guard. Lookup and proof-closure wiring remain next.
