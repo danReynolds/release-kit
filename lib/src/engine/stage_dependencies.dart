@@ -589,6 +589,7 @@ final class StageDependencies {
         if (input.consumers.contains(contract.name)) input.archive.path,
     },
     outputs: contract.outputs,
+    validateEvidence: contract.validateEvidence,
     validate: contract.validate,
   );
 
@@ -597,8 +598,9 @@ final class StageDependencies {
       importProducer,
       inputs: const {'step:source-snapshot'},
       outputs: {for (final artifact in _outputs) artifact.path: artifact.type},
+      validateEvidence: (context, step) =>
+          validateRecordedInputs(context.receipt),
       validate: (context, step) sync* {
-        yield* validateRecordedInputs(context.receipt);
         for (final input in imports) {
           try {
             input.validateProof(context.stage);

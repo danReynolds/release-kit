@@ -7,6 +7,7 @@ import '../../engine/release_stage.dart';
 import '../../engine/resolve.dart';
 import '../../engine/stage.dart';
 import '../../engine/stage_contract.dart';
+import '../../engine/stage_inspection.dart';
 import '../../engine/stage_receipt.dart';
 import '../../engine/targets.dart';
 import '../../engine/tools.dart';
@@ -32,6 +33,16 @@ TargetStage pubDevPackageStage({
       'pub-archive:${target.project!.name}',
       inputs: const {'step:source-snapshot'},
       outputs: {archivePath: 'pub-archive'},
+      validateEvidence: (context, step) =>
+          step.evidence['package_archive'] == 'staged'
+          ? const []
+          : [
+              StageIssue(
+                StageIssueKind.invalidStructure,
+                '${step.name} has no staged native package evidence',
+                path: 'stage.json',
+              ),
+            ],
     ),
   );
   return TargetStage(

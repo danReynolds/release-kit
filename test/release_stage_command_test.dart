@@ -8,6 +8,7 @@ import 'package:rk/src/targets/pub_dev/client.dart';
 import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
+import 'package:rk/src/engine/file_mode.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
 import 'package:rk/src/engine/release_stage.dart';
@@ -3327,6 +3328,7 @@ class _WorldTools implements Tools {
       File(output)
         ..parent.createSync(recursive: true)
         ..writeAsBytesSync(utf8.encode('BINARY tool 1.2.3'));
+      setFileModes({output: '0755'});
       return _ok();
     }
     if (_isDart(executable) &&

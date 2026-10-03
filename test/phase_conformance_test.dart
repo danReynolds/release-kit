@@ -9,6 +9,7 @@ import 'package:rk/src/targets/pub_dev/client.dart';
 import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
+import 'package:rk/src/engine/file_mode.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
 import 'package:rk/src/output/output.dart';
@@ -2426,6 +2427,7 @@ executables:
           File(out)
             ..parent.createSync(recursive: true)
             ..writeAsBytesSync('BINARY 1.0.0'.codeUnits);
+          setFileModes({out: '0755'});
         }
         if (key.startsWith('ditto')) {
           final zip = key.split(' ').last;

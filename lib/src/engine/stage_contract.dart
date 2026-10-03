@@ -1,6 +1,7 @@
 import 'assets.dart';
 import 'dependency_graph.dart';
 import 'resolve.dart';
+import 'source_tree.dart';
 import 'stage.dart';
 import 'stage_inspection.dart';
 import 'stage_receipt.dart';
@@ -8,17 +9,24 @@ import 'stage_receipt.dart';
 typedef StageStepContractValidator =
     Iterable<StageIssue> Function(StageContractContext context, StageStep step);
 
+typedef StageStepEvidenceValidator =
+    Iterable<StageIssue> Function(StageEvidenceContext context, StageStep step);
+
 final class StageStepContract {
   const StageStepContract(
     this.name, {
     this.inputs = const {},
     this.outputs = const {},
+    this.validateEvidence,
     this.validate,
   });
 
   final String name;
   final Set<String> inputs;
   final Map<String, String> outputs;
+  final StageStepEvidenceValidator? validateEvidence;
+
+  /// Additional checks that require the staged artifact files.
   final StageStepContractValidator? validate;
 }
 
@@ -62,6 +70,23 @@ List<T> orderStageContributions<T>(
         contractOf(left).step.name.compareTo(contractOf(right).step.name),
   );
   return List<T>.unmodifiable(entries);
+}
+
+/// Receipt evidence and authenticated source, without access to staged outputs.
+/// The caller establishes source authority before portable validation. These
+/// checks do not prove that any retained artifact bytes have been inspected.
+final class StageEvidenceContext {
+  const StageEvidenceContext({
+    required this.unit,
+    required this.repository,
+    required this.source,
+    required this.receipt,
+  });
+
+  final ResolvedUnit unit;
+  final String? repository;
+  final SourceTree source;
+  final StageReceipt receipt;
 }
 
 final class StageContractContext {
@@ -236,8 +261,8 @@ class StageReceiptContract {
       _dependencies[producer] ??
       (throw StateError('the stage contract has no producer "$producer"'));
 
-  /// Pure canonical producer shape checks. Byte and semantic evidence checks
-  /// still require [validate]; this method alone cannot authorize a provider.
+  /// Pure canonical producer shape checks. Evidence and artifact checks are
+  /// separate; this method alone cannot authorize a provider.
   List<StageIssue> validateDeclarations(StageReceipt receipt) {
     final issues = <StageIssue>[];
     final names = receipt.steps.map((step) => step.name).toList();
@@ -278,8 +303,33 @@ class StageReceiptContract {
     return issues;
   }
 
+  /// Validates producer evidence against caller-authenticated source. No stage
+  /// directory is needed, and artifact payloads are neither read nor vouched for.
+  List<StageIssue> validateEvidence(
+    StageReceipt receipt, {
+    required SourceTree source,
+  }) {
+    final issues = <StageIssue>[];
+    final context = StageEvidenceContext(
+      unit: unit,
+      repository: repository,
+      source: source,
+      receipt: receipt,
+    );
+    final contracts = {for (final step in _steps) step.name: step};
+    for (final step in receipt.steps) {
+      if (contracts[step.name]?.validateEvidence case final validate?) {
+        issues.addAll(validate(context, step));
+      }
+    }
+    return issues;
+  }
+
   List<StageIssue> validate(StageDirectory stage, StageReceipt receipt) {
-    final issues = validateDeclarations(receipt);
+    final issues = [
+      ...validateDeclarations(receipt),
+      ...validateEvidence(receipt, source: SnapshotSourceTree(sourceRoot)),
+    ];
     final context = StageContractContext(
       unit: unit,
       repository: repository,

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/canonical_json.dart';
 import 'package:rk/src/engine/diagnostic.dart';
+import 'package:rk/src/engine/file_mode.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/engine/release_stage.dart';
@@ -712,6 +713,7 @@ Future<void> _complete(ReleaseStage stage) async {
   final binaryBytes = utf8.encode('tool fixture');
   final binaryPath = ReleaseAssets.binaryPath(project, 'linux-x64');
   stage.directory.writeBytesAtomically(binaryPath, binaryBytes);
+  setFileModes({stage.directory.resolve(binaryPath): '0755'});
   final binary = StageArtifact.capture(
     stage: stage.directory,
     path: binaryPath,

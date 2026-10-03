@@ -878,3 +878,38 @@ passed on both Dart 3.10.4 and 3.13.5. This authorizes native facts and evidence
 portable current-source/contract authorization, retained archive bytes, exact
 pending input recovery and production command wiring remain separate required
 work. It does not yet establish complete frozen-stage restoration.
+
+Portable receipt semantics now have a separate evidence path. Producer contracts
+receive authenticated source and receipt records without access to stage files;
+full inspection runs those same checks plus the retained byte validators. Notes
+and formula commitments are checked with the existing renderers, notarization
+metadata is separated from its JSON payload checks, and Pub requires its native
+staging marker. Binary evidence retains signature, smoke, per-file identity and
+library-pin checks; canonical archive inventories additionally agree with build
+output hashes, sizes, modes and types. Actual archive decoding remains required
+for retained payloads.
+
+Source production and portable checking share an owned inventory of exact bytes
+and Git modes. Recapture retains executable modes and the selected commit, and
+non-Git capture owns the inventory before yielding. Completion similarly shares
+one manifest builder with production: current public assets, Homebrew bindings,
+input hashes and canonical manifest commitments must agree. Compiler comparison
+uses portable identity rather than the old executable path. A read-only receipt
+candidate is rebuilt from current plan/toolchain inputs without installing it;
+its pure checks work after old provider directories have been deleted.
+
+Cross-review found and closed executable-mode loss on snapshot recapture and an
+archive-entry size gap. The stronger checks also exposed fake compiler fixtures
+that wrote mode 0644 while declaring mode 0755 in their archives; the fixtures now
+match actual compiler behavior. This completes the generic source/contract/
+evidence portion of portable authorization. Native authorization of every proof
+node, retained native archive validation, exact pending-input recovery and
+transactional adoption still need their production composition. Neither this
+primitive nor a structurally valid proof alone grants restored-stage authority.
+
+Analysis is clean. The 427 affected cases passed across the final runs; after
+correcting fake executable modes, all 182 command/phase cases passed on rerun.
+Separate focused runs covered 119 binary/source/completion cases, 55 source and
+dependency-proof cases, and 128 producer/target evidence cases. Those overlap and
+are not additional unique-test counts. This is foundation qualification, not the
+final full-suite or bare Fleury command qualification required by the plan.

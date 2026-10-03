@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:io';
 
 import '../../engine/changelog.dart';
 import '../../engine/diagnostic.dart';
@@ -9,6 +8,7 @@ import '../../engine/stage_contract.dart';
 import '../../engine/stage_inspection.dart';
 import '../../engine/stage_receipt.dart';
 import '../../engine/targets.dart';
+import '../../transforms/digest.dart';
 import '../target_module.dart';
 
 /// GitHub's private release-body contribution to the reusable stage.
@@ -25,15 +25,19 @@ TargetStage githubReleaseNotesStage({
       'release-notes',
       inputs: const {'step:source-snapshot'},
       outputs: const {'release-notes.md': 'notes'},
-      validate: (context, step) {
-        final expected = _releaseNotes(
-          unit,
-          SnapshotSourceTree(context.sourceRoot),
-        );
-        final actual = File(context.stage.resolve('release-notes.md'));
-        if (expected != null &&
-            actual.existsSync() &&
-            actual.readAsStringSync() == expected) {
+      validateEvidence: (context, step) {
+        final expected = _releaseNotes(unit, context.source);
+        final bytes = expected == null ? null : utf8.encode(expected);
+        final actual = step.outputs
+            .where(
+              (output) =>
+                  output.path == 'release-notes.md' && output.type == 'notes',
+            )
+            .singleOrNull;
+        if (bytes != null &&
+            actual != null &&
+            actual.size == bytes.length &&
+            actual.sha256 == Sha256.hex(bytes)) {
           return const [];
         }
         return const [

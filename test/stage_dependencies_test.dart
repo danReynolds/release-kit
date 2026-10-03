@@ -25,6 +25,7 @@ import 'package:rk/src/engine/stage_plan.dart';
 import 'package:rk/src/engine/stage_receipt.dart';
 import 'package:rk/src/engine/stage_proof.dart';
 import 'package:rk/src/engine/stage_receipt_structure.dart';
+import 'package:rk/src/engine/stage_source.dart';
 import 'package:rk/src/engine/targets.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/output/output.dart';
@@ -684,6 +685,51 @@ void main() {
       Directory(chain.a.directory.path).deleteSync(recursive: true);
       Directory(chain.b.directory.path).deleteSync(recursive: true);
       final before = c.directory.fingerprint();
+      final currentSource = await StageSourceSnapshot.capture(f.source);
+      final current = f.resolver();
+      for (final saved in proof.stages.values) {
+        final nodeUnit = f.resolution.unit(
+          (saved.plan!['unit'] as Map)['name'] as String,
+        )!;
+        final candidate = current.candidateForReceipt(
+          nodeUnit,
+          currentGit: f.git,
+          receipt: saved,
+        );
+        expect(Directory(candidate.directory.path).existsSync(), isFalse);
+        expect(
+          candidate.validatePortableReceipt(
+            saved,
+            authoritativeSource: currentSource,
+          ),
+          isEmpty,
+        );
+        final forged = StageReceipt(
+          identity: saved.identity,
+          plan: saved.plan,
+          steps: [
+            StageStep(
+              name: saved.steps.first.name,
+              inputs: saved.steps.first.inputs,
+              evidence: saved.steps.first.evidence,
+              outputs: saved.steps.first.outputs.skip(1),
+            ),
+            ...saved.steps.skip(1),
+          ],
+        );
+        expect(
+          candidate
+              .validatePortableReceipt(
+                forged,
+                authoritativeSource: currentSource,
+              )
+              .any(
+                (issue) => issue.message.contains('source inventory differs'),
+              ),
+          isTrue,
+        );
+        expect(Directory(candidate.directory.path).existsSync(), isFalse);
+      }
       expect(c.inspect().issues, isEmpty);
       final restored = await f.resolver().adoptFrozen(
         unit,

@@ -590,6 +590,15 @@ class GitCommitSourceTree implements SourceTree {
   @override
   List<String> trackedFiles() => List.unmodifiable(_treeEntries.keys);
 
+  /// Git metadata from the selected immutable commit, never worktree modes.
+  List<GitTreeEntry> trackedEntries() => List.unmodifiable(_treeEntries.values);
+
+  /// Bulk source capture for staging and receipt authorization. The caller
+  /// checks entry kinds before requesting blobs so unsupported entries retain
+  /// their useful symlink/submodule diagnostic.
+  Future<Map<String, Uint8List>> readBytesBatch(List<String> paths) =>
+      _repository.readBytesBatchAt(commit, paths);
+
   Map<String, GitTreeEntry> get _treeEntries => _entries ??= {
     for (final entry in _repository.trackedEntriesAt(commit)) entry.path: entry,
   };
