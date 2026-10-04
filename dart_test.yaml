@@ -1,0 +1,3 @@
+tags:
+  # Shared RK CLI + native Pub + loopback registry, isolated from the fast jobs.
+  publication: {}

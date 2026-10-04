@@ -1,0 +1,5 @@
+name: rk_qualification_core
+version: 0.2.0
+description: Core values for Release Kit's isolated native publication qualification.
+environment:
+  sdk: ^3.10.4

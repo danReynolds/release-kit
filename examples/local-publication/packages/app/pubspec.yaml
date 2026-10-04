@@ -1,0 +1,12 @@
+name: rk_qualification_app
+version: 0.1.0
+description: Application for Release Kit's isolated native publication qualification.
+environment:
+  sdk: ^3.10.4
+dependencies:
+  rk_qualification_core: ^0.2.0
+  rk_qualification_format: ^0.3.0
+dev_dependencies:
+  rk_qualification_testing: ^0.4.0
+executables:
+  qualification: qualification

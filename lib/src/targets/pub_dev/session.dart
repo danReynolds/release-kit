@@ -5,10 +5,13 @@ import '../../engine/resolve.dart';
 import '../../engine/targets.dart';
 import '../../output/progress.dart';
 import '../target_module.dart';
+import 'endpoint.dart';
 
 /// Owns the native Dart credential session used by pub.dev publication.
 final class PubDevSession extends TargetSessionProvider {
-  const PubDevSession();
+  const PubDevSession({this.endpoint = const PubEndpoint.pubDev()});
+
+  final PubEndpoint endpoint;
 
   @override
   String get id => 'dart-pub';
@@ -25,6 +28,17 @@ final class PubDevSession extends TargetSessionProvider {
     // An environment-backed token needs no second durable credential.
     if (await _tokenConfigured(context)) {
       return const TargetReady(note: 'token configured');
+    }
+    if (!endpoint.isPubDev) {
+      return TargetNotReady(
+        Diagnostic(
+          code: 'RK-PUB-007',
+          message: 'the composed local registry has no native Pub token',
+          remedy:
+              'Register its token using dart pub token add ${endpoint.origin}.',
+        ),
+        unit: unit.name,
+      );
     }
     final runInteractive = context.runInteractive;
     if (runInteractive == null && _sessionStored(context) != true) {
@@ -83,7 +97,7 @@ final class PubDevSession extends TargetSessionProvider {
     unit: unit.name,
   );
 
-  /// Whether pub already has a token for pub.dev in this repository.
+  /// Whether Pub already has a token for this exact composed endpoint.
   Future<bool> _tokenConfigured(TargetReadinessContext context) async {
     try {
       final tokens = await context.tools.run('dart', const [
@@ -95,7 +109,7 @@ final class PubDevSession extends TargetSessionProvider {
       return tokens.stdout
           .split('\n')
           .map((line) => line.trim())
-          .any((line) => line == _pubDevUrl || line == '$_pubDevUrl/');
+          .any(endpoint.matches);
     } on ProcessException {
       return false;
     }
@@ -104,6 +118,7 @@ final class PubDevSession extends TargetSessionProvider {
   @override
   Future<bool?> established(TargetReadinessContext context) async {
     if (await _tokenConfigured(context)) return true;
+    if (!endpoint.isPubDev) return false;
     return _sessionStored(context);
   }
 
@@ -121,6 +136,9 @@ final class PubDevSession extends TargetSessionProvider {
 
   @override
   Future<String?> restore(TargetReadinessContext context) async {
+    // A local composition only uses preexisting tokens and never creates a
+    // public OAuth session. In particular, it must never run pub logout.
+    if (!endpoint.isPubDev) return null;
     final out = await context.tools.run('dart', const [
       'pub',
       'logout',
@@ -130,8 +148,6 @@ final class PubDevSession extends TargetSessionProvider {
         : 'pub session could not be cleared: ${out.summary}';
   }
 }
-
-const _pubDevUrl = 'https://pub.dev';
 
 /// Where the pub client keeps the session `dart pub login` writes.
 File? _pubCredentialsFile(Map<String, String> environment) {
