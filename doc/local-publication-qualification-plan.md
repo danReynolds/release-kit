@@ -193,3 +193,9 @@ CI runs the serial native command in its dedicated publication job and keeps
 endpoint/protocol regressions in the normal Linux/macOS suite. The proof boundary
 and deadline exclusions above still apply. Earlier runs using the discarded
 SDK-internal launcher do not count as native release qualification.
+
+CI passed quality, Linux tests/terminal flows and native publication. The macOS
+job exceeded its existing 20-minute limit while tests continued passing, before
+terminal qualification started; the merged base revision had the same timeout.
+Review approved a macOS-only 40-minute allowance, keeping Linux at 20 minutes and
+native publication at 15, with every check retained.
