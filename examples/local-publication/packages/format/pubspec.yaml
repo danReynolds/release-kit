@@ -1,0 +1,7 @@
+name: rk_qualification_format
+version: 0.3.0
+description: Formatting library for Release Kit's isolated native publication qualification.
+environment:
+  sdk: ^3.10.4
+dependencies:
+  rk_qualification_core: ^0.2.0

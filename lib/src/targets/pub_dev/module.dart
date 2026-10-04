@@ -3,18 +3,20 @@ import 'dart:io';
 import '../../engine/checklist.dart';
 import '../../engine/diagnostic.dart';
 import '../../engine/publish_target.dart';
-import '../../engine/pubspec.dart';
 import '../../engine/resolve.dart';
 import '../../engine/targets.dart';
 import '../../engine/verdict.dart';
 import '../../output/output.dart';
 import '../../output/progress.dart';
 import '../target_module.dart';
+import 'endpoint.dart';
 import 'package_stage.dart';
 import 'session.dart';
 
 final class PubDevTargetModule extends TargetModule {
-  const PubDevTargetModule();
+  const PubDevTargetModule({this.endpoint = const PubEndpoint.pubDev()});
+
+  final PubEndpoint endpoint;
 
   @override
   PublishTarget get target => PublishTarget.pubDev;
@@ -24,7 +26,7 @@ final class PubDevTargetModule extends TargetModule {
       ProgressActivity(running: 'publishing', failed: 'publish failed');
 
   @override
-  TargetSessionProvider get authentication => const PubDevSession();
+  TargetSessionProvider get authentication => PubDevSession(endpoint: endpoint);
 
   @override
   TargetPlan plan({
@@ -220,7 +222,7 @@ final class PubDevTargetModule extends TargetModule {
     final redirected = unit.projects
         .where((project) => project.publish.contains(PublishTarget.pubDev))
         .any(
-          (project) => !isPubDevDestination(
+          (project) => !endpoint.matches(
             project.pubspec.effectivePublishDestination(context.environment),
           ),
         );
@@ -228,12 +230,16 @@ final class PubDevTargetModule extends TargetModule {
     return TargetNotReady(
       Diagnostic(
         code: 'RK-PUB-009',
-        message: 'the native Dart configuration redirects pub.dev publication',
-        remedy:
-            'rk will not publish a pub.dev target to an ambient or custom '
-            'registry. Remove PUB_HOSTED_URL, or declare the intended native '
-            'publish_to and use a future matching target. The URL is omitted '
-            'because it may contain credentials.',
+        message: endpoint.isPubDev
+            ? 'the native Dart configuration redirects pub.dev publication'
+            : 'the native Dart configuration differs from the composed registry endpoint',
+        remedy: endpoint.isPubDev
+            ? 'rk will not publish a pub.dev target to an ambient or custom '
+                  'registry. Remove PUB_HOSTED_URL, or declare the intended native '
+                  'publish_to and use a future matching target. The URL is omitted '
+                  'because it may contain credentials.'
+            : 'Match native PUB_HOSTED_URL to the explicit endpoint supplied '
+                  'by the command composition.',
       ),
       unit: unit.name,
     );

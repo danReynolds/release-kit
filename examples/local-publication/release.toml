@@ -1,0 +1,18 @@
+schema = 2
+
+# Deliberately list consumers before providers. Versions remain independent.
+[release.app]
+path = "packages/app"
+publish = ["pub.dev"]
+
+[release.testing]
+path = "packages/testing"
+publish = ["pub.dev"]
+
+[release.format]
+path = "packages/format"
+publish = ["pub.dev"]
+
+[release.core]
+path = "packages/core"
+publish = ["pub.dev"]

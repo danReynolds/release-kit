@@ -24,6 +24,7 @@ import 'package:rk/src/commands/release.dart';
 import 'package:rk/src/commands/status.dart';
 import 'package:rk/src/commands/target.dart';
 import 'package:rk/src/targets/pub_dev/client.dart';
+import 'package:rk/src/targets/pub_dev/endpoint.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/output/diagnosis.dart';
 import 'package:rk/src/engine/diagnostic.dart';
@@ -186,7 +187,14 @@ String _usageFor(String? command) => switch (command) {
   _ => _usage,
 };
 
-Future<void> main(List<String> args) async {
+Future<void> main(List<String> args) => runRk(args);
+
+/// Shared command composition. The shipped entry point always uses pub.dev;
+/// native publication qualification supplies an explicit loopback endpoint.
+Future<void> runRk(
+  List<String> args, {
+  PubEndpoint pubEndpoint = const PubEndpoint.pubDev(),
+}) async {
   // This is deliberately self-contained: smoke tests, Homebrew, and a user
   // holding only the compiled artifact must be able to identify its bytes
   // without a repository, release.toml, network, or credential access.
@@ -324,6 +332,7 @@ Future<void> main(List<String> args) async {
       'stage' || 'release' => await _release(
         output,
         target,
+        pubEndpoint: pubEndpoint,
         stageOnly: command == 'stage',
         interactive: !json,
         yes: flags.contains('--yes') || flags.contains('-y'),
@@ -340,7 +349,7 @@ Future<void> main(List<String> args) async {
       ),
       'target' => TargetCommand(output: output).run(target),
       'plan' => await _plan(output, target),
-      _ => await _status(output, target),
+      _ => await _status(output, target, pubEndpoint: pubEndpoint),
     };
   } on Object catch (error, stack) {
     // Its own exit class: an agent must tell "refused — remedy, then retry"
@@ -554,6 +563,7 @@ bool _usableInitTerminal() {
 Future<int> _release(
   Output output,
   String? unit, {
+  required PubEndpoint pubEndpoint,
   required bool stageOnly,
   required bool interactive,
   required bool yes,
@@ -563,7 +573,10 @@ Future<int> _release(
   final context = prepared.context!;
   final source = _selectReleaseSource(prepared, unit, output);
   if (source == null) return ExitCodes.refused;
-  final registry = Registry();
+  final registry = Registry(
+    host: pubEndpoint.uri.authority,
+    secure: pubEndpoint.uri.scheme == 'https',
+  );
   final capabilities = source.resolution.units.any((unit) => unit.shipsBinaries)
       ? await HostCapabilities.detect()
       : HostCapabilities.inspect();
@@ -581,7 +594,7 @@ Future<int> _release(
     final resolution = source.resolution;
     final tree = source.tree;
     final git = source.binding;
-    final targets = TargetCatalog.builtIn();
+    final targets = TargetCatalog.builtIn(pubEndpoint: pubEndpoint);
     final stages = ReleaseStages(
       source: tree,
       git: git,
@@ -1124,18 +1137,25 @@ void _showPlanSourceProblem(
   output.problem(problem);
 }
 
-Future<int> _status(Output output, String? unit) async {
+Future<int> _status(
+  Output output,
+  String? unit, {
+  required PubEndpoint pubEndpoint,
+}) async {
   final prepared = await _prepare(output);
   if (!prepared.isReady) return prepared.code!;
   final source = _selectReleaseSource(prepared, unit, output);
   if (source == null) return ExitCodes.refused;
-  final registry = Registry();
+  final registry = Registry(
+    host: pubEndpoint.uri.authority,
+    secure: pubEndpoint.uri.scheme == 'https',
+  );
   final cancellation = ToolCancellation();
   final resolution = source.resolution;
   final tree = source.tree;
   final git = source.binding;
   try {
-    final targets = TargetCatalog.builtIn();
+    final targets = TargetCatalog.builtIn(pubEndpoint: pubEndpoint);
     final stages = ReleaseStages(
       source: tree,
       git: git,

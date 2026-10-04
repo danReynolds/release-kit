@@ -32,9 +32,9 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # Native terminal qualification follows the full suite and real Homebrew
-    # installation; slower macOS runners can need more than 15 minutes.
-    timeout-minutes: 20
+    # The macOS suite plus real Homebrew and terminal qualification exceeds
+    # 20 minutes on hosted runners. Keep its bounded allowance separate.
+    timeout-minutes: ${{ matrix.os == 'macos-latest' && 40 || 20 }}
     strategy:
       fail-fast: false
       matrix:
@@ -47,7 +47,7 @@ jobs:
         with:
           sdk: stable
       - run: dart pub get
-      - run: dart test
+      - run: dart test --exclude-tags publication
         env:
           # The Homebrew install test changes the host's Homebrew, so it runs
           # only on CI's disposable macOS runners.
@@ -60,3 +60,18 @@ jobs:
           .dart_tool/pty-env/bin/python tool/check_installation_tui.py .dart_tool/rk-inline-check
           .dart_tool/pty-env/bin/python tool/check_installation_ux.py .dart_tool/rk-inline-check
           .dart_tool/pty-env/bin/python tool/check_status_cli.py .dart_tool/rk-inline-check
+
+  publication:
+    name: Native publication qualification
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - run: dart pub get
+      - name: Exercise native publication and recovery locally
+        run: dart test --tags publication --concurrency=1 --reporter=expanded

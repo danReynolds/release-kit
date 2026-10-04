@@ -7,6 +7,7 @@ import '../engine/targets.dart';
 import 'git_tag/module.dart';
 import 'github_release/module.dart';
 import 'homebrew/module.dart';
+import 'pub_dev/endpoint.dart';
 import 'pub_dev/module.dart';
 import 'target_module.dart';
 
@@ -16,13 +17,13 @@ import 'target_module.dart';
 /// change, and the coverage check makes a new public checklist step fail fast
 /// until exactly one built-in module owns it.
 final class TargetCatalog {
-  TargetCatalog._()
-    : modules = const [
-        GitTagTargetModule(),
-        PubDevTargetModule(),
-        GithubReleaseTargetModule(),
-        HomebrewTargetModule(),
-      ] {
+  TargetCatalog._({PubEndpoint pubEndpoint = const PubEndpoint.pubDev()})
+    : modules = List.unmodifiable([
+        const GitTagTargetModule(),
+        PubDevTargetModule(endpoint: pubEndpoint),
+        const GithubReleaseTargetModule(),
+        const HomebrewTargetModule(),
+      ]) {
     final byTarget = <PublishTarget, TargetModule>{};
     for (final module in modules) {
       if (byTarget[module.target] != null) {
@@ -45,7 +46,11 @@ final class TargetCatalog {
     _byTarget = Map.unmodifiable(byTarget);
   }
 
-  factory TargetCatalog.builtIn() => _builtIn;
+  factory TargetCatalog.builtIn({
+    PubEndpoint pubEndpoint = const PubEndpoint.pubDev(),
+  }) => pubEndpoint.isPubDev
+      ? _builtIn
+      : TargetCatalog._(pubEndpoint: pubEndpoint);
 
   static final TargetCatalog _builtIn = TargetCatalog._();
   static final targetStepKinds = Set<StepKind>.unmodifiable(

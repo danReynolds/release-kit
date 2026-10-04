@@ -18,6 +18,7 @@ like.
 | `multi-project-unit/` | Several packages released together under one declared tag. Declaration order is the reverse of publication order, so the order has to come from the manifests. |
 | `escapes-repository/` | Built from sources the repository does not contain. **Must be refused** (`RK-DART-201`). |
 | `binary-cli/` | Ships binaries for three platforms, with a real `LICENSE` and `README.md` for the archiver to carry. |
+| [`local-publication/`](local-publication/README.md) | Independently versioned packages published by native Pub to an isolated local registry, then installed and executed by a fresh consumer. |
 
 ## Named for the shape, never for a real project
 
