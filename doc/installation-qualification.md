@@ -390,3 +390,22 @@ validator instead of maintaining a second layout parser.
 
 No public release was published, and the operator's installations and shell
 configuration were not switched by this qualification.
+
+
+## Native hook local launch qualification (2026-10-05)
+
+The local launcher now prepares hooks from the selected Dart project, then
+restores the caller directory and launches its original entrypoint. A real
+transitive C-library fixture verified cold native loading, rebuild after editing
+C source, arguments with spaces and dollar signs, stdin, nonzero exit status,
+uncaught errors, compile-time defines, and Platform.script. Installation
+resolution also accepts development dependencies while ordinary release
+resolution continues to reject them.
+
+Analysis passed. The affected installation, resolver and review-regression tests
+passed (119 tests across the focused run and the four-case CLI rerun). The CLI
+fixture now compiles rk once before invoking real subprocesses; repeatedly
+compiling it for every argument check timed out under local machine load.
+The broad repository run was stopped after unrelated timeout failures and does
+not constitute a full-suite pass. Native hooks do not qualify release artifact
+staging, signing, or physical hardware behavior.

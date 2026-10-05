@@ -209,3 +209,21 @@ third-party runtime imports.
 
 See [the implementation receipt](installation-qualification.md) for the checks
 actually run and the outstanding live-provider/platform qualification.
+
+### Local packages with native build hooks
+
+For a local package whose resolved dependencies contain `hook/build.dart`, RK
+starts Dart in the owning package so a cold launch prepares its native assets.
+A generated bootstrap then starts the original entrypoint in an isolate with
+the caller's working directory. Arguments, stdin, exit status and Platform.script
+continue to describe the actual application. Native source edits rerun the hook
+through Dart's normal cache checks. No Keypass-specific build logic is involved.
+
+This covers Dart's current directory-dependent hook discovery. Plain Dart local
+packages retain the direct launcher. Reselect Local after adding/removing a hook
+dependency, changing package resolution, or upgrading RK from an older launcher.
+An existing local selection does not rewrite its own generation automatically.
+
+Installation discovery allows unpublished path and Git dependencies in
+development checkouts. Release planning and publication retain their existing
+dependency-source checks.

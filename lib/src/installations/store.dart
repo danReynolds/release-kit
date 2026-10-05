@@ -121,7 +121,9 @@ class InstallationStore {
           throw const InstallationFailure('Invalid exported command name.');
         }
         final command = entry.value;
-        if (!command.executable.startsWith('/') ||
+        if ((command.workingDirectory != null &&
+                !command.workingDirectory!.startsWith('/')) ||
+            !command.executable.startsWith('/') ||
             command.environment.keys.any(
               (name) => !RegExp(r'^[A-Za-z_][A-Za-z0-9_]*$').hasMatch(name),
             )) {
@@ -137,8 +139,13 @@ class InstallationStore {
           );
           script.writeln('  exit 127\nfi');
         }
+        final bootstrap = command.workingDirectory;
+        if (bootstrap != null) {
+          script.writeln('rk_caller_directory="\$PWD"');
+          script.writeln('cd -- ${shellQuote(bootstrap)} || exit 127');
+        }
         script.writeln(
-          'exec ${[if (command.environment.isNotEmpty) '/usr/bin/env', for (final entry in command.environment.entries) '${entry.key}=${entry.value}', command.executable, ...command.arguments].map(shellQuote).join(' ')} "\$@"',
+          'exec ${[if (command.environment.isNotEmpty) '/usr/bin/env', for (final entry in command.environment.entries) '${entry.key}=${entry.value}', command.executable, ...command.arguments].map(shellQuote).join(' ')} ${bootstrap == null ? '' : '"\$rk_caller_directory" '}"\$@"',
         );
         final path = '$target/bin/${entry.key}';
         File(path).writeAsStringSync(script.toString(), flush: true);

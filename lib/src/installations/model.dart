@@ -65,22 +65,29 @@ class LaunchCommand {
     this.arguments = const [],
     this.environment = const {},
     this.requiredFiles = const [],
+    this.workingDirectory,
   });
   final String executable;
   final List<String> arguments;
   final Map<String, String> environment;
   final List<String> requiredFiles;
+
+  /// Bootstrap cwd; its first argument receives the original caller cwd.
+  /// Only local Dart hook bootstraps use this; other launchers are unchanged.
+  final String? workingDirectory;
   Map<String, Object?> toJson() => {
     'executable': executable,
     'arguments': arguments,
     'environment': environment,
     'required_files': requiredFiles,
+    if (workingDirectory != null) 'working_directory': workingDirectory,
   };
   factory LaunchCommand.fromJson(Map<String, dynamic> value) => LaunchCommand(
     value['executable'] as String,
     arguments: (value['arguments'] as List).cast<String>(),
     environment: (value['environment'] as Map).cast<String, String>(),
     requiredFiles: (value['required_files'] as List).cast<String>(),
+    workingDirectory: value['working_directory'] as String?,
   );
 }
 
