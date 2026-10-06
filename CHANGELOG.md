@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.14
+
 - Keep a released unit released while its own files are unchanged. A bare
   `rk release` used to stop at any unit whose tag was not on the current
   commit. It called the unit released from different source and asked for a
