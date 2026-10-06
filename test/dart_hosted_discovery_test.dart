@@ -304,22 +304,47 @@ void main() {
         coreFile.path,
       ]);
       expect(packed.exitCode, 0, reason: '${packed.stdout}\n${packed.stderr}');
-      final replay = await DartArchiveReplay.prepare(
-        root: consumer,
-        tools: const SystemTools(),
-        compiler: origin.dart,
-        defaultRegistry: origin.url,
-        discovered: result.graph,
-        archives: [
-          DartReplayArchive(
-            registry: origin.url,
-            archive: await NativePackageArchive.read(coreFile),
-            discoveredManifest: result.packages['rk_fixture_core']!.manifest,
-          ),
-          await DartHostedArchive.fetch(result.packages['rk_fixture_bridge']!),
-        ],
+      final archives = [
+        DartReplayArchive(
+          registry: origin.url,
+          archive: await NativePackageArchive.read(coreFile),
+          discoveredManifest: result.packages['rk_fixture_core']!.manifest,
+        ),
+        await DartHostedArchive.fetch(result.packages['rk_fixture_bridge']!),
+      ];
+      Future<DartArchiveReplay> replayWith(Tools tools) =>
+          DartArchiveReplay.prepare(
+            root: consumer,
+            tools: tools,
+            compiler: origin.dart,
+            defaultRegistry: origin.url,
+            discovered: result.graph,
+            archives: archives,
+          );
+
+      // Archives from one registry preload in one call. When Pub refuses
+      // that call, each archive is retried alone, so the error names the one
+      // Pub refused rather than the batch.
+      final refusing = _PreloadTools(
+        refuse: (archives) =>
+            archives.any((path) => path.endsWith('/input-1.tar.gz')),
       );
+      await expectLater(
+        replayWith(refusing),
+        throwsA(
+          isA<StateError>().having(
+            (error) => '$error',
+            'message',
+            contains('preloading rk_fixture_'),
+          ),
+        ),
+      );
+      expect(refusing.preloads.map((call) => call.length), [2, 1, 1]);
+
+      final preloading = _PreloadTools();
+      final replay = await replayWith(preloading);
       addTearDown(replay.close);
+      expect(preloading.preloads.map((call) => call.length), [2]);
       final output = '${origin.directory.path}/consumer-bin';
       final compiled = await replay.run([
         'compile',
@@ -934,4 +959,49 @@ void main() {
       throwsStateError,
     );
   });
+}
+
+/// System tools that record each `pub cache preload` call's archives, and
+/// refuse the calls [refuse] picks as Pub would refuse a bad archive.
+final class _PreloadTools implements Tools {
+  _PreloadTools({this.refuse});
+
+  final bool Function(List<String> archives)? refuse;
+  final preloads = <List<String>>[];
+
+  @override
+  Future<ToolResult> run(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+    Map<String, String>? environment,
+    Duration? timeout,
+  }) async {
+    final at = arguments.indexOf('preload');
+    if (at >= 0) {
+      final archives = arguments.sublist(at + 1);
+      preloads.add(archives);
+      if (refuse?.call(archives) ?? false) {
+        return ToolResult(
+          exitCode: 1,
+          stdout: '',
+          stderr: 'refused ${archives.join(' ')}',
+        );
+      }
+    }
+    return const SystemTools().run(
+      executable,
+      arguments,
+      workingDirectory: workingDirectory,
+      environment: environment,
+      timeout: timeout,
+    );
+  }
+
+  @override
+  Future<int> runInteractive(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+  }) => throw StateError('replay never runs an interactive tool');
 }

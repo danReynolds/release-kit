@@ -630,7 +630,7 @@ class ReleaseStage {
     final now = directory.fingerprint();
     final remembered = _inspected;
     if (remembered != null && _inspectedAt == now) return remembered;
-    final fresh = _inspectFromDisk();
+    final fresh = _inspectFromDisk(now);
     _inspected = fresh;
     _inspectedAt = now;
     return fresh;
@@ -639,8 +639,11 @@ class ReleaseStage {
   StageInspection? _inspected;
   String? _inspectedAt;
 
-  StageInspection _inspectFromDisk() {
-    final inspected = const StageInspector().inspect(directory);
+  StageInspection _inspectFromDisk(String fingerprint) {
+    final inspected = const StageInspector().inspect(
+      directory,
+      fingerprint: fingerprint,
+    );
     final receipt = inspected.receipt;
     final issues = [...inspected.issues];
     if (receipt != null &&

@@ -194,20 +194,43 @@ final class DartArchiveReplay {
       replay._rootManifestSha256 = originalRootSha256;
       replay._overridesSha256 = replay._readOverridesDigest();
       Directory('${replay.directory.path}/cache').createSync();
+      // One `pub cache preload` per registry, not per archive: each call
+      // starts a VM, and a stage replays fifty-odd archives (220 calls, 13s,
+      // for four packages). A failed batch is retried one archive at a time,
+      // so the error still names the archive pub refused.
+      final byRegistry = <String, List<({File file, String label})>>{};
       for (final (index, input) in selected.indexed) {
         final file = File('${replay.directory.path}/input-$index.tar.gz')
           ..writeAsBytesSync(input.archive.bytes, flush: true);
-        final result = await tools.run(
+        (byRegistry[input.registry] ??= []).add((
+          file: file,
+          label: '${input.name} ${input.version}',
+        ));
+      }
+      for (final MapEntry(key: registry, value: group) in byRegistry.entries) {
+        Future<ToolResult> preload(Iterable<File> files) => tools.run(
           compiler,
-          ['--suppress-analytics', 'pub', 'cache', 'preload', file.path],
+          [
+            '--suppress-analytics',
+            'pub',
+            'cache',
+            'preload',
+            for (final file in files) file.path,
+          ],
           workingDirectory: root.path,
-          environment: {
-            ...replay.environment,
-            'PUB_HOSTED_URL': input.registry,
-          },
+          environment: {...replay.environment, 'PUB_HOSTED_URL': registry},
           timeout: const Duration(minutes: 2),
         );
-        _requireSuccess('preloading ${input.name} ${input.version}', result);
+        final batch = await preload([for (final entry in group) entry.file]);
+        if (batch.ok) continue;
+        for (final entry in group) {
+          _requireSuccess(
+            'preloading ${entry.label}',
+            await preload([entry.file]),
+          );
+        }
+        // Each archive preloaded on its own, though together they failed.
+        _requireSuccess('preloading the archives from $registry', batch);
       }
       final get = await replay._run(const [
         'pub',

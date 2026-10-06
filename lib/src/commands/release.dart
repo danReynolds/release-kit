@@ -27,6 +27,7 @@ import 'release_preparation.dart';
 import 'release_stage_coordinator.dart';
 import 'release_publication_coordinator.dart';
 import 'repository_publication.dart';
+import 'stage_check_progress.dart';
 
 /// Executes a release: inspect, act, inspect again, one step at a time — and
 /// decides everything rk refuses.
@@ -413,9 +414,15 @@ class ReleaseCommand {
       return finishNoops();
     }
     final RepositoryPreparationPlan plan;
+    final checking = StageCheckProgress(
+      output,
+      repository: tree.description.split('/').last,
+      units: work,
+    );
     try {
       plan = await coordinator.resolve(
         selected: work,
+        observer: checking,
         eligibility: (restored) async {
           // Restoration must run first: the provisional dependency-free stage
           // is not evidence that a partial release lost its frozen bytes. But
@@ -492,10 +499,13 @@ class ReleaseCommand {
         },
       );
     } on _PreparationRefused {
+      checking.stop();
       return result(ExitCodes.refused);
     } on Object catch (error) {
+      checking.stop();
       return result(_refuseRepositoryPreparation(error));
     }
+    checking.finish();
     if (plan.order.isNotEmpty) {
       output.heading(
         'Preparation order: ${plan.order.map((unit) => unit.name).join(' -> ')}',

@@ -515,6 +515,23 @@ String _dartSdkExecutable(String selected) {
   if (File('${File(selected).parent.path}/dartaotruntime').existsSync()) {
     return selected;
   }
+  // The probe starts a VM, about 0.2s, and a release asks for the compiler
+  // identity over a hundred times. A wrapper that has not changed on disk
+  // runs the same SDK; one that has is asked again.
+  final wrapper = _fileFingerprint(File(selected));
+  final known = _sdkExecutableCache[selected];
+  if (known != null && known.wrapper == wrapper) return known.executable;
+  final executable = _probeDartSdkExecutable(selected);
+  // A probe that fell back to the wrapper may have failed transiently.
+  if (executable != selected) {
+    _sdkExecutableCache[selected] = (wrapper: wrapper, executable: executable);
+  }
+  return executable;
+}
+
+final _sdkExecutableCache = <String, ({String wrapper, String executable})>{};
+
+String _probeDartSdkExecutable(String selected) {
   final probe = Directory.systemTemp.createTempSync('rk-dart-sdk-');
   try {
     final script = File('${probe.path}/sdk.dart')

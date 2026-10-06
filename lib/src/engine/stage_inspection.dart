@@ -126,11 +126,46 @@ class StageInspection {
 }
 
 /// Hashes and inventories an existing stage without executing artifacts,
-/// contacting a service, or changing the filesystem.
+/// contacting a service, or changing the filesystem. A stage unchanged since
+/// this process last inspected it is answered from that inspection.
 class StageInspector {
   const StageInspector();
 
-  StageInspection inspect(StageDirectory stage) {
+  /// Verifies [stage]. A caller that has just taken the stage's [fingerprint]
+  /// passes it, so the stage is not listed and statted twice in a row.
+  StageInspection inspect(StageDirectory stage, {String? fingerprint}) {
+    final before = fingerprint ?? stage.fingerprint();
+    final known = _made[stage.path];
+    // The fixed-path check looks above the stage, where the fingerprint does
+    // not, so it runs every time; it costs a few lstat calls.
+    if (known != null &&
+        known.fingerprint == before &&
+        stage.unsafeFixedPath() == null) {
+      return known.inspection;
+    }
+    final inspection = _inspect(stage);
+    // Only an inspection of a stage that held still while it was read
+    // describes the stage the fingerprint names.
+    if (stage.fingerprint() == before) {
+      _made[stage.path] = (fingerprint: before, inspection: inspection);
+    } else {
+      _made.remove(stage.path);
+    }
+    return inspection;
+  }
+
+  /// Inspections this process has already made, by stage path, with the
+  /// fingerprint each stage had while it was read.
+  ///
+  /// A release opens the same stage many times, through a new
+  /// [StageDirectory] each time, and each opening re-read and re-hashed
+  /// every file: twenty full verifications, 16s, to reuse four stages. The
+  /// answer for an unchanged stage is the same answer, on the same evidence
+  /// [ReleaseStage] already trusts to skip a re-read: the fingerprint.
+  static final Map<String, ({String fingerprint, StageInspection inspection})>
+  _made = {};
+
+  StageInspection _inspect(StageDirectory stage) {
     final issues = <StageIssue>[];
     final unsafe = stage.unsafeFixedPath();
     if (unsafe != null) {

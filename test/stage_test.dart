@@ -585,6 +585,28 @@ void main() {
       );
     });
 
+    test('a remembered inspection does not outlive a same-size rewrite', () {
+      _writeCompleteStage(stage);
+      expect(StageInspector().inspect(stage).reusable, isTrue);
+      // Another StageDirectory for the same path is answered from what this
+      // process learned about it...
+      final again = StageDirectory(
+        repositoryRoot: repository.path,
+        identity: stage.identity,
+      );
+      expect(StageInspector().inspect(again).reusable, isTrue);
+
+      // ...but not once a staged file is rewritten, even at the same length.
+      final file = File(stage.resolve('rk'));
+      file.writeAsBytesSync(List.filled(file.lengthSync(), 0x2a));
+      final result = StageInspector().inspect(again);
+      expect(result.reusable, isFalse);
+      expect(
+        result.issues.map((issue) => issue.kind),
+        contains(StageIssueKind.changedArtifact),
+      );
+    });
+
     test('extra files and empty directories are rejected', () {
       _writeCompleteStage(stage);
       stage.writeBytesAtomically('planted.txt', utf8.encode('planted'));

@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Show what rk is doing while it checks saved stages, and check them
+  faster. Between the last `Releasing` (or `Staging`) heading and the
+  preparation order, rk verifies every unit's saved stage. It printed nothing
+  there, often for tens of seconds. It now shows a row per unit: verifying
+  its saved stage, or, when there is none, checking it and resolving its
+  dependencies.
+  - Reusing four saved stages took about half as long in a measured
+    four-package release. rk no longer runs the same work again within one
+    run: probing a Dart SDK behind a launcher such as Flutter's `dart`,
+    reading a file from a commit with its own `git show`, and re-hashing
+    every staged file each time a stage is opened.
+  - Fresh staging preloads a unit's dependency archives in one
+    `dart pub cache preload` per registry, instead of one per archive. If
+    Pub refuses the batch, each archive is retried alone, so the error still
+    names the archive.
+
 ## 0.1.14
 
 - Keep a released unit released while its own files are unchanged. A bare
