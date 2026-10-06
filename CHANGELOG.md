@@ -4,6 +4,9 @@
 
 ## 0.1.14
 
+- rk depends on Fleury 0.1 from pub.dev. The repository's override to a
+  Fleury revision with the native output, inline shutdown and navigation
+  fixes (Fleury #278) is gone: Fleury 0.1.0 includes them.
 - Keep a released unit released while its own files are unchanged. A bare
   `rk release` used to stop at any unit whose tag was not on the current
   commit. It called the unit released from different source and asked for a

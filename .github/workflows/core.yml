@@ -32,9 +32,12 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # The macOS suite plus real Homebrew and terminal qualification exceeds
-    # 20 minutes on hosted runners. Keep its bounded allowance separate.
-    timeout-minutes: ${{ matrix.os == 'macos-latest' && 40 || 20 }}
+    # Most tests drive `dart run bin/rk.dart`, which compiles rk and Fleury
+    # for every command; with Fleury 0.1 the Linux suite takes about 22
+    # minutes on hosted runners, and macOS, which adds real Homebrew and
+    # terminal qualification, about 35. Each allowance bounds a hang above
+    # that.
+    timeout-minutes: ${{ matrix.os == 'macos-latest' && 50 || 30 }}
     strategy:
       fail-fast: false
       matrix:

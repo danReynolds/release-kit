@@ -116,11 +116,10 @@ packages:
   fleury:
     dependency: "direct main"
     description:
-      path: "packages/fleury"
-      ref: "45142d13e0af8d3f22ca16c3072065e025df7eb4"
-      resolved-ref: "45142d13e0af8d3f22ca16c3072065e025df7eb4"
-      url: "https://github.com/danReynolds/fleury.git"
-    source: git
+      name: fleury
+      sha256: "297a16c2bd39d94f98f38ba1553bcc41f2d532a9d3ae385309347d0bce353a32"
+      url: "https://pub.dev"
+    source: hosted
     version: "0.1.0"
   frontend_server_client:
     dependency: transitive
@@ -154,6 +153,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "4.1.2"
+  image:
+    dependency: transitive
+    description:
+      name: image
+      sha256: a1e7f4951e538a568e14b856702afc9ae1d2f4b202daced8d22c1b9cd211ce89
+      url: "https://pub.dev"
+    source: hosted
+    version: "4.10.1"
   io:
     dependency: transitive
     description:
