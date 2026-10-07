@@ -86,21 +86,15 @@ execution. An acyclic package/producer graph that requires units to interleave
 gets an explicit regrouping refusal. Public acts are not a transaction; a
 failure preserves earlier public truth and saved stages.
 
-A partial release with built assets, or a package-only unit with an exact
-configured Git tag, needs its original stage when remaining targets need those
-bytes (`RK-STAGE-005`). The tag is a conservative unit-progress marker. One
-independently public package does not establish prior staging of its
-siblings: a tagless mixed package-only unit may prepare fresh on either command
-when no saved stage exists. Existing public archives must still match any
-staged archive used for comparison. Unread public targets refuse before fresh
-preparation.
+A version on pub.dev is published: rk does not compare an archive with one
+already there, and a published package binds nothing to its stage. After its
+own upload, rk still reads the archive back and requires the one it staged.
 
-Before release, a fresh stage's archive must match an already-public archive of
-the same package version. Native tar mtimes can make a fresh archive differ
-despite unchanged source contents; in that case release refuses before
-consent. Preserve or restore the original matching stage to finish the unit.
-If the public package never had an rk stage in a fresh tagless setup, regroup it
-into its own fully-public unit and prepare the remaining members separately.
+A partial release needs its original stage only while public bytes must match
+the ones it holds (`RK-STAGE-005`): assets on a GitHub release, a Homebrew
+formula that names their hashes, or the release manifest whose hash a pushed
+tag records. Otherwise a fresh stage publishes what remains. Unread public
+targets refuse before fresh preparation.
 
 A remaining moving target may recover entirely from authenticated public inputs.
 That narrow path does no package production, and its recovery binding is

@@ -2402,6 +2402,40 @@ publish = ["pub.dev"]
   }
 
   test(
+    'a published package alone does not require a binary release stage',
+    () async {
+      // The package's version on pub.dev binds nothing; the tag and the
+      // GitHub release, which bind the stage's bytes, are not public yet.
+      final run = await statusRun(
+        withConfig: binaryConfig,
+        source: binaryTree,
+        state: git(),
+        registry: FakeRegistry({
+          'keybay': ['0.1.0', '0.2.0'],
+        }),
+        inspectorBuilder: (git, _) => FixedInspector(
+          registry: FakeRegistry({
+            'keybay': ['0.1.0', '0.2.0'],
+          }),
+          git: git,
+          answer: const Inspection.absent(),
+          answers: const {
+            StepKind.publishRegistry: Inspection.exact(detail: 'published'),
+          },
+        ),
+      );
+
+      expect(
+        (run.report['problems'] as List).map(
+          (problem) => (problem as Map)['code'],
+        ),
+        isNot(contains('RK-STAGE-005')),
+      );
+      expect(run.text, isNot(contains('needs its exact stage')));
+    },
+  );
+
+  test(
     'a partial binary release without its exact stage is an issue',
     () async {
       final run = await statusRun(

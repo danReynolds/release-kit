@@ -38,9 +38,8 @@ class PubDevTarget implements PublicationInspector {
 
     final when = published.published;
     final age = when == null ? 'already published' : 'published ${_ago(when)}';
-    final unavailableReason = expectedArchiveSha256 == null
-        ? 'no matching stage'
-        : published.archiveSha256 == null
+    if (expectedArchiveSha256 == null) return Inspection.exact(detail: age);
+    final unavailableReason = published.archiveSha256 == null
         ? 'pub.dev did not provide an archive digest'
         : 'archive proof was incomplete';
     return PublicReconciliation.appendOnly(
@@ -48,8 +47,7 @@ class PubDevTarget implements PublicationInspector {
       expected: const {'archive'},
       published: const {'archive'},
       expectedProofs: {
-        if (expectedArchiveSha256 != null)
-          'archive': 'sha256:${expectedArchiveSha256.toLowerCase()}',
+        'archive': 'sha256:${expectedArchiveSha256.toLowerCase()}',
       },
       publishedProofs: {
         if (published.archiveSha256 != null)

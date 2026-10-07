@@ -70,13 +70,15 @@ publish = ["git-tag", "pub.dev"]
     },
   );
 
-  test('an occupied historical coordinate skips without provenance', () async {
-    final result = await inspect();
+  test('a listed version is published, whatever a stage holds', () async {
+    // Before rk acts, the version is the registry's truth: no archive is
+    // compared, so a re-packed stage cannot make a published version a
+    // conflict.
+    final result = await inspect(registrySha256: _b);
 
     expect(result.verdict, Verdict.exact);
-    expect(result.detail, contains('archive not compared'));
-    expect(result.detail, contains('no matching stage'));
-    expect(result.evidence['comparison'], 'unavailable');
+    expect(result.detail, startsWith('published'));
+    expect(result.evidence, isNot(contains('comparison')));
   });
 
   test('a missing provider digest also skips without provenance', () async {
