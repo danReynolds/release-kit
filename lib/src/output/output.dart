@@ -5,6 +5,7 @@ import '../engine/checklist.dart';
 import '../engine/diagnostic.dart';
 import 'progress.dart';
 import 'report.dart';
+import 'timeline.dart';
 import '../engine/verdict.dart';
 
 /// Makes untrusted text inert on a terminal while leaving report evidence raw.
@@ -179,7 +180,9 @@ final class OutputTheme {
 ///
 /// The rules this encodes, from the RFC: rk does not narrate itself; a running
 /// step expands and a finished one collapses; and a pipe sees the same words
-/// the terminal ends up showing, with no cursor movement.
+/// the terminal ends up showing, with no cursor movement. The one exception
+/// is time: a terminal's settled rows keep how long they ran, and a pipe's
+/// transcript does not, so it reads the same from one run to the next.
 class Output {
   Output({
     required this.sink,
@@ -193,7 +196,8 @@ class Output {
        _terminalWidth = terminalWidth,
        _terminalWidthReader = terminalWidthReader,
        report = report ?? Report('rk'),
-       _clock = clock ?? _wallClock;
+       _clock = clock ?? _wallClock,
+       timeline = RunTimeline(clock ?? _wallClock);
 
   /// Writes to stdout, detecting a terminal and honouring `NO_COLOR`.
   ///
@@ -260,6 +264,10 @@ class Output {
   bool previousUnitActed = false;
 
   final Elapsed Function() _clock;
+
+  /// This run's phases, rows and waits on a person, for the closing summary
+  /// and `--timings`.
+  final RunTimeline timeline;
 
   LiveProgress? _progressBoard;
 
@@ -972,6 +980,9 @@ final class LiveProgress {
 
   void _changed(ProgressRow row) {
     if (_closed) return;
+    // A row settles once, so this records it once. One still running when
+    // its board was discarded was recorded then, as unfinished.
+    if (row.took case final took?) _time(row, took, note: row.note);
     if (_output.isTerminal) {
       if (_visible && !_suspended) {
         _draw();
@@ -1228,6 +1239,11 @@ final class LiveProgress {
   /// Erases the transient surface without leaving a snapshot.
   void discard() {
     if (_closed) return;
+    // Work cut off mid-run, such as by a crash, still took its time.
+    for (final row in model.rows) {
+      if (row.state != ProgressRowState.active) continue;
+      if (row.ranFor case final ran?) _time(row, ran, note: 'unfinished');
+    }
     final printedRows = !_output.isTerminal && emitSlowToNonTerminal
         ? model.rows
               .where(
@@ -1305,21 +1321,40 @@ final class LiveProgress {
     settle();
   }
 
+  /// Tells the run's timeline that [row] ran for [took]. Its group goes with
+  /// it: rows under different groups can share a label.
+  void _time(ProgressRow row, Duration took, {required String? note}) =>
+      _output.timeline.rowSettled(
+        board: model.title,
+        id: row.id,
+        subject: row.group == null
+            ? row.subject
+            : '${row.group} · ${row.subject}',
+        note: note,
+        took: took,
+      );
+
   void _writeDurableRow(ProgressRow row, {int depth = 1, bool active = false}) {
-    final (glyph, status, glyphState, textState) = _rowPresentation(
+    var (glyph, status, glyphState, textState) = _rowPresentation(
       row,
       active: active,
     );
+    // A finished row that ran long enough for its counter to tick keeps its
+    // total, on a terminal. A pipe's transcript stays the same every run.
+    final took = row.took;
+    if (!active &&
+        _output.isTerminal &&
+        took != null &&
+        took >= const Duration(seconds: 1)) {
+      status = '$status · ${formatDuration(took)}';
+    }
     final mark = switch (glyph) {
       '✓' => Mark.done,
       '·' => Mark.satisfied,
       '✗' => Mark.blocked,
       _ => Mark.none,
     };
-    final subject = [
-      row.label,
-      if (row.coordinate != null) row.coordinate!,
-    ].join(' · ');
+    final subject = row.subject;
     final label = glyph == '—' || glyph == '…' ? '$glyph $subject' : subject;
     _output.line(
       label,

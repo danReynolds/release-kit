@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'timings.dart';
 
 /// Runs the native tools rk defers to.
 ///
@@ -172,6 +173,28 @@ class SystemTools implements StreamingTools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+  }) {
+    Future<ToolResult> run() => _run(
+      executable,
+      arguments,
+      workingDirectory: workingDirectory,
+      environment: environment,
+      timeout: timeout,
+    );
+    return Timings.enabled
+        ? Timings.timeTallyAsync(
+            'tool ${processTally(executable, arguments)}',
+            run,
+          )
+        : run();
+  }
+
+  Future<ToolResult> _run(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+    Map<String, String>? environment,
+    Duration? timeout,
   }) async {
     if (cancellation?.cancelled == true) {
       return ToolResult(
@@ -310,10 +333,33 @@ class SystemTools implements StreamingTools {
     required void Function(String line) onLine,
     String? workingDirectory,
     Map<String, String>? environment,
+  }) {
+    Future<ToolResult> run() => _runStreaming(
+      executable,
+      arguments,
+      onLine: onLine,
+      workingDirectory: workingDirectory,
+      environment: environment,
+    );
+    return Timings.enabled
+        ? Timings.timeTallyAsync(
+            'tool ${processTally(executable, arguments)} (streamed)',
+            run,
+          )
+        : run();
+  }
+
+  Future<ToolResult> _runStreaming(
+    String executable,
+    List<String> arguments, {
+    required void Function(String line) onLine,
+    String? workingDirectory,
+    Map<String, String>? environment,
   }) async {
     // A bounded run keeps [run]'s bound, and hands over its lines at the end.
+    // Through [_run]: [runStreaming] has already tallied this process.
     if (timeout != null || cancellation != null) {
-      final result = await run(
+      final result = await _run(
         executable,
         arguments,
         workingDirectory: workingDirectory,

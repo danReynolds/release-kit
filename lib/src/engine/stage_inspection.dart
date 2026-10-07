@@ -10,6 +10,7 @@ import 'stage_archive.dart';
 import 'stage_binary_evidence.dart';
 import 'stage_receipt.dart';
 import 'stage_receipt_structure.dart';
+import 'timings.dart';
 import 'verdict.dart';
 
 enum StageIssueKind {
@@ -144,6 +145,7 @@ class StageInspector {
         known != null &&
         known.fingerprint == before &&
         stage.unsafeFixedPath() == null) {
+      Timings.tally('stage inspection remembered');
       return known.inspection;
     }
     final inspection = verify(stage);
@@ -181,7 +183,10 @@ class StageInspector {
 
   /// Verifies [stage]: re-reads and re-hashes every file in it, whatever
   /// this process already knows.
-  StageInspection verify(StageDirectory stage) {
+  StageInspection verify(StageDirectory stage) =>
+      Timings.spanSync('verify stage files', () => _verify(stage));
+
+  StageInspection _verify(StageDirectory stage) {
     final issues = <StageIssue>[];
     final unsafe = stage.unsafeFixedPath();
     if (unsafe != null) {

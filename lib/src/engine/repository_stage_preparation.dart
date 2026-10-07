@@ -9,6 +9,7 @@ import 'resolve.dart';
 import 'resolution_facts.dart';
 import 'stage_dependencies.dart';
 import 'stage_intent.dart';
+import 'timings.dart';
 
 /// A completed provider already authorized against current source and native
 /// metadata by restoration. Pin its receipt as well as its stage identity:
@@ -114,7 +115,10 @@ final class RepositoryStagePreparation {
     final restored = <String, ReleaseStage>{};
     for (final unit in units) {
       observer?.restoring(unit);
-      final stage = await restore(unit);
+      final stage = await Timings.span(
+        'restore ${unit.name}',
+        () => restore(unit),
+      );
       observer?.restored(unit, found: stage != null);
       if (stage != null) {
         if (!identical(stages(unit), stage) || stage.intent == null) {
@@ -133,7 +137,10 @@ final class RepositoryStagePreparation {
           readInputs: () => native.readIntent(unit),
         ),
     };
-    final scope = await eligibility(Map.unmodifiable(restored));
+    final scope = await Timings.span(
+      'eligibility',
+      () => eligibility(Map.unmodifiable(restored)),
+    );
     if (!names.containsAll(scope.withoutPreparation)) {
       throw StateError(
         'public recovery names a unit outside preparation scope',

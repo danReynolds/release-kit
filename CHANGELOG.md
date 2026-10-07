@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Say how long each step took. On a terminal, a finished step keeps its
+  time once it reaches a second (`✓ package archive  staged · 1m 41s`), and
+  a successful `stage` or `release` of ten seconds or more ends with one
+  line of phases: `Done in 2m 53s · preparing 2s · checking stages 31s ·
+  staging 1m 58s · publishing 22s`. Time at rk's confirmation prompt is not
+  counted. Pipes and `--json` are unchanged.
+  - `--timings` prints the whole breakdown after the run, to stderr: every
+    phase and step, however fast, for a run that stopped too. It also writes
+    the run to `.rk/timings.json` as a trace that Perfetto opens.
 - Show what rk is doing while it checks saved stages, and check them
   faster. Between the last `Releasing` (or `Staging`) heading and the
   preparation order, rk verifies every unit's saved stage. It printed nothing

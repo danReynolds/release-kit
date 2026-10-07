@@ -193,6 +193,23 @@ void main() {
       expect(elsewhere.code, 2, reason: elsewhere.all);
       expect(elsewhere.problems.map((p) => p['code']), contains('RK-CLI-005'));
     });
+
+    test('--timings applies to stage and release, and names no file', () {
+      for (final command in ['stage', 'release']) {
+        final run = repo([command, '--timings', '--help']);
+        expect(run.code, 0, reason: '$command: ${run.all}');
+      }
+
+      final elsewhere = repo(['status', '--timings', '--json']);
+      expect(elsewhere.code, 2, reason: elsewhere.all);
+      expect(elsewhere.problems.map((p) => p['code']), contains('RK-CLI-005'));
+
+      // The trace goes to rk's own .rk/timings.json. A file named in the
+      // repository would be uncommitted, and refuse the next release.
+      final named = repo(['stage', '--timings=run.json', '--json']);
+      expect(named.code, 2, reason: named.all);
+      expect(named.problems.map((p) => p['code']), contains('RK-CLI-001'));
+    });
   });
 
   test(

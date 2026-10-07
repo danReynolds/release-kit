@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:io';
+import 'timings.dart';
 
 /// Read access to the repository being released.
 ///
@@ -116,7 +117,7 @@ class GitSourceTree implements SourceTree {
   @override
   List<String> trackedFiles() {
     if (_tracked != null) return _tracked!;
-    final result = Process.runSync('git', const [
+    final result = timedRunSync('git', const [
       'ls-files',
       '-z',
     ], workingDirectory: root);
@@ -148,7 +149,7 @@ class GitSourceTree implements SourceTree {
   }
 
   List<GitTreeEntry> _listTrackedEntriesAt(String commit) {
-    final result = Process.runSync('git', [
+    final result = timedRunSync('git', [
       'ls-tree',
       '-r',
       '-z',
@@ -202,6 +203,14 @@ class GitSourceTree implements SourceTree {
   /// A path containing a newline cannot be expressed in the batch protocol
   /// and is read on its own, so no path is silently skipped.
   Future<Map<String, Uint8List>> readBytesBatchAt(
+    String commit,
+    List<String> paths,
+  ) => Timings.timeTallyAsync(
+    'git cat-file --batch',
+    () => _readBytesBatchAt(commit, paths),
+  );
+
+  Future<Map<String, Uint8List>> _readBytesBatchAt(
     String commit,
     List<String> paths,
   ) async {
@@ -289,7 +298,7 @@ class GitSourceTree implements SourceTree {
   }
 
   List<int> _showBytesAt(String commit, String path) {
-    final result = Process.runSync(
+    final result = timedRunSync(
       'git',
       ['show', '$commit:$path'],
       workingDirectory: root,
@@ -303,7 +312,7 @@ class GitSourceTree implements SourceTree {
 
   /// The repository root containing [start], or null when there is none.
   static String? findRoot(String start) {
-    final result = Process.runSync('git', const [
+    final result = timedRunSync('git', const [
       'rev-parse',
       '--show-toplevel',
     ], workingDirectory: start);
@@ -448,7 +457,7 @@ class GitWorktreeSourceTree extends FileSystemSourceTree {
 
   @override
   List<String> trackedFiles() {
-    final result = Process.runSync('git', const [
+    final result = timedRunSync('git', const [
       'ls-files',
       '--cached',
       '--others',

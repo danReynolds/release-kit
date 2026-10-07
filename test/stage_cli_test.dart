@@ -100,6 +100,57 @@ publish = ["git-tag"]
   );
 
   test(
+    '--timings says where a stage went without changing the plain report',
+    () {
+      final repo = repository();
+      final traceFile = File('${repo.root}/.rk/timings.json');
+
+      final plain = repo(['stage', '--json']);
+      final timed = repo(['stage', '--json', '--timings']);
+      expect(timed.code, 0, reason: timed.all);
+
+      // The breakdown goes to stderr, so stdout stays one JSON document.
+      expect(timed.stderr, contains('Timings'));
+      expect(timed.stderr, contains('preparing'));
+      expect(timed.stderr, contains('Total'));
+      expect(
+        timed.stderr,
+        matches(RegExp(r'rk: wrote timings to /\S+/\.rk/timings\.json')),
+      );
+
+      final trace = jsonDecode(traceFile.readAsStringSync()) as Map;
+      final slices = (trace['traceEvents'] as List).where(
+        (event) => (event as Map)['ph'] == 'X',
+      );
+      expect(
+        slices.map((slice) => (slice as Map)['name']),
+        contains('preparing'),
+      );
+
+      // The report is the plain one: no step carries a time.
+      bool timedSteps(Run run) =>
+          run.stepsOf('core').any((step) => step.containsKey('took_ms'));
+      expect(timedSteps(plain), isFalse);
+      expect(timedSteps(timed), isFalse);
+
+      // The trace is rk's own, so the next run finds nothing uncommitted.
+      final again = repo(['stage', '--json']);
+      expect(again.code, 0, reason: again.all);
+
+      // And it is written only as a plain file in rk's own directory, never
+      // through a link that could point outside the repository.
+      final outside = File('${scratch.path}/outside.json');
+      traceFile.deleteSync();
+      Link(traceFile.path).createSync(outside.path);
+      final linked = repo(['stage', '--json', '--timings']);
+      expect(linked.code, 0, reason: linked.all);
+      expect(linked.stderr, contains('did not write timings'));
+      expect(outside.existsSync(), isFalse);
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
+
+  test(
     'bare stage prepares all units and named stage preserves its scope',
     () {
       final repo = repository(multiple: true);
