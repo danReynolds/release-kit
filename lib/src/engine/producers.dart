@@ -62,7 +62,6 @@ StageStepContract contractFor(ResolvedUnit unit, Step step) {
     case StepKind.build:
       return StageStepContract(
         receiptNameFor(step),
-        inputs: const {'step:source-snapshot'},
         outputs: binaries,
         validateEvidence: _buildEvidence,
       );
@@ -95,7 +94,6 @@ StageStepContract contractFor(ResolvedUnit unit, Step step) {
     case StepKind.buildAssets:
       return StageStepContract(
         receiptNameFor(step),
-        inputs: const {'step:source-snapshot'},
         outputs: ReleaseAssets.assetOutputs(project),
         validateEvidence: _assetEvidence,
       );

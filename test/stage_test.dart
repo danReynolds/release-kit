@@ -438,7 +438,7 @@ void main() {
       final build = parsed.steps.singleWhere(
         (step) => step.name == 'build:rk:macos-arm64',
       );
-      expect(build.inputs.single.name, 'step:source-snapshot');
+      expect(build.inputs, isEmpty);
       expect(
         (build.evidence['signature']! as Map)['certificate_sha256'],
         'a' * 64,
@@ -736,7 +736,7 @@ void main() {
         StageReceipt(
           identity: receipt.identity,
           plan: receipt.plan,
-          steps: [receipt.steps.first, sign, receipt.steps.last],
+          steps: [sign, receipt.steps.last],
         ),
       );
 
@@ -778,7 +778,7 @@ void main() {
         StageReceipt(
           identity: receipt.identity,
           plan: receipt.plan,
-          steps: [receipt.steps.first, sign, receipt.steps.last],
+          steps: [sign, receipt.steps.last],
         ),
       );
 
@@ -936,22 +936,6 @@ StageIdentity _identity(Object? plan) => StageIdentity.forPlan(
 );
 
 StageReceipt _writeCompleteStage(StageDirectory stage) {
-  stage.writeBytesAtomically('source/pubspec.yaml', utf8.encode('name: rk\n'));
-  final sourceArtifact = StageArtifact.capture(
-    stage: stage,
-    path: 'source/pubspec.yaml',
-    type: 'source',
-  );
-  final sourceStep = StageStep(
-    name: 'source-snapshot',
-    inputs: [
-      StageInput.commit(stage.identity),
-      StageInput.tree(stage.identity),
-      StageInput.plan(stage.identity),
-    ],
-    outputs: [sourceArtifact],
-    evidence: {'commit': _commit, 'tree': _tree},
-  );
   stage.writeBytesAtomically('rk', utf8.encode('binary'));
   final artifact = StageArtifact.capture(
     stage: stage,
@@ -960,7 +944,6 @@ StageReceipt _writeCompleteStage(StageDirectory stage) {
   );
   final build = StageStep(
     name: 'build:rk:macos-arm64',
-    inputs: [StageInput.step(sourceStep)],
     outputs: [artifact],
     evidence: {
       'signed_smoke': {'status': 'pass', 'command': '--version'},
@@ -995,7 +978,6 @@ StageReceipt _writeCompleteStage(StageDirectory stage) {
   final receipt = StageReceipt(
     identity: stage.identity,
     steps: [
-      sourceStep,
       build,
       StageStep(
         name: 'complete-stage',

@@ -37,7 +37,7 @@ void main() {
   });
 
   test('portable signature checks retain certificate and smoke bindings', () {
-    for (final change in ['certificate', 'smoke', 'signed digest', 'source']) {
+    for (final change in ['certificate', 'smoke', 'signed digest']) {
       final fixture = _Fixture(bundle: false);
       switch (change) {
         case 'certificate':
@@ -49,8 +49,6 @@ void main() {
         case 'signed digest':
           (fixture.buildEvidence['signature'] as Map)['signed_sha256'] =
               'f' * 64;
-        case 'source':
-          fixture.buildInputs.clear();
       }
       expect(_messages(fixture), isNotEmpty, reason: change);
     }
@@ -328,9 +326,7 @@ final class _Fixture {
 
   static const prefix = 'producers/tool/macos-arm64';
   final BinaryArtifact artifact;
-  final buildInputs = [
-    StageInput(name: 'step:source-snapshot', sha256: '1' * 64),
-  ];
+  final buildInputs = <StageInput>[];
   late final List<StageArtifact> outputs;
   late final Map<String, Object?> buildEvidence;
   late final List<StageInput> archiveInputs;

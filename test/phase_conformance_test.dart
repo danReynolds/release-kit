@@ -1851,12 +1851,9 @@ executables:
             directory: directory,
             enforceUnitContract: true,
             resolvedPlan: plan,
-            targetContributions:
-                TargetCatalog.builtIn().stageContractResolver(resolution)(
-                  unit: unit,
-                  repository: git.originUrl,
-                  sourceRoot: directory.resolve('source'),
-                ),
+            targetContributions: TargetCatalog.builtIn().stageContractResolver(
+              resolution,
+            )(unit: unit, repository: git.originUrl),
           );
         });
     const releaseTagObject = '4444444444444444444444444444444444444444';

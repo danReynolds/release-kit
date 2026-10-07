@@ -5,6 +5,7 @@ import '../../engine/diagnostic.dart';
 import '../../engine/publish_target.dart';
 import '../../engine/resolve.dart';
 import '../../engine/targets.dart';
+import '../../engine/tools.dart';
 import '../../engine/verdict.dart';
 import '../../output/output.dart';
 import '../../output/progress.dart';
@@ -50,8 +51,8 @@ final class PubDevTargetModule extends TargetModule {
       permanenceNotice:
           'pub.dev never deletes a version. a version can be retracted, '
           'which hides it and removes nothing.',
-      // pub publishes the staged source directory. There is no honest public
-      // archive filename to invent for this row.
+      // pub publishes the staged archive under its own name. There is no
+      // honest public archive filename to invent for this row.
       artifacts: const [],
     );
   }
@@ -280,20 +281,24 @@ final class PubDevTargetModule extends TargetModule {
   ) async {
     final project = target.project!;
     final archive = requirePubArchive(context.stage, project);
-    final sourceRoot = context.stage.sourceRoot;
-    final directory = project.pubspec.directory == '.'
-        ? sourceRoot
-        : '$sourceRoot/${project.pubspec.directory}';
     // Publication is non-interactive after the explicit session preflight.
     // Capture pub's output so it cannot write through RK's live multi-target
-    // progress surface; the transcript is retained if the act fails.
-    final result = await context.tools.run('dart', [
-      'pub',
-      'publish',
-      '--from-archive',
-      context.workspace.pathOf(archive.path),
-      '--force',
-    ], workingDirectory: directory);
+    // progress surface; the transcript is retained if the act fails. Pub
+    // uploads the archive as it is, from an empty directory of its own
+    // outside the stage.
+    final scratch = Directory.systemTemp.createTempSync('rk-pub-publish-');
+    final ToolResult result;
+    try {
+      result = await context.tools.run('dart', [
+        'pub',
+        'publish',
+        '--from-archive',
+        context.workspace.pathOf(archive.path),
+        '--force',
+      ], workingDirectory: scratch.path);
+    } finally {
+      scratch.deleteSync(recursive: true);
+    }
     context.reads.registry!.forget(project.name);
     if (!result.ok) {
       if (result.exitCode == 64) {

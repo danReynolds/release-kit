@@ -1,7 +1,6 @@
 import 'assets.dart';
 import 'dependency_graph.dart';
 import 'resolve.dart';
-import 'source_tree.dart';
 import 'stage.dart';
 import 'stage_inspection.dart';
 import 'stage_receipt.dart';
@@ -72,20 +71,17 @@ List<T> orderStageContributions<T>(
   return List<T>.unmodifiable(entries);
 }
 
-/// Receipt evidence and authenticated source, without access to staged outputs.
-/// The caller establishes source authority before portable validation. These
-/// checks do not prove that any retained artifact bytes have been inspected.
+/// Receipt evidence, without access to staged outputs. These checks do not
+/// prove that any retained artifact bytes have been inspected.
 final class StageEvidenceContext {
   const StageEvidenceContext({
     required this.unit,
     required this.repository,
-    required this.source,
     required this.receipt,
   });
 
   final ResolvedUnit unit;
   final String? repository;
-  final SourceTree source;
   final StageReceipt receipt;
 }
 
@@ -93,14 +89,12 @@ final class StageContractContext {
   const StageContractContext({
     required this.unit,
     required this.repository,
-    required this.sourceRoot,
     required this.stage,
     required this.receipt,
   });
 
   final ResolvedUnit unit;
   final String? repository;
-  final String sourceRoot;
   final StageDirectory stage;
   final StageReceipt receipt;
 }
@@ -109,7 +103,6 @@ typedef StageContractResolver =
     List<StageContributionContract> Function({
       required ResolvedUnit unit,
       required String? repository,
-      required String sourceRoot,
     });
 
 /// The canonical private producer graph for one configured release unit.
@@ -134,7 +127,6 @@ final class StageProducerGraph {
       (contract) => contract,
     );
     final declared = <StageStepContract>[
-      const StageStepContract('source-snapshot'),
       ...contributions.map((item) => item.step),
       ...localProducers,
       const StageStepContract(
@@ -212,7 +204,6 @@ class StageReceiptContract {
   StageReceiptContract._({
     required this.unit,
     required this.repository,
-    required this.sourceRoot,
     required List<StageStepContract> steps,
     required Map<String, Set<String>> dependencies,
   }) : _steps = List<StageStepContract>.unmodifiable(steps),
@@ -221,7 +212,6 @@ class StageReceiptContract {
   factory StageReceiptContract.forUnit({
     required ResolvedUnit unit,
     required String? repository,
-    required String sourceRoot,
     required Iterable<StageContributionContract> targetContributions,
     required Iterable<StageStepContract> localProducers,
   }) {
@@ -232,7 +222,6 @@ class StageReceiptContract {
     return StageReceiptContract._(
       unit: unit,
       repository: repository,
-      sourceRoot: sourceRoot,
       steps: graph.steps,
       dependencies: {
         for (final producer in graph.producerNames)
@@ -243,7 +232,6 @@ class StageReceiptContract {
 
   final ResolvedUnit unit;
   final String? repository;
-  final String sourceRoot;
   final List<StageStepContract> _steps;
   final Map<String, Set<String>> _dependencies;
 
@@ -288,8 +276,7 @@ class StageReceiptContract {
     for (final step in receipt.steps) {
       final contract = contracts[step.name];
       if (contract == null) continue;
-      if (step.name != 'source-snapshot' &&
-          step.name != 'complete-stage' &&
+      if (step.name != 'complete-stage' &&
           !_sameSet(
             step.inputs.map((input) => input.name).toSet(),
             contract.inputs,
@@ -303,17 +290,13 @@ class StageReceiptContract {
     return issues;
   }
 
-  /// Validates producer evidence against caller-authenticated source. No stage
-  /// directory is needed, and artifact payloads are neither read nor vouched for.
-  List<StageIssue> validateEvidence(
-    StageReceipt receipt, {
-    required SourceTree source,
-  }) {
+  /// Validates producer evidence. No stage directory is needed, and artifact
+  /// payloads are neither read nor vouched for.
+  List<StageIssue> validateEvidence(StageReceipt receipt) {
     final issues = <StageIssue>[];
     final context = StageEvidenceContext(
       unit: unit,
       repository: repository,
-      source: source,
       receipt: receipt,
     );
     final contracts = {for (final step in _steps) step.name: step};
@@ -328,12 +311,11 @@ class StageReceiptContract {
   List<StageIssue> validate(StageDirectory stage, StageReceipt receipt) {
     final issues = [
       ...validateDeclarations(receipt),
-      ...validateEvidence(receipt, source: SnapshotSourceTree(sourceRoot)),
+      ...validateEvidence(receipt),
     ];
     final context = StageContractContext(
       unit: unit,
       repository: repository,
-      sourceRoot: sourceRoot,
       stage: stage,
       receipt: receipt,
     );
@@ -347,7 +329,6 @@ class StageReceiptContract {
   }
 
   static bool _outputsMatch(StageStep step, StageStepContract contract) {
-    if (step.name == 'source-snapshot') return true;
     final actual = {
       for (final output in step.outputs) output.path: output.type,
     };
@@ -375,10 +356,11 @@ bool _isPrefix(List<String> prefix, List<String> whole) =>
       (index) => prefix[index] == whole[index],
     ).every((same) => same);
 
-/// Gaps are safe because every real step chains through declared inputs:
-/// a recorded step whose producer is missing fails the inspector's causal
-/// check, and a stale input digest fails its comparison. A step declaring
-/// no inputs would escape that backstop — contracts declare inputs.
+/// Gaps are safe because every step that depends on another names it among
+/// its inputs: a recorded step whose producer is missing fails the
+/// inspector's causal check, and a stale input digest fails its comparison.
+/// A step that depends on none declares no inputs; the receipt's identity
+/// binds it to its source.
 bool _isOrderedSubsequence(List<String> names, List<String> whole) {
   var at = 0;
   for (final name in names) {

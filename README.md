@@ -387,8 +387,8 @@ needed.
 
 Git-identified targets (`git-tag`, `github-release`, `homebrew`) need a
 clean working tree. A registry-only or local release may include
-uncommitted work: rk warns, snapshots that tree, and rechecks the
-snapshot before publishing.
+uncommitted work: rk warns, snapshots that tree once, and builds and
+publishes from that snapshot.
 
 Releases run from your machine. The design anticipates CI; support is
 deferred.

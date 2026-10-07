@@ -8,7 +8,7 @@ import 'workspace.dart';
 import 'timings.dart';
 
 /// Increment this only when the identity or receipt contract changes.
-const stageSchemaVersion = 13;
+const stageSchemaVersion = 14;
 
 /// The content address of one resolved release plan at one exact Git tree.
 class StageIdentity {

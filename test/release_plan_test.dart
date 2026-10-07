@@ -238,13 +238,21 @@ dependencies:
               .map((stage) => stage.contract),
           localProducers: localProducerContracts(unit),
         );
-        final stage = unitPlan.stage.toList();
+        // The plan starts from the source every producer builds from, which
+        // the receipt names by its identity rather than as a step.
+        final source = unitPlan.stage.singleWhere(
+          (node) => node.kind == ReleasePlanNodeKind.sourceSnapshot,
+        );
+        final stage = unitPlan.stage.where((node) => node != source).toList();
         final producerById = {for (final node in stage) node.id: node.producer};
 
         expect(stage.map((node) => node.producer), graph.producerNames);
         for (final node in stage) {
           expect(
-            node.needs.map((id) => producerById[id]).toSet(),
+            node.needs
+                .where((id) => id != source.id)
+                .map((id) => producerById[id])
+                .toSet(),
             graph.dependenciesOf(node.producer!),
             reason: '${unit.name}: ${node.producer}',
           );

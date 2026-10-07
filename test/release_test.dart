@@ -282,12 +282,9 @@ Future<Ran> release({
           repository: effectiveGit.originUrl,
           enforceUnitContract: true,
           resolvedPlan: plan,
-          targetContributions:
-              TargetCatalog.builtIn().stageContractResolver(resolution)(
-                unit: unit,
-                repository: effectiveGit.originUrl,
-                sourceRoot: directory.resolve('source'),
-              ),
+          targetContributions: TargetCatalog.builtIn().stageContractResolver(
+            resolution,
+          )(unit: unit, repository: effectiveGit.originUrl),
         );
       });
 

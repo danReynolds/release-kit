@@ -11,7 +11,6 @@ import 'package:test/test.dart';
 void main() {
   late Directory root;
   late StageDirectory stage;
-  late StageStep source;
   late List<StageArtifact> outputs;
   late Map<String, Object?> evidence;
   final artifact = BinaryArtifact.dartBundle('tool');
@@ -29,10 +28,8 @@ void main() {
       StageReceipt(
         identity: stage.identity,
         steps: [
-          source,
           StageStep(
             name: 'build:tool:macos-arm64',
-            inputs: [StageInput.step(source)],
             outputs: outputs,
             evidence: evidence,
           ),
@@ -51,14 +48,6 @@ void main() {
         runId: 'fixture',
         resolvedPlan: {'unit': 'tool'},
       ),
-    );
-    source = StageStep(
-      name: 'source-snapshot',
-      inputs: [StageInput.plan(stage.identity)],
-      outputs: [
-        write('source/bin/tool.dart', 'void main() {}', 'source', '0644'),
-      ],
-      evidence: {'source_binding': 'unbound'},
     );
     outputs = [
       for (final file in artifact.files)

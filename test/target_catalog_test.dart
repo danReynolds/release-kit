@@ -197,10 +197,10 @@ executables:
         ),
         (
           'pub-archive:example_tool',
-          'step:source-snapshot',
+          '',
           'producers/example_tool/pub/example_tool-1.2.3.tar.gz:pub-archive',
         ),
-        ('release-notes', 'step:source-snapshot', 'release-notes.md:notes'),
+        ('release-notes', '', 'release-notes.md:notes'),
       ],
     );
 
@@ -208,7 +208,6 @@ executables:
       () => StageReceiptContract.forUnit(
         unit: unit,
         repository: 'example/tool',
-        sourceRoot: '/stage/source',
         targetContributions: const [
           StageContributionContract(
             step: StageStepContract(
@@ -493,13 +492,12 @@ publish = ["pub.dev"]
     final contract = StageReceiptContract.forUnit(
       unit: resolution.unit('example')!,
       repository: null,
-      sourceRoot: '/stage/source',
       targetContributions: const [consumer, producer],
       localProducers: const [],
     );
     expect(
       contract.producerNames,
-      ['source-snapshot', 'producer', 'consumer', 'complete-stage'],
+      ['producer', 'consumer', 'complete-stage'],
       reason: 'artifact inputs are dependency edges, not lifecycle phases',
     );
 
@@ -510,7 +508,6 @@ publish = ["pub.dev"]
       () => StageReceiptContract.forUnit(
         unit: resolution.unit('example')!,
         repository: null,
-        sourceRoot: '/stage/source',
         targetContributions: const [missingInput],
         localProducers: const [],
       ),

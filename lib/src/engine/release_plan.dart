@@ -106,8 +106,8 @@ final class RepositoryReleasePlan {
       localProducers: localProducerContracts(unit),
     );
 
+    final sourceId = '${unit.name}/stage/source';
     String producerId(String producer) {
-      if (producer == 'source-snapshot') return '${unit.name}/stage/source';
       if (producer == 'complete-stage') return '${unit.name}/stage/complete';
       final local = localSteps[producer];
       if (local != null) return local.id;
@@ -138,12 +138,22 @@ final class RepositoryReleasePlan {
       );
     }
 
+    // Every producer builds from the commit's source, read once; a producer
+    // that needs no other starts from it.
+    nodes.add(
+      ReleasePlanNode(
+        id: sourceId,
+        kind: ReleasePlanNodeKind.sourceSnapshot,
+        phase: StepPhase.stage,
+        summary: 'source snapshot',
+        needs: const [],
+      ),
+    );
     for (final contract in producerGraph.steps) {
       final producer = contract.name;
       final local = localSteps[producer];
       final targetStage = targetStagesByProducer[producer];
       final kind = switch (producer) {
-        'source-snapshot' => ReleasePlanNodeKind.sourceSnapshot,
         'complete-stage' => ReleasePlanNodeKind.completeStage,
         _ when local != null => switch (local.kind) {
           StepKind.build => ReleasePlanNodeKind.build,
@@ -164,12 +174,14 @@ final class RepositoryReleasePlan {
           kind: kind,
           phase: StepPhase.stage,
           summary: switch (producer) {
-            'source-snapshot' => 'source snapshot',
             'complete-stage' => 'complete and validate stage',
             _ when local != null => local.summary,
             _ => targetStage!.planLabel,
           },
           needs: [
+            if (producer == 'complete-stage' ||
+                producerGraph.dependenciesOf(producer).isEmpty)
+              sourceId,
             for (final dependency in producerGraph.dependenciesOf(producer))
               producerId(dependency),
           ],

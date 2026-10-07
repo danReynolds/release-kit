@@ -7,6 +7,7 @@ import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
 import '../engine/stage_contract.dart';
 import '../engine/stage_receipt.dart';
+import '../engine/stage_source.dart';
 import '../engine/targets.dart';
 import '../engine/tools.dart';
 import '../engine/verdict.dart';
@@ -305,7 +306,7 @@ final class TargetStageContext {
     required this.git,
     required void Function(String name, String contents) attach,
     required this.stage,
-    required this.sourceStep,
+    required this.source,
     required Iterable<StageStep> priorSteps,
     required Map<String, ProgressHandle> progress,
     Map<String, String> fromSource = const {},
@@ -322,7 +323,9 @@ final class TargetStageContext {
   void attach(String name, String contents) => _attach(name, contents);
   final ReleaseStage stage;
   Workspace get workspace => stage.directory.workspace;
-  final StageStep sourceStep;
+  /// The source the stage is built from. A producer that builds exports it
+  /// into a directory of its own.
+  final StageSourceSnapshot source;
   final List<StageStep> priorSteps;
 
   /// The repository packages a Pub package takes from this source when it

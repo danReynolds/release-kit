@@ -470,18 +470,13 @@ class StatusCommand {
       final stage = factory(unit);
       final inspected = stage.inspect();
       final ordinaryAbsence =
-          inspected.canRestartSource ||
-          (inspected.receipt?.complete != true &&
-              inspected.issues.every(
-                (issue) =>
-                    issue.kind == StageIssueKind.missingReceipt ||
-                    issue.kind == StageIssueKind.incompleteReceipt,
-              ));
-      final state = inspected.canRestartSource
-          ? const Inspection.absent(
-              detail: 'saved plan; source preparation is incomplete',
-            )
-          : inspected.asInspection;
+          inspected.receipt?.complete != true &&
+          inspected.issues.every(
+            (issue) =>
+                issue.kind == StageIssueKind.missingReceipt ||
+                issue.kind == StageIssueKind.incompleteReceipt,
+          );
+      final state = inspected.asInspection;
       return _StageResult(
         inspection: inspected,
         candidate: stage,

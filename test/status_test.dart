@@ -2541,18 +2541,7 @@ Future<ReleaseStage> _completedStage({
   );
   final public = ReleaseAssets.expectedForUnit(unit).toSet()
     ..remove(ReleaseAssets.manifest);
-  final sourceArtifacts = await stage.materializeSource();
-  final sourceStep = StageStep(
-    name: 'source-snapshot',
-    inputs: [
-      StageInput.commit(identity),
-      StageInput.tree(identity),
-      StageInput.plan(identity),
-    ],
-    outputs: sourceArtifacts,
-    evidence: {'commit': identity.headCommit, 'tree': identity.headTree},
-  );
-  final steps = <StageStep>[sourceStep];
+  final steps = <StageStep>[];
   final project = unit.binaryProject!;
   final executable = project.executable!;
   final archives = <StageArtifact>[];
@@ -2570,7 +2559,7 @@ Future<ReleaseStage> _completedStage({
     steps.add(
       StageStep(
         name: '${platform.startsWith('macos-') ? 'sign' : 'build'}:$platform',
-        inputs: [StageInput.step(sourceStep)],
+        inputs: const [],
         outputs: [binary],
         evidence: {
           'smoke': {'status': 'passed'},

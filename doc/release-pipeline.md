@@ -74,7 +74,7 @@ waits for GitHub Release, and Pub can run beside GitHub once their tag is exact.
 | Owner | Owns | Does not own |
 | --- | --- | --- |
 | `ReleaseCommand` | repository/unit validation, checklist order, initial observation, cross-target refusal policy, stage-only exit | provider protocols, producer execution, sessions, authorization, publication transactions |
-| `ReleaseStageCoordinator` | stage reuse, signing continuity, source snapshot, isolated producer lanes, target-provided stage inputs, receipt persistence and revalidation | public credentials or public mutations |
+| `ReleaseStageCoordinator` | stage reuse, signing continuity, reading the source once and exporting it to isolated producer lanes, target-provided stage inputs, receipt persistence and revalidation | public credentials or public mutations |
 | `ReleasePublicationCoordinator` | ambient target readiness, destination binding, late sessions, final public-state gates, authorization, target publication, authoritative read-back, and bounded availability retries | building or changing reviewed stage bytes |
 | `TargetModule` | one destination's plan, observations, optional history/readiness/session/stage/availability contribution, publish transaction, and provider-specific recovery semantics | global ordering, authorization timing, retry policy, progress layout, or another target |
 

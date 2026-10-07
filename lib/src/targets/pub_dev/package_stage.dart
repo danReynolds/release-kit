@@ -2,7 +2,6 @@ import 'dart:io';
 
 import '../../engine/assets.dart';
 import '../../engine/diagnostic.dart';
-import '../../engine/file_mode.dart';
 import '../../engine/release_stage.dart';
 import '../../engine/resolve.dart';
 import '../../engine/stage.dart';
@@ -28,7 +27,6 @@ TargetStage pubDevPackageStage({
   final contract = StageContributionContract(
     step: StageStepContract(
       'pub-archive:${target.project!.name}',
-      inputs: const {'step:source-snapshot'},
       outputs: {archivePath: 'pub-archive'},
       validateEvidence: (context, step) =>
           step.evidence['package_archive'] == 'staged'
@@ -80,7 +78,7 @@ Future<TargetStageOutcome> _prepareStage(
       name: receiptName,
       inputs: context.stage.enforceUnitContract
           ? context.stage.producerInputs(receiptName, context.priorSteps)
-          : [StageInput.step(context.sourceStep)],
+          : const [],
       outputs: [
         StageArtifact.capture(
           stage: context.stage.directory,
@@ -141,62 +139,57 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
   ResolvedProject project, {
   required File archive,
 }) async {
-  final sourceRoot = context.stage.sourceRoot;
-  String inSource(String directory) =>
-      directory == '.' ? sourceRoot : '$sourceRoot/$directory';
-  final sourceDirectory = inSource(project.pubspec.directory);
-
-  // The repository packages Pub takes from this source, by name with their
-  // directories: those the release plan names (see
-  // [TargetStageContext.fromSource]), and members of the package's
-  // workspace that only its development needs.
-  final members =
-      resolutionPackages(sourceRoot, sourceDirectory).packages ?? const {};
-  final fromSource = {
-    for (final MapEntry(key: name, value: directory)
-        in context.fromSource.entries)
-      name: inSource(directory),
-    for (final name in developmentMembers(members, project.name))
-      name: members[name]!,
-  }..remove(project.name);
-
-  // A Flutter package, or one that takes a Flutter package from this
-  // source, needs a Flutter SDK's Dart, whose pub finds its own Flutter.
-  // The Dart rk identified for this stage is the one that packages and
-  // publishes; a standalone one would depend on an ambient FLUTTER_ROOT the
-  // stage does not record.
-  if (needsFlutter([sourceDirectory, ...fromSource.values])) {
-    final dart = context.stage.compiler?.executable;
-    if (dart != null && !dartInFlutterSdk(dart)) {
-      return (
-        diagnostic: _flutterDiagnostic(project.name, dart),
-        warnings: const <Diagnostic>[],
-      );
-    }
-  }
-
   final archivePath = ReleaseAssets.pubArchivePath(project);
-  Directory? consumer;
+  // Pub validates against the versions it resolves, so it resolves the
+  // package the way its consumers do, in a mirror of the source: as a root
+  // of its own, from its own pubspec, with no lockfile and no dependency
+  // override but the repository packages it takes from this source. Pub
+  // leaves overrides files out of archives, so the one written here does
+  // not change what is published.
+  final consumer = _mirrorSource(context);
   late final ToolResult packaged;
   late final String resolvedAs;
   try {
-    // Pub validates against the versions it resolves, so it resolves the
-    // package the way its consumers do, in a mirror of the snapshot: as a
-    // root of its own, from its own pubspec, with no lockfile and no
-    // dependency override but the repository packages it takes from this
-    // source. Pub leaves overrides files out of archives, so the one
-    // written here does not change what is published.
-    consumer = _mirrorSourceSnapshot(context);
-    final directory = _packageDirectory(consumer, project);
-    // Records left in the snapshot are not Pub's answer for it, and a
-    // lockfile holds versions its consumers do not get.
-    _removePubRecords(_join(consumer.path, const ['source']));
-    final here = _canonical(sourceDirectory);
+    final sourceRoot = _join(consumer.path, const ['source']);
+    String inSource(String directory) => directory == '.'
+        ? sourceRoot
+        : _join(sourceRoot, StagePath.segments(directory));
+    final directory = inSource(project.pubspec.directory);
+
+    // The repository packages Pub takes from this source, by name with
+    // their directories: those the release plan names (see
+    // [TargetStageContext.fromSource]), and members of the package's
+    // workspace that only its development needs.
+    final members =
+        resolutionPackages(sourceRoot, directory).packages ?? const {};
+    final fromSource = {
+      for (final MapEntry(key: name, value: path)
+          in context.fromSource.entries)
+        name: inSource(path),
+      for (final name in developmentMembers(members, project.name))
+        name: members[name]!,
+    }..remove(project.name);
+
+    // A Flutter package, or one that takes a Flutter package from this
+    // source, needs a Flutter SDK's Dart, whose pub finds its own Flutter.
+    // The Dart rk identified for this stage is the one that packages and
+    // publishes; a standalone one would depend on an ambient FLUTTER_ROOT
+    // the stage does not record.
+    if (needsFlutter([directory, ...fromSource.values])) {
+      final dart = context.stage.compiler?.executable;
+      if (dart != null && !dartInFlutterSdk(dart)) {
+        return (
+          diagnostic: _flutterDiagnostic(project.name, dart),
+          warnings: const <Diagnostic>[],
+        );
+      }
+    }
+
     File(_join(directory, const ['pubspec_overrides.yaml'])).writeAsStringSync(
       consumerOverrides({
         for (final MapEntry(key: name, value: path) in fromSource.entries)
-          name: _relativePath(here, _canonical(path)),
-      }, inWorkspace: inWorkspace(sourceDirectory)),
+          name: _relativePath(directory, path),
+      }, inWorkspace: inWorkspace(directory)),
     );
     final get = await context.tools.run(
       'dart',
@@ -237,7 +230,7 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
       archive.path,
     ], workingDirectory: directory);
   } finally {
-    consumer?.deleteSync(recursive: true);
+    consumer.deleteSync(recursive: true);
   }
   final validation = '${packaged.stdout}\n${packaged.stderr}'.trim();
   context.attach(
@@ -326,14 +319,6 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
   );
 }
 
-/// The staged package's directory in [mirror].
-String _packageDirectory(Directory mirror, ResolvedProject project) {
-  final source = _join(mirror.path, const ['source']);
-  return project.pubspec.directory == '.'
-      ? source
-      : _join(source, StagePath.segments(project.pubspec.directory));
-}
-
 /// Pub's validation findings in [output], by the heading Pub lists them
 /// under: "Package validation found the following" errors, or potential
 /// issues, its warnings. Hints are neither. Each finding is its bullet's
@@ -397,15 +382,6 @@ String _headline(String finding) {
   return lines.isEmpty ? finding : lines.first;
 }
 
-/// [path] with symbolic links resolved, when it exists.
-String _canonical(String path) {
-  try {
-    return Directory(path).resolveSymbolicLinksSync();
-  } on FileSystemException {
-    return path;
-  }
-}
-
 /// The path from directory [from] to [to], `/`-separated as a pubspec
 /// writes it.
 String _relativePath(String from, String to) {
@@ -423,15 +399,15 @@ String _relativePath(String from, String to) {
   ].join('/');
 }
 
-/// Copies the recorded snapshot outside the repository before invoking Pub.
+/// Exports the source outside the repository before invoking Pub.
 ///
 /// Release stages deliberately live under `.rk/`, which repositories normally
-/// ignore. Pub walks ancestor Git ignore rules when it builds a package; run
-/// directly in the stage, that makes the whole package look ignored and can
-/// produce an empty archive. The mirror contains only receipt-bound source
-/// files, retains their modes and the workspace layout, and is deleted after
-/// the native archive command finishes.
-Directory _mirrorSourceSnapshot(TargetStageContext context) {
+/// ignore, and Pub walks ancestor Git ignore rules when it builds a package:
+/// beneath a repository, the whole package can look ignored and produce an
+/// empty archive. The mirror holds the tracked files with their modes and
+/// the workspace layout, under `source/`, and is deleted after the archive
+/// command finishes.
+Directory _mirrorSource(TargetStageContext context) {
   final mirror = Directory.systemTemp.createTempSync('rk-pub-source-');
   try {
     final gitControl = _gitControlAncestor(mirror.path);
@@ -441,26 +417,11 @@ Directory _mirrorSourceSnapshot(TargetStageContext context) {
         '$gitControl',
       );
     }
-
-    final modes = <String, String>{};
-    for (final artifact in context.sourceStep.outputs) {
-      final parts = StagePath.segments(artifact.path);
-      if (artifact.type != 'source' ||
-          parts.length < 2 ||
-          parts.first != 'source') {
-        throw StateError(
-          'the source snapshot contains a non-source artifact: '
-          '${artifact.path}',
-        );
-      }
-      final destination = File(_join(mirror.path, parts));
-      destination.parent.createSync(recursive: true);
-      File(
-        context.stage.directory.resolve(artifact.path),
-      ).copySync(destination.path);
-      modes[destination.path] = artifact.mode;
-    }
-    setFileModes(modes);
+    final source = _join(mirror.path, const ['source']);
+    context.source.export(source);
+    // Records the source tracks are not Pub's answer for it, and a lockfile
+    // holds versions its consumers do not get.
+    _removePubRecords(source);
     return mirror;
   } on Object {
     if (mirror.existsSync()) mirror.deleteSync(recursive: true);
