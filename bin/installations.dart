@@ -205,7 +205,7 @@ Future<int> _run(
   );
   final resolution = config == null
       ? null
-      : Resolution.resolve(config, tree, diagnostics);
+      : Resolution.forInstallation(config, tree, diagnostics);
   if (resolution == null || diagnostics.isNotEmpty) {
     output.problems(diagnostics.found);
     return ExitCodes.refused;

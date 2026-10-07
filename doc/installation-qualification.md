@@ -390,3 +390,32 @@ validator instead of maintaining a second layout parser.
 
 No public release was published, and the operator's installations and shell
 configuration were not switched by this qualification.
+
+
+## Native hook local launch qualification (2026-10-05)
+
+The local launcher now prepares hooks from the selected Dart project, then
+restores the caller directory and launches its original entrypoint. A real
+transitive C-library fixture verified cold native loading, rebuild after editing
+C source, arguments with spaces and dollar signs, stdin, nonzero exit status,
+uncaught errors, compile-time defines, and Platform.script. Installation
+resolution also accepts development dependencies while ordinary release
+resolution continues to reject them.
+
+Analysis passed. The affected installation, resolver and review-regression tests
+passed (119 tests across the focused run and the four-case CLI rerun). The CLI
+fixture now compiles rk once before invoking real subprocesses; repeatedly
+compiling it for every argument check timed out under local machine load.
+The broad repository run was stopped after unrelated timeout failures and does
+not constitute a full-suite pass. Native hooks do not qualify release artifact
+staging, signing, or physical hardware behavior.
+
+Rechecked on 2026-10-07 with main (rk 0.1.14) merged in, locally on an Apple M1
+Pro with Dart 3.12.2:
+
+- The full suite passed: 1,953 tests, one skipped.
+- The three terminal checks passed against a compiled binary.
+- With the bootstrap disabled, the native fixture fails as the change describes
+  (`No available native assets`), so the test exercises the fix.
+- The macOS CI run of 2026-10-05 stopped at the installation-UX check's Ctrl+C
+  step while a provider check was still showing; that check passed locally.

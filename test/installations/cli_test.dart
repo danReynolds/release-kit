@@ -4,10 +4,31 @@ library;
 import 'dart:convert';
 import 'dart:io';
 import 'package:test/test.dart';
+import 'package:rk/src/engine/config.dart';
+import 'package:rk/src/engine/diagnostic.dart';
+import 'package:rk/src/engine/resolve.dart';
+import 'package:rk/src/engine/source_tree.dart';
 import 'fixtures.dart';
 
 void main() {
-  final executable = File('bin/rk.dart').absolute.path;
+  // Compile once: each case still runs a separate real CLI process, without
+  // repeatedly compiling the full CLI while testing installation behavior.
+  late Directory compiled;
+  late String executable;
+  setUpAll(() async {
+    compiled = Directory.systemTemp.createTempSync('rk-install-cli-binary-');
+    addTearDown(() => compiled.deleteSync(recursive: true));
+    executable = '${compiled.path}/rk';
+    final result = await Process.run(Platform.resolvedExecutable, [
+      '--suppress-analytics',
+      'compile',
+      'exe',
+      'bin/rk.dart',
+      '-o',
+      executable,
+    ]);
+    expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+  });
   late Directory scratch;
   late Map<String, String> environment;
   setUp(() {
@@ -27,8 +48,8 @@ void main() {
     List<String> args,
   ) async {
     final result = await Process.run(
-      Platform.resolvedExecutable,
-      [executable, ...args, '--json'],
+      executable,
+      [...args, '--json'],
       workingDirectory: root,
       environment: environment,
     );
@@ -120,6 +141,44 @@ void main() {
       ]);
       expect(removal, 1);
       expect(refused['problems'].single['message'], contains('selected'));
+    },
+  );
+
+  test(
+    'local accepts development dependencies while release resolution refuses them',
+    () async {
+      final project = fixture(scratch);
+      final dependency = Directory('${scratch.path}/unpublished')..createSync();
+      File('${dependency.path}/pubspec.yaml').writeAsStringSync(
+        'name: unpublished\nversion: 0.0.1\nenvironment:\n  sdk: ^3.10.4\n',
+      );
+      final manifest = File('${project.directory}/pubspec.yaml');
+      manifest.writeAsStringSync(
+        '${manifest.readAsStringSync()}\ndependencies:\n  unpublished:\n    path: ${dependency.path}\n',
+      );
+      final tree = FileSystemSourceTree(project.directory);
+      final diagnostics = Diagnostics();
+      final config = ReleaseConfig.parse(
+        tree.read('release.toml')!,
+        'release.toml',
+        diagnostics,
+      )!;
+      expect(Resolution.resolve(config, tree, diagnostics), isNull);
+      expect(
+        diagnostics.found.map((problem) => problem.code),
+        contains('RK-DART-201'),
+      );
+      final (used, selected) = await run(project.directory, ['use', 'local']);
+      expect(used, 0, reason: '$selected');
+      final entry = '${selected['installations']['managed_bin']}/orbit';
+      final result = await Process.run(
+        entry,
+        ['development'],
+        workingDirectory: scratch.path,
+        environment: environment,
+      );
+      expect(result.exitCode, 0, reason: '${result.stderr}');
+      expect(result.stdout, contains('development'));
     },
   );
 

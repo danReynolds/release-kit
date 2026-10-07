@@ -37,14 +37,36 @@ class Resolution {
     ReleaseConfig config,
     SourceTree tree,
     Diagnostics diagnostics,
-  ) {
+  ) => _resolve(config, tree, diagnostics, developmentSources: false);
+
+  /// Discovers installation targets without applying release source policy.
+  /// Local checkouts may depend on unpublished path or Git packages. Release
+  /// callers continue to use [resolve] and retain all publication checks.
+  static Resolution? forInstallation(
+    ReleaseConfig config,
+    SourceTree tree,
+    Diagnostics diagnostics,
+  ) => _resolve(config, tree, diagnostics, developmentSources: true);
+
+  static Resolution? _resolve(
+    ReleaseConfig config,
+    SourceTree tree,
+    Diagnostics diagnostics, {
+    required bool developmentSources,
+  }) {
     final projects = <ResolvedProject>[];
     final byUnit = <String, List<ResolvedProject>>{};
 
     for (final unit in config.units) {
       final list = <ResolvedProject>[];
       for (final declared in unit.projects) {
-        final project = _project(unit, declared, tree, diagnostics);
+        final project = _project(
+          unit,
+          declared,
+          tree,
+          diagnostics,
+          developmentSources: developmentSources,
+        );
         if (project != null) {
           list.add(project);
           projects.add(project);
@@ -161,8 +183,9 @@ class Resolution {
     UnitConfig unit,
     ProjectConfig declared,
     SourceTree tree,
-    Diagnostics diagnostics,
-  ) {
+    Diagnostics diagnostics, {
+    required bool developmentSources,
+  }) {
     final manifestPath = declared.path == '.'
         ? 'pubspec.yaml'
         : '${declared.path}/pubspec.yaml';
@@ -249,7 +272,7 @@ class Resolution {
         escaping.add('$name -> ${dependency.describeRequirement()}');
       }
     });
-    if (escaping.isNotEmpty) {
+    if (!developmentSources && escaping.isNotEmpty) {
       diagnostics.add(
         'RK-DART-201',
         '"${pubspec.name}" is built from sources this repository does not '
