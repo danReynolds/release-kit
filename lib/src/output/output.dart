@@ -979,9 +979,10 @@ final class LiveProgress {
   }
 
   void _changed(ProgressRow row) {
-    // A row settles once, so this records it once.
-    if (row.took case final took?) _time(row, took, note: row.note);
     if (_closed) return;
+    // A row settles once, so this records it once. One still running when
+    // its board was discarded was recorded then, as unfinished.
+    if (row.took case final took?) _time(row, took, note: row.note);
     if (_output.isTerminal) {
       if (_visible && !_suspended) {
         _draw();

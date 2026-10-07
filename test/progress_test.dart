@@ -102,17 +102,17 @@ void main() {
     test('a row cut off with its board is unfinished, not lost', () {
       final harness = _Harness(terminal: false);
       final board = harness.output.progressBoard('tool 1.2.3 · staging');
-      board
-          .addRow(id: 'archive', label: 'package archive')
-          .handle
-          .begin(CommonProgressActivities.validating);
+      final row = board.addRow(id: 'archive', label: 'package archive');
+      row.handle.begin(CommonProgressActivities.validating);
       harness.now += const Duration(seconds: 3);
       board.discard();
+      // Settling it afterwards does not count it again.
+      harness.now += const Duration(seconds: 1);
+      row.complete(note: 'staged');
 
-      expect(
-        harness.output.timeline.breakdown(),
-        matches(RegExp(r'package archive  unfinished +3\.0s')),
-      );
+      final breakdown = harness.output.timeline.breakdown();
+      expect(breakdown, matches(RegExp(r'package archive  unfinished +3\.0s')));
+      expect(RegExp('package archive').allMatches(breakdown), hasLength(1));
     });
 
     test('rows that share a label are told apart by their group', () {
