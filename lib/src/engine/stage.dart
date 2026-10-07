@@ -186,7 +186,7 @@ class StageDirectory {
   /// tick does not show, and the guarantee degrades to size and mode. rk's
   /// threat model is the operator's own machine, and everything a release
   /// publishes was hashed at least once with nothing else holding the stage
-  /// lock; the archived RFC 0001 prices what a stronger claim would cost.
+  /// lock.
   ///
   /// A missing directory has a fingerprint too — the empty one — so the
   /// answer for a stage that does not exist is as cacheable as any other.

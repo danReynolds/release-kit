@@ -1,11 +1,12 @@
 # RFC 0001: RK, an austere secure release compiler
 
-> Historical. This is the original threat catalog and build-versus-adopt
-> essay. It is not rk's product definition. See the [README](../../../README.md)
-> for what rk is.
+> Archived. An early direction rk did not take: a hardened release compiler
+> that treats every input as hostile. It is not rk's design, threat model or
+> assurance target, and nothing in it is a requirement. See
+> [AGENTS.md](../../../AGENTS.md) for the principles rk is built on, and the
+> [README](../../../README.md) for what rk is.
 
-- Status: Superseded as build authority by RFC 0002 (rk core, 2026-07-28);
-  retained as threat catalog and assurance ladder
+- Status: Archived (2026-10-07). Superseded by RFC 0002 (2026-07-28).
 - Production implementation: Blocked
 - Schema 1: Not frozen
 - Date: 2026-07-26

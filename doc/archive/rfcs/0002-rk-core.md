@@ -5,8 +5,7 @@
 
 - Status: Approved for implementation
 - Revision: 6 (2026-08-22) — Formula-only Homebrew publication
-- Supersedes: RFC 0001 as build authority; 0001 remains the threat catalog
-  and assurance ladder
+- Supersedes: RFC 0001, which is archived and is not rk's threat model
 - MVP scope: Dart packages and Dart CLIs, released **from the operator's
   own machine**, to pub.dev, GitHub Releases, and Homebrew
 - CI: designed for, deferred from the MVP. See "CI readiness" — its
@@ -1160,9 +1159,9 @@ discovery, no override of native vetoes.
 
 ## Relationship to RFC 0001
 
-RFC 0001 remains authoritative for the threat model and residual-risk
-analysis, the peer survey with pinned evidence, the Dune admission
-criteria, and the assurance ladder. It is no longer the build plan.
+RFC 0001 is archived. It is not rk's threat model, and its assurance ladder
+is not a list of things rk means to build. [AGENTS.md](../../../AGENTS.md)
+describes the cost-benefit test any new mechanism has to pass.
 
 ## Review history
 
