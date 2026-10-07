@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- A version on pub.dev counts as published. rk no longer compares a fresh
+  stage's archive with one already there, which refused a partly published
+  release whenever a re-packed archive's timestamps differed. After its own
+  upload, rk still reads the archive back and requires the one it staged.
+  - A published package no longer makes a unit's original stage required
+    (`RK-STAGE-005`). A stage is needed only while public bytes must match the
+    ones it holds: assets on a GitHub release, a Homebrew formula that names
+    their hashes, or the release manifest a pushed tag records.
 - Stage packages with Pub's own dependency resolution. Pub resolves each
   package once, the way its consumers will, through its normal cache. A
   package from this repository whose version is not on pub.dev yet comes from

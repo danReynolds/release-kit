@@ -56,12 +56,23 @@ final class PubDevTargetModule extends TargetModule {
     );
   }
 
+  /// A version on pub.dev is published: what is there is what its consumers
+  /// get, whatever bytes a stage holds now.
   @override
   Future<Inspection> inspectCandidate(
     TargetReadContext context,
     ResolvedUnit unit,
     TargetPlan target,
-  ) {
+  ) => _inspect(context, unit, target, againstStage: false);
+
+  /// After rk's own upload, the archive pub.dev reports must be the one it
+  /// staged and uploaded.
+  Future<Inspection> _inspect(
+    TargetReadContext context,
+    ResolvedUnit unit,
+    TargetPlan target, {
+    required bool againstStage,
+  }) {
     final reader = context.registry;
     if (reader == null) {
       return Future.value(
@@ -76,7 +87,7 @@ final class PubDevTargetModule extends TargetModule {
         ),
       );
     }
-    final stage = context.reusableStage(unit);
+    final stage = againstStage ? context.reusableStage(unit) : null;
     String? expectedArchiveSha256;
     if (stage != null) {
       try {
@@ -337,7 +348,12 @@ final class PubDevTargetModule extends TargetModule {
     var waited = Duration.zero;
     while (true) {
       context.reads.registry?.forget(target.coordinate);
-      final state = await inspectCandidate(context.reads, unit, target);
+      final state = await _inspect(
+        context.reads,
+        unit,
+        target,
+        againstStage: true,
+      );
       if (!state.isAbsent || waited >= context.confirmDeadline) {
         if (state.isAbsent && waited >= context.confirmDeadline) {
           final project = target.project!;

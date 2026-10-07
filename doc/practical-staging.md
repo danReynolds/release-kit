@@ -137,10 +137,12 @@ lockfile and Pub's hashes keep it honest.
    - The dependency-staging machinery and the workspace pre-resolution
      deleted: about 10,000 lines of code and 21 test files that covered only
      them.
-2. **The stage model.**
+2. **Registry truth.**
+   - A version on pub.dev is published; no archive comparison before acting.
+   - The narrowed recovery rule.
+3. **The stage model.**
    - Output-only stages and direct stage ids.
    - Verification of published outputs only.
-   - The narrowed recovery rule.
 
 Stages saved by rk 0.1.14 are not read by the new rk. A partly published
 release staged with 0.1.14 finishes with 0.1.14, as schema-12 stages already

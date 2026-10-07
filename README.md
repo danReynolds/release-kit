@@ -375,21 +375,15 @@ completed command, 1 refused or failed, 2 usage, 3 rk itself crashed —
 
 ## Behavior
 
-Stages live under `.rk/work/stages`. Keep them while a package or binary release is
-partly public so the remaining targets receive the exact staged bytes.
-Built-asset progress or an exact configured unit
-tag requires the original stage when remaining targets need it. An independently
-public package in a tagless package-only unit does not prove its siblings were
-previously staged; both `rk stage` and `rk release` may prepare those siblings
-fresh. The current unit contract still packages all configured outputs: if a
-fresh repack differs from an already-public archive, release refuses before
-consent. Native archive timestamps can cause this even with unchanged source;
-preserve or restore the original matching stage. For a fresh tagless setup that
-never had an RK stage,
-place the already-public package in its own release unit and prepare the remaining
-packages separately. Regrouping does not recover an existing tagged release. `rk clean` removes this repository's
-stages, lists their recorded identities, and asks first. Receipt metadata helps
-identify a stage; it does not prove that its bytes are no longer needed.
+Stages live under `.rk/work/stages`. Keep one while a release whose public bytes
+it holds is partly public: assets on a GitHub release, a Homebrew formula that
+names their hashes, or the release manifest a pushed tag records. The remaining
+targets need those exact bytes, and rk refuses without them (`RK-STAGE-005`).
+A published package needs nothing from its stage: a version on pub.dev is
+published, and a fresh stage publishes what remains. `rk clean` removes this
+repository's stages, lists their recorded identities, and asks first. Receipt
+metadata helps identify a stage; it does not prove that its bytes are no longer
+needed.
 
 Git-identified targets (`git-tag`, `github-release`, `homebrew`) need a
 clean working tree. A registry-only or local release may include

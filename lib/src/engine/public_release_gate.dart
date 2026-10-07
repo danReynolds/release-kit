@@ -7,12 +7,13 @@ import 'targets.dart';
 import 'verdict.dart';
 import '../targets/target_module.dart';
 
-/// Whether public progress requires preserving this unit's original stage.
+/// Whether public progress requires preserving this unit's original stage:
+/// whether bytes already public must match the ones it holds.
 ///
-/// Built release assets retain their existing exact-byte recovery rule. For a
-/// package-only unit, an exact configured tag marks unit-level release progress;
-/// an independently public package says nothing about its unstaged siblings.
-/// The tag is a progress marker, not proof of a package's frozen dependencies.
+/// They must for assets on a GitHub release, a Homebrew formula that names
+/// their hashes, and the release manifest whose hash a tag annotation
+/// records. A published package binds nothing: a fresh stage publishes the
+/// unit's remaining targets.
 bool hasRecoveryCriticalPublicProgress(
   ResolvedUnit unit,
   Iterable<(Step, Inspection)> observations,
@@ -21,9 +22,10 @@ bool hasRecoveryCriticalPublicProgress(
   return step.isPublic &&
       step.unit == unit.name &&
       state.isExact &&
-      (unit.buildsReleaseAssets ||
-          (unit.publish.contains(PublishTarget.gitTag) &&
-              step.target == PublishTarget.gitTag));
+      // A published package binds nothing: its version on pub.dev is the
+      // truth, and a fresh stage publishes what remains.
+      step.target != PublishTarget.pubDev &&
+      (unit.buildsReleaseAssets || step.target == PublishTarget.gitTag);
 });
 
 /// One fresh, coherent read of every public coordinate for a release.

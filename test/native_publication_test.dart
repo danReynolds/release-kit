@@ -271,34 +271,36 @@ void main() {
     await _consume(fixture);
   });
 
-  test('a conflicting occupied version is never overwritten', () async {
-    final staged = await _stage(fixture);
-    final conflict = _controlArchive(
-      fixture.root,
-      _core,
-      '0.2.0',
-      library: 'int get coreValue => -1;\n',
-    );
-    fixture.registry.seedArchive(conflict);
-    final original = Sha256.hex(conflict.readAsBytesSync());
-    final refused = await fixture.rk(['release', '--yes', '--json']);
-    expect(refused.code, 1, reason: refused.all);
-    expect(
-      refused.problems.map((p) => p['code']),
-      contains('RK-REL-001'),
-      reason: refused.all,
-    );
-    expect(refused.all, contains('archive differs from the intended release'));
-    expect(
-      fixture.registry.events.where((e) => e.kind == 'initiated'),
-      isEmpty,
-    );
-    expect(
-      Sha256.hex(fixture.registry.archive(_core, '0.2.0').readAsBytesSync()),
-      original,
-    );
-    _unchanged(staged);
-  });
+  test(
+    'an occupied version counts as published and is never overwritten',
+    () async {
+      final staged = await _stage(fixture);
+      final occupied = _controlArchive(
+        fixture.root,
+        _core,
+        '0.2.0',
+        library: 'int get coreValue => -1;\n',
+      );
+      fixture.registry.seedArchive(occupied);
+      final original = Sha256.hex(occupied.readAsBytesSync());
+
+      // A version on the registry is published: rk compares no archive with
+      // it, uploads nothing for it, and publishes the rest of the stack.
+      _ok(await fixture.rk(['release', '--yes', '--json']));
+      expect(
+        fixture.registry.events.where(
+          (e) => e.kind == 'upload_attempted' && e.name == _core,
+        ),
+        isEmpty,
+      );
+      expect(
+        Sha256.hex(fixture.registry.archive(_core, '0.2.0').readAsBytesSync()),
+        original,
+      );
+      _published(fixture.registry, staged, names: [_format, _testing, _app]);
+      _unchanged(staged);
+    },
+  );
 
   test(
     'consumer control resolves a valid package but detects incompatible API',

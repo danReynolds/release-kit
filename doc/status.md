@@ -39,14 +39,13 @@ is a version of a package from this repository that a unit needs and another
 unit publishes: `rk release` publishes it first when both are released
 together, and otherwise waits for it to be public.
 
-Built-asset progress or an exact configured unit tag makes the original stage
-required when remaining targets need its bytes; status reports `RK-STAGE-005` if it is missing. An independently public package
-in a tagless package-only unit does not establish that its siblings were staged.
-Status can recommend fresh preparation for that mixed unit when all public
-destinations are readable. An unread destination remains a blocking issue.
-Fresh preparation is not a promise of publishability: the complete-unit archive
-for an already-public package must still match its exact public bytes, and
-native archive timestamps can make a repack differ from the original stage.
+A version on pub.dev counts as published; status does not compare archives
+with it. The original stage is required only while public bytes must match the
+ones it holds: assets on a GitHub release, a Homebrew formula that names their
+hashes, or the release manifest a pushed tag records. Status reports
+`RK-STAGE-005` when that stage is missing. Otherwise it recommends fresh
+preparation for what remains when all public destinations are readable. An
+unread destination remains a blocking issue.
 
 ## Scripts and redirected output
 
