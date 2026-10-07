@@ -7,6 +7,7 @@ import '../transforms/digest.dart';
 import 'canonical_json.dart';
 import 'file_mode.dart';
 import 'stage.dart';
+import 'timings.dart';
 
 /// A persisted receipt must remain readable by inspection and frozen lookup.
 /// Apply the same bound before writes so progress cannot outgrow its reader.
@@ -268,7 +269,14 @@ class StageReceipt {
     }
   }
 
-  factory StageReceipt.parse(String document) {
+  factory StageReceipt.parse(String document) => Timings.enabled
+      ? Timings.timeTally(
+          'parse stage receipt',
+          () => StageReceipt._parse(document),
+        )
+      : StageReceipt._parse(document);
+
+  factory StageReceipt._parse(String document) {
     final decoded = CanonicalJson.decodeDocument(document);
     // Version before shape: an older receipt differs in both, and the
     // schema message is the one a reader can act on.

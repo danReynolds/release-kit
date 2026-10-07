@@ -10,6 +10,7 @@ import 'stage_archive.dart';
 import 'stage_binary_evidence.dart';
 import 'stage_receipt.dart';
 import 'stage_receipt_structure.dart';
+import 'timings.dart';
 import 'verdict.dart';
 
 enum StageIssueKind {
@@ -126,11 +127,66 @@ class StageInspection {
 }
 
 /// Hashes and inventories an existing stage without executing artifacts,
-/// contacting a service, or changing the filesystem.
+/// contacting a service, or changing the filesystem. A stage unchanged since
+/// this process last inspected it is answered from that inspection.
 class StageInspector {
   const StageInspector();
 
-  StageInspection inspect(StageDirectory stage) {
+  /// Inspects [stage], from this process's last [verify] of it when the stage
+  /// has not changed since. A caller that has just taken the stage's
+  /// [fingerprint] passes it, so the stage is not listed and statted twice in
+  /// a row.
+  StageInspection inspect(StageDirectory stage, {String? fingerprint}) {
+    final before = fingerprint ?? _fingerprint(stage);
+    final known = _made[stage.path];
+    // The fixed-path check looks above the stage, where the fingerprint does
+    // not, so it runs every time; it costs a few lstat calls.
+    if (before != null &&
+        known != null &&
+        known.fingerprint == before &&
+        stage.unsafeFixedPath() == null) {
+      Timings.tally('stage inspection remembered');
+      return known.inspection;
+    }
+    final inspection = verify(stage);
+    // Kept under the fingerprint taken before the read. A stage that moved
+    // while it was read no longer has that fingerprint, so this answer is
+    // never given for it; nor is one read where the path was unsafe.
+    if (before != null && stage.unsafeFixedPath() == null) {
+      _made[stage.path] = (fingerprint: before, inspection: inspection);
+    } else {
+      _made.remove(stage.path);
+    }
+    return inspection;
+  }
+
+  /// [stage]'s fingerprint, or null when it cannot be listed. Such a stage is
+  /// inspected afresh every time, and the inspection says what is unreadable.
+  static String? _fingerprint(StageDirectory stage) {
+    try {
+      return stage.fingerprint();
+    } on FileSystemException {
+      return null;
+    }
+  }
+
+  /// Inspections this process has already made, by stage path, with the
+  /// fingerprint each stage had while it was read.
+  ///
+  /// A release opens the same stage many times, through a new
+  /// [StageDirectory] each time, and each opening re-read and re-hashed
+  /// every file: twenty full verifications, 16s, to reuse four stages. The
+  /// answer for an unchanged stage is the same answer, on the same evidence
+  /// [ReleaseStage] already trusts to skip a re-read: the fingerprint.
+  static final Map<String, ({String fingerprint, StageInspection inspection})>
+  _made = {};
+
+  /// Verifies [stage]: re-reads and re-hashes every file in it, whatever
+  /// this process already knows.
+  StageInspection verify(StageDirectory stage) =>
+      Timings.spanSync('verify stage files', () => _verify(stage));
+
+  StageInspection _verify(StageDirectory stage) {
     final issues = <StageIssue>[];
     final unsafe = stage.unsafeFixedPath();
     if (unsafe != null) {

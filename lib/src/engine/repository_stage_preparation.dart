@@ -9,6 +9,7 @@ import 'resolve.dart';
 import 'resolution_facts.dart';
 import 'stage_dependencies.dart';
 import 'stage_intent.dart';
+import 'timings.dart';
 
 /// A completed provider already authorized against current source and native
 /// metadata by restoration. Pin its receipt as well as its stage identity:
@@ -56,6 +57,24 @@ final class RepositoryStageCandidates {
   final Set<String> withoutPreparation;
 }
 
+/// Watches [RepositoryStagePreparation.resolve] without taking part in it, so
+/// a command can show which unit's stage is being read. Restoration verifies
+/// every staged file and discovery resolves dependencies; either can take
+/// long enough that saying nothing looks like a hang.
+abstract interface class RepositoryPreparationObserver {
+  /// [unit]'s saved stage is about to be found and verified.
+  void restoring(ResolvedUnit unit);
+
+  /// [unit]'s restoration ended: [found] is whether a stage was adopted.
+  void restored(ResolvedUnit unit, {required bool found});
+
+  /// [unit] has no stage, and its dependencies are about to be resolved.
+  void discovering(ResolvedUnit unit);
+
+  /// Every unit without a stage has had its dependencies resolved.
+  void discovered();
+}
+
 /// Resolves one repository preparation scope without running its producers.
 /// The caller holds the stage-store mutation lock and supplies restoration that
 /// returns null only for conclusive absence, throwing on all rejected state.
@@ -82,6 +101,7 @@ final class RepositoryStagePreparation {
       Map<String, ReleaseStage> restored,
     )
     eligibility,
+    RepositoryPreparationObserver? observer,
   }) async {
     final resolvedFacts = resolutionFacts(resolution);
     final units = selected.toList();
@@ -94,7 +114,12 @@ final class RepositoryStagePreparation {
     }
     final restored = <String, ReleaseStage>{};
     for (final unit in units) {
-      final stage = await restore(unit);
+      observer?.restoring(unit);
+      final stage = await Timings.span(
+        'restore ${unit.name}',
+        () => restore(unit),
+      );
+      observer?.restored(unit, found: stage != null);
       if (stage != null) {
         if (!identical(stages(unit), stage) || stage.intent == null) {
           throw StateError('restoration did not install the shared binding');
@@ -112,7 +137,10 @@ final class RepositoryStagePreparation {
           readInputs: () => native.readIntent(unit),
         ),
     };
-    final scope = await eligibility(Map.unmodifiable(restored));
+    final scope = await Timings.span(
+      'eligibility',
+      () => eligibility(Map.unmodifiable(restored)),
+    );
     if (!names.containsAll(scope.withoutPreparation)) {
       throw StateError(
         'public recovery names a unit outside preparation scope',
@@ -163,6 +191,7 @@ final class RepositoryStagePreparation {
           scope.withoutPreparation.contains(unit.name)) {
         continue;
       }
+      observer?.discovering(unit);
       pending[unit.name] = await native.discover(
         unit,
         candidates: scope.candidates,
@@ -173,6 +202,7 @@ final class RepositoryStagePreparation {
         throw StateError('native discovery returned an unauthorized ecosystem');
       }
     }
+    observer?.discovered();
     final plan = RepositoryPreparationPlan._(
       stages: stages,
       resolution: resolution,

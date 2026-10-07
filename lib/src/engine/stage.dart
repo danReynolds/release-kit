@@ -5,6 +5,7 @@ import 'atomic_file.dart';
 import '../transforms/digest.dart';
 import 'canonical_json.dart';
 import 'workspace.dart';
+import 'timings.dart';
 
 /// Increment this only when the identity or receipt contract changes.
 const stageSchemaVersion = 13;
@@ -178,20 +179,31 @@ class StageDirectory {
   /// every write and the writer cannot set it back, so a rewrite that keeps
   /// the same size and modification time still shows up here.
   ///
-  /// That argument is only as good as the filesystem's clock. On APFS and
-  /// ext4 these are nanoseconds and any write is visible; on a volume that
-  /// keeps timestamps to the second — HFS+, some network mounts — a rewrite
-  /// of exactly the same length inside one tick is not, and the guarantee
-  /// degrades to size and mode. rk's threat model is the operator's own
-  /// machine, and everything a release publishes was hashed at least once
-  /// with nothing else holding the stage lock; the archived RFC 0001 prices
-  /// what a stronger claim would cost.
+  /// That argument is only as good as the clock rk can read. APFS and ext4
+  /// keep nanoseconds, but Dart reports both timestamps to the millisecond,
+  /// and a volume that keeps them to the second — HFS+, some network mounts
+  /// — is coarser still. A rewrite of exactly the same length inside one
+  /// tick does not show, and the guarantee degrades to size and mode. rk's
+  /// threat model is the operator's own machine, and everything a release
+  /// publishes was hashed at least once with nothing else holding the stage
+  /// lock; the archived RFC 0001 prices what a stronger claim would cost.
   ///
   /// A missing directory has a fingerprint too — the empty one — so the
   /// answer for a stage that does not exist is as cacheable as any other.
-  String fingerprint() {
+  /// Something else at the path, a file or a dangling link, has its own, so
+  /// an answer about it is never taken for an answer about nothing there.
+  String fingerprint() => Timings.enabled
+      ? Timings.timeTally('stage fingerprint', _fingerprint)
+      : _fingerprint();
+
+  String _fingerprint() {
     final directory = Directory(path);
-    if (!directory.existsSync()) return 'absent';
+    if (!directory.existsSync()) {
+      final type = FileSystemEntity.typeSync(path, followLinks: false);
+      return type == FileSystemEntityType.notFound
+          ? 'absent'
+          : 'not a directory: $type';
+    }
     final entries = directory.listSync(recursive: true, followLinks: false)
       ..sort((left, right) => left.path.compareTo(right.path));
     final described = StringBuffer();

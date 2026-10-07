@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+## 0.1.14
+
+- Say how long each step took. On a terminal, a finished step keeps its
+  time once it reaches a second (`✓ package archive  staged · 1m 41s`), and
+  a successful `stage` or `release` of ten seconds or more ends with one
+  line of phases: `Done in 2m 53s · preparing 2s · checking stages 31s ·
+  staging 1m 58s · publishing 22s`. Time at rk's confirmation prompt is not
+  counted. Pipes and `--json` are unchanged.
+  - `--timings` prints the whole breakdown after the run, to stderr: every
+    phase and step, however fast, for a run that stopped too. It also writes
+    the run to `.rk/timings.json` as a trace that Perfetto opens.
+- Show what rk is doing while it checks saved stages, and check them
+  faster. Between the last `Releasing` (or `Staging`) heading and the
+  preparation order, rk verifies every unit's saved stage. It printed nothing
+  there, often for tens of seconds. A `Checking stages` board now shows each
+  unit's saved stage being verified, the units' public targets being read,
+  and, for a unit with no stage, its dependencies being resolved. A row is
+  active only while its own work runs, so a refusal marks the work that
+  failed and nothing else, and the board is printed before the refusal.
+  - Reusing four saved stages took about half as long in a measured
+    four-package release. rk no longer runs the same work again within one
+    run: probing a Dart SDK behind a launcher such as Flutter's `dart`,
+    reading a file from a commit with its own `git show`, and re-hashing
+    every staged file each time a stage is opened. Authorization still asks
+    a Dart launcher which SDK it runs, before and after the yes, so a version
+    manager that switches SDKs mid-run is noticed before anything is
+    published.
+  - Fresh staging preloads a unit's dependency archives in one
+    `dart pub cache preload` per registry, instead of one per archive, with
+    the same two minutes per archive. If Pub refuses the batch, each archive
+    is retried alone, so an error still names the archive; when each one
+    preloads alone, staging goes on.
+
+- rk depends on Fleury 0.1 from pub.dev. The repository's override to a
+  Fleury revision with the native output, inline shutdown and navigation
+  fixes (Fleury #278) is gone: Fleury 0.1.0 includes them.
 - Keep a released unit released while its own files are unchanged. A bare
   `rk release` used to stop at any unit whose tag was not on the current
   commit. It called the unit released from different source and asked for a

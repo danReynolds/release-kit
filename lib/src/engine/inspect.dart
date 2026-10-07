@@ -11,6 +11,7 @@ import 'release_stage.dart';
 import 'targets.dart';
 import 'tools.dart';
 import 'verdict.dart';
+import 'timings.dart';
 
 /// Reads reality for one step, and nothing else.
 ///
@@ -117,7 +118,10 @@ class Inspector {
   static Set<String> expectedAssets(ResolvedUnit unit) =>
       ReleaseAssets.expectedForUnit(unit).toSet();
 
-  Future<Inspection> inspect(Step step, ResolvedUnit unit) async {
+  Future<Inspection> inspect(Step step, ResolvedUnit unit) =>
+      Timings.span('check ${step.id}', () => _inspect(step, unit));
+
+  Future<Inspection> _inspect(Step step, ResolvedUnit unit) async {
     final module = targets.moduleForStep(step);
     if (module != null) {
       final target = module.plan(

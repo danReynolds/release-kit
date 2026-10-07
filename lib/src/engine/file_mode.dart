@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'timings.dart';
 
 /// Renders the POSIX permission and special bits recorded in stage receipts.
 String posixMode(int mode) => (mode & 0xfff).toRadixString(8).padLeft(4, '0');
@@ -20,7 +21,7 @@ void setFileModes(Map<String, String> byPath) {
     // One argument list has a length the kernel will refuse. This bound is
     // well under every supported platform's limit.
     for (final batch in _batched(paths, 32000)) {
-      final changed = Process.runSync('chmod', [permissions, ...batch]);
+      final changed = timedRunSync('chmod', [permissions, ...batch]);
       if (changed.exitCode != 0) {
         throw FileSystemException(
           'could not preserve file mode $permissions: ${changed.stderr}',

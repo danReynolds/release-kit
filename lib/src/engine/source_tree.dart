@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:io';
+import 'timings.dart';
 
 /// Read access to the repository being released.
 ///
@@ -116,7 +117,7 @@ class GitSourceTree implements SourceTree {
   @override
   List<String> trackedFiles() {
     if (_tracked != null) return _tracked!;
-    final result = Process.runSync('git', const [
+    final result = timedRunSync('git', const [
       'ls-files',
       '-z',
     ], workingDirectory: root);
@@ -138,7 +139,17 @@ class GitSourceTree implements SourceTree {
   /// index. Release staging uses these after it captures HEAD and its tree so
   /// a concurrent edit cannot be trusted under the old tree identity.
   List<GitTreeEntry> trackedEntriesAt(String commit) {
-    final result = Process.runSync('git', [
+    if (!_CommittedObjects.isObjectId(commit)) {
+      return _listTrackedEntriesAt(commit);
+    }
+    final cached =
+        _CommittedObjects.trees[_CommittedObjects.key(root, commit)] ??=
+            List.unmodifiable(_listTrackedEntriesAt(commit));
+    return List.of(cached);
+  }
+
+  List<GitTreeEntry> _listTrackedEntriesAt(String commit) {
+    final result = timedRunSync('git', [
       'ls-tree',
       '-r',
       '-z',
@@ -166,7 +177,7 @@ class GitSourceTree implements SourceTree {
       final path = record.substring(separator + 1);
       if (metadata.length != 3 ||
           !RegExp(r'^[0-7]{6}$').hasMatch(metadata[0]) ||
-          !RegExp(r'^(?:[0-9a-f]{40}|[0-9a-f]{64})$').hasMatch(metadata[2])) {
+          !_CommittedObjects.isObjectId(metadata[2])) {
         throw SourceUnreadable(
           'the source tree at $commit',
           'git returned malformed mode, type, or object metadata for $path',
@@ -194,12 +205,26 @@ class GitSourceTree implements SourceTree {
   Future<Map<String, Uint8List>> readBytesBatchAt(
     String commit,
     List<String> paths,
+  ) => Timings.timeTallyAsync(
+    'git cat-file --batch',
+    () => _readBytesBatchAt(commit, paths),
+  );
+
+  Future<Map<String, Uint8List>> _readBytesBatchAt(
+    String commit,
+    List<String> paths,
   ) async {
     final result = <String, Uint8List>{};
     final batched = <String>[];
+    final cacheable = _CommittedObjects.isObjectId(commit);
     for (final path in paths) {
       _resolve(path); // validates that [path] cannot escape the repository.
-      if (path.contains('\n')) {
+      final cached = cacheable
+          ? _CommittedObjects.blobs[_CommittedObjects.key(root, commit, path)]
+          : null;
+      if (cached != null) {
+        result[path] = Uint8List.fromList(cached);
+      } else if (path.contains('\n')) {
         result[path] = Uint8List.fromList(readBytesAt(commit, path));
       } else {
         batched.add(path);
@@ -248,6 +273,12 @@ class GitSourceTree implements SourceTree {
         throw SourceUnreadable(path, 'git cat-file returned a short object');
       }
       result[path] = stdoutBytes.sublist(start, start + size);
+      if (cacheable) {
+        _CommittedObjects.remember(
+          _CommittedObjects.key(root, commit, path),
+          result[path]!,
+        );
+      }
       at = start + size + 1; // the newline that closes the object
     }
     return result;
@@ -255,7 +286,19 @@ class GitSourceTree implements SourceTree {
 
   List<int> readBytesAt(String commit, String path) {
     _resolve(path); // validates that [path] cannot escape the repository.
-    final result = Process.runSync(
+    if (!_CommittedObjects.isObjectId(commit)) {
+      return _showBytesAt(commit, path);
+    }
+    final key = _CommittedObjects.key(root, commit, path);
+    final cached = _CommittedObjects.blobs[key];
+    if (cached != null) return Uint8List.fromList(cached);
+    final bytes = _showBytesAt(commit, path);
+    _CommittedObjects.remember(key, bytes);
+    return bytes;
+  }
+
+  List<int> _showBytesAt(String commit, String path) {
+    final result = timedRunSync(
       'git',
       ['show', '$commit:$path'],
       workingDirectory: root,
@@ -269,7 +312,7 @@ class GitSourceTree implements SourceTree {
 
   /// The repository root containing [start], or null when there is none.
   static String? findRoot(String start) {
-    final result = Process.runSync('git', const [
+    final result = timedRunSync('git', const [
       'rev-parse',
       '--show-toplevel',
     ], workingDirectory: start);
@@ -414,7 +457,7 @@ class GitWorktreeSourceTree extends FileSystemSourceTree {
 
   @override
   List<String> trackedFiles() {
-    final result = Process.runSync('git', const [
+    final result = timedRunSync('git', const [
       'ls-files',
       '--cached',
       '--others',
@@ -756,4 +799,37 @@ class SourceUnreadable implements Exception {
 
   @override
   String toString() => '$path could not be read: $reason';
+}
+
+/// What this process has already read from immutable commits.
+///
+/// A commit named by its full object id cannot change, so neither can its
+/// tree or any blob in it. A release reads the same few manifests hundreds
+/// of times, each read a `git show` subprocess; answering repeats from memory
+/// leaves one read per file. Callers get copies, so nothing they do to a
+/// result reaches the cache. Symbolic names (HEAD, a branch) are never
+/// cached: they move.
+abstract final class _CommittedObjects {
+  static final Map<String, List<GitTreeEntry>> trees = {};
+  static final Map<String, Uint8List> blobs = {};
+
+  /// Past this many cached bytes, reads go back to git rather than growing
+  /// the cache without bound in a very large repository.
+  static const int _budget = 256 * 1024 * 1024;
+  static int _bytes = 0;
+
+  static final _objectId = RegExp(r'^(?:[0-9a-f]{40}|[0-9a-f]{64})$');
+
+  static bool isObjectId(String commit) => _objectId.hasMatch(commit);
+
+  /// The key of [commit]'s tree in the repository at [root], or of the blob
+  /// at [path] in it.
+  static String key(String root, String commit, [String? path]) =>
+      path == null ? '$root\u0000$commit' : '$root\u0000$commit\u0000$path';
+
+  static void remember(String key, List<int> bytes) {
+    if (blobs.containsKey(key) || _bytes + bytes.length > _budget) return;
+    blobs[key] = Uint8List.fromList(bytes);
+    _bytes += bytes.length;
+  }
 }

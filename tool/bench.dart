@@ -54,7 +54,10 @@ Future<void> main(List<String> args) async {
     () => GitState.read(gitRoot),
     detail: '11 git questions, concurrent',
   );
-  final head = git.head;
+  // By name, not by object id: rk remembers what it has read from a commit
+  // named by id, and a second attempt would time that memory, not git.
+  const head = 'HEAD';
+  report.note('commit', git.shortHead);
   final tree = GitSourceTree(gitRoot);
 
   final entries = report.time(
@@ -175,7 +178,7 @@ Future<void> main(List<String> args) async {
     );
     report.time(
       'verify a built stage',
-      () => const StageInspector().inspect(directory),
+      () => const StageInspector().verify(directory),
       detail: '${_size(size)} re-read and re-hashed',
     );
     report.time(

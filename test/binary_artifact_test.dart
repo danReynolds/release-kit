@@ -229,6 +229,39 @@ $metadata
     expect(wrapped.runtimeSha256, isNotNull);
   });
 
+  test('an unchanged SDK launcher is probed once', () {
+    if (Platform.isWindows) return;
+    final root = Directory.systemTemp.createTempSync('rk-sdk-probe-');
+    addTearDown(() => root.deleteSync(recursive: true));
+    final runs = File('${root.path}/runs');
+    final wrapper = File('${root.path}/dart');
+    void writeWrapper(String note) {
+      wrapper.writeAsStringSync(
+        '#!/bin/sh\n# $note\necho run >> "${runs.path}"\n'
+        'exec "${Platform.resolvedExecutable}" "\$@"\n',
+      );
+      Process.runSync('chmod', ['755', wrapper.path]);
+    }
+
+    int probes() => runs.existsSync() ? runs.readAsLinesSync().length : 0;
+
+    writeWrapper('one');
+    final first = DartCompilerIdentity.readResolved(wrapper.path);
+    expect(probes(), 1);
+    expect(DartCompilerIdentity.readResolved(wrapper.path), first);
+    expect(probes(), 1, reason: 'an unchanged launcher runs the same SDK');
+
+    writeWrapper('two, a different launcher');
+    expect(DartCompilerIdentity.readResolved(wrapper.path), first);
+    expect(probes(), 2, reason: 'a changed launcher is asked again');
+
+    // A version manager's shim can switch SDKs without changing on disk, so
+    // authorization forgets every answer before and after the yes.
+    DartCompilerIdentity.askWrappersAgain();
+    expect(DartCompilerIdentity.readResolved(wrapper.path), first);
+    expect(probes(), 3, reason: 'an unchanged launcher is asked again');
+  });
+
   test('the runtime bytes participate in compiler identity and round trip', () {
     final root = Directory.systemTemp.createTempSync('rk-runtime-identity-');
     addTearDown(() => root.deleteSync(recursive: true));

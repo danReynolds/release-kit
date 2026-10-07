@@ -11,6 +11,7 @@ import '../engine/publish_target.dart';
 import '../engine/public_release_gate.dart';
 import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
+import '../engine/stage_plan.dart';
 import '../engine/targets.dart';
 import '../engine/tools.dart';
 import '../engine/verdict.dart';
@@ -21,9 +22,6 @@ import '../transforms/digest.dart';
 import 'release_preparation.dart';
 import 'release_progress.dart';
 import 'release_stage_coordinator.dart';
-
-/// Long enough that a preparation board helps instead of flashing briefly.
-const _briefPhase = Duration(milliseconds: 800);
 
 enum ReleaseAction {
   notAttempted('not_attempted', 'not attempted'),
@@ -322,7 +320,7 @@ final class ReleasePublicationCoordinator {
       output,
       title: '${unit.name} ${unit.version} · preparing release',
       targets: targets,
-      delay: _briefPhase,
+      delay: briefPhase,
     );
     final context = TargetReadinessContext(
       tools: tools,
@@ -502,6 +500,9 @@ final class ReleasePublicationCoordinator {
     // A later unit's slow review may invalidate an earlier unit. Recheck all
     // contexts, then all local identities/bytes/endpoints synchronously after
     // the last await, before capturing what the confirmation will accept.
+    // Preparation may have taken minutes, so that includes the SDK a Dart
+    // launcher on PATH runs.
+    DartCompilerIdentity.askWrappersAgain();
     for (final review in checked) {
       final plan = review.plan;
       if (!plan.recoversWithoutStage &&
@@ -630,6 +631,8 @@ final class ReleasePublicationCoordinator {
       );
       return false;
     }
+    // So may the wait at the prompt: the first public action reads it again.
+    DartCompilerIdentity.askWrappersAgain();
     runConsent = consent;
     _completedReviewUnits.clear();
     _reviewedScopeGit = null;
@@ -2187,6 +2190,9 @@ final class ReleasePublicationCoordinator {
       output.next('rk release ${unit.name}');
       return false;
     }
+    // The wait at the prompt may have changed the SDK a Dart launcher on PATH
+    // runs: the first public action reads it again.
+    DartCompilerIdentity.askWrappersAgain();
     return true;
   }
 

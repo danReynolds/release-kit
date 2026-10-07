@@ -50,6 +50,7 @@ import 'package:rk/src/native/dart/stage_discovery.dart';
 import 'package:rk/src/native/dart/publication.dart';
 import 'package:rk/src/native/dart/stage_source.dart';
 import 'package:rk/src/version.dart';
+import 'package:rk/src/engine/timings.dart';
 
 const _usage = '''
 rk — an austere release tool
@@ -77,6 +78,8 @@ Flags
   -y, --yes   release, clean or uninstall: confirm without an interactive prompt
   --latest    install: get the latest compatible version without changing source
   --write     init: write the default configuration without a prompt
+  --timings   stage or release: how long each step took, after the run
+              (and .rk/timings.json, a trace Perfetto opens)
 
 Marks: ✓ done,  · already satisfied,  ✗ problem or conflict,  ! warning,
        → your next move,  unmarked pending
@@ -139,7 +142,7 @@ Example: rk plan tools
 
 const _stageUsage =
     '''
-rk stage [unit] [--json]
+rk stage [unit] [--timings] [--json]
 
 Prepare and validate the exact artifacts for a release; publish nothing.
 Runs configured builds, signing, notarization, and package checks.
@@ -149,6 +152,8 @@ $_unitHelp
 Omit the unit to prepare the whole repository in dependency order.
 A named unit may use a verified sibling stage or published dependencies.
 Naming a unit never builds other units. No publication is performed.
+--timings print how long each phase and step took, once the run ends,
+          and write it to .rk/timings.json as a trace
 --json    emit one structured report
 
 Example: rk stage tools
@@ -158,7 +163,7 @@ Release reuses a valid stage and prepares one when needed.
 
 const _releaseUsage =
     '''
-rk release [unit] [--yes] [--json]
+rk release [unit] [--yes] [--timings] [--json]
 
 Prepare configured artifacts, then publish unfinished release targets.
 Reuses a valid stage and prepares one when needed; rk stage is optional.
@@ -169,6 +174,8 @@ $_unitHelp
 Omit the unit to release every unfinished unit in dependency order.
 
 -y, --yes answer yes to the publication prompt; checks still run
+--timings print how long each phase and step took, once the run ends,
+          and write it to .rk/timings.json as a trace
 --json    emit one structured report; does not prompt
 
 Example: rk release tools
@@ -203,7 +210,15 @@ Future<void> runRk(
     return;
   }
 
-  const known = {'-h', '--help', '--json', '-y', '--yes', '--write'};
+  const known = {
+    '-h',
+    '--help',
+    '--json',
+    '-y',
+    '--yes',
+    '--write',
+    '--timings',
+  };
   final flags = args.where((argument) => argument.startsWith('-')).toSet();
   final positional = args.where((a) => !a.startsWith('-')).toList();
   final json = flags.contains('--json');
@@ -247,8 +262,8 @@ Future<void> runRk(
   const perVerb = {
     'status': {'-h', '--help', '--json'},
     'plan': {'-h', '--help', '--json'},
-    'stage': {'-h', '--help', '--json'},
-    'release': {'-h', '--help', '--json', '-y', '--yes'},
+    'stage': {'-h', '--help', '--json', '--timings'},
+    'release': {'-h', '--help', '--json', '-y', '--yes', '--timings'},
     'init': {'-h', '--help', '--json', '--write'},
     'clean': {'-h', '--help', '--json', '-y', '--yes'},
     'target': {'-h', '--help', '--json'},
@@ -390,13 +405,78 @@ Future<void> runRk(
   }
 
   _recordDiagnosis(output, code, crash: crash);
+  _reportTimings(
+    output,
+    command: command,
+    code: code,
+    requested: flags.contains('--timings'),
+  );
 
+  Timings.report(stderr);
   exitCode = code;
 
   // The machine surface survives a non-zero exit — including a crash — because
   // it is written here, after the code is known, rather than by whichever path
   // decided to stop.
   if (json) stdout.write(output.report.encode(exit: code));
+}
+
+/// Says where a staging or release run's time went.
+///
+/// On a terminal, a successful run long enough to wonder about ends with one
+/// line of phases. `--timings` prints the full breakdown to stderr and writes
+/// the run as a trace to `.rk/timings.json`, which is rk's own, so the next
+/// release does not find it uncommitted. Pipes and `--json` are unchanged.
+void _reportTimings(
+  Output output, {
+  required String command,
+  required int code,
+  required bool requested,
+}) {
+  if (command != 'stage' && command != 'release') return;
+  if (code == ExitCodes.ok && output.isTerminal) {
+    final summary = output.timeline.summaryLine();
+    if (summary != null) {
+      output.blank();
+      output.say(summary, role: VisualRole.secondary);
+    }
+  }
+  if (!requested) return;
+  stderr.write('\n${output.timeline.breakdown()}');
+  final root =
+      GitSourceTree.findRoot(Directory.current.path) ??
+      Directory.current.absolute.path;
+  if (!File('$root/release.toml').existsSync()) return;
+  final directory = '$root/.rk';
+  final trace = '$directory/timings.json';
+  // As the stage store does, rk writes only into a .rk that is a real
+  // directory, and never through a link: either could point outside the
+  // repository.
+  final unsafe = switch ((
+    FileSystemEntity.typeSync(directory, followLinks: false),
+    FileSystemEntity.typeSync(trace, followLinks: false),
+  )) {
+    (FileSystemEntityType.notFound, _) => null,
+    (FileSystemEntityType.directory, FileSystemEntityType.notFound) => null,
+    (FileSystemEntityType.directory, FileSystemEntityType.file) => null,
+    (FileSystemEntityType.directory, _) => trace,
+    _ => directory,
+  };
+  if (unsafe != null) {
+    stderr.writeln('rk: did not write timings: $unsafe is not rk\'s own');
+    return;
+  }
+  try {
+    // An earlier run's trace never answers for this one: it goes first, so
+    // a write that fails leaves no trace rather than a stale one.
+    final file = File(trace);
+    if (file.existsSync()) file.deleteSync();
+    file.parent.createSync(recursive: true);
+    file.writeAsStringSync(output.timeline.traceJson());
+    stderr.writeln('rk: wrote timings to $trace');
+  } on FileSystemException catch (error) {
+    stderr.writeln('rk: could not write timings to $trace: ${error.message}');
+  }
 }
 
 /// Writes the evidence for a run that began changing things and then failed.
@@ -709,8 +789,12 @@ Future<int> _release(
 /// stdin is a verb that could ask a question no caller can answer.
 Future<String?> _promptOnTerminal(Output output, String prompt) async {
   if (!stdin.hasTerminal) return null;
-  output.prompt(prompt);
-  return stdin.readLineSync();
+  // The one place rk waits on a person, so the only wait it leaves out of a
+  // run's times: --yes and --json never come here.
+  return output.timeline.waitingOnPerson(() async {
+    output.prompt(prompt);
+    return stdin.readLineSync();
+  });
 }
 
 /// What reading the repository produced: either everything a command needs,

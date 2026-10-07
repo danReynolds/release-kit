@@ -23,6 +23,7 @@ import 'stage_receipt.dart';
 import 'stage_receipt_structure.dart';
 import 'stage_source.dart';
 import 'git.dart';
+import 'timings.dart';
 
 String _newRunId() {
   final random = Random.secure();
@@ -629,8 +630,16 @@ class ReleaseStage {
   StageInspection inspect() {
     final now = directory.fingerprint();
     final remembered = _inspected;
-    if (remembered != null && _inspectedAt == now) return remembered;
-    final fresh = _inspectFromDisk();
+    if (remembered != null && _inspectedAt == now) {
+      Timings.tally('release stage inspection remembered');
+      return remembered;
+    }
+    // The span covers the reading, not the asking, so a trace counts the
+    // stages that were read rather than every time one was asked about.
+    final fresh = Timings.spanSync(
+      'inspect stage ${unit.name}',
+      () => _inspectFromDisk(now),
+    );
     _inspected = fresh;
     _inspectedAt = now;
     return fresh;
@@ -639,8 +648,11 @@ class ReleaseStage {
   StageInspection? _inspected;
   String? _inspectedAt;
 
-  StageInspection _inspectFromDisk() {
-    final inspected = const StageInspector().inspect(directory);
+  StageInspection _inspectFromDisk(String fingerprint) {
+    final inspected = const StageInspector().inspect(
+      directory,
+      fingerprint: fingerprint,
+    );
     final receipt = inspected.receipt;
     final issues = [...inspected.issues];
     if (receipt != null &&

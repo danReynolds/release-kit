@@ -462,6 +462,25 @@ void main() {
         expect(refused.confirmations, 0);
         expect(refused.discoveries, 0);
         expect(refused.tools.archives, isEmpty);
+        // The check's snapshot comes first, with the read that refused
+        // marked, and then why it stopped: the verdict is said last.
+        final board = refused.text.indexOf('Checking stages');
+        expect(board, isNonNegative, reason: refused.text);
+        expect(
+          board,
+          lessThan(refused.text.indexOf('needs its exact stage')),
+          reason: refused.text,
+        );
+        expect(
+          refused.text,
+          matches(RegExp(r'public targets +check failed')),
+          reason: refused.text,
+        );
+        expect(
+          refused.text,
+          matches(RegExp(r'bundle \S+ · saved stage +none')),
+          reason: refused.text,
+        );
       },
       timeout: const Timeout(Duration(minutes: 3)),
     );

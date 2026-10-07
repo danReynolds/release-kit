@@ -256,6 +256,42 @@ void main() {
     );
   });
 
+  test('repeated reads of a commit hand out copies', () async {
+    write('a.txt', 'one\n');
+    commit();
+    final head = (await GitState.read(root.path)).head;
+    final tree = GitSourceTree(root.path);
+
+    // Each reader scribbles on what it got back.
+    tree.readBytesAt(head, 'a.txt')[0] = 0x58;
+    (await tree.readBytesBatchAt(head, ['a.txt']))['a.txt']![1] = 0x58;
+    tree.trackedEntriesAt(head).clear();
+
+    expect(String.fromCharCodes(tree.readBytesAt(head, 'a.txt')), 'one\n');
+    expect(
+      String.fromCharCodes(
+        (await tree.readBytesBatchAt(head, ['a.txt']))['a.txt']!,
+      ),
+      'one\n',
+    );
+    expect(tree.trackedFilesAt(head), ['a.txt']);
+  });
+
+  test('a symbolic commit is read afresh after it moves', () async {
+    write('a.txt', 'one\n');
+    commit();
+    final tree = GitSourceTree(root.path);
+    expect(String.fromCharCodes(tree.readBytesAt('HEAD', 'a.txt')), 'one\n');
+    expect(tree.trackedFilesAt('HEAD'), ['a.txt']);
+
+    write('a.txt', 'two\n');
+    write('b.txt', 'new\n');
+    commit();
+
+    expect(String.fromCharCodes(tree.readBytesAt('HEAD', 'a.txt')), 'two\n');
+    expect(tree.trackedFilesAt('HEAD'), ['a.txt', 'b.txt']);
+  });
+
   test('a commit source tree rejects every escaping read path', () async {
     write('a.txt', 'one\n');
     commit();

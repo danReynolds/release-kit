@@ -14,9 +14,9 @@ String _sha(String text) => Sha256.hex(utf8.encode(text));
 
 /// Rewrites [file], after letting the clock move.
 ///
-/// Timestamps are microseconds, and two writes in the same microsecond are
-/// indistinguishable by size, mode, and time — the collision the file-level
-/// memo documents and cannot see. A test that rewrites a file immediately
+/// Dart reports timestamps to the millisecond, and a kernel may tick more
+/// coarsely still; two writes inside one tick are indistinguishable by size,
+/// mode, and time — the collision the fingerprint documents and cannot see. A test that rewrites a file immediately
 /// after digesting it lands in exactly that window and passes or fails on
 /// how fast the machine is; the wait is what makes these tests about the
 /// guard rather than about the clock.
@@ -585,6 +585,28 @@ void main() {
       );
     });
 
+    test('a remembered inspection does not outlive a same-size rewrite', () {
+      _writeCompleteStage(stage);
+      expect(StageInspector().inspect(stage).reusable, isTrue);
+      // Another StageDirectory for the same path is answered from what this
+      // process learned about it...
+      final again = StageDirectory(
+        repositoryRoot: repository.path,
+        identity: stage.identity,
+      );
+      expect(StageInspector().inspect(again).reusable, isTrue);
+
+      // ...but not once a staged file is rewritten, even at the same length.
+      final file = File(stage.resolve('rk'));
+      _rewriteAfterAMoment(file, '*' * file.lengthSync());
+      final result = StageInspector().inspect(again);
+      expect(result.reusable, isFalse);
+      expect(
+        result.issues.map((issue) => issue.kind),
+        contains(StageIssueKind.changedArtifact),
+      );
+    });
+
     test('extra files and empty directories are rejected', () {
       _writeCompleteStage(stage);
       stage.writeBytesAtomically('planted.txt', utf8.encode('planted'));
@@ -623,6 +645,38 @@ void main() {
       expect(result.issues.single.kind, StageIssueKind.unsafePath);
       expect(Directory('${elsewhere.path}/work').existsSync(), isFalse);
     });
+
+    test('a file at the stage path is not taken for nothing there', () {
+      Directory(stage.path).parent.createSync(recursive: true);
+      File(stage.path).writeAsStringSync('not a stage');
+      expect(
+        StageInspector().inspect(stage).issues.single.kind,
+        StageIssueKind.unsafePath,
+      );
+
+      // Once it is gone, the stage is absent, not still unsafe.
+      File(stage.path).deleteSync();
+      final absent = StageInspector().inspect(stage);
+      expect(absent.reusable, isFalse);
+      expect(
+        absent.issues.map((issue) => issue.kind),
+        isNot(contains(StageIssueKind.unsafePath)),
+      );
+    });
+
+    test('a stage that cannot be listed is reported, not thrown', () {
+      _writeCompleteStage(stage);
+      final locked = Directory(stage.resolve('locked'))..createSync();
+      Process.runSync('chmod', ['000', locked.path]);
+      addTearDown(() => Process.runSync('chmod', ['755', locked.path]));
+
+      final result = StageInspector().inspect(stage);
+      expect(result.reusable, isFalse);
+      expect(
+        result.issues.map((issue) => issue.kind),
+        contains(StageIssueKind.unreadable),
+      );
+    }, testOn: '!windows');
 
     test('path-escaping records invalidate the receipt', () {
       final receipt = _writeCompleteStage(stage);

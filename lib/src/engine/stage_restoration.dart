@@ -17,6 +17,7 @@ import 'stage_proof.dart';
 import 'stage_receipt.dart';
 import 'stage_source.dart';
 import 'stage_store.dart';
+import 'timings.dart';
 
 /// Observes frozen local evidence or reuses native selections transactionally.
 /// Restoring commands hold the store's mutation lock; [observeLocal] is read-only.
@@ -289,7 +290,10 @@ final class StageRestoration {
       throw StateError('unknown current release unit: $unitName');
     }
     final intent = _intent(unit, git);
-    final found = await lookup.find(intent, recoveryStageId: recoveryStageId);
+    final found = await Timings.span(
+      'find stage',
+      () => lookup.find(intent, recoveryStageId: recoveryStageId),
+    );
     if (found.kind == StageLookupKind.absent) {
       final current = await refreshGit();
       _requireResolution();
@@ -305,20 +309,23 @@ final class StageRestoration {
     final receipt = found.receipt!;
     if (requireComplete && !receipt.complete) return null;
     late void Function() recheck;
-    return stages.adoptFrozen(
-      unit,
-      currentGit: git,
-      receipt: receipt,
-      intent: intent,
-      authorize: (receipt, _) async {
-        final restored = await _authorize(
-          receipt,
-          requireComplete: requireComplete,
-        );
-        recheck = restored.recheck;
-        return restored.dependencies;
-      },
-      beforeInstall: () => recheck(),
+    return Timings.span(
+      'adopt frozen stage',
+      () => stages.adoptFrozen(
+        unit,
+        currentGit: git,
+        receipt: receipt,
+        intent: intent,
+        authorize: (receipt, _) async {
+          final restored = await _authorize(
+            receipt,
+            requireComplete: requireComplete,
+          );
+          recheck = restored.recheck;
+          return restored.dependencies;
+        },
+        beforeInstall: () => recheck(),
+      ),
     );
   }
 
