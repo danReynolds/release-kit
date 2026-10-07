@@ -10,12 +10,12 @@ import '../engine/git.dart';
 import '../output/output.dart';
 import '../output/progress.dart';
 import '../engine/inspect.dart';
-import '../engine/native_publication.dart';
 import '../engine/public_release_gate.dart';
 import '../engine/publish_target.dart';
+import '../engine/registry.dart';
+import '../engine/release_dependencies.dart';
 import '../engine/resolve.dart';
 import '../engine/release_stage.dart';
-import '../engine/repository_stage_preparation.dart';
 import '../engine/source_tree.dart';
 import '../engine/stage_inspection.dart';
 import '../engine/targets.dart';
@@ -26,9 +26,7 @@ import 'release_progress.dart';
 import 'release_preparation.dart';
 import 'release_stage_coordinator.dart';
 import 'release_publication_coordinator.dart';
-import 'repository_publication.dart';
 import '../engine/timings.dart';
-import 'stage_check_progress.dart';
 
 /// Executes a release: inspect, act, inspect again, one step at a time — and
 /// decides everything rk refuses.
@@ -55,9 +53,6 @@ class ReleaseCommand {
     required this.confirm,
     required this.allowInteractiveTools,
     this.stageOnly = false,
-    this.repositoryStages,
-    this.nativePublication,
-    this.completedProvider,
     ReleaseStage Function(ResolvedUnit unit)? stageFor,
     ReleaseStage Function(ResolvedUnit unit, GitState git)? refreshStage,
     Future<GitState> Function()? refreshGit,
@@ -67,7 +62,6 @@ class ReleaseCommand {
   }) : repositoryGit = repositoryGit ?? git,
        _wait = wait ?? _sleep,
        _stageFor =
-           repositoryStages?.stages.call ??
            stageFor ??
            ReleaseStages(
              source: tree,
@@ -77,7 +71,6 @@ class ReleaseCommand {
              ),
            ).call,
        _refreshStage =
-           repositoryStages?.stages.refresh ??
            refreshStage ??
            ((unit, currentGit) => ReleaseStages(
              source: tree,
@@ -142,18 +135,49 @@ class ReleaseCommand {
   /// authorization or any public mutation.
   final bool stageOnly;
 
-  /// Shared native preparation composition. Narrow legacy destination tests
-  /// may omit it; production supplies the same resolver as the inspector.
-  final RepositoryStagePreparation? repositoryStages;
-
-  /// Adapter-owned public runtime projection and exact-archive pre-act checks.
-  final NativePublication? nativePublication;
-
-  /// Optional siblings are eligible only after complete current authorization.
-  /// This callback never recovers pending inputs or prepares the sibling.
-  final Future<ReleaseStage?> Function(ResolvedUnit unit)? completedProvider;
-
   final ReleaseStage Function(ResolvedUnit unit) _stageFor;
+
+  /// The packages this run releases, so a prerequisite on one of them is met
+  /// by this run's own publication rather than by an earlier one.
+  Set<String> _releasing = const {};
+
+  /// The repository packages each of [unit]'s Pub packages takes from this
+  /// source when staged, by package, each with its directory: see
+  /// [ReleaseDependencyPlan.fromSource].
+  Future<Map<String, Map<String, String>>> _fromSource(
+    ResolvedUnit unit,
+  ) async => {
+    for (final project in unit.projects)
+      if (project.publish.contains(PublishTarget.pubDev))
+        project.name: {
+          for (final sibling in await resolution.dependencyPlan.fromSource(
+            project,
+            _published,
+          ))
+            sibling.name: sibling.pubspec.directory,
+        },
+  };
+
+  /// Whether [version] of [package] is on pub.dev. One rk cannot read
+  /// counts as not yet: the stage then takes it from this source, and a
+  /// release still waits to read it before publishing what needs it.
+  Future<bool> _published(String package, String version) async {
+    try {
+      final published = await inspector.registry?.lookup(package);
+      return published?.versions.any((v) => v.version.canonical == version) ??
+          false;
+    } on RegistryUnavailable {
+      return false;
+    }
+  }
+
+  /// The package a prerequisite step waits for: its coordinate is
+  /// `pub.dev/<package>/<version>`.
+  static String? _prerequisitePackage(Step step) {
+    final parts = step.coordinate?.split('/');
+    return parts == null || parts.length < 3 ? null : parts[1];
+  }
+
   final ReleaseStage Function(ResolvedUnit unit, GitState git) _refreshStage;
   final Future<GitState> Function() _refreshGit;
   final Map<String, String> Function() _refreshEnvironment;
@@ -228,64 +252,22 @@ class ReleaseCommand {
       }
       return _runRepository(named);
     }
-    if (stageOnly && repositoryStages == null && resolution.units.length > 1) {
-      return _refuseRepositoryPreparation(
-        StateError(
-          'repository staging requires its dependency preparation coordinator',
-        ),
-      );
+    final problems = Diagnostics();
+    final ordered = resolution.dependencyPlan.units(problems);
+    if (problems.isNotEmpty) {
+      output.problems(problems.found);
+      output.halt(HaltKind.beforeActing);
+      return ExitCodes.refused;
     }
-    if (repositoryStages == null) {
-      final problems = Diagnostics();
-      final ordered = resolution.dependencyPlan.units(problems);
-      if (problems.isNotEmpty) {
-        output.problems(problems.found);
-        output.halt(HaltKind.beforeActing);
-        return ExitCodes.refused;
-      }
-      return _runRepository(ordered);
-    }
-    return _runRepository(resolution.units);
+    return _runRepository(ordered);
   }
 
   Future<int> _runRepository(List<ResolvedUnit> selected) async {
     final prepared = await _prepareRepository(selected);
     if (prepared.code != ExitCodes.ok || stageOnly) return prepared.code;
-    var publications = prepared.publications;
+    final publications = prepared.publications;
     if (publications.isEmpty) return ExitCodes.ok;
     output.timeline.phase('publishing');
-    try {
-      final native = nativePublication;
-      if (native == null) {
-        if (repositoryStages != null &&
-            publications.any(
-              (plan) =>
-                  plan.targets.any((target) => target.packageProducer != null),
-            )) {
-          throw StateError('native publication checks are not configured');
-        }
-      } else {
-        publications = await repositoryPublications(
-          prepared: publications,
-          native: native,
-        );
-      }
-    } on RkFailure catch (error) {
-      output.problems(error.diagnostics);
-      output.halt(HaltKind.beforeActing);
-      return ExitCodes.refused;
-    } on Object catch (error) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-REL-001',
-          message: 'the frozen public dependency plan cannot be prepared',
-          evidence: '$error',
-          remedy: '$error',
-        ),
-      );
-      output.halt(HaltKind.beforeActing);
-      return ExitCodes.refused;
-    }
     final publicUnits = publications.where(
       (plan) => plan.publicSteps.isNotEmpty,
     );
@@ -316,6 +298,10 @@ class ReleaseCommand {
     final publications = <PublicationPlan>[];
     ({int code, List<PublicationPlan> publications}) result(int code) =>
         (code: code, publications: List.unmodifiable(publications));
+    _releasing = {
+      for (final unit in selected)
+        for (final project in unit.projects) project.name,
+    };
     for (final unit in selected) {
       output.report.unit(
         name: unit.name,
@@ -407,142 +393,11 @@ class ReleaseCommand {
     }
 
     if (work.isEmpty) return finishNoops();
-    final coordinator = repositoryStages;
-    if (coordinator == null) {
-      // Narrow destination fixtures can supply completed dependency-free
-      // stages directly. They share the same all-private/consent boundary.
-      for (final unit in work) {
-        final prepared = await _prepareRelease(
-          inspected[unit.name]!,
-          refreshObservations: true,
-        );
-        if (prepared.code != ExitCodes.ok) return result(prepared.code);
-        if (prepared.publication case final publication?) {
-          publications.add(publication);
-        }
-      }
-      return finishNoops();
-    }
-    final RepositoryPreparationPlan plan;
-    output.timeline.phase('checking stages');
-    final checking = StageCheckProgress(output, units: work);
-    try {
-      plan = await coordinator.resolve(
-        selected: work,
-        observer: checking,
-        eligibility: (restored) async {
-          // Restoration must run first: the provisional dependency-free stage
-          // is not evidence that a partial release lost its frozen bytes. But
-          // once absence is conclusive, public recovery is checked before any
-          // fresh native solve or producer can replace the lost commitment.
-          final withoutPreparation = <String>{};
-          for (final unit in work) {
-            final observed = await checking.checkingPublicTargets(
-              unit,
-              () => _recoveryBeforeDiscovery(inspected[unit.name]!),
-            );
-            inspected[unit.name] = observed;
-            final unfinished = observed.targets
-                .where((target) => !observed.states[target.step.id]!.isExact)
-                .toList();
-            if (_recoversWithoutStage(
-              coordinator.stages(unit).inspect(),
-              unfinished,
-              observed.states,
-            )) {
-              withoutPreparation.add(unit.name);
-            }
-          }
-          checking.publicTargetsChecked();
-          if (work.every(
-            (unit) =>
-                restored.containsKey(unit.name) ||
-                withoutPreparation.contains(unit.name),
-          )) {
-            // Frozen consumers already own their inputs. Do not solve or probe
-            // siblings just to offer candidates that no fresh context will use.
-            return RepositoryStageCandidates(
-              candidates: const [],
-              withoutPreparation: withoutPreparation,
-            );
-          }
-          final complete = <String, PreparedStageProvider>{
-            for (final stage in restored.values)
-              if (stage.inspect().reusable)
-                stage.unit.name: PreparedStageProvider.capture(stage),
-          };
-          final workNames = work.map((unit) => unit.name).toSet();
-          final configured = coordinator.native.configuredCandidates();
-          // Only optional, outside-work units are probed. Selected consumers
-          // always use strict restoration, where rejected state is fatal.
-          for (final name in configured.map((c) => c.unit).toSet()) {
-            if (workNames.contains(name)) continue;
-            final unit = resolution.unit(name)!;
-            final provider = completedProvider;
-            if (provider == null) continue;
-            // An optional sibling: none usable is an answer, not a failure.
-            checking.restoring(unit);
-            final stage = await provider(unit);
-            checking.restored(unit, found: stage != null);
-            if (stage != null) {
-              complete[name] = PreparedStageProvider.capture(stage);
-            }
-          }
-          return RepositoryStageCandidates(
-            providers: complete.values,
-            withoutPreparation: withoutPreparation,
-            candidates: configured.where((candidate) {
-              if (withoutPreparation.contains(candidate.unit)) return false;
-              if (complete.containsKey(candidate.unit)) return true;
-              if (!workNames.contains(candidate.unit)) return false;
-              final observation = inspected[candidate.unit]!;
-              final target = observation.targets
-                  .where(
-                    (target) => target.packageProducer == candidate.producer,
-                  )
-                  .singleOrNull;
-              if (target == null) {
-                throw StateError(
-                  'native provider has no matching package publication target',
-                );
-              }
-              return !observation.states[target.step.id]!.isExact;
-            }),
-          );
-        },
-      );
-    } on _PreparationRefused catch (refused) {
-      // The board's snapshot first, then why it stopped, as on every other
-      // halt: the verdict is the last thing a reader sees.
-      checking.stop();
-      refused.report();
-      return result(ExitCodes.refused);
-    } on Object catch (error) {
-      checking.stop();
-      return result(_refuseRepositoryPreparation(error));
-    }
-    checking.finish();
     output.timeline.phase('staging');
-    if (plan.order.isNotEmpty) {
-      output.heading(
-        'Preparation order: ${plan.order.map((unit) => unit.name).join(' -> ')}',
-      );
-      output.blank();
-    }
-    for (final unit in plan.order) {
-      try {
-        await Timings.span('bind ${unit.name}', () => plan.bind(unit));
-      } on Object catch (error) {
-        return result(_refuseRepositoryPreparation(error, unit: unit.name));
-      }
+    for (final unit in work) {
       final prepared = await Timings.span(
         'prepare ${unit.name}',
-        () => _prepareRelease(
-          inspected[unit.name]!,
-          nativePreparation: !plan.withoutPreparation.contains(unit.name),
-          recoverOnly: plan.withoutPreparation.contains(unit.name),
-          refreshObservations: true,
-        ),
+        () => _prepareRelease(inspected[unit.name]!, refreshObservations: true),
       );
       if (prepared.code != ExitCodes.ok) return result(prepared.code);
       if (prepared.publication case final publication?) {
@@ -550,82 +405,6 @@ class ReleaseCommand {
       }
     }
     return finishNoops();
-  }
-
-  /// Reads [observed]'s public targets before any stage is resolved, throwing
-  /// [_PreparationRefused] when they rule out preparing it.
-  Future<_InspectedUnit> _recoveryBeforeDiscovery(
-    _InspectedUnit observed,
-  ) async {
-    final unit = observed.unit;
-    final stage = _stageFor(unit);
-    final inspection = stage.inspect();
-    final publicSteps = observed.checklist.steps
-        .where((s) => s.isPublic)
-        .toList();
-    if (publicSteps.isEmpty) return observed;
-    final problems = Diagnostics();
-    final history = await inspector.releaseMonotonicity(
-      unit,
-      observed.targets,
-      problems,
-      refreshRegistry: true,
-    );
-    final values = await Future.wait([
-      for (final step in publicSteps) inspector.inspect(step, unit),
-    ]);
-    final states = {
-      for (final (index, step) in publicSteps.indexed) step.id: values[index],
-    };
-    inspector
-        .tagGuards(unit, observed.checklist, states)
-        .forEach(problems.report);
-    if (problems.isNotEmpty) {
-      throw _PreparationRefused(() {
-        output.halt(HaltKind.beforeActing);
-        output.problems(problems.found);
-      });
-    }
-    final unfinished = observed.targets
-        .where((target) => !states[target.step.id]!.isExact)
-        .toList();
-    if (!_needsLostStage(
-      unit,
-      inspection,
-      publicSteps,
-      states,
-      recoversWithoutStage: _recoversWithoutStage(
-        inspection,
-        unfinished,
-        states,
-      ),
-    )) {
-      return _InspectedUnit(
-        unit: unit,
-        checklist: observed.checklist,
-        targets: observed.targets,
-        states: {...observed.states, ...states},
-        history: history,
-        stageId: stage.directory.identity.id,
-        stageReceipt: inspection.receipt?.encode(),
-        stageReusable: inspection.reusable,
-      );
-    }
-    throw _PreparationRefused(() {
-      output.problem(
-        Diagnostic(
-          code: 'RK-STAGE-005',
-          message: 'the partial release needs its exact stage',
-          remedy:
-              'restore ${stage.directory.path} from the machine that staged '
-              'this release. Its recorded archives and frozen dependency '
-              'choices cannot be recreated after a public target has bound '
-              'them.',
-        ),
-        unit: unit.name,
-      );
-      output.halt(HaltKind.unfixableByRerun);
-    });
   }
 
   int _refuseRepositoryPreparation(Object error, {String? unit}) {
@@ -669,12 +448,7 @@ class ReleaseCommand {
     for (final unit in units) {
       final problems = Diagnostics();
       _validate(unit, problems);
-      Checklist.derive(
-        unit,
-        resolution,
-        problems,
-        sourceDependencies: repositoryStages == null,
-      );
+      Checklist.derive(unit, resolution, problems);
       for (final problem in problems.found) {
         final key =
             '${problem.code}\u0000${problem.message}\u0000'
@@ -729,12 +503,7 @@ class ReleaseCommand {
       return null;
     }
 
-    final checklist = Checklist.derive(
-      unit,
-      resolution,
-      problems,
-      sourceDependencies: repositoryStages == null,
-    );
+    final checklist = Checklist.derive(unit, resolution, problems);
     if (problems.isNotEmpty) {
       output.halt(HaltKind.beforeActing);
       output.problems(problems.found);
@@ -849,10 +618,8 @@ class ReleaseCommand {
 
   Future<({int code, PublicationPlan? publication})> _prepareRelease(
     _InspectedUnit inspected, {
-    bool nativePreparation = false,
     bool refreshObservations = false,
     bool allowProduction = true,
-    bool recoverOnly = false,
   }) async {
     final unit = inspected.unit;
     output.report.unit(
@@ -882,28 +649,6 @@ class ReleaseCommand {
       );
       output.halt(HaltKind.beforeActing);
       return (code: ExitCodes.refused, publication: null);
-    }
-    if (nativePreparation) {
-      try {
-        for (final target in targets) {
-          final producer = target.packageProducer;
-          if (producer == null) continue;
-          if (!stage.dependencies.contexts.any(
-            (context) =>
-                context.owner == target.project?.name &&
-                context.consumers.contains(producer),
-          )) {
-            throw StateError(
-              'native preparation does not cover package producer $producer',
-            );
-          }
-        }
-      } on Object catch (error) {
-        return (
-          code: _refuseRepositoryPreparation(error, unit: unit.name),
-          publication: null,
-        );
-      }
     }
     var stageInspection = stage.inspect();
     if (refreshObservations ||
@@ -977,25 +722,14 @@ class ReleaseCommand {
     final initialBlock = checklist.steps.where((step) {
       if (step.kind == StepKind.completeStage) return false;
       if (step.kind == StepKind.prerequisite) {
-        final dependents = targets
-            .where((target) => target.step.needs.contains(step.id))
-            .toList();
-        final covered =
-            dependents.isNotEmpty &&
-            dependents.every(
-              (target) =>
-                  target.packageProducer != null &&
-                  stage.dependencies.contexts.any(
-                    (context) =>
-                        context.owner == target.project?.name &&
-                        context.consumers.contains(target.packageProducer),
-                  ),
-            );
+        // A sibling the stage can take from this source waits for nothing
+        // while staging, which is private. A sibling released in this run
+        // publishes first, in dependency order, and is public before this
+        // unit uploads. Only a release that needs a package some other run
+        // must publish waits for it here.
         if ((!allowProduction && alreadyReleased) ||
-            (nativePreparation && covered)) {
-          // The publishing package producer has a resolved native context.
-          // A separate binary/build context for this owner is not sufficient.
-          // Keep public observations truthful for the publication boundary.
+            stageOnly ||
+            _releasing.contains(_prerequisitePackage(step))) {
           return false;
         }
       }
@@ -1068,14 +802,13 @@ class ReleaseCommand {
       unfinishedTargets,
       states,
     );
-    if ((recoverOnly && !recoversWithoutStage) ||
-        _needsLostStage(
-          unit,
-          stageInspection,
-          publicSteps,
-          states,
-          recoversWithoutStage: recoversWithoutStage,
-        )) {
+    if (_needsLostStage(
+      unit,
+      stageInspection,
+      publicSteps,
+      states,
+      recoversWithoutStage: recoversWithoutStage,
+    )) {
       output.halt(HaltKind.unfixableByRerun);
       output.problem(
         Diagnostic(
@@ -1152,6 +885,7 @@ class ReleaseCommand {
         stage: stage,
         inspected: stageInspection,
         claims: releaseHistory.claims,
+        fromSource: await _fromSource(unit),
       );
       if (result == null) {
         if (!stageOnly) _publication.showActions(targets, publicActions);
@@ -1456,12 +1190,4 @@ final class _InspectedUnit {
   final String stageId;
   final String? stageReceipt;
   final bool stageReusable;
-}
-
-/// A refusal found while the stage-check board is live. It carries its own
-/// report, printed once the board has been concluded.
-final class _PreparationRefused implements Exception {
-  const _PreparationRefused(this.report);
-
-  final void Function() report;
 }

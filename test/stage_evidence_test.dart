@@ -11,7 +11,6 @@ import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/engine/stage_contract.dart';
-import 'package:rk/src/engine/stage_dependencies.dart';
 import 'package:rk/src/engine/stage_inspection.dart';
 import 'package:rk/src/engine/stage_receipt.dart';
 import 'package:rk/src/targets/catalog.dart';
@@ -24,7 +23,7 @@ void main() {
   setUp(() => f = _Fixture());
   tearDown(() => f.root.deleteSync(recursive: true));
 
-  test('full validation runs both callbacks after dependency decoration', () {
+  test('full validation runs both evidence and artifact checks', () {
     final calls = <String>[];
     final declared = StageStepContract(
       'probe',
@@ -43,14 +42,11 @@ void main() {
         ];
       },
     );
-    final decorated = StageDependencies().decorate(declared);
-    expect(decorated.validateEvidence, same(declared.validateEvidence));
-    expect(decorated.validate, same(declared.validate));
     f.stage.writeBytesAtomically(
       'source/CHANGELOG.md',
       utf8.encode('snapshot'),
     );
-    final contract = f.contract(local: [decorated]);
+    final contract = f.contract(local: [declared]);
     final receipt = f.receipt([
       StageStep(name: 'source-snapshot'),
       StageStep(name: 'probe'),

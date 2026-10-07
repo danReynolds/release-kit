@@ -146,17 +146,17 @@ stage metadata explains the change, RK tells you why it is rebuilding. A
 verified stage is reused; interrupted staging resumes from verified work.
 
 Bare `rk stage` prepares all configured units in dependency order. Packages keep
-independent versions, and consumers use the exact compatible dependency archives
-prepared by the same run. `rk stage <unit>` stays within the named scope: it can
-use a verified completed sibling stage or resolve published dependencies, but
-does not build the sibling. Saved stages retain their recorded dependency choices
-across named and repository-wide runs.
+independent versions, and Pub resolves their dependencies through its own cache.
+A package that depends on another package in this repository, at a version that
+satisfies its requirement, takes it from the same commit's source while staging,
+so it can be staged before that sibling is published. `rk stage <unit>` prepares
+exactly the named unit, the same way; it never builds or publishes the sibling.
 
 `rk release` completes private preparation for every selected unit before one
 confirmation, publication login or public action. Use `rk stage` first to inspect
-the artifacts separately. Name a unit to keep both preparation and publication
-within that scope; an unpublished sibling may supply verified staged bytes but
-must become public before a dependent package can publish.
+the artifacts separately. A package publishes only once the packages it needs
+are public: a sibling released in the same run publishes first, and a named
+release asks for a sibling outside it to be released first.
 
 ## Install
 
@@ -244,8 +244,8 @@ path = "packages/cli"
 publish = ["pub.dev"]
 ```
 
-`rk release` prepares both units first, using compatible staged dependency
-archives. Each keeps its own version. RK then shows the remaining targets,
+`rk release` prepares both units first; `cli` is staged against `core`'s
+source from the same commit. Each keeps its own version. RK then shows the remaining targets,
 first claims, signing identities and preparation warnings, and asks once:
 
 ```console
@@ -267,17 +267,14 @@ again. The reviewed stage receipts, signing identities, warnings, targets and
 first claims cannot change or expand; a changed plan stops for a fresh run.
 This includes targets that were already public when reviewed.
 
-Staging and publication have separate dependency orders. Private development
-helpers can be needed for preparation without becoming public prerequisites.
-Before uploading a Dart archive, RK verifies the exact staged runtime-provider
-archives at their declared registries and resolves a fresh prospective consumer
-using public runtime dependencies. It then uploads the unchanged staged archive.
-A named release never publishes a sibling to satisfy this check.
+Packages publish in dependency order, and each waits until the version it
+uploaded is available before the next unit starts. Development-only
+dependencies never become publication prerequisites.
 
 Public releases are not atomic. If a later publication fails, earlier completed
 targets remain public; rerunning rechecks them and resumes with the recorded
 stage. See the [repository release contract](doc/repository-release-plan.md)
-for recovery and native limitations.
+for recovery.
 
 ## Release assets your own build makes
 
@@ -379,8 +376,8 @@ completed command, 1 refused or failed, 2 usage, 3 rk itself crashed —
 ## Behavior
 
 Stages live under `.rk/work/stages`. Keep them while a package or binary release is
-partly public so the remaining targets receive the exact staged bytes
-and frozen dependency choices. Built-asset progress or an exact configured unit
+partly public so the remaining targets receive the exact staged bytes.
+Built-asset progress or an exact configured unit
 tag requires the original stage when remaining targets need it. An independently
 public package in a tagless package-only unit does not prove its siblings were
 previously staged; both `rk stage` and `rk release` may prepare those siblings
@@ -390,8 +387,7 @@ consent. Native archive timestamps can cause this even with unchanged source;
 preserve or restore the original matching stage. For a fresh tagless setup that
 never had an RK stage,
 place the already-public package in its own release unit and prepare the remaining
-packages separately. Regrouping does not recover an existing frozen or tagged
-release. `rk clean` removes this repository's
+packages separately. Regrouping does not recover an existing tagged release. `rk clean` removes this repository's
 stages, lists their recorded identities, and asks first. Receipt metadata helps
 identify a stage; it does not prove that its bytes are no longer needed.
 

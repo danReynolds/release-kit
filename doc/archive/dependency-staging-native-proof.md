@@ -1,5 +1,8 @@
 # Native dependency staging qualification
 
+> Archived. Superseded by [practical staging](../practical-staging.md), which
+> replaced rk's own dependency resolution and archive staging with Pub.
+
 This record distinguishes native mechanism tests, integrated command tests and
 actual Fleury dogfooding. It does not qualify a real public upload or browser
 rendering. The [architecture map](dependency-staging-plan.md) and

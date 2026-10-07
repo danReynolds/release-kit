@@ -20,7 +20,7 @@ final class StageReceiptLimit implements Exception {
   @override
   String toString() =>
       'stage receipt byte limit exceeded ($limit bytes); reduce the source '
-      'inventory or native dependency metadata before staging';
+      'inventory before staging';
 }
 
 /// One digest-bearing input to a completed release step.

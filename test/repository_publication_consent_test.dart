@@ -11,7 +11,6 @@ import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
-import 'package:rk/src/engine/native_publication.dart';
 import 'package:rk/src/engine/publish_target.dart';
 import 'package:rk/src/engine/public_release_gate.dart';
 import 'package:rk/src/engine/release_stage.dart';
@@ -300,21 +299,11 @@ void main() {
     expect(f.sessionCalls, isEmpty);
   });
 
-  for (final when in ['review', 'session', 'native-gate']) {
+  for (final when in ['review', 'session']) {
     test('global no-op coverage refuses $when drift in another unit', () async {
       f.makePublic('alpha');
       final noop = f.copy(f.plans.first, preparedNoop: true);
-      final active = f.copy(
-        f.plans.last,
-        checks: when == 'native-gate'
-            ? {
-                f.plans.last.targets.single.step.id: _Check(() async {
-                  f.registry.published.remove('alpha');
-                  return NativePublicationReady(evidence: const {});
-                }),
-              }
-            : null,
-      );
+      final active = f.copy(f.plans.last);
       if (when == 'review') {
         f.onRead = (unit) {
           if (unit == 'beta') f.registry.published.remove('alpha');
@@ -463,91 +452,19 @@ void main() {
     expect(f.calls, contains('publish:alpha'));
   });
 
-  for (final outcome in ['blocked', 'throws', 'tampered', 'ready']) {
-    test(
-      'native $outcome gate precedes attempted state and final checks',
-      () async {
-        final original = f.plans.first;
-        final check = _Check(() async {
-          f.calls.add('native-gate');
-          expect(f.output.report.acted, isFalse);
-          expect(
-            original.actions.values,
-            everyElement(ReleaseAction.notAttempted),
-          );
-          if (outcome == 'throws') throw StateError('native read failed');
-          if (outcome == 'blocked') {
-            return NativePublicationBlocked(
-              diagnostic: const Diagnostic(
-                code: 'RK-PUB-018',
-                message: 'runtime dependency is not public',
-              ),
-              evidence: {'result': 'blocked'},
-            );
-          }
-          if (outcome == 'tampered') {
-            File(
-              original.stage.directory.resolve('source/alpha/pubspec.yaml'),
-            ).writeAsStringSync('changed by probe');
-          }
-          return NativePublicationReady(evidence: {'result': 'ready'});
-        });
-        final plan = f.copy(
-          original,
-          checks: {original.targets.single.step.id: check},
-        );
-        expect(() => plan.nativeChecks.clear(), throwsUnsupportedError);
-        expect(await f.coordinator.authorizeRepository([plan]), isTrue);
-        final code = await f.coordinator.publish(plan);
-        if (outcome == 'ready') {
-          expect(code, ExitCodes.ok, reason: f.text.toString());
-          final gate = f.calls.indexOf('native-gate');
-          final act = f.calls.indexOf('publish:alpha');
-          expect(act, greaterThan(gate));
-          expect(f.calls.sublist(gate + 1, act), contains('read:alpha'));
-        } else {
-          expect(code, ExitCodes.refused);
-          expect(f.output.report.acted, isFalse);
-          expect(plan.actions.values, everyElement(ReleaseAction.notAttempted));
-          expect(f.calls.where((call) => call.startsWith('publish:')), isEmpty);
-        }
-        if (outcome != 'throws') {
-          expect(
-            f.output.report.attachments.keys,
-            contains('native-publication/${original.targets.single.step.id}'),
-          );
-        }
-      },
-    );
-  }
-
-  for (final when in ['after-yes', 'session', 'native-gate', 'final-read']) {
+  for (final when in ['after-yes', 'session']) {
     test('pending public unit remains guarded at $when', () async {
       final later = f.plans.last;
-      var nativeFinished = false;
       void tamper() => File(
         later.stage.directory.resolve('source/beta/pubspec.yaml'),
       ).writeAsStringSync('changed later private output');
-      final first = f.copy(
-        f.plans.first,
-        checks: {
-          f.plans.first.targets.single.step.id: _Check(() async {
-            if (when == 'native-gate') tamper();
-            nativeFinished = true;
-            return NativePublicationReady(evidence: const {});
-          }),
-        },
-      );
+      final first = f.copy(f.plans.first);
       expect(await f.coordinator.authorizeRepository([first, later]), isTrue);
       switch (when) {
         case 'after-yes':
           tamper();
         case 'session':
           f.onSession = tamper;
-        case 'final-read':
-          f.onRead = (_) {
-            if (nativeFinished) tamper();
-          };
       }
       expect(await f.coordinator.publish(first), ExitCodes.refused);
       expect(f.problemCodes, contains('RK-STAGE-002'));
@@ -557,64 +474,6 @@ void main() {
       if (when == 'after-yes') expect(f.sessionCalls, isEmpty);
     });
   }
-
-  for (final when in ['native-gate', 'final-read']) {
-    test('late $when warning cannot expand consent', () async {
-      var nativeFinished = false;
-      final original = f.plans.first;
-      final plan = f.copy(
-        original,
-        checks: {
-          original.targets.single.step.id: _Check(() async {
-            if (when == 'native-gate') f.warning('alpha', 'new warning');
-            nativeFinished = true;
-            return NativePublicationReady(evidence: const {});
-          }),
-        },
-      );
-      expect(await f.coordinator.authorizeRepository([plan]), isTrue);
-      if (when == 'final-read') {
-        f.onRead = (_) {
-          if (nativeFinished) f.warning('alpha', 'new warning');
-        };
-      }
-      expect(await f.coordinator.publish(plan), ExitCodes.refused);
-      expect(f.problemCodes, contains('RK-AUTH-003'));
-      expect(plan.actions.values, everyElement(ReleaseAction.notAttempted));
-      expect(f.calls.where((call) => call.startsWith('publish:')), isEmpty);
-      expect(f.output.report.acted, isFalse);
-    });
-  }
-
-  test(
-    'native gate cannot replace a valid reviewed receipt and archive',
-    () async {
-      final original = f.plans.first;
-      final reviewed = original.stage.requireReceipt().encode();
-      final plan = f.copy(
-        original,
-        checks: {
-          original.targets.single.step.id: _Check(() async {
-            // Native archives can encode different timestamps with identical
-            // contents. A rebuilt, valid stage still needs fresh consent.
-            f.archiveStamp = 1;
-            original.stage.reset();
-            await f.prepare(original.unit);
-            f.plans.removeLast();
-            expect(original.stage.inspect().reusable, isTrue);
-            expect(original.stage.requireReceipt().encode(), isNot(reviewed));
-            return NativePublicationReady(evidence: const {});
-          }),
-        },
-      );
-      expect(await f.coordinator.authorizeRepository([plan]), isTrue);
-      expect(await f.coordinator.publish(plan), ExitCodes.refused);
-      expect(f.problemCodes, contains('RK-AUTH-003'));
-      expect(plan.actions.values, everyElement(ReleaseAction.notAttempted));
-      expect(f.calls.where((call) => call.startsWith('publish:')), isEmpty);
-      expect(f.output.report.acted, isFalse);
-    },
-  );
 
   test(
     'completed public unit may lose its private stage after consent',
@@ -648,19 +507,14 @@ void main() {
     'scope that became public cannot disappear before another act',
     () async {
       final later = f.plans.last;
-      final first = f.copy(
-        f.plans.first,
-        checks: {
-          f.plans.first.targets.single.step.id: _Check(() async {
-            f.registry.published.remove('beta');
-            f.registry.forget('beta');
-            return NativePublicationReady(evidence: const {});
-          }),
-        },
-      );
+      final first = f.copy(f.plans.first);
       expect(await f.coordinator.authorizeRepository([first, later]), isTrue);
       f.makePublic('beta');
       later.stage.reset();
+      f.onSession = () {
+        f.registry.published.remove('beta');
+        f.registry.forget('beta');
+      };
       expect(await f.coordinator.publish(first), ExitCodes.refused);
       expect(f.problemCodes, contains('RK-AUTH-003'));
       expect(first.actions.values, everyElement(ReleaseAction.notAttempted));
@@ -671,20 +525,10 @@ void main() {
 
   for (final change in ['endpoint', 'compiler']) {
     test('final provider read cannot hide changed $change', () async {
-      var nativeFinished = false;
       final original = f.plans.first;
-      final plan = f.copy(
-        original,
-        checks: {
-          original.targets.single.step.id: _Check(() async {
-            nativeFinished = true;
-            return NativePublicationReady(evidence: const {});
-          }),
-        },
-      );
+      final plan = f.copy(original);
       expect(await f.coordinator.authorizeRepository([plan]), isTrue);
-      f.onRead = (_) {
-        if (!nativeFinished) return;
+      f.onSession = () {
         switch (change) {
           case 'endpoint':
             f.environment['PUB_HOSTED_URL'] = 'https://elsewhere.invalid';
@@ -726,17 +570,6 @@ void main() {
     expect(() => facts.clear(), throwsUnsupportedError);
     expect(() => facts.first['message'] = 'changed', throwsUnsupportedError);
   });
-}
-
-final class _Check implements NativePublicationCheck {
-  _Check(this.run);
-  final Future<NativePublicationOutcome> Function() run;
-  @override
-  String get producer => 'pub-archive:alpha';
-  @override
-  List<NativePublicArchiveRequirement> get requirements => const [];
-  @override
-  Future<NativePublicationOutcome> verify() => run();
 }
 
 final class _Fixture {
@@ -955,7 +788,6 @@ final class _Fixture {
     PublicationPlan p, {
     ReleaseSigningContext? signing,
     Map<String, String>? endpoints,
-    Map<String, NativePublicationCheck>? checks,
     bool? preparedNoop,
   }) => PublicationPlan(
     unit: p.unit,
@@ -972,7 +804,6 @@ final class _Fixture {
     stage: p.stage,
     recoversWithoutStage: p.recoversWithoutStage,
     preparedNoop: preparedNoop ?? p.preparedNoop,
-    nativeChecks: checks ?? p.nativeChecks,
   );
   void makePublic(String name) {
     final plan = plans.singleWhere((plan) => plan.unit.name == name);

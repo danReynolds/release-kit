@@ -10,3 +10,7 @@ other documents in [`doc/`](..).
 - [RFC 0001: RK, an austere secure release compiler](rfcs/0001-rk-secure-release-compiler.md):
   an early direction rk did not take. It is not rk's threat model.
 - [RFC 0002: rk core](rfcs/0002-rk-core.md)
+- [Dependency-aware repository staging](dependency-staging-plan.md) and its
+  [native evidence](dependency-staging-native-proof.md): rk's own dependency
+  resolution and archive staging, replaced by
+  [practical staging](../practical-staging.md).

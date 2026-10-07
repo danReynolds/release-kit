@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- Stage packages with Pub's own dependency resolution. Pub resolves each
+  package once, the way its consumers will, through its normal cache. A
+  package from this repository whose version is not on pub.dev yet comes from
+  the same commit's source, through a path override in the scratch mirror; Pub
+  leaves that file out of the archive. Everything else comes from pub.dev,
+  including a published version of a sibling, even when this source has
+  unreleased changes at that version. A fresh stage of Fleury's four packages
+  took 2m 9s with 0.1.14 and about 50s now.
+  - rk no longer downloads each dependency's archive itself, or keeps frozen
+    dependency choices in a stage. A later stage resolves again, as `pub get`
+    does.
+  - `rk release` publishes a package's dependencies from this repository
+    before it. A named release asks for a dependency it does not publish to
+    be published first. Before an upload, rk no longer checks staged
+    provider archives against the registry or resolves a trial consumer
+    (`RK-PUB-018`).
+  - A tracked dependency override no longer refuses a package
+    (`RK-PUB-008`), and the resolution of the whole workspace that looked
+    for one is gone (`RK-PUB-016`). rk's own overrides file replaces tracked
+    ones where Pub validates, so none can reach what is published. A Dart
+    package in a workspace with Flutter packages stages with a standalone
+    Dart.
+  - Stages saved by 0.1.14 are not reused. A release that 0.1.14 left partly
+    published finishes with 0.1.14.
 - `rk use local` runs Dart commands whose dependencies have build hooks
   (native assets) from any directory. Started elsewhere, `dart run` (Dart
   3.12, at least) did not build those hooks, so a command that calls a native

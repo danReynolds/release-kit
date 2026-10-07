@@ -1,5 +1,8 @@
 # Dependency-aware repository staging
 
+> Archived. Superseded by [practical staging](../practical-staging.md), which
+> replaced rk's own dependency resolution and archive staging with Pub.
+
 Status: implemented. This document maps the design to its production owners and
 regression tests. The [repository release contract](repository-release-plan.md)
 defines command behavior; the [native qualification record](dependency-staging-native-proof.md)

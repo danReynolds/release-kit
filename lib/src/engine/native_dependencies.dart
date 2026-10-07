@@ -157,8 +157,10 @@ String _nativeText(Map<String, Object?> map, String key) {
   return value;
 }
 
-/// A source-only choice. A null candidate means native resolution is still
-/// required, never that a compatible public version is known to exist.
+/// A source-only choice. A candidate is taken from this repository's source
+/// when staging, because its version satisfies every requirement on it; with
+/// none, Pub resolves the requirement from its registry. Neither is proof that
+/// a version is available there.
 final class NativeCandidateSelection {
   NativeCandidateSelection._(this.requirements, this.candidate);
   final List<NativeRequirement> requirements;
@@ -169,9 +171,7 @@ final class NativeCandidateSelection {
       for (final requirement in requirements) requirement.toJson(),
     ],
     'candidate': candidate?.toJson(),
-    'resolution': candidate == null
-        ? 'native_resolution_required'
-        : 'candidate_requires_native_validation',
+    'resolution': candidate == null ? 'registry' : 'repository',
   };
 }
 

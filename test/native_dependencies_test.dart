@@ -92,10 +92,7 @@ void main() {
         _require('bridge', '>=0.1.0 <0.3.0'),
       ]);
       expect(selected.single.candidate, isNull);
-      expect(
-        selected.single.toJson()['resolution'],
-        'native_resolution_required',
-      );
+      expect(selected.single.toJson()['resolution'], 'registry');
     },
   );
 
@@ -357,6 +354,72 @@ dependencies:
     },
   );
 
+  group('a staged package takes from this source', () {
+    test('what is not published yet, through each other', () async {
+      expect(await _fromSource(_stack(), 'app'), ['core', 'mid', 'testkit']);
+    });
+
+    test('nothing for a published version or what it needs', () async {
+      // Consumers get mid 0.3.0 from pub.dev, with whatever core it asks
+      // for there; testkit still brings the core this source has.
+      expect(await _fromSource(_stack(), 'app', published: {'mid@0.3.0'}), [
+        'core',
+        'testkit',
+      ]);
+      expect(
+        await _fromSource(
+          _stack(),
+          'app',
+          published: {'mid@0.3.0', 'core@0.2.0'},
+        ),
+        ['testkit'],
+      );
+    });
+
+    test('what only its development needs, even when published', () async {
+      expect(
+        await _fromSource(
+          _stack(),
+          'app',
+          published: {'mid@0.3.0', 'core@0.2.0', 'testkit@0.1.0'},
+        ),
+        ['testkit'],
+      );
+    });
+
+    test('nothing whose version does not satisfy the requirement', () async {
+      final resolution = _stack({
+        'mid': 'dependencies:\n  core: ^0.1.0\n',
+        'app': 'dependencies:\n  mid: ^0.2.0\n',
+      });
+      expect(await _fromSource(resolution, 'app'), isEmpty);
+      expect(await _fromSource(resolution, 'mid'), isEmpty);
+    });
+
+    test(
+      'a development need it also has at runtime, by the runtime rule',
+      () async {
+        final resolution = _stack({
+          'app':
+              'dependencies:\n  mid: ^0.3.0\n'
+              'dev_dependencies:\n  mid: ^0.3.0\n',
+        });
+        expect(
+          await _fromSource(resolution, 'app', published: {'mid@0.3.0'}),
+          isEmpty,
+        );
+      },
+    );
+
+    test('never the package itself', () async {
+      // core develops with testkit, whose need of core is core itself.
+      final resolution = _stack({
+        'core': 'dev_dependencies:\n  testkit: ^0.1.0\n',
+      });
+      expect(await _fromSource(resolution, 'core'), ['testkit']);
+    });
+  });
+
   test(
     'malformed requirements identify the dependency and its manifest line',
     () {
@@ -375,6 +438,63 @@ dependencies:
       expect(diagnostic.source!.line, 4);
     },
   );
+}
+
+/// A repository of four units: app needs mid, which needs core, and app
+/// develops with testkit, which needs core too. [manifests] replaces any
+/// package's pubspec body after its name and version.
+Resolution _stack([Map<String, String> manifests = const {}]) {
+  final diagnostics = Diagnostics();
+  final config = ReleaseConfig.parse(
+    [
+      'schema = 2',
+      for (final name in ['core', 'mid', 'app', 'testkit']) ...[
+        '[release.$name]',
+        'path = "$name"',
+        'publish = ["pub.dev"]',
+      ],
+    ].join('\n'),
+    'release.toml',
+    diagnostics,
+  )!;
+  const versions = {
+    'core': '0.2.0',
+    'mid': '0.3.0',
+    'app': '1.0.0',
+    'testkit': '0.1.0',
+  };
+  const bodies = {
+    'core': '',
+    'mid': 'dependencies:\n  core: ^0.2.0\n',
+    'app':
+        'dependencies:\n  mid: ^0.3.0\n'
+        'dev_dependencies:\n  testkit: ^0.1.0\n',
+    'testkit': 'dependencies:\n  core: ^0.2.0\n',
+  };
+  final result = Resolution.resolve(
+    config,
+    MemorySourceTree({
+      for (final MapEntry(key: name, value: version) in versions.entries)
+        '$name/pubspec.yaml':
+            'name: $name\nversion: $version\n'
+            '${manifests[name] ?? bodies[name]}',
+    }),
+    diagnostics,
+  );
+  expect(diagnostics.found, isEmpty);
+  return result!;
+}
+
+Future<List<String>> _fromSource(
+  Resolution resolution,
+  String project, {
+  Set<String> published = const {},
+}) async {
+  final sourced = await resolution.dependencyPlan.fromSource(
+    resolution.allProjects.singleWhere((p) => p.name == project),
+    (package, version) async => published.contains('$package@$version'),
+  );
+  return [for (final sibling in sourced) sibling.name]..sort();
 }
 
 final class _OpaqueSemantics implements NativeDependencySemantics {

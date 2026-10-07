@@ -11,8 +11,6 @@ import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/file_mode.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
-import 'package:rk/src/engine/native_stage_context.dart';
-import 'package:rk/src/engine/stage_dependencies.dart';
 import 'package:rk/src/engine/release_stage.dart';
 import 'package:rk/src/engine/registry.dart';
 import 'package:rk/src/engine/release_manifest.dart';
@@ -29,7 +27,7 @@ import 'package:rk/src/transforms/archive.dart';
 import 'package:rk/src/transforms/digest.dart';
 import 'package:test/test.dart';
 
-import 'pub_deps_double.dart';
+import 'pub_get_double.dart';
 import 'status_test.dart' show FakeRegistry;
 
 const _head = '1111111111111111111111111111111111111111';
@@ -940,44 +938,6 @@ publish = ["pub.dev"]
       isEmpty,
       reason: 'stage mode may inspect targets, but cannot mutate any of them',
     );
-  });
-
-  test('refreshes public history after dependency binding changes', () async {
-    var resolutions = 0;
-    final run = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('private preparation must not authorize'),
-      stageFor: (unit) {
-        if (++resolutions == 2) {
-          harness.registry.published['tool']!.add('2.0.0');
-          return harness.stages.bindDependencies(
-            unit,
-            StageDependencies(
-              contexts: [
-                NativeStageContext(
-                  context: 'fixture:tool',
-                  ecosystem: 'fixture',
-                  owner: 'tool',
-                  format: 1,
-                  consumers: const ['pub-archive:tool'],
-                  bindings: const [],
-                  native: const {'selection': 'frozen'},
-                ),
-              ],
-            ),
-          );
-        }
-        return harness.stages(unit);
-      },
-    );
-    expect(resolutions, 2);
-    expect(run.code, ExitCodes.refused, reason: run.text);
-    expect(run.text, contains('2.0.0'));
-    expect(
-      run.keys,
-      isNot(contains('dart pub publish --to-archive <archive>')),
-    );
-    expect(run.publicMutations, isEmpty);
   });
 
   test('native Pub packaging escapes a repository that ignores .rk', () async {
@@ -3493,8 +3453,7 @@ class _WorldTools implements Tools {
     // modeled.
     final resolving =
         _isDart(executable) &&
-        (_starts(arguments, ['pub', 'get', '--no-example']) ||
-            _starts(arguments, ['pub', 'deps']));
+        _starts(arguments, ['pub', 'get', '--no-example']);
     if (resolving && nativePubArchive) {
       return const SystemTools().run(
         executable,
@@ -3505,12 +3464,7 @@ class _WorldTools implements Tools {
       );
     }
     if (resolving && workingDirectory != null) {
-      if (arguments.contains('--no-example')) {
-        return pubGetIn(workingDirectory, environment: environment);
-      }
-      return arguments.contains('--json')
-          ? pubDepsJsonIn(workingDirectory)
-          : pubDepsCompactIn(workingDirectory);
+      return pubGetIn(workingDirectory, environment: environment);
     }
     if (_isDart(executable) && _starts(arguments, ['pub', 'get'])) {
       return _ok();

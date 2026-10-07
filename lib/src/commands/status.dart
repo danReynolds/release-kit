@@ -11,8 +11,6 @@ import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
 import '../engine/source_tree.dart';
 import '../engine/stage_inspection.dart';
-import '../engine/stage_lookup.dart';
-import '../engine/stage_restoration.dart';
 import '../engine/targets.dart';
 import '../engine/verdict.dart';
 import '../engine/version.dart';
@@ -34,7 +32,6 @@ class StatusCommand {
     required this.inspector,
     required this.output,
     this.stageFor,
-    this.observeStage,
     HostCapabilities? capabilities,
   }) : repositoryGit = repositoryGit ?? git,
        capabilities = capabilities ?? HostCapabilities.inspect();
@@ -55,10 +52,6 @@ class StatusCommand {
   /// An explicit seam for filesystem tests. In normal composition the same
   /// resolver already installed on [inspector] is used.
   final ReleaseStage Function(ResolvedUnit unit)? stageFor;
-
-  /// Read-only frozen-stage lookup. Its candidate supplies the same local
-  /// bytes to status rows and public comparisons, without adopting a binding.
-  final Future<StageObservation> Function(ResolvedUnit unit)? observeStage;
 
   Future<int> run({String? only}) async {
     final units = only == null
@@ -191,15 +184,7 @@ class StatusCommand {
   }) async {
     final diagnostics = Diagnostics();
     final stageResult = await _inspectStage(unit);
-    // A recognized native-bound receipt has its own recorded choices. Source
-    // candidate edges are not proof of its runtime publication obligations.
-    // Status leaves those native checks deferred without solving or adopting.
-    final checklist = Checklist.derive(
-      unit,
-      resolution,
-      diagnostics,
-      sourceDependencies: !stageResult.nativeAuthorizationDeferred,
-    );
+    final checklist = Checklist.derive(unit, resolution, diagnostics);
 
     for (final project in unit.projects) {
       Changelog.check(
@@ -211,17 +196,7 @@ class StatusCommand {
       );
     }
 
-    final reader = observeStage == null
-        ? inspector
-        : inspector.forStages((requested) {
-            final stage = stageResult.candidate;
-            if (requested.name != unit.name || stage == null) {
-              throw StateError(
-                'no locally verified stage for ${requested.name}',
-              );
-            }
-            return stage;
-          });
+    final reader = inspector;
     final expectations = inspector.targets.derive(
       unit,
       checklist,
@@ -399,7 +374,7 @@ class StatusCommand {
             remedy:
                 'restore ${stageResult.path ?? '.rk/work/stages/<stage-id>'} '
                 'from the machine that staged this release. '
-                '${unit.shipsBinaries ? 'Signed or notarized bytes' : 'Recorded archive bytes and frozen dependency choices'} '
+                '${unit.shipsBinaries ? 'Signed or notarized bytes' : 'Recorded archive bytes'} '
                 'cannot be recreated byte-for-byte after a public target has bound them.',
           ),
         ),
@@ -418,7 +393,6 @@ class StatusCommand {
       targets: targets,
       stage: stageResult.inspection,
       stageState: stageResult.state,
-      nativeAuthorizationDeferred: stageResult.nativeAuthorizationDeferred,
       issues: issues,
       sourceVersionAlreadyReleased: releasedSource != null,
     );
@@ -487,67 +461,15 @@ class StatusCommand {
 
   Future<_StageResult> _inspectStage(ResolvedUnit unit) async {
     final factory = stageFor ?? inspector.stageFor;
-    if ((factory == null && observeStage == null) ||
+    if (factory == null ||
         !_isFullObjectId(git.head) ||
         !_isFullObjectId(git.headTree)) {
       return const _StageResult(state: Inspection.absent(detail: 'not staged'));
     }
     try {
-      final ReleaseStage stage;
-      final StageInspection inspected;
-      var nativeAuthorizationDeferred = false;
-      var locallyObserved = false;
-      final observe = observeStage;
-      if (observe == null) {
-        stage = factory!(unit);
-        inspected = stage.inspect();
-      } else {
-        final observation = await observe(unit);
-        if (observation.lookup.kind == StageLookupKind.absent &&
-            observation.problem == null) {
-          return const _StageResult(
-            state: Inspection.absent(detail: 'not staged'),
-          );
-        }
-        if (!observation.locallyVerified) {
-          final detail =
-              observation.problem ??
-              observation.lookup.message ??
-              'the saved stage could not be verified locally';
-          final failed = observation.inspection;
-          return _StageResult(
-            inspection: failed?.reusable == true ? null : failed,
-            state:
-                failed?.claimsCompletion == true &&
-                    failed!.asInspection.verdict == Verdict.conflict
-                ? failed.asInspection
-                : Inspection.unknown(detail),
-            path: observation.lookup.path,
-            issue: StatusIssue(
-              unit: unit.name,
-              diagnostic: Diagnostic(
-                code: 'RK-STAGE-002',
-                message: 'the saved release stage could not be verified',
-                remedy:
-                    'Inspect the saved-stage problem before retrying. '
-                    'Stage and release must verify its recorded choices '
-                    'before reuse; this observation did not change them.',
-                evidence: detail,
-              ),
-              evidence: {
-                'Lookup': observation.lookup.kind.name,
-                'Cause': detail,
-              },
-            ),
-          );
-        }
-        stage = observation.candidate!;
-        inspected = observation.inspection!;
-        nativeAuthorizationDeferred = observation.nativeAuthorizationDeferred;
-        locallyObserved = true;
-      }
+      final stage = factory(unit);
+      final inspected = stage.inspect();
       final ordinaryAbsence =
-          (locallyObserved && inspected.incomplete) ||
           inspected.canRestartSource ||
           (inspected.receipt?.complete != true &&
               inspected.issues.every(
@@ -555,12 +477,7 @@ class StatusCommand {
                     issue.kind == StageIssueKind.missingReceipt ||
                     issue.kind == StageIssueKind.incompleteReceipt,
               ));
-      final state = locallyObserved && inspected.incomplete
-          ? const Inspection.absent(
-              detail:
-                  'saved stage is incomplete; recorded progress verified locally',
-            )
-          : inspected.canRestartSource
+      final state = inspected.canRestartSource
           ? const Inspection.absent(
               detail: 'saved plan; source preparation is incomplete',
             )
@@ -568,28 +485,7 @@ class StatusCommand {
       return _StageResult(
         inspection: inspected,
         candidate: stage,
-        nativeAuthorizationDeferred: nativeAuthorizationDeferred,
-        state: observe == null
-            ? state
-            : Inspection(
-                state.verdict,
-                detail: inspected.reusable && nativeAuthorizationDeferred
-                    ? 'local stage verified; native dependency checks deferred '
-                          'until stage or release'
-                    : inspected.reusable
-                    ? 'local stage verified'
-                    : state.detail,
-                evidence: {
-                  ...state.evidence,
-                  if (inspected.receipt != null)
-                    'stage id': inspected.receipt!.identity.id,
-                  'stage path':
-                      '.rk/work/stages/${stage.directory.identity.id}',
-                  'native authorization': 'not performed by status',
-                  if (nativeAuthorizationDeferred)
-                    'native public readiness': 'not performed by status',
-                },
-              ),
+        state: state,
         path: stage.directory.path,
         issue: ordinaryAbsence || inspected.issues.isEmpty
             ? null
@@ -987,20 +883,6 @@ class StatusCommand {
         note: producers == 0
             ? 'source preparation incomplete'
             : '$producers recorded producers; stage incomplete',
-        depth: 1,
-        role: VisualRole.secondary,
-      );
-    }
-    if (snapshot.nativeAuthorizationDeferred) {
-      output.line(
-        'Native dependency checks',
-        note: 'deferred until stage or release',
-        depth: 1,
-        role: VisualRole.secondary,
-      );
-      output.line(
-        'Public dependency checks',
-        note: 'deferred until release',
         depth: 1,
         role: VisualRole.secondary,
       );
@@ -1417,7 +1299,6 @@ class StatusUnitSnapshot {
     required Iterable<TargetObservation> targets,
     required this.stage,
     required this.stageState,
-    this.nativeAuthorizationDeferred = false,
     required Iterable<StatusIssue> issues,
     required this.sourceVersionAlreadyReleased,
   }) : states = Map<String, Inspection>.unmodifiable(states),
@@ -1430,7 +1311,6 @@ class StatusUnitSnapshot {
   final List<TargetObservation> targets;
   final StageInspection? stage;
   final Inspection stageState;
-  final bool nativeAuthorizationDeferred;
   final List<StatusIssue> issues;
   final bool sourceVersionAlreadyReleased;
 }
@@ -1485,7 +1365,6 @@ class _StageResult {
     this.issue,
     this.path,
     this.candidate,
-    this.nativeAuthorizationDeferred = false,
   });
 
   final StageInspection? inspection;
@@ -1493,7 +1372,6 @@ class _StageResult {
   final StatusIssue? issue;
   final String? path;
   final ReleaseStage? candidate;
-  final bool nativeAuthorizationDeferred;
 }
 
 class _CurrentVersion {

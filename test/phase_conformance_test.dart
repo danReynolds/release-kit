@@ -24,73 +24,9 @@ import 'package:rk/src/transforms/digest.dart';
 import 'package:rk/src/targets/catalog.dart';
 import 'package:test/test.dart';
 
-import 'pub_deps_double.dart';
+import 'pub_get_double.dart';
 import 'rk_process.dart';
 import 'status_test.dart' show FakeRegistry;
-
-/// `pub deps --json` for keybay alone, depending on [dependencies].
-ToolResult keybayDeps(List<String> dependencies) => ToolResult(
-  exitCode: 0,
-  stdout: jsonEncode({
-    'root': 'keybay',
-    'packages': [
-      {
-        'name': 'keybay',
-        'kind': 'root',
-        'source': 'root',
-        'dependencies': dependencies,
-        'directDependencies': dependencies,
-        'devDependencies': <String>[],
-      },
-      for (final name in dependencies)
-        {
-          'name': name,
-          'kind': 'direct',
-          'source': 'hosted',
-          'dependencies': <String>[],
-          'directDependencies': <String>[],
-        },
-    ],
-  }),
-  stderr: '',
-);
-
-/// `pub deps --json` for a workspace: [roots] are its packages, each with
-/// its direct dependencies and any overrides it reports declaring, and [dev]
-/// its dev dependencies; [hosted] lists the other packages with their
-/// dependencies, and [sources] any that Pub took from somewhere other than a
-/// registry.
-ToolResult workspaceDeps(
-  Map<String, ({List<String> direct, List<String> overrides})> roots, {
-  Map<String, List<String>> hosted = const {},
-  Map<String, String> sources = const {},
-  Map<String, List<String>> dev = const {},
-}) => ToolResult(
-  exitCode: 0,
-  stdout: jsonEncode({
-    'root': roots.keys.first,
-    'packages': [
-      for (final MapEntry(key: name, value: root) in roots.entries)
-        {
-          'name': name,
-          'kind': 'root',
-          'source': 'root',
-          'dependencies': [...root.direct, ...?dev[name], ...root.overrides],
-          'directDependencies': root.direct,
-          'devDependencies': dev[name] ?? const <String>[],
-        },
-      for (final MapEntry(key: name, value: dependencies) in hosted.entries)
-        {
-          'name': name,
-          'kind': 'transitive',
-          'source': sources[name] ?? 'hosted',
-          'dependencies': dependencies,
-          'directDependencies': dependencies,
-        },
-    ],
-  }),
-  stderr: '',
-);
 
 /// Checks each phase against the deliverables its plan lists, so "done" is
 /// something this file decides rather than something a judgement call does.
@@ -467,23 +403,13 @@ void main() {
               target.startsWith('package:fleury/')) {
             continue;
           }
-          // Installation eligibility uses Pub's own SDK-constraint semantics.
-          // Native dependency compatibility also uses Pub semantics. Keep the
-          // exception at this exact native file, outside the shared engine.
+          // Installation eligibility uses Pub's own SDK-constraint semantics,
+          // and so does the dependency plan's compatibility check. Keep the
+          // exception at these exact files, outside the shared engine.
           if ((entity.path == 'lib/src/targets/pub_dev/installation.dart' ||
                   entity.path ==
                       'lib/src/native/dart/version_constraints.dart') &&
               target == 'package:pub_semver/pub_semver.dart') {
-            continue;
-          }
-          if ((entity.path == 'lib/src/native/dart/resolution_graph.dart' ||
-                  entity.path == 'lib/src/native/dart/package_archive.dart') &&
-              target == 'package:yaml/yaml.dart') {
-            continue;
-          }
-          if ((entity.path == 'lib/src/native/package_archive.dart' ||
-                  entity.path == 'lib/src/native/dart/hosted_discovery.dart') &&
-              target == 'package:tar/tar.dart') {
             continue;
           }
           foreign.add('${entity.path}: $target');
@@ -662,8 +588,7 @@ void main() {
       String? config,
       void Function(String key)? onRun,
       DartCompilerIdentity Function()? compiler,
-      Set<String> overridden = const {},
-      PubResolution? pub,
+      PubResolution pub = const PubResolution(),
       void Function(String key, String workingDirectory)? inspect,
     }) async {
       // A fresh registry per drive is a fresh process: the world — what is
@@ -728,9 +653,6 @@ publish = ["git-tag", "pub.dev"]
           ..writeAsBytesSync(archiveOfTree());
       }
 
-      // `pub deps` leaves Pub's records in the mirror, as the real one does:
-      // the lockfile marking [overridden] packages, and a root pointer.
-      final pubModel = pub ?? PubResolution.overriding(overridden);
       final pubAnswers = <String, ToolResult>{};
       late final RecordingTools tools;
       tools = RecordingTools(
@@ -741,18 +663,8 @@ publish = ["git-tag", "pub.dev"]
             case 'dart pub get --no-example':
               pubAnswers[key] = pubGetIn(
                 workingDirectory,
-                resolution: pubModel,
+                resolution: pub,
                 environment: tools.environments[key],
-              );
-            case 'dart pub deps --json':
-              pubAnswers[key] = pubDepsJsonIn(
-                workingDirectory,
-                resolution: pubModel,
-              );
-            case 'dart pub deps --style=compact':
-              pubAnswers[key] = pubDepsCompactIn(
-                workingDirectory,
-                resolution: pubModel,
               );
           }
         },
@@ -902,137 +814,6 @@ publish = ["git-tag", "pub.dev"]
       expect(sourceContains('StepKind.tag'), isTrue);
     });
 
-    test(
-      'a tracked pubspec_overrides.yaml refuses before the permanent act',
-      () async {
-        final run = await drive(
-          published: {
-            'keybay': ['0.1.0'],
-          },
-          archives: {},
-          tags: {},
-          sourceFiles: {
-            'packages/keybay/pubspec_overrides.yaml':
-                'dependency_overrides:\n  transitive:\n    path: ../other\n',
-          },
-          results: {
-            'dart pub deps --json': keybayDeps(['transitive']),
-          },
-          overridden: {'transitive'},
-        );
-
-        expect(run.code, ExitCodes.refused);
-        expect(run.text, contains('mask consumer resolution'));
-        expect(run.text, contains('keybay depends on transitive'));
-        expect(
-          run.calls,
-          isNot(contains('dart pub publish --to-archive <archive>')),
-          reason:
-              'pub excludes pubspec_overrides.yaml from the archive but '
-              'honours it locally — native validation against an overridden '
-              'graph '
-              'validates a package consumers never get, so the refusal '
-              'precedes it',
-        );
-        expect(run.calls.where((c) => c.contains('publish --force')), isEmpty);
-      },
-    );
-
-    test(
-      'a dependency_overrides section masks the same way, and refuses',
-      () async {
-        // The section form: tracked by necessity (it lives in the manifest),
-        // honoured by native resolution, then stripped from the archive.
-        // Pub exits 0 with only a hint, so only rk can refuse it.
-        final run = await drive(
-          published: {
-            'keybay': ['0.1.0'],
-          },
-          archives: {},
-          tags: {},
-          sourceFiles: {
-            'packages/keybay/pubspec.yaml':
-                'name: keybay\n'
-                'version: 0.2.0\n'
-                'dependency_overrides:\n'
-                '  transitive:\n'
-                '    path: ../other\n',
-          },
-          results: {
-            'dart pub deps --json': keybayDeps(['transitive']),
-          },
-          overridden: {'transitive'},
-        );
-
-        expect(run.code, ExitCodes.refused);
-        expect(run.text, contains('mask consumer resolution'));
-        expect(run.text, contains('dependency_overrides section'));
-        expect(
-          run.calls,
-          isNot(contains('dart pub publish --to-archive <archive>')),
-        );
-      },
-    );
-
-    test(
-      'a workspace member is masked from its nested workspace root',
-      () async {
-        // Pub resolves a `resolution: workspace` member at the top-most
-        // ancestor declaring `workspace:` — which need not be the repository
-        // root. Overrides tracked there mask every member whose dependencies
-        // reach them.
-        final run = await drive(
-          published: {
-            'keybay': ['0.1.0'],
-          },
-          archives: {},
-          tags: {},
-          config: '''
-schema = 2
-
-[release.core]
-path = "dart/packages/keybay"
-publish = ["git-tag", "pub.dev"]
-''',
-          sourceFiles: {
-            'dart/pubspec.yaml':
-                'name: dart_workspace\n'
-                'publish_to: none\n'
-                'environment:\n'
-                "  sdk: ^3.6.0\n"
-                'workspace:\n'
-                '  - packages/keybay\n',
-            'dart/pubspec_overrides.yaml':
-                'dependency_overrides:\n  transitive:\n    path: ../other\n',
-            'dart/packages/keybay/pubspec.yaml':
-                'name: keybay\n'
-                'version: 0.2.0\n'
-                'resolution: workspace\n',
-            'dart/packages/keybay/CHANGELOG.md': '## 0.2.0\n',
-          },
-          results: {
-            'dart pub deps --json': workspaceDeps(
-              {
-                'dart_workspace': (direct: [], overrides: ['transitive']),
-                'keybay': (direct: ['transitive'], overrides: []),
-              },
-              hosted: {'transitive': []},
-              sources: {'transitive': 'path'},
-            ),
-          },
-          overridden: {'transitive'},
-        );
-
-        expect(run.code, ExitCodes.refused);
-        expect(run.text, contains('mask consumer resolution'));
-        expect(run.text, contains('dart/pubspec_overrides.yaml'));
-        expect(
-          run.calls,
-          isNot(contains('dart pub publish --to-archive <archive>')),
-        );
-      },
-    );
-
     /// Drives to a completed release: pub.dev lists what was published.
     Future<
       ({
@@ -1048,8 +829,7 @@ publish = ["git-tag", "pub.dev"]
       Map<String, String> sourceFiles = const {},
       String? config,
       DartCompilerIdentity Function()? compiler,
-      Set<String> overridden = const {},
-      PubResolution? pub,
+      PubResolution pub = const PubResolution(),
       void Function(String key, String workingDirectory)? inspect,
     }) {
       final published = {
@@ -1064,7 +844,6 @@ publish = ["git-tag", "pub.dev"]
         sourceFiles: sourceFiles,
         config: config,
         compiler: compiler,
-        overridden: overridden,
         pub: pub,
         inspect: inspect,
         onRun: (key) {
@@ -1101,7 +880,6 @@ publish = ["git-tag", "pub.dev"]
         expect(
           written,
           [
-            isNull,
             '# Written by rk: resolve this package the way its consumers do.\n'
                 'dependency_overrides: {}\n',
           ],
@@ -1111,77 +889,156 @@ publish = ["git-tag", "pub.dev"]
       },
     );
 
+    // Pub honours a tracked override where it resolves, and leaves it out
+    // of the archive. The stage resolves in a mirror where its own
+    // pubspec_overrides.yaml replaces every tracked one, so what Pub
+    // validates is what consumers get.
+    const consumerFile =
+        '# Written by rk: resolve this package the way its consumers do.\n'
+        'dependency_overrides: {}\n';
+    Future<List<String?>> overridesSeenBy(
+      Future<Object?> Function(
+        void Function(String key, String workingDirectory) inspect,
+      )
+      run,
+    ) async {
+      final seen = <String?>[];
+      await run((key, directory) {
+        if (key != 'dart pub get --no-example') return;
+        final file = File('$directory/pubspec_overrides.yaml');
+        seen.add(file.existsSync() ? file.readAsStringSync() : null);
+      });
+      return seen;
+    }
+
     test(
-      'an override that reaches only other packages does not refuse this one',
+      'a tracked pubspec_overrides.yaml stays out of what Pub validates',
       () async {
-        // A workspace overrides a package for one member; another member
-        // that never depends on it resolves exactly what its consumers will.
-        final run = await release(
-          sourceFiles: unrelatedOverride,
-          results: {
-            'dart pub deps --json': keybayDeps(['collection']),
-          },
+        late ({
+          int code,
+          String text,
+          List<String> calls,
+          Map<String, Object?> report,
+          Object? died,
+        })
+        run;
+        final seen = await overridesSeenBy(
+          (inspect) async => run = await release(
+            sourceFiles: {
+              'packages/keybay/pubspec_overrides.yaml':
+                  'dependency_overrides:\n  transitive:\n    path: ../other\n',
+            },
+            inspect: inspect,
+          ),
         );
 
         expect(run.code, ExitCodes.ok, reason: run.text);
-        expect(run.text, isNot(contains('mask consumer resolution')));
+        expect(seen, [consumerFile]);
         expect(
           run.calls,
           containsAllInOrder([
-            'dart pub deps --json',
-            startsWith('dart pub publish --to-archive '),
-            startsWith('dart pub publish --from-archive '),
+            'dart pub get --no-example',
+            'dart pub publish --to-archive <archive>',
           ]),
         );
       },
     );
 
-    test('an override whose reach cannot be resolved still refuses', () async {
-      // `pub deps --json` fails, and this Dart predates the package graph
-      // `pub get` records, so nothing says what keybay reaches.
-      final run = await release(
-        sourceFiles: unrelatedOverride,
-        pub: const PubResolution(recordsGraph: false),
-        results: {
-          'dart pub deps --json': ToolResult(
-            exitCode: 69,
-            stdout: '',
-            stderr: 'Git error: could not fetch unrelated',
-          ),
-        },
+    test('a dependency_overrides section is replaced the same way', () async {
+      // An overrides file replaces the pubspec's section, as Pub reads it.
+      late ({
+        int code,
+        String text,
+        List<String> calls,
+        Map<String, Object?> report,
+        Object? died,
+      })
+      run;
+      final seen = await overridesSeenBy(
+        (inspect) async => run = await release(
+          sourceFiles: {
+            'packages/keybay/pubspec.yaml':
+                'name: keybay\n'
+                'version: 0.2.0\n'
+                'dependency_overrides:\n'
+                '  transitive:\n'
+                '    path: ../other\n',
+          },
+          inspect: inspect,
+        ),
       );
 
-      expect(run.code, ExitCodes.refused);
-      expect(
-        (run.report['problems'] as List).map((p) => (p as Map)['code']),
-        contains('RK-PUB-016'),
-      );
-      expect(run.text, contains('could not resolve which packages keybay'));
-      expect(run.text, contains('Git error'));
-      expect(run.calls.where((c) => c.startsWith('dart pub publish')), isEmpty);
+      expect(run.code, ExitCodes.ok, reason: run.text);
+      expect(seen, [consumerFile]);
     });
 
     test(
-      'reads the lockfile Pub wrote, not one the snapshot points to',
+      'a workspace member resolves apart from its nested workspace root',
       () async {
-        // A tracked pointer from an old resolution sends a reader to a decoy
-        // lockfile. The stage clears such records before Pub resolves.
-        final run = await release(
-          sourceFiles: {
-            'packages/keybay/.dart_tool/pub/workspace_ref.json':
-                '{"workspaceRoot": "../../decoy"}\n',
-            'packages/keybay/decoy/pubspec.lock': 'packages: {}\n',
-          },
-          pub: const PubResolution(lock: {'transitive': 'direct overridden'}),
-          results: {
-            'dart pub deps --json': keybayDeps(['transitive']),
-          },
+        // Pub resolves a `resolution: workspace` member at the top-most
+        // ancestor declaring `workspace:`, which need not be the repository
+        // root, and applies the overrides tracked there. The stage resolves
+        // the member as a root of its own instead.
+        late ({
+          int code,
+          String text,
+          List<String> calls,
+          Map<String, Object?> report,
+          Object? died,
+        })
+        run;
+        final seen = await overridesSeenBy(
+          (inspect) async => run = await release(
+            config: '''
+schema = 2
+
+[release.core]
+path = "dart/packages/keybay"
+publish = ["git-tag", "pub.dev"]
+''',
+            sourceFiles: {
+              'dart/pubspec.yaml':
+                  'name: dart_workspace\n'
+                  'publish_to: none\n'
+                  'environment:\n'
+                  "  sdk: ^3.6.0\n"
+                  'workspace:\n'
+                  '  - packages/keybay\n',
+              'dart/pubspec_overrides.yaml':
+                  'dependency_overrides:\n  transitive:\n    path: ../other\n',
+              'dart/packages/keybay/pubspec.yaml':
+                  'name: keybay\n'
+                  'version: 0.2.0\n'
+                  'resolution: workspace\n',
+              'dart/packages/keybay/CHANGELOG.md': '## 0.2.0\n',
+            },
+            inspect: inspect,
+          ),
         );
 
-        expect(run.code, ExitCodes.refused, reason: run.text);
-        expect(run.text, contains('keybay depends on transitive'));
+        expect(run.code, ExitCodes.ok, reason: run.text);
+        expect(seen, [
+          '# Written by rk: resolve this package the way its consumers do.\n'
+              'resolution: null\n'
+              'workspace: []\n'
+              'dependency_overrides: {}\n',
+        ]);
       },
     );
+
+    test('a tracked override reaching nothing stages and publishes', () async {
+      final run = await release(sourceFiles: unrelatedOverride);
+
+      expect(run.code, ExitCodes.ok, reason: run.text);
+      expect(
+        run.calls,
+        containsAllInOrder([
+          'dart pub get --no-example',
+          startsWith('dart pub publish --to-archive '),
+          startsWith('dart pub publish --from-archive '),
+        ]),
+      );
+    });
 
     group('a workspace', () {
       const members = {
@@ -1205,45 +1062,13 @@ publish = ["git-tag", "pub.dev"]
             'dependencies:\n'
             '  pinned: ^1.0.0\n',
       };
-      const none = <String>[];
 
-      test("refuses an override a sibling member declares", () async {
+      test('stages past overrides that other members and the root declare, '
+          'which consumers never get', () async {
         // Pub applies any member's overrides to the whole workspace, so
-        // host's pin of leaf is what keybay validates against.
-        final run = await release(
-          sourceFiles: {
-            ...members,
-            'packages/host/pubspec.yaml':
-                '${members['packages/host/pubspec.yaml']}'
-                'dependency_overrides:\n'
-                '  leaf:\n'
-                '    path: ../fork\n',
-          },
-          results: {
-            'dart pub deps --json': workspaceDeps(
-              {
-                'ws': (direct: none, overrides: none),
-                'keybay': (direct: ['leaf'], overrides: none),
-                'host': (direct: ['pinned'], overrides: ['leaf']),
-              },
-              hosted: {'leaf': none, 'pinned': none},
-            ),
-          },
-          overridden: {'leaf'},
-        );
-
-        expect(run.code, ExitCodes.refused);
-        expect(run.text, contains('keybay depends on leaf'));
-        expect(run.text, contains('packages/host/pubspec.yaml'));
-        expect(
-          run.calls.where((c) => c.startsWith('dart pub publish')),
-          isEmpty,
-        );
-      });
-
-      test('stages past a root pin that only another member uses', () async {
-        // Flark's shape: the root pins a Git package for one host, and the
-        // package being released never depends on it.
+        // keybay's own tests may run against host's fork of leaf. Consumers
+        // get leaf from pub.dev, and so does the resolution Pub validates.
+        String? written;
         final run = await release(
           sourceFiles: {
             ...members,
@@ -1252,225 +1077,29 @@ publish = ["git-tag", "pub.dev"]
                 'dependency_overrides:\n'
                 '  pinned:\n'
                 '    git: https://example.com/pinned.git\n',
-          },
-          results: {
-            'dart pub deps --json': workspaceDeps(
-              {
-                'ws': (direct: none, overrides: ['pinned']),
-                'keybay': (direct: ['leaf'], overrides: none),
-                'host': (direct: ['pinned'], overrides: none),
-              },
-              hosted: {'leaf': none, 'pinned': none},
-            ),
-          },
-          overridden: {'pinned'},
-        );
-
-        expect(run.code, ExitCodes.ok, reason: run.text);
-        expect(
-          run.report['attachments'],
-          containsPair('pub-overrides-keybay.txt', contains('pinned')),
-        );
-      });
-
-      test(
-        'refuses an override Pub applied that rk found no declaration of',
-        () async {
-          // Pub's lockfile marks leaf overridden, though nothing rk read
-          // declares it: a member file rk did not read, or a declaration it
-          // misread. Pub's answer decides.
-          final run = await release(
-            sourceFiles: members,
-            overridden: {'leaf'},
-            results: {
-              'dart pub deps --json': workspaceDeps(
-                {
-                  'ws': (direct: none, overrides: none),
-                  'keybay': (direct: ['leaf'], overrides: none),
-                  'host': (direct: ['pinned'], overrides: none),
-                },
-                hosted: {'leaf': none, 'pinned': none},
-              ),
-            },
-          );
-
-          expect(run.code, ExitCodes.refused);
-          expect(run.text, contains('keybay depends on leaf'));
-          expect(run.text, contains('which rk did not find declared'));
-          expect(
-            run.calls.where((c) => c.startsWith('dart pub publish')),
-            isEmpty,
-          );
-        },
-      );
-
-      test(
-        'refuses a reached package from a path, whatever declared it',
-        () async {
-          // Pub does not report an override in a member's overrides file, and
-          // rk's reading may miss one it cannot read. The source Pub took the
-          // package from is what consumers cannot have.
-          final run = await release(
-            sourceFiles: members,
-            results: {
-              'dart pub deps --json': workspaceDeps(
-                {
-                  'ws': (direct: none, overrides: none),
-                  'keybay': (direct: ['leaf'], overrides: none),
-                  'host': (direct: ['pinned'], overrides: none),
-                },
-                hosted: {'leaf': none, 'pinned': none},
-                sources: {'leaf': 'path'},
-              ),
-            },
-          );
-
-          expect(run.code, ExitCodes.refused);
-          expect(run.text, contains('leaf (from path)'));
-          expect(
-            run.calls.where((c) => c.startsWith('dart pub publish')),
-            isEmpty,
-          );
-        },
-      );
-
-      test('stages past a section its overrides file replaces', () async {
-        // Pub still reports host's section, but host's overrides file
-        // replaces it with none, so keybay's leaf is the one consumers get.
-        final run = await release(
-          sourceFiles: {
-            ...members,
             'packages/host/pubspec.yaml':
                 '${members['packages/host/pubspec.yaml']}'
                 'dependency_overrides:\n'
                 '  leaf:\n'
                 '    path: ../fork\n',
-            'packages/host/pubspec_overrides.yaml':
-                'dependency_overrides: {}\n',
           },
-          results: {
-            'dart pub deps --json': workspaceDeps(
-              {
-                'ws': (direct: none, overrides: none),
-                'keybay': (direct: ['leaf'], overrides: none),
-                'host': (direct: ['pinned'], overrides: ['leaf']),
-              },
-              hosted: {'leaf': none, 'pinned': none},
-            ),
+          inspect: (key, directory) {
+            if (key != 'dart pub get --no-example') return;
+            written = File(
+              '$directory/pubspec_overrides.yaml',
+            ).readAsStringSync();
           },
         );
 
         expect(run.code, ExitCodes.ok, reason: run.text);
-      });
-
-      // Each of Pub's reports, and rk's reading, catches an override on its
-      // own; the stage refuses when any of them does.
-      final leafGraph = workspaceDeps(
-        {
-          'ws': (direct: none, overrides: none),
-          'keybay': (direct: ['leaf'], overrides: none),
-          'host': (direct: ['pinned'], overrides: none),
-        },
-        hosted: {'leaf': none, 'pinned': none},
-      );
-      for (final (label, pub, files) in [
-        (
-          "Pub's compact report of what it read",
-          const PubResolution(
-            declared: {
-              'host': {'leaf'},
-            },
-          ),
-          members,
-        ),
-        (
-          "pub get's report of what it applied, asked for in full",
-          const PubResolution(reported: {'leaf'}),
-          members,
-        ),
-        (
-          "Pub's lockfile",
-          const PubResolution(lock: {'leaf': 'direct overridden'}),
-          members,
-        ),
-        (
-          "rk's own reading of the declarations",
-          const PubResolution(),
-          {
-            ...members,
-            'packages/host/pubspec.yaml':
-                '${members['packages/host/pubspec.yaml']}'
-                'dependency_overrides:\n'
-                '  leaf: 1.0.0\n',
-          },
-        ),
-      ]) {
-        test('refuses an override that only $label shows', () async {
-          final run = await release(
-            sourceFiles: files,
-            pub: pub,
-            results: {'dart pub deps --json': leafGraph},
-          );
-
-          expect(run.code, ExitCodes.refused, reason: run.text);
-          expect(run.text, contains('keybay depends on leaf'));
-          expect(
-            run.calls.where((c) => c.startsWith('dart pub publish')),
-            isEmpty,
-          );
-        });
-      }
-
-      test('refuses an override of a direct dependency, which the lockfile '
-          'records as direct', () async {
-        // Pub writes `direct main` for an override of the root's own
-        // dependency, so its reports carry the override, not its lockfile.
-        final run = await release(
-          sourceFiles: members,
-          pub: PubResolution.overriding({'leaf'}, type: 'direct main'),
-          results: {'dart pub deps --json': leafGraph},
+        expect(
+          written,
+          '# Written by rk: resolve this package the way its consumers do.\n'
+          'resolution: null\n'
+          'workspace: []\n'
+          'dependency_overrides: {}\n',
         );
-
-        expect(run.code, ExitCodes.refused);
-        expect(run.text, contains('keybay depends on leaf'));
       });
-
-      test(
-        'refuses an override from a workspace an overrides file declares',
-        () async {
-          // `workspace:` in keybay's overrides file makes m a member, which rk's
-          // reading does not follow; Pub's report of m's overrides still says.
-          final run = await release(
-            sourceFiles: {
-              'packages/keybay/pubspec.yaml':
-                  'name: keybay\n'
-                  'version: 0.2.0\n'
-                  'dependencies:\n'
-                  '  leaf: ^1.0.0\n',
-              'packages/keybay/pubspec_overrides.yaml': 'workspace:\n  - m\n',
-              'packages/keybay/m/pubspec.yaml':
-                  'name: m\n'
-                  'publish_to: none\n'
-                  'resolution: workspace\n'
-                  'dependency_overrides:\n'
-                  '  leaf: 1.0.0\n',
-            },
-            pub: PubResolution(
-              reported: {'leaf'},
-              declared: {
-                'm': {'leaf'},
-              },
-              lock: {'leaf': 'direct main'},
-            ),
-            results: {
-              'dart pub deps --json': keybayDeps(['leaf']),
-            },
-          );
-
-          expect(run.code, ExitCodes.refused);
-          expect(run.text, contains('keybay depends on leaf'));
-        },
-      );
 
       test('asks pub get for its full report, without examples', () async {
         final run = await release(sourceFiles: members);
@@ -1525,81 +1154,57 @@ publish = ["git-tag", "pub.dev"]
               'dependencies:\n'
               '  base: ^1.0.0\n',
         };
-        final graph = workspaceDeps(
-          {
-            'ws': (direct: none, overrides: none),
-            'keybay': (direct: ['base', 'leaf'], overrides: none),
-            'base': (direct: ['leaf'], overrides: none),
-            'testkit': (direct: ['base'], overrides: none),
-            'host': (direct: ['pinned'], overrides: none),
-          },
-          hosted: {'leaf': none, 'pinned': none},
-          dev: {
-            'keybay': ['testkit'],
-          },
-        ).stdout;
+        test('alone, with only what it develops with from the source', () async {
+          final overridesFiles = <String, String?>{};
+          String? publishedFrom;
+          final run = await release(
+            sourceFiles: siblings,
+            inspect: (key, directory) {
+              final file = File('$directory/pubspec_overrides.yaml');
+              if (key == 'dart pub get --no-example') {
+                overridesFiles[directory] = file.existsSync()
+                    ? file.readAsStringSync()
+                    : null;
+              }
+              if (key == 'dart pub publish --to-archive <archive>') {
+                publishedFrom = directory;
+              }
+            },
+          );
 
-        test(
-          'alone, with only what it develops with from the snapshot',
-          () async {
-            final overridesFiles = <String, String?>{};
-            String? publishedFrom;
-            final run = await release(
-              sourceFiles: siblings,
-              pub: PubResolution(graph: graph),
-              inspect: (key, directory) {
-                final file = File('$directory/pubspec_overrides.yaml');
-                if (key == 'dart pub get --no-example') {
-                  overridesFiles[directory] = file.existsSync()
-                      ? file.readAsStringSync()
-                      : null;
-                }
-                if (key == 'dart pub publish --to-archive <archive>') {
-                  publishedFrom = directory;
-                }
-              },
-            );
-
-            expect(run.code, ExitCodes.ok, reason: run.text);
-            expect(overridesFiles, hasLength(2));
-            final [workspace, consumer] = overridesFiles.keys.toList();
-            expect(
-              overridesFiles[workspace],
-              isNull,
-              reason: 'the workspace resolves as the snapshot tracks it',
-            );
-            expect(
-              overridesFiles[consumer],
-              '# Written by rk: resolve this package the way its consumers '
-              'do.\n'
-              'resolution: null\n'
-              'workspace: []\n'
-              'dependency_overrides:\n'
-              '  testkit:\n'
-              '    path: "../testkit"\n',
-              reason:
-                  "keybay's consumers take base from pub.dev, where its unit "
-                  'has published it; nothing publishes testkit, which only '
-                  'keybay\'s development needs',
-            );
-            expect(
-              publishedFrom,
-              consumer,
-              reason: 'Pub validates and archives where it resolved keybay',
-            );
-            expect(
-              run.report['attachments'],
-              containsPair(
-                'pub-package-keybay.txt',
-                startsWith(
-                  'Pub validated keybay the way its consumers resolve it: as a '
-                  'root of its own, with no lockfile and no dependency override '
-                  'but testkit from this snapshot',
-                ),
+          expect(run.code, ExitCodes.ok, reason: run.text);
+          final [consumer] = overridesFiles.keys.toList();
+          expect(
+            overridesFiles[consumer],
+            '# Written by rk: resolve this package the way its consumers '
+            'do.\n'
+            'resolution: null\n'
+            'workspace: []\n'
+            'dependency_overrides:\n'
+            '  testkit:\n'
+            '    path: "../testkit"\n',
+            reason:
+                "keybay's consumers take base from pub.dev, where its unit "
+                'has published it; nothing publishes testkit, which only '
+                'keybay\'s development needs',
+          );
+          expect(
+            publishedFrom,
+            consumer,
+            reason: 'Pub validates and archives where it resolved keybay',
+          );
+          expect(
+            run.report['attachments'],
+            containsPair(
+              'pub-package-keybay.txt',
+              startsWith(
+                'Pub validated keybay the way its consumers resolve it: as a '
+                'root of its own, with no lockfile and no dependency override '
+                'but testkit from this source',
               ),
-            );
-          },
-        );
+            ),
+          );
+        });
 
         test('without the lockfiles the snapshot tracks', () async {
           // A lockfile holds the versions an earlier resolution picked, and
@@ -1612,7 +1217,6 @@ publish = ["git-tag", "pub.dev"]
               'packages/keybay/pubspec.lock':
                   '# Generated by pub\npackages: {}\n',
             },
-            pub: PubResolution(graph: graph),
             inspect: (key, directory) {
               if (key != 'dart pub get --no-example') return;
               final source = Directory(directory).parent.parent;
@@ -1624,14 +1228,13 @@ publish = ["git-tag", "pub.dev"]
           );
 
           expect(run.code, ExitCodes.ok, reason: run.text);
-          expect(lockfiles, [isEmpty, isEmpty]);
+          expect(lockfiles, [isEmpty]);
         });
 
         test('and refuses what Pub cannot resolve that way', () async {
           final run = await release(
             sourceFiles: siblings,
             pub: PubResolution(
-              graph: graph,
               consumerFailure:
                   "Because keybay depends on leaf ^1.0.0 which doesn't match "
                   'any versions, version solving failed.',
@@ -1655,7 +1258,7 @@ publish = ["git-tag", "pub.dev"]
           () async {
             final run = await release(
               sourceFiles: siblings,
-              pub: PubResolution(graph: graph, consumerAlsoReports: {'leaf'}),
+              pub: PubResolution(consumerAlsoReports: {'leaf'}),
             );
 
             expect(run.code, ExitCodes.refused);
@@ -1671,77 +1274,6 @@ publish = ["git-tag", "pub.dev"]
               run.calls.where((c) => c.startsWith('dart pub publish')),
               isEmpty,
             );
-          },
-        );
-      });
-
-      group('reads the graph pub get recorded when pub deps --json fails', () {
-        // Dart 3.12's `pub deps --json` fails when a member's pubspec
-        // overrides a package the member's overrides file leaves out.
-        ToolResult graph({Map<String, String> sources = const {}}) =>
-            workspaceDeps(
-              {
-                'ws': (direct: none, overrides: none),
-                'keybay': (direct: ['leaf'], overrides: none),
-                'host': (direct: ['pinned'], overrides: none),
-              },
-              hosted: {'leaf': none, 'pinned': none},
-              sources: sources,
-            );
-
-        test('and stages what it shows overrides do not reach', () async {
-          final run = await release(
-            sourceFiles: members,
-            pub: PubResolution(graph: graph().stdout, depsJsonFails: true),
-          );
-
-          expect(run.code, ExitCodes.ok, reason: run.text);
-        });
-
-        test('and refuses an override it shows reaching keybay', () async {
-          final run = await release(
-            sourceFiles: {
-              ...members,
-              'packages/host/pubspec_overrides.yaml':
-                  'dependency_overrides:\n'
-                  '  leaf: 1.0.0\n',
-            },
-            pub: PubResolution(
-              graph: graph().stdout,
-              depsJsonFails: true,
-              reported: {'leaf'},
-              declared: {
-                'host': {'leaf'},
-              },
-              lock: {'leaf': 'direct overridden'},
-            ),
-          );
-
-          expect(run.code, ExitCodes.refused);
-          expect(
-            (run.report['problems'] as List).map((p) => (p as Map)['code']),
-            contains('RK-PUB-008'),
-          );
-          expect(run.text, contains('leaf'));
-        });
-
-        test(
-          'and refuses a reached package the lockfile says is from Git',
-          () async {
-            final run = await release(
-              sourceFiles: members,
-              pub: PubResolution(
-                graph: graph(sources: {'leaf': 'git'}).stdout,
-                depsJsonFails: true,
-              ),
-            );
-
-            expect(run.code, ExitCodes.refused);
-            expect(
-              (run.report['problems'] as List).map((p) => (p as Map)['code']),
-              contains('RK-PUB-008'),
-            );
-            expect(run.text, contains('leaf (from git)'));
           },
         );
       });
@@ -1796,10 +1328,32 @@ path = "dart/packages/keybay"
 publish = ["git-tag", "pub.dev"]
 ''';
 
-      test('are refused by a standalone Dart before Pub runs', () async {
+      // keybay itself develops with Flutter here.
+      final flutterKeybay = {
+        ...workspace,
+        'dart/packages/keybay/pubspec.yaml':
+            '${workspace['dart/packages/keybay/pubspec.yaml']}'
+            'dev_dependencies:\n'
+            '  flutter_test:\n'
+            '    sdk: flutter\n',
+      };
+
+      test('leave a Dart package to a standalone Dart', () async {
+        // The stage resolves keybay apart from the workspace, so app's
+        // Flutter never reaches it.
         final run = await release(
           config: config,
           sourceFiles: workspace,
+          compiler: dart(file('dart-sdk/bin/dart')),
+        );
+
+        expect(run.code, ExitCodes.ok, reason: run.text);
+      });
+
+      test('are refused by a standalone Dart before Pub runs', () async {
+        final run = await release(
+          config: config,
+          sourceFiles: flutterKeybay,
           compiler: dart(file('dart-sdk/bin/dart')),
         );
 
@@ -1812,61 +1366,13 @@ publish = ["git-tag", "pub.dev"]
         expect(run.calls.where((c) => c.startsWith('dart pub')), isEmpty);
       });
 
-      test(
-        'are refused from the graph when rk cannot read the workspace',
-        () async {
-          // An anchor keeps rk from reading the workspace, so the early check
-          // cannot see the Flutter member; Pub's graph still shows Flutter.
-          final run = await release(
-            config: config,
-            sourceFiles: {
-              ...workspace,
-              'dart/pubspec.yaml': '${workspace['dart/pubspec.yaml']}x: &a 1\n',
-            },
-            compiler: dart(file('dart-sdk/bin/dart')),
-            results: {
-              'dart pub deps --json': workspaceDeps(
-                {
-                  'dart_workspace': (direct: [], overrides: []),
-                  'keybay': (direct: [], overrides: []),
-                  'app': (direct: ['flutter'], overrides: []),
-                },
-                hosted: {'flutter': []},
-                sources: {'flutter': 'sdk'},
-              ),
-            },
-          );
-
-          expect(run.code, ExitCodes.refused);
-          expect(
-            (run.report['problems'] as List).map((p) => (p as Map)['code']),
-            contains('RK-PUB-014'),
-          );
-          expect(
-            run.calls.where((c) => c.startsWith('dart pub publish')),
-            isEmpty,
-          );
-        },
-      );
-
       test("are staged and published with a Flutter SDK's Dart", () async {
         file('flutter/bin/flutter');
         file('flutter/bin/cache/dart-sdk/bin/dart');
         final run = await release(
           config: config,
-          sourceFiles: workspace,
+          sourceFiles: flutterKeybay,
           compiler: dart(file('flutter/bin/dart')),
-          results: {
-            'dart pub deps --json': workspaceDeps(
-              {
-                'dart_workspace': (direct: [], overrides: []),
-                'keybay': (direct: [], overrides: []),
-                'app': (direct: ['flutter'], overrides: []),
-              },
-              hosted: {'flutter': []},
-              sources: {'flutter': 'sdk'},
-            ),
-          },
         );
 
         expect(run.code, ExitCodes.ok, reason: run.text);

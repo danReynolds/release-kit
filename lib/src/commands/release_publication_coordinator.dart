@@ -6,7 +6,6 @@ import '../engine/dependency_graph.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
 import '../engine/inspect.dart';
-import '../engine/native_publication.dart';
 import '../engine/publish_target.dart';
 import '../engine/public_release_gate.dart';
 import '../engine/release_stage.dart';
@@ -50,9 +49,7 @@ final class PublicationPlan {
     required this.stage,
     required this.recoversWithoutStage,
     this.preparedNoop = false,
-    Map<String, NativePublicationCheck> nativeChecks = const {},
-  }) : nativeChecks = Map.unmodifiable(nativeChecks),
-       steps = List.unmodifiable(steps),
+  }) : steps = List.unmodifiable(steps),
        publicSteps = List.unmodifiable(publicSteps),
        targets = List.unmodifiable(targets),
        states = Map.of(states),
@@ -72,7 +69,6 @@ final class PublicationPlan {
 
   /// Preparation proved every public target exact; this plan cannot gain work.
   final bool preparedNoop;
-  final Map<String, NativePublicationCheck> nativeChecks;
 }
 
 /// What one yes, asked before a repository release's first unit acted,
@@ -1027,7 +1023,7 @@ final class ReleasePublicationCoordinator {
     }
     // Re-read synchronous identities, endpoints and bytes after the last await.
     // Artifact digests are reused only while file metadata remains unchanged.
-    // No native discovery or public dependency solving is repeated here.
+    // No dependency resolution is repeated here.
     _reviewedScopeGit = currentGit;
     return _repositoryInputsStillValid();
   }
@@ -1281,7 +1277,6 @@ final class ReleasePublicationCoordinator {
             stage: stage,
             recoversWithoutStage: recoversWithoutStage,
             recoveryBinding: recoveryBindings[step.id],
-            nativeCheck: plan.nativeChecks[step.id],
             signing: prepared.signing,
           );
         }
@@ -1406,7 +1401,6 @@ final class ReleasePublicationCoordinator {
     required bool recoversWithoutStage,
     required String? recoveryBinding,
     ReleaseSigningContext? signing,
-    NativePublicationCheck? nativeCheck,
   }) async {
     final module = inspector.targets.moduleForTarget(target);
     releaseProgress.begin(target, CommonProgressActivities.checking);
@@ -1501,57 +1495,6 @@ final class ReleasePublicationCoordinator {
         return _PublicTargetCompletion.failed(
           step,
           _PublicationFailure.reported(step),
-        );
-      }
-    }
-
-    if (nativeCheck != null) {
-      final NativePublicationOutcome outcome;
-      try {
-        outcome = await nativeCheck.verify();
-      } on Object catch (error) {
-        releaseProgress.fail(
-          target,
-          activity: CommonProgressActivities.checking,
-        );
-        return _PublicTargetCompletion.failed(
-          step,
-          _PublicationFailure(
-            step: step,
-            diagnostics: [
-              Diagnostic(
-                code: 'RK-REL-001',
-                message:
-                    '${step.summary}: native public dependency verification failed',
-                remedy:
-                    'restore readable public dependencies and re-run; no upload was attempted for this target',
-                evidence: '$error',
-              ),
-            ],
-            halt: output.report.acted
-                ? HaltKind.stoppedPartway
-                : HaltKind.beforeActing,
-          ),
-        );
-      }
-      output.report.attach(
-        'native-publication/${step.id}',
-        CanonicalJson.encode(outcome.evidence),
-      );
-      if (outcome case NativePublicationBlocked(:final diagnostic)) {
-        releaseProgress.fail(
-          target,
-          activity: CommonProgressActivities.checking,
-        );
-        return _PublicTargetCompletion.failed(
-          step,
-          _PublicationFailure(
-            step: step,
-            diagnostics: [diagnostic],
-            halt: output.report.acted
-                ? HaltKind.stoppedPartway
-                : HaltKind.beforeActing,
-          ),
         );
       }
     }
