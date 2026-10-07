@@ -113,7 +113,10 @@ publish = ["git-tag"]
       expect(timed.stderr, contains('Timings'));
       expect(timed.stderr, contains('preparing'));
       expect(timed.stderr, contains('Total'));
-      expect(timed.stderr, contains('rk: wrote timings to .rk/timings.json'));
+      expect(
+        timed.stderr,
+        matches(RegExp(r'rk: wrote timings to /\S+/\.rk/timings\.json')),
+      );
 
       final trace = jsonDecode(traceFile.readAsStringSync()) as Map;
       final slices = (trace['traceEvents'] as List).where(
@@ -133,6 +136,16 @@ publish = ["git-tag"]
       // The trace is rk's own, so the next run finds nothing uncommitted.
       final again = repo(['stage', '--json']);
       expect(again.code, 0, reason: again.all);
+
+      // And it is written only as a plain file in rk's own directory, never
+      // through a link that could point outside the repository.
+      final outside = File('${scratch.path}/outside.json');
+      traceFile.deleteSync();
+      Link(traceFile.path).createSync(outside.path);
+      final linked = repo(['stage', '--json', '--timings']);
+      expect(linked.code, 0, reason: linked.all);
+      expect(linked.stderr, contains('did not write timings'));
+      expect(outside.existsSync(), isFalse);
     },
     timeout: const Timeout(Duration(minutes: 2)),
   );

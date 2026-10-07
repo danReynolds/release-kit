@@ -109,9 +109,10 @@ final class RunTimeline {
     ].join(' · ');
   }
 
-  /// The `--timings` breakdown: each phase, then each row that ran during
-  /// it, under the board that showed it. Every row is listed, however fast,
-  /// in the words the run already used.
+  /// The `--timings` breakdown: each phase, then each row that started in
+  /// it, under the board that showed it. A row cut off when the run stopped
+  /// ends after its phase did, and still belongs to it. Every row is listed,
+  /// however fast, in the words the run already used.
   String breakdown() {
     endPhase();
     final out = StringBuffer('Timings\n');
@@ -120,13 +121,13 @@ final class RunTimeline {
       _writeTimed(out, phase.name, _work(phase.start, phase.end!), depth: 1);
       final inside = [
         for (final row in unplaced)
-          if (row.start >= phase.start && row.end <= phase.end!) row,
+          if (row.start >= phase.start && row.start < phase.end!) row,
       ];
       unplaced.removeWhere(inside.contains);
       _writeRows(out, inside, depth: 2);
     }
     if (unplaced.isNotEmpty) {
-      out.writeln('  across phases');
+      out.writeln('  after the last phase');
       _writeRows(out, unplaced, depth: 2);
     }
     final waited = this.waited;

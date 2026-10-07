@@ -93,6 +93,10 @@ so quick steps can still be told apart. The same run is written to
 person marked where they fell. The file is rk's own, under `.rk/`, so the
 next release does not find it uncommitted, and an earlier run's trace is
 removed first, so a trace that could not be written is missing, not stale.
+As with the stage store, it is written only into a `.rk` that is a real
+directory and never through a link, which could point outside the
+repository. A row cut off when the run stopped is listed under the phase it
+started in.
 
 The `--json` report's optional `took_ms` stays unfilled. Progress rows do not
 map onto report steps: staging rows are per artifact, not per build or
@@ -115,9 +119,11 @@ boundaries:
 - command phases: inspect, restore, eligibility, bind, prepare;
 - stage verification, where a stage is actually read;
 - subprocesses run through `Tools.run`, `timedRunSync` and the git source
-  tree, named by executable and leading arguments less absolute paths, so a
-  repeated command is one count (not yet: `runInteractive`, `GitState`'s own
-  reads, and the macOS launcher compiler);
+  tree, named by the executable and the leading arguments that say what it
+  does, up to the first that looks like data (a path, a ref, a
+  `commit:path`), so every `git show <commit>:<path>` is one `git show`
+  count (not yet: `runInteractive`, `GitState`'s own reads, and the macOS
+  launcher compiler);
 - tallies for work too frequent to be a span: digests (with bytes), receipt
   parsing, canonical JSON, stage fingerprints, and stage inspections answered
   from memory.

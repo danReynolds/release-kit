@@ -218,13 +218,21 @@ final class _Span {
       '${(duration.inMicroseconds / 1e6).toStringAsFixed(3)}s';
 }
 
-/// A subprocess's tally name: its executable and first few arguments, less
-/// the absolute paths that differ from one call to the next, so a command
-/// run a hundred times is one line counted a hundred times.
-String processTally(String executable, List<String> arguments) => [
-  executable,
-  ...arguments.where((argument) => !argument.startsWith('/')).take(4),
-].join(' ');
+/// A subprocess's tally name: its executable's name and the leading
+/// arguments that say what it does, up to the first that looks like data —
+/// a path, a ref, a `commit:path`, a `key=value` — which differs from one call
+/// to the next. A command run a hundred times is one line counted a hundred
+/// times: every `git show <commit>:<path>` is `git show`.
+String processTally(String executable, List<String> arguments) {
+  final words = [executable.split('/').last];
+  for (final argument in arguments.take(4)) {
+    if (argument.contains(_data)) break;
+    words.add(argument);
+  }
+  return words.join(' ');
+}
+
+final _data = RegExp('[/:=@]');
 
 /// [Process.runSync], tallied by [processTally].
 ProcessResult timedRunSync(

@@ -447,18 +447,35 @@ void _reportTimings(
       GitSourceTree.findRoot(Directory.current.path) ??
       Directory.current.absolute.path;
   if (!File('$root/release.toml').existsSync()) return;
-  final trace = File('$root/.rk/timings.json');
+  final directory = '$root/.rk';
+  final trace = '$directory/timings.json';
+  // As the stage store does, rk writes only into a .rk that is a real
+  // directory, and never through a link: either could point outside the
+  // repository.
+  final unsafe = switch ((
+    FileSystemEntity.typeSync(directory, followLinks: false),
+    FileSystemEntity.typeSync(trace, followLinks: false),
+  )) {
+    (FileSystemEntityType.notFound, _) => null,
+    (FileSystemEntityType.directory, FileSystemEntityType.notFound) => null,
+    (FileSystemEntityType.directory, FileSystemEntityType.file) => null,
+    (FileSystemEntityType.directory, _) => trace,
+    _ => directory,
+  };
+  if (unsafe != null) {
+    stderr.writeln('rk: did not write timings: $unsafe is not rk\'s own');
+    return;
+  }
   try {
     // An earlier run's trace never answers for this one: it goes first, so
     // a write that fails leaves no trace rather than a stale one.
-    if (trace.existsSync()) trace.deleteSync();
-    trace.parent.createSync(recursive: true);
-    trace.writeAsStringSync(output.timeline.traceJson());
-    stderr.writeln('rk: wrote timings to .rk/timings.json');
+    final file = File(trace);
+    if (file.existsSync()) file.deleteSync();
+    file.parent.createSync(recursive: true);
+    file.writeAsStringSync(output.timeline.traceJson());
+    stderr.writeln('rk: wrote timings to $trace');
   } on FileSystemException catch (error) {
-    stderr.writeln(
-      'rk: could not write timings to .rk/timings.json: ${error.message}',
-    );
+    stderr.writeln('rk: could not write timings to $trace: ${error.message}');
   }
 }
 

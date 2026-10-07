@@ -96,11 +96,17 @@ void main() {
   test('a command run again and again is one tally', () {
     expect(
       processTally('/sdk/bin/dart', ['/tmp/rk-dart-sdk-AbC/sdk.dart']),
-      processTally('/sdk/bin/dart', ['/tmp/rk-dart-sdk-XyZ/sdk.dart']),
+      'dart',
     );
     expect(
       processTally('git', ['show', 'HEAD:pubspec.yaml']),
-      'git show HEAD:pubspec.yaml',
+      processTally('git', ['show', 'HEAD:packages/core/pubspec.yaml']),
+    );
+    expect(processTally('git', ['show', 'HEAD:a']), 'git show');
+    expect(processTally('/sdk/bin/dart', ['--version']), 'dart --version');
+    expect(
+      processTally('git', ['ls-remote', 'origin', 'refs/tags/v1']),
+      'git ls-remote origin',
     );
   });
 

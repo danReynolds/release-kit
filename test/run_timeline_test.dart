@@ -120,6 +120,28 @@ void main() {
     expect(lines.last, 'Total 1m 41s');
   });
 
+  test('a row cut off when the run stopped stays under its phase', () {
+    final timeline = RunTimeline(clock)..phase('preparing');
+    now += const Duration(seconds: 1);
+    // The row begins here, and the command ends its phase a second later as
+    // it unwinds; the board that still shows the row is taken down after.
+    now += const Duration(seconds: 1);
+    timeline.endPhase();
+    now += const Duration(seconds: 2);
+    timeline.rowSettled(
+      board: 'tool 1.2.3 · preparing release',
+      id: 'tag',
+      subject: 'Git tag',
+      note: 'unfinished',
+      took: const Duration(seconds: 3),
+    );
+
+    final lines = timeline.breakdown().split('\n');
+    final phase = lines.indexWhere((line) => line.startsWith('  preparing'));
+    expect(lines[phase + 2], contains('Git tag  unfinished'));
+    expect(lines, isNot(contains('  after the last phase')));
+  });
+
   test('tenths round down, as the terminal format does', () {
     final timeline = RunTimeline(clock)..phase('staging');
     rowRan(
