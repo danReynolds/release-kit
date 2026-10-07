@@ -72,15 +72,10 @@ final class StageSourceSnapshot implements SourceTree {
       }
       files[path] = Uint8List.fromList(bytes).asUnmodifiableView();
     }
-    return StageSourceSnapshot._(
-      source.description,
-      Map.unmodifiable(files),
-      {
-        for (final path in paths)
-          if (entries[path]?.executable == true) path,
-      },
-      git?.commit,
-    );
+    return StageSourceSnapshot._(source.description, Map.unmodifiable(files), {
+      for (final path in paths)
+        if (entries[path]?.executable == true) path,
+    }, git?.commit);
   }
 
   @override

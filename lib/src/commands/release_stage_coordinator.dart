@@ -510,9 +510,7 @@ final class ReleaseStageCoordinator {
           );
         }
         try {
-          record(
-            _captureProducerStep(stage, step, progress, act),
-          );
+          record(_captureProducerStep(stage, step, progress, act));
           return _StageWorkCompletion.succeeded(receiptName);
         } on Object catch (error) {
           stageProgress.fail(receiptName);
