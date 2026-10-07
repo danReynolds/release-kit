@@ -77,17 +77,12 @@ Successful stage-only and local-only releases include `stage id` and
 the repository root. These storage details stay out of the human success
 summary; `next[]` contains the publish command when publication is configured.
 
-Status uses read-only intent lookup to recognize a saved dependency-bound stage.
-Its `completeStage` evidence includes the actual `stage id`, `stage path`, and
-`native authorization: "not performed by status"`. A recognized native-bound
-stage also reports `native public readiness: "not performed by status"` and
-suppresses source-only prerequisite guesses. An exact local stage verdict
-means the current source/producer contracts and recorded bytes validate locally;
-stage or release must still authorize the frozen native dependency graph before
-adopting it. Status performs no dependency solve, input recovery, producer work,
-index write or resolver adoption. An incomplete saved stage reports only its
-recorded local progress. Ambiguous or unreadable saved work is reported as a
-problem, never as permission to solve again.
+Status reads the saved stage for the current source, if any. Its
+`completeStage` evidence includes the actual `stage id` and `stage path`. An
+exact local stage verdict means the current source/producer contracts and
+recorded bytes validate locally. Status performs no dependency resolution or
+producer work. An incomplete saved stage reports only its recorded local
+progress.
 
 ## Release plan
 
@@ -122,12 +117,12 @@ an optional configured `candidate`, and `resolution`. A candidate has native
 its native `context`, owning configured root `owner`, installation `slot`,
 immediate declaring `consumer`, `package`, opaque
 `constraint`, native `kind`, manifest `location`, and applicable `phases`.
-`resolution` is `candidate_requires_native_validation` or
-`native_resolution_required`. Neither is proof of an available registry version
-or staged artifact. An incompatible local candidate leaves hosted resolution
-pending; it does not force the dependent package to change version. Development
-requirements do not become publication edges. Native discovery may add
-transitive requirements when an acting command prepares the scope.
+`resolution` is `repository` when the candidate is taken from this
+repository's source while staging, its version satisfying every requirement on
+it, or `registry` when Pub resolves the requirement from its registry. Neither
+is proof that a registry version is available. An incompatible local candidate
+leaves the requirement to the registry; it does not force the dependent package
+to change version. Development requirements do not become publication edges.
 
 Node ids and `needs[]` are the machine graph. `lane`, when present, is an
 opaque equality key scoped to one unit and phase: nodes with the same key are
@@ -187,13 +182,8 @@ remains the shared status/release observation. Native login is not a target
 action. A pub.dev action is `completed` only after publish and exact public
 read-back; an idempotent retry records `already_published`.
 
-The native publication gate runs before `attempted`. Missing or different exact
-provider archives, or a failed fresh prospective-consumer resolution, report
-`RK-PUB-018` while the package target remains `not_attempted`. The
-`native-publication/<step-id>` attachment contains transient public-check
-evidence; it never replaces the frozen receipt or private dependency choices.
-The actual public runtime order can differ from source-only `plan` candidate
-edges and from private development/build dependencies.
+Packages publish in source dependency order, providers first; development
+dependencies never order publication.
 
 `verdict` is one of, frozen:
 

@@ -11,18 +11,15 @@ import '../../engine/stage_inspection.dart';
 import '../../engine/stage_receipt.dart';
 import '../../engine/targets.dart';
 import '../../engine/tools.dart';
-import '../../native/dart/package_archive.dart';
-import '../../native/dart/stage_context.dart';
-import '../../native/dart/stage_preparation.dart';
-import '../../native/package_archive.dart';
 import '../../output/progress.dart';
 import '../target_module.dart';
 import 'resolution.dart';
 
 /// Pub's native package archive contribution to the reusable release stage.
 ///
-/// Packaging, override detection, diagnostics, and the receipt contract stay
-/// together because they describe one private input to the pub.dev lifecycle.
+/// Packaging, how Pub resolves the package, diagnostics, and the receipt
+/// contract stay together because they describe one private input to the
+/// pub.dev lifecycle.
 TargetStage pubDevPackageStage({
   required TargetPlan target,
   required ResolvedUnit unit,
@@ -50,9 +47,7 @@ TargetStage pubDevPackageStage({
     contract: contract,
     planLabel: 'package archive',
     progress: [TargetStageProgress.row(id: 'source', label: 'package archive')],
-    prepare: (context) => _prepareStage(context, target.project!, {
-      for (final project in unit.projects) project.name,
-    }),
+    prepare: (context) => _prepareStage(context, target.project!),
   );
 }
 
@@ -73,17 +68,10 @@ StageArtifact requirePubArchive(ReleaseStage stage, ResolvedProject project) {
 Future<TargetStageOutcome> _prepareStage(
   TargetStageContext context,
   ResolvedProject project,
-  Set<String> releasedWith,
 ) async {
   final receiptName = context.contract.step.name;
   context.progress('source').begin(CommonProgressActivities.validating);
-  Map<String, Object?>? nativeResolution;
-  final validation = await _packageArchive(
-    context,
-    project,
-    releasedWith,
-    onResolution: (graph) => nativeResolution = graph,
-  );
+  final validation = await _packageArchive(context, project);
   if (validation.diagnostic case final diagnostic?) {
     return TargetStageFailure(diagnostic, unit: project.unitName);
   }
@@ -100,23 +88,17 @@ Future<TargetStageOutcome> _prepareStage(
           type: 'pub-archive',
         ),
       ],
-      evidence: {
-        'package_archive': 'staged',
-        if (nativeResolution != null) 'native_resolution': nativeResolution,
-      },
+      evidence: const {'package_archive': 'staged'},
     ),
     warnings: validation.warnings,
   );
 }
 
-/// Stages [project]'s Pub archive. [releasedWith] names the packages its
-/// unit releases, itself included.
+/// Stages [project]'s Pub archive.
 Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
   TargetStageContext context,
   ResolvedProject project,
-  Set<String> releasedWith, {
-  required void Function(Map<String, Object?> graph) onResolution,
-}) async {
+) async {
   final archivePath = ReleaseAssets.pubArchivePath(project);
   void requireAbsentDestination() {
     final destination = context.stage.directory.resolve(archivePath);
@@ -136,13 +118,7 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
   try {
     final archive = File(_join(scratch.path, StagePath.segments(archivePath)));
     archive.parent.createSync(recursive: true);
-    final result = await _packageArchiveTo(
-      context,
-      project,
-      releasedWith,
-      archive: archive,
-      onResolution: onResolution,
-    );
+    final result = await _packageArchiveTo(context, project, archive: archive);
     if (result.diagnostic == null) {
       requireAbsentDestination();
       if (FileSystemEntity.typeSync(archive.path, followLinks: false) !=
@@ -162,27 +138,34 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchive(
 
 Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
   TargetStageContext context,
-  ResolvedProject project,
-  Set<String> releasedWith, {
+  ResolvedProject project, {
   required File archive,
-  required void Function(Map<String, Object?> graph) onResolution,
 }) async {
   final sourceRoot = context.stage.sourceRoot;
-  final sourceDirectory = project.pubspec.directory == '.'
-      ? sourceRoot
-      : '$sourceRoot/${project.pubspec.directory}';
+  String inSource(String directory) =>
+      directory == '.' ? sourceRoot : '$sourceRoot/$directory';
+  final sourceDirectory = inSource(project.pubspec.directory);
 
-  // What rk reads of the workspace names where overrides are declared and
-  // finds Flutter packages early. It does not decide what is overridden: Pub
-  // does, below, from the snapshot it validates.
-  final packages = resolutionPackages(sourceRoot, sourceDirectory).packages;
+  // The repository packages Pub takes from this source, by name with their
+  // directories: those the release plan names (see
+  // [TargetStageContext.fromSource]), and members of the package's
+  // workspace that only its development needs.
+  final members =
+      resolutionPackages(sourceRoot, sourceDirectory).packages ?? const {};
+  final fromSource = {
+    for (final MapEntry(key: name, value: directory)
+        in context.fromSource.entries)
+      name: inSource(directory),
+    for (final name in developmentMembers(members, project.name))
+      name: members[name]!,
+  }..remove(project.name);
 
-  // A Flutter package, or any package resolved with one in its workspace,
-  // needs a Flutter SDK's Dart, whose pub finds its own Flutter. The Dart rk
-  // identified for this stage is the one that packages and publishes; a
-  // standalone one would depend on an ambient FLUTTER_ROOT the stage does
-  // not record.
-  if (packages != null && needsFlutter(packages.values)) {
+  // A Flutter package, or one that takes a Flutter package from this
+  // source, needs a Flutter SDK's Dart, whose pub finds its own Flutter.
+  // The Dart rk identified for this stage is the one that packages and
+  // publishes; a standalone one would depend on an ambient FLUTTER_ROOT the
+  // stage does not record.
+  if (needsFlutter([sourceDirectory, ...fromSource.values])) {
     final dart = context.stage.compiler?.executable;
     if (dart != null && !dartInFlutterSdk(dart)) {
       return (
@@ -191,122 +174,69 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
       );
     }
   }
-  final declared = packages == null
-      ? const <DependencyOverride>[]
-      : dependencyOverrides(sourceRoot, packages);
 
   final archivePath = ReleaseAssets.pubArchivePath(project);
-  final frozen = DartStagePreparation.contextFor(
-    context.stage,
-    project,
-    DartStageOperation.pubArchive,
-    context.contract.step.name,
-  );
-  Directory? workspace;
   Directory? consumer;
-  DartStagePreparation? native;
   late final ToolResult packaged;
   late final String resolvedAs;
   try {
-    if (frozen != null) {
-      native = await DartStagePreparation.open(
-        stage: context.stage,
-        project: project,
-        context: frozen,
-        producer: context.contract.step.name,
-        tools: context.tools,
-      );
-      packaged = await native.replay.run([
-        'pub',
-        'publish',
-        '--to-archive',
-        archive.path,
-      ]);
-      if (archive.existsSync()) {
-        DartPackageManifest.fromArchive(
-          await NativePackageArchive.read(archive),
-        ).requireSameManifest(frozen.root);
-      }
-      onResolution(native.replay.graph.toJson());
-      resolvedAs =
-          'Pub validated ${project.name} using the exact receipt-bound '
-          'dependency archives, with original requirements and registry identities.';
-    } else {
-      workspace = _mirrorSourceSnapshot(context);
-      // Records left in the snapshot are not Pub's answer for it, and a
-      // lockfile holds versions its consumers do not get.
-      _removePubRecords(_join(workspace.path, const ['source']));
-      final checked = await _checkWorkspace(
-        context,
-        project,
-        _packageDirectory(workspace, project),
-        declared,
-        releasedWith,
-      );
-      if (checked.diagnostic case final diagnostic?) {
-        return (diagnostic: diagnostic, warnings: const <Diagnostic>[]);
-      }
-
-      // Pub validates against the versions it resolves, so it resolves the
-      // package the way its consumers do, in a second mirror: as a root of its
-      // own, from its own pubspec, with no lockfile and no dependency override
-      // but the workspace packages its consumers cannot take from pub.dev yet
-      // (see [snapshotPackages]). The rest of the workspace constrains only
-      // local resolutions. Pub leaves overrides files out of archives, so the
-      // one written here does not change what is published.
-      consumer = _mirrorSourceSnapshot(context);
-      final directory = _packageDirectory(consumer, project);
-      _removePubRecords(_join(consumer.path, const ['source']));
-      File(
-        _join(directory, const ['pubspec_overrides.yaml']),
-      ).writeAsStringSync(
-        consumerOverrides(
-          checked.fromSnapshot,
-          inWorkspace: checked.inWorkspace,
+    // Pub validates against the versions it resolves, so it resolves the
+    // package the way its consumers do, in a mirror of the snapshot: as a
+    // root of its own, from its own pubspec, with no lockfile and no
+    // dependency override but the repository packages it takes from this
+    // source. Pub leaves overrides files out of archives, so the one
+    // written here does not change what is published.
+    consumer = _mirrorSourceSnapshot(context);
+    final directory = _packageDirectory(consumer, project);
+    // Records left in the snapshot are not Pub's answer for it, and a
+    // lockfile holds versions its consumers do not get.
+    _removePubRecords(_join(consumer.path, const ['source']));
+    final here = _canonical(sourceDirectory);
+    File(_join(directory, const ['pubspec_overrides.yaml'])).writeAsStringSync(
+      consumerOverrides({
+        for (final MapEntry(key: name, value: path) in fromSource.entries)
+          name: _relativePath(here, _canonical(path)),
+      }, inWorkspace: inWorkspace(sourceDirectory)),
+    );
+    final get = await context.tools.run(
+      'dart',
+      const ['pub', 'get', '--no-example'],
+      workingDirectory: directory,
+      environment: const {'PUB_SUMMARY_ONLY': '0'},
+    );
+    final report = '${get.stdout}\n${get.stderr}'.trim();
+    final unexpected = reportedOverrides(
+      report,
+    ).difference(fromSource.keys.toSet());
+    if (!get.ok || unexpected.isNotEmpty) {
+      return (
+        diagnostic: _consumerDiagnostic(
+          project.name,
+          !get.ok
+              ? 'dart pub get failed: ${_firstLine(get.stderr)}'
+              : 'Pub applied overrides rk did not write: '
+                    '${unexpected.join(', ')}',
+          report,
         ),
+        warnings: const <Diagnostic>[],
       );
-      final get = await context.tools.run(
-        'dart',
-        const ['pub', 'get', '--no-example'],
-        workingDirectory: directory,
-        environment: const {'PUB_SUMMARY_ONLY': '0'},
-      );
-      final report = '${get.stdout}\n${get.stderr}'.trim();
-      final unexpected = reportedOverrides(
-        report,
-      ).difference(checked.fromSnapshot.keys.toSet());
-      if (!get.ok || unexpected.isNotEmpty) {
-        return (
-          diagnostic: _consumerDiagnostic(
-            project.name,
-            !get.ok
-                ? 'dart pub get failed: ${_firstLine(get.stderr)}'
-                : 'Pub applied overrides rk did not write: '
-                      '${unexpected.join(', ')}',
-            report,
-          ),
-          warnings: const <Diagnostic>[],
-        );
-      }
-      final names = checked.fromSnapshot.keys.toList()..sort();
-      final taken = names.isEmpty
-          ? ''
-          : ' but ${names.join(', ')} from this snapshot, in the '
-                'pubspec_overrides.yaml rk wrote';
-      resolvedAs =
-          'Pub validated ${project.name} the way its consumers resolve it: as '
-          'a root of its own, with no lockfile and no dependency override'
-          '$taken.';
-      packaged = await context.tools.run('dart', [
-        'pub',
-        'publish',
-        '--to-archive',
-        archive.path,
-      ], workingDirectory: directory);
     }
+    final names = fromSource.keys.toList()..sort();
+    final taken = names.isEmpty
+        ? ''
+        : ' but ${names.join(', ')} from this source, in the '
+              'pubspec_overrides.yaml rk wrote';
+    resolvedAs =
+        'Pub validated ${project.name} the way its consumers resolve it: as '
+        'a root of its own, with no lockfile and no dependency override'
+        '$taken.';
+    packaged = await context.tools.run('dart', [
+      'pub',
+      'publish',
+      '--to-archive',
+      archive.path,
+    ], workingDirectory: directory);
   } finally {
-    native?.close();
-    workspace?.deleteSync(recursive: true);
     consumer?.deleteSync(recursive: true);
   }
   final validation = '${packaged.stdout}\n${packaged.stderr}'.trim();
@@ -393,150 +323,6 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
           evidence: warning.contains('\n') ? warning : null,
         ),
     ],
-  );
-}
-
-/// What resolving the workspace's mirror decides: a refusal, or the
-/// workspace packages the consumer resolution takes from the snapshot, by
-/// name with their paths relative to the staged package, and whether that
-/// package is part of a workspace at all.
-typedef _WorkspaceCheck = ({
-  Diagnostic? diagnostic,
-  Map<String, String> fromSnapshot,
-  bool inWorkspace,
-});
-
-/// Resolves the workspace at [directory], the staged package's directory in
-/// a mirror of the snapshot, and refuses what reaches the package's
-/// consumers from it: overrides, and packages from a path or Git.
-Future<_WorkspaceCheck> _checkWorkspace(
-  TargetStageContext context,
-  ResolvedProject project,
-  String directory,
-  List<DependencyOverride> declared,
-  Set<String> releasedWith,
-) async {
-  _WorkspaceCheck refuse(Diagnostic diagnostic) =>
-      (diagnostic: diagnostic, fromSnapshot: const {}, inWorkspace: false);
-
-  // Pub honours dependency overrides where it resolves and strips them
-  // from the published archive, so Pub decides what is overridden: its
-  // compact report lists what it read from every package's declarations,
-  // `pub get` reports each override it applied, and its lockfile marks them
-  // too.
-  final get = await context.tools.run(
-    'dart',
-    const ['pub', 'get', '--no-example'],
-    workingDirectory: directory,
-    environment: const {'PUB_SUMMARY_ONLY': '0'},
-  );
-  final deps = get.ok
-      ? await context.tools.run('dart', const [
-          'pub',
-          'deps',
-          '--json',
-        ], workingDirectory: directory)
-      : get;
-  final compact = get.ok
-      ? await context.tools.run('dart', const [
-          'pub',
-          'deps',
-          '--style=compact',
-        ], workingDirectory: directory)
-      : get;
-  final root = get.ok ? resolvedRoot(directory) : null;
-  // `pub deps --json` fails in one layout Pub resolves (see
-  // [recordedGraph]); `pub get` recorded the same graph.
-  final graph = deps.ok
-      ? deps.stdout
-      : root == null
-      ? null
-      : recordedGraph(root);
-  final reached = graph == null
-      ? null
-      : runtimeDependencies(graph, project.name);
-  final unhosted = reached == null
-      ? null
-      : unhostedDependencies(graph!, reached);
-  final flutter = graph == null ? null : usesFlutter(graph);
-  final members = graph == null ? null : workspacePackages(graph);
-  final siblings = graph == null
-      ? null
-      : snapshotPackages(graph, project.name, releasedWith);
-  final overridden = root == null ? null : overriddenPackages(root);
-  final directories = root == null ? null : packageDirectories(root);
-  final String? unknown = !get.ok
-      ? 'dart pub get failed: ${_firstLine(get.stderr)}'
-      : graph == null && !deps.ok
-      ? 'dart pub deps failed: ${_firstLine(deps.stderr)}'
-      : !compact.ok
-      ? 'dart pub deps failed: ${_firstLine(compact.stderr)}'
-      : reached == null ||
-            unhosted == null ||
-            flutter == null ||
-            members == null ||
-            siblings == null
-      ? 'dart pub deps did not print a dependency graph rk reads'
-      : root == null
-      ? 'Pub left no record of where it resolved ${project.name}'
-      : overridden == null
-      ? 'rk cannot read the lockfile Pub wrote'
-      : directories == null || !siblings.every(directories.containsKey)
-      ? 'rk cannot read the package configuration Pub wrote'
-      : null;
-  if (unknown != null) {
-    return refuse(_unresolvedDiagnostic(project.name, unknown));
-  }
-  // Resolved with Flutter packages rk's reading did not see.
-  if (flutter!) {
-    final dart = context.stage.compiler?.executable;
-    if (dart != null && !dartInFlutterSdk(dart)) {
-      return refuse(_flutterDiagnostic(project.name, dart));
-    }
-  }
-  String declaredIn(String package) =>
-      declared.where((o) => o.package == package).firstOrNull?.declaredIn ??
-      declared
-          .where((o) => o.package == everyPackage)
-          .firstOrNull
-          ?.declaredIn ??
-      'an override Pub applied, which rk did not find declared';
-  final all = {
-    ...declaredOverrides(compact.stdout),
-    ...reportedOverrides('${get.stdout}\n${get.stderr}'),
-    ...overridden!,
-    for (final o in declared)
-      if (o.package != everyPackage) o.package,
-  };
-  final masking = [
-    for (final name in all)
-      if (name == project.name || reached!.contains(name))
-        (package: name, declaredIn: declaredIn(name)),
-  ];
-  if (masking.isNotEmpty) {
-    return refuse(_maskingDiagnostic(project.name, masking));
-  }
-  // A reached package from a path or Git source is refused whatever
-  // declared it: consumers can only receive hosted and SDK packages.
-  if (unhosted!.isNotEmpty) {
-    return refuse(_unhostedDiagnostic(project.name, unhosted));
-  }
-  if (all.isNotEmpty) {
-    context.attach(
-      'pub-overrides-${project.name}.txt',
-      'Dependency overrides that do not reach ${project.name}\'s '
-          'dependencies, so its consumers resolve what Pub validated:\n'
-          '${[for (final name in all) '  $name (${declaredIn(name)})'].join('\n')}\n',
-    );
-  }
-  final here = _canonical(directory);
-  return (
-    diagnostic: null,
-    fromSnapshot: {
-      for (final name in siblings!)
-        name: _relativePath(here, _canonical(directories![name]!)),
-    },
-    inWorkspace: members!.length > 1,
   );
 }
 
@@ -699,70 +485,6 @@ String? _gitControlAncestor(String path) {
 String _join(String root, Iterable<String> parts) =>
     [root, ...parts].join(Platform.pathSeparator);
 
-Diagnostic _maskingDiagnostic(
-  String package,
-  List<DependencyOverride> masking,
-) {
-  final where = {for (final o in masking) o.declaredIn}.join(' and ');
-  final named = {
-    for (final o in masking)
-      if (o.package != everyPackage) o.package,
-  };
-  final String remedy;
-  if (named.isEmpty) {
-    remedy =
-        '$where is honoured locally, stripped from the published archive, '
-        'and overrides packages rk cannot name. Remove it and re-stage.';
-  } else if (named.length == 1 && named.single == package) {
-    remedy =
-        '$where overrides $package itself. Pub honours that locally and '
-        'strips it from the published archive, so validation here would not '
-        'see what consumers see. Remove the override and re-stage.';
-  } else {
-    final reached = named.where((name) => name != package).toList();
-    final them = reached.length == 1 ? 'it' : 'them';
-    remedy =
-        '$package depends on ${reached.join(', ')}, overridden by $where. '
-        'Pub honours that locally and strips it from the published archive, '
-        'so validation here would not see what consumers see. Publish or '
-        'pin $them, remove the override, and re-stage.';
-  }
-  return Diagnostic(
-    code: 'RK-PUB-008',
-    message: '$package: tracked dependency overrides mask consumer resolution',
-    remedy: remedy,
-  );
-}
-
-Diagnostic _unhostedDiagnostic(String package, Map<String, String> unhosted) {
-  final names = [
-    for (final MapEntry(key: name, value: source) in unhosted.entries)
-      '$name (from $source)',
-  ];
-  return Diagnostic(
-    code: 'RK-PUB-008',
-    message: '$package: tracked dependency overrides mask consumer resolution',
-    remedy:
-        '$package depends on ${names.join(', ')}, which consumers cannot '
-        'receive: they resolve every dependency from pub.dev or the SDK. An '
-        'override or dependency somewhere in the workspace points '
-        '${unhosted.length == 1 ? 'it' : 'them'} elsewhere, so validation '
-        'here would not see what consumers see. Publish the package, remove '
-        'what points at the ${unhosted.length == 1 ? 'copy' : 'copies'}, and '
-        're-stage.',
-  );
-}
-
-Diagnostic _unresolvedDiagnostic(String package, String why) => Diagnostic(
-  code: 'RK-PUB-016',
-  message: 'rk could not resolve which packages $package reaches',
-  remedy:
-      '$why. rk resolves the staged snapshot to see which dependency '
-      'overrides reach $package, and without that it cannot tell whether '
-      'validation here matches what consumers resolve. Fix the resolution, '
-      'then re-stage.',
-);
-
 Diagnostic _consumerDiagnostic(String package, String why, String report) =>
     Diagnostic(
       code: 'RK-PUB-017',
@@ -770,10 +492,10 @@ Diagnostic _consumerDiagnostic(String package, String why, String report) =>
       remedy:
           '$why. rk validates $package against the versions its consumers '
           'get: Pub resolves it alone, from its own pubspec, with no lockfile '
-          'and no dependency overrides, and takes from pub.dev every package '
-          'that is not released with it or needed only to develop it. Make '
-          '$package resolve that way, for example by publishing what it '
-          'depends on, then re-stage.',
+          'and no dependency overrides, and takes from pub.dev everything but '
+          'the packages of this repository that are not published there yet '
+          'or that only its development needs. Make $package resolve that '
+          'way, for example by publishing what it depends on, then re-stage.',
       evidence: report.isEmpty ? null : report,
     );
 

@@ -1,9 +1,7 @@
 # Repository release contract
 
-Status: implemented and qualified. Full suites pass on Dart 3.13.5 and 3.12.2;
-actual Fleury private preparation and archive-consumer workflows pass. No public
-release was performed. See the [delivery plan](dependency-staging-plan.md) and
-[native evidence](dependency-staging-native-proof.md) for exact evidence and limits.
+Status: implemented. How packages get their dependencies while they are
+staged is described in [practical staging](practical-staging.md).
 
 ## Scope
 
@@ -19,27 +17,47 @@ rk release -y              alias of --yes
 
 There is no shared version, release group, automatic manifest edit or `--all`.
 A compatible Fleury 0.2.0 can supply an MCP 0.1.0 build without changing MCP's
-version. An incompatible local version does not replace its native requirement.
+version. An incompatible local version leaves the requirement to pub.dev.
 
-Bare staging discovers the complete selected native graph before producers run.
-Providers produce exact archives before consumers use them. A named command may
-use a current verified completed sibling stage, or ordinary hosted resolution;
-it never builds or publishes the sibling. An authorized saved consumer retains
-its frozen choices across bare/named and stage/release commands, even after a
-provider stage is cleaned. Ambiguous, corrupt or unauthorized saved choices
-refuse rather than silently solving again.
+Bare staging prepares every unit in dependency order. A named command prepares
+exactly that unit; it never builds or publishes a sibling.
+
+## Dependencies
+
+A package is staged the way its consumers will resolve it. Pub resolves it
+in a scratch mirror of the commit, as a root of its own, with no lockfile and
+through its normal cache. rk writes the mirror's `pubspec_overrides.yaml`,
+which replaces any tracked override. In a workspace it also takes the package
+out of the workspace's resolution.
+
+That file overrides only this repository's packages that cannot come from
+pub.dev yet:
+
+- a package it needs at runtime, directly or through such packages, whose
+  version here satisfies what is asked of it and is not published yet;
+- a package only its development needs, whose consumers never resolve it.
+
+Everything else comes from pub.dev. Once a version is published there, Pub
+takes it from there, as consumers do, even when this source has unreleased
+changes at that version. Pub leaves overrides files out of archives, so these
+paths never change what is published.
+
+`rk release` publishes providers before consumers. A consumer's upload waits
+until each version it needs is public. A named release whose package needs a
+version no unit in it publishes asks for that version to be published first.
+Development-only dependencies never become publication prerequisites.
 
 ## Preparation, review and publication
 
 For `core 0.2.0 -> cli 0.1.0`, a repository release:
 
 1. inspects source, public destinations, monotonicity and recovery requirements;
-2. restores or discovers selected native contexts and prepares every required
-   private stage, including the consumer against exact provider archives;
+2. prepares every required private stage, `cli` against `core`'s source from
+   the same commit;
 3. reviews all remaining targets, receipts, signing identities, first claims,
    warnings and effective endpoints;
-4. asks once, then acquires publication sessions and publishes in public
-   dependency order, checking each operation again before acting.
+4. asks once, then acquires publication sessions and publishes in dependency
+   order, checking each operation again before acting.
 
 A failure during preparation or review causes no publication session acquisition
 or public mutation. Completed private stages remain available for retry. Local
@@ -61,94 +79,43 @@ before consent, sessions and public acts. A disappeared target cannot become
 new work under the previous review. Selected local-only outputs remain under
 receipt/context checks too, without adding a publication prompt or target.
 
-## Separate native dependency projections
-
-Private preparation and public publication reuse native facts, but have distinct
-edges. Core schedules opaque provider/consumer identities; adapters own version,
-source, constraint and runtime semantics. Git tag, GitHub Release and Homebrew
-retain their target lifecycle edges.
-
-Dart publication projects original runtime requirements through the frozen
-selected manifests. A private development helper or development-only selection
-creates no public obligation. A development constraint that shadows a runtime
-package name cannot donate that selection's transitive edges to the runtime
-projection. Source-only `rk plan` shows candidates and pending native discovery;
-it is not a frozen publication solution.
-
-Immediately before a package is marked attempted, the native gate:
-
-- fetches every relevant selected first-party provider from its declared public
-  registry and verifies the exact staged archive digest and full manifest;
-- resolves a fresh external consumer with only the prospective consumer archive
-  preloaded under its original hosted identity, fetching runtime dependencies
-  publicly and excluding private helpers and workspace source mappings;
-- checks that the prospective consumer's source, version, archive and extracted
-  package remain exact, and verifies the staged providers again after the solve.
-
-A broad runtime range may select a newer compatible public dependency. That
-solution is recorded separately and cannot replace the frozen private binding.
-If it selects the staged coordinate, the archive must match. Same-version
-repacking, unavailable provider bytes, propagation lag and an unresolvable
-runtime graph stop before upload with `RK-PUB-018`; the target remains
-`not_attempted`. The existing post-publication availability warning has a
-different role and cannot substitute for this blocking gate. The coordinator
-rechecks stage/context and destination, then uploads the same staged archive.
-
-An SDK runtime branch that reaches a staged first-party provider is explicitly
-unsupported: current frozen SDK evidence lacks the original hosted constraints
-needed to prove that obligation. This is a proof limitation, not a claim that
-Pub cannot solve it. An SDK branch containing only public dependencies remains
-part of the fresh native consumer solve. Runtime path/Git substitutions remain
-unsupported.
-
 ## Ordering and recovery
 
-Preparation and publication each diagnose their actual dependency graph before
-serial unit execution. An acyclic package/producer graph that requires units to
-interleave gets an explicit regrouping refusal. Public acts are not a transaction;
-a failure preserves earlier public truth and exact saved stages.
+Preparation and publication diagnose their dependency graph before serial unit
+execution. An acyclic package/producer graph that requires units to interleave
+gets an explicit regrouping refusal. Public acts are not a transaction; a
+failure preserves earlier public truth and saved stages.
 
 A partial release with built assets, or a package-only unit with an exact
 configured Git tag, needs its original stage when remaining targets need those
-bytes (`RK-STAGE-005`). The tag is a conservative unit-progress marker, not a
-cryptographic commitment to the Pub dependency graph. One independently public
-package does not establish prior staging of its siblings: a tagless mixed
-package-only unit may prepare fresh on either command when no saved stage exists.
-Retained stages still require strict restoration, and existing public archives
-must still match any staged archive used for comparison. Unread public targets
-refuse before fresh preparation. A missing new-schema directory cannot bypass
-authenticated unit-progress or old-stage recovery requirements.
+bytes (`RK-STAGE-005`). The tag is a conservative unit-progress marker. One
+independently public package does not establish prior staging of its
+siblings: a tagless mixed package-only unit may prepare fresh on either command
+when no saved stage exists. Existing public archives must still match any
+staged archive used for comparison. Unread public targets refuse before fresh
+preparation.
 
-Fresh mixed-unit preparation uses already-public packages as hosted dependency
-inputs, while the complete-unit contract still packages all configured outputs.
-Before release, those outputs must match the exact already-public archives.
-Native tar mtimes can make a fresh archive differ despite unchanged source
-contents; in that case release refuses before consent. Preserve or restore the
-original matching stage to finish the unit. If the public package never had an
-RK stage in a fresh tagless setup, regroup it into its own fully-public unit and
-prepare the remaining members separately. Regrouping does not bypass recovery
-for an existing frozen stage or tagged unit. Provider eligibility does not waive
-this raw archive comparison or remove outputs from the complete-unit contract.
+Before release, a fresh stage's archive must match an already-public archive of
+the same package version. Native tar mtimes can make a fresh archive differ
+despite unchanged source contents; in that case release refuses before
+consent. Preserve or restore the original matching stage to finish the unit.
+If the public package never had an rk stage in a fresh tagless setup, regroup it
+into its own fully-public unit and prepare the remaining members separately.
 
 A remaining moving target may recover entirely from authenticated public inputs.
-That narrow path does no native discovery, package production or private-provider
-selection, and its recovery binding is checked again before consent and acting.
-An absent package upload is never such a recovery target. Completely public
-units need no local stage but remain covered by the no-op growth guard.
+That narrow path does no package production, and its recovery binding is
+checked again before consent and acting. An absent package upload is never such
+a recovery target. Completely public units need no local stage but remain
+covered by the no-op growth guard.
 
-## Evidence and remaining qualification
+## Evidence
 
 The existing JSON schema reports per-unit verdicts/actions, issues, warnings and
 attachments; no repository journal or new release group is introduced.
-`authorization-disclosures/run` retains the aggregate disclosure, and
-`native-publication/<step-id>` retains transient native gate evidence. These are
-invocation evidence, not a replacement stage plan.
+`authorization-disclosures/run` retains the aggregate disclosure, and each pub
+package's attachment records how Pub resolved it and which packages it took
+from this source.
 
 Focused tests cover all-selected preparation before consent, no-public-action
-failure boundaries, immutable consent, no-op drift, native projection and exact
-archive/public consumer checks. Native fixtures use owned loopback registries;
-they do not publish to public registries. Full suites, independent reviews and
-actual Fleury command/archive-consumer qualification completed; the
-[native evidence record](dependency-staging-native-proof.md#final-qualification--2026-10-03)
-records their scope. No real upload, remote tag, release draft or tap write was
-performed.
+failure boundaries, immutable consent, no-op drift, providers publishing before
+consumers, and the overrides each staged package resolves with.

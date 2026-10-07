@@ -308,7 +308,9 @@ final class TargetStageContext {
     required this.sourceStep,
     required Iterable<StageStep> priorSteps,
     required Map<String, ProgressHandle> progress,
+    Map<String, String> fromSource = const {},
   }) : priorSteps = List<StageStep>.unmodifiable(priorSteps),
+       fromSource = Map.unmodifiable(fromSource),
        _attach = attach,
        _progress = Map.unmodifiable(progress);
 
@@ -322,6 +324,12 @@ final class TargetStageContext {
   Workspace get workspace => stage.directory.workspace;
   final StageStep sourceStep;
   final List<StageStep> priorSteps;
+
+  /// The repository packages a Pub package takes from this source when it
+  /// is staged, by name, with each one's directory relative to the
+  /// repository root: those it needs whose versions are not published yet,
+  /// and those only its development needs.
+  final Map<String, String> fromSource;
   final Map<String, ProgressHandle> _progress;
 
   ProgressHandle progress(String id) =>

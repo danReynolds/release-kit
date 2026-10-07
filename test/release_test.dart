@@ -21,7 +21,7 @@ import 'package:rk/src/transforms/digest.dart';
 import 'package:rk/src/targets/catalog.dart';
 import 'package:test/test.dart';
 
-import 'pub_deps_double.dart';
+import 'pub_get_double.dart';
 import 'status_test.dart' show FakeRegistry;
 
 const _config = '''
@@ -304,8 +304,7 @@ Future<Ran> release({
   // `cat-file` below is where rk reads it back — the fixture models the object,
   // not the intent, because that is the distinction rk now enforces.
   final signedTags = <String>{...signedExistingTags};
-  // Pub resolves the stage's mirror and leaves its records there, as the
-  // real one does.
+  // Pub resolves the stage's mirror, reporting the overrides rk wrote.
   final pubAnswers = <String, ToolResult>{};
   late final RecordingTools recording;
   recording = RecordingTools(
@@ -317,10 +316,6 @@ Future<Ran> release({
             workingDirectory,
             environment: recording.environments[key],
           );
-        case 'dart pub deps --json':
-          pubAnswers[key] = pubDepsJsonIn(workingDirectory);
-        case 'dart pub deps --style=compact':
-          pubAnswers[key] = pubDepsCompactIn(workingDirectory);
       }
     },
     answers: (key) {
@@ -612,13 +607,16 @@ publish = ["git-tag", "pub.dev"]
     },
   );
 
-  test(
-    'source-only destination fixtures cannot stage an unpublished dependency',
-    () async {
-      final ran = await release(
-        only: null,
-        typed: 'no',
-        config: '''
+  test('a dependency released in the same run is staged from source and '
+      'publishes first', () async {
+    final prompts = <String>[];
+    final ran = await release(
+      only: null,
+      answerPrompt: (prompt) {
+        prompts.add(prompt);
+        return 'no';
+      },
+      config: '''
 schema = 2
 
 [release.cli]
@@ -629,34 +627,82 @@ publish = ["pub.dev"]
 path = "packages/core"
 publish = ["pub.dev"]
 ''',
-        source: MemorySourceTree({
-          'packages/cli/pubspec.yaml': '''
+      source: MemorySourceTree({
+        'packages/cli/pubspec.yaml': '''
 name: cli
 version: 3.0.0
 dependencies:
   core: ^2.0.0
 ''',
-          'packages/cli/CHANGELOG.md': '## 3.0.0\n',
-          'packages/core/pubspec.yaml': 'name: core\nversion: 2.0.0\n',
-          'packages/core/CHANGELOG.md': '## 2.0.0\n',
-        }, description: '/repo/stack'),
-        registry: FakeRegistry({
-          'cli': ['2.0.0'],
-          'core': ['1.0.0'],
-        }),
-      );
+        'packages/cli/CHANGELOG.md': '## 3.0.0\n',
+        'packages/core/pubspec.yaml': 'name: core\nversion: 2.0.0\n',
+        'packages/core/CHANGELOG.md': '## 2.0.0\n',
+      }, description: '/repo/stack'),
+      registry: FakeRegistry({
+        'cli': ['2.0.0'],
+        'core': ['1.0.0'],
+      }),
+    );
 
-      expect(ran.exitCode, ExitCodes.refused);
-      expect(
-        ran.problems.map((problem) => problem['code']),
-        contains('RK-REL-001'),
-      );
-      expect(
-        ran.calls.where((call) => call.contains('--from-archive')),
-        isEmpty,
-      );
-    },
-  );
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(ran.text, contains('Release order: core 2.0.0 -> cli 3.0.0'));
+    expect(prompts, ['Release core 2.0.0 and cli 3.0.0? [y/N] ']);
+    expect(ran.problems.map((problem) => problem['code']), ['RK-AUTH-002']);
+    expect(
+      ran.calls.where((call) => call.contains('publish --to-archive')),
+      hasLength(2),
+      reason: 'both packages stage before the one question',
+    );
+    expect(
+      (ran.report['attachments'] as Map)['pub-package-cli.txt'],
+      contains('but core from this source'),
+      reason: 'core 2.0.0 is not on pub.dev yet',
+    );
+    expect(ran.calls.where((call) => call.contains('--from-archive')), isEmpty);
+  });
+
+  test('a dependency already published comes from pub.dev', () async {
+    final ran = await release(
+      only: 'cli',
+      typed: 'no',
+      config: '''
+schema = 2
+
+[release.cli]
+path = "packages/cli"
+publish = ["pub.dev"]
+
+[release.core]
+path = "packages/core"
+publish = ["pub.dev"]
+''',
+      source: MemorySourceTree({
+        'packages/cli/pubspec.yaml': '''
+name: cli
+version: 3.0.0
+dependencies:
+  core: ^2.0.0
+''',
+        'packages/cli/CHANGELOG.md': '## 3.0.0\n',
+        'packages/core/pubspec.yaml': 'name: core\nversion: 2.0.0\n',
+        'packages/core/CHANGELOG.md': '## 2.0.0\n',
+      }, description: '/repo/stack'),
+      registry: FakeRegistry({
+        'cli': ['2.0.0'],
+        'core': ['1.0.0', '2.0.0'],
+      }),
+    );
+
+    expect(ran.problems.map((problem) => problem['code']), ['RK-AUTH-002']);
+    expect(
+      (ran.report['attachments'] as Map)['pub-package-cli.txt'],
+      allOf(
+        contains('with no lockfile and no dependency override.'),
+        isNot(contains('from this source')),
+      ),
+      reason: "cli's consumers get core 2.0.0 from pub.dev, and so does Pub",
+    );
+  });
 
   test(
     'a cross-unit dependency cycle refuses before preparing either unit',
@@ -1008,34 +1054,6 @@ publish = ["pub.dev"]
       expect(ran.calls, isEmpty);
     },
   );
-
-  test('repository-wide stage requires its preparation coordinator', () async {
-    final ran = await release(
-      only: null,
-      dryRun: true,
-      config: '''
-schema = 2
-
-[release.a]
-path = "packages/a"
-publish = ["pub.dev"]
-
-[release.b]
-path = "packages/b"
-publish = ["pub.dev"]
-''',
-      source: MemorySourceTree({
-        'packages/a/pubspec.yaml': 'name: a\nversion: 1.0.0\n',
-        'packages/a/CHANGELOG.md': '## 1.0.0\n',
-        'packages/b/pubspec.yaml': 'name: b\nversion: 1.0.0\n',
-        'packages/b/CHANGELOG.md': '## 1.0.0\n',
-      }, description: '/repo/two'),
-    );
-
-    expect(ran.exitCode, ExitCodes.refused);
-    expect(ran.problems.map((problem) => problem['code']), ['RK-STAGE-001']);
-    expect(ran.calls, isEmpty);
-  });
 }
 
 /// Phase 7a closeout: `_signingBaseline` — the identity read the whole sign

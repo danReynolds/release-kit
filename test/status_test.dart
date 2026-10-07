@@ -2333,7 +2333,7 @@ publish = ["pub.dev"]
           ),
         );
         expect(run.text, contains('the partial release needs its exact stage'));
-        expect(run.text, contains('frozen dependency choices'));
+        expect(run.text, contains('Recorded archive bytes cannot be'));
         expect(run.report['next'], isEmpty);
         final problems = (run.report['problems'] as List).cast<Map>();
         expect(

@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
@@ -14,13 +13,9 @@ import 'stage_store.dart';
 import 'producers.dart';
 import 'stage_contract.dart';
 import 'stage_completion.dart';
-import 'stage_binary_evidence.dart';
-import 'stage_dependencies.dart';
 import 'stage_inspection.dart';
-import 'stage_intent.dart';
 import 'stage_plan.dart';
 import 'stage_receipt.dart';
-import 'stage_receipt_structure.dart';
 import 'stage_source.dart';
 import 'git.dart';
 import 'timings.dart';
@@ -57,182 +52,18 @@ class ReleaseStages {
   final RkImplementationIdentity Function() _rkIdentity;
   final Map<String, String> Function() _environment;
   final Map<String, ReleaseStage> _stages = {};
-  final Map<String, StageDependencies> _dependencies = {};
-  final Map<String, StageIntent> _intents = {};
-  final Map<String, int> _bindingGenerations = {};
   final String _unboundRunId = _newRunId();
   DartCompilerIdentity? _compiler;
 
   ReleaseStage call(ResolvedUnit unit) => _stages.putIfAbsent(
-    _cacheKey(unit),
+    unit.name,
     () => _resolve(
       unit,
       git,
       _compiler ??= _readCompilerIdentity(),
       _readRkIdentity(),
-      _dependencies[unit.name] ?? StageDependencies(),
-      _intents[unit.name],
     ),
   );
-
-  /// Native discovery supplies frozen artifact choices before consumer
-  /// preparation. Refresh keeps those choices even if providers become public.
-  ReleaseStage bindDependencies(
-    ResolvedUnit unit,
-    StageDependencies dependencies, {
-    StageIntent? intent,
-  }) {
-    // The portable identity excludes temporary provider handles. A restored
-    // declaration and a freshly acquired provider may therefore have the same
-    // identity while only the latter can materialize a missing import.
-    final candidate = _resolve(
-      unit,
-      git,
-      _compiler ??= _readCompilerIdentity(),
-      _readRkIdentity(),
-      dependencies,
-      intent,
-    );
-    _install(unit, dependencies, candidate);
-    return candidate;
-  }
-
-  /// Installs freshly discovered choices only if the caller's observed binding
-  /// and live intent still agree. Discovery may await native tools or providers;
-  /// those waits cannot grant permission to overwrite a newer binding or reuse
-  /// the resolver's cached compiler identity.
-  ReleaseStage bindDiscovered(
-    ResolvedUnit unit, {
-    required StageDependencies dependencies,
-    required StageIntent intent,
-    required GitState currentGit,
-    required ReleaseStage expectedBinding,
-    required void Function() beforeInstall,
-  }) {
-    void requireExpected() {
-      if (!identical(call(unit), expectedBinding)) {
-        throw StateError('stage binding changed after native discovery');
-      }
-    }
-
-    requireExpected();
-    final candidate = _resolve(
-      unit,
-      currentGit,
-      _readCompilerIdentity(),
-      _readRkIdentity(),
-      dependencies,
-      intent,
-    );
-    // Force the canonical producer graph and native coverage checks before any
-    // resolver mutation. Invalid requests must never install a partial plan.
-    candidate.producerNames;
-    beforeInstall();
-    requireExpected();
-    _install(unit, dependencies, candidate);
-    return candidate;
-  }
-
-  /// Adopts an existing frozen receipt without changing choices or disk bytes.
-  /// The caller holds the stage-store mutation lock and supplies current Git
-  /// state. Native source/registry/provider authorization must happen in
-  /// [authorize]; deserialized dependency declarations alone are not authority.
-  /// It may attach temporary handles, but may not select different dependencies.
-  /// Refusal throws, never returning an absent-stage result that invites a solve.
-  Future<ReleaseStage> adoptFrozen(
-    ResolvedUnit unit, {
-    required GitState currentGit,
-    required StageReceipt receipt,
-    StageIntent? intent,
-    required Future<StageDependencies> Function(
-      StageReceipt receipt,
-      GitState currentGit,
-    )
-    authorize,
-    void Function()? beforeInstall,
-  }) async {
-    final generation = _bindingGenerations[unit.name] ?? 0;
-    final plan = receipt.plan;
-    if (plan == null) {
-      throw StateError('frozen stage adoption requires its recorded plan');
-    }
-    final declared = plan['dependency_inputs'] == null
-        ? StageDependencies()
-        : StageDependencies.fromJson(plan['dependency_inputs']);
-    final authorized = await authorize(receipt, currentGit);
-    if (CanonicalJson.encode(authorized.toJson()) !=
-        CanonicalJson.encode(declared.toJson())) {
-      throw StateError('authorization changed the frozen dependency choices');
-    }
-    final candidate = _resolve(
-      unit,
-      currentGit,
-      _readCompilerIdentity(),
-      _readRkIdentity(),
-      authorized,
-      intent,
-    );
-    if (candidate.directory.identity.id != receipt.identity.id) {
-      throw StateError('frozen stage differs from the current release inputs');
-    }
-    final inspected = candidate.inspect();
-    if (inspected.receipt?.encode() != receipt.encode()) {
-      throw StateError('frozen receipt changed during stage authorization');
-    }
-    if (!inspected.reusable && !inspected.canRestartSource) {
-      // Permits only verified progress with declared pending producer outputs.
-      // Unrecorded bytes are never returned as artifacts or cleaned here.
-      candidate.requireProducerProgress();
-    }
-    if ((_bindingGenerations[unit.name] ?? 0) != generation) {
-      throw StateError('stage binding changed during frozen authorization');
-    }
-    // A closure authorizer may have validated additional retained providers.
-    // Recheck them synchronously after the async handoff, before any binding
-    // changes. This callback must be observational and must not yield.
-    beforeInstall?.call();
-    _install(unit, authorized, candidate);
-    return candidate;
-  }
-
-  void _install(
-    ResolvedUnit unit,
-    StageDependencies dependencies,
-    ReleaseStage stage,
-  ) {
-    _stages.removeWhere((_, stage) => stage.unit.name == unit.name);
-    _dependencies[unit.name] = dependencies;
-    if (stage.intent case final intent?) {
-      _intents[unit.name] = intent;
-    } else {
-      _intents.remove(unit.name);
-    }
-    _stages[_cacheKey(unit)] = stage;
-    _bindingGenerations[unit.name] = (_bindingGenerations[unit.name] ?? 0) + 1;
-  }
-
-  String _cacheKey(ResolvedUnit unit) =>
-      '${unit.name}:${_intents[unit.name]?.sha256}:${CanonicalJson.encode(_dependencies[unit.name]?.toJson())}';
-
-  StageIntent intentFor(
-    ResolvedUnit unit, {
-    required GitState currentGit,
-    required Map<String, Object?> Function() readInputs,
-  }) {
-    final base = _resolve(
-      unit,
-      currentGit,
-      _readCompilerIdentity(),
-      _readRkIdentity(),
-      StageDependencies(),
-      null,
-    );
-    return StageIntent.capture(
-      base: base.directory.identity,
-      basePlan: base.resolvedPlan!,
-      readInputs: readInputs,
-    );
-  }
 
   /// Resolves the stage again from facts read at the release boundary.
   ///
@@ -240,51 +71,14 @@ class ReleaseStages {
   /// the initial Git state. Publication must notice a PATH-selected compiler,
   /// signing policy, origin, commit, tree, platform, or plan change that
   /// happened while private preparation or authorization was in progress.
-  ReleaseStage refresh(ResolvedUnit unit, GitState currentGit) => _resolve(
-    unit,
-    currentGit,
-    _readCompilerIdentity(),
-    _readRkIdentity(),
-    _dependencies[unit.name] ?? StageDependencies(),
-    _intents[unit.name],
-  );
-
-  /// Reconstructs a receipt's candidate using current plans and toolchain facts,
-  /// without installing bindings or reading its old stage directory. This is
-  /// only a candidate: portable/native authorization and retained-byte checks
-  /// still precede [adoptFrozen]. The caller supplies current resolved source.
-  ReleaseStage candidateForReceipt(
-    ResolvedUnit unit, {
-    required GitState currentGit,
-    required StageReceipt receipt,
-    StageIntent? intent,
-  }) {
-    final plan = receipt.plan;
-    if (plan == null) throw StateError('receipt has no frozen release plan');
-    final dependencies = plan['dependency_inputs'] == null
-        ? StageDependencies()
-        : StageDependencies.fromJson(plan['dependency_inputs']);
-    final candidate = _resolve(
-      unit,
-      currentGit,
-      _readCompilerIdentity(),
-      _readRkIdentity(),
-      dependencies,
-      intent,
-    );
-    if (candidate.directory.identity.id != receipt.identity.id) {
-      throw StateError('frozen receipt differs from current release inputs');
-    }
-    return candidate;
-  }
+  ReleaseStage refresh(ResolvedUnit unit, GitState currentGit) =>
+      _resolve(unit, currentGit, _readCompilerIdentity(), _readRkIdentity());
 
   ReleaseStage _resolve(
     ResolvedUnit unit,
     GitState currentGit,
     DartCompilerIdentity compiler,
     RkImplementationIdentity rk,
-    StageDependencies dependencies,
-    StageIntent? intent,
   ) {
     final launcher =
         Platform.isMacOS &&
@@ -303,24 +97,16 @@ class ReleaseStages {
       rk: rk,
       environment: _environment(),
     );
-    StageIdentity identityFor(Map<String, Object?> value) => currentGit.isBound
+    final identity = currentGit.isBound
         ? StageIdentity.forPlan(
             headCommit: currentGit.head,
             headTree: currentGit.headTree,
-            resolvedPlan: value,
+            resolvedPlan: plan,
           )
         : StageIdentity.forUnboundPlan(
             runId: _unboundRunId,
-            resolvedPlan: value,
+            resolvedPlan: plan,
           );
-    if (intent != null) {
-      intent.requireCurrent(identityFor(plan));
-      plan[StageIntent.planKey] = intent.sha256;
-    }
-    if (!dependencies.isEmpty) {
-      plan['dependency_inputs'] = dependencies.toJson();
-    }
-    final identity = identityFor(plan);
     final directory = StageDirectory(
       repositoryRoot: repositoryRoot,
       identity: identity,
@@ -334,8 +120,6 @@ class ReleaseStages {
       enforceUnitContract: true,
       directory: directory,
       resolvedPlan: plan,
-      dependencies: dependencies,
-      intent: intent,
       targetContributions: stageContracts(
         unit: unit,
         repository: currentGit.originUrl,
@@ -381,25 +165,13 @@ class ReleaseStage {
     this.repository,
     this.enforceUnitContract = false,
     Map<String, Object?>? resolvedPlan,
-    this.intent,
-    StageDependencies? dependencies,
     Iterable<StageContributionContract> targetContributions = const [],
   }) : resolvedPlan = resolvedPlan == null
            ? null
            : CanonicalJson.normalize(resolvedPlan) as Map<String, Object?>,
-       dependencies = dependencies ?? StageDependencies(),
        targetContributions = List<StageContributionContract>.unmodifiable(
          targetContributions,
-       ) {
-    if (!this.dependencies.isEmpty &&
-        (resolvedPlan == null ||
-            CanonicalJson.encode(resolvedPlan['dependency_inputs']) !=
-                CanonicalJson.encode(this.dependencies.toJson()) ||
-            Sha256.hex(utf8.encode(CanonicalJson.encode(resolvedPlan))) !=
-                directory.identity.planSha256)) {
-      throw StateError('dependency inputs must be bound to the stage identity');
-    }
-  }
+       );
 
   final ResolvedUnit unit;
   final SourceTree source;
@@ -412,8 +184,6 @@ class ReleaseStage {
   /// Its digest alone cannot authorize reuse of source or provider artifacts.
   final Map<String, Object?>? resolvedPlan;
   final List<StageContributionContract> targetContributions;
-  final StageDependencies dependencies;
-  final StageIntent? intent;
 
   /// Direct construction is used by low-level receipt/atomicity tests whose
   /// deliberately partial producer graphs are not a release plan. Every
@@ -429,27 +199,12 @@ class ReleaseStage {
 
   StageReceiptContract? _resolveContract() {
     if (!enforceUnitContract) return null;
-    final local = localProducerContracts(unit);
-    dependencies.validateProducers(
-      unit.name,
-      [
-        ...targetContributions.map((contribution) => contribution.step),
-        ...local,
-      ],
-      owners: {for (final project in unit.projects) project.name},
-    );
     return StageReceiptContract.forUnit(
       unit: unit,
       repository: repository,
       sourceRoot: sourceRoot,
-      targetContributions: [
-        if (dependencies.hasImports) dependencies.contribution,
-        for (final contribution in targetContributions)
-          StageContributionContract(
-            step: dependencies.decorate(contribution.step),
-          ),
-      ],
-      localProducers: local.map(dependencies.decorate),
+      targetContributions: targetContributions,
+      localProducers: localProducerContracts(unit),
     );
   }
 
@@ -467,61 +222,6 @@ class ReleaseStage {
   StageStepContract producerContract(String producer) =>
       _unitContract?.producerContract(producer) ??
       (throw StateError('this partial stage has no producer contract'));
-
-  /// Pure evidence checks for a candidate reconstructed from current facts.
-  /// No provider directory or ancestor payload is read. The caller separately
-  /// authorizes native contexts and every retained direct artifact before reuse.
-  List<StageIssue> validatePortableReceipt(
-    StageReceipt receipt, {
-    required StageSourceSnapshot authoritativeSource,
-  }) {
-    final contract = _unitContract;
-    if (contract == null) {
-      throw StateError(
-        'portable validation requires the complete unit contract',
-      );
-    }
-    final issues = <StageIssue>[];
-    if (receipt.identity.id != directory.identity.id ||
-        CanonicalJson.encode(receipt.plan) !=
-            CanonicalJson.encode(resolvedPlan)) {
-      issues.add(
-        const StageIssue(
-          StageIssueKind.wrongStage,
-          'portable receipt differs from the current release plan',
-          path: 'stage.json',
-        ),
-      );
-      return issues;
-    }
-    issues.addAll(StageReceiptStructure.validate(receipt));
-    issues.addAll(contract.validateDeclarations(receipt));
-    issues.addAll(dependencies.validateRecordedInputs(receipt));
-    try {
-      authoritativeSource.requireReceipt(receipt);
-      issues.addAll(
-        contract.validateEvidence(receipt, source: authoritativeSource),
-      );
-    } on Object catch (error) {
-      issues.add(
-        StageIssue(
-          StageIssueKind.invalidStructure,
-          '$error',
-          path: 'stage.json',
-        ),
-      );
-    }
-    issues.addAll(StageBinaryEvidence.validate(receipt));
-    issues.addAll(
-      StageCompletion.validate(
-        receipt,
-        unit: unit,
-        repository: repository,
-        compiler: compiler,
-      ),
-    );
-    return issues;
-  }
 
   /// Bind every declared input, including same-unit archive edges, to a
   /// completed producer's receipt. This does not require unit completion.

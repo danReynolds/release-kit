@@ -4,22 +4,10 @@ import 'dart:io';
 import '../../engine/diagnostic.dart';
 import '../../engine/yaml.dart';
 
-/// A dependency override that Pub honours where it resolves the staged
-/// package and strips from the published archive: the package it replaces
-/// ([everyPackage] when the declaration cannot be read) and where it is
-/// declared, relative to the source root.
-typedef DependencyOverride = ({String package, String declaredIn});
-
-/// Stands for every package when a declaration cannot be read.
-const everyPackage = '*';
-
-/// The packages Pub resolves together with the one at [directory], by name:
-/// every package of the workspace whose top-most root it resolves at, or the
-/// package alone.
-///
-/// Pub applies any of these packages' overrides to all of them, so all of
-/// them are read. [unreadable] says what kept rk from knowing the set;
-/// [packages] is then null.
+/// The packages of the workspace the package at [directory] belongs to, by
+/// name with their directories: every package of the workspace whose
+/// top-most root it resolves at, or the package alone. [unreadable] says
+/// what kept rk from knowing the set; [packages] is then null.
 typedef ResolutionPackages = ({
   Map<String, String>? packages,
   String? unreadable,
@@ -78,68 +66,6 @@ ResolutionPackages resolutionPackages(String sourceRoot, String directory) {
   return (packages: packages, unreadable: null);
 }
 
-/// Every override declared by [packages] (name to directory), as rk reads
-/// them: each one's `pubspec_overrides.yaml`, or its pubspec's
-/// `dependency_overrides` section when that file declares none. The stage
-/// names declarations with this; Pub's lockfile decides what is overridden.
-List<DependencyOverride> dependencyOverrides(
-  String sourceRoot,
-  Map<String, String> packages,
-) {
-  final found = <DependencyOverride>[];
-  void declare(YamlNode? section, String where) {
-    // An empty or null section declares nothing.
-    if (section == null ||
-        (section is YamlScalar &&
-            !section.quoted &&
-            const {'', '~', 'null', 'Null', 'NULL'}.contains(section.value))) {
-      return;
-    }
-    if (section is! YamlMap) {
-      found.add((package: everyPackage, declaredIn: where));
-      return;
-    }
-    for (final name in section.keys) {
-      // A key Pub would not read as a package name is one rk has misread.
-      found.add((
-        package: _packageName.hasMatch(name) ? name : everyPackage,
-        declaredIn: where,
-      ));
-    }
-  }
-
-  for (final dir in packages.values) {
-    final file = '$dir/pubspec_overrides.yaml';
-    final overrides = _read(file);
-    if (overrides.exists) {
-      if (overrides.map == null) {
-        found.add((
-          package: everyPackage,
-          declaredIn: _relative(sourceRoot, file),
-        ));
-        continue;
-      }
-      if (overrides.map!.has('dependency_overrides')) {
-        declare(
-          overrides.map!['dependency_overrides'],
-          _relative(sourceRoot, file),
-        );
-        continue;
-      }
-    }
-    final pubspec = '$dir/pubspec.yaml';
-    final where =
-        'the dependency_overrides section in ${_relative(sourceRoot, pubspec)}';
-    final manifest = _read(pubspec).map;
-    if (manifest == null) {
-      found.add((package: everyPackage, declaredIn: where));
-      continue;
-    }
-    declare(manifest['dependency_overrides'], where);
-  }
-  return found;
-}
-
 /// The packages `dart pub get` reports it overrode, from its [output]: a
 /// `!` line for each, such as `! leaf 9.9.9 from path ../fork (overridden)`.
 /// Pub prints these only in a full report, which `PUB_SUMMARY_ONLY` turns
@@ -152,296 +78,12 @@ Set<String> reportedOverrides(String output) => {
     match.group(1)!,
 };
 
-/// The overrides Pub read from every package of the workspace, from
-/// `dart pub deps --style=compact`: each package's `dependency overrides:`
-/// section, as Pub parsed its pubspec and overrides file. Unlike
-/// [reportedOverrides], the report does not depend on `PUB_SUMMARY_ONLY`.
-Set<String> declaredOverrides(String compact) {
-  final names = <String>{};
-  var inOverrides = false;
-  for (final line in compact.split('\n')) {
-    if (line.trim() == 'dependency overrides:') {
-      inOverrides = true;
-      continue;
-    }
-    if (!inOverrides) continue;
-    final entry = RegExp(r'^- (\S+)').firstMatch(line);
-    if (entry == null) {
-      inOverrides = false;
-      continue;
-    }
-    names.add(entry.group(1)!);
-  }
-  return names;
-}
-
-/// Whether the resolved graph in [pubDepsJson] takes a package from an SDK,
-/// which only Flutter provides. Null when the output is not a graph.
-bool? usesFlutter(String pubDepsJson) {
-  final packages = _packages(pubDepsJson);
-  if (packages == null) return null;
-  return packages.values.any((entry) => entry['source'] == 'sdk');
-}
-
-/// Where Pub resolved the package at [directory], as Pub records it after
-/// resolving: the root its `.dart_tool/pub/workspace_ref.json` points to, or
-/// the package itself when Pub wrote its package configuration there. Null
-/// when Pub left neither.
-String? resolvedRoot(String directory) {
-  final reference = File('$directory/.dart_tool/pub/workspace_ref.json');
-  if (reference.existsSync()) {
-    final Object? decoded;
-    try {
-      decoded = jsonDecode(reference.readAsStringSync());
-    } on FormatException {
-      return null;
-    } on FileSystemException {
-      return null;
-    }
-    final relative = decoded is Map ? decoded['workspaceRoot'] : null;
-    if (relative is! String) return null;
-    final root = Uri.directory(
-      '$directory/.dart_tool/pub/',
-    ).resolve(relative.endsWith('/') ? relative : '$relative/');
-    final path = root.toFilePath();
-    return path.length > 1 && path.endsWith('/')
-        ? path.substring(0, path.length - 1)
-        : path;
-  }
-  return File('$directory/.dart_tool/package_config.json').existsSync()
-      ? directory
-      : null;
-}
-
-/// The packages the lockfile Pub wrote at [root] marks overridden. Pub
-/// records an overridden direct dependency of the root as direct, so this
-/// complements [reportedOverrides] rather than replacing it. Null when there
-/// is no lockfile rk can read.
-Set<String>? overriddenPackages(String root) {
-  final lock = _read('$root/pubspec.lock');
-  if (lock.map == null) return null;
-  final packages = lock.map!['packages'];
-  if (packages is YamlScalar && packages.value.isEmpty) return {};
-  if (packages is! YamlMap) return null;
-  final overridden = <String>{};
-  for (final name in packages.keys) {
-    final dependency = packages.map(name)?.string('dependency');
-    if (dependency == null) return null;
-    if (dependency.contains('overridden')) overridden.add(name);
-  }
-  return overridden;
-}
-
-/// The packages [package] brings to its consumers, from `pub deps --json`:
-/// its own dependencies without its dev dependencies, and everything those
-/// depend on. Null when the output does not describe the graph completely.
-Set<String>? runtimeDependencies(String pubDepsJson, String package) {
-  final packages = _packages(pubDepsJson);
-  if (packages == null || !packages.containsKey(package)) return null;
-  final reached = <String>{};
-  final pending = [package];
-  while (pending.isNotEmpty) {
-    final entry = packages[pending.removeLast()];
-    if (entry == null) return null;
-    // A root package (the one staged, or a workspace member it depends on)
-    // keeps its dev dependencies and overrides to itself; any other package
-    // lists only what its consumers receive.
-    final edges = _strings(
-      entry['kind'] == 'root'
-          ? entry['directDependencies']
-          : entry['dependencies'],
-    );
-    if (edges == null) return null;
-    for (final name in edges) {
-      if (reached.add(name)) pending.add(name);
-    }
-  }
-  return reached;
-}
-
-/// The packages in [reached] that Pub resolved from a path or Git source,
-/// with that source. Consumers of a published package receive only hosted
-/// and SDK packages, so each one is overridden, or a dependency Pub refuses
-/// to publish, whatever declared it. Workspace packages are left out:
-/// consumers receive their published versions, which rk's prerequisites
-/// require. Null when the output does not say where a package came from.
-Map<String, String>? unhostedDependencies(
-  String pubDepsJson,
-  Set<String> reached,
-) {
-  final packages = _packages(pubDepsJson);
-  if (packages == null) return null;
-  final unhosted = <String, String>{};
-  for (final name in reached) {
-    final entry = packages[name];
-    final source = entry?['source'];
-    if (entry == null || source is! String) return null;
-    if (entry['kind'] == 'root' || source == 'hosted' || source == 'sdk') {
-      continue;
-    }
-    unhosted[name] = source;
-  }
-  return unhosted;
-}
-
-/// The overrides among [overrides] that change what [package]'s consumers
-/// resolve: those of [package], of anything in [reached], or of every
-/// package. With [reached] unknown, every override counts.
-List<DependencyOverride> maskingOverrides(
-  List<DependencyOverride> overrides,
-  String package,
-  Set<String>? reached,
-) => [
-  for (final override in overrides)
-    if (reached == null ||
-        override.package == everyPackage ||
-        override.package == package ||
-        reached.contains(override.package))
-      override,
-];
-
-/// The dependency graph `dart pub get` recorded where it resolved at
-/// [root], in the shape rk reads from `dart pub deps --json`: the edges
-/// from `.dart_tool/package_graph.json`, and each package's source from the
-/// lockfile. `pub deps --json` fails when a workspace member's pubspec
-/// overrides a package that the member's overrides file leaves out: that
-/// command follows the pubspec, and Pub never resolved the package. Pub
-/// writes the graph file from Dart 3.8. Null when either record is missing,
-/// or they do not describe the same packages.
-String? recordedGraph(String root) {
-  final Object? decoded;
-  try {
-    decoded = jsonDecode(
-      File('$root/.dart_tool/package_graph.json').readAsStringSync(),
-    );
-  } on FileSystemException {
-    return null;
-  } on FormatException {
-    return null;
-  }
-  if (decoded is! Map || decoded['packages'] is! List) return null;
-  final roots = _strings(decoded['roots']);
-  if (roots == null) return null;
-  final locked = _read('$root/pubspec.lock').map?['packages'];
-  final packages = <Map<String, Object?>>[];
-  for (final entry in decoded['packages'] as List) {
-    if (entry is! Map || entry['name'] is! String) return null;
-    final name = entry['name'] as String;
-    final dependencies = _strings(entry['dependencies']);
-    if (dependencies == null) return null;
-    if (roots.contains(name)) {
-      final dev = _strings(entry['devDependencies']);
-      if (dev == null) return null;
-      packages.add({
-        'name': name,
-        'kind': 'root',
-        'source': 'root',
-        'dependencies': [...dependencies, ...dev],
-        'directDependencies': dependencies,
-        'devDependencies': dev,
-      });
-      continue;
-    }
-    final source = locked is YamlMap
-        ? locked.map(name)?.string('source')
-        : null;
-    if (source == null) return null;
-    packages.add({
-      'name': name,
-      'kind': 'transitive',
-      'source': source,
-      'dependencies': dependencies,
-      'directDependencies': dependencies,
-    });
-  }
-  return jsonEncode({'packages': packages});
-}
-
-/// The workspace packages in [pubDepsJson], by name.
-Set<String>? workspacePackages(String pubDepsJson) => _packages(
-  pubDepsJson,
-)?.entries.where((e) => e.value['kind'] == 'root').map((e) => e.key).toSet();
-
-/// The workspace packages that resolving [package] the way its consumers do
-/// takes from the snapshot rather than from pub.dev, from [pubDepsJson]:
-/// those it reaches through its dependencies that are released with it
-/// ([releasedWith], its unit's packages, staged before any of them is
-/// published), and those it reaches only through its dev dependencies,
-/// which its consumers never resolve. Any other workspace package it
-/// reaches, its consumers take from pub.dev, and so does the resolution.
-/// Null when the output does not describe the graph completely.
-Set<String>? snapshotPackages(
-  String pubDepsJson,
-  String package,
-  Set<String> releasedWith,
-) {
-  final packages = _packages(pubDepsJson);
-  final start = packages?[package];
-  if (packages == null || start == null) return null;
-  final runtime = runtimeDependencies(pubDepsJson, package);
-  final dev = _strings(start['devDependencies']);
-  if (runtime == null || dev == null) return null;
-  // Everything the dev dependencies bring, as a workspace package brings
-  // its own dependencies but not its dev dependencies.
-  final developed = <String>{};
-  final pending = [...dev];
-  while (pending.isNotEmpty) {
-    final name = pending.removeLast();
-    if (!developed.add(name)) continue;
-    final entry = packages[name];
-    if (entry == null) return null;
-    final edges = _strings(
-      entry['kind'] == 'root'
-          ? entry['directDependencies']
-          : entry['dependencies'],
-    );
-    if (edges == null) return null;
-    pending.addAll(edges);
-  }
-  bool workspace(String name) => packages[name]?['kind'] == 'root';
-  return {
-    for (final name in runtime)
-      if (workspace(name) && releasedWith.contains(name)) name,
-    for (final name in developed)
-      if (workspace(name) && !runtime.contains(name)) name,
-  }..remove(package);
-}
-
-/// Each package's directory, by name, from the package configuration Pub
-/// wrote at [root]. Null when there is none rk reads.
-Map<String, String>? packageDirectories(String root) {
-  final Object? decoded;
-  try {
-    decoded = jsonDecode(
-      File('$root/.dart_tool/package_config.json').readAsStringSync(),
-    );
-  } on FileSystemException {
-    return null;
-  } on FormatException {
-    return null;
-  }
-  if (decoded is! Map || decoded['packages'] is! List) return null;
-  final base = Uri.directory('$root/.dart_tool/');
-  final directories = <String, String>{};
-  for (final entry in decoded['packages'] as List) {
-    if (entry is! Map) return null;
-    final name = entry['name'];
-    final rootUri = entry['rootUri'];
-    if (name is! String || rootUri is! String) return null;
-    final path = base.resolve(rootUri).toFilePath();
-    directories[name] = path.length > 1 && path.endsWith('/')
-        ? path.substring(0, path.length - 1)
-        : path;
-  }
-  return directories;
-}
-
 /// The `pubspec_overrides.yaml` the stage writes over a package's own, so
 /// that Pub resolves the package the way its consumers do. Within a
 /// workspace ([inWorkspace]) the package becomes a root of its own, with no
 /// workspace of its own either. Pub then applies no dependency override but
-/// [fromSnapshot]: the workspace packages the package reaches, by name, each
-/// with its path relative to the package.
+/// [fromSnapshot]: the repository packages the stage takes from its source,
+/// by name, each with its path relative to the package.
 String consumerOverrides(
   Map<String, String> fromSnapshot, {
   required bool inWorkspace,
@@ -461,6 +103,42 @@ String consumerOverrides(
     ],
     '',
   ].join('\n');
+}
+
+/// The packages of [members] (a workspace's, by name with their
+/// directories) that [package] reaches only through its development
+/// dependencies, read from their pubspecs. Its consumers never resolve
+/// them, so the stage takes them from this source. A member reaches what
+/// its dependencies name: its own development dependencies count only where
+/// it is the root.
+Set<String> developmentMembers(Map<String, String> members, String package) {
+  Iterable<String> named(String name, String section) =>
+      _read('${members[name]}/pubspec.yaml').map?.map(section)?.keys ??
+      const [];
+  Set<String> reach(Iterable<String> from) {
+    final reached = <String>{};
+    final pending = [...from];
+    while (pending.isNotEmpty) {
+      final name = pending.removeLast();
+      if (members.containsKey(name) && reached.add(name)) {
+        pending.addAll(named(name, 'dependencies'));
+      }
+    }
+    return reached;
+  }
+
+  if (!members.containsKey(package)) return const {};
+  return reach(
+    named(package, 'dev_dependencies'),
+  ).difference(reach(named(package, 'dependencies')))..remove(package);
+}
+
+/// Whether the package at [directory] resolves with a workspace, as its
+/// root or as one of its members.
+bool inWorkspace(String directory) {
+  final manifest = _read('$directory/pubspec.yaml').map;
+  return manifest != null &&
+      (manifest.has('workspace') || manifest.has('resolution'));
 }
 
 /// Whether resolving [packages] (directories) needs the Flutter SDK: one of
@@ -508,8 +186,6 @@ bool dartInFlutterSdk(String executable) {
       name(cache) == 'cache' &&
       isFlutterBin(cache.parent);
 }
-
-final _packageName = RegExp(r'^[A-Za-z_][A-Za-z0-9_]*$');
 
 /// Where Pub resolves the package at [directory]: while a package declares
 /// `resolution: workspace`, the nearest ancestor declaring `workspace:`,
@@ -680,33 +356,6 @@ List<String> _children(String dir) {
   } on FileSystemException {
     return const [];
   }
-}
-
-Map<String, Map<Object?, Object?>>? _packages(String pubDepsJson) {
-  final Object? decoded;
-  try {
-    decoded = jsonDecode(pubDepsJson);
-  } on FormatException {
-    return null;
-  }
-  if (decoded is! Map || decoded['packages'] is! List) return null;
-  final packages = <String, Map<Object?, Object?>>{};
-  for (final entry in decoded['packages'] as List) {
-    if (entry is! Map || entry['name'] is! String) return null;
-    if (packages.containsKey(entry['name'])) return null;
-    packages[entry['name'] as String] = entry;
-  }
-  return packages;
-}
-
-List<String>? _strings(Object? value) {
-  if (value is! List) return null;
-  final strings = <String>[];
-  for (final item in value) {
-    if (item is! String) return null;
-    strings.add(item);
-  }
-  return strings;
 }
 
 String _relative(String sourceRoot, String path) {

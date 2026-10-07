@@ -36,19 +36,12 @@ import 'package:rk/src/output/output.dart';
 import 'package:rk/src/engine/registry.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/release_stage.dart';
-import 'package:rk/src/engine/repository_stage_preparation.dart';
 import 'package:rk/src/engine/release_source.dart';
-import 'package:rk/src/engine/stage_restoration.dart';
 import 'package:rk/src/engine/stage_store.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/source_context.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/targets/catalog.dart';
-import 'package:rk/src/native/dart/stage_authorization.dart';
-import 'package:rk/src/native/dart/stage_authority.dart';
-import 'package:rk/src/native/dart/stage_discovery.dart';
-import 'package:rk/src/native/dart/publication.dart';
-import 'package:rk/src/native/dart/stage_source.dart';
 import 'package:rk/src/version.dart';
 import 'package:rk/src/engine/timings.dart';
 
@@ -683,59 +676,6 @@ Future<int> _release(
     Future<GitState> readGit() async => git.isBound
         ? await GitState.read(context.root)
         : GitState.unbound(context.root);
-    RepositoryStagePreparation? repositoryStages;
-    Future<ReleaseStage?> Function(ResolvedUnit)? completedProvider;
-    try {
-      String defaultRegistry() =>
-          Platform.environment['PUB_HOSTED_URL'] ?? 'https://pub.dev';
-      final compiler = stages(resolution.units.first).compiler!.executable;
-      final nativeSource = DartStageSource(
-        resolution: resolution,
-        source: tree,
-        git: git,
-        defaultRegistry: defaultRegistry,
-      );
-      final native = DartStageDiscovery(
-        nativeSource,
-        tools: const SystemTools(),
-        compiler: compiler,
-      );
-      late final restoration = StageRestoration.create(
-        stages: stages,
-        resolution: resolution,
-        currentGit: git,
-        refreshGit: readGit,
-        authority: DartStageAuthority(
-          DartStageAuthorization(
-            resolution: resolution,
-            source: tree,
-            git: git,
-            tools: const SystemTools(),
-            compiler: compiler,
-            defaultRegistry: defaultRegistry,
-          ),
-        ),
-      );
-      repositoryStages = RepositoryStagePreparation(
-        resolution: resolution,
-        stages: stages,
-        native: native,
-        restore: (unit) async => (await restoration).restore(unit.name),
-        refreshGit: readGit,
-      );
-      completedProvider = (unit) async =>
-          (await restoration).restoreCompletedProvider(unit.name);
-    } on Object catch (error) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-STAGE-001',
-          message: 'native dependency preparation could not be initialized',
-          evidence: '$error',
-          remedy: 'resolve the source or toolchain problem and re-run rk stage',
-        ),
-      );
-      return ExitCodes.refused;
-    }
     const targetTools = SystemTools(timeout: Duration(minutes: 2));
     return await ReleaseCommand(
       resolution: resolution,
@@ -769,9 +709,6 @@ Future<int> _release(
       allowInteractiveTools:
           interactive && stdin.hasTerminal && stdout.hasTerminal,
       stageOnly: stageOnly,
-      repositoryStages: repositoryStages,
-      nativePublication: DartPublication(tools: const SystemTools()),
-      completedProvider: completedProvider,
       stageFor: stages.call,
       refreshStage: stages.refresh,
       refreshGit: readGit,
@@ -1249,34 +1186,12 @@ Future<int> _status(
       timeout: const Duration(minutes: 2),
       cancellation: cancellation,
     );
-    // Observation shares authoritative source/intent lookup with restoration,
-    // but never invokes its native verifier, recovery or adoption path.
-    late final observation = StageRestoration.create(
-      stages: stages,
-      resolution: resolution,
-      currentGit: git,
-      refreshGit: () async => git.isBound
-          ? await GitState.read(git.root)
-          : GitState.unbound(git.root),
-      authority: DartStageAuthority(
-        DartStageAuthorization(
-          resolution: resolution,
-          source: tree,
-          git: git,
-          tools: targetTools,
-          compiler: stages(resolution.units.first).compiler!.executable,
-          defaultRegistry: () =>
-              Platform.environment['PUB_HOSTED_URL'] ?? 'https://pub.dev',
-        ),
-      ),
-    );
     final command = StatusCommand(
       resolution: resolution,
       tree: tree,
       git: git,
       repositoryGit: source.repository,
       sourceWarning: source.warning,
-      observeStage: (unit) async => (await observation).observeLocal(unit.name),
       inspector: Inspector(
         registry: registry,
         pubDev: PubDevTarget(registry: registry),

@@ -498,11 +498,7 @@ dependencies:
       final selection =
           (dependencyCandidates['publication'] as List).single as Map;
       expect(selection['candidate'], isNull);
-      expect(selection['resolution'], 'native_resolution_required');
-      expect(
-        _render(plan, terminal: false, color: false),
-        contains('native dependency discovery pending'),
-      );
+      expect(selection['resolution'], 'registry');
     });
   });
 

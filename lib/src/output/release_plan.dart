@@ -106,13 +106,6 @@ final class ReleasePlanRenderer {
     }
     lines.addAll([
       const [OutputSpan('')],
-      if (_hasNativeRequirements(plan))
-        const [
-          OutputSpan(
-            'native dependency discovery pending',
-            role: VisualRole.secondary,
-          ),
-        ],
       const [
         OutputSpan(
           'no destination checks · no changes',
@@ -336,24 +329,11 @@ final class ReleasePlanRenderer {
       }
     }
     output.blank();
-    if (_hasNativeRequirements(plan)) {
-      output.say(
-        'native dependency discovery pending',
-        role: VisualRole.secondary,
-      );
-    }
     output.say(
       'no destination checks · no changes',
       role: VisualRole.secondary,
     );
   }
-
-  static bool _hasNativeRequirements(RepositoryReleasePlan plan) =>
-      plan.units.any(
-        (unit) => unit.dependencyCandidates.values.any(
-          (selections) => selections.isNotEmpty,
-        ),
-      );
 
   static List<OutputSpan> _chain(List<ReleasePlanNode> nodes, VisualRole role) {
     final spans = <OutputSpan>[];

@@ -16,7 +16,6 @@ import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
 import '../engine/stage.dart';
 import '../engine/stage_contract.dart';
-import '../engine/stage_dependencies.dart';
 import '../engine/stage_board.dart';
 import '../engine/stage_inspection.dart';
 import '../engine/stage_history.dart';
@@ -220,7 +219,9 @@ final class ReleaseStageCoordinator {
     return false;
   }
 
-  /// Produces or reuses the exact receipt-backed private stage.
+  /// Produces or reuses the exact receipt-backed private stage. [fromSource]
+  /// names, for each Pub package, the repository packages it takes from
+  /// this source: see [TargetStageContext.fromSource].
   Future<PreparedRelease?> prepare({
     required ResolvedUnit unit,
     required Checklist checklist,
@@ -229,6 +230,7 @@ final class ReleaseStageCoordinator {
     required ReleaseStage stage,
     required StageInspection inspected,
     required List<TargetClaim> claims,
+    Map<String, Map<String, String>> fromSource = const {},
   }) async {
     final producerSteps = checklist.steps.where((step) {
       return !step.isPublic &&
@@ -240,14 +242,6 @@ final class ReleaseStageCoordinator {
         targetStage.contract.step.name: targetStage,
     };
     final outputsByProducer = <String, Set<String>>{
-      if (stage.dependencies.hasImports)
-        StageDependencies.importProducer: stage
-            .dependencies
-            .contribution
-            .step
-            .outputs
-            .keys
-            .toSet(),
       for (final step in producerSteps)
         receiptNameFor(step): contractFor(unit, step).outputs.keys.toSet(),
       for (final entry in targetStagesByName.entries)
@@ -405,11 +399,7 @@ final class ReleaseStageCoordinator {
     final producersByName = {
       for (final step in producerSteps) receiptNameFor(step): step,
     };
-    final runnable = {
-      ...producersByName.keys,
-      ...targetStagesByName.keys,
-      if (stage.dependencies.hasImports) StageDependencies.importProducer,
-    };
+    final runnable = {...producersByName.keys, ...targetStagesByName.keys};
     final graph = DependencyGraph<String>(
       stage.producerNames,
       idOf: (producer) => producer,
@@ -450,6 +440,7 @@ final class ReleaseStageCoordinator {
             sourceStep: sourceStep,
             priorSteps: List<StageStep>.unmodifiable(progress),
             progress: stageProgress.handlesFor(targetStage),
+            fromSource: fromSource[target.project?.name] ?? const {},
           ),
         );
         warnings.addAll([
@@ -561,18 +552,6 @@ final class ReleaseStageCoordinator {
     }
 
     Future<_StageWorkCompletion> runWork(String name) {
-      if (name == StageDependencies.importProducer) {
-        try {
-          record(stage.dependencies.materialize(stage.directory, sourceStep));
-          return Future.value(_StageWorkCompletion.succeeded(name));
-        } on Object catch (error) {
-          _discardInterruptedOutputs(stage, outputsByProducer[name]!);
-          _stageOperationProblem('dependency archive import', error);
-          return Future.value(
-            _StageWorkCompletion.failed(name, HaltKind.beforeActing),
-          );
-        }
-      }
       final targetStage = targetStagesByName[name];
       if (targetStage != null) return runTargetStage(name, targetStage);
       final producer = producersByName[name];

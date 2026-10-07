@@ -52,8 +52,13 @@ final class ReleaseDependencyPlan {
     ResolvedUnit unit,
     Diagnostics diagnostics, {
     required DependencyPhase phase,
-  }) => selectNativeCandidates(
-    requirements: requirements(unit, diagnostics),
+  }) => _select(requirements(unit, diagnostics), phase);
+
+  List<NativeCandidateSelection> _select(
+    Iterable<NativeRequirement> requirements,
+    DependencyPhase phase,
+  ) => selectNativeCandidates(
+    requirements: requirements,
     candidates: [
       for (final project in resolution.allProjects)
         if (project.publish.contains(PublishTarget.pubDev))
@@ -62,6 +67,70 @@ final class ReleaseDependencyPlan {
     semantics: const DartDependencySemantics(),
     phase: phase,
   );
+
+  /// The repository's packages [project] takes from this source when it is
+  /// staged, so that Pub resolves it as its consumers will.
+  ///
+  /// A package it needs at runtime, directly or through other such
+  /// packages, comes from this source while its version here satisfies
+  /// what is asked of it and is not [published] yet: it can come from
+  /// nowhere else, and it publishes first. Once that version is published,
+  /// Pub takes it from the registry, as consumers do. A package [project]
+  /// needs only for development comes from this source whenever its
+  /// version satisfies: its consumers never resolve it.
+  Future<List<ResolvedProject>> fromSource(
+    ResolvedProject project,
+    Future<bool> Function(String package, String version) published,
+  ) async {
+    final projects = {
+      for (final project in resolution.allProjects) project.name: project,
+    };
+    List<NativeCandidate> needs(
+      ResolvedProject owner,
+      bool Function(NativeRequirement requirement) needed,
+      DependencyPhase phase,
+    ) => [
+      for (final selection in _select(
+        requirements(
+          resolution.unit(owner.unitName)!,
+          Diagnostics(),
+        ).where((requirement) => requirement.owner == owner.name).where(needed),
+        phase,
+      ))
+        if (selection.candidate case final provider?) provider,
+    ];
+    bool runtime(NativeRequirement requirement) =>
+        requirement.kind == 'runtime';
+
+    final runtimeNames = project.pubspec.dependencies.keys.toSet();
+    final sourced = <ResolvedProject>[
+      for (final provider in needs(
+        project,
+        (requirement) =>
+            requirement.kind == 'development' &&
+            !runtimeNames.contains(requirement.slot),
+        DependencyPhase.preparation,
+      ))
+        if (provider.project != project.name) projects[provider.project]!,
+    ];
+    final seen = {project.name, for (final sibling in sourced) sibling.name};
+    final pending = [
+      ...needs(project, runtime, DependencyPhase.publication),
+      for (final sibling in sourced)
+        ...needs(sibling, runtime, DependencyPhase.publication),
+    ];
+    while (pending.isNotEmpty) {
+      final provider = pending.removeLast();
+      if (!seen.add(provider.project) ||
+          await published(provider.package.name, provider.version)) {
+        continue;
+      }
+      final sibling = projects[provider.project]!;
+      sourced.add(sibling);
+      pending.addAll(needs(sibling, runtime, DependencyPhase.publication));
+    }
+    return sourced;
+  }
 
   /// Within [unit], a project that another depends on publishes first, so
   /// the dependent resolves for consumers the moment it lands. Development
