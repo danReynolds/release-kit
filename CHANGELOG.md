@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.14
+
 - Say how long each step took. On a terminal, a finished step keeps its
   time once it reaches a second (`✓ package archive  staged · 1m 41s`), and
   a successful `stage` or `release` of ten seconds or more ends with one
@@ -32,8 +34,6 @@
     the same two minutes per archive. If Pub refuses the batch, each archive
     is retried alone, so an error still names the archive; when each one
     preloads alone, staging goes on.
-
-## 0.1.14
 
 - rk depends on Fleury 0.1 from pub.dev. The repository's override to a
   Fleury revision with the native output, inline shutdown and navigation
