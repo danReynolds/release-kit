@@ -217,7 +217,7 @@ starts Dart in the owning package so a cold launch prepares its native assets.
 A generated bootstrap then starts the original entrypoint in an isolate with
 the caller's working directory. Arguments, stdin, exit status and Platform.script
 continue to describe the actual application. Native source edits rerun the hook
-through Dart's normal cache checks. No Keypass-specific build logic is involved.
+through Dart's normal cache checks.
 
 This covers Dart's current directory-dependent hook discovery. Plain Dart local
 packages retain the direct launcher. Reselect Local after adding/removing a hook

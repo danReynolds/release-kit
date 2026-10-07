@@ -409,3 +409,13 @@ compiling it for every argument check timed out under local machine load.
 The broad repository run was stopped after unrelated timeout failures and does
 not constitute a full-suite pass. Native hooks do not qualify release artifact
 staging, signing, or physical hardware behavior.
+
+Rechecked on 2026-10-07 with main (rk 0.1.14) merged in, locally on an Apple M1
+Pro with Dart 3.12.2:
+
+- The full suite passed: 1,953 tests, one skipped.
+- The three terminal checks passed against a compiled binary.
+- With the bootstrap disabled, the native fixture fails as the change describes
+  (`No available native assets`), so the test exercises the fix.
+- The macOS CI run of 2026-10-05 stopped at the installation-UX check's Ctrl+C
+  step while a provider check was still showing; that check passed locally.
