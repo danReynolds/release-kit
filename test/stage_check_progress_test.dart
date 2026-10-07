@@ -90,10 +90,10 @@ publish = ["pub.dev"]
     checking.discovering(cli);
     await pause();
     expect(text.toString(), contains('dependencies'));
-    expect(text.toString(), contains('resolving'));
+    expect(text.toString(), contains('resolving · cli 2.0.0'));
 
     checking
-      ..discovered(cli)
+      ..discovered()
       ..finish();
     output.close();
   });
@@ -184,7 +184,10 @@ publish = ["pub.dev"]
       final printed = text.toString();
       expect(printed, matches(RegExp(r'core 1\.0\.0 · saved stage +verified')));
       expect(printed, matches(RegExp(r'cli 2\.0\.0 · saved stage +none')));
-      expect(printed, matches(RegExp(r'public targets +check failed')));
+      expect(
+        printed,
+        matches(RegExp(r'public targets +check failed · cli 2\.0\.0')),
+      );
       expect(RegExp('failed').allMatches(printed), hasLength(1));
     });
 
@@ -201,7 +204,6 @@ publish = ["pub.dev"]
         ..restoring(cli)
         ..restored(cli, found: false)
         ..discovering(core)
-        ..discovered(core)
         ..discovering(cli)
         ..stop();
       output.close();
@@ -209,11 +211,7 @@ publish = ["pub.dev"]
       final printed = text.toString();
       expect(
         printed,
-        matches(RegExp(r'core 1\.0\.0 · dependencies +resolved')),
-      );
-      expect(
-        printed,
-        matches(RegExp(r'cli 2\.0\.0 · dependencies +resolution failed')),
+        matches(RegExp(r'dependencies +resolution failed · cli 2\.0\.0')),
       );
       expect(RegExp('failed').allMatches(printed), hasLength(1));
     });
@@ -231,12 +229,94 @@ publish = ["pub.dev"]
         ..restoring(cli)
         ..restored(cli, found: false)
         ..discovering(cli)
-        ..discovered(cli)
+        ..discovered()
         ..stop();
       output.close();
 
       expect(text.toString(), isNot(contains('failed')));
     });
+  });
+
+  test('a unit may share a name with a shared row', () async {
+    final diagnostics = Diagnostics();
+    final config = ReleaseConfig.parse(
+      '''
+schema = 2
+
+[release.public-targets]
+path = "packages/public-targets"
+publish = ["pub.dev"]
+
+[release.dependencies]
+path = "packages/dependencies"
+publish = ["pub.dev"]
+''',
+      'release.toml',
+      diagnostics,
+    );
+    final named = Resolution.resolve(
+      config!,
+      MemorySourceTree({
+        'packages/public-targets/pubspec.yaml':
+            'name: public_targets\nversion: 1.0.0\n',
+        'packages/dependencies/pubspec.yaml':
+            'name: dependencies\nversion: 2.0.0\n',
+      }),
+      diagnostics,
+    );
+    expect(diagnostics.found, isEmpty);
+    final (:text, :output) = harness(terminal: false);
+    final checking = StageCheckProgress(
+      output,
+      units: named!.units,
+      delay: const Duration(seconds: 1),
+    );
+    for (final unit in named.units) {
+      checking
+        ..restoring(unit)
+        ..restored(unit, found: false);
+    }
+    for (final unit in named.units) {
+      await checking.checkingPublicTargets(unit, () async {});
+    }
+    checking.publicTargetsChecked();
+    named.units.forEach(checking.discovering);
+    checking
+      ..discovered()
+      ..stop();
+    output.close();
+
+    final printed = text.toString();
+    expect(
+      printed,
+      matches(RegExp(r'public-targets 1\.0\.0 · saved stage +none')),
+    );
+    expect(printed, matches(RegExp(r'public targets +checked')));
+    expect(printed, matches(RegExp(r'dependencies +resolved')));
+    expect(printed, isNot(contains('failed')));
+  });
+
+  test('the board grows by one line per unit', () {
+    final (:text, :output) = harness(terminal: false);
+    final checking = StageCheckProgress(
+      output,
+      units: units,
+      delay: const Duration(seconds: 1),
+    );
+    for (final unit in units) {
+      checking
+        ..restoring(unit)
+        ..restored(unit, found: false)
+        ..discovering(unit);
+    }
+    checking
+      ..discovered()
+      ..stop();
+    output.close();
+
+    // The title, a saved stage per unit, and one dependencies row.
+    final board = text.toString().trim().split('\n');
+    expect(board, hasLength(1 + units.length + 1), reason: '$text');
   });
 
   test('a sibling checked as a provider gets its own row', () {
