@@ -9,6 +9,7 @@ import 'git.dart';
 import 'publish_target.dart';
 import 'resolve.dart';
 import 'stage.dart';
+import 'timings.dart';
 
 /// The ambient Dart compiler rk will invoke for binary production.
 ///
@@ -105,7 +106,7 @@ class DartCompilerIdentity {
     final executable = _dartSdkExecutable(_canonicalFile(selectedExecutable));
     final ProcessResult result;
     try {
-      result = Process.runSync(executable, const ['--version']);
+      result = timedRunSync(executable, const ['--version']);
     } on Object catch (error) {
       throw DartCompilerUnavailable('dart --version could not run: $error');
     }
@@ -556,7 +557,7 @@ String _probeDartSdkExecutable(String selected) {
       ..writeAsStringSync(
         "import 'dart:io'; void main() => print(Platform.resolvedExecutable);\n",
       );
-    final result = Process.runSync(selected, [
+    final result = timedRunSync(selected, [
       script.path,
     ], workingDirectory: probe.path);
     if (result.exitCode != 0) return selected;

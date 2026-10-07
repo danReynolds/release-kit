@@ -100,6 +100,46 @@ publish = ["git-tag"]
   );
 
   test(
+    '--timings says where a stage went without changing the plain report',
+    () {
+      final repo = repository();
+      final scratch = Directory.systemTemp.createTempSync('rk-timings-');
+      addTearDown(() => scratch.deleteSync(recursive: true));
+      final traceFile = '${scratch.path}/stage.json';
+
+      final plain = repo(['stage', '--json']);
+      final timed = repo([
+        'stage',
+        '--json',
+        '--timings',
+        '--timings=$traceFile',
+      ]);
+      expect(timed.code, 0, reason: timed.all);
+
+      // The breakdown goes to stderr, so stdout stays one JSON document.
+      expect(timed.stderr, contains('Timings'));
+      expect(timed.stderr, contains('preparing'));
+      expect(timed.stderr, contains('Total'));
+      expect(timed.stderr, contains('rk: wrote timings to $traceFile'));
+
+      final trace = jsonDecode(File(traceFile).readAsStringSync()) as Map;
+      final slices = (trace['traceEvents'] as List).where(
+        (event) => (event as Map)['ph'] == 'X',
+      );
+      expect(
+        slices.map((slice) => (slice as Map)['name']),
+        contains('preparing'),
+      );
+
+      bool timedSteps(Run run) =>
+          run.stepsOf('core').any((step) => step.containsKey('took_ms'));
+      expect(timedSteps(plain), isFalse);
+      expect(timedSteps(timed), isTrue);
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
+
+  test(
     'bare stage prepares all units and named stage preserves its scope',
     () {
       final repo = repository(multiple: true);

@@ -23,6 +23,7 @@ import 'stage_receipt.dart';
 import 'stage_receipt_structure.dart';
 import 'stage_source.dart';
 import 'git.dart';
+import 'timings.dart';
 
 String _newRunId() {
   final random = Random.secure();
@@ -626,7 +627,10 @@ class ReleaseStage {
   /// answer would require is a rewrite that restores size, mode, and both
   /// timestamps, which a writer cannot do to change time: the kernel sets
   /// it. Concurrent writers are excluded separately, by the stage lock.
-  StageInspection inspect() {
+  StageInspection inspect() =>
+      Timings.spanSync('inspect stage ${unit.name}', _inspectStage);
+
+  StageInspection _inspectStage() {
     final now = directory.fingerprint();
     final remembered = _inspected;
     if (remembered != null && _inspectedAt == now) return remembered;

@@ -606,7 +606,9 @@ final class ReleasePublicationCoordinator {
           ].join('\n'),
       ].join('\n\n'),
     );
-    final answer = await confirm!('Release $series? [y/N] ');
+    final answer = await output.timeline.waitingOnPerson(
+      () => confirm!('Release $series? [y/N] '),
+    );
     final accepted = const {'y', 'yes'}.contains(answer?.trim().toLowerCase());
     if (!accepted) {
       output.blank();
@@ -2161,8 +2163,8 @@ final class ReleasePublicationCoordinator {
 
     if (!requireAuthorizer(unit)) return false;
 
-    final answer = await confirm!(
-      'Release ${unit.name} ${unit.version}? [y/N] ',
+    final answer = await output.timeline.waitingOnPerson(
+      () => confirm!('Release ${unit.name} ${unit.version}? [y/N] '),
     );
     final accepted = switch (answer?.trim().toLowerCase()) {
       'y' || 'yes' => true,

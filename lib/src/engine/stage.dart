@@ -5,6 +5,7 @@ import 'atomic_file.dart';
 import '../transforms/digest.dart';
 import 'canonical_json.dart';
 import 'workspace.dart';
+import 'timings.dart';
 
 /// Increment this only when the identity or receipt contract changes.
 const stageSchemaVersion = 13;
@@ -191,7 +192,9 @@ class StageDirectory {
   /// answer for a stage that does not exist is as cacheable as any other.
   /// Something else at the path, a file or a dangling link, has its own, so
   /// an answer about it is never taken for an answer about nothing there.
-  String fingerprint() {
+  String fingerprint() => Timings.timeTally('stage fingerprint', _fingerprint);
+
+  String _fingerprint() {
     final directory = Directory(path);
     if (!directory.existsSync()) {
       final type = FileSystemEntity.typeSync(path, followLinks: false);

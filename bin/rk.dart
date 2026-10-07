@@ -50,6 +50,7 @@ import 'package:rk/src/native/dart/stage_discovery.dart';
 import 'package:rk/src/native/dart/publication.dart';
 import 'package:rk/src/native/dart/stage_source.dart';
 import 'package:rk/src/version.dart';
+import 'package:rk/src/engine/timings.dart';
 
 const _usage = '''
 rk — an austere release tool
@@ -77,6 +78,8 @@ Flags
   -y, --yes   release, clean or uninstall: confirm without an interactive prompt
   --latest    install: get the latest compatible version without changing source
   --write     init: write the default configuration without a prompt
+  --timings   stage or release: how long each step took, after the run
+              (--timings=FILE writes it as a trace Perfetto opens)
 
 Marks: ✓ done,  · already satisfied,  ✗ problem or conflict,  ! warning,
        → your next move,  unmarked pending
@@ -139,7 +142,7 @@ Example: rk plan tools
 
 const _stageUsage =
     '''
-rk stage [unit] [--json]
+rk stage [unit] [--timings[=FILE]] [--json]
 
 Prepare and validate the exact artifacts for a release; publish nothing.
 Runs configured builds, signing, notarization, and package checks.
@@ -149,6 +152,8 @@ $_unitHelp
 Omit the unit to prepare the whole repository in dependency order.
 A named unit may use a verified sibling stage or published dependencies.
 Naming a unit never builds other units. No publication is performed.
+--timings print how long each phase and step took, once the run ends;
+          --timings=FILE writes the same as a trace file instead
 --json    emit one structured report
 
 Example: rk stage tools
@@ -158,7 +163,7 @@ Release reuses a valid stage and prepares one when needed.
 
 const _releaseUsage =
     '''
-rk release [unit] [--yes] [--json]
+rk release [unit] [--yes] [--timings[=FILE]] [--json]
 
 Prepare configured artifacts, then publish unfinished release targets.
 Reuses a valid stage and prepares one when needed; rk stage is optional.
@@ -169,6 +174,8 @@ $_unitHelp
 Omit the unit to release every unfinished unit in dependency order.
 
 -y, --yes answer yes to the publication prompt; checks still run
+--timings print how long each phase and step took, once the run ends;
+          --timings=FILE writes the same as a trace file instead
 --json    emit one structured report; does not prompt
 
 Example: rk release tools
@@ -203,8 +210,27 @@ Future<void> runRk(
     return;
   }
 
-  const known = {'-h', '--help', '--json', '-y', '--yes', '--write'};
-  final flags = args.where((argument) => argument.startsWith('-')).toSet();
+  const known = {
+    '-h',
+    '--help',
+    '--json',
+    '-y',
+    '--yes',
+    '--write',
+    '--timings',
+  };
+  // `--timings=FILE` is the one flag that carries a value: where the trace
+  // goes. It is checked as `--timings`; an empty value is not that flag.
+  String? timingsFile;
+  final flags = args.where((argument) => argument.startsWith('-')).map((
+    argument,
+  ) {
+    if (argument.startsWith('--timings=') && argument.length > 10) {
+      timingsFile = argument.substring(10);
+      return '--timings';
+    }
+    return argument;
+  }).toSet();
   final positional = args.where((a) => !a.startsWith('-')).toList();
   final json = flags.contains('--json');
 
@@ -247,8 +273,8 @@ Future<void> runRk(
   const perVerb = {
     'status': {'-h', '--help', '--json'},
     'plan': {'-h', '--help', '--json'},
-    'stage': {'-h', '--help', '--json'},
-    'release': {'-h', '--help', '--json', '-y', '--yes'},
+    'stage': {'-h', '--help', '--json', '--timings'},
+    'release': {'-h', '--help', '--json', '-y', '--yes', '--timings'},
     'init': {'-h', '--help', '--json', '--write'},
     'clean': {'-h', '--help', '--json', '-y', '--yes'},
     'target': {'-h', '--help', '--json'},
@@ -390,13 +416,55 @@ Future<void> runRk(
   }
 
   _recordDiagnosis(output, code, crash: crash);
+  _reportTimings(
+    output,
+    command: command,
+    code: code,
+    breakdown: args.contains('--timings'),
+    traceFile: timingsFile,
+  );
 
+  Timings.report(stderr);
   exitCode = code;
 
   // The machine surface survives a non-zero exit — including a crash — because
   // it is written here, after the code is known, rather than by whichever path
   // decided to stop.
   if (json) stdout.write(output.report.encode(exit: code));
+}
+
+/// Says where a staging or release run's time went.
+///
+/// On a terminal, a successful run long enough to wonder about ends with one
+/// line of phases. `--timings` prints the full breakdown to stderr, and
+/// `--timings=FILE` writes it as a trace file; either also fills the
+/// report's `took_ms`. Pipes and `--json` are otherwise unchanged.
+void _reportTimings(
+  Output output, {
+  required String command,
+  required int code,
+  required bool breakdown,
+  required String? traceFile,
+}) {
+  if (command != 'stage' && command != 'release') return;
+  if (code == ExitCodes.ok && output.isTerminal) {
+    final summary = output.timeline.summaryLine();
+    if (summary != null) {
+      output.blank();
+      output.say(summary, role: VisualRole.secondary);
+    }
+  }
+  if (!breakdown && traceFile == null) return;
+  output.report.recordTook(output.timeline.stepDurations());
+  if (breakdown) stderr.write('\n${output.timeline.breakdown()}');
+  if (traceFile case final path?) {
+    try {
+      File(path).writeAsStringSync(output.timeline.traceJson());
+      stderr.writeln('rk: wrote timings to $path');
+    } on FileSystemException catch (error) {
+      stderr.writeln('rk: could not write timings to $path: ${error.message}');
+    }
+  }
 }
 
 /// Writes the evidence for a run that began changing things and then failed.

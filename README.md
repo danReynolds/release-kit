@@ -313,8 +313,9 @@ assets = [
   makes from it is what gets released, so reuse only what the build can
   check is current. `rk clean` leaves it; delete it whenever in doubt.
 - **While it runs.** On a terminal, the stage shows the command's latest
-  line beside its elapsed time. If it fails, rk prints its last lines, and
-  the diagnosis keeps all of them.
+  line beside its elapsed time, and keeps how long the build took once it
+  is done. If it fails, rk prints its last lines, and the diagnosis keeps
+  all of them.
 - **Rust crates.** A directory with a `Cargo.toml` and no `pubspec.yaml` is a
   Rust crate. Its name and version come from the `[package]` table, and it
   is released only this way.
@@ -342,6 +343,14 @@ manifest of what was built.
 
 `rk -h` lists the commands, output marks, and exit codes. Use
 `rk <command> -h` for its flags and examples.
+
+On a terminal, a finished step keeps how long it took once that reaches a
+second, and a `stage` or `release` of ten seconds or more ends with where the
+time went: `Done in 2m 51s · preparing 2s · checking stages 31s · staging
+1m 58s · publishing 22s`. Time spent at the confirmation prompt is not
+counted. For the whole breakdown, every phase and step however fast, pass
+`--timings` (printed to stderr after the run) or `--timings=run.json` (a trace
+file Perfetto opens); either also fills `took_ms` in `--json`.
 
 ## Agents
 

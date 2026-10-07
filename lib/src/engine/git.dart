@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'diagnostic.dart';
+import 'timings.dart';
 
 /// The repository facts a release depends on.
 ///
@@ -307,7 +308,10 @@ class GitState {
   /// branches contain HEAD" needs an answer first — so they are asked
   /// together rather than one at a time. Sequential `runSync` calls also
   /// blocked the isolate, which froze every progress row rk was animating.
-  static Future<GitState> read(String root) async {
+  static Future<GitState> read(String root) =>
+      Timings.span('read git state', () => _read(root));
+
+  static Future<GitState> _read(String root) async {
     Future<ProcessResult> ask(List<String> args) => Process.run('git', [
       '--no-optional-locks',
       ...args,

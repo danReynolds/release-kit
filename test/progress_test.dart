@@ -33,6 +33,53 @@ final class _Harness {
 }
 
 void main() {
+  group('a settled row keeps how long it ran', () {
+    // Runs one board: a row that took 2m 11s across two activities, one under
+    // a second, one that failed after 2m 11s, and one restored from a receipt
+    // without running.
+    String settled({required bool terminal}) {
+      final harness = _Harness(terminal: terminal);
+      final board = harness.output.progressBoard('tool 1.2.3 · staging');
+      final archive = board.addRow(id: 'archive', label: 'package archive');
+      final source = board.addRow(id: 'source', label: 'source snapshot');
+      final binary = board.addRow(id: 'binary', label: 'binary');
+      final notes = board.addRow(id: 'notes', label: 'release notes');
+      archive.handle.begin(CommonProgressActivities.validating);
+      source.handle.begin(CommonProgressActivities.verifying);
+      binary.handle.begin(CommonProgressActivities.validating);
+      harness.now += const Duration(milliseconds: 400);
+      source.complete(note: 'verified');
+      harness.now += const Duration(seconds: 30);
+      // A new activity restarts the live counter, not the row's total.
+      archive.handle.begin(
+        ProgressActivity(running: 'packaging', failed: 'packaging failed'),
+      );
+      harness.now += const Duration(seconds: 101);
+      archive.complete(note: 'staged');
+      binary.fail();
+      notes.restoreComplete(note: 'staged');
+      board.settle(title: 'tool 1.2.3 · staged');
+      return harness.text;
+    }
+
+    String lineOf(String text, String label) =>
+        text.split('\n').lastWhere((line) => line.contains(label));
+
+    test('on a terminal, from a second up', () {
+      final text = settled(terminal: true);
+      expect(lineOf(text, 'package archive'), endsWith('staged · 2m 11s'));
+      expect(lineOf(text, 'binary'), endsWith('validation failed · 2m 11s'));
+      expect(lineOf(text, 'source snapshot'), endsWith('verified'));
+      expect(lineOf(text, 'release notes'), endsWith('staged'));
+    });
+
+    test('never in a pipe, whose transcript stays the same every run', () {
+      final text = settled(terminal: false);
+      expect(text, isNot(contains('2m 11s')));
+      expect(lineOf(text, 'package archive'), endsWith('staged'));
+    });
+  });
+
   group('target-owned activity vocabulary', () {
     test('accepts concise bespoke wording', () {
       final activity = ProgressActivity(

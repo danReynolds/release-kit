@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'timings.dart';
 
 /// Runs the native tools rk defers to.
 ///
@@ -172,6 +173,23 @@ class SystemTools implements StreamingTools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+  }) => Timings.timeTallyAsync(
+    'tool ${executable.split('/').last} ${arguments.where((a) => !a.startsWith('/')).take(4).join(' ')}',
+    () => _run(
+      executable,
+      arguments,
+      workingDirectory: workingDirectory,
+      environment: environment,
+      timeout: timeout,
+    ),
+  );
+
+  Future<ToolResult> _run(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+    Map<String, String>? environment,
+    Duration? timeout,
   }) async {
     if (cancellation?.cancelled == true) {
       return ToolResult(
@@ -305,6 +323,23 @@ class SystemTools implements StreamingTools {
 
   @override
   Future<ToolResult> runStreaming(
+    String executable,
+    List<String> arguments, {
+    required void Function(String line) onLine,
+    String? workingDirectory,
+    Map<String, String>? environment,
+  }) => Timings.timeTallyAsync(
+    'tool ${executable.split('/').last} ${arguments.where((a) => !a.startsWith('/')).take(4).join(' ')} (streamed)',
+    () => _runStreaming(
+      executable,
+      arguments,
+      onLine: onLine,
+      workingDirectory: workingDirectory,
+      environment: environment,
+    ),
+  );
+
+  Future<ToolResult> _runStreaming(
     String executable,
     List<String> arguments, {
     required void Function(String line) onLine,

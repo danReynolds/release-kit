@@ -187,6 +187,11 @@ final class ProgressRow {
   String? _note;
   ProgressElapsed? _elapsed;
 
+  /// The stopwatch of the row's first operation; `_elapsed` restarts with
+  /// each new activity, this one does not.
+  ProgressElapsed? _activeSince;
+  Duration? _took;
+
   ProgressRowState get state => _state;
   ProgressRowMark get mark => _mark;
   ProgressRowEmphasis get emphasis => _emphasis;
@@ -194,6 +199,11 @@ final class ProgressRow {
   String? get detail => _detail;
   String? get note => _note;
   Duration get elapsed => _elapsed?.call() ?? Duration.zero;
+
+  /// How long the row was active in all, from its first operation to its
+  /// settlement. Null for a row that has not settled, or never ran (one
+  /// restored from a receipt, or not attempted).
+  Duration? get took => _took;
 
   void _wait(String result) {
     if (_state != ProgressRowState.pending) {
@@ -213,6 +223,7 @@ final class ProgressRow {
         ? null
         : _text('progress detail', detail, max: 120);
     if (_activity != next) _elapsed = _clock();
+    _activeSince ??= _elapsed;
     _activity = next;
     _detail = safeDetail;
     _note = null;
@@ -249,6 +260,7 @@ final class ProgressRow {
   }) {
     _note = _text('progress completion', result, max: 120);
     _detail = null;
+    _took = _activeSince?.call();
     _mark = mark;
     _emphasis = emphasis;
     _state = ProgressRowState.complete;
@@ -264,6 +276,7 @@ final class ProgressRow {
     _activity = failedActivity;
     _note = _text('progress failure', result, max: 120);
     _detail = null;
+    _took = _activeSince?.call();
     _mark = ProgressRowMark.none;
     _emphasis = ProgressRowEmphasis.plain;
     _state = ProgressRowState.failed;

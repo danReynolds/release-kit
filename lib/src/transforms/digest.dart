@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import '../engine/timings.dart';
 
 /// The gzip transport checksum. Artifact identity still uses SHA-256.
 abstract final class Crc32 {
@@ -61,7 +62,10 @@ class Sha256 {
   /// more than the hashing did — a growable `List<int>` holds eight bytes
   /// per element, so a 10MB input became an 80MB list — and every staged
   /// byte passes through here, several times over a release.
-  static Uint8List bytes(List<int> message) {
+  static Uint8List bytes(List<int> message) =>
+      Timings.timeTally('sha256', () => _bytes(message), bytes: message.length);
+
+  static Uint8List _bytes(List<int> message) {
     // Typed once, so the compression loop indexes bytes rather than a
     // generic list. Callers reading files already hand over a Uint8List.
     final data = message is Uint8List ? message : Uint8List.fromList(message);

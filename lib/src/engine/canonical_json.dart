@@ -1,5 +1,6 @@
 import 'dart:collection';
 import 'dart:convert';
+import 'timings.dart';
 
 /// The deliberately small JSON value grammar used by stage identities and
 /// receipts.
@@ -11,7 +12,8 @@ import 'dart:convert';
 class CanonicalJson {
   const CanonicalJson._();
 
-  static String encode(Object? value) => jsonEncode(normalize(value));
+  static String encode(Object? value) =>
+      Timings.timeTally('canonical json', () => jsonEncode(normalize(value)));
 
   static Object? normalize(Object? value, [String at = r'$']) {
     if (value == null || value is bool || value is String || value is int) {

@@ -177,6 +177,11 @@ optional concrete `target`, `summary`, `verdict`,
 `permanent?`, `public?`, `needs[]`, `detail?`, `evidence?`, `took_ms?`, and
 optional `action` during `stage` or `release`.
 
+`took_ms` is present only when `stage` or `release` runs with `--timings`
+(or `--timings=FILE`): the milliseconds rk spent on the step during this run,
+summed over the progress rows that showed it. Without the flag the field is
+absent, so a report reads the same from one run to the next.
+
 `kind` describes lifecycle mechanics; `target` is the stable destination id
 for public steps (for example `pubDev` or `githubRelease`). More than one
 registry can therefore share `publishRegistry` without becoming ambiguous.

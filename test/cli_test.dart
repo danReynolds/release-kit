@@ -193,6 +193,25 @@ void main() {
       expect(elsewhere.code, 2, reason: elsewhere.all);
       expect(elsewhere.problems.map((p) => p['code']), contains('RK-CLI-005'));
     });
+
+    test('--timings applies to stage and release, with or without a file', () {
+      for (final command in ['stage', 'release']) {
+        for (final flag in ['--timings', '--timings=run.json']) {
+          final run = repo([command, flag, '--help']);
+          expect(run.code, 0, reason: '$command $flag: ${run.all}');
+        }
+      }
+
+      final elsewhere = repo(['status', '--timings', '--json']);
+      expect(elsewhere.code, 2, reason: elsewhere.all);
+      expect(elsewhere.problems.map((p) => p['code']), contains('RK-CLI-005'));
+
+      // An empty file name is not the flag: refused, not read as plain
+      // --timings.
+      final empty = repo(['stage', '--timings=', '--json']);
+      expect(empty.code, 2, reason: empty.all);
+      expect(empty.problems.map((p) => p['code']), contains('RK-CLI-001'));
+    });
   });
 
   test(

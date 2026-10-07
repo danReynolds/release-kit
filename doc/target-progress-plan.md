@@ -69,8 +69,11 @@ mislabel a definite upload or publish rejection as a verification failure.
    authorization, retry safety, public truth, or whether a target succeeded.
 6. A failed subprocess is not necessarily a failed publication. RK performs
    its authoritative read-back before replacing an active row with a failure.
-7. TTY output may animate and redraw. Pipes and JSON remain deterministic and
-   do not receive spinner frames or elapsed-time events.
+7. TTY output may animate and redraw. A settled row keeps how long it ran
+   once that reaches a second, and a successful `stage` or `release` of ten
+   seconds or more ends with one line of phases (`doc/step-timings.md`).
+   Pipes and JSON remain deterministic and do not receive spinner frames or
+   elapsed-time events; `--timings` is the explicit request that adds them.
 8. Report a bespoke activity only for a separately observable operation. Do
    not invent a `provenance` phase when a native publish command performs
    publication and provenance attestation as one opaque operation.
@@ -454,7 +457,8 @@ using the existing safety rules.
   model. Transient activity is presentation state and adds no report key or
   schema bump.
 - Tests use a fake clock and captured activity transitions; production output
-  never serializes wall-clock progress.
+  never serializes wall-clock progress unless `--timings` asks for it, which
+  fills `took_ms` and writes a breakdown to stderr or a trace file.
 - TTY and non-TTY agree on final row state and issue text. Delayed non-TTY
   activity lines are informational, not report state.
 
@@ -577,6 +581,7 @@ architectural proof only; production npm publishing remains its own change.
 - Interactive subprocess output does not corrupt the live board, erase native
   diagnostics, leak timers, or lose its durable target/activity handoff.
 - Pipes and JSON stay deterministic; the report schema does not change.
+  `--timings` fills the already-optional `took_ms`, and only on request.
 - Activity/label validation prevents multiline output, control characters,
   oversized details, duplicated target names, and credential disclosure.
 - Existing stage receipts, target inspections, authorization, settlement,

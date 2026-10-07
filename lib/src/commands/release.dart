@@ -27,6 +27,7 @@ import 'release_preparation.dart';
 import 'release_stage_coordinator.dart';
 import 'release_publication_coordinator.dart';
 import 'repository_publication.dart';
+import '../engine/timings.dart';
 import 'stage_check_progress.dart';
 
 /// Executes a release: inspect, act, inspect again, one step at a time — and
@@ -189,6 +190,7 @@ class ReleaseCommand {
     try {
       return await _runUnits(only: only);
     } finally {
+      output.timeline.endPhase();
       // Every exit path, including the refusals and the single named unit: a
       // run that stopped partway may still have created the session, and
       // leaving one behind is exactly what this undoes.
@@ -251,6 +253,7 @@ class ReleaseCommand {
     if (prepared.code != ExitCodes.ok || stageOnly) return prepared.code;
     var publications = prepared.publications;
     if (publications.isEmpty) return ExitCodes.ok;
+    output.timeline.phase('publishing');
     try {
       final native = nativePublication;
       if (native == null) {
@@ -321,9 +324,13 @@ class ReleaseCommand {
       );
     }
     if (!_validateRepositoryScope(selected)) return result(ExitCodes.refused);
+    output.timeline.phase('preparing');
     final inspected = <String, _InspectedUnit>{};
     for (final unit in selected) {
-      final observation = await _inspectRelease(unit);
+      final observation = await Timings.span(
+        'inspect ${unit.name}',
+        () => _inspectRelease(unit),
+      );
       if (observation == null) return result(ExitCodes.refused);
       inspected[unit.name] = observation;
     }
@@ -362,17 +369,20 @@ class ReleaseCommand {
         );
         return result(ExitCodes.refused);
       }
-      final baselines = await _publication.prepareDestinations(
-        unit: unit,
-        targets: observation.targets,
-        states: observation.states,
-        actions: {
-          for (final target in observation.targets)
-            target.step.id: observation.states[target.step.id]!.isExact
-                ? ReleaseAction.alreadyPublished
-                : ReleaseAction.notAttempted,
-        },
-        stageOnly: true,
+      final baselines = await Timings.span(
+        'prepare destinations ${unit.name}',
+        () => _publication.prepareDestinations(
+          unit: unit,
+          targets: observation.targets,
+          states: observation.states,
+          actions: {
+            for (final target in observation.targets)
+              target.step.id: observation.states[target.step.id]!.isExact
+                  ? ReleaseAction.alreadyPublished
+                  : ReleaseAction.notAttempted,
+          },
+          stageOnly: true,
+        ),
       );
       if (baselines == null) return result(ExitCodes.refused);
     }
@@ -414,6 +424,7 @@ class ReleaseCommand {
       return finishNoops();
     }
     final RepositoryPreparationPlan plan;
+    output.timeline.phase('checking stages');
     final checking = StageCheckProgress(output, units: work);
     try {
       plan = await coordinator.resolve(
@@ -511,6 +522,7 @@ class ReleaseCommand {
       return result(_refuseRepositoryPreparation(error));
     }
     checking.finish();
+    output.timeline.phase('staging');
     if (plan.order.isNotEmpty) {
       output.heading(
         'Preparation order: ${plan.order.map((unit) => unit.name).join(' -> ')}',
@@ -519,15 +531,18 @@ class ReleaseCommand {
     }
     for (final unit in plan.order) {
       try {
-        await plan.bind(unit);
+        await Timings.span('bind ${unit.name}', () => plan.bind(unit));
       } on Object catch (error) {
         return result(_refuseRepositoryPreparation(error, unit: unit.name));
       }
-      final prepared = await _prepareRelease(
-        inspected[unit.name]!,
-        nativePreparation: !plan.withoutPreparation.contains(unit.name),
-        recoverOnly: plan.withoutPreparation.contains(unit.name),
-        refreshObservations: true,
+      final prepared = await Timings.span(
+        'prepare ${unit.name}',
+        () => _prepareRelease(
+          inspected[unit.name]!,
+          nativePreparation: !plan.withoutPreparation.contains(unit.name),
+          recoverOnly: plan.withoutPreparation.contains(unit.name),
+          refreshObservations: true,
+        ),
       );
       if (prepared.code != ExitCodes.ok) return result(prepared.code);
       if (prepared.publication case final publication?) {
