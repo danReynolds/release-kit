@@ -254,6 +254,12 @@ $metadata
     writeWrapper('two, a different launcher');
     expect(DartCompilerIdentity.readResolved(wrapper.path), first);
     expect(probes(), 2, reason: 'a changed launcher is asked again');
+
+    // A version manager's shim can switch SDKs without changing on disk, so
+    // authorization forgets every answer before and after the yes.
+    DartCompilerIdentity.askWrappersAgain();
+    expect(DartCompilerIdentity.readResolved(wrapper.path), first);
+    expect(probes(), 3, reason: 'an unchanged launcher is asked again');
   });
 
   test('the runtime bytes participate in compiler identity and round trip', () {

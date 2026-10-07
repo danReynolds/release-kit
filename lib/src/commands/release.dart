@@ -18,7 +18,6 @@ import '../engine/release_stage.dart';
 import '../engine/repository_stage_preparation.dart';
 import '../engine/source_tree.dart';
 import '../engine/stage_inspection.dart';
-import '../engine/stage_plan.dart';
 import '../engine/targets.dart';
 import '../engine/tools.dart';
 import '../engine/verdict.dart';
@@ -76,17 +75,16 @@ class ReleaseCommand {
                resolution,
              ),
            ).call,
-       _refreshStage = _atReleaseBoundary(
-         repositoryStages?.stages.refresh ??
-             refreshStage ??
-             ((unit, currentGit) => ReleaseStages(
-               source: tree,
-               git: currentGit,
-               stageContracts: inspector.targets.stageContractResolver(
-                 resolution,
-               ),
-             ).call(unit)),
-       ),
+       _refreshStage =
+           repositoryStages?.stages.refresh ??
+           refreshStage ??
+           ((unit, currentGit) => ReleaseStages(
+             source: tree,
+             git: currentGit,
+             stageContracts: inspector.targets.stageContractResolver(
+               resolution,
+             ),
+           ).call(unit)),
        _refreshGit = refreshGit ?? (() async => git),
        _refreshEnvironment =
            refreshEnvironment ??
@@ -94,15 +92,6 @@ class ReleaseCommand {
 
   static Future<void> _sleep(Duration duration) =>
       Future<void>.delayed(duration);
-
-  /// [refresh] as a release boundary uses it: every ambient input read again,
-  /// down to which SDK a Dart wrapper on PATH runs.
-  static ReleaseStage Function(ResolvedUnit, GitState) _atReleaseBoundary(
-    ReleaseStage Function(ResolvedUnit, GitState) refresh,
-  ) => (unit, git) {
-    DartCompilerIdentity.askWrappersAgain();
-    return refresh(unit, git);
-  };
 
   final Resolution resolution;
   final SourceTree tree;

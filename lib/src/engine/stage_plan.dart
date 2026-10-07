@@ -84,10 +84,11 @@ class DartCompilerIdentity {
   /// Forgets which SDK each Dart wrapper on PATH runs, so the next reading
   /// asks the wrapper again.
   ///
-  /// Between boundaries an unchanged wrapper is trusted to run the same SDK,
-  /// which spares a release a hundred probes. A version manager's shim can
-  /// switch SDKs without changing on disk, though, and publication must
-  /// notice a changed compiler, so each release boundary asks again.
+  /// Otherwise an unchanged wrapper is trusted to run the same SDK, which
+  /// spares a release a hundred probes. A version manager's shim can switch
+  /// SDKs without changing on disk, though, and publication must notice a
+  /// changed compiler, so authorization asks again: before the context a
+  /// person approves is checked, and after the yes.
   static void askWrappersAgain() => _sdkExecutableCache.clear();
 
   /// Resolves and reads the compiler selected by PATH.
@@ -526,7 +527,7 @@ String _dartSdkExecutable(String selected) {
   }
   // The probe starts a VM, about 0.2s, and a release asks for the compiler
   // identity over a hundred times. A wrapper that has not changed on disk is
-  // taken to run the same SDK until the next release boundary
+  // taken to run the same SDK until authorization asks again
   // ([DartCompilerIdentity.askWrappersAgain]), as long as that SDK is still
   // there; one that has changed is asked again.
   final wrapper = _fileFingerprint(File(selected));
