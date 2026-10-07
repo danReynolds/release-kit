@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- Show what rk is doing while it checks saved stages, and check them
+  faster. Between the last `Releasing` (or `Staging`) heading and the
+  preparation order, rk verifies every unit's saved stage. It printed nothing
+  there, often for tens of seconds. A `Checking stages` board now shows each
+  unit's saved stage being verified, the units' public targets being read,
+  and, for a unit with no stage, its dependencies being resolved. A row is
+  active only while its own work runs, so a refusal marks the work that
+  failed and nothing else, and the board is printed before the refusal.
+  - Reusing four saved stages took about half as long in a measured
+    four-package release. rk no longer runs the same work again within one
+    run: probing a Dart SDK behind a launcher such as Flutter's `dart`,
+    reading a file from a commit with its own `git show`, and re-hashing
+    every staged file each time a stage is opened. Authorization still asks
+    a Dart launcher which SDK it runs, before and after the yes, so a version
+    manager that switches SDKs mid-run is noticed before anything is
+    published.
+  - Fresh staging preloads a unit's dependency archives in one
+    `dart pub cache preload` per registry, instead of one per archive, with
+    the same two minutes per archive. If Pub refuses the batch, each archive
+    is retried alone, so an error still names the archive; when each one
+    preloads alone, staging goes on.
+
 ## 0.1.14
 
 - rk depends on Fleury 0.1 from pub.dev. The repository's override to a

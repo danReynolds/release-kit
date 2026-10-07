@@ -194,20 +194,47 @@ final class DartArchiveReplay {
       replay._rootManifestSha256 = originalRootSha256;
       replay._overridesSha256 = replay._readOverridesDigest();
       Directory('${replay.directory.path}/cache').createSync();
+      // One `pub cache preload` per registry, not per archive: each call
+      // starts a VM, and a stage replays fifty-odd archives (220 calls, 13s,
+      // for four packages).
+      final byRegistry = <String, List<({File file, String label})>>{};
       for (final (index, input) in selected.indexed) {
         final file = File('${replay.directory.path}/input-$index.tar.gz')
           ..writeAsBytesSync(input.archive.bytes, flush: true);
-        final result = await tools.run(
+        (byRegistry[input.registry] ??= []).add((
+          file: file,
+          label: '${input.name} ${input.version}',
+        ));
+      }
+      for (final MapEntry(key: registry, value: group) in byRegistry.entries) {
+        Future<ToolResult> preload(List<File> files) => tools.run(
           compiler,
-          ['--suppress-analytics', 'pub', 'cache', 'preload', file.path],
+          [
+            '--suppress-analytics',
+            'pub',
+            'cache',
+            'preload',
+            for (final file in files) file.path,
+          ],
           workingDirectory: root.path,
-          environment: {
-            ...replay.environment,
-            'PUB_HOSTED_URL': input.registry,
-          },
-          timeout: const Duration(minutes: 2),
+          environment: {...replay.environment, 'PUB_HOSTED_URL': registry},
+          // Each archive keeps the two minutes it had in a call of its own.
+          timeout: const Duration(minutes: 2) * files.length,
         );
-        _requireSuccess('preloading ${input.name} ${input.version}', result);
+        final batch = await preload([for (final entry in group) entry.file]);
+        if (batch.ok) continue;
+        if (group.length == 1) {
+          _requireSuccess('preloading ${group.single.label}', batch);
+        }
+        // One archive at a time, so a refusal names the archive pub refused.
+        // When each preloads alone the cache holds them all, and the batch
+        // failed for its own sake: its length, or a moment's trouble.
+        for (final entry in group) {
+          _requireSuccess(
+            'preloading ${entry.label}',
+            await preload([entry.file]),
+          );
+        }
       }
       final get = await replay._run(const [
         'pub',

@@ -27,6 +27,7 @@ import 'release_preparation.dart';
 import 'release_stage_coordinator.dart';
 import 'release_publication_coordinator.dart';
 import 'repository_publication.dart';
+import 'stage_check_progress.dart';
 
 /// Executes a release: inspect, act, inspect again, one step at a time — and
 /// decides everything rk refuses.
@@ -413,9 +414,11 @@ class ReleaseCommand {
       return finishNoops();
     }
     final RepositoryPreparationPlan plan;
+    final checking = StageCheckProgress(output, units: work);
     try {
       plan = await coordinator.resolve(
         selected: work,
+        observer: checking,
         eligibility: (restored) async {
           // Restoration must run first: the provisional dependency-free stage
           // is not evidence that a partial release lost its frozen bytes. But
@@ -423,10 +426,10 @@ class ReleaseCommand {
           // fresh native solve or producer can replace the lost commitment.
           final withoutPreparation = <String>{};
           for (final unit in work) {
-            final observed = await _recoveryBeforeDiscovery(
-              inspected[unit.name]!,
+            final observed = await checking.checkingPublicTargets(
+              unit,
+              () => _recoveryBeforeDiscovery(inspected[unit.name]!),
             );
-            if (observed == null) throw const _PreparationRefused();
             inspected[unit.name] = observed;
             final unfinished = observed.targets
                 .where((target) => !observed.states[target.step.id]!.isExact)
@@ -439,6 +442,7 @@ class ReleaseCommand {
               withoutPreparation.add(unit.name);
             }
           }
+          checking.publicTargetsChecked();
           if (work.every(
             (unit) =>
                 restored.containsKey(unit.name) ||
@@ -463,7 +467,12 @@ class ReleaseCommand {
           for (final name in configured.map((c) => c.unit).toSet()) {
             if (workNames.contains(name)) continue;
             final unit = resolution.unit(name)!;
-            final stage = await completedProvider?.call(unit);
+            final provider = completedProvider;
+            if (provider == null) continue;
+            // An optional sibling: none usable is an answer, not a failure.
+            checking.restoring(unit);
+            final stage = await provider(unit);
+            checking.restored(unit, found: stage != null);
             if (stage != null) {
               complete[name] = PreparedStageProvider.capture(stage);
             }
@@ -491,11 +500,17 @@ class ReleaseCommand {
           );
         },
       );
-    } on _PreparationRefused {
+    } on _PreparationRefused catch (refused) {
+      // The board's snapshot first, then why it stopped, as on every other
+      // halt: the verdict is the last thing a reader sees.
+      checking.stop();
+      refused.report();
       return result(ExitCodes.refused);
     } on Object catch (error) {
+      checking.stop();
       return result(_refuseRepositoryPreparation(error));
     }
+    checking.finish();
     if (plan.order.isNotEmpty) {
       output.heading(
         'Preparation order: ${plan.order.map((unit) => unit.name).join(' -> ')}',
@@ -522,7 +537,9 @@ class ReleaseCommand {
     return finishNoops();
   }
 
-  Future<_InspectedUnit?> _recoveryBeforeDiscovery(
+  /// Reads [observed]'s public targets before any stage is resolved, throwing
+  /// [_PreparationRefused] when they rule out preparing it.
+  Future<_InspectedUnit> _recoveryBeforeDiscovery(
     _InspectedUnit observed,
   ) async {
     final unit = observed.unit;
@@ -549,9 +566,10 @@ class ReleaseCommand {
         .tagGuards(unit, observed.checklist, states)
         .forEach(problems.report);
     if (problems.isNotEmpty) {
-      output.halt(HaltKind.beforeActing);
-      output.problems(problems.found);
-      return null;
+      throw _PreparationRefused(() {
+        output.halt(HaltKind.beforeActing);
+        output.problems(problems.found);
+      });
     }
     final unfinished = observed.targets
         .where((target) => !states[target.step.id]!.isExact)
@@ -578,19 +596,21 @@ class ReleaseCommand {
         stageReusable: inspection.reusable,
       );
     }
-    output.problem(
-      Diagnostic(
-        code: 'RK-STAGE-005',
-        message: 'the partial release needs its exact stage',
-        remedy:
-            'restore ${stage.directory.path} from the machine that staged '
-            'this release. Its recorded archives and frozen dependency choices '
-            'cannot be recreated after a public target has bound them.',
-      ),
-      unit: unit.name,
-    );
-    output.halt(HaltKind.unfixableByRerun);
-    return null;
+    throw _PreparationRefused(() {
+      output.problem(
+        Diagnostic(
+          code: 'RK-STAGE-005',
+          message: 'the partial release needs its exact stage',
+          remedy:
+              'restore ${stage.directory.path} from the machine that staged '
+              'this release. Its recorded archives and frozen dependency '
+              'choices cannot be recreated after a public target has bound '
+              'them.',
+        ),
+        unit: unit.name,
+      );
+      output.halt(HaltKind.unfixableByRerun);
+    });
   }
 
   int _refuseRepositoryPreparation(Object error, {String? unit}) {
@@ -1423,6 +1443,10 @@ final class _InspectedUnit {
   final bool stageReusable;
 }
 
+/// A refusal found while the stage-check board is live. It carries its own
+/// report, printed once the board has been concluded.
 final class _PreparationRefused implements Exception {
-  const _PreparationRefused();
+  const _PreparationRefused(this.report);
+
+  final void Function() report;
 }
