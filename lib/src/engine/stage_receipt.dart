@@ -46,7 +46,7 @@ class StageInput {
       StageInput(name: artifact.path, sha256: artifact.sha256);
 
   /// Binds a consumer to the complete, ordered output set of an earlier
-  /// step. This is useful for source snapshots and other multi-file inputs.
+  /// step, for multi-file inputs.
   factory StageInput.step(StageStep step) =>
       StageInput(name: 'step:${step.name}', sha256: step.outputSha256);
 
@@ -205,22 +205,6 @@ class StageStep {
       evidence: evidence.cast<String, Object?>(),
     );
   }
-
-  factory StageStep.sourceSnapshot(
-    StageIdentity identity,
-    Iterable<StageArtifact> artifacts,
-  ) => StageStep(
-    name: 'source-snapshot',
-    inputs: [
-      if (identity.isGitBound) StageInput.commit(identity),
-      if (identity.isGitBound) StageInput.tree(identity),
-      StageInput.plan(identity),
-    ],
-    outputs: artifacts,
-    evidence: identity.isGitBound
-        ? {'commit': identity.headCommit, 'tree': identity.headTree}
-        : const {'source_binding': 'unbound'},
-  );
 
   final String name;
   final List<StageInput> inputs;

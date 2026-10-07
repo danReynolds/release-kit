@@ -616,13 +616,13 @@ assets = ["assets/parser-macos-arm64.dylib", "parser-linux-x64.so", "src.tar.gz"
       });
     });
 
-    test('leaves a receipt of the source it read and the assets it wrote', () {
+    test('leaves a receipt of the assets it wrote', () {
       final unit = unitOf(parser());
       final step = Checklist.localProducerSteps(unit).single;
       final contract = contractFor(unit, step);
       expect(receiptNameFor(step), 'assets:flark_parse');
       expect(contract.name, 'assets:flark_parse');
-      expect(contract.inputs, {'step:source-snapshot'});
+      expect(contract.inputs, isEmpty);
       expect(contract.outputs, {
         'producers/flark_parse/assets/parser-macos-arm64.dylib': 'asset',
         'producers/flark_parse/assets/parser-linux-x64.so': 'asset',

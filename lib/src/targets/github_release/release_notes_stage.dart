@@ -5,10 +5,8 @@ import '../../engine/diagnostic.dart';
 import '../../engine/resolve.dart';
 import '../../engine/source_tree.dart';
 import '../../engine/stage_contract.dart';
-import '../../engine/stage_inspection.dart';
 import '../../engine/stage_receipt.dart';
 import '../../engine/targets.dart';
-import '../../transforms/digest.dart';
 import '../target_module.dart';
 
 /// GitHub's private release-body contribution to the reusable stage.
@@ -20,34 +18,12 @@ TargetStage githubReleaseNotesStage({
   required ResolvedUnit unit,
   required TargetPlan target,
 }) {
-  final contract = StageContributionContract(
+  // The notes are extracted from the commit the stage names; their bytes are
+  // recorded and verified like any other output.
+  const contract = StageContributionContract(
     step: StageStepContract(
       'release-notes',
-      inputs: const {'step:source-snapshot'},
-      outputs: const {'release-notes.md': 'notes'},
-      validateEvidence: (context, step) {
-        final expected = _releaseNotes(unit, context.source);
-        final bytes = expected == null ? null : utf8.encode(expected);
-        final actual = step.outputs
-            .where(
-              (output) =>
-                  output.path == 'release-notes.md' && output.type == 'notes',
-            )
-            .singleOrNull;
-        if (bytes != null &&
-            actual != null &&
-            actual.size == bytes.length &&
-            actual.sha256 == Sha256.hex(bytes)) {
-          return const [];
-        }
-        return const [
-          StageIssue(
-            StageIssueKind.invalidStructure,
-            'release-notes does not match the staged changelog entry',
-            path: 'stage.json',
-          ),
-        ];
-      },
+      outputs: {'release-notes.md': 'notes'},
     ),
   );
   return TargetStage(
@@ -62,8 +38,7 @@ Future<TargetStageOutcome> _prepareReleaseNotes(
   TargetStageContext context,
 ) async {
   final receiptName = context.contract.step.name;
-  final source = SnapshotSourceTree(context.stage.sourceRoot);
-  final notes = _releaseNotes(context.stage.unit, source);
+  final notes = _releaseNotes(context.stage.unit, context.source);
   if (notes == null) {
     return TargetStageFailure(
       Diagnostic(
@@ -97,7 +72,7 @@ Future<TargetStageOutcome> _prepareReleaseNotes(
   return TargetStageSuccess(
     StageStep(
       name: receiptName,
-      inputs: [StageInput.step(context.sourceStep)],
+      inputs: const [],
       outputs: [
         StageArtifact.capture(
           stage: context.stage.directory,

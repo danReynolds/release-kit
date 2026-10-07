@@ -154,26 +154,24 @@ void main() {
     );
   }
 
-  test(
-    'source retry refuses unknown residue without removing the frozen header',
-    () async {
-      final stage = harness.stage;
-      stage.writeProgress(const []);
-      final file = File(stage.directory.resolve('stage.json'));
-      final bytes = file.readAsBytesSync();
-      final extra = File(stage.directory.resolve('unowned'))
-        ..writeAsStringSync('keep');
-      final run = await harness.run(stageOnly: true, confirm: null);
-      expect(run.code, ExitCodes.refused, reason: run.text);
-      expect(
-        run.text,
-        contains('frozen source plan could not be resumed safely'),
-      );
-      expect(run.publicMutations, isEmpty);
-      expect(file.readAsBytesSync(), bytes);
-      expect(extra.readAsStringSync(), 'keep');
-    },
-  );
+  test('an interrupted stage refuses unknown residue without removing its '
+      'frozen header', () async {
+    final stage = harness.stage;
+    stage.writeProgress(const []);
+    final file = File(stage.directory.resolve('stage.json'));
+    final bytes = file.readAsBytesSync();
+    final extra = File(stage.directory.resolve('unowned'))
+      ..writeAsStringSync('keep');
+    final run = await harness.run(stageOnly: true, confirm: null);
+    expect(run.code, ExitCodes.refused, reason: run.text);
+    expect(
+      run.text,
+      contains('the interrupted stage could not be resumed safely'),
+    );
+    expect(run.publicMutations, isEmpty);
+    expect(file.readAsBytesSync(), bytes);
+    expect(extra.readAsStringSync(), 'keep');
+  });
 
   test('a production receipt cannot omit its frozen plan', () {
     final stage = harness.stage;
@@ -435,7 +433,7 @@ void main() {
       final receipt = unbound.stage.requireReceipt();
       expect(receipt.identity.isGitBound, isFalse);
       expect(receipt.identity.headCommit, isNull);
-      expect(receipt.steps.first.evidence, const {'source_binding': 'unbound'});
+      expect(receipt.steps.last.evidence['source_binding'], 'unbound');
       final manifest = ReleaseManifest.parse(
         File(
           unbound.stage.directory.resolve(ReleaseAssets.manifest),
@@ -969,7 +967,7 @@ publish = ["pub.dev"]
   });
 
   test('normal release reuses the exact stage without producers or preflight '
-      'and publishes from its source snapshot', () async {
+      'and publishes its staged archive', () async {
     final staged = await harness.run(
       stageOnly: true,
       confirm: (_) async => fail('stage mode must not authorize'),
@@ -1010,11 +1008,12 @@ publish = ["pub.dev"]
     ]);
     expect(
       publish.workingDirectory,
-      '${harness.stage.sourceRoot}/packages/tool',
+      isNot(startsWith(harness.stage.directory.repositoryRoot)),
       reason:
-          'the registry must receive the reviewed snapshot, not mutable '
-          'worktree bytes',
+          'Pub uploads the staged archive as it is, from a directory of its '
+          'own, never the mutable worktree',
     );
+    expect(Directory(publish.workingDirectory!).existsSync(), isFalse);
     expect(
       publish.interactive,
       isFalse,
@@ -2423,7 +2422,7 @@ publish = ["pub.dev"]
   }
 
   for (final boundary in [
-    (step: 'source-snapshot', preflightDone: false, buildDone: false),
+    (step: 'plan', preflightDone: false, buildDone: false),
     (step: 'pub-archive:tool', preflightDone: true, buildDone: false),
     (step: 'release-notes', preflightDone: true, buildDone: false),
     (step: 'build:tool:linux-x64', preflightDone: true, buildDone: true),
@@ -2440,7 +2439,11 @@ publish = ["pub.dev"]
         expect(first.code, ExitCodes.ok, reason: first.text);
         _interruptAfter(harness.stage, boundary.step);
         final before = harness.stage.inspect();
-        expect(before.validProgress, isTrue, reason: before.issues.join('\n'));
+        expect(
+          before.validProgress || before.planRecorded,
+          isTrue,
+          reason: before.issues.join('\n'),
+        );
         final retained = {
           for (final artifact in before.receipt!.artifacts)
             artifact.path: File(
@@ -2951,10 +2954,16 @@ Future<void> _expectRefreshDriftRefused(
   expect(drifted.publicMutations, isEmpty);
 }
 
+/// Cuts a completed stage back to the steps through [stepName]; `plan`
+/// keeps only the frozen plan header.
 void _interruptAfter(ReleaseStage stage, String stepName) {
   final complete = stage.requireReceipt();
-  final through = complete.steps.indexWhere((step) => step.name == stepName);
-  if (through < 0) fail('fixture receipt has no $stepName');
+  final through = stepName == 'plan'
+      ? -1
+      : complete.steps.indexWhere((step) => step.name == stepName);
+  if (through < 0 && stepName != 'plan') {
+    fail('fixture receipt has no $stepName');
+  }
   final kept = complete.steps.take(through + 1).toList();
   final keptPaths = kept
       .expand((step) => step.outputs)

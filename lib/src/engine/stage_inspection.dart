@@ -78,21 +78,6 @@ class StageInspection {
       issues.isNotEmpty &&
       issues.every((issue) => issue.kind == StageIssueKind.incompleteReceipt);
 
-  /// Read-only classification of an intact header with unrecorded source-copy
-  /// residue. The coordinator can discard that residue after adoption. It
-  /// remains untrusted and is never part of reusable producer progress.
-  bool get canRestartSource =>
-      receipt?.plan != null &&
-      receipt!.steps.isEmpty &&
-      issues.isNotEmpty &&
-      issues.every(
-        (issue) =>
-            issue.kind == StageIssueKind.incompleteReceipt ||
-            (issue.kind == StageIssueKind.extraArtifact &&
-                (issue.path == 'source' ||
-                    issue.path?.startsWith('source/') == true)),
-      );
-
   /// The shared verdict used by status and release for the stage barrier.
   ///
   /// A missing or interrupted receipt is ordinary work. A receipt that once
@@ -334,14 +319,21 @@ class StageInspector {
     }
 
     try {
+      // Within one run rk trusts its own writes: a file this process hashed
+      // to the recorded digest, and that has not moved since, is not read
+      // again. A later run reads and hashes everything once.
+      if (stage.digestStillStands(expected.path, expected.sha256)) return;
       final file = File(stage.resolve(expected.path));
       final stat = file.statSync();
       final bytes = file.readAsBytesSync();
+      final sha256 = Sha256.hex(bytes);
       final differences = <String>[];
       if (_mode(stat.mode) != expected.mode) differences.add('mode');
       if (bytes.length != expected.size) differences.add('size');
-      if (Sha256.hex(bytes) != expected.sha256) differences.add('sha256');
-      if (differences.isNotEmpty) {
+      if (sha256 != expected.sha256) differences.add('sha256');
+      if (differences.isEmpty) {
+        stage.noteDigested(expected.path, stat, sha256);
+      } else {
         issues.add(
           StageIssue(
             StageIssueKind.changedArtifact,
@@ -368,25 +360,7 @@ class StageInspector {
   ) {
     issues.addAll(StageReceiptStructure.validate(receipt));
     issues.addAll(StageBinaryEvidence.validate(receipt));
-    if (receipt.steps.isEmpty) {
-      if (receipt.plan != null) {
-        final type = FileSystemEntity.typeSync(
-          stage.resolve('source'),
-          followLinks: false,
-        );
-        if (type != FileSystemEntityType.notFound &&
-            type != FileSystemEntityType.directory) {
-          issues.add(
-            const StageIssue(
-              StageIssueKind.wrongType,
-              'unrecorded source residue is not a directory',
-              path: 'source',
-            ),
-          );
-        }
-      }
-      return;
-    }
+    if (receipt.steps.isEmpty) return;
     // Progress is reusable only if semantic producer evidence validates too;
     // otherwise a crash after a bad archive was receipted would turn that
     // false claim into a trusted input on the next run.

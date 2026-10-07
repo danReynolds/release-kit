@@ -2,7 +2,6 @@ import 'dart:io';
 import 'dart:math';
 
 import '../builds/launcher_compiler.dart';
-import '../transforms/digest.dart';
 import 'canonical_json.dart';
 import 'release_asset.dart';
 import 'release_manifest.dart';
@@ -123,7 +122,6 @@ class ReleaseStages {
       targetContributions: stageContracts(
         unit: unit,
         repository: currentGit.originUrl,
-        sourceRoot: directory.resolve('source'),
       ),
     );
   }
@@ -152,9 +150,10 @@ class ReleaseStages {
 
 /// One resolved unit's immutable local release stage.
 ///
-/// The source snapshot and every producer output live beneath the
-/// content-addressed directory. Only a complete, re-inspected receipt makes
-/// those files reusable; directory contents by themselves carry no authority.
+/// Every producer output lives beneath the content-addressed directory; the
+/// source it was built from is named by the stage identity, not copied into
+/// it. Only a complete, inspected receipt makes those files reusable;
+/// directory contents by themselves carry no authority.
 class ReleaseStage {
   ReleaseStage({
     required this.unit,
@@ -202,7 +201,6 @@ class ReleaseStage {
     return StageReceiptContract.forUnit(
       unit: unit,
       repository: repository,
-      sourceRoot: sourceRoot,
       targetContributions: targetContributions,
       localProducers: localProducerContracts(unit),
     );
@@ -308,8 +306,6 @@ class ReleaseStage {
     }
     return receipt!;
   }
-
-  String get sourceRoot => directory.resolve('source');
 
   /// What this stage is, verified.
   ///
@@ -466,26 +462,6 @@ class ReleaseStage {
     }
   }
 
-  /// Retains the frozen header across interrupted source-copy recovery. Only
-  /// unrecorded source residue may be discarded; never delete stage.json.
-  void discardUnrecordedSource() {
-    final inspected = inspect();
-    final receipt = inspected.receipt;
-    if (!inspected.canRestartSource ||
-        receipt!.identity.id != directory.identity.id) {
-      throw StateError('source retry requires an intact frozen plan header');
-    }
-    final type = FileSystemEntity.typeSync(sourceRoot, followLinks: false);
-    if (type == FileSystemEntityType.notFound) return;
-    if (type != FileSystemEntityType.directory) {
-      throw FileSystemException(
-        'source residue is not a directory',
-        sourceRoot,
-      );
-    }
-    Directory(sourceRoot).deleteSync(recursive: true);
-  }
-
   /// Removes declared producer outputs that were written but never receipted.
   ///
   /// A producer writes bytes before rk can hash and record them. If that
@@ -567,116 +543,13 @@ class ReleaseStage {
     }
   }
 
-  /// Copies the Git-tracked source into the stage and returns the captured
-  /// records. Producers use [sourceRoot], never the mutable worktree.
-  Future<List<StageArtifact>> materializeSource() async {
-    final snapshot = await StageSourceSnapshot.capture(
-      source,
-      commit: directory.identity.headCommit,
-    );
-    // Source inventories usually dominate receipt size. Refuse an oversized
-    // inventory before copying any files or running producers, preserving the
-    // intact frozen header for a clear diagnostic on retry.
-    StageReceipt(
-      identity: directory.identity,
-      plan: resolvedPlan,
-      steps: [StageStep.sourceSnapshot(directory.identity, snapshot.artifacts)],
-    ).encodeForStorage();
-    return snapshot.materialize(directory);
-  }
-
-  /// Returns why mutable, unbound source no longer matches its captured
-  /// snapshot. Git-bound stages use their commit/tree identity instead.
-  String? unboundSourceProblem() {
-    if (directory.identity.isGitBound) return null;
-    final receipt = StageReceiptStore(directory).read();
-    if (receipt == null || receipt.steps.isEmpty) {
-      return 'the stage has no source snapshot receipt';
-    }
-    final step = receipt.steps.first;
-    if (step.name != 'source-snapshot') {
-      return 'the stage has no source snapshot step';
-    }
-    final expected = <String, StageArtifact>{
-      for (final artifact in step.outputs)
-        if (artifact.path.startsWith('source/'))
-          artifact.path.substring('source/'.length): artifact,
-    };
-    final current = source.trackedFiles().toSet();
-    final captured = expected.keys.toSet();
-    final added = current.difference(captured).toList()..sort();
-    final removed = captured.difference(current).toList()..sort();
-    if (added.isNotEmpty || removed.isNotEmpty) {
-      return [
-        if (added.isNotEmpty) 'added: ${added.join(', ')}',
-        if (removed.isNotEmpty) 'removed: ${removed.join(', ')}',
-      ].join('; ');
-    }
-    for (final path in current.toList()..sort()) {
-      final bytes = source.readBytes(path);
-      if (bytes == null) return '$path disappeared';
-      if (bytes.length != expected[path]!.size ||
-          Sha256.hex(bytes) != expected[path]!.sha256) {
-        return '$path changed';
-      }
-    }
-    return null;
-  }
-
-  /// Revalidates the immutable source snapshot and removes only untracked
-  /// producer scratch beneath it (for example `.dart_tool`).
-  ///
-  /// A changed or missing tracked file is refused, never restored: producer
-  /// output must not be able to alter the bytes the stage identity names.
-  void sealSource(Iterable<StageArtifact> expected) {
-    final byPath = {for (final artifact in expected) artifact.path: artifact};
-    final source = Directory(sourceRoot);
-    if (!source.existsSync()) {
-      throw StateError('the staged source snapshot disappeared');
-    }
-    final extras = <FileSystemEntity>[];
-    final entities = source.listSync(recursive: true, followLinks: false)
-      ..sort((left, right) => right.path.length.compareTo(left.path.length));
-    for (final entity in entities) {
-      final relative = entity.path
-          .substring(directory.path.length + 1)
-          .split(Platform.pathSeparator)
-          .join('/');
-      final wanted = byPath[relative];
-      if (wanted == null) {
-        extras.add(entity);
-        continue;
-      }
-      if (entity is! File) {
-        throw StateError('staged source changed type: $relative');
-      }
-      // The snapshot is sealed after every producer, so most of these files
-      // were digested moments ago and have not moved since.
-      final actual = StageArtifact.confirm(wanted, stage: directory);
-      if (actual.mode != wanted.mode ||
-          actual.size != wanted.size ||
-          actual.sha256 != wanted.sha256) {
-        throw StateError('a producer changed staged source: $relative');
-      }
-    }
-    for (final path in byPath.keys) {
-      if (!File(directory.resolve(path)).existsSync()) {
-        throw StateError('a producer removed staged source: $path');
-      }
-    }
-    for (final entity in extras) {
-      final type = FileSystemEntity.typeSync(entity.path, followLinks: false);
-      if (type == FileSystemEntityType.notFound) continue;
-      if (type == FileSystemEntityType.directory) {
-        final directory = Directory(entity.path);
-        if (directory.listSync(followLinks: false).isEmpty) {
-          directory.deleteSync();
-        }
-      } else {
-        entity.deleteSync();
-      }
-    }
-  }
+  /// The source this stage is built from, read once into memory: the
+  /// committed bytes for a Git-bound stage. Producers export it into
+  /// directories of their own, never the mutable worktree.
+  Future<StageSourceSnapshot> captureSource() => StageSourceSnapshot.capture(
+    source,
+    commit: directory.identity.headCommit,
+  );
 
   /// Finalizes the public manifest and the strict local receipt.
   ///
@@ -762,36 +635,24 @@ class ReleaseStage {
       oldManifest.deleteSync();
     }
 
+    // Valid progress holds exactly what producers recorded, each hashed
+    // when it was written; nothing else is in the stage. A unit with no
+    // producers has recorded only its plan.
     final inspectedProgress = inspect();
-    if (!inspectedProgress.validProgress) {
+    if (!inspectedProgress.validProgress && !inspectedProgress.planRecorded) {
       throw StateError(
         'the in-progress stage does not validate: '
         '${inspectedProgress.issues.join('; ')}',
       );
     }
-
-    final beforeManifest = _captureAll();
     final byPath = {
-      for (final artifact in beforeManifest) artifact.path: artifact,
+      for (final artifact in progress.artifacts) artifact.path: artifact,
     };
     final boundStagedPaths = {...stagedPaths, ...homebrewStagedPaths};
     final missing = boundStagedPaths.difference(byPath.keys.toSet());
     if (missing.isNotEmpty) {
       throw StateError(
         'stage is missing publication artifacts: ${missing.join(', ')}',
-      );
-    }
-
-    final allowed = <String>{
-      for (final path in byPath.keys)
-        if (path.startsWith('source/')) path,
-      ...boundStagedPaths,
-      ...progress.artifacts.map((artifact) => artifact.path),
-    };
-    final planted = byPath.keys.toSet().difference(allowed);
-    if (planted.isNotEmpty) {
-      throw StateError(
-        'stage contains files no producer recorded: ${planted.join(', ')}',
       );
     }
 
@@ -803,17 +664,6 @@ class ReleaseStage {
       releaseAssets: releaseAssets,
     );
     completion.manifest.writeTo(directory);
-
-    final recorded = progress.artifacts
-        .map((artifact) => artifact.path)
-        .toSet();
-    final unrecorded = byPath.keys.toSet().difference(recorded);
-    if (unrecorded.isNotEmpty) {
-      throw StateError(
-        'stage contains outputs no producer recorded: '
-        '${unrecorded.join(', ')}',
-      );
-    }
 
     final manifestArtifact = StageArtifact.capture(
       stage: directory,
@@ -922,51 +772,6 @@ class ReleaseStage {
         return byContract != 0 ? byContract : left.$1.compareTo(right.$1);
       });
     return [for (final (_, step) in decorated) step];
-  }
-
-  List<StageArtifact> _captureAll() {
-    if (!Directory(directory.path).existsSync()) return const [];
-    final artifacts = <StageArtifact>[];
-    final entities = Directory(directory.path).listSync(
-      recursive: true,
-      followLinks: false,
-    )..sort((left, right) => left.path.compareTo(right.path));
-    for (final entity in entities) {
-      if (entity is! File) continue;
-      final relative = entity.path
-          .substring(directory.path.length + 1)
-          .split(Platform.pathSeparator)
-          .join('/');
-      if (relative == 'stage.json') continue;
-      artifacts.add(
-        StageArtifact.capture(
-          stage: directory,
-          path: relative,
-          type: _typeOf(relative),
-        ),
-      );
-    }
-    return artifacts;
-  }
-
-  static String _typeOf(String path) {
-    if (path.startsWith('source/')) return 'source';
-    // What a project's own build wrote, whatever the files are called: a
-    // declared asset may well end in .tar.gz or .zip.
-    final parts = path.split('/');
-    if (parts.length > 3 && parts[0] == 'producers' && parts[2] == 'assets') {
-      return 'asset';
-    }
-    if (path == 'release-manifest.json') return 'manifest';
-    if (path == 'release-notes.md') return 'notes';
-    if (path.endsWith('.tar.gz')) return 'archive';
-    if (path.endsWith('.rb')) return 'formula';
-    if (path.endsWith('.notary-result.json') ||
-        path.endsWith('.notary-log.json')) {
-      return 'notary';
-    }
-    if (path.endsWith('.zip')) return 'notary-input';
-    return 'executable';
   }
 
   StagedHomebrewBinding? _homebrewBinding() {

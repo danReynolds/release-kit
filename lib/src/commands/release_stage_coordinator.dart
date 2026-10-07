@@ -20,6 +20,7 @@ import '../engine/stage_board.dart';
 import '../engine/stage_inspection.dart';
 import '../engine/stage_history.dart';
 import '../engine/stage_receipt.dart';
+import '../engine/stage_source.dart';
 import '../engine/targets.dart';
 import '../engine/tools.dart';
 import '../engine/verdict.dart';
@@ -76,10 +77,10 @@ final class ReleaseStageCoordinator {
         !inspected.planRecorded) {
       return Diagnostic(
         code: 'RK-STAGE-003',
-        message: 'the frozen source plan could not be resumed safely',
+        message: 'the interrupted stage could not be resumed safely',
         remedy:
             '${inspected.issues.join('\n')}\n'
-            'Resolve the recorded source-copy residue, then re-run '
+            'Resolve the recorded residue, then re-run '
             'rk stage ${unit.name}. The frozen receipt has been preserved.',
       );
     }
@@ -184,13 +185,6 @@ final class ReleaseStageCoordinator {
         current.signingConfigured != initialGit.signingConfigured) {
       drift.add('the Git tag-signing policy changed');
     }
-    if (!initialGit.isBound) {
-      final sourceProblem = stage.unboundSourceProblem();
-      if (sourceProblem != null) {
-        drift.add('the unbound source changed: $sourceProblem');
-      }
-    }
-
     try {
       final refreshed = refreshStage(unit, current);
       if (refreshed.directory.identity.id != stage.directory.identity.id) {
@@ -340,20 +334,12 @@ final class ReleaseStageCoordinator {
     }
 
     final progress = <StageStep>[];
-    late final List<StageArtifact> sourceArtifacts;
-    late final StageStep sourceStep;
     if (inspected.validProgress) {
       progress.addAll(inspected.receipt!.steps);
-      sourceStep = progress.first;
-      sourceArtifacts = List<StageArtifact>.from(sourceStep.outputs);
-    } else {
+    } else if (!inspected.planRecorded) {
       try {
-        if (inspected.planRecorded) {
-          stage.discardUnrecordedSource();
-        } else {
-          stage.reset();
-          stage.writeProgress(const []);
-        }
+        stage.reset();
+        stage.writeProgress(const []);
       } on Object catch (error) {
         stageProgress.discard();
         output.problem(
@@ -362,30 +348,6 @@ final class ReleaseStageCoordinator {
             message: 'the old release stage could not be replaced safely',
             remedy:
                 'resolve the recorded filesystem failure, then re-run '
-                'rk stage ${unit.name}',
-            evidence: '$error',
-          ),
-        );
-        output.halt(HaltKind.beforeActing);
-        return null;
-      }
-
-      try {
-        sourceArtifacts = await stage.materializeSource();
-        sourceStep = StageStep.sourceSnapshot(
-          stage.directory.identity,
-          sourceArtifacts,
-        );
-        progress.add(sourceStep);
-        _persistStageProgress(stage, sourceArtifacts, progress);
-      } on Object catch (error) {
-        stageProgress.discard();
-        output.problem(
-          Diagnostic(
-            code: 'RK-STAGE-003',
-            message: 'the committed source could not be staged',
-            remedy:
-                'resolve the recorded source-staging failure, then re-run '
                 'rk stage ${unit.name}',
             evidence: '$error',
           ),
@@ -406,6 +368,30 @@ final class ReleaseStageCoordinator {
       dependenciesOf: stage.producerDependencies,
     );
     final completed = {for (final step in progress) step.name};
+
+    // Producers build from the commit the stage names, read once into
+    // memory when anything remains to produce; each exports it into a
+    // directory of its own.
+    late final StageSourceSnapshot source;
+    if (runnable.difference(completed).isNotEmpty) {
+      try {
+        source = await stage.captureSource();
+      } on Object catch (error) {
+        stageProgress.discard();
+        output.problem(
+          Diagnostic(
+            code: 'RK-STAGE-003',
+            message: 'the committed source could not be read',
+            remedy:
+                'resolve the recorded source failure, then re-run '
+                'rk stage ${unit.name}',
+            evidence: '$error',
+          ),
+        );
+        output.halt(HaltKind.beforeActing);
+        return null;
+      }
+    }
     final laneSources = <String, ProducerLaneSource>{};
     final laneChains = <String, BinaryChain>{};
     final activeTargets = <PublishTarget>{};
@@ -414,7 +400,7 @@ final class ReleaseStageCoordinator {
     void record(StageStep recorded) {
       progress.add(recorded);
       try {
-        _persistStageProgress(stage, sourceArtifacts, progress);
+        stage.writeProgress(progress);
         stageProgress.record(recorded);
       } on Object {
         progress.remove(recorded);
@@ -437,7 +423,7 @@ final class ReleaseStageCoordinator {
             git: initialGit,
             attach: output.report.attach,
             stage: stage,
-            sourceStep: sourceStep,
+            source: source,
             priorSteps: List<StageStep>.unmodifiable(progress),
             progress: stageProgress.handlesFor(targetStage),
             fromSource: fromSource[target.project?.name] ?? const {},
@@ -487,14 +473,10 @@ final class ReleaseStageCoordinator {
           ? '${step.project}/build'
           : '${step.project}/${step.platform!}';
       try {
-        final laneSource = laneSources.putIfAbsent(laneName, () {
-          final source = ProducerLaneSource(
-            stage: stage.directory,
-            lane: laneName,
-          );
-          source.materialize(sourceArtifacts);
-          return source;
-        });
+        final laneSource = laneSources.putIfAbsent(
+          laneName,
+          () => ProducerLaneSource.export(source),
+        );
         final chain = laneChains.putIfAbsent(
           laneName,
           () => _chain(unit, repositoryRoot: laneSource.path),
@@ -529,7 +511,7 @@ final class ReleaseStageCoordinator {
         }
         try {
           record(
-            _captureProducerStep(stage, unit, step, sourceStep, progress, act),
+            _captureProducerStep(stage, step, progress, act),
           );
           return _StageWorkCompletion.succeeded(receiptName);
         } on Object catch (error) {
@@ -674,15 +656,6 @@ final class ReleaseStageCoordinator {
         inspected.planRecorded) {
       return inspected;
     }
-    if (inspected.receipt?.plan != null && inspected.receipt!.steps.isEmpty) {
-      try {
-        stage.discardUnrecordedSource();
-        final recovered = stage.inspect();
-        return recovered.planRecorded ? recovered : inspected;
-      } on Object {
-        return inspected;
-      }
-    }
     final allowedExtras = <String>{};
     for (final output in declaredOutputs) {
       allowedExtras.add(output);
@@ -702,7 +675,9 @@ final class ReleaseStageCoordinator {
     try {
       stage.discardUnrecordedOutputs(declaredOutputs);
       final recovered = stage.inspect();
-      return recovered.validProgress ? recovered : inspected;
+      return recovered.validProgress || recovered.planRecorded
+          ? recovered
+          : inspected;
     } on Object {
       return inspected;
     }
@@ -749,15 +724,6 @@ final class ReleaseStageCoordinator {
     );
     output.halt(HaltKind.beforeActing);
     return false;
-  }
-
-  void _persistStageProgress(
-    ReleaseStage stage,
-    List<StageArtifact> sourceArtifacts,
-    List<StageStep> steps,
-  ) {
-    stage.sealSource(sourceArtifacts);
-    stage.writeProgress(steps);
   }
 
   List<_StageWarning> _recordedStageWarnings(
@@ -829,9 +795,7 @@ final class ReleaseStageCoordinator {
 
   StageStep _captureProducerStep(
     ReleaseStage stage,
-    ResolvedUnit unit,
     Step step,
-    StageStep sourceStep,
     List<StageStep> progress,
     LocalProducerOutcome outcome,
   ) {

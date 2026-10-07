@@ -224,10 +224,6 @@ abstract final class StageBinaryEvidence {
     String? problem;
     if (binary == null) {
       problem = 'signed build does not produce exactly one executable';
-    } else if (!producer.inputs.any(
-      (input) => input.name == 'step:source-snapshot',
-    )) {
-      problem = 'signed build is not bound to the staged source snapshot';
     } else if (signature is! Map) {
       problem = 'signed build has no signature evidence';
     } else {

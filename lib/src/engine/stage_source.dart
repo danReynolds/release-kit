@@ -1,22 +1,22 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
-import '../transforms/digest.dart';
-import 'canonical_json.dart';
 import 'file_mode.dart';
 import 'source_tree.dart';
 import 'stage.dart';
-import 'stage_receipt.dart';
 
-/// Exact source inventory shared by production and portable authorization.
-/// Select authoritative source before capture: Git-backed trees read committed
-/// bytes/modes; other trees represent the caller's single-invocation snapshot.
-/// Keeping owned bytes permits one capture to authenticate a whole proof closure.
+/// The source a stage is built from, read once per run and held in memory.
+///
+/// A Git-backed tree reads committed bytes and modes; any other tree is the
+/// caller's snapshot for this invocation. Producers never build in the stage
+/// or the working tree: each exports this snapshot into a directory of its
+/// own.
 final class StageSourceSnapshot implements SourceTree {
   StageSourceSnapshot._(
     this.description,
     this._files,
-    this.artifacts,
+    this._executable,
     this.gitCommit,
   );
 
@@ -65,28 +65,20 @@ final class StageSourceSnapshot implements SourceTree {
     // first asynchronous boundary, just as ordinary source production does.
     final batched = git == null ? null : await git.readBytesBatch(paths);
     final files = <String, Uint8List>{};
-    final artifacts = <StageArtifact>[];
     for (final path in paths) {
       final bytes = git == null ? source.readBytes(path) : batched![path];
       if (bytes == null) {
         throw StateError('tracked source disappeared while staging: $path');
       }
-      final owned = Uint8List.fromList(bytes).asUnmodifiableView();
-      files[path] = owned;
-      artifacts.add(
-        StageArtifact(
-          path: 'source/$path',
-          type: 'source',
-          mode: entries[path]?.executable == true ? '0755' : '0644',
-          size: owned.length,
-          sha256: Sha256.hex(owned),
-        ),
-      );
+      files[path] = Uint8List.fromList(bytes).asUnmodifiableView();
     }
     return StageSourceSnapshot._(
       source.description,
       Map.unmodifiable(files),
-      List.unmodifiable(artifacts),
+      {
+        for (final path in paths)
+          if (entries[path]?.executable == true) path,
+      },
       git?.commit,
     );
   }
@@ -95,7 +87,7 @@ final class StageSourceSnapshot implements SourceTree {
   final String description;
   final String? gitCommit;
   final Map<String, Uint8List> _files;
-  final List<StageArtifact> artifacts;
+  final Set<String> _executable;
 
   @override
   List<String> trackedFiles() => List.unmodifiable(_files.keys);
@@ -115,40 +107,18 @@ final class StageSourceSnapshot implements SourceTree {
         _files.keys.any((file) => file.startsWith('$normalized/'));
   }
 
-  /// A pending header claims no source output. Every recorded source byte and
-  /// mode, however, must match exactly; self-consistent forged hashes do not
-  /// establish source authority.
-  void requireReceipt(StageReceipt receipt) {
-    if (gitCommit != null && gitCommit != receipt.identity.headCommit) {
-      throw StateError('source snapshot belongs to a different Git commit');
-    }
-    if (receipt.steps.isEmpty) return;
-    final source = receipt.steps.first;
-    if (source.name != 'source-snapshot' ||
-        CanonicalJson.encode(source.outputs.map((a) => a.toJson()).toList()) !=
-            CanonicalJson.encode(artifacts.map((a) => a.toJson()).toList())) {
-      throw StateError(
-        'recorded source inventory differs from authoritative source',
+  /// Writes every file, with its mode, beneath the empty directory [root].
+  void export(String root) {
+    final modes = <String, String>{};
+    for (final MapEntry(key: path, value: bytes) in _files.entries) {
+      final file = File(
+        [root, ...StagePath.segments(path)].join(Platform.pathSeparator),
       );
+      file.parent.createSync(recursive: true);
+      file.writeAsBytesSync(bytes);
+      modes[file.path] = _executable.contains(path) ? '0755' : '0644';
     }
-  }
-
-  List<StageArtifact> materialize(StageDirectory stage) {
-    for (final entry in _files.entries) {
-      stage.writeBytesAtomically('source/${entry.key}', entry.value);
-    }
-    setFileModes({
-      for (final artifact in artifacts)
-        stage.resolve(artifact.path): artifact.mode,
-    });
-    return [
-      for (final artifact in artifacts)
-        StageArtifact.capture(
-          stage: stage,
-          path: artifact.path,
-          type: artifact.type,
-        ),
-    ];
+    setFileModes(modes);
   }
 }
 

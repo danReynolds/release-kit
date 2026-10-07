@@ -5,8 +5,8 @@ import 'stage.dart';
 import 'stage_inspection.dart';
 import 'stage_receipt.dart';
 
-/// Pure declaration checks shared by on-disk inspection and portable proofs.
-/// This establishes causal consistency, not artifact bytes or source authority.
+/// Pure declaration checks: causal consistency between steps, not artifact
+/// bytes. The receipt's identity binds every step to its source.
 final class StageReceiptStructure {
   const StageReceiptStructure._();
 
@@ -53,49 +53,6 @@ final class StageReceiptStructure {
         priorArtifacts[output.path] = output;
       }
       priorSteps[step.name] = step;
-    }
-
-    final source = receipt.steps.first;
-    if (source.name != 'source-snapshot') {
-      _structure(issues, 'source-snapshot must be the first receipt step');
-    } else {
-      final expectedInputs = {
-        if (receipt.identity.isGitBound)
-          'stage:commit': Sha256.hex(utf8.encode(receipt.identity.headCommit!)),
-        if (receipt.identity.isGitBound)
-          'stage:tree': Sha256.hex(utf8.encode(receipt.identity.headTree!)),
-        'stage:plan': receipt.identity.planSha256,
-      };
-      final actualInputs = {
-        for (final input in source.inputs) input.name: input.sha256,
-      };
-      if (!_sameMap(expectedInputs, actualInputs)) {
-        _structure(
-          issues,
-          receipt.identity.isGitBound
-              ? 'source-snapshot is not bound to commit, tree, and plan'
-              : 'source-snapshot is not bound to its plan',
-        );
-      }
-      if (source.outputs.isEmpty ||
-          source.outputs.any(
-            (output) =>
-                output.type != 'source' || !output.path.startsWith('source/'),
-          )) {
-        _structure(issues, 'source-snapshot must record its source files');
-      }
-      final expectedEvidence = receipt.identity.isGitBound
-          ? <String, Object?>{
-              'commit': receipt.identity.headCommit,
-              'tree': receipt.identity.headTree,
-            }
-          : <String, Object?>{'source_binding': 'unbound'};
-      if (!_sameMap(expectedEvidence, source.evidence)) {
-        _structure(
-          issues,
-          'source-snapshot evidence disagrees with the stage identity',
-        );
-      }
     }
 
     if (!receipt.complete) {
@@ -150,12 +107,4 @@ void _structure(List<StageIssue> issues, String message) {
   issues.add(
     StageIssue(StageIssueKind.invalidStructure, message, path: 'stage.json'),
   );
-}
-
-bool _sameMap(Map<String, Object?> left, Map<String, Object?> right) {
-  if (left.length != right.length) return false;
-  for (final entry in left.entries) {
-    if (right[entry.key] != entry.value) return false;
-  }
-  return true;
 }

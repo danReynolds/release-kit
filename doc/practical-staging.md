@@ -1,7 +1,7 @@
 # Practical staging
 
-Status: accepted, being implemented. Supersedes the dependency-staging design
-in [`archive/dependency-staging-plan.md`](archive/dependency-staging-plan.md).
+Status: implemented. Supersedes the dependency-staging design in
+[`archive/dependency-staging-plan.md`](archive/dependency-staging-plan.md).
 
 ## Why
 
@@ -100,7 +100,11 @@ lockfile and Pub's hashes keep it honest.
 - The stage id is computed from the commit, its tree, the unit's plan and the
   toolchain. rk finds a stage by its id, with no scan of saved receipts.
 - Builds run in their own scratch export of the commit, outside the
-  repository. Producers that run at the same time do not share one.
+  repository. Producers that run at the same time do not share one. The
+  commit is read once per run, into memory, and only when something is
+  produced.
+- Within a run, rk does not hash again a file it hashed and that has not
+  moved since. A later run hashes what it reuses once.
 - What makes a saved stage reusable:
   - its receipt is complete and names this id and plan;
   - every published output still has its recorded size and hash.

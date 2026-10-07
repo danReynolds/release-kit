@@ -114,11 +114,7 @@ final class TargetCatalog {
   }
 
   StageContractResolver stageContractResolver(Resolution resolution) =>
-      ({
-        required ResolvedUnit unit,
-        required String? repository,
-        required String sourceRoot,
-      }) {
+      ({required ResolvedUnit unit, required String? repository}) {
         final diagnostics = Diagnostics();
         final checklist = Checklist.derive(
           unit,

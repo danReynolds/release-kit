@@ -683,24 +683,11 @@ publish = ["pub.dev"]
 
 Future<void> _complete(ReleaseStage stage) async {
   final project = stage.unit.projects.single;
-  final sourceStep = StageStep(
-    name: 'source-snapshot',
-    inputs: [
-      StageInput.commit(stage.directory.identity),
-      StageInput.tree(stage.directory.identity),
-      StageInput.plan(stage.directory.identity),
-    ],
-    outputs: await stage.materializeSource(),
-    evidence: {
-      'commit': stage.directory.identity.headCommit,
-      'tree': stage.directory.identity.headTree,
-    },
-  );
 
   stage.directory.writeBytesAtomically('release-notes.md', const []);
   final notesStep = StageStep(
     name: 'release-notes',
-    inputs: [StageInput.step(sourceStep)],
+    inputs: const [],
     outputs: [
       StageArtifact.capture(
         stage: stage.directory,
@@ -721,7 +708,7 @@ Future<void> _complete(ReleaseStage stage) async {
   );
   final buildStep = StageStep(
     name: 'build:tool:linux-x64',
-    inputs: [StageInput.step(sourceStep)],
+    inputs: const [],
     outputs: [binary],
     evidence: const {
       'smoke': {'status': 'passed'},
@@ -751,6 +738,6 @@ Future<void> _complete(ReleaseStage stage) async {
     },
   );
 
-  stage.writeProgress([sourceStep, notesStep, buildStep, archiveStep]);
+  stage.writeProgress([notesStep, buildStep, archiveStep]);
   stage.finalize(releaseAssets: ReleaseAssets.bundleFor(stage.unit));
 }

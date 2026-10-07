@@ -29,7 +29,6 @@ void main() {
       'probe',
       validateEvidence: (context, step) {
         calls.add('evidence');
-        expect(context.source.read('CHANGELOG.md'), 'snapshot');
         return const [
           StageIssue(StageIssueKind.invalidStructure, 'evidence finding'),
         ];
@@ -42,15 +41,8 @@ void main() {
         ];
       },
     );
-    f.stage.writeBytesAtomically(
-      'source/CHANGELOG.md',
-      utf8.encode('snapshot'),
-    );
     final contract = f.contract(local: [declared]);
-    final receipt = f.receipt([
-      StageStep(name: 'source-snapshot'),
-      StageStep(name: 'probe'),
-    ]);
+    final receipt = f.receipt([StageStep(name: 'probe')]);
     expect(contract.validate(f.stage, receipt).map((issue) => issue.message), [
       'evidence finding',
       'artifact finding',
@@ -58,63 +50,45 @@ void main() {
     expect(calls, ['evidence', 'artifacts']);
   });
 
-  test('notes validate from supplied source after stage cleanup', () {
-    final contract = f.target('release-notes');
-    final step = StageStep(
-      name: contract.name,
-      outputs: [_artifact('release-notes.md', 'notes', 'Portable release.')],
+  test('release notes are verified by their recorded bytes', () async {
+    final contribution = StageContributionContract(
+      step: f.target('release-notes'),
     );
-    expect(f.evidence(contract, [step]), isEmpty);
-    expect(Directory(f.stage.path).existsSync(), isFalse);
-    f.source.files['CHANGELOG.md'] = '## 1.2.3\n\nChanged entry.\n';
-    expect(f.evidence(contract, [step]), isNotEmpty);
-  });
-
-  test(
-    'renderer commitment does not replace actual stage byte checks',
-    () async {
-      final contribution = StageContributionContract(
-        step: f.target('release-notes'),
-      );
-      final release = ReleaseStage(
-        unit: f.unit,
-        source: f.source,
-        directory: f.stage,
-        repository: 'example/tool',
-        enforceUnitContract: true,
-        resolvedPlan: f.plan,
-        targetContributions: [contribution],
-      );
-      release.writeProgress(const []);
-      final source = f.sourceStep(await release.materializeSource());
-      f.stage.writeBytesAtomically(
-        'release-notes.md',
-        utf8.encode('Portable release.'),
-      );
-      final notes = StageStep(
-        name: 'release-notes',
-        inputs: [StageInput.step(source)],
-        outputs: [
-          StageArtifact.capture(
-            stage: f.stage,
-            path: 'release-notes.md',
-            type: 'notes',
-          ),
-        ],
-      );
-      release.writeProgress([source, notes]);
-      expect(release.inspect().validProgress, isTrue);
-      File(f.stage.resolve('release-notes.md')).writeAsStringSync('tampered');
-      expect(f.evidence(contribution.step, [source, notes]), isEmpty);
-      expect(
-        release.inspect().issues.any(
-          (issue) => issue.kind == StageIssueKind.changedArtifact,
+    final release = ReleaseStage(
+      unit: f.unit,
+      source: f.source,
+      directory: f.stage,
+      repository: 'example/tool',
+      enforceUnitContract: true,
+      resolvedPlan: f.plan,
+      targetContributions: [contribution],
+    );
+    release.writeProgress(const []);
+    f.stage.writeBytesAtomically(
+      'release-notes.md',
+      utf8.encode('Portable release.'),
+    );
+    final notes = StageStep(
+      name: 'release-notes',
+      outputs: [
+        StageArtifact.capture(
+          stage: f.stage,
+          path: 'release-notes.md',
+          type: 'notes',
         ),
-        isTrue,
-      );
-      expect(release.inspect().validProgress, isFalse);
-    },
-  );
+      ],
+    );
+    release.writeProgress([notes]);
+    expect(release.inspect().validProgress, isTrue);
+    File(f.stage.resolve('release-notes.md')).writeAsStringSync('tampered');
+    expect(
+      release.inspect().issues.any(
+        (issue) => issue.kind == StageIssueKind.changedArtifact,
+      ),
+      isTrue,
+    );
+    expect(release.inspect().validProgress, isFalse);
+  });
 
   test('formula evidence binds its rendered bytes to the archive digests', () {
     final project = f.unit.projects.single;
@@ -217,7 +191,6 @@ void main() {
       final disk = StageContractContext(
         unit: f.unit,
         repository: 'example/tool',
-        sourceRoot: f.stage.resolve('source'),
         stage: f.stage,
         receipt: f.receipt([step]),
       );
@@ -394,7 +367,6 @@ executables:
   }) => StageReceiptContract.forUnit(
     unit: unit,
     repository: 'example/tool',
-    sourceRoot: stage.resolve('source'),
     targetContributions: targets,
     localProducers: local,
   );
@@ -407,21 +379,9 @@ executables:
         StageEvidenceContext(
           unit: unit,
           repository: 'example/tool',
-          source: source,
           receipt: receipt(steps),
         ),
         steps.singleWhere((step) => step.name == contract.name),
       )
       .toList();
-
-  StageStep sourceStep(List<StageArtifact> artifacts) => StageStep(
-    name: 'source-snapshot',
-    inputs: [
-      StageInput.commit(identity),
-      StageInput.tree(identity),
-      StageInput.plan(identity),
-    ],
-    outputs: artifacts,
-    evidence: {'commit': identity.headCommit, 'tree': identity.headTree},
-  );
 }

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- A stage holds only what rk publishes, and its receipt. It no longer keeps a
+  copy of the repository's source, which rk hashed file by file several times
+  a run: 148 MB for each of Fleury's packages. Producers build from the
+  commit, read once into memory, each in a directory of its own outside the
+  repository, and `pub publish` uploads the staged archive from outside the
+  stage. Within a run rk no longer hashes again what it just wrote; a later
+  run that reuses a stage hashes its outputs once. Stages saved by earlier
+  versions are not reused. With the change to staging through Pub below, a
+  fresh stage of Fleury's four packages takes about 28s, down from 2m 9s,
+  and reusing their stages 4s, down from about 30s.
 - A version on pub.dev counts as published. rk no longer compares a fresh
   stage's archive with one already there, which refused a partly published
   release whenever a re-packed archive's timestamps differed. After its own

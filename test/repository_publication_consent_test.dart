@@ -134,9 +134,7 @@ void main() {
         switch (change) {
           case 'bytes':
             File(
-              f.plans.first.stage.directory.resolve(
-                'source/alpha/pubspec.yaml',
-              ),
+              f.plans.first.stage.directory.resolve('release-manifest.json'),
             ).writeAsStringSync('changed');
           case 'compiler':
             f.compiler = 'd';
@@ -338,7 +336,7 @@ void main() {
       final local = f.localOnly(f.plans.first);
       final active = f.plans.last;
       void tamper() => File(
-        local.stage.directory.resolve('source/alpha/pubspec.yaml'),
+        local.stage.directory.resolve('release-manifest.json'),
       ).writeAsStringSync('changed private output');
       if (when == 'review') {
         f.onRead = (unit) {
@@ -456,7 +454,7 @@ void main() {
     test('pending public unit remains guarded at $when', () async {
       final later = f.plans.last;
       void tamper() => File(
-        later.stage.directory.resolve('source/beta/pubspec.yaml'),
+        later.stage.directory.resolve('release-manifest.json'),
       ).writeAsStringSync('changed later private output');
       final first = f.copy(f.plans.first);
       expect(await f.coordinator.authorizeRepository([first, later]), isTrue);
@@ -690,17 +688,7 @@ final class _Fixture {
 
   Future<void> prepare(ResolvedUnit unit) async {
     final stage = stages(unit);
-    final sourceStep = StageStep(
-      name: 'source-snapshot',
-      inputs: [
-        StageInput.commit(stage.directory.identity),
-        StageInput.tree(stage.directory.identity),
-        StageInput.plan(stage.directory.identity),
-      ],
-      outputs: await stage.materializeSource(),
-      evidence: {'commit': git.head, 'tree': git.headTree},
-    );
-    final steps = [sourceStep];
+    final steps = <StageStep>[];
     stage.writeProgress(steps);
     for (final project in unit.projects.where(
       (project) => project.publish.contains(PublishTarget.pubDev),
@@ -873,7 +861,10 @@ final class _Tools implements Tools {
       return ToolResult(exitCode: 0, stdout: 'https://pub.dev\n', stderr: '');
     }
     if (arguments.contains('--from-archive')) {
-      final name = workingDirectory!.split('/').last;
+      // producers/<package>/pub/<archive>
+      final archive = arguments[arguments.indexOf('--from-archive') + 1];
+      final parts = archive.split('/');
+      final name = parts[parts.lastIndexOf('producers') + 1];
       fixture.calls.add('publish:$name');
       fixture.makePublic(name);
       return ToolResult(exitCode: 0, stdout: '', stderr: '');
