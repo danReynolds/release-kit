@@ -51,13 +51,16 @@ void main() {
       expect(declined.code, 1, reason: declined.all);
       expect(declined.problems.map((p) => p['code']), contains('RK-AUTH-001'));
 
+      // app needs core and format, which no unit in a named app release
+      // publishes: it waits for them before acting.
       final blocked = await fixture.rk(['release', 'app', '--yes', '--json']);
       expect(blocked.code, 1, reason: blocked.all);
       expect(
         blocked.problems.map((p) => p['code']),
-        contains('RK-PUB-018'),
+        contains('RK-REL-001'),
         reason: blocked.all,
       );
+      expect(blocked.all, contains('rk_qualification_core 0.2.0 must be live'));
       expect(
         fixture.registry.events.where((e) => e.kind == 'initiated'),
         isEmpty,
@@ -218,77 +221,55 @@ void main() {
     },
   );
 
-  test(
-    'archive propagation wait and native dependency refusal recover without reupload',
-    () async {
-      final staged = await _stage(fixture);
-      fixture.registry.unavailableArchives.add(_core);
-      final unavailable = Completer<void>();
-      fixture.registry.onEvent = (event) {
-        if (event.kind == 'archive_unavailable' &&
-            event.name == _core &&
-            !unavailable.isCompleted) {
-          unavailable.complete();
-        }
-      };
-      final interrupted = await fixture.rk([
-        'release',
-        '--yes',
-        '--json',
-      ], interruptWhen: unavailable.future);
-      expect(interrupted.code, 130, reason: interrupted.all);
-      expect(unavailable.isCompleted, isTrue);
-      fixture.registry.onEvent = null;
-      expect(fixture.registry.committed.keys, ['$_core@0.2.0']);
+  test('an archive propagation wait recovers without reupload', () async {
+    final staged = await _stage(fixture);
+    fixture.registry.unavailableArchives.add(_core);
+    final unavailable = Completer<void>();
+    fixture.registry.onEvent = (event) {
+      if (event.kind == 'archive_unavailable' &&
+          event.name == _core &&
+          !unavailable.isCompleted) {
+        unavailable.complete();
+      }
+    };
+    final interrupted = await fixture.rk([
+      'release',
+      '--yes',
+      '--json',
+    ], interruptWhen: unavailable.future);
+    expect(interrupted.code, 130, reason: interrupted.all);
+    expect(unavailable.isCompleted, isTrue);
+    fixture.registry.onEvent = null;
+    expect(fixture.registry.committed.keys, ['$_core@0.2.0']);
 
-      // Whole-stack release waits for propagation after committing core. A named
-      // consumer separately proves its native input gate refuses metadata whose
-      // archive cannot be downloaded; neither run waits out the ten-minute poll.
-      final failed = await fixture.rk(['release', 'format', '--yes', '--json']);
-      expect(failed.code, 1, reason: failed.all);
-      expect(
-        failed.problems.map((p) => p['code']),
-        contains('RK-PUB-018'),
-        reason: failed.all,
-      );
-      expect(fixture.registry.committed.keys, ['$_core@0.2.0']);
-      expect(
-        fixture.registry.events
-            .where((e) => e.kind == 'upload_attempted')
-            .map((e) => e.name),
-        [_core],
-      );
-      expect(
-        fixture.registry.events.where((e) => e.kind == 'archive_unavailable'),
-        isNotEmpty,
-      );
+    // Whole-stack release waits for propagation after committing core. A
+    // named consumer needs only core's version to be listed, as Pub's
+    // resolution does; neither run waits out the ten-minute poll.
+    _ok(await fixture.rk(['release', 'format', '--yes', '--json']));
+    expect(
+      fixture.registry.committed.keys,
+      unorderedEquals(['$_core@0.2.0', '$_format@0.3.0']),
+    );
+    expect(
+      fixture.registry.events.where((e) => e.kind == 'archive_unavailable'),
+      isNotEmpty,
+    );
 
-      fixture.registry.unavailableArchives.clear();
-      _ok(await fixture.rk(['release', '--yes', '--json']));
-      final events = fixture.registry.events;
-      final failedRead = events.indexWhere(
-        (e) => e.kind == 'archive_unavailable',
-      );
-      final availableRead = events.indexWhere(
-        (e) => e.kind == 'downloaded' && e.name == _core,
-        failedRead + 1,
-      );
-      final consumerUpload = events.indexWhere(
-        (e) => e.kind == 'upload_attempted' && e.name == _format,
-      );
-      expect(availableRead, greaterThan(failedRead));
-      expect(consumerUpload, greaterThan(availableRead));
+    fixture.registry.unavailableArchives.clear();
+    _ok(await fixture.rk(['release', '--yes', '--json']));
+    for (final name in [_core, _format]) {
       expect(
         fixture.registry.events.where(
-          (e) => e.kind == 'upload_attempted' && e.name == _core,
+          (e) => e.kind == 'upload_attempted' && e.name == name,
         ),
         hasLength(1),
+        reason: '$name is uploaded once',
       );
-      _published(fixture.registry, staged);
-      _unchanged(staged);
-      await _consume(fixture);
-    },
-  );
+    }
+    _published(fixture.registry, staged);
+    _unchanged(staged);
+    await _consume(fixture);
+  });
 
   test('a conflicting occupied version is never overwritten', () async {
     final staged = await _stage(fixture);
@@ -302,13 +283,12 @@ void main() {
     final original = Sha256.hex(conflict.readAsBytesSync());
     final refused = await fixture.rk(['release', '--yes', '--json']);
     expect(refused.code, 1, reason: refused.all);
-    // Consumers refuse the changed runtime provider during native publication
-    // readiness, before RK reaches the provider's own target conflict message.
     expect(
       refused.problems.map((p) => p['code']),
-      contains('RK-PUB-018'),
+      contains('RK-REL-001'),
       reason: refused.all,
     );
+    expect(refused.all, contains('archive differs from the intended release'));
     expect(
       fixture.registry.events.where((e) => e.kind == 'initiated'),
       isEmpty,
