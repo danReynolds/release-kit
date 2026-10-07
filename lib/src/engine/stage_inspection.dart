@@ -131,27 +131,41 @@ class StageInspection {
 class StageInspector {
   const StageInspector();
 
-  /// Verifies [stage]. A caller that has just taken the stage's [fingerprint]
-  /// passes it, so the stage is not listed and statted twice in a row.
+  /// Inspects [stage], from this process's last [verify] of it when the stage
+  /// has not changed since. A caller that has just taken the stage's
+  /// [fingerprint] passes it, so the stage is not listed and statted twice in
+  /// a row.
   StageInspection inspect(StageDirectory stage, {String? fingerprint}) {
-    final before = fingerprint ?? stage.fingerprint();
+    final before = fingerprint ?? _fingerprint(stage);
     final known = _made[stage.path];
     // The fixed-path check looks above the stage, where the fingerprint does
     // not, so it runs every time; it costs a few lstat calls.
-    if (known != null &&
+    if (before != null &&
+        known != null &&
         known.fingerprint == before &&
         stage.unsafeFixedPath() == null) {
       return known.inspection;
     }
-    final inspection = _inspect(stage);
-    // Only an inspection of a stage that held still while it was read
-    // describes the stage the fingerprint names.
-    if (stage.fingerprint() == before) {
+    final inspection = verify(stage);
+    // Kept under the fingerprint taken before the read. A stage that moved
+    // while it was read no longer has that fingerprint, so this answer is
+    // never given for it; nor is one read where the path was unsafe.
+    if (before != null && stage.unsafeFixedPath() == null) {
       _made[stage.path] = (fingerprint: before, inspection: inspection);
     } else {
       _made.remove(stage.path);
     }
     return inspection;
+  }
+
+  /// [stage]'s fingerprint, or null when it cannot be listed. Such a stage is
+  /// inspected afresh every time, and the inspection says what is unreadable.
+  static String? _fingerprint(StageDirectory stage) {
+    try {
+      return stage.fingerprint();
+    } on FileSystemException {
+      return null;
+    }
   }
 
   /// Inspections this process has already made, by stage path, with the
@@ -165,7 +179,9 @@ class StageInspector {
   static final Map<String, ({String fingerprint, StageInspection inspection})>
   _made = {};
 
-  StageInspection _inspect(StageDirectory stage) {
+  /// Verifies [stage]: re-reads and re-hashes every file in it, whatever
+  /// this process already knows.
+  StageInspection verify(StageDirectory stage) {
     final issues = <StageIssue>[];
     final unsafe = stage.unsafeFixedPath();
     if (unsafe != null) {

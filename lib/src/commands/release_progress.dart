@@ -7,6 +7,9 @@ import '../output/output.dart';
 import '../output/progress.dart';
 import '../targets/target_module.dart';
 
+/// Long enough that a preparation board helps instead of flashing briefly.
+const briefPhase = Duration(milliseconds: 800);
+
 /// Public-target rows rendered through RK's shared progress model.
 final class TargetReleaseProgress {
   TargetReleaseProgress(

@@ -69,6 +69,9 @@ abstract interface class RepositoryPreparationObserver {
 
   /// [unit] has no stage, and its dependencies are about to be resolved.
   void discovering(ResolvedUnit unit);
+
+  /// [unit]'s dependencies were resolved.
+  void discovered(ResolvedUnit unit);
 }
 
 /// Resolves one repository preparation scope without running its producers.
@@ -186,6 +189,7 @@ final class RepositoryStagePreparation {
         unit,
         candidates: scope.candidates,
       );
+      observer?.discovered(unit);
       if (pending[unit.name]!.contexts.any(
         (context) => !native.ecosystems.contains(context.ecosystem),
       )) {

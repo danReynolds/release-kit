@@ -2,79 +2,110 @@ import '../engine/repository_stage_preparation.dart';
 import '../engine/resolve.dart';
 import '../output/output.dart';
 import '../output/progress.dart';
+import 'release_progress.dart';
 
 /// The board for the repository-wide stage check that runs before any unit is
-/// prepared: one row per unit while its saved stage is found and every staged
-/// file verified, or, when there is none, while its dependencies resolve.
+/// prepared: each unit's saved stage found and every staged file verified,
+/// the units' public targets read, and, for a unit with no stage, its
+/// dependencies resolved.
 ///
 /// Without it this was the longest silence in a release: tens of seconds
 /// after the last "Releasing" heading with nothing on screen, which reads
 /// as a hang.
+///
+/// A row is active only while its own work runs. The check does one unit at
+/// a time, so its time is that work's time, and a stop fails the row that
+/// was running and no other.
 final class StageCheckProgress implements RepositoryPreparationObserver {
   StageCheckProgress(
     Output output, {
-    required String repository,
     required List<ResolvedUnit> units,
-    // The same grace the per-unit stage check gives a quick answer.
-    Duration delay = const Duration(milliseconds: 800),
+    Duration delay = briefPhase,
   }) : _board = output.progressBoard(
-         '$repository · checking stages',
+         'Checking stages',
          delay: delay,
          emitSlowToNonTerminal: true,
        ) {
-    for (final unit in units) {
-      _rows[unit.name] = _board.addRow(
-        id: 'stage-check/${unit.name}',
-        label: '${unit.name} ${unit.version}',
-        coordinate: 'saved stage',
-      );
-    }
+    units.forEach(_stage);
   }
 
   static final _resolving = ProgressActivity(
-    running: 'resolving dependencies',
+    running: 'resolving',
     failed: 'resolution failed',
   );
 
   final LiveProgress _board;
-  final Map<String, ProgressRowController> _rows = {};
+  final Map<String, ProgressRowController> _stages = {};
+  final Map<String, ProgressRowController> _dependencies = {};
+  ProgressRowController? _targets;
+
+  /// [unit]'s saved-stage row. The selected units' rows exist from the start;
+  /// a sibling's appears when its stage is looked for.
+  ProgressRowController _stage(ResolvedUnit unit) =>
+      _stages[unit.name] ??= _board.addRow(
+        id: 'stage-check/${unit.name}',
+        label: '${unit.name} ${unit.version}',
+        coordinate: 'saved stage',
+      );
 
   @override
   void restoring(ResolvedUnit unit) =>
-      _rows[unit.name]?.handle.begin(CommonProgressActivities.verifying);
+      _stage(unit).handle.begin(CommonProgressActivities.verifying);
 
   @override
-  void restored(ResolvedUnit unit, {required bool found}) {
-    final row = _rows[unit.name];
-    if (row == null) return;
-    if (found) {
-      row.complete(note: 'verified', mark: ProgressRowMark.satisfied);
-    } else {
-      // Still this unit's work: the check goes on to its public targets and,
-      // if it is to be staged, its dependencies.
-      row.handle.begin(
-        CommonProgressActivities.checking,
-        detail: 'no saved stage',
+  void restored(ResolvedUnit unit, {required bool found}) =>
+      _stage(unit).complete(
+        note: found ? 'verified' : 'none',
+        mark: found ? ProgressRowMark.satisfied : ProgressRowMark.none,
       );
-    }
+
+  @override
+  void discovering(ResolvedUnit unit) {
+    // Its own row: the unit's stage row settled long before, and other
+    // units' work ran in between.
+    final row = _dependencies[unit.name] = _board.addRow(
+      id: 'stage-check/${unit.name}/dependencies',
+      label: '${unit.name} ${unit.version}',
+      coordinate: 'dependencies',
+    );
+    row.handle.begin(_resolving);
   }
 
   @override
-  void discovering(ResolvedUnit unit) =>
-      _rows[unit.name]?.handle.begin(_resolving);
+  void discovered(ResolvedUnit unit) =>
+      _dependencies[unit.name]!.complete(note: 'resolved');
 
-  /// Settles the rows the check left open and takes the board down.
+  /// Runs [body], the release command's read of [unit]'s public targets. One
+  /// row covers every unit's read, naming the unit being read.
+  Future<T> checkingPublicTargets<T>(
+    ResolvedUnit unit,
+    Future<T> Function() body,
+  ) {
+    (_targets ??= _board.addRow(
+      id: 'stage-check/public-targets',
+      label: 'public targets',
+    )).handle.begin(
+      CommonProgressActivities.checking,
+      detail: '${unit.name} ${unit.version}',
+    );
+    return body();
+  }
+
+  /// Every unit's public targets have been read.
+  void publicTargetsChecked() =>
+      _targets?.complete(note: 'checked', mark: ProgressRowMark.none);
+
+  /// Takes the board down once the check has finished. Every row has already
+  /// settled on what its own work found.
   void finish() {
-    for (final row in _rows.values) {
-      if (row.state != ProgressRowState.active) continue;
-      row.complete(
-        note: row.activity == _resolving ? 'resolved' : 'to stage',
-        mark: ProgressRowMark.none,
-      );
-    }
+    assert(
+      _board.model.rows.every((row) => row.state != ProgressRowState.active),
+      'a stage-check row was left running',
+    );
     _board.discard();
   }
 
-  /// Ends the board after a refusal: unfinished rows show they stopped.
+  /// Ends the board after a refusal: the row that was running fails, and
+  /// rows the check never reached say so.
   void stop() => _board.conclude();
 }

@@ -341,10 +341,21 @@ void main() {
       );
       expect(refusing.preloads.map((call) => call.length), [2, 1, 1]);
 
+      // A batch can fail as a whole, too long or caught in a moment's
+      // trouble, while each of its archives preloads alone. The cache then
+      // holds them all, and the replay goes on.
+      final batchOnly = _PreloadTools(
+        refuse: (archives) => archives.length > 1,
+      );
+      (await replayWith(batchOnly)).close();
+      expect(batchOnly.preloads.map((call) => call.length), [2, 1, 1]);
+
       final preloading = _PreloadTools();
       final replay = await replayWith(preloading);
       addTearDown(replay.close);
       expect(preloading.preloads.map((call) => call.length), [2]);
+      // Each archive keeps the two minutes it had in a call of its own.
+      expect(preloading.timeouts, [const Duration(minutes: 4)]);
       final output = '${origin.directory.path}/consumer-bin';
       final compiled = await replay.run([
         'compile',
@@ -968,6 +979,7 @@ final class _PreloadTools implements Tools {
 
   final bool Function(List<String> archives)? refuse;
   final preloads = <List<String>>[];
+  final timeouts = <Duration?>[];
 
   @override
   Future<ToolResult> run(
@@ -981,6 +993,7 @@ final class _PreloadTools implements Tools {
     if (at >= 0) {
       final archives = arguments.sublist(at + 1);
       preloads.add(archives);
+      timeouts.add(timeout);
       if (refuse?.call(archives) ?? false) {
         return ToolResult(
           exitCode: 1,

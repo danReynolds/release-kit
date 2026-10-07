@@ -31,9 +31,6 @@ import '../transforms/macos.dart';
 import 'release_preparation.dart';
 import 'release_progress.dart';
 
-/// Long enough that a preparation board helps instead of flashing briefly.
-const _briefPhase = Duration(milliseconds: 800);
-
 /// Owns the private stage boundary and the ambient facts that authorize its
 /// reuse at a later public boundary.
 final class ReleaseStageCoordinator {
@@ -882,7 +879,7 @@ final class ReleaseStageCoordinator {
   ) async {
     final live = output.progressBoard(
       '${unit.name} ${unit.version} · preparing stage',
-      delay: _briefPhase,
+      delay: briefPhase,
       emitSlowToNonTerminal: true,
     );
     final row = live.addRow(

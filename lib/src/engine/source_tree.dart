@@ -141,10 +141,9 @@ class GitSourceTree implements SourceTree {
     if (!_CommittedObjects.isObjectId(commit)) {
       return _listTrackedEntriesAt(commit);
     }
-    final key = '$root\u0000$commit';
-    final cached = _CommittedObjects.trees[key] ??= List.unmodifiable(
-      _listTrackedEntriesAt(commit),
-    );
+    final cached =
+        _CommittedObjects.trees[_CommittedObjects.key(root, commit)] ??=
+            List.unmodifiable(_listTrackedEntriesAt(commit));
     return List.of(cached);
   }
 
@@ -177,7 +176,7 @@ class GitSourceTree implements SourceTree {
       final path = record.substring(separator + 1);
       if (metadata.length != 3 ||
           !RegExp(r'^[0-7]{6}$').hasMatch(metadata[0]) ||
-          !RegExp(r'^(?:[0-9a-f]{40}|[0-9a-f]{64})$').hasMatch(metadata[2])) {
+          !_CommittedObjects.isObjectId(metadata[2])) {
         throw SourceUnreadable(
           'the source tree at $commit',
           'git returned malformed mode, type, or object metadata for $path',
@@ -212,7 +211,7 @@ class GitSourceTree implements SourceTree {
     for (final path in paths) {
       _resolve(path); // validates that [path] cannot escape the repository.
       final cached = cacheable
-          ? _CommittedObjects.blobs['$root\u0000$commit\u0000$path']
+          ? _CommittedObjects.blobs[_CommittedObjects.key(root, commit, path)]
           : null;
       if (cached != null) {
         result[path] = Uint8List.fromList(cached);
@@ -267,7 +266,7 @@ class GitSourceTree implements SourceTree {
       result[path] = stdoutBytes.sublist(start, start + size);
       if (cacheable) {
         _CommittedObjects.remember(
-          '$root\u0000$commit\u0000$path',
+          _CommittedObjects.key(root, commit, path),
           result[path]!,
         );
       }
@@ -281,9 +280,9 @@ class GitSourceTree implements SourceTree {
     if (!_CommittedObjects.isObjectId(commit)) {
       return _showBytesAt(commit, path);
     }
-    final key = '$root\u0000$commit\u0000$path';
+    final key = _CommittedObjects.key(root, commit, path);
     final cached = _CommittedObjects.blobs[key];
-    if (cached != null) return List<int>.of(cached);
+    if (cached != null) return Uint8List.fromList(cached);
     final bytes = _showBytesAt(commit, path);
     _CommittedObjects.remember(key, bytes);
     return bytes;
@@ -813,6 +812,11 @@ abstract final class _CommittedObjects {
   static final _objectId = RegExp(r'^(?:[0-9a-f]{40}|[0-9a-f]{64})$');
 
   static bool isObjectId(String commit) => _objectId.hasMatch(commit);
+
+  /// The key of [commit]'s tree in the repository at [root], or of the blob
+  /// at [path] in it.
+  static String key(String root, String commit, [String? path]) =>
+      path == null ? '$root\u0000$commit' : '$root\u0000$commit\u0000$path';
 
   static void remember(String key, List<int> bytes) {
     if (blobs.containsKey(key) || _bytes + bytes.length > _budget) return;

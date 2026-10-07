@@ -22,9 +22,6 @@ import 'release_preparation.dart';
 import 'release_progress.dart';
 import 'release_stage_coordinator.dart';
 
-/// Long enough that a preparation board helps instead of flashing briefly.
-const _briefPhase = Duration(milliseconds: 800);
-
 enum ReleaseAction {
   notAttempted('not_attempted', 'not attempted'),
   attempted('attempted', 'attempted; result unknown'),
@@ -322,7 +319,7 @@ final class ReleasePublicationCoordinator {
       output,
       title: '${unit.name} ${unit.version} · preparing release',
       targets: targets,
-      delay: _briefPhase,
+      delay: briefPhase,
     );
     final context = TargetReadinessContext(
       tools: tools,
