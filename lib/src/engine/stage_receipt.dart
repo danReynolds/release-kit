@@ -269,10 +269,12 @@ class StageReceipt {
     }
   }
 
-  factory StageReceipt.parse(String document) => Timings.timeTally(
-    'parse stage receipt',
-    () => StageReceipt._parse(document),
-  );
+  factory StageReceipt.parse(String document) => Timings.enabled
+      ? Timings.timeTally(
+          'parse stage receipt',
+          () => StageReceipt._parse(document),
+        )
+      : StageReceipt._parse(document);
 
   factory StageReceipt._parse(String document) {
     final decoded = CanonicalJson.decodeDocument(document);

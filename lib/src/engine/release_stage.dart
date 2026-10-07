@@ -627,14 +627,19 @@ class ReleaseStage {
   /// answer would require is a rewrite that restores size, mode, and both
   /// timestamps, which a writer cannot do to change time: the kernel sets
   /// it. Concurrent writers are excluded separately, by the stage lock.
-  StageInspection inspect() =>
-      Timings.spanSync('inspect stage ${unit.name}', _inspectStage);
-
-  StageInspection _inspectStage() {
+  StageInspection inspect() {
     final now = directory.fingerprint();
     final remembered = _inspected;
-    if (remembered != null && _inspectedAt == now) return remembered;
-    final fresh = _inspectFromDisk(now);
+    if (remembered != null && _inspectedAt == now) {
+      Timings.tally('release stage inspection remembered');
+      return remembered;
+    }
+    // The span covers the reading, not the asking, so a trace counts the
+    // stages that were read rather than every time one was asked about.
+    final fresh = Timings.spanSync(
+      'inspect stage ${unit.name}',
+      () => _inspectFromDisk(now),
+    );
     _inspected = fresh;
     _inspectedAt = now;
     return fresh;

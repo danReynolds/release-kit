@@ -345,12 +345,12 @@ manifest of what was built.
 `rk <command> -h` for its flags and examples.
 
 On a terminal, a finished step keeps how long it took once that reaches a
-second, and a `stage` or `release` of ten seconds or more ends with where the
-time went: `Done in 2m 51s · preparing 2s · checking stages 31s · staging
-1m 58s · publishing 22s`. Time spent at the confirmation prompt is not
-counted. For the whole breakdown, every phase and step however fast, pass
-`--timings` (printed to stderr after the run) or `--timings=run.json` (a trace
-file Perfetto opens); either also fills `took_ms` in `--json`.
+second, and a successful `stage` or `release` of ten seconds or more ends
+with where the time went: `Done in 2m 53s · preparing 2s · checking stages
+31s · staging 1m 58s · publishing 22s`. Time spent at rk's confirmation
+prompt is not counted. For the whole breakdown, every phase and step however
+fast, pass `--timings`: it is printed to stderr after the run, and the run is
+written to `.rk/timings.json` as a trace that Perfetto opens.
 
 ## Agents
 

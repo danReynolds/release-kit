@@ -173,16 +173,21 @@ class SystemTools implements StreamingTools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
-  }) => Timings.timeTallyAsync(
-    'tool ${executable.split('/').last} ${arguments.where((a) => !a.startsWith('/')).take(4).join(' ')}',
-    () => _run(
+  }) {
+    Future<ToolResult> run() => _run(
       executable,
       arguments,
       workingDirectory: workingDirectory,
       environment: environment,
       timeout: timeout,
-    ),
-  );
+    );
+    return Timings.enabled
+        ? Timings.timeTallyAsync(
+            'tool ${processTally(executable, arguments)}',
+            run,
+          )
+        : run();
+  }
 
   Future<ToolResult> _run(
     String executable,
@@ -328,16 +333,21 @@ class SystemTools implements StreamingTools {
     required void Function(String line) onLine,
     String? workingDirectory,
     Map<String, String>? environment,
-  }) => Timings.timeTallyAsync(
-    'tool ${executable.split('/').last} ${arguments.where((a) => !a.startsWith('/')).take(4).join(' ')} (streamed)',
-    () => _runStreaming(
+  }) {
+    Future<ToolResult> run() => _runStreaming(
       executable,
       arguments,
       onLine: onLine,
       workingDirectory: workingDirectory,
       environment: environment,
-    ),
-  );
+    );
+    return Timings.enabled
+        ? Timings.timeTallyAsync(
+            'tool ${processTally(executable, arguments)} (streamed)',
+            run,
+          )
+        : run();
+  }
 
   Future<ToolResult> _runStreaming(
     String executable,
@@ -347,8 +357,9 @@ class SystemTools implements StreamingTools {
     Map<String, String>? environment,
   }) async {
     // A bounded run keeps [run]'s bound, and hands over its lines at the end.
+    // Through [_run]: [runStreaming] has already tallied this process.
     if (timeout != null || cancellation != null) {
-      final result = await run(
+      final result = await _run(
         executable,
         arguments,
         workingDirectory: workingDirectory,

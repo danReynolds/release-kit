@@ -202,8 +202,15 @@ final class ProgressRow {
 
   /// How long the row was active in all, from its first operation to its
   /// settlement. Null for a row that has not settled, or never ran (one
-  /// restored from a receipt, or not attempted).
+  /// restored from a receipt, or never begun).
   Duration? get took => _took;
+
+  /// How long the row has been active: [took] once it settles, the time so
+  /// far while it runs, and null if it never ran.
+  Duration? get ranFor => _took ?? _activeSince?.call();
+
+  /// What the row is about: its label, and its coordinate when it has one.
+  String get subject => coordinate == null ? label : '$label · $coordinate';
 
   void _wait(String result) {
     if (_state != ProgressRowState.pending) {
@@ -295,6 +302,8 @@ final class ProgressRow {
       );
     }
     _note = _text('progress skipped result', result, max: 120);
+    // A drained lane's row did run, until the stop; its time stands.
+    _took = _activeSince?.call();
     _state = ProgressRowState.notAttempted;
     _changed(this);
   }

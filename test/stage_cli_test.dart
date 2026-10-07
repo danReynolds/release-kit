@@ -103,26 +103,19 @@ publish = ["git-tag"]
     '--timings says where a stage went without changing the plain report',
     () {
       final repo = repository();
-      final scratch = Directory.systemTemp.createTempSync('rk-timings-');
-      addTearDown(() => scratch.deleteSync(recursive: true));
-      final traceFile = '${scratch.path}/stage.json';
+      final traceFile = File('${repo.root}/.rk/timings.json');
 
       final plain = repo(['stage', '--json']);
-      final timed = repo([
-        'stage',
-        '--json',
-        '--timings',
-        '--timings=$traceFile',
-      ]);
+      final timed = repo(['stage', '--json', '--timings']);
       expect(timed.code, 0, reason: timed.all);
 
       // The breakdown goes to stderr, so stdout stays one JSON document.
       expect(timed.stderr, contains('Timings'));
       expect(timed.stderr, contains('preparing'));
       expect(timed.stderr, contains('Total'));
-      expect(timed.stderr, contains('rk: wrote timings to $traceFile'));
+      expect(timed.stderr, contains('rk: wrote timings to .rk/timings.json'));
 
-      final trace = jsonDecode(File(traceFile).readAsStringSync()) as Map;
+      final trace = jsonDecode(traceFile.readAsStringSync()) as Map;
       final slices = (trace['traceEvents'] as List).where(
         (event) => (event as Map)['ph'] == 'X',
       );
@@ -131,10 +124,15 @@ publish = ["git-tag"]
         contains('preparing'),
       );
 
+      // The report is the plain one: no step carries a time.
       bool timedSteps(Run run) =>
           run.stepsOf('core').any((step) => step.containsKey('took_ms'));
       expect(timedSteps(plain), isFalse);
-      expect(timedSteps(timed), isTrue);
+      expect(timedSteps(timed), isFalse);
+
+      // The trace is rk's own, so the next run finds nothing uncommitted.
+      final again = repo(['stage', '--json']);
+      expect(again.code, 0, reason: again.all);
     },
     timeout: const Timeout(Duration(minutes: 2)),
   );

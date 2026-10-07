@@ -80,6 +80,62 @@ void main() {
     });
   });
 
+  group('the run timeline hears of every row that ran', () {
+    test('a drained lane keeps the time it ran before the stop', () {
+      final harness = _Harness(terminal: false);
+      final board = harness.output.progressBoard('tool 1.2.3 · staging');
+      final archive = board.addRow(id: 'archive', label: 'linux archive');
+      final never = board.addRow(id: 'never', label: 'macos archive');
+      archive.handle.begin(CommonProgressActivities.validating);
+      harness.now += const Duration(seconds: 60);
+      // A sibling lane failed; this one's build finished, its archive never
+      // started.
+      archive.notAttempted();
+      never.notAttempted();
+      board.conclude();
+
+      final breakdown = harness.output.timeline.breakdown();
+      expect(breakdown, matches(RegExp(r'linux archive  not attempted +1m\n')));
+      expect(breakdown, isNot(contains('macos archive')));
+    });
+
+    test('a row cut off with its board is unfinished, not lost', () {
+      final harness = _Harness(terminal: false);
+      final board = harness.output.progressBoard('tool 1.2.3 · staging');
+      board
+          .addRow(id: 'archive', label: 'package archive')
+          .handle
+          .begin(CommonProgressActivities.validating);
+      harness.now += const Duration(seconds: 3);
+      board.discard();
+
+      expect(
+        harness.output.timeline.breakdown(),
+        matches(RegExp(r'package archive  unfinished +3\.0s')),
+      );
+    });
+
+    test('rows that share a label are told apart by their group', () {
+      final harness = _Harness(terminal: false);
+      final board = harness.output.progressBoard('framework 1.0.0 · staging');
+      for (final package in ['top', 'base']) {
+        final row = board.addRow(
+          id: '$package/archive',
+          label: 'package archive',
+          group: package,
+        );
+        row.handle.begin(CommonProgressActivities.validating);
+        harness.now += const Duration(seconds: 1);
+        row.complete(note: 'staged');
+      }
+      board.settle();
+
+      final breakdown = harness.output.timeline.breakdown();
+      expect(breakdown, contains('top · package archive  staged'));
+      expect(breakdown, contains('base · package archive  staged'));
+    });
+  });
+
   group('target-owned activity vocabulary', () {
     test('accepts concise bespoke wording', () {
       final activity = ProgressActivity(

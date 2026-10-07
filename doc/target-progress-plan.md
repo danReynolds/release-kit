@@ -73,7 +73,8 @@ mislabel a definite upload or publish rejection as a verification failure.
    once that reaches a second, and a successful `stage` or `release` of ten
    seconds or more ends with one line of phases (`doc/step-timings.md`).
    Pipes and JSON remain deterministic and do not receive spinner frames or
-   elapsed-time events; `--timings` is the explicit request that adds them.
+   elapsed-time events; `--timings` is the explicit request for them, on
+   stderr and in `.rk/timings.json`.
 8. Report a bespoke activity only for a separately observable operation. Do
    not invent a `provenance` phase when a native publish command performs
    publication and provenance attestation as one opaque operation.
@@ -458,7 +459,7 @@ using the existing safety rules.
   schema bump.
 - Tests use a fake clock and captured activity transitions; production output
   never serializes wall-clock progress unless `--timings` asks for it, which
-  fills `took_ms` and writes a breakdown to stderr or a trace file.
+  writes a breakdown to stderr and a trace to `.rk/timings.json`.
 - TTY and non-TTY agree on final row state and issue text. Delayed non-TTY
   activity lines are informational, not report state.
 
@@ -581,7 +582,6 @@ architectural proof only; production npm publishing remains its own change.
 - Interactive subprocess output does not corrupt the live board, erase native
   diagnostics, leak timers, or lose its durable target/activity handoff.
 - Pipes and JSON stay deterministic; the report schema does not change.
-  `--timings` fills the already-optional `took_ms`, and only on request.
 - Activity/label validation prevents multiline output, control characters,
   oversized details, duplicated target names, and credential disclosure.
 - Existing stage receipts, target inspections, authorization, settlement,

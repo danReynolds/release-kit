@@ -142,26 +142,6 @@ class Report {
     });
   }
 
-  /// Adds `took_ms` to each recorded step that [durations] names, in the
-  /// place [step] gives it. Only `--timings` asks for this: a report's bytes
-  /// otherwise stay the same from one run to the next.
-  void recordTook(Map<String, Duration> durations) {
-    for (final unit in _units.values) {
-      final steps = unit['steps'] as List<Map<String, Object?>>;
-      for (final (index, recorded) in steps.indexed) {
-        final took = durations[recorded['id']];
-        if (took == null || recorded.containsKey('took_ms')) continue;
-        steps[index] = {
-          for (final MapEntry(:key, :value) in recorded.entries) ...{
-            if (key == 'action') 'took_ms': took.inMilliseconds,
-            key: value,
-          },
-          if (!recorded.containsKey('action')) 'took_ms': took.inMilliseconds,
-        };
-      }
-    }
-  }
-
   /// Records one target-oriented status observation without introducing a
   /// second readiness state machine. The target carries the same four-way
   /// verdict as its checklist step; artifact status describes only the local

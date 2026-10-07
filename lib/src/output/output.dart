@@ -951,9 +951,6 @@ final class LiveProgress {
   final Map<String, Timer> _nonTerminalDelays = {};
   final Map<String, ProgressActivity> _nonTerminalPrinted = {};
   final Map<String, ProgressActivity> _nonTerminalScheduled = {};
-
-  /// Rows whose settlement the run timeline has recorded.
-  final Set<String> _timed = {};
   Timer? _delay;
   Timer? _ticker;
   var _drawnLines = 0;
@@ -982,17 +979,8 @@ final class LiveProgress {
   }
 
   void _changed(ProgressRow row) {
-    final took = row.took;
-    if (took != null && _timed.add(row.id)) {
-      _output.timeline.rowSettled(
-        board: model.title,
-        id: row.id,
-        label: row.label,
-        coordinate: row.coordinate,
-        note: row.note,
-        took: took,
-      );
-    }
+    // A row settles once, so this records it once.
+    if (row.took case final took?) _time(row, took, note: row.note);
     if (_closed) return;
     if (_output.isTerminal) {
       if (_visible && !_suspended) {
@@ -1250,6 +1238,11 @@ final class LiveProgress {
   /// Erases the transient surface without leaving a snapshot.
   void discard() {
     if (_closed) return;
+    // Work cut off mid-run, such as by a crash, still took its time.
+    for (final row in model.rows) {
+      if (row.state != ProgressRowState.active) continue;
+      if (row.ranFor case final ran?) _time(row, ran, note: 'unfinished');
+    }
     final printedRows = !_output.isTerminal && emitSlowToNonTerminal
         ? model.rows
               .where(
@@ -1327,6 +1320,19 @@ final class LiveProgress {
     settle();
   }
 
+  /// Tells the run's timeline that [row] ran for [took]. Its group goes with
+  /// it: rows under different groups can share a label.
+  void _time(ProgressRow row, Duration took, {required String? note}) =>
+      _output.timeline.rowSettled(
+        board: model.title,
+        id: row.id,
+        subject: row.group == null
+            ? row.subject
+            : '${row.group} · ${row.subject}',
+        note: note,
+        took: took,
+      );
+
   void _writeDurableRow(ProgressRow row, {int depth = 1, bool active = false}) {
     var (glyph, status, glyphState, textState) = _rowPresentation(
       row,
@@ -1347,10 +1353,7 @@ final class LiveProgress {
       '✗' => Mark.blocked,
       _ => Mark.none,
     };
-    final subject = [
-      row.label,
-      if (row.coordinate != null) row.coordinate!,
-    ].join(' · ');
+    final subject = row.subject;
     final label = glyph == '—' || glyph == '…' ? '$glyph $subject' : subject;
     _output.line(
       label,

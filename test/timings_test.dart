@@ -67,6 +67,43 @@ void main() {
     ]);
   });
 
+  test(
+    'a span whose body throws before returning a future still ends',
+    () async {
+      await expectLater(
+        Timings.span<void>('refused', () => throw StateError('no')),
+        throwsStateError,
+      );
+
+      expect(Timings.reportText(), isNot(contains('unfinished')));
+    },
+  );
+
+  test('an async tally names the caller that started it', () async {
+    Timings.startRecording(clock: () => now, callers: true);
+    Future<int> readsSomething() =>
+        Timings.timeTallyAsync('tool git', () async {
+          await Future<void>.delayed(Duration.zero);
+          return 1;
+        });
+
+    await readsSomething();
+
+    expect(Timings.reportText(), contains('tool git  ← main.'));
+    expect(Timings.reportText(), isNot(contains('← ?')));
+  });
+
+  test('a command run again and again is one tally', () {
+    expect(
+      processTally('/sdk/bin/dart', ['/tmp/rk-dart-sdk-AbC/sdk.dart']),
+      processTally('/sdk/bin/dart', ['/tmp/rk-dart-sdk-XyZ/sdk.dart']),
+    );
+    expect(
+      processTally('git', ['show', 'HEAD:pubspec.yaml']),
+      'git show HEAD:pubspec.yaml',
+    );
+  });
+
   test('an unfinished span says so', () async {
     final pending = Completer<void>();
     final waiting = Timings.span('waiting', () => pending.future);

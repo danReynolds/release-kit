@@ -62,8 +62,13 @@ class Sha256 {
   /// more than the hashing did — a growable `List<int>` holds eight bytes
   /// per element, so a 10MB input became an 80MB list — and every staged
   /// byte passes through here, several times over a release.
-  static Uint8List bytes(List<int> message) =>
-      Timings.timeTally('sha256', () => _bytes(message), bytes: message.length);
+  static Uint8List bytes(List<int> message) => Timings.enabled
+      ? Timings.timeTally(
+          'sha256',
+          () => _bytes(message),
+          bytes: message.length,
+        )
+      : _bytes(message);
 
   static Uint8List _bytes(List<int> message) {
     // Typed once, so the compression loop indexes bytes rather than a

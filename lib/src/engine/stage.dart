@@ -192,7 +192,9 @@ class StageDirectory {
   /// answer for a stage that does not exist is as cacheable as any other.
   /// Something else at the path, a file or a dangling link, has its own, so
   /// an answer about it is never taken for an answer about nothing there.
-  String fingerprint() => Timings.timeTally('stage fingerprint', _fingerprint);
+  String fingerprint() => Timings.enabled
+      ? Timings.timeTally('stage fingerprint', _fingerprint)
+      : _fingerprint();
 
   String _fingerprint() {
     final directory = Directory(path);

@@ -9,8 +9,8 @@ import 'stage.dart';
 import 'stage_archive.dart';
 import 'stage_binary_evidence.dart';
 import 'stage_receipt.dart';
-import 'timings.dart';
 import 'stage_receipt_structure.dart';
+import 'timings.dart';
 import 'verdict.dart';
 
 enum StageIssueKind {
@@ -127,7 +127,8 @@ class StageInspection {
 }
 
 /// Hashes and inventories an existing stage without executing artifacts,
-/// contacting a service, or changing the filesystem.
+/// contacting a service, or changing the filesystem. A stage unchanged since
+/// this process last inspected it is answered from that inspection.
 class StageInspector {
   const StageInspector();
 

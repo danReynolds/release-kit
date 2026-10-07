@@ -1,8 +1,8 @@
 # Step timings
 
 Status: built. Settled rows keep their duration, `stage` and `release` end
-with a summary line, `--timings` gives the breakdown, and `--json` fills
-`took_ms` under it. The decisions are under "Decided" below.
+with a summary line, and `--timings` gives the breakdown and a trace file.
+The decisions are under "Decided" below.
 
 ## Why
 
@@ -57,20 +57,26 @@ counter would have ticked, in the counter's own format:
 ·   source snapshot                  verified
 ```
 
-A row restored from a receipt, or one never attempted, never ran and shows
-none. A successful `rk stage` or `rk release` that took ten seconds or more
-ends with one line, leaving out phases under a second:
+A row restored from a receipt, or one never begun, never ran and shows none.
+A row that ran and was then marked not attempted, a drained lane after a stop
+elsewhere, keeps the time it ran. A successful `rk stage` or `rk release`
+that took ten seconds or more ends with one line, leaving out phases under a
+second:
 
 ```
-Done in 2m 51s · preparing 2s · checking stages 31s · staging 1m 58s · publishing 22s
+Done in 2m 53s · preparing 2s · checking stages 31s · staging 1m 58s · publishing 22s
 ```
 
 The phases are the ones the run's boards already name: `preparing` (reading
 each unit's public targets), `checking stages`, `staging` and `publishing`.
-Time at rk's confirmation prompt counts toward no phase and no total: a
-release that waited at the prompt over lunch did not take an hour. Time in an
-interactive native tool (a registry sign-in, say) still counts, because those
-tools also do the work and rk cannot tell their waiting from their working.
+Until the command names its first phase the run is `starting`, so slow setup
+(reading the repository, probing the toolchain) is named too. Time at rk's
+confirmation prompt counts toward no phase and no total: a release that
+waited at the prompt over lunch did not take an hour. It is measured where rk
+asks at the terminal, so `--yes` and `--json`, which never ask, record no
+wait. Time in an interactive native tool (a registry sign-in, say) still
+counts, because those tools also do the work and rk cannot tell their waiting
+from their working.
 
 Pipes and `--json` are unchanged by this layer, so a transcript or report
 reads the same from one run to the next.
@@ -79,14 +85,20 @@ reads the same from one run to the next.
 
 `rk stage --timings` and `rk release --timings` print, after the run and to
 stderr, every phase with every row that ran during it, under the board that
-showed it, however fast. Durations under ten seconds keep tenths so quick
-steps can still be told apart. `--timings=FILE` writes the same run as Chrome
-trace events instead, which Perfetto and `chrome://tracing` open: phases on
-one track, each row on its own, waits on a person marked where they fell.
+showed it, however fast; for a run that stopped too, ending with a neutral
+`Total`. Durations under ten seconds keep tenths, rounded down like the rest,
+so quick steps can still be told apart. The same run is written to
+`.rk/timings.json` as Chrome trace events, which Perfetto and
+`chrome://tracing` open: phases on one track, each row on its own, waits on a
+person marked where they fell. The file is rk's own, under `.rk/`, so the
+next release does not find it uncommitted, and an earlier run's trace is
+removed first, so a trace that could not be written is missing, not stale.
 
-Either form fills `took_ms` on the report's steps: the milliseconds rk spent
-on that step during the run, summed over the progress rows that showed it. A
-step no row showed has none. Without the flag the field stays absent.
+The `--json` report's optional `took_ms` stays unfilled. Progress rows do not
+map onto report steps: staging rows are per artifact, not per build or
+completion step, so summing rows by step would have credited a public step
+with its readiness check and left the build that took minutes with nothing.
+Filling it honestly means timing each step where its outcome is recorded.
 
 It is a flag of its own rather than part of a `--verbose`. rk has no verbose
 mode to join, and one would have to decide what else it shows; tying timing
@@ -100,19 +112,23 @@ For a maintainer chasing a slow path, and undocumented on purpose: it shows
 rk's internals, which layers 1 and 2 never do. Spans sit at module
 boundaries:
 
-- command phases: inspect, resolve stages, restore, eligibility, bind,
-  prepare;
-- stage verification;
-- every subprocess, through `Tools.run` and the git source tree;
+- command phases: inspect, restore, eligibility, bind, prepare;
+- stage verification, where a stage is actually read;
+- subprocesses run through `Tools.run`, `timedRunSync` and the git source
+  tree, named by executable and leading arguments less absolute paths, so a
+  repeated command is one count (not yet: `runInteractive`, `GitState`'s own
+  reads, and the macOS launcher compiler);
 - tallies for work too frequent to be a span: digests (with bytes), receipt
-  parsing, canonical JSON, stage fingerprints.
+  parsing, canonical JSON, stage fingerprints, and stage inspections answered
+  from memory.
 
 Spans propagate through zones, so work started under a span is charged to it
 across awaits and `Future.wait`. Tallies are charged to the span they ran in.
-`RK_TIMINGS_CALLERS=1` adds the first caller frame to each tally, which is how
-the 719 `git show` calls were traced to `DartStageInputs.read`; it walks a
-stack per tally, so it is for diagnosis only. With the variable unset, every
-call runs its body directly.
+`RK_TIMINGS_CALLERS=1` adds the first caller frame to each tally, read when
+the work starts, which is how the 719 `git show` calls were traced to
+`DartStageInputs.read`; it walks a stack per tally, so it is for diagnosis
+only. With the variable unset, every call runs its body directly, and hot
+paths do not even build a tally's name.
 
 Excerpt, from the run that found the problem:
 
@@ -130,14 +146,15 @@ rk timings (wall clock; nested spans overlap their parent)
 ## How it is built
 
 - `ProgressRow` keeps the stopwatch of its first operation and freezes `took`
-  when it completes or fails.
-- `LiveProgress` reports each settled row to the run's `RunTimeline`
-  (`lib/src/output/timeline.dart`), and `_writeDurableRow` adds the duration
-  on a terminal.
-- `release.dart` marks the phases, and the publication coordinator runs the
-  confirmation prompts through `RunTimeline.waitingOnPerson`.
-- `bin/rk.dart` prints the closing line, the breakdown or the trace file, and
-  passes the step durations to `Report.recordTook` under `--timings`.
+  when it completes, fails, or is marked not attempted after running.
+- `LiveProgress` reports each settled row, with its group, to the run's
+  `RunTimeline` (`lib/src/output/timeline.dart`), and a row still running
+  when its board is discarded, as in a crash, as unfinished.
+  `_writeDurableRow` adds the duration on a terminal.
+- `release.dart` marks the phases, and `bin/rk.dart` runs its terminal prompt
+  through `RunTimeline.waitingOnPerson`.
+- `bin/rk.dart` prints the closing line and, under `--timings`, the
+  breakdown and `.rk/timings.json`.
 - `Timings` (`lib/src/engine/timings.dart`) is the maintainer trace.
 
 ## Decided
@@ -148,7 +165,10 @@ rk timings (wall clock; nested spans overlap their parent)
    more, and leaves out phases under a second and time at the prompt.
 3. `--timings` is a public flag of its own (see layer 2), speaking only in
    phases, boards and rows. `RK_TIMINGS` stays a maintainer variable.
-4. `took_ms` is filled only under `--timings`.
+4. `took_ms` stays unfilled (see layer 2). It was first filled under
+   `--timings` from the rows that showed each step, but rows are not steps;
+   the trace file is the machine-readable timing until a step's own time is
+   measured where its outcome is recorded.
 5. No per-run history for now. Timings on a developer machine move with load,
    caches and the network, which is why `tool/bench.dart` asserts almost
    nothing; history can come later if a need shows.

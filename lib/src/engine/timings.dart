@@ -15,7 +15,8 @@ import 'dart:io';
 /// to the span they ran in. `RK_TIMINGS_CALLERS=1` adds each tally's first
 /// caller frame; it walks a stack per tally, so it is for diagnosis only.
 ///
-/// Recording off, every call runs its body directly.
+/// Recording off, every call runs its body directly. Hot paths check
+/// [Timings.enabled] first, so they do not even build a tally's name.
 final class Timings {
   Timings._();
 
@@ -48,8 +49,10 @@ final class Timings {
     final recording = _recording;
     if (recording == null) return body();
     final span = _Span(name, recording.current, recording.now());
+    // Future.sync: a body that throws before returning a future still ends
+    // its span.
     return runZoned(
-      () => body().whenComplete(() => span.end = recording.now()),
+      () => Future.sync(body).whenComplete(() => span.end = recording.now()),
       zoneValues: {_key: span},
     );
   }
@@ -71,23 +74,19 @@ final class Timings {
   static void tally(String name, {int bytes = 0, Duration? elapsed}) {
     final recording = _recording;
     if (recording == null) return;
-    final key = recording.callers ? '$name  ← ${_caller()}' : name;
-    final tally = recording.current.tallies.putIfAbsent(key, _Tally.new);
-    tally
-      ..count += 1
-      ..bytes += bytes
-      ..elapsed += elapsed ?? Duration.zero;
+    recording.charge(recording.keyFor(name), bytes: bytes, elapsed: elapsed);
   }
 
   /// Times synchronous [body] as a tally named [name].
   static T timeTally<T>(String name, T Function() body, {int bytes = 0}) {
     final recording = _recording;
     if (recording == null) return body();
+    final key = recording.keyFor(name);
     final started = recording.now();
     try {
       return body();
     } finally {
-      tally(name, bytes: bytes, elapsed: recording.now() - started);
+      recording.charge(key, bytes: bytes, elapsed: recording.now() - started);
     }
   }
 
@@ -95,9 +94,12 @@ final class Timings {
   static Future<T> timeTallyAsync<T>(String name, Future<T> Function() body) {
     final recording = _recording;
     if (recording == null) return body();
+    // The caller is read now: once the future completes, the stack holds
+    // only the event loop.
+    final key = recording.keyFor(name);
     final started = recording.now();
-    return body().whenComplete(
-      () => tally(name, elapsed: recording.now() - started),
+    return Future.sync(body).whenComplete(
+      () => recording.charge(key, elapsed: recording.now() - started),
     );
   }
 
@@ -160,6 +162,18 @@ final class _Recording {
   final _Span root;
 
   _Span get current => (Zone.current[Timings._key] as _Span?) ?? root;
+
+  /// [name], with its caller when callers are being recorded.
+  String keyFor(String name) =>
+      callers ? '$name  ← ${Timings._caller()}' : name;
+
+  /// Charges one occurrence of [key] to the current span.
+  void charge(String key, {int bytes = 0, Duration? elapsed}) {
+    current.tallies.putIfAbsent(key, _Tally.new)
+      ..count += 1
+      ..bytes += bytes
+      ..elapsed += elapsed ?? Duration.zero;
+  }
 }
 
 final class _Tally {
@@ -204,20 +218,30 @@ final class _Span {
       '${(duration.inMicroseconds / 1e6).toStringAsFixed(3)}s';
 }
 
-/// [Process.runSync], tallied as its executable and first argument.
+/// A subprocess's tally name: its executable and first few arguments, less
+/// the absolute paths that differ from one call to the next, so a command
+/// run a hundred times is one line counted a hundred times.
+String processTally(String executable, List<String> arguments) => [
+  executable,
+  ...arguments.where((argument) => !argument.startsWith('/')).take(4),
+].join(' ');
+
+/// [Process.runSync], tallied by [processTally].
 ProcessResult timedRunSync(
   String executable,
   List<String> arguments, {
   String? workingDirectory,
   Encoding? stdoutEncoding = systemEncoding,
   Encoding? stderrEncoding = systemEncoding,
-}) => Timings.timeTally(
-  '$executable ${arguments.isEmpty ? '' : arguments.first}',
-  () => Process.runSync(
+}) {
+  ProcessResult run() => Process.runSync(
     executable,
     arguments,
     workingDirectory: workingDirectory,
     stdoutEncoding: stdoutEncoding,
     stderrEncoding: stderrEncoding,
-  ),
-);
+  );
+  return Timings.enabled
+      ? Timings.timeTally(processTally(executable, arguments), run)
+      : run();
+}

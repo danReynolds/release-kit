@@ -1,7 +1,6 @@
 import 'dart:convert';
 
 import 'package:rk/src/output/output.dart';
-import 'package:rk/src/output/report.dart';
 import 'package:rk/src/output/timeline.dart';
 import 'package:test/test.dart';
 
@@ -19,7 +18,7 @@ void main() {
     RunTimeline timeline, {
     String board = 'tool 1.2.3 · staging',
     required String id,
-    required String label,
+    required String subject,
     String? note,
     required Duration took,
   }) {
@@ -27,8 +26,7 @@ void main() {
     timeline.rowSettled(
       board: board,
       id: id,
-      label: label,
-      coordinate: null,
+      subject: subject,
       note: note,
       took: took,
     );
@@ -47,6 +45,18 @@ void main() {
     expect(
       timeline.summaryLine(),
       'Done in 2m 31s · preparing 2s · checking stages 31s · staging 1m 58s',
+    );
+  });
+
+  test('setup before the first phase is named, too', () {
+    final timeline = RunTimeline(clock);
+    now += const Duration(seconds: 3);
+    timeline.phase('checking stages');
+    now += const Duration(seconds: 8);
+
+    expect(
+      timeline.summaryLine(),
+      'Done in 11s · starting 3s · checking stages 8s',
     );
   });
 
@@ -77,57 +87,74 @@ void main() {
     },
   );
 
-  test('a step is credited with every row that showed it', () {
-    final timeline = RunTimeline(clock)..phase('publishing');
-    rowRan(
-      timeline,
-      id: 'tool/pub.dev/tool@1.2.3',
-      label: 'pub.dev',
-      took: const Duration(seconds: 1),
-    );
-    rowRan(
-      timeline,
-      id: 'tool/pub.dev/tool@1.2.3',
-      label: 'pub.dev',
-      took: const Duration(seconds: 2),
-    );
-
-    expect(timeline.stepDurations(), {
-      'tool/pub.dev/tool@1.2.3': const Duration(seconds: 3),
-    });
-  });
-
   test('the breakdown lists every row under its phase and board', () {
     final timeline = RunTimeline(clock)..phase('staging');
     rowRan(
       timeline,
       id: 'source',
-      label: 'source snapshot',
+      subject: 'source snapshot',
       note: 'verified',
       took: const Duration(milliseconds: 300),
     );
     rowRan(
       timeline,
       id: 'archive',
-      label: 'package archive',
+      subject: 'package archive',
       note: 'staged',
       took: const Duration(seconds: 101),
     );
 
     final lines = timeline.breakdown().trimRight().split('\n');
     expect(lines.first, 'Timings');
-    expect(lines[1], startsWith('  staging'));
-    expect(lines[1], endsWith('1m 41s'));
-    expect(lines[2], '    tool 1.2.3 · staging');
+    expect(lines[1], allOf(startsWith('  starting'), endsWith('0.0s')));
+    expect(lines[2], allOf(startsWith('  staging'), endsWith('1m 41s')));
+    expect(lines[3], '    tool 1.2.3 · staging');
     expect(
-      lines[3],
+      lines[4],
       allOf(contains('source snapshot  verified'), endsWith('0.3s')),
     );
     expect(
-      lines[4],
+      lines[5],
       allOf(contains('package archive  staged'), endsWith('1m 41s')),
     );
     expect(lines.last, 'Total 1m 41s');
+  });
+
+  test('tenths round down, as the terminal format does', () {
+    final timeline = RunTimeline(clock)..phase('staging');
+    rowRan(
+      timeline,
+      id: 'quick',
+      subject: 'almost ten',
+      took: const Duration(milliseconds: 9960),
+    );
+    rowRan(
+      timeline,
+      id: 'slow',
+      subject: 'just over',
+      took: const Duration(milliseconds: 10999),
+    );
+
+    final breakdown = timeline.breakdown();
+    expect(breakdown, matches(RegExp(r'almost ten +9\.9s')));
+    expect(breakdown, matches(RegExp(r'just over +10s')));
+  });
+
+  test('text from boards and tools reaches the terminal inert', () {
+    final timeline = RunTimeline(clock)..phase('staging');
+    rowRan(
+      timeline,
+      board: 'tool\u009b31m · staging',
+      id: 'row',
+      subject: 'archive\u001b[2J',
+      took: const Duration(seconds: 1),
+    );
+
+    final breakdown = timeline.breakdown();
+    expect(breakdown, isNot(contains('\u009b')));
+    expect(breakdown, isNot(contains('\u001b')));
+    expect(breakdown, contains(r'tool\x9b31m · staging'));
+    expect(breakdown, contains(r'archive\x1b[2J'));
   });
 
   test('the trace file is Chrome trace events', () async {
@@ -138,7 +165,7 @@ void main() {
     rowRan(
       timeline,
       id: 'tool/tag/v1.2.3',
-      label: 'Git tag',
+      subject: 'Git tag',
       note: 'pushed',
       took: const Duration(milliseconds: 1500),
     );
@@ -148,47 +175,15 @@ void main() {
     final slices = events.where((event) => event['ph'] == 'X').toList();
     expect(
       [for (final slice in slices) slice['name']],
-      ['publishing', 'waiting on you', 'Git tag'],
+      ['starting', 'publishing', 'waiting on you', 'Git tag'],
     );
     final tag = slices.last;
     expect(tag['ts'], 4000000);
     expect(tag['dur'], 1500000);
     expect(tag['args'], {
       'board': 'tool 1.2.3 · staging',
-      'step': 'tool/tag/v1.2.3',
+      'row': 'tool/tag/v1.2.3',
       'note': 'pushed',
     });
-  });
-
-  test('took_ms lands on the steps it names, before the action', () {
-    final report = Report('release')
-      ..step(
-        id: 'tool/pub.dev/tool@1.2.3',
-        unit: 'tool',
-        summary: 'publish',
-        evidence: const {'archive': 'sha'},
-        action: 'published',
-      )
-      ..step(id: 'tool/tag/v1.2.3', unit: 'tool', summary: 'tag')
-      ..step(id: 'tool/other', unit: 'tool', summary: 'other');
-    report.recordTook({
-      'tool/pub.dev/tool@1.2.3': const Duration(milliseconds: 12345),
-      'tool/tag/v1.2.3': const Duration(milliseconds: 250),
-    });
-
-    final document = jsonDecode(report.encode(exit: 0)) as Map<String, Object?>;
-    final steps = ((document['units']! as List).single as Map)['steps'] as List;
-    final publish = steps[0] as Map<String, Object?>;
-    expect(publish.keys.toList(), [
-      'id',
-      'summary',
-      'verdict',
-      'evidence',
-      'took_ms',
-      'action',
-    ]);
-    expect(publish['took_ms'], 12345);
-    expect((steps[1] as Map)['took_ms'], 250);
-    expect((steps[2] as Map).containsKey('took_ms'), isFalse);
   });
 }
