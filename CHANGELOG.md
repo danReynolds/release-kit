@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- `rk use local` runs Dart commands whose dependencies have build hooks
+  (native assets) from any directory. Started elsewhere, `dart run` (Dart
+  3.12, at least) did not build those hooks, so a command that calls a native
+  library failed with `No available native assets`. For such a project the local
+  launcher now runs a small bootstrap from the project's directory, which
+  builds the hooks and starts the command's entrypoint with the caller's
+  working directory, arguments, standard input, defines and exit status. A
+  project without hooks keeps the direct launcher. Select Local again to
+  prepare the new launcher; earlier generations stay recoverable.
+- `rk use` finds local commands in projects that depend on path or Git
+  packages. Releasing such a project still refuses those sources.
+
 ## 0.1.14
 
 - Say how long each step took. On a terminal, a finished step keeps its
