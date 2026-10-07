@@ -323,6 +323,7 @@ final class TargetStageContext {
   void attach(String name, String contents) => _attach(name, contents);
   final ReleaseStage stage;
   Workspace get workspace => stage.directory.workspace;
+
   /// The source the stage is built from. A producer that builds exports it
   /// into a directory of its own.
   final StageSourceSnapshot source;

@@ -163,8 +163,7 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
     final members =
         resolutionPackages(sourceRoot, directory).packages ?? const {};
     final fromSource = {
-      for (final MapEntry(key: name, value: path)
-          in context.fromSource.entries)
+      for (final MapEntry(key: name, value: path) in context.fromSource.entries)
         name: inSource(path),
       for (final name in developmentMembers(members, project.name))
         name: members[name]!,
