@@ -609,29 +609,14 @@ final class ReleasePublicationCoordinator {
     final lastMutationActivity =
         releaseContext.progress.activity ?? mutationActivity;
 
-    // A process result is not public truth. Every started operation performs
-    // its destination read-back even if another concurrent lane has failed.
+    // A process result is not public truth unless the provider's answer is
+    // the read-back. Every started operation is read back even if another
+    // concurrent lane has failed.
     releaseProgress.begin(target, CommonProgressActivities.verifying);
     try {
-      // A registry can take minutes to list an upload it accepted. One it
-      // refused, or that never arrived, is not worth that wait: a lost
-      // response shows within a few reads.
-      state = await module.confirmPublication(
-        act.ok
-            ? releaseContext
-            : TargetReleaseContext(
-                reads: releaseContext.reads,
-                tools: releaseContext.tools,
-                stage: releaseContext.stage,
-                progress: releaseContext.progress,
-                runInteractive: releaseContext.runInteractive,
-                wait: releaseContext.wait,
-                confirmDeadline: confirmInterval * 2,
-                confirmInterval: confirmInterval,
-              ),
-        unit,
-        target,
-      );
+      state =
+          act.confirmed ??
+          await module.confirmPublication(releaseContext, unit, target, act);
     } on Object catch (error) {
       state = Inspection.unknown(
         '${target.kindLabel} verification threw: $error',
@@ -660,7 +645,12 @@ final class ReleasePublicationCoordinator {
     if (!act.ok || !state.isExact) {
       releaseProgress.fail(
         target,
-        activity: !act.ok && state.isAbsent
+        // A refused act failed where it acted; one that may have landed
+        // failed where it was read back.
+        activity:
+            !act.ok &&
+                !act.mayHaveActed &&
+                (state.isAbsent || state.verdict == Verdict.conflict)
             ? lastMutationActivity
             : CommonProgressActivities.verifying,
       );
@@ -678,13 +668,11 @@ final class ReleasePublicationCoordinator {
       );
     }
 
-    final inspected = act.includeInspectionDetail && state.detail != null
-        ? ' · ${state.detail}'
-        : '';
-    releaseProgress.complete(
-      target,
-      note: '${act.successNote ?? 'published'}$inspected',
-    );
+    final note = [
+      ?act.successNote,
+      if (act.includeInspectionDetail) ?state.detail,
+    ].join(' · ');
+    releaseProgress.complete(target, note: note.isEmpty ? 'published' : note);
     return _PublicTargetCompletion.completed(step);
   }
 

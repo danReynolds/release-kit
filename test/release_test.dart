@@ -249,6 +249,7 @@ Future<Ran> release({
   bool dryRun = false,
   Map<String, ToolResult> results = const {},
   void Function(String key)? onRun,
+  void Function(String key)? onRawRun,
   void Function(String key)? onInteractive,
   void Function()? onConfirm,
   ToolResult? Function(String key)? answers,
@@ -403,7 +404,11 @@ Future<Ran> release({
         if (scripted == null || scripted.exitCode == 0) {
           final tag = key.split(' ')[3];
           localTags.add(tag);
-          tagObjects[tag] = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+          // Each tag is its own object. The default unit's keeps the id the
+          // scripted results name.
+          tagObjects[tag] = tag == 'v0.2.0'
+              ? _tagObject
+              : Sha256.hex(utf8.encode(tag)).substring(0, 40);
           if (key.startsWith('git tag -s ')) signedTags.add(tag);
         }
       }
@@ -429,6 +434,7 @@ Future<Ran> release({
           }
         }
       }
+      onRawRun?.call(key);
       onRun?.call(_normalizedPubKey(key));
     },
   );
@@ -1446,6 +1452,7 @@ executables:
 
 void main() {
   releaseCommandContract();
+  originRoundTrips();
   reviewRegressions();
   mutationCloseout();
   signingBaselineRegressions();
@@ -1504,6 +1511,34 @@ void main() {
         isNot(contains('dart pub publish --from-archive <archive> --force')),
       );
       expect('not attempted'.allMatches(ran.text), hasLength(2));
+    },
+  );
+
+  test(
+    'with no pub session stored, login goes straight to the terminal',
+    () async {
+      // Captured, `dart pub login` without a session opens a browser login
+      // and waits on it: twenty silent seconds before the operator saw it.
+      final interactive = <String>[];
+      final registry = _MutableRegistry(<String>['0.1.0']);
+      final ran = await release(
+        registry: registry,
+        onInteractive: interactive.add,
+        onRun: (key) {
+          if (key == 'dart pub publish --from-archive <archive> --force') {
+            registry.goLive('0.2.0');
+            registry.archives['keybay@0.2.0'] = publishedBytes();
+          }
+        },
+      );
+
+      expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+      expect(interactive, ['dart pub login']);
+      expect(
+        ran.calls.where((call) => call == 'dart pub login'),
+        hasLength(1),
+        reason: 'no captured attempt before the attached one',
+      );
     },
   );
 
@@ -1926,7 +1961,7 @@ publish = ["pub.dev"]
           exitCode: 0,
           stdout:
               'Validating package...\n'
-              'Package validation found the following 2 potential issues:\n'
+              'Package validation found the following 3 potential issues:\n'
               '* `dart analyze` found the following issue(s):\n'
               '  Analyzing lib, pubspec.yaml...\n'
               '  \n'
@@ -1939,6 +1974,16 @@ publish = ["pub.dev"]
               "* ./CHANGELOG.md doesn't mention current version (0.2.0).\n"
               '  Consider updating it with notes on this version prior to '
               'publication.\n'
+              '\n'
+              '* Your dependency on "path" should allow more than one '
+              'version. For example:\n'
+              '  \n'
+              '  dependencies:\n'
+              '    path: ^1.9.1\n'
+              '  \n'
+              '  Constraints that are too tight will make it difficult for '
+              'people to use your package\n'
+              '  along with other packages that also depend on "path".\n'
               '\n'
               'Package validation found the following hint:\n'
               '* Non-dev dependencies are overridden in '
@@ -1968,6 +2013,8 @@ publish = ["pub.dev"]
           'issue(s): 1 issue found.',
       "pub validation for keybay: ./CHANGELOG.md doesn't mention current "
           'version (0.2.0).',
+      'pub validation for keybay: Your dependency on "path" should allow '
+          'more than one version.',
     ]);
     expect(
       ran.text,
@@ -1998,6 +2045,37 @@ publish = ["pub.dev"]
     expect(ran.exitCode, ExitCodes.refused);
     expect(ran.problems.map((p) => p['code']), contains('RK-PUB-001'));
     expect(ran.calls.where((c) => c.startsWith('git tag')), isEmpty);
+  });
+
+  test('a registry Pub cannot reach is not a validation refusal', () async {
+    // What `dart pub publish --to-archive` says offline: it stops resolving,
+    // before it validates anything.
+    final ran = await release(
+      results: {
+        'dart pub publish --to-archive <archive>': ToolResult(
+          exitCode: 69,
+          stdout: 'Resolving dependencies...\n',
+          stderr:
+              'Got socket error trying to find package path at '
+              'https://pub.dev.\n',
+        ),
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    final problem = ran.problems.single;
+    expect(problem['code'], 'RK-PUB-019');
+    expect(
+      ran.text,
+      contains('Pub could not resolve dependencies or reach the registry'),
+    );
+    expect(
+      ran.text,
+      contains(
+        'Got socket error trying to find package path at https://pub.dev',
+      ),
+    );
+    expect(ran.text, isNot(contains('validation errors')));
   });
 
   test(
@@ -2062,7 +2140,7 @@ publish = ["pub.dev"]
   );
 
   test(
-    'a failed tag cleanup is a known partial state, not before publishing',
+    'a failed tag cleanup leaves a local tag, and no public target changed',
     () async {
       final ran = await release(
         registry: _MutableRegistry(<String>['0.1.0']),
@@ -2081,8 +2159,9 @@ publish = ["pub.dev"]
       );
 
       expect(ran.exitCode, ExitCodes.refused);
-      expect((ran.report['halt'] as Map?)?['kind'], 'stoppedPartway');
-      expect(ran.text, isNot(contains('no public target changed')));
+      // The tag left behind is local: no public target changed, and a re-run
+      // inspects it before pushing.
+      expect((ran.report['halt'] as Map?)?['kind'], 'beforeActing');
       expect(ran.text, contains('local tag could not be removed'));
       expect(
         ran.calls.where((call) => call.contains('publish --force')),
@@ -2090,6 +2169,53 @@ publish = ["pub.dev"]
       );
     },
   );
+
+  test('a published package says when it was published, once', () async {
+    final registry = _MutableRegistry(<String>['0.1.0']);
+    final ran = await release(
+      registry: registry,
+      onRun: (key) {
+        if (key == 'dart pub publish --from-archive <archive> --force') {
+          registry.goLive('0.2.0');
+          registry.archives['keybay@0.2.0'] = publishedBytes();
+        }
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    final row = ran.text
+        .split('\n')
+        .lastWhere((line) => line.contains('pub.dev · keybay'));
+    expect(row, contains(RegExp(r'published [^·]+ · archive matches')));
+    expect(row, isNot(contains('published · published')));
+  });
+
+  test('a refused upload is read back briefly, not for ten minutes', () async {
+    // pub.dev may take minutes to list an upload it accepted, so a publish
+    // that succeeded is read back for up to ten. One pub refused, or whose
+    // answer was lost, settles within a few reads.
+    final registry = _ReadCountingRegistry();
+    final ran = await release(
+      registry: registry,
+      results: {
+        'dart pub publish --from-archive <archive> --force': ToolResult(
+          exitCode: 65,
+          stdout: '',
+          stderr: "You aren't an uploader for package 'keybay'.",
+        ),
+      },
+      onRun: (key) {
+        if (key == 'dart pub publish --from-archive <archive> --force') {
+          registry.uploaded = true;
+        }
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(ran.text, contains("You aren't an uploader"));
+    expect(ran.text, contains('does not report it after 10s'));
+    expect(registry.readsAfterUpload, 3, reason: 'now, and after two waits');
+  });
 
   test(
     'a version the registry never lists hits the deadline, honestly',
@@ -2276,31 +2402,37 @@ publish = ["pub.dev"]
   });
 
   group('a project that signs its releases', () {
-    test(
-      'says so through tag.gpgSign, and gets a verified signature',
-      () async {
-        // The pub.dev leg has to settle for the run to finish, or the test
-        // would assert a verified signature on a release that never landed.
-        final registry = _MutableRegistry(<String>['0.1.0']);
-        final ran = await release(
-          state: _git(tagSigningRequested: true),
-          registry: registry,
-          onRun: (key) {
-            if (key == 'dart pub publish --from-archive <archive> --force') {
-              registry.goLive('0.2.0');
-              registry.archives['keybay@0.2.0'] = publishedBytes();
-            }
-          },
-        );
-        expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
-        expect(
-          ran.calls.firstWhere((c) => c.startsWith('git tag')),
-          contains('git tag -s'),
-        );
-        expect(ran.calls, contains('git verify-tag $_tagObject'));
-        expect(ran.text, contains('signed, verified'));
-      },
-    );
+    test('says so through tag.gpgSign, and git signs the tag', () async {
+      // The pub.dev leg has to settle for the run to finish, or the test
+      // would assert a signed tag on a release that never landed.
+      final registry = _MutableRegistry(<String>['0.1.0']);
+      final ran = await release(
+        state: _git(tagSigningRequested: true),
+        registry: registry,
+        // A machine that cannot check its own signature, as one without
+        // gpg.ssh.allowedSignersFile cannot, still releases: git signed it.
+        results: {
+          'git verify-tag $_tagObject': ToolResult(
+            exitCode: 1,
+            stdout: '',
+            stderr: 'error: gpg.ssh.allowedSignersFile needs to be configured',
+          ),
+        },
+        onRun: (key) {
+          if (key == 'dart pub publish --from-archive <archive> --force') {
+            registry.goLive('0.2.0');
+            registry.archives['keybay@0.2.0'] = publishedBytes();
+          }
+        },
+      );
+      expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+      expect(
+        ran.calls.firstWhere((c) => c.startsWith('git tag')),
+        contains('git tag -s'),
+      );
+      expect(ran.calls.where((c) => c.startsWith('git verify-tag')), isEmpty);
+      expect(ran.text, contains('signed, pushed'));
+    });
 
     test('refuses before acting when no signing key is configured', () async {
       final ran = await release(
@@ -2324,53 +2456,10 @@ publish = ["pub.dev"]
     });
 
     test(
-      'refuses a signature this machine cannot verify, naming the fix',
+      'a signed release history alone does not sign: git config decides',
       () async {
-        final ran = await release(
-          state: _git(tagSigningRequested: true),
-          registry: _MutableRegistry(<String>['0.1.0']),
-          results: {
-            'git verify-tag $_tagObject': ToolResult(
-              exitCode: 1,
-              stdout: '',
-              stderr:
-                  'error: gpg.ssh.allowedSignersFile needs to be '
-                  'configured and exist for ssh signature verification',
-            ),
-          },
-        );
-        expect(ran.exitCode, ExitCodes.refused);
-        expect(
-          ran.problems.map((problem) => problem['code']),
-          contains('RK-TAG-007'),
-        );
-        expect(ran.text, contains('signature could not be verified'));
-        expect(ran.text, contains('gpg.ssh.allowedSignersFile'));
-        // The refusal builds its diagnostic in publish and
-        // classifyUnconfirmedPublication builds the one that is reported: what
-        // git said has to survive the handover, not be attached to the
-        // diagnostic that is discarded.
-        final refusal = ran.problems.singleWhere(
-          (p) => p['code'] == 'RK-TAG-007',
-        );
-        expect(refusal['evidence'], isNotNull);
-        expect(
-          (ran.report['attachments'] as Map)[refusal['evidence']],
-          contains('allowedSignersFile'),
-        );
-        expect(
-          ran.calls.where((c) => c.startsWith('git push origin')),
-          isEmpty,
-          reason: 'an unverifiable signature is not published as signed',
-        );
-      },
-    );
-
-    test(
-      'a signed release history requires signing without any git config',
-      () async {
-        // tag.gpgSign lives in .git/config, which is not committed — a fresh
-        // clone would otherwise silently downgrade a project that always signed.
+        // As `git tag -a` does: tag.gpgSign signs, an earlier signed tag
+        // does not, and rk reads no earlier tag to find out.
         final ran = await release(
           state: _git(
             tags: const ['v0.1.0'],
@@ -2383,8 +2472,22 @@ publish = ["pub.dev"]
           signedExistingTags: const ['v0.1.0'],
           registry: _MutableRegistry(<String>['0.1.0']),
         );
-        expect(ran.exitCode, ExitCodes.refused);
-        expect(ran.text, contains('no signing key is configured'));
+        expect(
+          ran.problems.map((p) => p['code']),
+          isNot(contains('RK-TAG-005')),
+        );
+        expect(
+          ran.calls.firstWhere((c) => c.startsWith('git tag')),
+          contains('git tag -a'),
+        );
+        expect(
+          ran.calls,
+          isNot(
+            contains(
+              'git cat-file tag bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            ),
+          ),
+        );
       },
     );
 
@@ -2571,6 +2674,20 @@ final class _HeldRegistry implements RegistryReader {
 
   @override
   void forget(String name) => delegate.forget(name);
+}
+
+/// Counts version reads once `dart pub publish` has run.
+class _ReadCountingRegistry extends _MutableRegistry {
+  _ReadCountingRegistry() : super(<String>['0.1.0']);
+
+  bool uploaded = false;
+  int readsAfterUpload = 0;
+
+  @override
+  Future<PublishedVersion?> lookupVersion(String name, Version version) {
+    if (uploaded) readsAfterUpload++;
+    return super.lookupVersion(name, version);
+  }
 }
 
 class _MutableRegistry extends FakeRegistry {
@@ -2786,6 +2903,69 @@ publish = ["pub.dev"]
           'the top-ranked failure was checked only by the verb that '
           'does not act',
     );
+  });
+
+  test('a package pub.dev lists under another repository is released after '
+      'a warning: the repository may have moved', () async {
+    final registry = FakeRegistry(
+      {
+        'keybay': ['0.1.0'],
+      },
+      repositories: {'keybay': 'https://github.com/old/keybay'},
+    );
+    final ran = await release(
+      registry: registry,
+      source: MemorySourceTree({
+        'packages/keybay/pubspec.yaml':
+            'name: keybay\nversion: 0.2.0\n'
+            'repository: https://github.com/danReynolds/keybay\n',
+        'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
+      }, description: '/repo/keybay'),
+      onRun: (key) {
+        if (key == 'dart pub publish --from-archive <archive> --force') {
+          registry.published['keybay']!.add('0.2.0');
+        }
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    const warning =
+        'keybay on pub.dev points to https://github.com/old/keybay, not '
+        'https://github.com/danReynolds/keybay';
+    expect(
+      ran.text.indexOf(warning),
+      allOf(
+        greaterThanOrEqualTo(0),
+        lessThan(ran.text.indexOf('Authorized in the reviewed')),
+      ),
+      reason: 'the operator sees it before the one question',
+    );
+    expect(
+      (ran.report['warnings'] as List).cast<Map>().map((w) => w['code']),
+      contains('RK-PUB-010'),
+    );
+  });
+
+  test('an old tag that names no version does not stop a release', () async {
+    final registry = _MutableRegistry(<String>['0.1.0']);
+    final ran = await release(
+      registry: registry,
+      results: {
+        'git ls-remote --tags origin': ToolResult(
+          exitCode: 0,
+          stdout: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb refs/tags/v1.0\n',
+          stderr: '',
+        ),
+      },
+      onRun: (key) {
+        if (key == 'dart pub publish --from-archive <archive> --force') {
+          registry.goLive('0.2.0');
+          registry.archives['keybay@0.2.0'] = publishedBytes();
+        }
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
   });
 
   test(
@@ -3018,26 +3198,33 @@ void mutationCloseout() {
   });
 
   test(
-    'a push that origin does not confirm is lostTrack, not success',
+    'a push git accepts is confirmed without reading origin again',
     () async {
-      // The push exits 0 and ls-remote still lists nothing: the verify leg the
-      // RFC names, which trusting the exit code alone skipped.
+      // Git accepts a tag push only as the exact object it was given, and
+      // refuses to replace a tag origin has, so its answer is the read-back:
+      // origin is read once, before staging, and not again around the push.
+      final registry = _MutableRegistry(<String>['0.1.0']);
       final ran = await release(
-        registry: _MutableRegistry(<String>['0.1.0']),
-        results: {
-          // A push the harness's world-model does not believe: script the
-          // remote read directly to answer empty despite the "successful" push.
-          'git ls-remote --tags origin': ToolResult(
-            exitCode: 0,
-            stdout: '',
-            stderr: '',
-          ),
+        registry: registry,
+        onRun: (key) {
+          if (key == 'dart pub publish --from-archive <archive> --force') {
+            registry.goLive('0.2.0');
+            registry.archives['keybay@0.2.0'] = publishedBytes();
+          }
         },
       );
 
-      expect(ran.exitCode, ExitCodes.refused);
-      expect(ran.problems.map((p) => p['code']), contains('RK-TAG-003'));
-      expect(ran.text, contains('an effect may exist'));
+      expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+      expect(
+        ran.calls.where(
+          (call) =>
+              call.startsWith('git ls-remote') || call.startsWith('git push'),
+        ),
+        ['git ls-remote --tags origin', _tagPush],
+      );
+      final tag = ran.steps.singleWhere((step) => step['kind'] == 'tag');
+      expect(tag['verdict'], 'exact');
+      expect(tag['evidence'], containsPair('tag object', _tagObject));
     },
   );
 
@@ -3165,4 +3352,89 @@ void mutationCloseout() {
       );
     },
   );
+}
+
+/// Every `git ls-remote` and `git push` is a round trip to origin: over SSH
+/// to GitHub each costs most of a second.
+void originRoundTrips() {
+  test('a repository release reads origin\'s tags once and pushes each tag '
+      'once', () async {
+    final registry = FakeRegistry({
+      for (final name in const [
+        'fleury',
+        'fleury_mcp',
+        'fleury_test',
+        'fleury_web',
+      ])
+        name: ['0.1.1'],
+    });
+    final ran = await release(
+      only: null,
+      registry: registry,
+      config: '''
+schema = 2
+
+[release.fleury]
+path = "packages/fleury"
+tag = "fleury-v{version}"
+publish = ["pub.dev", "git-tag"]
+
+[release.fleury_mcp]
+path = "packages/fleury_mcp"
+publish = ["pub.dev"]
+
+[release.fleury_test]
+path = "packages/fleury_test"
+publish = ["pub.dev"]
+
+[release.fleury_web]
+path = "packages/fleury_web"
+tag = "fleury_web-v{version}"
+publish = ["pub.dev", "git-tag"]
+''',
+      source: MemorySourceTree({
+        'packages/fleury/pubspec.yaml': 'name: fleury\nversion: 0.1.2\n',
+        'packages/fleury/CHANGELOG.md': '## 0.1.2\n',
+        for (final name in const [
+          'fleury_mcp',
+          'fleury_test',
+          'fleury_web',
+        ]) ...{
+          'packages/$name/pubspec.yaml':
+              'name: $name\nversion: 0.1.2\n'
+              'dependencies:\n  fleury: 0.1.2\n',
+          'packages/$name/CHANGELOG.md': '## 0.1.2\n',
+        },
+      }, description: '/repo/fleury'),
+      // pub.dev lists what `dart pub publish` uploads.
+      onRawRun: (key) {
+        final upload = RegExp(
+          r'pub publish --from-archive \S*/pub/(\w+)-([0-9.]+)\.tar\.gz',
+        ).firstMatch(key);
+        if (upload != null) registry.published[upload[1]!]!.add(upload[2]!);
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    expect(
+      ran.calls.where(
+        (call) =>
+            call.startsWith('git ls-remote') || call.startsWith('git push'),
+      ),
+      [
+        'git ls-remote --tags origin',
+        allOf(
+          startsWith('git push origin '),
+          endsWith('refs/tags/fleury-v0.1.2'),
+        ),
+        allOf(
+          startsWith('git push origin '),
+          endsWith('refs/tags/fleury_web-v0.1.2'),
+        ),
+      ],
+      reason:
+          'one listing answers every tag target before and after staging; '
+          'each push is its own read-back',
+    );
+  });
 }

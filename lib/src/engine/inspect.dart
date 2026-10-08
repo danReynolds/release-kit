@@ -224,12 +224,9 @@ class Inspector {
     final latest = await Future.wait([
       for (final target in candidates) readHistory(target, unit),
     ]);
-    return ReleaseHistoryCheck(
-      claims: historyFindings([
-        for (final (index, target) in candidates.indexed)
-          (target, latest[index]),
-      ], problems),
-    );
+    return historyFindings([
+      for (final (index, target) in candidates.indexed) (target, latest[index]),
+    ], problems);
   }
 
   /// [target]'s public history; a read that throws is unknown, never absent.
@@ -251,14 +248,16 @@ class Inspector {
   /// What a release learns from its lanes' histories: the names it claims
   /// for the first time, and in [problems], every history that refuses it —
   /// a version regression, or a history that could not be read.
-  static List<TargetClaim> historyFindings(
+  static ReleaseHistoryCheck historyFindings(
     Iterable<(TargetPlan, TargetHistory?)> histories,
     Diagnostics problems,
   ) {
     final claims = <TargetClaim>[];
+    final warnings = <Diagnostic>[];
     for (final (target, history) in histories) {
       if (history == null) continue;
       claims.addAll(history.claims);
+      warnings.addAll(history.warnings);
       history.problems.forEach(problems.report);
       final inspection = history.inspection;
       if (inspection.isAbsent) continue;
@@ -287,7 +286,7 @@ class Inspector {
         );
       }
     }
-    return claims;
+    return ReleaseHistoryCheck(claims: claims, warnings: warnings);
   }
 
   /// Cross-step judgments about the tag, which no single step can make.
@@ -439,8 +438,14 @@ class Inspector {
 /// What one read of every lane's public history found: the names this
 /// release would claim for the first time.
 final class ReleaseHistoryCheck {
-  ReleaseHistoryCheck({Iterable<TargetClaim> claims = const []})
-    : claims = List.unmodifiable(claims);
+  ReleaseHistoryCheck({
+    Iterable<TargetClaim> claims = const [],
+    Iterable<Diagnostic> warnings = const [],
+  }) : claims = List.unmodifiable(claims),
+       warnings = List.unmodifiable(warnings);
 
   final List<TargetClaim> claims;
+
+  /// What the lanes' histories warn of, which does not stop the release.
+  final List<Diagnostic> warnings;
 }

@@ -603,38 +603,33 @@ void classificationTables() {
     );
 
     test(
-      'a foreign pub.dev repository keeps its provider-specific remedy',
+      "a lane's warning travels with its history, and refuses nothing",
       () async {
         final fixture = await releaseTargets();
         final inspector = _LatestInspector(
           answers: {
-            'pubDev': const Inspection.conflict(
-              'example_cli points to another repository on pub.dev',
-              evidence: {
-                'published repository':
-                    'https://github.com/another/example_cli',
-                'this repository': 'https://github.com/example/tool',
-              },
+            'pubDev': const Inspection.exact(evidence: {'version': '0.9.0'}),
+          },
+          warnings: {
+            'pubDev': const Diagnostic(
+              code: 'RK-PUB-010',
+              message:
+                  'example_cli on pub.dev points to '
+                  'https://github.com/old/example_cli, not '
+                  'https://github.com/example/tool',
             ),
           },
         );
         final problems = Diagnostics();
 
-        await inspector.releaseMonotonicity(
+        final history = await inspector.releaseMonotonicity(
           fixture.unit,
           fixture.targets,
           problems,
         );
 
-        final diagnostic = problems.found.singleWhere(
-          (problem) => problem.code == 'RK-PUB-010',
-        );
-        expect(diagnostic.message, contains('another/example_cli'));
-        expect(diagnostic.remedy, contains('choose an unclaimed package name'));
-        expect(
-          problems.found.where((problem) => problem.code == 'RK-REL-001'),
-          isEmpty,
-        );
+        expect(problems.found, isEmpty);
+        expect(history.warnings.map((warning) => warning.code), ['RK-PUB-010']);
       },
     );
 
@@ -909,6 +904,7 @@ Future<ResolvedUnit> _binaryUnit() async =>
 class _LatestInspector extends Inspector {
   _LatestInspector({
     this.answers = const {},
+    this.warnings = const {},
     this.expectedConcurrent = 0,
     List<String> tags = const [],
   }) : super(
@@ -927,6 +923,7 @@ class _LatestInspector extends Inspector {
        );
 
   final Map<String, Inspection> answers;
+  final Map<String, Diagnostic> warnings;
   final int expectedConcurrent;
   final Completer<void> allStarted = Completer<void>();
   final Completer<void> _finish = Completer<void>();
@@ -951,29 +948,10 @@ class _LatestInspector extends Inspector {
       active--;
     }
     final inspection = answers[target.kind] ?? const Inspection.absent();
-    if (target.kind == 'pubDev' && inspection.verdict == Verdict.conflict) {
-      final project = target.project!;
-      final published = inspection.evidence['published repository'];
-      final local = inspection.evidence['this repository'];
-      return TargetHistory(
-        inspection: inspection,
-        problems: [
-          Diagnostic(
-            code: 'RK-PUB-010',
-            message:
-                '${project.name} on pub.dev points to $published, not '
-                '$local',
-            remedy:
-                'choose an unclaimed package name in pubspec.yaml; '
-                'pub.dev package names cannot be reclaimed by publishing '
-                'a newer version',
-          ),
-        ],
-      );
-    }
     return TargetHistory.versioned(
       inspection: inspection,
       target: target,
+      warnings: [?warnings[target.kind]],
       regressionDiagnostic: target.kind == 'pubDev'
           ? (publicVersion) => Diagnostic(
               code: 'RK-MONO-002',
@@ -1094,10 +1072,7 @@ publish = ["git-tag", "pub.dev"]
       registry: FakeRegistry({}),
       git: gitWith(tags: localTags, tagObjects: tagObjects, signing: signing),
       tools: RecordingTools(
-        results: {
-          'git ls-remote --tags origin': remote,
-          ...additionalResults,
-        },
+        results: {'git ls-remote --tags origin': remote, ...additionalResults},
       ),
       repository: 'example/keybay',
     ).inspect(step, unit);
@@ -1207,42 +1182,44 @@ publish = ["git-tag", "pub.dev"]
     expect(state.verdict, Verdict.unknown);
   });
 
-  test('a configured tag remains non-exact when its signature fails without '
-      'a stage', () async {
-    final state = await inspectTag(
-      localTags: const ['v0.2.0'],
-      tagObjects: const {'v0.2.0': object},
-      signing: true,
-      remote: ToolResult(
-        exitCode: 0,
-        stdout:
-            '$object refs/tags/v0.2.0\n'
-            '$head refs/tags/v0.2.0^{}',
-        stderr: '',
-      ),
-      additionalResults: {
-        'git cat-file tag $object': ToolResult(
+  test(
+    'a signed tag this machine cannot verify is still the release: a '
+    'key that expired or lives elsewhere changes nothing published',
+    () async {
+      final state = await inspectTag(
+        localTags: const ['v0.2.0'],
+        tagObjects: const {'v0.2.0': object},
+        signing: true,
+        remote: ToolResult(
           exitCode: 0,
           stdout:
-              'object $head\n'
-              'type commit\n'
-              'tag v0.2.0\n'
-              'tagger Test <test@example.com> 0 +0000\n\n'
-              'core 0.2.0\n\n'
-              'release-manifest-sha256: $digest\n',
+              '$object refs/tags/v0.2.0\n'
+              '$head refs/tags/v0.2.0^{}',
           stderr: '',
         ),
-        'git verify-tag $object': ToolResult(
-          exitCode: 1,
-          stdout: '',
-          stderr: 'BAD signature',
-        ),
-      },
-    );
+        additionalResults: {
+          'git cat-file tag $object': ToolResult(
+            exitCode: 0,
+            stdout:
+                'object $head\n'
+                'type commit\n'
+                'tag v0.2.0\n'
+                'tagger Test <test@example.com> 0 +0000\n\n'
+                'core 0.2.0\n\n'
+                'release-manifest-sha256: $digest\n',
+            stderr: '',
+          ),
+          'git verify-tag $object': ToolResult(
+            exitCode: 1,
+            stdout: '',
+            stderr: 'error: key expired',
+          ),
+        },
+      );
 
-    expect(state.verdict, Verdict.conflict);
-    expect(state.detail, contains('signature could not be verified'));
-  });
+      expect(state.verdict, Verdict.exact, reason: state.detail);
+    },
+  );
 
   test('a known unsigned lightweight tag is not an exact release record '
       'without a stage', () async {

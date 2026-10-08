@@ -272,10 +272,11 @@ and acquires no publication session. The yes covers exactly the targets shown
 and nothing else; a target that was already public when asked is never acted
 on. Right before each act rk reads that target again, skipping one another run
 has published since, checks the staged bytes it publishes, acts, and reads the
-result back.
+result back. A Git tag is read once a run, with every other tag: git accepts a
+tag push only as the exact object it was given, so its answer is the read-back.
 
-Packages publish in dependency order, and each waits until the version it
-uploaded is available before the next unit starts. Development-only
+Packages publish in dependency order, and each waits until pub.dev lists the
+version it uploaded before the next unit starts. Development-only
 dependencies never become publication prerequisites.
 
 Public releases are not atomic. If a later publication fails, earlier completed

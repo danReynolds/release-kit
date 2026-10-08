@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- A release reads origin's tags once, for every tag target, and takes git's
+  answer to a tag push as its read-back: git accepts a push only as the
+  exact object it was given and refuses to replace a tag origin has. A
+  release of Fleury's four units and two tags makes three round trips to
+  origin, down from ten. A push git refuses reads origin's tag and reports
+  the conflict a fresh inspection would have, with the same advice
+  (`RK-TAG-003` and `RK-TAG-004` are gone).
+- A tag on origin that matches the release pattern without naming a
+  semantic version, such as `v1.0` under `v{version}`, no longer refuses
+  every release after it.
+- After an upload pub.dev refused, rk reads pub.dev back for ten seconds, not
+  ten minutes. rk no longer downloads each published package into a fresh
+  Pub cache to check it (`RK-PUB-013`, `RK-REL-004`).
+- A package pub.dev lists under another repository is a warning, not a
+  refusal (`RK-PUB-010`): a repository that moved or was renamed could never
+  be released again.
+- Staging offline reports that Pub could not reach the registry
+  (`RK-PUB-019`), not validation errors to fix.
+- With no pub session stored, `dart pub login` runs at the terminal at once,
+  not after twenty silent seconds.
+- A GitHub Release whose title or notes were edited after publishing is
+  still the release; only its tag, maturity and assets are compared. A
+  GitHub publish makes two fewer API calls, and a release no longer lists
+  every GitHub release to read the lane's history: the tag's history covers
+  it.
+
 - A stage is named by what it is built from: its commit, tree, configuration
   and origin. Updating rk, Dart or Xcode, or setting up a signing key, no
   longer orphans the stage a partly published release still needs. Reusing a
@@ -17,12 +43,16 @@
   `RK-AUTH-003`, `RK-SIGN-013` and `RK-STAGE-004`.
   - The release tag is made on the staged commit, not on whatever HEAD is by
     then.
-  - rk signs a release tag when `tag.gpgSign` asks it to, or earlier release
-    tags are signed, as git does. A signing key alone no longer signs tags.
+  - rk signs a release tag when `tag.gpgSign` asks it to, as git does. A
+    signing key alone, or an earlier signed tag, no longer signs tags, and rk
+    no longer verifies the signature git made: a key that has expired, or
+    lives on another machine, no longer makes a published tag a conflict
+    (`RK-TAG-006`, `RK-TAG-007`).
   - rk signs in to pub.dev and GitHub once a run, after the yes, and no
     longer logs out of a pub session it created.
-  - Recovering a Homebrew formula without its stage checks the archives
-    GitHub serves against the release manifest the tag binds, before pushing.
+  - A Homebrew formula already at the release's version is published: only
+    the tap is read. Without its stage, a formula is rendered from the
+    digests GitHub reports for the published archives.
 - A repository's units stage side by side, from one read of the commit, and
   each Pub package resolves and archives in one `pub publish --to-archive`.
   `rk stage` and `rk release` read every unit's destinations at once. A fresh

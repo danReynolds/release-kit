@@ -48,20 +48,18 @@ class GithubRelease {
     );
   }
 
-  /// Inspects the complete public release identity, including downloaded
-  /// asset bytes.
+  /// Inspects the public release against its stage, including asset bytes.
   ///
   /// Before a stage exists, [inspect] can answer only inventory. Once a receipt
-  /// exists, this is the stronger question: tag, title, body, asset names, and
-  /// every asset digest must all match. A download failure is unknown rather
+  /// exists, this is the stronger question: tag, asset names, and every asset
+  /// digest must all match. A title or notes edited on GitHub after
+  /// publishing change none of that. A download failure is unknown rather
   /// than a digest mismatch — not being able to read bytes is not evidence
   /// about them.
   Future<Inspection> inspectExact(GithubReleaseExpectation expected) =>
       _inspect(
         tag: expected.tag,
         expectedAssets: expected.assetSha256.keys.toSet(),
-        expectedTitle: expected.title,
-        expectedBody: expected.body,
         expectedDigests: expected.assetSha256,
         expectedPrerelease: expected.prerelease,
       );
@@ -133,8 +131,6 @@ class GithubRelease {
   Future<Inspection> _inspect({
     required String tag,
     required Set<String> expectedAssets,
-    String? expectedTitle,
-    String? expectedBody,
     Map<String, String>? expectedDigests,
     required bool expectedPrerelease,
   }) async {
@@ -154,8 +150,6 @@ class GithubRelease {
       observed.release!,
       tag: tag,
       expectedAssets: expectedAssets,
-      expectedTitle: expectedTitle,
-      expectedBody: expectedBody,
       expectedPrerelease: expectedPrerelease,
     );
     if (!surface.isExact) return surface;
@@ -193,35 +187,17 @@ class GithubRelease {
     }
   }
 
+  /// Compares what makes [release] this release: its tag, maturity and
+  /// asset inventory. Its title and notes are prose its owner may edit.
   Inspection _compareRelease(
     _Release release, {
     required String tag,
     Set<String>? expectedAssets,
-    String? expectedTitle,
-    String? expectedBody,
     required bool expectedPrerelease,
   }) {
-    if (expectedTitle != null && !release.titleReadable) {
-      return const Inspection.unknown(
-        'the release exists but its title could not be read',
-      );
-    }
-    if (expectedBody != null && !release.bodyReadable) {
-      return const Inspection.unknown(
-        'the release exists but its body could not be read',
-      );
-    }
-
     final differences = <String, String>{};
     if (release.tag != tag) {
       differences['tag'] = 'published ${release.tag}, expected $tag';
-    }
-    if (expectedTitle != null && release.title != expectedTitle) {
-      differences['title'] =
-          'published ${_shown(release.title)}, expected ${_shown(expectedTitle)}';
-    }
-    if (expectedBody != null && release.body != expectedBody) {
-      differences['body'] = 'published release notes differ';
     }
     if (release.isPrerelease != expectedPrerelease) {
       differences['prerelease'] = expectedPrerelease
@@ -252,8 +228,6 @@ class GithubRelease {
   Future<Inspection> _inspectAssetBytes(
     String tag,
     Map<String, String> expectedDigests, {
-    Map<String, List<int>> knownBytes = const {},
-    String expectedBy = 'staged release',
     _Release? release,
   }) async {
     try {
@@ -265,8 +239,7 @@ class GithubRelease {
       // precedence remain deterministic.
       final reads = <String, Future<({List<int>? bytes, String? problem})>>{
         for (final name in names)
-          if (!knownBytes.containsKey(name) &&
-              _publishedDigest(release, name) == null)
+          if (_publishedDigest(release, name) == null)
             name: _downloadAssetBytes(tag, name),
       };
       final completed = await Future.wait([
@@ -278,7 +251,7 @@ class GithubRelease {
       final publishedDigests = <String, String>{};
       final unreadable = <String, String>{};
       for (final name in names) {
-        final bytes = knownBytes[name] ?? downloaded[name]?.bytes;
+        final bytes = downloaded[name]?.bytes;
         final providerDigest = _publishedDigest(release, name);
         final problem = downloaded[name]?.problem;
         if (bytes == null && providerDigest == null) {
@@ -306,7 +279,7 @@ class GithubRelease {
       );
       if (compared.verdict == Verdict.conflict) {
         return Inspection.conflict(
-          'published asset bytes differ from the $expectedBy',
+          'published asset bytes differ from the staged release',
           evidence: compared.evidence,
         );
       }
@@ -481,15 +454,16 @@ class GithubRelease {
         );
 
     final url = 'https://github.com/$repository/releases/tag/$tag';
-    final local = _validateUploadRequest(
-      tag: tag,
-      title: title,
-      notesPath: notesPath,
-      assets: assets,
-    );
-    if (local.problem != null) return failed(local.problem!);
-    final notes = local.notes!;
-    final ordered = local.assets!;
+    // The stage was checked against its receipt just before this act, so
+    // its files are read here, not checked again.
+    final String notes;
+    try {
+      notes = File(notesPath).readAsStringSync();
+    } on Object catch (error) {
+      return failed('the staged release notes could not be read: $error');
+    }
+    final ordered = [...assets]
+      ..sort((left, right) => left.publicName.compareTo(right.publicName));
     final names = [for (final asset in ordered) asset.publicName];
     final assetSha256 = {
       for (final asset in ordered) asset.publicName: asset.sha256,
@@ -498,8 +472,6 @@ class GithubRelease {
       for (final asset in ordered) asset.publicName: asset.size,
     };
 
-    // Local shape and bytes are validated before this first remote read. A
-    // malformed request can therefore never delete, create, or fill a draft.
     onProgress?.call(GithubPublishEvent.drafting, 0, ordered.length);
     final existing = await _drafts(tag);
     if (existing == null) return failed('GitHub could not be read');
@@ -660,9 +632,10 @@ class GithubRelease {
       }
 
       // This is the publication gate. The draft must still be private and must
-      // already carry the exact metadata, complete inventory, and staged bytes.
-      // Post-act inspection repeats the same byte check against public reality;
-      // it is confirmation, not the first point at which bad bytes are found.
+      // already carry the complete inventory and staged bytes. Its title and
+      // notes are the ones this run created or resumed. Post-act inspection
+      // repeats the byte check against public reality; it is confirmation,
+      // not the first point at which bad bytes are found.
       final beforePublish = await _viewById(draftId);
       if (beforePublish is! _Found) {
         return failed(
@@ -681,8 +654,6 @@ class GithubRelease {
         draft,
         tag: tag,
         expectedAssets: names.toSet(),
-        expectedTitle: title,
-        expectedBody: notes,
         expectedPrerelease: prerelease,
       );
       if (!surface.isExact) {
@@ -737,101 +708,6 @@ class GithubRelease {
         // Public truth does not depend on scratch cleanup.
       }
     }
-  }
-
-  ({String? problem, String? notes, List<GithubReleaseAssetUpload>? assets})
-  _validateUploadRequest({
-    required String tag,
-    required String title,
-    required String notesPath,
-    required List<GithubReleaseAssetUpload> assets,
-  }) {
-    if (tag.trim().isEmpty || title.trim().isEmpty) {
-      return (
-        problem: 'the release tag or title is empty',
-        notes: null,
-        assets: null,
-      );
-    }
-    final notesType = FileSystemEntity.typeSync(notesPath, followLinks: false);
-    if (notesType != FileSystemEntityType.file) {
-      return (
-        problem: 'the staged release notes are missing or not a regular file',
-        notes: null,
-        assets: null,
-      );
-    }
-    final String notes;
-    try {
-      notes = File(notesPath).readAsStringSync();
-    } on Object catch (error) {
-      return (
-        problem: 'the staged release notes could not be read: $error',
-        notes: null,
-        assets: null,
-      );
-    }
-
-    final ordered = List<GithubReleaseAssetUpload>.of(assets)
-      ..sort((left, right) => left.publicName.compareTo(right.publicName));
-    final names = <String>{};
-    final paths = <String>{};
-    for (final asset in ordered) {
-      final normalized = asset.publicName.toLowerCase();
-      if (!names.add(normalized)) {
-        return (
-          problem: 'two staged assets have the same public filename',
-          notes: null,
-          assets: null,
-        );
-      }
-      if (!paths.add(asset.stagedPath)) {
-        return (
-          problem: 'two public assets refer to the same staged file',
-          notes: null,
-          assets: null,
-        );
-      }
-      if (!_isPublicAssetName(asset.publicName)) {
-        return (
-          problem: 'invalid public asset filename: ${asset.publicName}',
-          notes: null,
-          assets: null,
-        );
-      }
-      if (!_isSha256(asset.sha256) || asset.size < 0) {
-        return (
-          problem: 'invalid size or SHA-256 for ${asset.publicName}',
-          notes: null,
-          assets: null,
-        );
-      }
-      if (FileSystemEntity.typeSync(asset.stagedPath, followLinks: false) !=
-          FileSystemEntityType.file) {
-        return (
-          problem: '${asset.publicName} is missing or not a regular file',
-          notes: null,
-          assets: null,
-        );
-      }
-      try {
-        final bytes = File(asset.stagedPath).readAsBytesSync();
-        if (bytes.length != asset.size || Sha256.hex(bytes) != asset.sha256) {
-          return (
-            problem: '${asset.publicName} differs from its staged receipt',
-            notes: null,
-            assets: null,
-          );
-        }
-      } on Object catch (error) {
-        return (
-          problem: '${asset.publicName} could not be read: $error',
-          notes: null,
-          assets: null,
-        );
-      }
-    }
-    return (problem: null, notes: notes, assets: List.unmodifiable(ordered));
   }
 
   ({Inspection inspection, List<GithubReleaseAssetUpload> missing})
@@ -1108,14 +984,6 @@ class GithubRelease {
 
 enum GithubPublishEvent { drafting, uploading, publishing }
 
-bool _isPublicAssetName(String name) =>
-    name.isNotEmpty &&
-    name != '.' &&
-    name != '..' &&
-    !name.contains('/') &&
-    !name.contains(r'\') &&
-    !name.codeUnits.any((unit) => unit < 0x20 || unit == 0x7f);
-
 class _Release {
   _Release({
     required this.tag,
@@ -1180,15 +1048,11 @@ class GithubReleaseAssetUpload {
 class GithubReleaseExpectation {
   GithubReleaseExpectation({
     required this.tag,
-    required this.title,
-    required this.body,
     required this.prerelease,
     required Map<String, String> assetSha256,
   }) : assetSha256 = Map.unmodifiable(assetSha256);
 
   final String tag;
-  final String title;
-  final String body;
   final bool prerelease;
 
   /// Exact public asset name to lowercase or uppercase SHA-256.
@@ -1220,8 +1084,6 @@ class _ReleaseObservation {
 
 bool _isSha256(String value) => RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(value);
 
-String _shown(String? value) => value == null ? '<none>' : '"$value"';
-
 /// What asking the forge about one tag produced.
 sealed class _Lookup {
   const _Lookup();
@@ -1252,7 +1114,6 @@ class PublishOutcome {
     this.url,
     this.problem,
     this.confirmed, {
-    this.permanent,
     this.draftEffect = DraftEffect.none,
     this.transcript,
   });
@@ -1292,28 +1153,11 @@ class PublishOutcome {
          transcript: transcript,
        );
 
-  /// rk read back what it did and it is wrong, and it cannot be taken back.
-  const PublishOutcome.terminal(
-    String problem, {
-    required String url,
-    required String permanent,
-    DraftEffect draftEffect = DraftEffect.none,
-  }) : this._(
-         url,
-         problem,
-         false,
-         permanent: permanent,
-         draftEffect: draftEffect,
-       );
-
   final String? url;
   final String? problem;
 
   /// Whether rk read back what it did.
   final bool confirmed;
-
-  /// What is already public and cannot be undone, stated before any remedy.
-  final String? permanent;
 
   /// What this attempt did to GitHub's private draft surface.
   final DraftEffect draftEffect;

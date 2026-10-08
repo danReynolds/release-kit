@@ -197,14 +197,10 @@ void main() {
     final bytes = utf8.encode('the staged archive bytes');
 
     GithubReleaseExpectation expectation({
-      String title = 'tool 1.0.0',
-      String body = 'release notes\n',
       String? digest,
       bool prerelease = false,
     }) => GithubReleaseExpectation(
       tag: 'v1.0.0',
-      title: title,
-      body: body,
       prerelease: prerelease,
       assetSha256: {asset: digest ?? Sha256.hex(bytes)},
     );
@@ -226,15 +222,12 @@ void main() {
       workingDirectory: '/repo',
     ).inspectExact(expected ?? expectation());
 
-    test(
-      'tag, title, body, inventory, and downloaded bytes can all be exact',
-      () async {
-        final state = await inspectExact(view());
-        expect(state.verdict, Verdict.exact);
-        expect(state.detail, contains('asset bytes match'));
-        expect(state.evidence[asset], 'sha256:${Sha256.hex(bytes)}');
-      },
-    );
+    test('tag, inventory, and downloaded bytes can all be exact', () async {
+      final state = await inspectExact(view());
+      expect(state.verdict, Verdict.exact);
+      expect(state.detail, contains('asset bytes match'));
+      expect(state.evidence[asset], 'sha256:${Sha256.hex(bytes)}');
+    });
 
     test('independent asset downloads run concurrently', () async {
       final downloads = {
@@ -264,8 +257,6 @@ void main() {
           ).inspectExact(
             GithubReleaseExpectation(
               tag: 'v1.0.0',
-              title: 'tool 1.0.0',
-              body: 'release notes\n',
               prerelease: false,
               assetSha256: {
                 for (final entry in downloads.entries)
@@ -285,30 +276,28 @@ void main() {
     });
 
     test(
-      'title and body differences are conflicts before any download',
+      'a title or notes edited after publishing are still the release',
       () async {
-        final state = await inspectExact(
+        // Prose its owner may correct on GitHub; the assets are the release.
+        final edited = await inspectExact(
           view(title: 'Surprise', body: 'different notes'),
         );
-        expect(state.verdict, Verdict.conflict);
-        expect(state.evidence.keys, containsAll(['title', 'body']));
+        expect(edited.verdict, Verdict.exact, reason: edited.detail);
+
+        final cleared = await inspectExact(
+          jsonEncode({
+            'tag_name': 'v1.0.0',
+            'draft': false,
+            'prerelease': false,
+            'id': 41,
+            'assets': [
+              {'name': asset},
+            ],
+          }),
+        );
+        expect(cleared.verdict, Verdict.exact, reason: cleared.detail);
       },
     );
-
-    test('missing title/body fields are unreadable, not a mismatch', () async {
-      final state = await inspectExact(
-        jsonEncode({
-          'tag_name': 'v1.0.0',
-          'draft': false,
-          'prerelease': false,
-          'id': 41,
-          'assets': [
-            {'name': asset},
-          ],
-        }),
-      );
-      expect(state.verdict, Verdict.unknown);
-    });
 
     test(
       'a downloaded digest mismatch is a conflict with both digests',
@@ -453,7 +442,6 @@ void main() {
     publish({
       String slurp = '[[]]',
       bool prerelease = false,
-      bool duplicateAssetNames = false,
       List<String> initialDraftNames = const [],
       String draftTitle = 'tool 1.0.0',
       String draftBody = 'notes',
@@ -477,10 +465,7 @@ void main() {
       final notes = File('${scratch.path}/notes.md')
         ..writeAsStringSync('notes');
       final paths = <String>[];
-      for (final name
-          in duplicateAssetNames
-              ? const ['left/a.tar.gz', 'right/a.tar.gz']
-              : const ['a.tar.gz', 'b.tar.gz']) {
+      for (final name in const ['a.tar.gz', 'b.tar.gz']) {
         final file = File('${scratch.path}/$name');
         file.parent.createSync(recursive: true);
         file.writeAsStringSync(name);
@@ -728,30 +713,6 @@ void main() {
     );
 
     test(
-      'local request validation runs before any remote read or mutation',
-      () async {
-        final run = await publish(
-          slurp: jsonEncode([
-            [
-              {
-                'tag_name': 'v1.0.0',
-                'draft': true,
-                'prerelease': false,
-                'id': 11,
-              },
-            ],
-          ]),
-          duplicateAssetNames: true,
-        );
-
-        expect(run.outcome.ok, isFalse);
-        expect(run.outcome.mayHaveActed, isFalse);
-        expect(run.outcome.draftEffect, DraftEffect.none);
-        expect(run.tools.calls, isEmpty);
-      },
-    );
-
-    test(
       'one exact draft subset is adopted and only its difference uploads',
       () async {
         final run = await publish(
@@ -937,12 +898,13 @@ void main() {
         );
         expect(create, greaterThanOrEqualTo(0));
         expect(uploads, hasLength(2));
-        expect(reads, hasLength(3));
-        expect(create, lessThan(reads.first));
-        expect(reads.first, lessThan(uploads.first));
-        expect(uploads.last, lessThan(reads[1]));
-        expect(reads[1], lessThan(patch));
-        expect(patch, lessThan(reads.last));
+        // The draft is read once, after its last upload and before it is
+        // made public. What the PATCH did is read back by the release.
+        expect(reads, hasLength(1));
+        expect(create, lessThan(uploads.first));
+        expect(uploads.last, lessThan(reads.single));
+        expect(reads.single, lessThan(patch));
+        expect(patch, run.tools.calls.length - 1);
         for (final index in uploads) {
           final call = run.tools.calls[index];
           expect(
@@ -1005,8 +967,8 @@ void main() {
           for (var i = 0; i < run.tools.calls.length; i++)
             if (run.tools.calls[i] == 'gh api repos/example/tool/releases/7') i,
         ];
-        expect(draftReads[1], greaterThan(uploads.first));
-        expect(draftReads[1], lessThan(uploads.last));
+        expect(draftReads.first, greaterThan(uploads.first));
+        expect(draftReads.first, lessThan(uploads.last));
       },
     );
 
@@ -1082,10 +1044,16 @@ void main() {
     );
 
     test(
-      'a lost final PATCH response reconciles by immutable release id',
+      'a lost final PATCH response is left to the release to read back',
       () async {
         final run = await publish(patchFails: true, failedPatchLands: true);
-        expect(run.outcome.ok, isTrue, reason: run.outcome.problem ?? '');
+        expect(run.outcome.ok, isFalse);
+        expect(run.outcome.mayHaveActed, isTrue);
+        expect(
+          run.tools.calls.last,
+          contains(' -X PATCH '),
+          reason: 'one read-back, by the release, settles it',
+        );
       },
     );
 

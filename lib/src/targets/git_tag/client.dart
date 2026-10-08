@@ -68,15 +68,10 @@ class GitTag {
       }
       if (ref.endsWith('^{}')) continue;
       final tag = ref.substring('refs/tags/'.length);
-      final raw = _versionIn(tag, parts);
-      if (raw == null) continue;
-      final version = Version.tryParse(raw);
-      if (version == null) {
-        return Inspection.unknown(
-          'the origin tag $tag matches the release pattern but is not a '
-          'semantic version',
-        );
-      }
+      // A tag that names no semantic version, `v1.0` or `vnext`, is no
+      // release of this lane, as the local check reads it too.
+      final version = Version.tryParse(_versionIn(tag, parts) ?? '');
+      if (version == null) continue;
       if (latest == null || version > latest) latest = version;
     }
     if (latest == null) {
@@ -97,17 +92,16 @@ class GitTag {
     'origin',
   ], workingDirectory: root);
 
-  /// Proves the release binding carried by origin's annotated tag when the
-  /// caller knows the source commit but did not know the tag object id until
-  /// after creating/pushing it. When [expectedManifestSha256] is present the
-  /// binding must name those exact staged bytes; without a stage, one valid
-  /// binding is still required so a malformed release tag is never exact.
+  /// Proves the release binding carried by origin's annotated tag, read from
+  /// [listing], the run's one read of origin's tags. When
+  /// [expectedManifestSha256] is present the binding must name those exact
+  /// staged bytes; without a stage, one valid binding is still required so a
+  /// malformed release tag is never exact.
   ///
   /// The direct object id is read from origin, its peel must be the expected
   /// source, and `cat-file` addresses that immutable id rather than the mutable
   /// local ref. Thus the message parsed here is the message origin actually
-  /// names. When [requireSignature] is true, Git must also authenticate that
-  /// same object before the tag step can be called exact.
+  /// names.
   ///
   /// A tag on an earlier commit still releases this version when nothing
   /// under [sourcePaths], the unit's own directories, has changed since:
@@ -128,7 +122,7 @@ class GitTag {
         'could not read the expected release tag binding',
       );
     }
-    final remote = await _read(tag, listing: listing);
+    final remote = await _read(tag, listing: listing ?? listTags());
     if (remote.problem != null) return Inspection.unknown(remote.problem!);
     if (remote.direct == null) {
       return const Inspection.absent(detail: 'not on origin');
@@ -163,23 +157,13 @@ class GitTag {
         'origin\'s annotated tag object could not be read: ${object.summary}',
       );
     }
-    final binding = _manifestBindingIn(object.stdout);
-    if (binding is! TagManifestBound) {
-      final why = switch (binding) {
-        TagManifestAbsent(:final why) ||
-        TagManifestMissing(:final why) ||
-        TagManifestMalformed(:final why) ||
-        TagManifestConflict(:final why) ||
-        TagManifestUnreadable(:final why) ||
-        TagManifestUnbound(:final why) => why,
-        TagManifestBound() => 'unexpected manifest binding state',
-      };
+    final (:digest, :problem) = _manifestBindingIn(object.stdout);
+    if (digest == null) {
       return Inspection.conflict(
         'origin\'s release tag does not carry one valid manifest binding',
-        evidence: {'manifest binding': why},
+        evidence: {'manifest binding': problem!},
       );
     }
-    final digest = binding.digest;
     final expectedDigest = expectedManifestSha256?.toLowerCase();
     if (sameCommit && expectedDigest != null && digest != expectedDigest) {
       return Inspection.conflict(
@@ -254,9 +238,9 @@ class GitTag {
   /// Whether a local tag is safe to use as the input to the next push.
   ///
   /// A remote absence is permission to push only after the existing local
-  /// object has passed the same source, manifest, and signature policy as a
-  /// public tag. Otherwise a harmless preflight absence would turn a malformed
-  /// local tag into an immutable public conflict before rk discovered it.
+  /// object has passed the same source and manifest policy as a public tag.
+  /// Otherwise a harmless preflight absence would turn a malformed local tag
+  /// into an immutable public conflict before rk discovered it.
   Future<Inspection> inspectLocalReleaseBinding({
     required String tag,
     required String expectedObject,
@@ -303,29 +287,19 @@ class GitTag {
       );
     }
 
-    final binding = _manifestBindingIn(object.stdout);
-    if (binding is! TagManifestBound) {
-      final why = switch (binding) {
-        TagManifestAbsent(:final why) ||
-        TagManifestMissing(:final why) ||
-        TagManifestMalformed(:final why) ||
-        TagManifestConflict(:final why) ||
-        TagManifestUnreadable(:final why) ||
-        TagManifestUnbound(:final why) => why,
-        TagManifestBound() => 'unexpected manifest binding state',
-      };
+    final (:digest, :problem) = _manifestBindingIn(object.stdout);
+    if (digest == null) {
       return Inspection.conflict(
         'the local release tag does not carry one valid manifest binding',
-        evidence: {'manifest binding': why},
+        evidence: {'manifest binding': problem!},
       );
     }
     final expectedDigest = expectedManifestSha256?.toLowerCase();
-    if (expectedDigest != null && binding.digest != expectedDigest) {
+    if (expectedDigest != null && digest != expectedDigest) {
       return Inspection.conflict(
         'the local release tag binds a different manifest',
         evidence: {
-          'manifest sha256':
-              'local ${binding.digest}, expected $expectedDigest',
+          'manifest sha256': 'local $digest, expected $expectedDigest',
         },
       );
     }
@@ -335,8 +309,21 @@ class GitTag {
       evidence: {
         'tag object': expectedObject.toLowerCase(),
         'source commit': expectedCommit.toLowerCase(),
-        'manifest sha256': binding.digest,
+        'manifest sha256': digest,
       },
+    );
+  }
+
+  /// Origin's [tag] now, read on its own rather than from the run's listing:
+  /// the object it names, and the commit that object peels to.
+  Future<({String? object, String? commit, String? problem})> onOrigin(
+    String tag,
+  ) async {
+    final remote = await _read(tag);
+    return (
+      object: remote.direct,
+      commit: remote.peeled ?? remote.direct,
+      problem: remote.problem,
     );
   }
 
@@ -389,9 +376,8 @@ class GitTag {
 
   /// Resolves the immutable annotated-tag object currently named by [tag].
   ///
-  /// The caller validates that object and then passes its OID to [pushExact].
-  /// Keeping the mutable ref name out of the push closes the interval in which
-  /// another local process could replace the tag after validation.
+  /// The caller passes its OID to [pushExact]. Keeping the mutable ref name
+  /// out of the push means the object pushed is the one rk created.
   Future<({String? object, String? problem})> localObject(String tag) async {
     final ToolResult result;
     try {
@@ -418,7 +404,10 @@ class GitTag {
     return (object: lines.single.toLowerCase(), problem: null);
   }
 
-  /// Pushes the exact validated tag object to the public tag ref.
+  /// Pushes the exact tag object to the public tag ref.
+  ///
+  /// Git refuses to replace a tag origin already has, and pushing the object
+  /// origin already has succeeds, so its answer settles the push.
   Future<ToolResult> pushExact(String tag, String object) {
     if (!_isObjectId(object)) {
       throw ArgumentError.value(object, 'object', 'invalid Git object id');
@@ -457,91 +446,35 @@ String? _versionIn(String tag, List<String> pattern) {
   return tag.substring(prefix.length, end);
 }
 
-TagManifestBinding _manifestBindingIn(String tagObject) {
+/// The release-manifest digest an annotated tag object's message binds, or
+/// why it binds none.
+({String? digest, String? problem}) _manifestBindingIn(String tagObject) {
+  ({String? digest, String? problem}) none(String problem) =>
+      (digest: null, problem: problem);
   final messageAt = tagObject.indexOf('\n\n');
   if (messageAt < 0) {
-    return const TagManifestMalformed(
-      'the annotated tag object has no readable message',
-    );
+    return none('the annotated tag object has no readable message');
   }
-  final message = tagObject.substring(messageAt + 2);
-  final candidates = message
+  final candidates = tagObject
+      .substring(messageAt + 2)
       .split('\n')
       .where((line) => line.contains('release-manifest-sha256'))
       .toList();
   if (candidates.isEmpty) {
-    return const TagManifestMissing(
+    return none(
       'the annotated tag message has no release-manifest-sha256 binding',
     );
   }
   if (candidates.length != 1) {
-    return const TagManifestMalformed(
-      'the annotated tag message has more than one manifest binding',
-    );
+    return none('the annotated tag message has more than one manifest binding');
   }
   final match = RegExp(
     r'^release-manifest-sha256: ([0-9a-f]{64})$',
   ).firstMatch(candidates.single);
   if (match == null) {
-    return const TagManifestMalformed(
-      'the annotated tag message has a malformed manifest binding',
-    );
+    return none('the annotated tag message has a malformed manifest binding');
   }
-  return TagManifestBound(match.group(1)!);
-}
-
-/// What reading an exact remote tag's release-manifest binding produced.
-sealed class TagManifestBinding {
-  const TagManifestBinding();
-
-  /// Present only when the tag carries one exact lowercase SHA-256 binding.
-  String? get sha256 => null;
-}
-
-class TagManifestBound extends TagManifestBinding {
-  const TagManifestBound(this.digest);
-
-  final String digest;
-
-  @override
-  String get sha256 => digest;
-}
-
-/// No tag exists at the remote coordinate.
-class TagManifestAbsent extends TagManifestBinding {
-  const TagManifestAbsent(this.why);
-  final String why;
-}
-
-/// The exact annotated tag has no binding line.
-class TagManifestMissing extends TagManifestBinding {
-  const TagManifestMissing(this.why);
-  final String why;
-}
-
-/// A binding-like line or tag message exists but does not meet the contract.
-class TagManifestMalformed extends TagManifestBinding {
-  const TagManifestMalformed(this.why);
-  final String why;
-}
-
-/// Origin carries a different tag object or source commit.
-class TagManifestConflict extends TagManifestBinding {
-  const TagManifestConflict(this.why, {this.evidence = const {}});
-  final String why;
-  final Map<String, String> evidence;
-}
-
-/// The tag or its object could not be read.
-class TagManifestUnreadable extends TagManifestBinding {
-  const TagManifestUnreadable(this.why);
-  final String why;
-}
-
-/// The tag is exact but has no annotated message by construction.
-class TagManifestUnbound extends TagManifestBinding {
-  const TagManifestUnbound(this.why);
-  final String why;
+  return (digest: match.group(1)!, problem: null);
 }
 
 class _RemoteTag {

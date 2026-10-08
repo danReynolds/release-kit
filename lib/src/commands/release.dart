@@ -489,6 +489,9 @@ class ReleaseCommand {
       );
     }
 
+    for (final warning in read.historyWarnings) {
+      output.warning(warning, unit: name);
+    }
     final problems = Diagnostics();
     read.historyProblems.forEach(problems.report);
     read.tagProblems.forEach(problems.report);

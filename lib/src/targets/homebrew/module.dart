@@ -8,7 +8,6 @@ import '../../engine/publish_target.dart';
 import '../../engine/resolve.dart';
 import '../../engine/targets.dart';
 import '../../engine/verdict.dart';
-import '../../output/output.dart';
 import '../../output/progress.dart';
 import '../github_release/client.dart';
 import '../target_module.dart';
@@ -301,50 +300,31 @@ final class HomebrewTargetModule extends TargetModule {
   }
 
   @override
-  Future<TargetFailure> classifyUnconfirmedPublication(
-    TargetReleaseContext context,
+  bool get conflictIsPermanent => false;
+
+  @override
+  ({String code, String message, String? next}) nameUnconfirmed(
     ResolvedUnit unit,
     TargetPlan target,
     Inspection state,
-    TargetActOutcome act, {
-    required bool actedBefore,
-  }) async {
-    final code = switch (state.verdict) {
-      Verdict.unknown => 'RK-BREW-002',
-      Verdict.conflict => 'RK-BREW-003',
-      Verdict.absent || Verdict.exact => 'RK-BREW-001',
-    };
-    final message = switch (state.verdict) {
-      Verdict.unknown => 'the tap was updated and could not be read back',
-      Verdict.conflict => 'the public tap does not hold what rk pushed',
-      Verdict.absent || Verdict.exact => 'the tap formula was not updated',
-    };
-    final details = <String>[
-      if (act.diagnostic?.remedy != null) act.diagnostic!.remedy!,
-      if (act.problem != null) act.problem!,
-      if (state.detail != null) state.detail!,
-      ...state.evidence.entries.map((entry) => '${entry.key}: ${entry.value}'),
-    ];
-    final halt = state.verdict == Verdict.conflict
-        ? HaltKind.stoppedPartway
-        : act.mayHaveActed || state.verdict == Verdict.unknown
-        ? HaltKind.lostTrack
-        : actedBefore
-        ? HaltKind.stoppedPartway
-        : HaltKind.beforeActing;
-    return TargetFailure(
-      diagnostic: Diagnostic(
-        code: code,
-        message: message,
-        remedy: details.isEmpty
-            ? 're-run; the shared destination inspection will classify the '
-                  'public target before any retry'
-            : details.join('\n'),
-        evidence: act.evidence ?? act.diagnostic?.evidence,
-      ),
-      halt: halt,
-    );
-  }
+    TargetActOutcome act,
+  ) => switch (state.verdict) {
+    Verdict.unknown => (
+      code: 'RK-BREW-002',
+      message: 'the tap was updated and could not be read back',
+      next: null,
+    ),
+    Verdict.conflict => (
+      code: 'RK-BREW-003',
+      message: 'the public tap does not hold what rk pushed',
+      next: null,
+    ),
+    Verdict.absent || Verdict.exact => (
+      code: 'RK-BREW-001',
+      message: 'the tap formula was not updated',
+      next: null,
+    ),
+  };
 
   @override
   TargetStage stageInput({

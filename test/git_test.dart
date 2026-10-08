@@ -434,16 +434,31 @@ void main() {
       expect(result.verdict, Verdict.absent);
     });
 
-    test('a malformed matching semantic tag is unknown', () async {
-      final result = await latest(
-        ToolResult(
-          exitCode: 0,
-          stdout: '1111111111111111111111111111111111111111\trefs/tags/vnext\n',
-          stderr: '',
-        ),
-      );
-      expect(result.verdict, Verdict.unknown);
-    });
+    test(
+      'a matching tag that is no semantic version is not a release',
+      () async {
+        // `v1.0` and `vnext` match `v{version}` and name no version: an old
+        // or hand-made tag, which must not block every release after it.
+        const one = '1111111111111111111111111111111111111111';
+        final result = await latest(
+          ToolResult(
+            exitCode: 0,
+            stdout:
+                '$one\trefs/tags/vnext\n'
+                '$one\trefs/tags/v1.0\n'
+                '$one\trefs/tags/v0.9.0\n',
+            stderr: '',
+          ),
+        );
+        expect(result.verdict, Verdict.exact, reason: result.detail);
+        expect(result.evidence['version'], '0.9.0');
+
+        final none = await latest(
+          ToolResult(exitCode: 0, stdout: '$one\trefs/tags/v1.0\n', stderr: ''),
+        );
+        expect(none.verdict, Verdict.absent, reason: none.detail);
+      },
+    );
 
     test('an unreadable origin is unknown', () async {
       final result = await latest(
@@ -471,25 +486,22 @@ void main() {
 
     Future<({Inspection state, RecordingTools tools})> prove({
       String objectBytes = tagObject,
-      bool signed = true,
-      ToolResult? signature,
       String expectedCommit = commit,
       List<String> sourcePaths = const [],
       ToolResult? diff,
     }) async {
       final tools = RecordingTools(
         results: {
-          'git ls-remote origin refs/tags/v1.0.0 refs/tags/v1.0.0^{}':
-              ToolResult(exitCode: 0, stdout: remote, stderr: ''),
+          'git ls-remote --tags origin': ToolResult(
+            exitCode: 0,
+            stdout: '$remote$commit\trefs/tags/v0.9.0\n',
+            stderr: '',
+          ),
           'git cat-file tag $object': ToolResult(
             exitCode: 0,
             stdout: objectBytes,
             stderr: '',
           ),
-          if (signed)
-            'git verify-tag $object':
-                signature ??
-                ToolResult(exitCode: 0, stdout: 'Good', stderr: ''),
           if (diff != null)
             'git --literal-pathspecs diff-tree --quiet -r $commit^{commit} '
                     '$expectedCommit -- ${sourcePaths.join(' ')}':
@@ -559,16 +571,6 @@ void main() {
         expect(result.state.releasedFrom, commit);
       });
 
-      test('still needs its signature', () async {
-        final result = await prove(
-          expectedCommit: later,
-          sourcePaths: ['packages/tool'],
-          diff: exit(0),
-          signature: ToolResult(exitCode: 1, stdout: '', stderr: 'bad'),
-        );
-        expect(result.state.verdict, isNot(Verdict.exact));
-      });
-
       test('is a different source when no directory is named', () async {
         // As once this commit is staged: its bytes need a tag of its own.
         final result = await prove(expectedCommit: later);
@@ -580,34 +582,25 @@ void main() {
       });
     });
 
-    test(
-      'proves origin object, peel, manifest digest, and signature',
-      () async {
-        final result = await prove();
-        expect(result.state.verdict, Verdict.exact);
-        expect(
-          result.state.releasedFrom,
-          isNull,
-          reason: 'a tag on this commit is released from here',
-        );
-        expect(result.state.evidence['manifest sha256'], digest);
-        expect(result.state.evidence['signature'], 'verified');
-        expect(result.tools.calls, contains('git verify-tag $object'));
-      },
-    );
-
-    test(
-      'an intentionally unsigned annotated tag still binds the manifest',
-      () async {
-        final result = await prove(signed: false);
-        expect(result.state.verdict, Verdict.exact);
-        expect(result.state.evidence['signature'], 'not required');
-        expect(
-          result.tools.calls.where((call) => call.startsWith('git verify-tag')),
-          isEmpty,
-        );
-      },
-    );
+    test('proves origin object, peel, and manifest digest', () async {
+      final result = await prove();
+      expect(result.state.verdict, Verdict.exact);
+      expect(
+        result.state.releasedFrom,
+        isNull,
+        reason: 'a tag on this commit is released from here',
+      );
+      expect(result.state.evidence, {
+        'tag object': object,
+        'source commit': commit,
+        'manifest sha256': digest,
+      });
+      expect(
+        result.tools.calls,
+        ['git ls-remote --tags origin', 'git cat-file tag $object'],
+        reason: 'the tag is read from the listing of every tag',
+      );
+    });
 
     test('a different manifest binding is a public conflict', () async {
       final result = await prove(
@@ -634,19 +627,9 @@ void main() {
         expect(result.state.evidence['released source commit'], commit);
         expect(result.state.evidence['current source commit'], current);
         expect(result.state.evidence['manifest sha256'], digest);
-        expect(result.state.evidence['signature'], 'verified');
         expect(result.tools.calls, contains('git cat-file tag $object'));
-        expect(result.tools.calls, contains('git verify-tag $object'));
       },
     );
-
-    test('a promised signature must verify on the remote object id', () async {
-      final result = await prove(
-        signature: ToolResult(exitCode: 1, stdout: '', stderr: 'BAD signature'),
-      );
-      expect(result.state.verdict, Verdict.conflict);
-      expect(result.state.evidence['signature'], contains('BAD signature'));
-    });
   });
 
   test(
@@ -766,7 +749,6 @@ void main() {
         'tag object': tagObject,
         'source commit': sourceCommit,
         'manifest sha256': manifestDigest,
-        'signature': 'not required',
       });
 
       expectOk(
@@ -780,6 +762,15 @@ void main() {
       );
       expect(secondReadback.verdict, Verdict.exact);
       expect(secondReadback.evidence, firstReadback.evidence);
+
+      // Git refuses to replace the tag origin has, which is why a push's
+      // answer settles it with no read before or after.
+      final replaced = await destination.pushExact(tag, replacementObject);
+      expect(replaced.ok, isFalse);
+      expect(replaced.stderr, contains('already exists'));
+      final origin = await destination.onOrigin(tag);
+      expect(origin.object, tagObject);
+      expect(origin.commit, sourceCommit);
     },
   );
 }

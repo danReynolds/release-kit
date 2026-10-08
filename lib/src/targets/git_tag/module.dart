@@ -7,7 +7,6 @@ import '../../engine/resolve.dart';
 import '../../engine/targets.dart';
 import '../../engine/verdict.dart';
 import '../../engine/version.dart';
-import '../../output/output.dart';
 import '../../output/progress.dart';
 import '../target_module.dart';
 import 'client.dart';
@@ -232,63 +231,4 @@ final class GitTagTargetModule extends TargetModule {
     TargetPlan target,
     Inspection inspected,
   ) => publishGitTag(context, unit);
-
-  @override
-  Future<TargetFailure> classifyUnconfirmedPublication(
-    TargetReleaseContext context,
-    ResolvedUnit unit,
-    TargetPlan target,
-    Inspection state,
-    TargetActOutcome act, {
-    required bool actedBefore,
-  }) async {
-    String? cleanup;
-    var cleanupFailed = false;
-    final recovery = act.cleanupIfAbsent;
-    if (state.isAbsent && recovery != null) {
-      final result = await recovery();
-      cleanupFailed = !result.ok;
-      cleanup = result.detail;
-    }
-
-    final conflict = state.verdict == Verdict.conflict;
-    final code = conflict ? 'RK-TAG-004' : act.diagnostic?.code ?? 'RK-TAG-003';
-    final message = conflict
-        ? 'origin did not confirm the release binding on '
-              '${act.coordinate ?? target.coordinate}'
-        : act.diagnostic?.message ??
-              'the push reported success, and origin did not confirm the exact '
-                  'tag ${act.coordinate ?? target.coordinate}';
-    final details = <String>[
-      if (act.diagnostic?.remedy != null) act.diagnostic!.remedy!,
-      if (act.problem != null) act.problem!,
-      if (state.detail != null) state.detail!,
-      ...state.evidence.entries.map((entry) => '${entry.key}: ${entry.value}'),
-      if (cleanup != null) cleanup,
-    ];
-    final pushProvedAbsent = !act.ok && state.isAbsent;
-    final halt = conflict
-        ? HaltKind.actedAndUnfixable
-        : cleanupFailed
-        ? HaltKind.stoppedPartway
-        : pushProvedAbsent
-        ? (actedBefore ? HaltKind.stoppedPartway : HaltKind.beforeActing)
-        : act.mayHaveActed || state.verdict == Verdict.unknown
-        ? HaltKind.lostTrack
-        : actedBefore
-        ? HaltKind.stoppedPartway
-        : HaltKind.beforeActing;
-    return TargetFailure(
-      diagnostic: Diagnostic(
-        code: code,
-        message: message,
-        remedy: details.isEmpty
-            ? 're-run; the shared destination inspection will classify the '
-                  'public target before any retry'
-            : details.join('\n'),
-        evidence: act.evidence ?? act.diagnostic?.evidence,
-      ),
-      halt: halt,
-    );
-  }
 }

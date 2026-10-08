@@ -221,19 +221,21 @@ void main() {
     },
   );
 
-  test('archive propagation does not hold the release', () async {
+  test('an archive pub.dev does not serve yet delays nothing, and nothing is '
+      'uploaded twice', () async {
     final staged = await _stage(fixture);
-    // The registry lists core as soon as it accepts it, and serves its
-    // archive later. Publishing reads the listing, as Pub's own resolution
-    // does, so the stack releases without waiting for the archive.
+    // pub.dev lists a version before its archive downloads. A release reads
+    // the listing; it downloads nothing, so it waits on nothing.
     fixture.registry.unavailableArchives.add(_core);
     _ok(await fixture.rk(['release', '--yes', '--json']));
-    _published(fixture.registry, staged);
+    expect(
+      fixture.registry.events.where((e) => e.kind == 'archive_unavailable'),
+      isEmpty,
+    );
 
     fixture.registry.unavailableArchives.clear();
     _ok(await fixture.rk(['release', '--yes', '--json']));
-    for (final coordinate in fixture.registry.committed.keys) {
-      final name = coordinate.split('@').first;
+    for (final name in _versions.keys) {
       expect(
         fixture.registry.events.where(
           (e) => e.kind == 'upload_attempted' && e.name == name,

@@ -111,17 +111,35 @@ abstract base class TargetModule {
     Inspection inspected,
   );
 
+  /// Reads back what [act] did, when the act did not confirm it itself.
   Future<Inspection> confirmPublication(
     TargetReleaseContext context,
     ResolvedUnit unit,
     TargetPlan target,
+    TargetActOutcome act,
   ) => inspectCandidate(context.reads, unit, target);
 
+  /// The code and sentence for an act that did not settle exact and carried
+  /// no diagnostic of its own, or whose result is a conflict, in this
+  /// target's terms; and the command to run next, if one helps.
+  ({String code, String message, String? next}) nameUnconfirmed(
+    ResolvedUnit unit,
+    TargetPlan target,
+    Inspection state,
+    TargetActOutcome act,
+  ) => (
+    code: 'RK-REL-003',
+    message:
+        '${target.step.summary}: '
+        '${act.problem ?? state.detail ?? 'the public result could not be confirmed'}',
+    next: null,
+  );
+
+  /// Whether a conflict read back after this target's act is permanent. A
+  /// moving channel's is not: the next update moves it.
+  bool get conflictIsPermanent => true;
+
   /// Classifies a provider operation that did not settle exact.
-  ///
-  /// Most append-only targets share this policy. A target overrides it only
-  /// when it has a real provider-specific recovery operation or when a public
-  /// conflict is repairable by a later run.
   Future<TargetFailure> classifyUnconfirmedPublication(
     TargetReleaseContext context,
     ResolvedUnit unit,
@@ -130,10 +148,33 @@ abstract base class TargetModule {
     TargetActOutcome act, {
     required bool actedBefore,
   }) async {
-    final details = <String>[
-      if (act.diagnostic?.remedy != null) act.diagnostic!.remedy!,
-      if (act.problem != null) act.problem!,
-      if (act.privateEffectDetail != null) act.privateEffectDetail!,
+    final conflict = state.verdict == Verdict.conflict;
+    // The provider refused the act because a permanent target was already
+    // something else: the conflict a fresh inspection would have found, with
+    // the same advice.
+    if (conflict && conflictIsPermanent && !act.ok && !act.mayHaveActed) {
+      final advice = diagnoseConflict(unit, target, state);
+      return TargetFailure(
+        diagnostic: Diagnostic(
+          code: advice.code,
+          message: advice.message,
+          source: advice.source,
+          remedy: [?advice.remedy, ?act.problem].join('\n'),
+          evidence: act.evidence ?? act.diagnostic?.evidence,
+        ),
+        halt: actedBefore
+            ? HaltKind.actedAndUnfixable
+            : HaltKind.unfixableByRerun,
+      );
+    }
+    final given = act.diagnostic;
+    final named = given == null || conflict
+        ? nameUnconfirmed(unit, target, state, act)
+        : (code: given.code, message: given.message, next: null);
+    final details = [
+      ?given?.remedy,
+      ?act.problem,
+      ?act.privateEffectDetail,
       if (act.privateEffectDetail == null &&
           act.privateEffect == TargetPrivateEffect.changed)
         'private provider state changed; this step did not confirm a public '
@@ -142,34 +183,31 @@ abstract base class TargetModule {
           act.privateEffect == TargetPrivateEffect.uncertain)
         'private provider state may have changed; no public release was '
             'confirmed.',
-      if (state.detail != null) state.detail!,
+      ?state.detail,
       ...state.evidence.entries.map((entry) => '${entry.key}: ${entry.value}'),
-      if (act.permanent != null) act.permanent!,
     ];
-    final immutableConflict = state.verdict == Verdict.conflict;
-    final halt = act.permanent != null || immutableConflict
-        ? HaltKind.actedAndUnfixable
-        : act.mayHaveActed ||
-              act.privateEffect == TargetPrivateEffect.uncertain ||
-              state.verdict == Verdict.unknown
-        ? HaltKind.lostTrack
-        : act.privateEffect == TargetPrivateEffect.changed || actedBefore
-        ? HaltKind.stoppedPartway
-        : HaltKind.beforeActing;
     return TargetFailure(
       diagnostic: Diagnostic(
-        code: act.diagnostic?.code ?? 'RK-REL-003',
-        message:
-            act.diagnostic?.message ??
-            '${target.step.summary}: '
-                '${act.problem ?? state.detail ?? 'the public result could not be confirmed'}',
+        code: named.code,
+        message: named.message,
         remedy: details.isEmpty
             ? 're-run; the shared destination inspection will classify the '
                   'public target before any retry'
             : details.join('\n'),
-        evidence: act.evidence ?? act.diagnostic?.evidence,
+        evidence: act.evidence ?? given?.evidence,
       ),
-      halt: halt,
+      halt: conflict
+          ? (conflictIsPermanent
+                ? HaltKind.actedAndUnfixable
+                : HaltKind.stoppedPartway)
+          : act.mayHaveActed ||
+                act.privateEffect == TargetPrivateEffect.uncertain ||
+                state.verdict == Verdict.unknown
+          ? HaltKind.lostTrack
+          : act.privateEffect == TargetPrivateEffect.changed || actedBefore
+          ? HaltKind.stoppedPartway
+          : HaltKind.beforeActing,
+      nextCommand: named.next,
     );
   }
 
@@ -194,8 +232,10 @@ final class TargetHistory {
     required this.inspection,
     this.version,
     Iterable<Diagnostic> problems = const [],
+    Iterable<Diagnostic> warnings = const [],
     Iterable<TargetClaim> claims = const [],
   }) : problems = List.unmodifiable(problems),
+       warnings = List.unmodifiable(warnings),
        claims = List.unmodifiable(claims);
 
   factory TargetHistory.versioned({
@@ -203,6 +243,7 @@ final class TargetHistory {
     required TargetPlan target,
     Diagnostic Function(Version publicVersion)? regressionDiagnostic,
     Iterable<Diagnostic> problems = const [],
+    Iterable<Diagnostic> warnings = const [],
     Iterable<TargetClaim> claims = const [],
   }) {
     final raw = inspection.evidence['version'];
@@ -225,6 +266,7 @@ final class TargetHistory {
       inspection: inspection,
       version: version,
       problems: found,
+      warnings: warnings,
       claims: claims,
     );
   }
@@ -232,6 +274,9 @@ final class TargetHistory {
   final Inspection inspection;
   final Version? version;
   final List<Diagnostic> problems;
+
+  /// What the operator should know before releasing, which does not stop it.
+  final List<Diagnostic> warnings;
   final List<TargetClaim> claims;
 }
 
@@ -264,9 +309,6 @@ final class TargetReadContext {
     if (memo == null) return read();
     return (memo[key] ??= read()).then((value) => value as T);
   }
-
-  /// Drops [key] after rk acted on what it describes.
-  void forget(String key) => shared?.remove(key);
 
   ReleaseStage? reusableStage(ResolvedUnit unit) {
     final factory = stageFor;
@@ -574,14 +616,13 @@ final class TargetActOutcome {
     this.mayHaveActed = false,
     this.privateEffect = TargetPrivateEffect.none,
     this.privateEffectDetail,
-    this.permanent,
     this.diagnostic,
     this.coordinate,
-    this.cleanupIfAbsent,
     this.successNote,
     this.includeInspectionDetail = false,
     this.reconciledNote,
     this.evidence,
+    this.confirmed,
   });
 
   final bool ok;
@@ -589,10 +630,8 @@ final class TargetActOutcome {
   final bool mayHaveActed;
   final TargetPrivateEffect privateEffect;
   final String? privateEffectDetail;
-  final String? permanent;
   final Diagnostic? diagnostic;
   final String? coordinate;
-  final TargetCleanup? cleanupIfAbsent;
   final String? successNote;
   final bool includeInspectionDetail;
   final String? reconciledNote;
@@ -605,20 +644,15 @@ final class TargetActOutcome {
   /// so the account of a half-finished publish survives the sentence
   /// summarizing it.
   final String? evidence;
+
+  /// The public state the act itself established, when the provider's own
+  /// answer is the read-back: Git accepts a tag push only as the exact
+  /// object it was given. Null means the target is read back.
+  final Inspection? confirmed;
 }
 
 /// A private provider-side effect that is not itself a published release.
 enum TargetPrivateEffect { none, changed, uncertain }
-
-/// A target-owned recovery action safe only after public absence is proven.
-typedef TargetCleanup = Future<TargetCleanupResult> Function();
-
-final class TargetCleanupResult {
-  const TargetCleanupResult({required this.ok, required this.detail});
-
-  final bool ok;
-  final String detail;
-}
 
 /// The target's final classification after an act and authoritative read-back.
 final class TargetFailure {
