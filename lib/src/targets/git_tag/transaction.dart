@@ -68,12 +68,14 @@ Future<TargetActOutcome> publishGitTag(
     context.progress.begin(
       ProgressActivity(running: 'pushing', failed: 'push failed'),
     );
-    return _pushExisting(
+    final outcome = await _pushExisting(
       destination,
       unit,
       object: existing,
       signed: existingSigned,
     );
+    context.reads.forget(originTagsKey);
+    return outcome;
   }
 
   final manifestSha256 = _manifestDigest(context);
@@ -164,6 +166,7 @@ Future<TargetActOutcome> publishGitTag(
   }
 
   final pushed = await destination.pushExact(tag, object);
+  context.reads.forget(originTagsKey);
   if (!pushed.ok) {
     return TargetActOutcome(
       ok: false,

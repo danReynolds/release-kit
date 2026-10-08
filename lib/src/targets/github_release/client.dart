@@ -4,7 +4,6 @@ import 'dart:io';
 import '../../engine/reconciliation.dart';
 import '../../engine/tools.dart';
 import '../../engine/verdict.dart';
-import '../../engine/version.dart';
 import '../../transforms/digest.dart';
 
 /// Publishes a set of assets as one immutable release.
@@ -47,80 +46,6 @@ class GithubRelease {
       expectedAssets: expectedAssets,
       expectedPrerelease: prerelease,
     );
-  }
-
-  /// The newest semantic version carried by a published release matching
-  /// [tagPattern]. Every page is read; a draft is private staging and therefore
-  /// is not a published version. A malformed answer stays unknown rather than
-  /// silently shortening the history rk compares against.
-  Future<Inspection> inspectLatestVersion(String tagPattern) async {
-    final parts = tagPattern.split('{version}');
-    if (parts.length != 2) {
-      return const Inspection.unknown(
-        'the release tag pattern has no single {version} coordinate',
-      );
-    }
-    final result = await tools.run('gh', [
-      'api',
-      '--paginate',
-      '--slurp',
-      'repos/$repository/releases',
-    ], workingDirectory: workingDirectory);
-    if (!result.ok) {
-      return Inspection.unknown(
-        'GitHub releases could not be read: ${result.summary}',
-      );
-    }
-
-    try {
-      final decoded = jsonDecode(result.stdout);
-      if (decoded is! List) {
-        return const Inspection.unknown(
-          'GitHub returned a malformed paginated release list',
-        );
-      }
-      Version? latest;
-      for (final page in decoded) {
-        if (page is! List) {
-          return const Inspection.unknown(
-            'GitHub returned a malformed release page',
-          );
-        }
-        for (final entry in page) {
-          if (entry is! Map ||
-              entry['tag_name'] is! String ||
-              entry['draft'] is! bool) {
-            return const Inspection.unknown(
-              'GitHub returned a malformed release entry',
-            );
-          }
-          if (entry['draft'] as bool) continue;
-          final raw = _versionIn(entry['tag_name'] as String, parts);
-          if (raw == null) continue;
-          final version = Version.tryParse(raw);
-          if (version == null) {
-            return Inspection.unknown(
-              'the published tag ${entry['tag_name']} matches the release '
-              'pattern but is not a semantic version',
-            );
-          }
-          if (latest == null || version > latest) latest = version;
-        }
-      }
-      if (latest == null) {
-        return const Inspection.absent(
-          detail: 'no matching GitHub Release is published',
-        );
-      }
-      return Inspection.exact(
-        detail: 'latest published GitHub Release is $latest',
-        evidence: {'version': latest.canonical},
-      );
-    } on Object catch (error) {
-      return Inspection.unknown(
-        'GitHub returned a malformed release list: $error',
-      );
-    }
   }
 
   /// Inspects the complete public release identity, including downloaded
@@ -744,31 +669,7 @@ class GithubRelease {
           draftId = createdId;
         }
         draftEffect = DraftEffect.changed;
-
-        // A create response proves only an id. Verify the exact empty draft
-        // metadata before placing the first byte into it.
-        final observed = await _viewById(draftId);
-        if (observed is! _Found) {
-          return failed(
-            'private draft $draftId could not be read after create',
-          );
-        }
-        final reconciliation = _inspectDraftSubset(
-          observed.release,
-          tag: tag,
-          title: title,
-          body: notes,
-          expected: ordered,
-          prerelease: prerelease,
-        );
-        if (!reconciliation.inspection.isExact ||
-            reconciliation.missing.length != ordered.length) {
-          return failed(
-            'private draft $draftId did not start as the frozen empty release: '
-            '${reconciliation.inspection.detail ?? reconciliation.inspection.verdict.name}',
-          );
-        }
-        missing = reconciliation.missing;
+        missing = ordered;
       }
 
       for (final (index, asset) in missing.indexed) {
@@ -906,43 +807,16 @@ class GithubRelease {
         publishInput.path,
       ], workingDirectory: workingDirectory);
 
-      // A failed client response is ambiguous. Read by immutable release id:
-      // public+complete reconciles to success, still-draft is a private failure,
-      // and unreadable means the shared caller must inspect public reality.
-      final after = await _viewById(draftId);
-      if (after case _Found(:final release)) {
-        if (release.isDraft) {
-          return failed(
-            'private draft $draftId was not published: ${published.summary}',
-            transcript: published.transcript,
-          );
-        }
-        final publicSurface = _compareRelease(
-          release,
-          tag: tag,
-          expectedAssets: names.toSet(),
-          expectedTitle: title,
-          expectedBody: notes,
-          expectedPrerelease: prerelease,
-        );
-        if (!publicSurface.isExact) {
-          return PublishOutcome.terminal(
-            'the release became public with different metadata or assets',
-            url: url,
-            permanent: 'the release at $tag is public and cannot be edited',
-            draftEffect: draftEffect,
-          );
-        }
+      // The shared read-back decides what a failed response did.
+      if (published.ok) {
         return PublishOutcome.published(url, draftEffect: draftEffect);
       }
       return PublishOutcome.lostTrack(
-        published.ok
-            ? 'the complete draft was published but could not be read back'
-            : 'publishing the complete draft did not return successfully: '
-                  '${published.summary}',
+        'publishing the complete draft did not return successfully: '
+        '${published.summary}',
         url: url,
         draftEffect: DraftEffect.uncertain,
-        transcript: published.ok ? null : published.transcript,
+        transcript: published.transcript,
       );
     } on Object catch (error) {
       return failed('the private release draft failed: $error');
@@ -1319,15 +1193,6 @@ class GithubRelease {
     } on Object {
       return null;
     }
-  }
-
-  static String? _versionIn(String tag, List<String> pattern) {
-    final prefix = pattern[0];
-    final suffix = pattern[1];
-    if (!tag.startsWith(prefix) || !tag.endsWith(suffix)) return null;
-    final end = tag.length - suffix.length;
-    if (end <= prefix.length) return null;
-    return tag.substring(prefix.length, end);
   }
 }
 

@@ -65,7 +65,10 @@ class Inspector {
     tools: tools,
     repository: repository,
     stageFor: stageFor,
+    shared: _shared,
   );
+
+  final _shared = <String, Future<Object?>>{};
 
   /// Whether this step's state lives somewhere rk can read without acting.
   ///

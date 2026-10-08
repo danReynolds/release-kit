@@ -118,37 +118,6 @@ final class GithubReleaseTargetModule extends TargetModule {
   }
 
   @override
-  Future<TargetHistory> inspectHistory(
-    TargetReadContext context,
-    ResolvedUnit unit,
-    TargetPlan target,
-  ) async {
-    final tools = context.tools;
-    if (tools == null) {
-      return TargetHistory.versioned(
-        inspection: const Inspection.unknown('no tools to read the forge with'),
-        target: target,
-      );
-    }
-    final repository = context.repository;
-    if (repository == null) {
-      return TargetHistory.versioned(
-        inspection: const Inspection.unknown('no origin remote to ask'),
-        target: target,
-      );
-    }
-    final inspection =
-        await GithubRelease(
-          tools: tools,
-          repository: repository,
-          workingDirectory: context.git.root,
-        ).inspectLatestVersion(
-          requiredTargetTagPattern(unit, PublishTarget.githubRelease),
-        );
-    return TargetHistory.versioned(inspection: inspection, target: target);
-  }
-
-  @override
   Diagnostic diagnoseConflict(
     ResolvedUnit unit,
     TargetPlan target,

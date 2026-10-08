@@ -331,6 +331,22 @@ Future<Ran> release({
         }
         return ToolResult(exitCode: 1, stdout: '', stderr: 'unknown tag');
       }
+      if (key == 'git ls-remote --tags origin') {
+        return ToolResult(
+          exitCode: 0,
+          stdout: [
+            for (final tag in remoteTags)
+              if ((tagObjects[tag] ?? effectiveGit.head) ==
+                  (effectiveGit.tagTarget(tag) ?? effectiveGit.head))
+                '${effectiveGit.tagTarget(tag) ?? effectiveGit.head} refs/tags/$tag'
+              else ...[
+                '${tagObjects[tag]} refs/tags/$tag',
+                '${effectiveGit.tagTarget(tag) ?? effectiveGit.head} refs/tags/$tag^{}',
+              ],
+          ].join('\n'),
+          stderr: '',
+        );
+      }
       const prefix = 'git ls-remote origin refs/tags/';
       if (key.startsWith(prefix)) {
         final tag = key.substring(prefix.length).split(' ').first;
@@ -2941,8 +2957,11 @@ void mutationCloseout() {
         results: {
           // A push the harness's world-model does not believe: script the
           // remote read directly to answer empty despite the "successful" push.
-          'git ls-remote origin refs/tags/v0.2.0 refs/tags/v0.2.0^{}':
-              ToolResult(exitCode: 0, stdout: '', stderr: ''),
+          'git ls-remote --tags origin': ToolResult(
+            exitCode: 0,
+            stdout: '',
+            stderr: '',
+          ),
         },
       );
 

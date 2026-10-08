@@ -613,7 +613,25 @@ final class ReleasePublicationCoordinator {
     // its destination read-back even if another concurrent lane has failed.
     releaseProgress.begin(target, CommonProgressActivities.verifying);
     try {
-      state = await module.confirmPublication(releaseContext, unit, target);
+      // A registry can take minutes to list an upload it accepted. One it
+      // refused, or that never arrived, is not worth that wait: a lost
+      // response shows within a few reads.
+      state = await module.confirmPublication(
+        act.ok
+            ? releaseContext
+            : TargetReleaseContext(
+                reads: releaseContext.reads,
+                tools: releaseContext.tools,
+                stage: releaseContext.stage,
+                progress: releaseContext.progress,
+                runInteractive: releaseContext.runInteractive,
+                wait: releaseContext.wait,
+                confirmDeadline: confirmInterval * 2,
+                confirmInterval: confirmInterval,
+              ),
+        unit,
+        target,
+      );
     } on Object catch (error) {
       state = Inspection.unknown(
         '${target.kindLabel} verification threw: $error',

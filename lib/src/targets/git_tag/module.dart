@@ -87,6 +87,7 @@ final class GitTagTargetModule extends TargetModule {
     }
 
     final remote = await destination.inspectReleaseBinding(
+      listing: context.once(originTagsKey, destination.listTags),
       tag: tag,
       expectedCommit: context.git.head,
       expectedManifestSha256: manifestSha256,
@@ -137,13 +138,14 @@ final class GitTagTargetModule extends TargetModule {
     TargetPlan target,
   ) async {
     final tools = context.tools;
-    final inspection = tools == null
+    final destination = tools == null
+        ? null
+        : GitTag(tools: tools, root: context.git.root);
+    final inspection = destination == null
         ? const Inspection.unknown('no tools to read origin with')
-        : await GitTag(
-            tools: tools,
-            root: context.git.root,
-          ).inspectLatestVersion(
+        : await destination.inspectLatestVersion(
             requiredTargetTagPattern(unit, PublishTarget.gitTag),
+            listing: context.once(originTagsKey, destination.listTags),
           );
     final history = TargetHistory.versioned(
       inspection: inspection,

@@ -1095,9 +1095,7 @@ publish = ["git-tag", "pub.dev"]
       git: gitWith(tags: localTags, tagObjects: tagObjects, signing: signing),
       tools: RecordingTools(
         results: {
-          'git ls-remote origin refs/tags/v0.2.0 '
-                  'refs/tags/v0.2.0^{}':
-              remote,
+          'git ls-remote --tags origin': remote,
           ...additionalResults,
         },
       ),

@@ -244,6 +244,7 @@ final class TargetReadContext {
     required this.tools,
     required this.repository,
     required this.stageFor,
+    this.shared,
   });
 
   final RegistryReader? registry;
@@ -252,6 +253,20 @@ final class TargetReadContext {
   final Tools? tools;
   final String? repository;
   final ReleaseStage Function(ResolvedUnit unit)? stageFor;
+
+  /// Reads several targets share within one run, by key.
+  final Map<String, Future<Object?>>? shared;
+
+  /// [read], once per run for [key]: origin's tag listing answers every tag
+  /// target's history and candidate.
+  Future<T> once<T>(String key, Future<T> Function() read) {
+    final memo = shared;
+    if (memo == null) return read();
+    return (memo[key] ??= read()).then((value) => value as T);
+  }
+
+  /// Drops [key] after rk acted on what it describes.
+  void forget(String key) => shared?.remove(key);
 
   ReleaseStage? reusableStage(ResolvedUnit unit) {
     final factory = stageFor;

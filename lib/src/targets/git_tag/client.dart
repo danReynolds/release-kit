@@ -21,6 +21,9 @@ final _signatureBlock = RegExp(
   multiLine: true,
 );
 
+/// The run's one read of origin's tags.
+const originTagsKey = 'git ls-remote --tags origin';
+
 class GitTag {
   GitTag({required this.tools, required this.root});
 
@@ -50,7 +53,10 @@ class GitTag {
   /// The newest semantic version named by a tag on origin matching
   /// [tagPattern]. Direct refs are the inventory; peeled `^{}` lines describe
   /// the same annotated tag and are ignored for version discovery.
-  Future<Inspection> inspectLatestVersion(String tagPattern) async {
+  Future<Inspection> inspectLatestVersion(
+    String tagPattern, {
+    Future<ToolResult>? listing,
+  }) async {
     final parts = tagPattern.split('{version}');
     if (parts.length != 2) {
       return const Inspection.unknown(
@@ -59,11 +65,7 @@ class GitTag {
     }
     final ToolResult result;
     try {
-      result = await tools.run('git', const [
-        'ls-remote',
-        '--tags',
-        'origin',
-      ], workingDirectory: root);
+      result = await (listing ?? listTags());
     } on Object catch (error) {
       return Inspection.unknown('origin tags could not be read: $error');
     }
@@ -111,6 +113,13 @@ class GitTag {
       evidence: {'version': latest.canonical},
     );
   }
+
+  /// Every tag origin has, with the commit each annotated tag peels to.
+  Future<ToolResult> listTags() => tools.run('git', const [
+    'ls-remote',
+    '--tags',
+    'origin',
+  ], workingDirectory: root);
 
   /// Whether origin's [tag] is the exact local tag object and source commit
   /// the caller expects.
@@ -264,6 +273,7 @@ class GitTag {
     required String? expectedManifestSha256,
     required bool requireSignature,
     List<String> sourcePaths = const [],
+    Future<ToolResult>? listing,
   }) async {
     if (!_isObjectId(expectedCommit) ||
         (expectedManifestSha256 != null &&
@@ -272,7 +282,7 @@ class GitTag {
         'could not read the expected release tag binding',
       );
     }
-    final remote = await _read(tag);
+    final remote = await _read(tag, listing: listing);
     if (remote.problem != null) return Inspection.unknown(remote.problem!);
     if (remote.direct == null) {
       return const Inspection.absent(detail: 'not on origin');
@@ -513,17 +523,19 @@ class GitTag {
     );
   }
 
-  Future<_RemoteTag> _read(String tag) async {
+  Future<_RemoteTag> _read(String tag, {Future<ToolResult>? listing}) async {
     final directRef = 'refs/tags/$tag';
     final peeledRef = '$directRef^{}';
     final ToolResult result;
     try {
-      result = await tools.run('git', [
-        'ls-remote',
-        'origin',
-        directRef,
-        peeledRef,
-      ], workingDirectory: root);
+      result =
+          await (listing ??
+              tools.run('git', [
+                'ls-remote',
+                'origin',
+                directRef,
+                peeledRef,
+              ], workingDirectory: root));
     } on Object catch (error) {
       return _RemoteTag(problem: 'origin could not be read: $error');
     }
@@ -531,7 +543,12 @@ class GitTag {
       return _RemoteTag(problem: 'origin could not be read: ${result.summary}');
     }
     return _RemoteTag.parse(
-      result.stdout,
+      [
+        for (final line in result.stdout.split('\n'))
+          if (line.trim().endsWith(directRef) ||
+              line.trim().endsWith(peeledRef))
+            line,
+      ].join('\n'),
       directRef: directRef,
       peeledRef: peeledRef,
     );
