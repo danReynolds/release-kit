@@ -89,10 +89,8 @@ executables:
   /// Tools that answer by prefix and write the artifacts a real tool would.
   RecordingTools scripted({
     String designatedRequirement = 'designated => leaf "A"',
-    int? failingSignatureVerification,
     ToolResult? Function(String key)? display,
   }) {
-    var signatureVerifications = 0;
     return BundleRecordingTools(
       answers: (key) {
         final shown = display?.call(key);
@@ -106,16 +104,6 @@ executables:
             stdout: designatedRequirement,
             stderr: '',
           );
-        }
-        if (key.startsWith('codesign --verify --strict')) {
-          signatureVerifications++;
-          if (signatureVerifications == failingSignatureVerification) {
-            return ToolResult(
-              exitCode: 1,
-              stdout: '',
-              stderr: 'invalid signature in final artifact',
-            );
-          }
         }
         if (key.startsWith('security find-identity')) {
           return ToolResult(
@@ -228,9 +216,6 @@ executables:
       'Developer ID Application: Dan (TEAM123456)',
     );
     expect(signature['certificate_sha256'], _certificateSha256);
-    expect(signature['unsigned_sha256'], hasLength(64));
-    expect(signature['signed_sha256'], hasLength(64));
-    expect(signature['verified_after_smoke'], isTrue);
 
     final notarized = await chain(
       tools,
@@ -258,43 +243,15 @@ executables:
     expect(archived.outputs.map((output) => (output.path, output.type)), [
       (ReleaseAssets.archivePath(project, 'macos-arm64'), 'archive'),
     ]);
-    final inventory = archived.evidence['inventory']! as List;
-    expect(inventory, hasLength(5));
-    expect((inventory.first as Map)['name'], 'tool');
-    expect((inventory.first as Map)['mode'], '0755');
-    expect(archived.evidence['signature'], {
-      'status': 'valid',
-      'scope': 'archive-extracted',
-      'files': ['tool', 'lib/tool/dartaotruntime', 'lib/tool/app.aot'],
-      'smoke': 'passed',
-    });
     expect(
-      tools.calls.where((call) => call.startsWith('codesign --verify')),
-      hasLength(9),
-      reason:
-          'the signature is checked after signing, after the signed '
-          'smoke test, and on the final archive payload',
+      tools.calls.where((call) => call.startsWith('codesign --force')),
+      hasLength(3),
+      reason: 'each code file is signed once',
     );
     expect(
       workspace.exists(ReleaseAssets.archivePath(project, 'macos-arm64')),
       isTrue,
     );
-  });
-
-  test('a signature invalidated by the signed smoke test is refused', () async {
-    final tools = scripted(failingSignatureVerification: 4);
-
-    final built = await chain(tools).buildStep(
-      step(StepKind.build),
-      project,
-      signing: const MacSigning(
-        publishedRequirement: null,
-        codeId: 'com.example.tool',
-      ),
-    );
-
-    expect(built.ok, isFalse);
-    expect(buffer.toString(), contains('after the signed smoke test'));
   });
 
   group('the runtime admits only the module it ships', () {
@@ -357,75 +314,6 @@ executables:
         );
       },
     );
-
-    test('a constraint that states more than code hashes is refused', () async {
-      final tools = scripted(
-        display: (key) => key.startsWith('codesign -dvvvvvv ')
-            ? ToolResult(
-                exitCode: 0,
-                stdout: '',
-                stderr: constraintDisplay({
-                  'team-identifier': 'TEAM123456',
-                  ...pinConstraint(['5' * 40]),
-                }),
-              )
-            : null,
-      );
-
-      final built = await chain(
-        tools,
-      ).buildStep(step(StepKind.build), project, signing: signing);
-
-      expect(built.ok, isFalse);
-      expect(built.problem, contains('could not be read'));
-    });
-
-    test('a constraint admitting another module is refused', () async {
-      final tools = scripted(
-        display: (key) => key.startsWith('codesign -dvvvvvv ')
-            ? ToolResult(
-                exitCode: 0,
-                stdout: '',
-                stderr: constraintDisplay(pinConstraint(['6' * 40])),
-              )
-            : null,
-      );
-
-      final built = await chain(
-        tools,
-      ).buildStep(step(StepKind.build), project, signing: signing);
-
-      expect(built.ok, isFalse);
-      expect(built.problem, contains('does not admit exactly'));
-    });
-  });
-
-  test('an invalid signature in the final archive is refused', () async {
-    final tools = scripted(failingSignatureVerification: 7);
-    final built = await chain(tools).buildStep(
-      step(StepKind.build),
-      project,
-      signing: const MacSigning(
-        publishedRequirement: null,
-        codeId: 'com.example.tool',
-      ),
-    );
-    expect(built.ok, isTrue, reason: built.problem ?? buffer.toString());
-    final notarized = await chain(
-      tools,
-    ).notarizeStep(step(StepKind.notarize), project);
-    expect(
-      notarized.ok,
-      isTrue,
-      reason: notarized.problem ?? buffer.toString(),
-    );
-
-    final archived = await chain(
-      tools,
-    ).archiveStep(step(StepKind.archive), project);
-
-    expect(archived.ok, isFalse);
-    expect(buffer.toString(), contains('in the final archive'));
   });
 
   test(

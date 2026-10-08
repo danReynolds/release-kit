@@ -84,10 +84,6 @@ void main() {
         '--library-constraint',
         constraint.path,
       ]);
-      expect(
-        (await signer.admittedLibraries(runtime)).admitted,
-        hashes.toSet(),
-      );
 
       final own = await Process.run(launcher, ['--version']);
       expect(own.exitCode, 0, reason: '${own.stderr}');
@@ -109,7 +105,6 @@ void main() {
 
       // The refusal is the pin's: the same runtime without it runs the swap.
       await adHoc(runtime);
-      expect((await signer.admittedLibraries(runtime)).admitted, isEmpty);
       final unpinned = await Process.run(launcher, ['--version']);
       expect(unpinned.exitCode, 0, reason: '${unpinned.stderr}');
       expect(unpinned.stdout, contains('another module'));

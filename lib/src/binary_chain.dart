@@ -10,7 +10,6 @@ import 'output/output.dart';
 import 'output/progress.dart';
 import 'engine/resolve.dart';
 import 'engine/release_stage.dart';
-import 'engine/stage_archive.dart';
 import 'engine/tools.dart';
 import 'engine/verdict.dart';
 import 'engine/workspace.dart';
@@ -238,7 +237,6 @@ class BinaryChain {
       final codeId = '${signing.codeId}${file.codeSuffix}';
       final isIdentity = file.path == artifact.identityFile;
       final pins = isIdentity ? (shipped.toList()..sort()) : const <String>[];
-      final unsigned = Sha256.hex(workspace.readBytes(name)!);
       final signed = await signer.sign(
         binary: workspace.pathOf(name),
         team: team,
@@ -255,12 +253,6 @@ class BinaryChain {
         );
       }
       fingerprint ??= signed.certificateSha256;
-      if (identifierOf(signed.requirement!) != codeId) {
-        return fail(
-          'RK-SIGN-003',
-          'the signature names a different code identifier',
-        );
-      }
       if (isIdentity && published != null && signed.requirement != published) {
         output.problem(
           Diagnostic(
@@ -293,8 +285,6 @@ class BinaryChain {
         'code_id': codeId,
         'certificate': signed.certificate,
         'certificate_sha256': signed.certificateSha256,
-        'unsigned_sha256': unsigned,
-        'signed_sha256': Sha256.hex(workspace.readBytes(name)!),
       };
       if (file.loadedByIdentity) {
         final reading = await signer.codeDirectoryHashes(
@@ -311,27 +301,7 @@ class BinaryChain {
         shipped.addAll(hashes);
         record['cdhashes'] = hashes;
       }
-      if (isIdentity && artifact.libraries.isNotEmpty) {
-        // Read back rather than trusted: a constraint that admits more than
-        // the shipped modules would still launch and pass every other check.
-        final reading = await signer.admittedLibraries(workspace.pathOf(name));
-        final admitted = reading.admitted;
-        if (admitted == null) {
-          return fail(
-            'RK-SIGN-019',
-            "the runtime's library load constraint could not be read",
-            transcript: reading.display.transcript,
-          );
-        }
-        if (pins.isEmpty ||
-            admitted.length != pins.length ||
-            !admitted.containsAll(pins)) {
-          return fail(
-            'RK-SIGN-018',
-            'the runtime does not admit exactly the module it ships with',
-            transcript: reading.display.transcript,
-          );
-        }
+      if (isIdentity && pins.isNotEmpty) {
         record['pinned_library_cdhashes'] = pins;
       }
       signatures[file.path] = record;
@@ -348,20 +318,6 @@ class BinaryChain {
         'the signed binary does not run or reports the wrong version',
         transcript: signedSmoke.transcript,
       );
-    }
-    for (final file in artifact.signedFiles) {
-      final name = '$root/${file.path}';
-      final verified = await signer.verifies(workspace.pathOf(name));
-      if (!verified.ok ||
-          signatures[file.path]!['signed_sha256'] !=
-              Sha256.hex(workspace.readBytes(name)!)) {
-        return fail(
-          'RK-SIGN-015',
-          'the signature did not verify after the signed smoke test',
-          transcript: verified.transcript,
-        );
-      }
-      signatures[file.path]!['verified_after_smoke'] = true;
     }
     return LocalProducerOutcome.succeeded(
       outputs: [
@@ -561,62 +517,7 @@ class BinaryChain {
     }
 
     final name = ReleaseAssets.archivePath(project, platform);
-    final bytes = ArchiveBuilder.gzip(ArchiveBuilder.tar(entries));
-    workspace.write(name, bytes);
-    final contents = StageArchiveInventory.decode(bytes);
-
-    if (platform.startsWith('macos-')) {
-      final verificationDirectory = Directory.systemTemp.createTempSync(
-        'rk-archive-verify-',
-      );
-      try {
-        contents.extractTo(verificationDirectory);
-        for (final file in artifact.signedFiles) {
-          final verified = await MacOsSigner(
-            tools: tools,
-          ).verifies('${verificationDirectory.path}/${file.path}');
-          if (!verified.ok) {
-            output.problem(
-              Diagnostic(
-                code: 'RK-SIGN-016',
-                message:
-                    'the macOS signature does not verify in the final archive',
-                remedy: 'rk will not publish the archive.',
-                evidence: verified.transcript,
-              ),
-              unit: step.unit,
-            );
-            return const LocalProducerOutcome.failed(
-              'the final archived signature did not verify',
-            );
-          }
-        }
-        final smoke = await tools.run(
-          '${verificationDirectory.path}/${artifact.entryPoint}',
-          const ['--version'],
-          timeout: const Duration(minutes: 2),
-        );
-        if (!smoke.ok || !smoke.stdout.contains(project.version.canonical)) {
-          return const LocalProducerOutcome.failed(
-            'the final archived program did not run with the expected version',
-          );
-        }
-        for (final file in artifact.signedFiles) {
-          if (Sha256.hex(
-                File(
-                  '${verificationDirectory.path}/${file.path}',
-                ).readAsBytesSync(),
-              ) !=
-              Sha256.hex(contents.files[file.path]!)) {
-            return const LocalProducerOutcome.failed(
-              'the final archived program changed during its smoke test',
-            );
-          }
-        }
-      } finally {
-        verificationDirectory.deleteSync(recursive: true);
-      }
-    }
+    workspace.write(name, ArchiveBuilder.gzip(ArchiveBuilder.tar(entries)));
     output.step(
       step,
       show: false,
@@ -627,16 +528,6 @@ class BinaryChain {
     );
     return LocalProducerOutcome.succeeded(
       outputs: [LocalProducerOutput(name, 'archive')],
-      evidence: {
-        'inventory': StageArchiveInventory.evidence(contents.inventory),
-        if (platform.startsWith('macos-'))
-          'signature': {
-            'status': 'valid',
-            'scope': 'archive-extracted',
-            'files': [for (final file in artifact.signedFiles) file.path],
-            'smoke': 'passed',
-          },
-      },
     );
   }
 

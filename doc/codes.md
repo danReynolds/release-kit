@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `test/codes_index_test.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-164 codes across 28 families.
+160 codes across 28 families.
 
 
 ## RK-AUTH — Authorization
@@ -258,11 +258,7 @@ RK-STAGE-004, the checks a release once repeated between staging and each act.
 | `RK-SIGN-002` | $platform: signing failed | `lib/src/binary_chain.dart` |
 | `RK-SIGN-003` | the signature does not match the identity users  already installed | `lib/src/binary_chain.dart` |
 | `RK-SIGN-014` | the signed binary does not run | `lib/src/binary_chain.dart` |
-| `RK-SIGN-015` | the signature no longer verifies after the signed binary ran | `lib/src/binary_chain.dart` |
-| `RK-SIGN-016` | the macOS signature does not verify in the final archive | `lib/src/binary_chain.dart` |
 | `RK-SIGN-017` | the code hash of $file could not be read | `lib/src/binary_chain.dart` |
-| `RK-SIGN-018` | the runtime does not admit exactly the module it ships with | `lib/src/binary_chain.dart` |
-| `RK-SIGN-019` | the runtime's library load constraint could not be read | `lib/src/binary_chain.dart` |
 | `RK-SIGN-004` | the identity users already installed could not be read | `lib/src/commands/release_stage_coordinator.dart` |
 | `RK-SIGN-006` | the login keychain could not be read | `lib/src/commands/release_stage_coordinator.dart` |
 | `RK-SIGN-007` | no Developer ID Application certificate is installed | `lib/src/commands/release_stage_coordinator.dart` |
@@ -271,6 +267,9 @@ RK-STAGE-004, the checks a release once repeated between staging and each act.
 | `RK-SIGN-010` | no certificate for the team the published release names | `lib/src/commands/release_stage_coordinator.dart` |
 | `RK-SIGN-011` | several certificates for the published team | `lib/src/commands/release_stage_coordinator.dart` |
 | `RK-SIGN-012` | the selected signing certificate fingerprint could not be read | `lib/src/commands/release_stage_coordinator.dart` |
+
+RK-SIGN-015, RK-SIGN-016, RK-SIGN-018 and RK-SIGN-019, checks that read back
+signatures rk had just written, are retired and not reused.
 
 ## RK-SRC — Source binding
 

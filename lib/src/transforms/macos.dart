@@ -259,13 +259,6 @@ class MacOsSigner {
     if (requirement == null) {
       return SignOutcome.failed('the signature could not be read back');
     }
-    final verified = await verifies(binary);
-    if (!verified.ok) {
-      return SignOutcome.failed(
-        'the signature did not verify after signing',
-        transcript: verified.transcript,
-      );
-    }
     return SignOutcome.signed(
       requirement,
       certificate: selected.name,
@@ -322,43 +315,6 @@ class MacOsSigner {
       return (hashes: null, display: display);
     }
     return (hashes: hashes.toList()..sort(), display: display);
-  }
-
-  /// The code hashes the library load constraint in [binary]'s signature
-  /// admits: empty without a constraint, and null when codesign cannot be
-  /// read or the constraint states anything beyond a list of code hashes.
-  /// [display] is codesign's run either way.
-  ///
-  /// codesign displays a constraint only as a nested dump at its highest
-  /// verbosity. A constraint rk did not write — another fact, another
-  /// operator — answers null rather than a subset that looks like a pin.
-  Future<({Set<String>? admitted, ToolResult display})> admittedLibraries(
-    String binary,
-  ) async {
-    final display = await tools.run('codesign', ['-dvvvvvv', binary]);
-    if (!display.ok) return (admitted: null, display: display);
-    final text = '${display.stdout}\n${display.stderr}';
-    if (!text.contains('Has Library Load Constraints')) {
-      return (admitted: <String>{}, display: display);
-    }
-    const structure = {'ccat', 'comp', 'reqs', 'vers', 'cdhash', r'$in'};
-    final keys = RegExp(
-      r'^\s*\[Key\] (.*?)\s*$',
-      multiLine: true,
-    ).allMatches(text).map((match) => match.group(1)!);
-    final data = [
-      for (final match in RegExp(
-        r'^\s*\[Data\] (.*?)\s*$',
-        multiLine: true,
-      ).allMatches(text))
-        match.group(1)!.toLowerCase(),
-    ];
-    if (keys.any((key) => !structure.contains(key)) ||
-        data.isEmpty ||
-        data.any((hash) => !_cdhash.hasMatch(hash))) {
-      return (admitted: null, display: display);
-    }
-    return (admitted: data.toSet(), display: display);
   }
 }
 

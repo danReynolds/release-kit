@@ -6,9 +6,9 @@ import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/transforms/digest.dart';
 
 /// Models compiler/copy/launcher outputs for release orchestration tests, and
-/// what codesign reports about the files it signed: identifiers, code hashes
-/// and embedded library load constraints. No platform executable runs. Real
-/// launcher and pinning behavior have separate tests.
+/// what codesign reports about the files it signed: identifiers and code
+/// hashes, which depend on any embedded library load constraint. No platform
+/// executable runs. Real launcher and pinning behavior have separate tests.
 ///
 /// A scripted result always wins, as [RecordingTools] promises. The model
 /// answers only the codesign displays nothing scripted.
@@ -97,7 +97,7 @@ class BundleRecordingTools extends RecordingTools {
   ToolResult? _display(String executable, List<String> arguments) {
     if (executable != 'codesign' || arguments.length != 2) return null;
     final [flag, path] = arguments;
-    if (flag != '-dvvv' && flag != '-dvvvvvv') return null;
+    if (flag != '-dvvv') return null;
     final file = File(path);
     if (!file.existsSync()) {
       return ToolResult(
@@ -114,15 +114,10 @@ class BundleRecordingTools extends RecordingTools {
         stderr: '$path: code object is not signed at all',
       );
     }
-    final constraint = signature.constraint;
     return ToolResult(
       exitCode: 0,
       stdout: '',
-      stderr: flag == '-dvvv'
-          ? 'CandidateCDHash sha256=${signature.cdhash}\n'
-          : constraint == null
-          ? 'CDHash=${signature.cdhash}\nSignature=fixture\n'
-          : constraintDisplay(constraint, cdhash: signature.cdhash),
+      stderr: 'CandidateCDHash sha256=${signature.cdhash}\n',
     );
   }
 }
@@ -144,44 +139,15 @@ final class _Signature {
     return _Signature._(
       digest,
       Sha256.hex(utf8.encode(signed)).substring(0, 40),
-      constraint,
     );
   }
-  _Signature._(this._digest, this.cdhash, this.constraint);
+  _Signature._(this._digest, this.cdhash);
 
   final String _digest;
   final String cdhash;
-  final Map<String, Object?>? constraint;
 
   bool covers(List<int> bytes) => Sha256.hex(bytes) == _digest;
 }
-
-/// The library load constraint rk writes to pin [hashes].
-Map<String, Object?> pinConstraint(List<String> hashes) => {
-  'cdhash': {
-    r'$in': [
-      for (final hash in hashes)
-        Uint8List.fromList([
-          for (var index = 0; index < hash.length; index += 2)
-            int.parse(hash.substring(index, index + 2), radix: 16),
-        ]),
-    ],
-  },
-};
-
-/// codesign's highest-verbosity display of a signature whose library load
-/// constraint is [constraint], laid out as macOS 26 prints it.
-String constraintDisplay(
-  Map<String, Object?> constraint, {
-  String cdhash = '1111111111111111111111111111111111111111',
-}) => [
-  'Library Load Constraints:',
-  '\tHas Library Load Constraints',
-  'CDHash=$cdhash',
-  'Signature=adhoc',
-  'Internal requirements count=0 size=12',
-  ..._render({'ccat': 0, 'comp': 1, 'reqs': constraint, 'vers': 1}, 1),
-].join('\n');
 
 List<String> _render(Object? value, int depth) {
   final indent = '\t' * depth;

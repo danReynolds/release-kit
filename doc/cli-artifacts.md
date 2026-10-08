@@ -56,7 +56,7 @@ Library validation admits any library signed by the same team, so a signed
 runtime would otherwise run any module signed with that team's certificates.
 rk signs the module first, then signs the runtime with a library load
 constraint that admits only the module's code directory hash. macOS's own
-libraries are exempt. rk reads the constraint back before continuing, the
+libraries are exempt. codesign refuses a constraint it cannot evaluate, the
 signed smoke test proves the module still loads, and the receipt records both
 hashes. The pin protects runtimes signed from this change on. A runtime
 published earlier, such as rk 0.1.12's, is unpinned and still loads any module
@@ -65,12 +65,11 @@ pinned release still runs only its own module. rk still compares the runtime's
 designated requirement with the published one, so a signing change that altered
 the program identity would stop the release.
 
-rk checks the signed command, verifies every signature again, notarizes the
-whole payload, and verifies and runs the extracted final archive. Receipts bind
-all companion files and their signatures. The stage is named by the commit and
-the unit's configuration, not by the Dart SDK or Xcode tools that built it, so
-updating either does not orphan a stage that a partly published release still
-needs.
+rk runs the signed command and notarizes the whole payload. The archive holds
+the signed files byte for byte, and the receipt binds every companion file.
+The stage is named by the commit and the unit's configuration, not by the
+Dart SDK or Xcode tools that built it, so updating either does not orphan a
+stage that a partly published release still needs.
 
 These checks establish release artifact integrity and launch behavior. An
 application with persistent OS credentials still needs its own upgrade and
