@@ -13,15 +13,6 @@ final class NativePackage {
   final String source;
   final String name;
 
-  factory NativePackage.fromJson(Object? value) {
-    final map = _nativeMap(value, {'ecosystem', 'source', 'name'});
-    return NativePackage(
-      ecosystem: _nativeText(map, 'ecosystem'),
-      source: _nativeText(map, 'source'),
-      name: _nativeText(map, 'name'),
-    );
-  }
-
   @override
   bool operator ==(Object other) =>
       other is NativePackage &&
@@ -108,23 +99,6 @@ final class NativeCandidate {
   final String project;
   final String producer;
 
-  factory NativeCandidate.fromJson(Object? value) {
-    final map = _nativeMap(value, {
-      'package',
-      'version',
-      'unit',
-      'project',
-      'producer',
-    });
-    return NativeCandidate(
-      package: NativePackage.fromJson(map['package']),
-      version: _nativeText(map, 'version'),
-      unit: _nativeText(map, 'unit'),
-      project: _nativeText(map, 'project'),
-      producer: _nativeText(map, 'producer'),
-    );
-  }
-
   Map<String, Object?> toJson() => {
     'package': package.toJson(),
     'version': version,
@@ -136,25 +110,6 @@ final class NativeCandidate {
 
 abstract interface class NativeDependencySemantics {
   bool accepts(NativeRequirement requirement, NativeCandidate candidate);
-}
-
-Map<String, Object?> _nativeMap(Object? value, Set<String> keys) {
-  if (value is! Map ||
-      value.length != keys.length ||
-      !value.keys.every(keys.contains)) {
-    throw const FormatException('invalid native identity fields');
-  }
-  return value.cast<String, Object?>();
-}
-
-String _nativeText(Map<String, Object?> map, String key) {
-  final value = map[key];
-  if (value is! String ||
-      value.isEmpty ||
-      value.contains(RegExp(r'[\x00-\x1f]'))) {
-    throw FormatException('invalid native identity $key');
-  }
-  return value;
 }
 
 /// A source-only choice. A candidate is taken from this repository's source
