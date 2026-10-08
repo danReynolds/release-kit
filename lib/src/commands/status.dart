@@ -148,7 +148,7 @@ class StatusCommand {
     if (!git.hasCommit) {
       output.line(
         'Source',
-        note: 'unbound · comparison unavailable',
+        note: 'no commit yet · commit to stage or release',
         depth: 1,
         labelWidth: 18,
         noteState: RuntimeState.attention,
@@ -159,23 +159,25 @@ class StatusCommand {
       _renderUnit(snapshot);
     }
 
-    final targetWarnings = [
-      for (final unit in snapshots)
-        for (final target in unit.targets)
-          for (final warning in target.historyWarnings)
-            (
-              unit: unit.unit.name,
-              target: target.expectation.step.id,
-              warning: warning,
-            ),
-    ];
-    if (targetWarnings.isNotEmpty) {
-      output.blank();
-      output.heading('Warnings');
-      for (final (:unit, :target, :warning) in targetWarnings) {
-        output.warning(warning, unit: unit, target: target, depth: 1);
+    for (final unit in snapshots) {
+      for (final target in unit.targets) {
+        for (final warning in target.historyWarnings) {
+          output.deferWarning(
+            warning,
+            unit: unit.unit.name,
+            target: target.expectation.step.id,
+          );
+        }
+      }
+      // What the stage found, such as Pub's validation warnings, is what
+      // `rk release` will list before it asks: said here first.
+      if (_workRemains(unit)) {
+        for (final (:target, :warning) in _stageWarnings(unit)) {
+          output.deferWarning(warning, unit: unit.unit.name, target: target);
+        }
       }
     }
+    output.flushWarnings();
     if (uniqueIssues.isNotEmpty) _renderIssues(uniqueIssues);
 
     if (uniqueIssues.isNotEmpty) {
@@ -192,6 +194,27 @@ class StatusCommand {
       output.blank();
       output.next(command);
     }
+  }
+
+  /// The warnings [unit]'s reusable stage recorded, each with the target
+  /// that found it.
+  List<({String? target, Diagnostic warning})> _stageWarnings(
+    StatusUnitSnapshot unit,
+  ) {
+    final stage = unit.stage;
+    if (stage == null || !stage.reusable) return const [];
+    final stages = {
+      for (final targetStage in inspector.targets.stages(
+        unit: unit.unit,
+        targets: unit.observed.targets,
+      ))
+        targetStage.contract.name: targetStage.target.step.id,
+    };
+    return [
+      for (final step in stage.receipt!.steps)
+        for (final warning in recordedTargetStageWarnings(step))
+          (target: stages[step.name], warning: warning),
+    ];
   }
 
   Future<StatusUnitSnapshot> _gather(
@@ -934,7 +957,7 @@ class StatusCommand {
           if (target.expectation.kind == 'pubDev')
             (
               target,
-              '${target.identity} source',
+              '${target.identity} package archive',
               staged ? ArtifactStatus.staged : ArtifactStatus.notStaged,
             )
           else if (target.artifacts.isNotEmpty)
