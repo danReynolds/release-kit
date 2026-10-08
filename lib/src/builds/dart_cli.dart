@@ -106,12 +106,18 @@ class DartCliBuilder {
       }
     }
 
-    if (!capability.canProve) {
+    // Another platform's binary runs in a container, when one answers.
+    final runtime =
+        capability.capability == Capability.native || !capability.canProve
+        ? null
+        : await capabilities.containerRuntime();
+    if (!capability.canProve ||
+        (capability.capability != Capability.native && runtime == null)) {
       // Built, and nothing here can run it. The absence of the proof is
       // carried forward rather than swallowed or treated as a failure.
       return BuildOutcome.built(
         output,
-        unproven: capability.reason ?? 'nothing here can run it',
+        unproven: capability.reason ?? noContainerRuntime,
       );
     }
 
@@ -119,7 +125,7 @@ class DartCliBuilder {
     final smoke = await _smokeTest(
       platform: platform,
       binary: output,
-      capability: capability,
+      runtime: runtime,
       expectedVersion: expectedVersion,
     );
     if (smoke != null) return smoke;
@@ -196,28 +202,20 @@ class DartCliBuilder {
   /// The strongest cheap signal that the right thing was built: a binary that
   /// prints the wrong version is one nobody should ship, and it is exactly
   /// what a stale artifact looks like.
+  /// [runtime] runs another platform's binary; null runs it here.
   Future<BuildOutcome?> _smokeTest({
     required String platform,
     required String binary,
-    required PlatformCapability capability,
+    required String? runtime,
     required String expectedVersion,
   }) async {
     final ToolResult result;
-    if (capability.capability == Capability.native) {
+    if (runtime == null) {
       result = await tools.run(binary, const [
         '--version',
       ], timeout: _smokeTimeout);
     } else {
       final target = _target(platform);
-      final runtime = capabilities.containerRuntime;
-      if (runtime == null) {
-        // Unreachable through the capability gate, and stated rather than
-        // assumed: the alternative is a null-check crash at the one step
-        // whose whole job is to prove the binary runs.
-        return const BuildOutcome.failed(
-          'no container runtime is available to run it',
-        );
-      }
       result = await tools.run(runtime, [
         'run',
         '--rm',

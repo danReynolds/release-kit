@@ -650,9 +650,8 @@ Future<int> _release(
     host: pubEndpoint.uri.authority,
     secure: pubEndpoint.uri.scheme == 'https',
   );
-  final capabilities = source.resolution.units.any((unit) => unit.shipsBinaries)
-      ? await HostCapabilities.detect()
-      : HostCapabilities.inspect();
+  // A container runtime is asked for only when a smoke test needs one.
+  final capabilities = HostCapabilities.detect();
   StageStoreLock? stageLock;
   try {
     try {

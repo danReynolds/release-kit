@@ -104,12 +104,12 @@ void main() {
           },
         );
 
-        final detected = await HostCapabilities.detect(
+        final detected = HostCapabilities.detect(
           tools: tools,
           runtimeProbeTimeout: const Duration(milliseconds: 125),
         );
 
-        expect(detected.containerRuntime, isNull);
+        expect(await detected.containerRuntime(), isNull);
         expect(tools.calls, ['docker info', 'podman info']);
         expect(tools.timeouts, everyElement(const Duration(milliseconds: 125)));
       },
@@ -118,7 +118,7 @@ void main() {
     test(
       'detection returns the optional runtime that actually answered',
       () async {
-        final detected = await HostCapabilities.detect(
+        final detected = HostCapabilities.detect(
           tools: RecordingTools(
             results: {
               'docker info': ToolResult(
@@ -131,7 +131,56 @@ void main() {
           ),
         );
 
-        expect(detected.containerRuntime, 'podman');
+        expect(await detected.containerRuntime(), 'podman');
+      },
+    );
+
+    test(
+      'a container runtime is asked for only when a smoke test needs one',
+      () async {
+        final tools = RecordingTools(
+          answers: (key) => key.contains('--version')
+              ? ToolResult(exitCode: 0, stdout: '2.0.0', stderr: '')
+              : null,
+        );
+        final host = HostCapabilities.detect(tools: tools);
+        final out = Directory.systemTemp.createTempSync('rk-lazy-probe-');
+        addTearDown(() => out.deleteSync(recursive: true));
+        Future<BuildOutcome> build(String platform) =>
+            DartCliBuilder(tools: tools, capabilities: host).build(
+              platform: platform,
+              entryPoint: 'bin/tool.dart',
+              output: '${out.path}/$platform/tool',
+              workingDirectory: '/repo',
+              expectedVersion: '2.0.0',
+            );
+
+        expect(host.resolve('linux-x64').canProduce, isTrue);
+        expect(tools.calls, isEmpty, reason: 'a reused stage builds nothing');
+
+        expect((await build(host.hostPlatform)).ok, isTrue);
+        expect(
+          tools.calls.where((call) => call.contains(' info')),
+          isEmpty,
+          reason: 'the host runs its own binary without a container',
+        );
+
+        final other = host.hostPlatform == 'linux-x64'
+            ? 'linux-arm64'
+            : 'linux-x64';
+        expect((await build(other)).ok, isTrue);
+        expect(
+          tools.calls.where((call) => call == 'docker info'),
+          hasLength(1),
+        );
+        expect(tools.calls.last, startsWith('docker run'));
+
+        await build(other);
+        expect(
+          tools.calls.where((call) => call == 'docker info'),
+          hasLength(1),
+          reason: 'one answer serves the whole run',
+        );
       },
     );
   });
