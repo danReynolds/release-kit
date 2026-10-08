@@ -279,39 +279,16 @@ final class ReleasePublicationCoordinator {
     }
   }
 
+  /// Stops before anything acts on [step], whose snapshot read refuses it.
   void haltForState(
     ResolvedUnit unit,
     Step step,
     Inspection state, {
     TargetPlan? target,
-    bool afterAct = false,
   }) {
-    // Targets own their recovery advice. The observed bytes remain in the
-    // step's JSON evidence, rather than taking the place of an action.
-    final diagnostic =
-        state.verdict == Verdict.conflict && target != null && !afterAct
-        ? inspector.targets
-              .moduleForTarget(target)
-              .diagnoseConflict(unit, target, state)
-        : Diagnostic(
-            code: afterAct ? 'RK-REL-003' : 'RK-REL-001',
-            message: '${step.summary}: ${state.detail ?? state.verdict.name}',
-            remedy: state.evidence.isEmpty
-                ? (state.verdict == Verdict.unknown
-                      ? 'the target could not be proven; fix the read and re-run'
-                      : null)
-                : state.evidence.entries
-                      .map((entry) => '${entry.key}: ${entry.value}')
-                      .join('\n'),
-          );
-    output.problem(diagnostic, unit: unit.name);
-    output.halt(
-      state.verdict == Verdict.conflict
-          ? (afterAct ? HaltKind.actedAndUnfixable : HaltKind.unfixableByRerun)
-          : afterAct
-          ? HaltKind.lostTrack
-          : HaltKind.beforeActing,
-    );
+    final refusal = _refusal(step, target, unit, state, acted: false);
+    output.problem(refusal.diagnostics.single, unit: unit.name);
+    output.halt(refusal.halt);
   }
 
   /// Asks once, for every unit, whether to publish what the snapshot found
@@ -641,7 +618,7 @@ final class ReleasePublicationCoordinator {
       releaseProgress.fail(target, activity: CommonProgressActivities.checking);
       return _PublicTargetCompletion.failed(
         step,
-        _inspectionFailure(step, target, unit, state),
+        _refusal(step, target, unit, state, acted: output.report.acted),
       );
     }
     final halt = output.report.acted
@@ -837,20 +814,21 @@ final class ReleasePublicationCoordinator {
     );
   }
 
-  /// A target read right before its act found something other than the
-  /// release missing. A conflict carries the target's own advice, as it
-  /// does when the snapshot finds it.
-  _PublicationFailure _inspectionFailure(
+  /// A read that found something other than the release missing: a
+  /// conflict carries the target's own advice; anything else says what was
+  /// read. [acted] is whether this run has already changed something public.
+  _PublicationFailure _refusal(
     Step step,
-    TargetPlan target,
+    TargetPlan? target,
     ResolvedUnit unit,
-    Inspection state,
-  ) {
-    final acted = output.report.acted;
+    Inspection state, {
+    required bool acted,
+  }) {
+    final conflict = state.verdict == Verdict.conflict;
     return _PublicationFailure(
       step: step,
       diagnostics: [
-        if (state.verdict == Verdict.conflict)
+        if (conflict && target != null)
           inspector.targets
               .moduleForTarget(target)
               .diagnoseConflict(unit, target, state)
@@ -859,19 +837,17 @@ final class ReleasePublicationCoordinator {
             code: 'RK-REL-001',
             message: '${step.summary}: ${state.detail ?? state.verdict.name}',
             remedy: state.evidence.isEmpty
-                ? 'the target could not be proven; fix the read and re-run'
+                ? (state.verdict == Verdict.unknown
+                      ? 'the target could not be proven; fix the read and re-run'
+                      : null)
                 : state.evidence.entries
                       .map((entry) => '${entry.key}: ${entry.value}')
                       .join('\n'),
           ),
       ],
-      halt: state.verdict == Verdict.conflict
-          ? acted
-                ? HaltKind.actedAndUnfixable
-                : HaltKind.unfixableByRerun
-          : acted
-          ? HaltKind.stoppedPartway
-          : HaltKind.beforeActing,
+      halt: conflict
+          ? (acted ? HaltKind.actedAndUnfixable : HaltKind.unfixableByRerun)
+          : (acted ? HaltKind.stoppedPartway : HaltKind.beforeActing),
     );
   }
 
