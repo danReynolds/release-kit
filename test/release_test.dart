@@ -2206,31 +2206,37 @@ publish = ["pub.dev"]
   });
 
   group('a project that signs its releases', () {
-    test(
-      'says so through tag.gpgSign, and gets a verified signature',
-      () async {
-        // The pub.dev leg has to settle for the run to finish, or the test
-        // would assert a verified signature on a release that never landed.
-        final registry = _MutableRegistry(<String>['0.1.0']);
-        final ran = await release(
-          state: _git(tagSigningRequested: true),
-          registry: registry,
-          onRun: (key) {
-            if (key == 'dart pub publish --from-archive <archive> --force') {
-              registry.goLive('0.2.0');
-              registry.archives['keybay@0.2.0'] = publishedBytes();
-            }
-          },
-        );
-        expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
-        expect(
-          ran.calls.firstWhere((c) => c.startsWith('git tag')),
-          contains('git tag -s'),
-        );
-        expect(ran.calls, contains('git verify-tag $_tagObject'));
-        expect(ran.text, contains('signed, verified'));
-      },
-    );
+    test('says so through tag.gpgSign, and git signs the tag', () async {
+      // The pub.dev leg has to settle for the run to finish, or the test
+      // would assert a signed tag on a release that never landed.
+      final registry = _MutableRegistry(<String>['0.1.0']);
+      final ran = await release(
+        state: _git(tagSigningRequested: true),
+        registry: registry,
+        // A machine that cannot check its own signature, as one without
+        // gpg.ssh.allowedSignersFile cannot, still releases: git signed it.
+        results: {
+          'git verify-tag $_tagObject': ToolResult(
+            exitCode: 1,
+            stdout: '',
+            stderr: 'error: gpg.ssh.allowedSignersFile needs to be configured',
+          ),
+        },
+        onRun: (key) {
+          if (key == 'dart pub publish --from-archive <archive> --force') {
+            registry.goLive('0.2.0');
+            registry.archives['keybay@0.2.0'] = publishedBytes();
+          }
+        },
+      );
+      expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+      expect(
+        ran.calls.firstWhere((c) => c.startsWith('git tag')),
+        contains('git tag -s'),
+      );
+      expect(ran.calls.where((c) => c.startsWith('git verify-tag')), isEmpty);
+      expect(ran.text, contains('signed, pushed'));
+    });
 
     test('refuses before acting when no signing key is configured', () async {
       final ran = await release(
@@ -2254,53 +2260,10 @@ publish = ["pub.dev"]
     });
 
     test(
-      'refuses a signature this machine cannot verify, naming the fix',
+      'a signed release history alone does not sign: git config decides',
       () async {
-        final ran = await release(
-          state: _git(tagSigningRequested: true),
-          registry: _MutableRegistry(<String>['0.1.0']),
-          results: {
-            'git verify-tag $_tagObject': ToolResult(
-              exitCode: 1,
-              stdout: '',
-              stderr:
-                  'error: gpg.ssh.allowedSignersFile needs to be '
-                  'configured and exist for ssh signature verification',
-            ),
-          },
-        );
-        expect(ran.exitCode, ExitCodes.refused);
-        expect(
-          ran.problems.map((problem) => problem['code']),
-          contains('RK-TAG-007'),
-        );
-        expect(ran.text, contains('signature could not be verified'));
-        expect(ran.text, contains('gpg.ssh.allowedSignersFile'));
-        // The refusal builds its diagnostic in publish and
-        // classifyUnconfirmedPublication builds the one that is reported: what
-        // git said has to survive the handover, not be attached to the
-        // diagnostic that is discarded.
-        final refusal = ran.problems.singleWhere(
-          (p) => p['code'] == 'RK-TAG-007',
-        );
-        expect(refusal['evidence'], isNotNull);
-        expect(
-          (ran.report['attachments'] as Map)[refusal['evidence']],
-          contains('allowedSignersFile'),
-        );
-        expect(
-          ran.calls.where((c) => c.startsWith('git push origin')),
-          isEmpty,
-          reason: 'an unverifiable signature is not published as signed',
-        );
-      },
-    );
-
-    test(
-      'a signed release history requires signing without any git config',
-      () async {
-        // tag.gpgSign lives in .git/config, which is not committed — a fresh
-        // clone would otherwise silently downgrade a project that always signed.
+        // As `git tag -a` does: tag.gpgSign signs, an earlier signed tag
+        // does not, and rk reads no earlier tag to find out.
         final ran = await release(
           state: _git(
             tags: const ['v0.1.0'],
@@ -2313,8 +2276,22 @@ publish = ["pub.dev"]
           signedExistingTags: const ['v0.1.0'],
           registry: _MutableRegistry(<String>['0.1.0']),
         );
-        expect(ran.exitCode, ExitCodes.refused);
-        expect(ran.text, contains('no signing key is configured'));
+        expect(
+          ran.problems.map((p) => p['code']),
+          isNot(contains('RK-TAG-005')),
+        );
+        expect(
+          ran.calls.firstWhere((c) => c.startsWith('git tag')),
+          contains('git tag -a'),
+        );
+        expect(
+          ran.calls,
+          isNot(
+            contains(
+              'git cat-file tag bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            ),
+          ),
+        );
       },
     );
 

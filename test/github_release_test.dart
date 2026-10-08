@@ -937,12 +937,13 @@ void main() {
         );
         expect(create, greaterThanOrEqualTo(0));
         expect(uploads, hasLength(2));
-        expect(reads, hasLength(3));
-        expect(create, lessThan(reads.first));
-        expect(reads.first, lessThan(uploads.first));
-        expect(uploads.last, lessThan(reads[1]));
-        expect(reads[1], lessThan(patch));
-        expect(patch, lessThan(reads.last));
+        // The draft is read once, after its last upload and before it is
+        // made public. What the PATCH did is read back by the release.
+        expect(reads, hasLength(1));
+        expect(create, lessThan(uploads.first));
+        expect(uploads.last, lessThan(reads.single));
+        expect(reads.single, lessThan(patch));
+        expect(patch, run.tools.calls.length - 1);
         for (final index in uploads) {
           final call = run.tools.calls[index];
           expect(
@@ -1005,8 +1006,8 @@ void main() {
           for (var i = 0; i < run.tools.calls.length; i++)
             if (run.tools.calls[i] == 'gh api repos/example/tool/releases/7') i,
         ];
-        expect(draftReads[1], greaterThan(uploads.first));
-        expect(draftReads[1], lessThan(uploads.last));
+        expect(draftReads.first, greaterThan(uploads.first));
+        expect(draftReads.first, lessThan(uploads.last));
       },
     );
 
@@ -1082,10 +1083,16 @@ void main() {
     );
 
     test(
-      'a lost final PATCH response reconciles by immutable release id',
+      'a lost final PATCH response is left to the release to read back',
       () async {
         final run = await publish(patchFails: true, failedPatchLands: true);
-        expect(run.outcome.ok, isTrue, reason: run.outcome.problem ?? '');
+        expect(run.outcome.ok, isFalse);
+        expect(run.outcome.mayHaveActed, isTrue);
+        expect(
+          run.tools.calls.last,
+          contains(' -X PATCH '),
+          reason: 'one read-back, by the release, settles it',
+        );
       },
     );
 

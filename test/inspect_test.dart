@@ -1094,10 +1094,7 @@ publish = ["git-tag", "pub.dev"]
       registry: FakeRegistry({}),
       git: gitWith(tags: localTags, tagObjects: tagObjects, signing: signing),
       tools: RecordingTools(
-        results: {
-          'git ls-remote --tags origin': remote,
-          ...additionalResults,
-        },
+        results: {'git ls-remote --tags origin': remote, ...additionalResults},
       ),
       repository: 'example/keybay',
     ).inspect(step, unit);
@@ -1207,42 +1204,44 @@ publish = ["git-tag", "pub.dev"]
     expect(state.verdict, Verdict.unknown);
   });
 
-  test('a configured tag remains non-exact when its signature fails without '
-      'a stage', () async {
-    final state = await inspectTag(
-      localTags: const ['v0.2.0'],
-      tagObjects: const {'v0.2.0': object},
-      signing: true,
-      remote: ToolResult(
-        exitCode: 0,
-        stdout:
-            '$object refs/tags/v0.2.0\n'
-            '$head refs/tags/v0.2.0^{}',
-        stderr: '',
-      ),
-      additionalResults: {
-        'git cat-file tag $object': ToolResult(
+  test(
+    'a signed tag this machine cannot verify is still the release: a '
+    'key that expired or lives elsewhere changes nothing published',
+    () async {
+      final state = await inspectTag(
+        localTags: const ['v0.2.0'],
+        tagObjects: const {'v0.2.0': object},
+        signing: true,
+        remote: ToolResult(
           exitCode: 0,
           stdout:
-              'object $head\n'
-              'type commit\n'
-              'tag v0.2.0\n'
-              'tagger Test <test@example.com> 0 +0000\n\n'
-              'core 0.2.0\n\n'
-              'release-manifest-sha256: $digest\n',
+              '$object refs/tags/v0.2.0\n'
+              '$head refs/tags/v0.2.0^{}',
           stderr: '',
         ),
-        'git verify-tag $object': ToolResult(
-          exitCode: 1,
-          stdout: '',
-          stderr: 'BAD signature',
-        ),
-      },
-    );
+        additionalResults: {
+          'git cat-file tag $object': ToolResult(
+            exitCode: 0,
+            stdout:
+                'object $head\n'
+                'type commit\n'
+                'tag v0.2.0\n'
+                'tagger Test <test@example.com> 0 +0000\n\n'
+                'core 0.2.0\n\n'
+                'release-manifest-sha256: $digest\n',
+            stderr: '',
+          ),
+          'git verify-tag $object': ToolResult(
+            exitCode: 1,
+            stdout: '',
+            stderr: 'error: key expired',
+          ),
+        },
+      );
 
-    expect(state.verdict, Verdict.conflict);
-    expect(state.detail, contains('signature could not be verified'));
-  });
+      expect(state.verdict, Verdict.exact, reason: state.detail);
+    },
+  );
 
   test('a known unsigned lightweight tag is not an exact release record '
       'without a stage', () async {

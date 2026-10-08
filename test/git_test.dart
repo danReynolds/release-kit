@@ -378,8 +378,6 @@ void main() {
 
     Future<({Inspection state, RecordingTools tools})> prove({
       String objectBytes = tagObject,
-      bool signed = true,
-      ToolResult? signature,
       String expectedCommit = commit,
       List<String> sourcePaths = const [],
       ToolResult? diff,
@@ -393,10 +391,6 @@ void main() {
             stdout: objectBytes,
             stderr: '',
           ),
-          if (signed)
-            'git verify-tag $object':
-                signature ??
-                ToolResult(exitCode: 0, stdout: 'Good', stderr: ''),
           if (diff != null)
             'git --literal-pathspecs diff-tree --quiet -r $commit^{commit} '
                     '$expectedCommit -- ${sourcePaths.join(' ')}':
@@ -466,16 +460,6 @@ void main() {
         expect(result.state.releasedFrom, commit);
       });
 
-      test('still needs its signature', () async {
-        final result = await prove(
-          expectedCommit: later,
-          sourcePaths: ['packages/tool'],
-          diff: exit(0),
-          signature: ToolResult(exitCode: 1, stdout: '', stderr: 'bad'),
-        );
-        expect(result.state.verdict, isNot(Verdict.exact));
-      });
-
       test('is a different source when no directory is named', () async {
         // As once this commit is staged: its bytes need a tag of its own.
         final result = await prove(expectedCommit: later);
@@ -487,34 +471,25 @@ void main() {
       });
     });
 
-    test(
-      'proves origin object, peel, manifest digest, and signature',
-      () async {
-        final result = await prove();
-        expect(result.state.verdict, Verdict.exact);
-        expect(
-          result.state.releasedFrom,
-          isNull,
-          reason: 'a tag on this commit is released from here',
-        );
-        expect(result.state.evidence['manifest sha256'], digest);
-        expect(result.state.evidence['signature'], 'verified');
-        expect(result.tools.calls, contains('git verify-tag $object'));
-      },
-    );
-
-    test(
-      'an intentionally unsigned annotated tag still binds the manifest',
-      () async {
-        final result = await prove(signed: false);
-        expect(result.state.verdict, Verdict.exact);
-        expect(result.state.evidence['signature'], 'not required');
-        expect(
-          result.tools.calls.where((call) => call.startsWith('git verify-tag')),
-          isEmpty,
-        );
-      },
-    );
+    test('proves origin object, peel, and manifest digest', () async {
+      final result = await prove();
+      expect(result.state.verdict, Verdict.exact);
+      expect(
+        result.state.releasedFrom,
+        isNull,
+        reason: 'a tag on this commit is released from here',
+      );
+      expect(result.state.evidence, {
+        'tag object': object,
+        'source commit': commit,
+        'manifest sha256': digest,
+      });
+      expect(
+        result.tools.calls.where((call) => call.startsWith('git verify-tag')),
+        isEmpty,
+        reason: 'git checked the signature when it signed',
+      );
+    });
 
     test('a different manifest binding is a public conflict', () async {
       final result = await prove(
@@ -541,19 +516,9 @@ void main() {
         expect(result.state.evidence['released source commit'], commit);
         expect(result.state.evidence['current source commit'], current);
         expect(result.state.evidence['manifest sha256'], digest);
-        expect(result.state.evidence['signature'], 'verified');
         expect(result.tools.calls, contains('git cat-file tag $object'));
-        expect(result.tools.calls, contains('git verify-tag $object'));
       },
     );
-
-    test('a promised signature must verify on the remote object id', () async {
-      final result = await prove(
-        signature: ToolResult(exitCode: 1, stdout: '', stderr: 'BAD signature'),
-      );
-      expect(result.state.verdict, Verdict.conflict);
-      expect(result.state.evidence['signature'], contains('BAD signature'));
-    });
   });
 
   test(
@@ -673,7 +638,6 @@ void main() {
         'tag object': tagObject,
         'source commit': sourceCommit,
         'manifest sha256': manifestDigest,
-        'signature': 'not required',
       });
 
       expectOk(

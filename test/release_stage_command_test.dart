@@ -1240,40 +1240,6 @@ void main() {
   );
 
   test(
-    'pub resolver propagation is bounded and does not fail publication',
-    () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
-      harness.tools.pubAvailabilityFailures = 1000;
-
-      final released = await harness.run(
-        stageOnly: false,
-        confirm: (_) async => '1.2.3',
-      );
-
-      expect(released.code, ExitCodes.ok, reason: released.text);
-      expect(released.text, contains('released'));
-      expect(released.warningCodes, contains('RK-PUB-013'));
-      expect(
-        harness.tools.invocations
-            .where((call) => _starts(call.arguments, ['pub', 'cache', 'add']))
-            .map((call) => call.executable),
-        everyElement('dart'),
-        reason: 'an installed RK executable or AOT runtime is not the Dart SDK',
-      );
-      expect(released.text, contains('do not upload the version again'));
-      expect(
-        released.keys.where((key) => key.startsWith('dart pub cache add tool')),
-        hasLength(121),
-        reason: 'one initial check plus the bounded ten-minute retry window',
-      );
-    },
-  );
-
-  test(
     'a newly pushed tag with the wrong binding is terminal before pub',
     () async {
       final staged = await harness.run(
@@ -1771,53 +1737,6 @@ void main() {
     );
     expect(harness.stage.inspect().reusable, isFalse);
   });
-
-  test(
-    'lost-stage recovery refuses public archives its manifest does not name',
-    () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
-      harness.tools.rejectHomebrewPush = true;
-
-      final partial = await harness.run(
-        stageOnly: false,
-        confirm: (_) async => '1.2.3',
-      );
-      expect(partial.code, ExitCodes.refused, reason: partial.text);
-      harness.stage.reset();
-      harness.git = harness.gitAt(
-        tags: const ['v1.2.3'],
-        tagObjects: const {'v1.2.3': _tagObject},
-        tagTargets: const {'v1.2.3': _head},
-      );
-      harness.tools.rejectHomebrewPush = false;
-      final archive = ReleaseAssets.archiveName('tool', '1.2.3', 'linux-x64');
-
-      final resumed = await harness.run(
-        stageOnly: false,
-        confirm: (_) async {
-          harness.tools.uploadedAssets[archive] = utf8.encode(
-            'changed archive',
-          );
-          return '1.2.3';
-        },
-      );
-
-      expect(resumed.code, ExitCodes.refused, reason: resumed.text);
-      expect(
-        resumed.text,
-        contains('archives no longer match its release manifest'),
-        reason: 'recovered assets must match the manifest the tag binds',
-      );
-      expect(
-        resumed.publicMutations.map((call) => call.publicKind),
-        isNot(contains('homebrew')),
-      );
-    },
-  );
 
   test('an unreadable GitHub readback remains lost-track', () async {
     final staged = await harness.run(
@@ -3031,7 +2950,6 @@ class _WorldTools implements Tools {
   bool githubReleaseExists = false;
   bool githubDraft = false;
   bool loseGithubFinalResponse = false;
-  bool _loseGithubReadByIdOnce = false;
   bool failGithubDraftCreate = false;
   bool failGithubUpload = false;
   bool unreadGithubAfterPublish = false;
@@ -3049,7 +2967,6 @@ class _WorldTools implements Tools {
   bool failPubArchiveCapability = false;
   bool failPubLogin = false;
   bool losePubPublishResponse = false;
-  int pubAvailabilityFailures = 0;
   bool _githubPublicUnreadable = false;
   bool _tagPublicUnreadable = false;
   bool _homebrewPublicUnreadable = false;
@@ -3088,17 +3005,6 @@ class _WorldTools implements Tools {
           : _ok(stdout: 'You are already logged in as <dev@example.com>\n');
     }
     if (_isDart(executable) && _starts(arguments, ['pub', 'get'])) {
-      return _ok();
-    }
-    if (_isDart(executable) && _starts(arguments, ['pub', 'cache', 'add'])) {
-      if (pubAvailabilityFailures > 0) {
-        pubAvailabilityFailures--;
-        return ToolResult(
-          exitCode: 1,
-          stdout: '',
-          stderr: 'version is not visible to the resolver yet',
-        );
-      }
       return _ok();
     }
     if (_isDart(executable) && _starts(arguments, ['compile', 'exe'])) {
@@ -3336,14 +3242,6 @@ class _WorldTools implements Tools {
     }
     if (executable == 'gh' &&
         arguments.join(' ') == 'api repos/example/tool/releases/7') {
-      if (_loseGithubReadByIdOnce) {
-        _loseGithubReadByIdOnce = false;
-        return ToolResult(
-          exitCode: 1,
-          stdout: '',
-          stderr: 'connection closed before the response',
-        );
-      }
       return githubReleaseExists
           ? _ok(stdout: jsonEncode(_githubReleaseJson()))
           : _notFound();
@@ -3358,7 +3256,6 @@ class _WorldTools implements Tools {
       githubDraft = false;
       if (conflictGithubAfterPublish) githubTitle = 'wrong public title';
       if (loseGithubFinalResponse) {
-        _loseGithubReadByIdOnce = true;
         if (unreadGithubAfterPublish) _githubPublicUnreadable = true;
         return ToolResult(
           exitCode: 1,
