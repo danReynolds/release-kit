@@ -197,8 +197,9 @@ class Report {
       _warnings.any((warning) => warning['unit'] == unit);
 
   /// Stable warning facts disclosed to this unit, including repository-wide
-  /// warnings. Evidence is its content, not an attachment's incidental name.
-  /// Repeated rendering does not grow consent; changed warning content does.
+  /// warnings, for the disclosure that travels with the yes. Each distinct
+  /// fact is listed once; evidence is its content, not an attachment's
+  /// incidental name.
   List<Map<String, Object?>> warningEvidenceFor(String unit) {
     final unique = <String, Map<String, Object?>>{};
     for (final warning in _warnings) {

@@ -16,7 +16,7 @@ class HomebrewFormula {
   /// Renders rk's complete formula for one GitHub-hosted release.
   ///
   /// Target adapters supply only release facts. Provider presentation stays
-  /// here so staging, validation, and lost-stage recovery cannot drift.
+  /// here so staging and lost-stage recovery cannot drift.
   static String renderRelease({
     required String className,
     required String version,

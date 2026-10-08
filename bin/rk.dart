@@ -142,8 +142,8 @@ Runs configured builds, signing, notarization, and package checks.
 May contact private services; does not ask for publication approval.
 
 $_unitHelp
-Omit the unit to prepare the whole repository in dependency order.
-A named unit may use a verified sibling stage or published dependencies.
+Omit the unit to prepare the whole repository; units build side by side.
+A named unit takes a sibling not yet on pub.dev from the same commit.
 Naming a unit never builds other units. No publication is performed.
 --timings print how long each phase and step took, once the run ends,
           and write it to .rk/timings.json as a trace
@@ -914,9 +914,7 @@ Future<int> _plan(Output output, String? unit) async {
 /// target is valid topology even when this directory has no Git identity.
 /// Readiness belongs to status and release. Like release, a clean repository
 /// with a commit resolves from immutable HEAD while a dirty, unborn, or
-/// unbound repository gets one double-read byte snapshot. Bound Git identity
-/// is re-read before returning so topology and its displayed branch/commit
-/// cannot come from two moments.
+/// unbound repository gets one byte snapshot. Git is read once.
 Future<_Prepared> _selectPlanSource(
   SourceContext context,
   Output output,

@@ -421,6 +421,40 @@ void main() {
     },
   );
 
+  test('a unit keeps one stage of a source with no commit', () async {
+    // No later run can reuse it, so each run's stage replaces the last.
+    final unbound = _Harness(unbound: true);
+    addTearDown(unbound.close);
+    List<FileSystemEntity> stages() =>
+        Directory('${unbound.root.path}/.rk/work/stages').listSync();
+
+    // Declined each time, so each run stages and publishes nothing.
+    final first = await unbound.run(
+      stageOnly: false,
+      confirm: (_) async => 'no',
+    );
+    expect(first.problemCodes, ['RK-AUTH-002'], reason: first.text);
+    expect(stages(), hasLength(1));
+    final earlier = stages().single.path;
+
+    // A new process: its stages resolve afresh.
+    unbound.stages = ReleaseStages(
+      source: unbound.source,
+      git: unbound.git,
+      stageContracts: TargetCatalog.builtIn().stageContractResolver(
+        unbound.resolution,
+      ),
+      repositoryRoot: unbound.root.path,
+    );
+    final second = await unbound.run(
+      stageOnly: false,
+      confirm: (_) async => 'no',
+    );
+    expect(second.problemCodes, ['RK-AUTH-002'], reason: second.text);
+    expect(stages(), hasLength(1));
+    expect(stages().single.path, isNot(earlier));
+  });
+
   test('a dirty registry-only snapshot warns and still releases', () async {
     final unbound = _Harness(unbound: true);
     addTearDown(unbound.close);

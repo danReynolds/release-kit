@@ -213,6 +213,7 @@ final class ReleaseStageCoordinator {
         'Staging a temporary source snapshot; each run starts a new stage.',
         role: VisualRole.secondary,
       );
+      stage.discardEarlierUnboundStages();
     } else if (inspected.claimsCompletion) {
       output.say(
         'Rebuilding: the recorded stage no longer verifies.',
@@ -281,7 +282,6 @@ final class ReleaseStageCoordinator {
     }
     final laneSources = <String, ProducerLaneSource>{};
     final laneChains = <String, BinaryChain>{};
-    final activeTargets = <PublishTarget>{};
     final failures = <HaltKind>[];
 
     void record(StageStep recorded) {
@@ -435,8 +435,6 @@ final class ReleaseStageCoordinator {
             .where(runnable.contains)
             .toList();
         for (final name in ready) {
-          final target = targetStagesByName[name]?.target.target;
-          if (target != null && !activeTargets.add(target)) continue;
           active[name] = runWork(name);
         }
         if (active.isEmpty && ready.isEmpty) {
@@ -451,8 +449,6 @@ final class ReleaseStageCoordinator {
       if (active.isEmpty) break;
       final result = await Future.any(active.values);
       active.remove(result.producer);
-      final target = targetStagesByName[result.producer]?.target.target;
-      if (target != null) activeTargets.remove(target);
       if (result.halt case final halt?) {
         failures.add(halt);
       } else {

@@ -19,9 +19,9 @@ class StageIdentity {
     required this.runId,
   });
 
-  /// Canonicalizes [resolvedPlan] before hashing it. The caller must include
-  /// every release-affecting choice in that value, including targets,
-  /// platforms, signing policy, and toolchain identity.
+  /// Canonicalizes [resolvedPlan] before hashing it: what the stage is built
+  /// from beyond the commit's bytes, the unit's configuration and its origin
+  /// (see `stagePlanFor`). The tools that build it are left out.
   factory StageIdentity.forPlan({
     required String headCommit,
     required String headTree,

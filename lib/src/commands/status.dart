@@ -828,15 +828,13 @@ class StatusCommand {
     Step step,
     Inspection state,
   ) {
-    final declaring = _declaring(step);
     return StatusIssue(
       unit: unit.name,
       diagnostic: Diagnostic(
         code: 'RK-REL-001',
         message: '${step.summary}: ${_condition(state)}',
-        remedy: declaring != null && state.isAbsent
-            ? 'publish the prerequisite first: '
-                  'rk release ${declaring.unitName}'
+        remedy: state.isAbsent
+            ? 'publish it first, then run rk status ${unit.name} again'
             : 'restore read access to the prerequisite, then run '
                   'rk status ${unit.name} again',
       ),
@@ -1359,10 +1357,10 @@ bool _workRemains(StatusUnitSnapshot snapshot) =>
 /// Whether this release still needs a private binary stage.
 ///
 /// A binary is a selected local output until an exact public target binds all
-/// of its archives. Once that happens, losing a compiler-specific stage does
-/// not turn a completed release back into unfinished local work. This stays
-/// data-driven: the destination's artifact inventory establishes the binding,
-/// so status does not need to know which target kind published the bytes.
+/// of its archives. Once that happens, losing its stage does not turn a
+/// completed release back into unfinished local work. This stays data-driven:
+/// the destination's artifact inventory establishes the binding, so status
+/// does not need to know which target kind published the bytes.
 bool _localBinaryWorkRemains({
   required ResolvedUnit unit,
   required Iterable<TargetObservation> targets,

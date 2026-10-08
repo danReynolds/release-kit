@@ -370,7 +370,9 @@ class GitState {
       // A configured signing key, whether SSH or GPG. Inferring one from a
       // commit-signing *preference* would answer a different question, and
       // still would not prove a key exists — so rk claims only what git
-      // states, and signs or does not accordingly.
+      // states. Whether a release tag is signed comes from tag.gpgSign and
+      // the release history; this lets rk refuse (RK-TAG-005) when signing
+      // is required and no key is set.
       signingConfigured: text(answers[4]).isNotEmpty,
       tagSigningRequested: text(answers[10]) == 'true',
       originUrl: _originSlug(text(answers[9])),

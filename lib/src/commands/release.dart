@@ -439,9 +439,8 @@ class ReleaseCommand {
   }
 
   Future<_InspectedUnit?> _inspectRelease(ResolvedUnit unit) async {
-    // The machine surface carries the same identity facts on every verb:
-    // doc/json.md promises repository and the unit's version and tag, and
-    // the production-alpha retry checkpoint reads both from this document.
+    // The machine surface carries the same identity facts on every verb, as
+    // doc/json.md promises: repository, and the unit's version and tag.
     output.report.unit(
       name: unit.name,
       version: unit.version.canonical,
@@ -981,10 +980,10 @@ class ReleaseCommand {
       });
 
   /// Whether a partial public release needs the exact stage it no longer has.
-  /// Built assets or an exact configured unit tag make the original stage
-  /// recovery-critical. A public package alone does not establish that its
-  /// siblings were previously staged. Unread destinations cannot authorize
-  /// reconstruction once unit-level release progress is established.
+  /// Only built release assets make the original stage recovery-critical; a
+  /// unit without them, or a pub.dev package, stages again from its commit.
+  /// Unread destinations cannot authorize reconstruction once unit-level
+  /// release progress is established.
   bool _needsLostStage(
     ResolvedUnit unit,
     StageInspection stageInspection,

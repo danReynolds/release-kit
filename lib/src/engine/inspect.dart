@@ -198,8 +198,8 @@ class Inspector {
   /// Exact-coordinate inspection answers whether this version exists. It
   /// cannot answer whether a newer version exists elsewhere in the same lane:
   /// a shallow checkout can truthfully find `v1.0.0` absent while origin is
-  /// already at `v2.0.0`. Release calls this before private production and
-  /// again immediately before authorization.
+  /// already at `v2.0.0`. Release calls this once, in the snapshot it takes
+  /// before staging.
   ///
   /// Targets decide whether their latest-version read is a meaningful guard.
   /// Homebrew, for example, authenticates its public formula bytes during its

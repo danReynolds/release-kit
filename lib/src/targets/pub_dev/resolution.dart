@@ -66,10 +66,11 @@ ResolutionPackages resolutionPackages(String sourceRoot, String directory) {
   return (packages: packages, unreadable: null);
 }
 
-/// The packages `dart pub get` reports it overrode, from its [output]: a
-/// `!` line for each, such as `! leaf 9.9.9 from path ../fork (overridden)`.
-/// Pub prints these only in a full report, which `PUB_SUMMARY_ONLY` turns
-/// off, so the stage runs it with that set to `0`.
+/// The packages Pub reports it overrode while `dart pub publish --to-archive`
+/// resolves, from its [output]: a `!` line for each, such as
+/// `! leaf 9.9.9 from path ../fork (overridden)`. Pub prints these only in a
+/// full report, which `PUB_SUMMARY_ONLY` turns off, so the stage runs it with
+/// that set to `0`.
 Set<String> reportedOverrides(String output) => {
   for (final match in RegExp(
     r'^! (\S+) .*\(overridden',

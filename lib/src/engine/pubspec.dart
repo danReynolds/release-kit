@@ -97,7 +97,8 @@ class Pubspec {
 
   /// The native publication endpoint after repository and ambient Dart
   /// configuration are applied. Kept out of reports because URLs may carry
-  /// credentials; stage identity hashes it and release compares it opaquely.
+  /// credentials; the pub.dev target's readiness check compares it with its
+  /// endpoint (`RK-PUB-009`).
   String effectivePublishDestination(Map<String, String> environment) =>
       canonicalPublishDestination(
         publishTo ?? environment['PUB_HOSTED_URL'] ?? 'https://pub.dev',

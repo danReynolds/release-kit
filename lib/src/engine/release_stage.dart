@@ -222,6 +222,34 @@ class ReleaseStage {
     }
   }
 
+  /// Removes this unit's earlier stages of a source with no commit. Each such
+  /// run starts a stage no later run can reuse, so the one before it is
+  /// garbage once this one begins.
+  void discardEarlierUnboundStages() {
+    if (directory.identity.isGitBound) return;
+    final store = StageStore(directory.repositoryRoot);
+    for (final entry in store.inventory()) {
+      if (entry.name == directory.identity.id ||
+          entry.type != FileSystemEntityType.directory) {
+        continue;
+      }
+      try {
+        final receipt = StageReceipt.parse(
+          File(store.receiptPath(entry.name)!).readAsStringSync(),
+        );
+        final planned = receipt.plan?['unit'];
+        if (receipt.identity.isGitBound ||
+            planned is! Map ||
+            planned['name'] != unit.name) {
+          continue;
+        }
+        store.deleteEntry(entry);
+      } on Object {
+        // Not a stage rk can read as this unit's; rk clean shows it.
+      }
+    }
+  }
+
   /// Removes declared producer outputs that were written but never recorded,
   /// so the producer can run again. It never adopts bytes and never follows
   /// a symlink.

@@ -14,9 +14,8 @@ import 'client.dart';
 
 /// Homebrew's formula-rendering contribution to the reusable release stage.
 ///
-/// The contract binds the generated formula to the exact archive receipts. Its
-/// validator and producer use the same renderer so resumability cannot accept
-/// a formula that a fresh stage would not produce.
+/// It runs after the archives it names and renders the formula from the
+/// digests their receipts record, with the renderer lost-stage recovery uses.
 TargetStage homebrewFormulaStage({
   required ResolvedUnit unit,
   required TargetPlan target,

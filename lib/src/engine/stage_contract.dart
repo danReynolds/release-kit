@@ -268,11 +268,10 @@ bool _isPrefix(List<String> prefix, List<String> whole) =>
       (index) => prefix[index] == whole[index],
     ).every((same) => same);
 
-/// Gaps are safe because every step that depends on another names it among
-/// its inputs: a recorded step whose producer is missing fails the
-/// inspector's causal check, and a stale input digest fails its comparison.
-/// A step that depends on none declares no inputs; the receipt's identity
-/// binds it to its source.
+/// Gaps are safe because rk records a producer only after the producers it
+/// depends on were recorded, and trusts its own writes; every recorded output
+/// is checked before an interrupted stage resumes. A step that depends on
+/// none declares no inputs; the receipt's identity binds it to its source.
 bool _isOrderedSubsequence(List<String> names, List<String> whole) {
   var at = 0;
   for (final name in names) {

@@ -566,9 +566,8 @@ class GitTag {
   Future<ToolResult> verifySignature(String object) =>
       tools.run('git', ['verify-tag', object], workingDirectory: root);
 
-  /// Creates the tag locally, signed when the repository has a key.
   /// Creates the annotated tag [tag] on [commit], never on whatever HEAD is
-  /// by the time the release reaches this step.
+  /// by the time the release reaches this step; signed when [signed] says so.
   Future<ToolResult> create(
     String tag, {
     required String commit,
