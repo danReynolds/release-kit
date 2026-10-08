@@ -798,8 +798,33 @@ class Output {
     _progressBoard?.yieldToProse();
   }
 
+  /// Runs [body] holding back its halts, then says the most serious once.
+  /// Work running side by side stops together, rather than one halt landing
+  /// among the others' progress.
+  Future<T> holdingHalts<T>(Future<T> Function() body) async {
+    _holdingHalts++;
+    try {
+      return await body();
+    } finally {
+      if (--_holdingHalts == 0) {
+        final held = _heldHalt;
+        _heldHalt = null;
+        if (held != null) halt(held);
+      }
+    }
+  }
+
+  var _holdingHalts = 0;
+  HaltKind? _heldHalt;
+
   /// The plain sentence that opens every halt, before any verdict noun.
   void halt(HaltKind kind) {
+    if (_holdingHalts > 0) {
+      final held = _heldHalt;
+      // The kinds are declared in order of seriousness.
+      if (held == null || kind.index > held.index) _heldHalt = kind;
+      return;
+    }
     // A later unit can fail before its own first act after an earlier unit in
     // the same repository command already published. The report is for the
     // whole invocation, so "nothing changed" would be false.

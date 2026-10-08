@@ -148,13 +148,28 @@ final class StageReleaseProgress {
     Output output, {
     required String title,
     required this.board,
-  }) : live = output.progressBoard(title, emitSlowToNonTerminal: true) {
+  }) : live = output.progressBoard(title, emitSlowToNonTerminal: true),
+       _owned = true {
+    _addRows(null);
+  }
+
+  /// One unit's rows on a board several units share, each group named for
+  /// [unit]. The board's owner settles it; this only fills the rows.
+  StageReleaseProgress.shared(
+    this.live, {
+    required this.board,
+    required String unit,
+  }) : _owned = false {
+    _addRows(unit);
+  }
+
+  void _addRows(String? unit) {
     for (final group in board.groups) {
       for (final row in group.rows) {
         _controllers[row] = live.addRow(
           id: row.id,
           label: row.name,
-          group: group.label,
+          group: unit == null ? group.label : '$unit · ${group.label}',
         );
       }
     }
@@ -162,6 +177,7 @@ final class StageReleaseProgress {
 
   final StageBoard board;
   final LiveProgress live;
+  final bool _owned;
   final Map<StageBoardRow, ProgressRowController> _controllers = {};
   final Map<String, StageStep> _recorded = {};
 
@@ -242,9 +258,24 @@ final class StageReleaseProgress {
     }
   }
 
-  void conclude() => live.conclude();
+  void conclude() {
+    if (_owned) live.conclude();
+  }
 
-  void discard() => live.discard();
+  /// Ends this unit's part without producing anything. On a shared board
+  /// its rows say they were not attempted.
+  void discard() {
+    if (_owned) {
+      live.discard();
+      return;
+    }
+    for (final controller in _controllers.values) {
+      if (controller.state == ProgressRowState.pending ||
+          controller.state == ProgressRowState.active) {
+        controller.notAttempted();
+      }
+    }
+  }
 
   void concludeStopped() {
     for (final group in board.groups) {
@@ -255,8 +286,10 @@ final class StageReleaseProgress {
         }
       }
     }
-    live.conclude();
+    if (_owned) live.conclude();
   }
 
-  void settle({String? title}) => live.settle(title: title);
+  void settle({String? title}) {
+    if (_owned) live.settle(title: title);
+  }
 }

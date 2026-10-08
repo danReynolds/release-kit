@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -191,10 +192,14 @@ class Ran {
 }
 
 final class _InteractiveTrackingTools implements Tools {
-  _InteractiveTrackingTools(this.delegate, this.onInteractive);
+  _InteractiveTrackingTools(this.delegate, this.onInteractive, this.gate);
 
   final RecordingTools delegate;
   final void Function(String key)? onInteractive;
+
+  /// Awaited before a command answers, so a test can hold it open or make
+  /// it fail.
+  final Future<void> Function(String key, String? workingDirectory)? gate;
 
   @override
   Future<ToolResult> run(
@@ -203,13 +208,20 @@ final class _InteractiveTrackingTools implements Tools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
-  }) => delegate.run(
-    executable,
-    arguments,
-    workingDirectory: workingDirectory,
-    environment: environment,
-    timeout: timeout,
-  );
+  }) async {
+    final result = await delegate.run(
+      executable,
+      arguments,
+      workingDirectory: workingDirectory,
+      environment: environment,
+      timeout: timeout,
+    );
+    await gate?.call(
+      _normalizedPubKey('$executable ${arguments.join(' ')}'),
+      workingDirectory,
+    );
+    return result;
+  }
 
   @override
   Future<int> runInteractive(
@@ -239,6 +251,7 @@ Future<Ran> release({
   void Function(String key)? onInteractive,
   void Function()? onConfirm,
   ToolResult? Function(String key)? answers,
+  Future<void> Function(String key, String? workingDirectory)? gate,
   Iterable<String> onRemote = const [],
   Iterable<String> signedExistingTags = const [],
   String config = _config,
@@ -403,7 +416,7 @@ Future<Ran> release({
       onRun?.call(_normalizedPubKey(key));
     },
   );
-  final recorder = _InteractiveTrackingTools(recording, onInteractive);
+  final recorder = _InteractiveTrackingTools(recording, onInteractive, gate);
 
   final effectiveRegistry =
       registry ??
@@ -780,6 +793,57 @@ publish = ["pub.dev"]
         },
       );
     }
+
+    test('stages its units side by side', () async {
+      // Each unit's package archive is held until both have started: one
+      // after the other, the first would wait forever.
+      final started = <String>[];
+      final both = Completer<void>();
+      final staged = await release(
+        only: null,
+        config: config,
+        source: source(),
+        registry: world().registry,
+        dryRun: true,
+        gate: (key, _) async {
+          if (key != 'dart pub publish --to-archive <archive>') return;
+          started.add(key);
+          if (started.length == 2) both.complete();
+          await both.future.timeout(const Duration(seconds: 10));
+        },
+      );
+
+      expect(staged.exitCode, ExitCodes.ok, reason: staged.text);
+      expect(started, hasLength(2));
+      expect(staged.text, contains('2 units staged'));
+      expect(staged.text, contains('core 0.2.0 · pub.dev · keybay'));
+      expect(staged.text, contains('other 0.2.0 · pub.dev · other'));
+    });
+
+    test(
+      'one unit failing to stage lets the other finish, and says so once',
+      () async {
+        final staged = await release(
+          only: null,
+          config: config,
+          source: source(),
+          registry: world().registry,
+          dryRun: true,
+          gate: (key, directory) async {
+            if (key == 'dart pub publish --to-archive <archive>' &&
+                directory!.endsWith('/packages/other')) {
+              throw const ProcessException('dart', [], 'pub crashed');
+            }
+          },
+        );
+
+        expect(staged.exitCode, ExitCodes.refused, reason: staged.text);
+        expect(staged.problems, hasLength(1), reason: staged.text);
+        expect('rk stopped'.allMatches(staged.text), hasLength(1));
+        expect(staged.text, contains('core 0.2.0 staged successfully'));
+        expect(staged.text, isNot(contains('other 0.2.0 staged successfully')));
+      },
+    );
 
     test('shows the whole run, and asks once for all of it', () async {
       final (:registry, :onRun) = world();

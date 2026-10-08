@@ -367,17 +367,43 @@ class ReleaseCommand {
 
     if (work.isEmpty) return finishNoops();
     output.timeline.phase('staging');
+    // Each unit is checked, and its signing settled, one at a time in
+    // release order. Then every unit that needs a stage builds at once, and
+    // each is finished in release order again.
+    final planned = <_ReleasePlan>[];
     for (final unit in work) {
-      final prepared = await Timings.span(
-        'prepare ${unit.name}',
-        () => _prepareRelease(inspected[unit.name]!),
+      final plan = await Timings.span(
+        'plan ${unit.name}',
+        () => _planRelease(inspected[unit.name]!),
       );
-      if (prepared.code != ExitCodes.ok) return result(prepared.code);
-      if (prepared.publication case final publication?) {
-        publications.add(publication);
-      }
+      if (plan == null) return result(ExitCodes.refused);
+      planned.add(plan);
     }
-    return finishNoops();
+    final stagings = [
+      for (final plan in planned)
+        if (plan.staging case final staging?) staging,
+    ];
+    Future<({int code, List<PublicationPlan> publications})> finish() async {
+      final prepared = await _stage(stagings);
+      // Every unit says how its staging went, even past one that failed.
+      var code = ExitCodes.ok;
+      for (final plan in planned) {
+        final finished = _finishRelease(plan, prepared[plan.unit.name]);
+        if (finished.code != ExitCodes.ok) {
+          if (code == ExitCodes.ok) code = finished.code;
+          continue;
+        }
+        if (finished.publication case final publication?) {
+          publications.add(publication);
+        }
+      }
+      if (code != ExitCodes.ok) return result(code);
+      return finishNoops();
+    }
+
+    // Units staged side by side say how they stopped once, after all of
+    // them have said what they staged.
+    return stagings.length > 1 ? output.holdingHalts(finish) : finish();
   }
 
   /// Says once per run, before anything asks for a yes, that the release
@@ -567,6 +593,15 @@ class ReleaseCommand {
   Future<({int code, PublicationPlan? publication})> _prepareRelease(
     _InspectedUnit inspected,
   ) async {
+    final plan = await _planRelease(inspected);
+    if (plan == null) return (code: ExitCodes.refused, publication: null);
+    final prepared = await _stage([?plan.staging]);
+    return _finishRelease(plan, prepared[plan.unit.name]);
+  }
+
+  /// Checks [inspected]'s unit against everything that refuses it before
+  /// staging, and settles what its staging needs first. Null when refused.
+  Future<_ReleasePlan?> _planRelease(_InspectedUnit inspected) async {
     final unit = inspected.unit;
     output.report.unit(
       name: unit.name,
@@ -578,7 +613,6 @@ class ReleaseCommand {
     final states = inspected.states;
     final releaseHistory = inspected.history;
     final publicSteps = checklist.steps.where((step) => step.isPublic).toList();
-    final localOnly = publicSteps.isEmpty;
     final targetByStep = {for (final target in targets) target.step.id: target};
     final ReleaseStage stage;
     try {
@@ -592,9 +626,9 @@ class ReleaseCommand {
         ),
       );
       output.halt(HaltKind.beforeActing);
-      return (code: ExitCodes.refused, publication: null);
+      return null;
     }
-    var stageInspection = stage.inspect();
+    final stageInspection = stage.inspect();
 
     final alreadyReleased =
         publicSteps.isNotEmpty &&
@@ -636,7 +670,7 @@ class ReleaseCommand {
         states[initialBlock.id]!,
         target: targetByStep[initialBlock.id],
       );
-      return (code: ExitCodes.refused, publication: null);
+      return null;
     }
 
     final publicActions = {
@@ -645,7 +679,158 @@ class ReleaseCommand {
             ? ReleaseAction.alreadyPublished
             : ReleaseAction.notAttempted,
     };
-    if (alreadyReleased) {
+    final plan = _ReleasePlan(
+      inspected: inspected,
+      stage: stage,
+      stageInspection: stageInspection,
+      publicSteps: publicSteps,
+      publicActions: publicActions,
+      alreadyReleased: alreadyReleased,
+    );
+    if (alreadyReleased) return plan;
+
+    // A moving channel may be able to finish from authenticated public
+    // inputs even after the local stage is lost. This is intentionally an
+    // all-remaining-targets check: one versioned publication that still needs
+    // bytes keeps the original stage recovery-critical for the whole run.
+    final unfinishedTargets = [
+      for (final step in publicSteps)
+        if (!states[step.id]!.isExact) targetByStep[step.id]!,
+    ];
+    plan.recoversWithoutStage = _recoversWithoutStage(
+      stageInspection,
+      unfinishedTargets,
+      states,
+    );
+    if (_needsLostStage(
+      unit,
+      stageInspection,
+      publicSteps,
+      states,
+      recoversWithoutStage: plan.recoversWithoutStage,
+    )) {
+      output.halt(HaltKind.unfixableByRerun);
+      output.problem(
+        Diagnostic(
+          code: 'RK-STAGE-005',
+          message: unit.shipsBinaries
+              ? 'the partial binary release needs its exact stage'
+              : 'the partial release needs its exact stage',
+          remedy:
+              'restore ${stage.directory.path} from the machine that '
+              'staged this release. Its recorded archive bytes cannot be '
+              'recreated byte-for-byte after a public target has bound them.',
+        ),
+      );
+      if (!stageOnly) _publication.showActions(targets, publicActions);
+      return null;
+    }
+    if (!stageInspection.reusable && !plan.recoversWithoutStage) {
+      final refusal = _refuseIfUnfinishable(unit);
+      if (refusal != null) {
+        output.halt(HaltKind.beforeActing);
+        output.problem(refusal);
+        if (!stageOnly) _publication.showActions(targets, publicActions);
+        return null;
+      }
+    }
+
+    if (!stageOnly) {
+      // Stage-only mode keeps its explicit ability to replace
+      // reviewed-but-invalid bytes. A real release refuses that ambiguity
+      // before any local preparation.
+      final stageProblem = plan.recoversWithoutStage
+          ? null
+          : _stages.preparationProblem(
+              unit,
+              stageInspection,
+              mayReplaceReviewed: false,
+            );
+      if (stageProblem != null) {
+        output.problem(stageProblem, unit: unit.name);
+        output.halt(HaltKind.beforeActing);
+        _publication.showActions(targets, publicActions);
+        return null;
+      }
+    }
+
+    if (plan.recoversWithoutStage) return plan;
+    final staging = await _stages.begin(
+      unit: unit,
+      checklist: checklist,
+      targets: targets,
+      targetStages: inspector.targets.stages(unit: unit, targets: targets),
+      stage: stage,
+      inspected: stageInspection,
+      claims: releaseHistory.claims,
+      fromSource: await _fromSource(unit),
+    );
+    if (staging == null) {
+      if (!stageOnly) _publication.showActions(targets, publicActions);
+      return null;
+    }
+    return plan..staging = staging;
+  }
+
+  /// Builds or reuses every stage in [stagings], all at once, by unit name;
+  /// a null result is a unit whose staging refused and said why. Several
+  /// units share one board.
+  Future<Map<String, PreparedRelease?>> _stage(
+    List<UnitStaging> stagings,
+  ) async {
+    if (stagings.isEmpty) return const {};
+    if (stagings.length == 1) {
+      final staging = stagings.single;
+      return {
+        staging.unit.name: await Timings.span(
+          'stage ${staging.unit.name}',
+          () => _stages.complete(staging),
+        ),
+      };
+    }
+    final live = output.progressBoard(
+      'staging ${stagings.length} units',
+      emitSlowToNonTerminal: true,
+    );
+    final shared = [
+      for (final staging in stagings)
+        StageReleaseProgress.shared(
+          live,
+          board: staging.board,
+          unit: '${staging.unit.name} ${staging.unit.version}',
+        ),
+    ];
+    final prepared = await Future.wait([
+      for (final (index, staging) in stagings.indexed)
+        Timings.span(
+          'stage ${staging.unit.name}',
+          () => _stages.complete(staging, shared: shared[index]),
+        ),
+    ]);
+    if (prepared.every((result) => result != null)) {
+      live.settle(title: '${stagings.length} units staged');
+    } else {
+      live.conclude();
+    }
+    return {
+      for (final (index, staging) in stagings.indexed)
+        staging.unit.name: prepared[index],
+    };
+  }
+
+  /// Finishes [plan]'s unit once its stage is built ([prepared]; null when
+  /// staging refused): says what was staged, and hands publication the
+  /// plan it acts on.
+  ({int code, PublicationPlan? publication}) _finishRelease(
+    _ReleasePlan plan,
+    PreparedRelease? prepared,
+  ) {
+    final _ReleasePlan(:unit, :stage, :publicSteps, :publicActions) = plan;
+    final checklist = plan.inspected.checklist;
+    final targets = plan.inspected.targets;
+    final states = plan.inspected.states;
+    final localOnly = publicSteps.isEmpty;
+    if (plan.alreadyReleased) {
       if (stageOnly) {
         output.line(
           '${unit.name} ${unit.version}',
@@ -664,7 +849,7 @@ class ReleaseCommand {
           states: states,
           actions: publicActions,
           prepared: PreparedRelease(
-            claims: releaseHistory.claims,
+            claims: plan.inspected.history.claims,
             signing: null,
           ),
           stage: stage,
@@ -673,96 +858,15 @@ class ReleaseCommand {
       );
     }
 
-    // A moving channel may be able to finish from authenticated public
-    // inputs even after the local stage is lost. This is intentionally an
-    // all-remaining-targets check: one versioned publication that still needs
-    // bytes keeps the original stage recovery-critical for the whole run.
-    final unfinishedTargets = [
-      for (final step in publicSteps)
-        if (!states[step.id]!.isExact) targetByStep[step.id]!,
-    ];
-    final recoversWithoutStage = _recoversWithoutStage(
-      stageInspection,
-      unfinishedTargets,
-      states,
-    );
-    if (_needsLostStage(
-      unit,
-      stageInspection,
-      publicSteps,
-      states,
-      recoversWithoutStage: recoversWithoutStage,
-    )) {
-      output.halt(HaltKind.unfixableByRerun);
-      output.problem(
-        Diagnostic(
-          code: 'RK-STAGE-005',
-          message: unit.shipsBinaries
-              ? 'the partial binary release needs its exact stage'
-              : 'the partial release needs its exact stage',
-          remedy:
-              'restore ${stage.directory.path} from the machine that '
-              'staged this release. Its recorded archive bytes cannot be '
-              'recreated byte-for-byte after a public target has bound them.',
-        ),
-      );
-      if (!stageOnly) _publication.showActions(targets, publicActions);
-      return (code: ExitCodes.refused, publication: null);
-    }
-    if (!stageInspection.reusable && !recoversWithoutStage) {
-      final refusal = _refuseIfUnfinishable(unit);
-      if (refusal != null) {
-        output.halt(HaltKind.beforeActing);
-        output.problem(refusal);
-        if (!stageOnly) _publication.showActions(targets, publicActions);
-        return (code: ExitCodes.refused, publication: null);
-      }
-    }
-
-    if (!stageOnly) {
-      // Stage-only mode keeps its explicit ability to replace
-      // reviewed-but-invalid bytes. A real release refuses that ambiguity
-      // before any local preparation.
-      final stageProblem = recoversWithoutStage
-          ? null
-          : _stages.preparationProblem(
-              unit,
-              stageInspection,
-              mayReplaceReviewed: false,
-            );
-      if (stageProblem != null) {
-        output.problem(stageProblem, unit: unit.name);
-        output.halt(HaltKind.beforeActing);
-        _publication.showActions(targets, publicActions);
-        return (code: ExitCodes.refused, publication: null);
-      }
-    }
-
-    final reusedStage = stageInspection.reusable;
-    final PreparedRelease prepared;
-    if (recoversWithoutStage) {
+    final reusedStage = plan.stageInspection.reusable;
+    if (plan.recoversWithoutStage) {
       prepared = PreparedRelease(claims: const [], signing: null);
     } else {
-      final targetStages = inspector.targets.stages(
-        unit: unit,
-        targets: targets,
-      );
-      final result = await _stages.prepare(
-        unit: unit,
-        checklist: checklist,
-        targets: targets,
-        targetStages: targetStages,
-        stage: stage,
-        inspected: stageInspection,
-        claims: releaseHistory.claims,
-        fromSource: await _fromSource(unit),
-      );
-      if (result == null) {
+      if (prepared == null) {
         if (!stageOnly) _publication.showActions(targets, publicActions);
         return (code: ExitCodes.refused, publication: null);
       }
-      prepared = result;
-      stageInspection = stage.inspect();
+      final stageInspection = stage.inspect();
       if (!stageInspection.reusable) {
         output.problem(
           Diagnostic(
@@ -833,7 +937,7 @@ class ReleaseCommand {
         actions: publicActions,
         prepared: prepared,
         stage: stage,
-        recoversWithoutStage: recoversWithoutStage,
+        recoversWithoutStage: plan.recoversWithoutStage,
       ),
     );
   }
@@ -1021,6 +1125,33 @@ class ReleaseCommand {
   /// team it names.
   static String _shortCertificate(String certificate) =>
       certificate.replaceFirst('Developer ID Application: ', '');
+}
+
+/// One unit's release after its checks: what staging it needs, if any.
+final class _ReleasePlan {
+  _ReleasePlan({
+    required this.inspected,
+    required this.stage,
+    required this.stageInspection,
+    required this.publicSteps,
+    required this.publicActions,
+    required this.alreadyReleased,
+  });
+
+  final _InspectedUnit inspected;
+  final ReleaseStage stage;
+  final StageInspection stageInspection;
+  final List<Step> publicSteps;
+  final Map<String, ReleaseAction> publicActions;
+  final bool alreadyReleased;
+
+  /// Whether every remaining target can finish from public inputs alone.
+  var recoversWithoutStage = false;
+
+  /// The stage to build or reuse; null when none is needed.
+  UnitStaging? staging;
+
+  ResolvedUnit get unit => inspected.unit;
 }
 
 /// The one public snapshot a release takes of a unit, before staging. It

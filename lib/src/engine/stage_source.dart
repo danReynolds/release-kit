@@ -46,6 +46,24 @@ final class StageSourceSnapshot implements SourceTree {
     } else {
       git = null;
     }
+    if (git == null) return _capture(source, null);
+    // Every unit a run stages from one commit shares its one read.
+    final key = git.description;
+    final read = _committed[key] ??= _capture(source, git);
+    try {
+      return await read;
+    } on Object {
+      if (identical(_committed[key], read)) _committed.remove(key);
+      rethrow;
+    }
+  }
+
+  static final Map<String, Future<StageSourceSnapshot>> _committed = {};
+
+  static Future<StageSourceSnapshot> _capture(
+    SourceTree source,
+    GitCommitSourceTree? git,
+  ) async {
     final entries = {
       for (final entry in git?.trackedEntries() ?? <GitTreeEntry>[])
         entry.path: entry,

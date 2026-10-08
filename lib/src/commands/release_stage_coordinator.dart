@@ -87,10 +87,12 @@ final class ReleaseStageCoordinator {
     return null;
   }
 
-  /// Produces or reuses the exact receipt-backed private stage. [fromSource]
-  /// names, for each Pub package, the repository packages it takes from
-  /// this source: see [TargetStageContext.fromSource].
-  Future<PreparedRelease?> prepare({
+  /// Settles what staging [unit] needs before its producers run: leftovers
+  /// of an interrupted run are cleared, and its signing identity is chosen.
+  /// Units do this one at a time, since choosing an identity may ask the
+  /// operator. [fromSource] names, for each Pub package, the repository
+  /// packages it takes from this source: see [TargetStageContext.fromSource].
+  Future<UnitStaging?> begin({
     required ResolvedUnit unit,
     required Checklist checklist,
     required List<TargetPlan> targets,
@@ -100,35 +102,54 @@ final class ReleaseStageCoordinator {
     required List<TargetClaim> claims,
     Map<String, Map<String, String>> fromSource = const {},
   }) async {
-    final producerSteps = checklist.steps.where((step) {
-      return !step.isPublic &&
-          step.kind != StepKind.prerequisite &&
-          step.kind != StepKind.completeStage;
-    }).toList();
-    final targetStagesByName = {
-      for (final targetStage in targetStages)
-        targetStage.contract.step.name: targetStage,
-    };
-    final outputsByProducer = <String, Set<String>>{
-      for (final step in producerSteps)
-        receiptNameFor(step): contractFor(unit, step).outputs.keys.toSet(),
-      for (final entry in targetStagesByName.entries)
-        entry.key: entry.value.contract.step.outputs.keys.toSet(),
-    };
+    final staging = UnitStaging._(
+      unit: unit,
+      checklist: checklist,
+      targets: targets,
+      targetStages: targetStages,
+      stage: stage,
+      inspected: inspected,
+      claims: claims,
+      fromSource: fromSource,
+    );
     _discardUnrecordedOutputs(
       stage,
       inspected,
-      outputsByProducer.values.expand((outputs) => outputs).toSet(),
+      staging.outputsByProducer.values.expand((outputs) => outputs).toSet(),
     );
-
     final inputs = await _prepareStageInputs(unit, inspected);
     if (inputs == null) return null;
-    final signing = inputs.signing;
-    final stageProgress = StageReleaseProgress(
-      output,
-      title: '${unit.name} ${unit.version} · staging',
-      board: StageBoard.forUnit(unit, targets, targetStages),
-    );
+    return staging.._signing = inputs.signing;
+  }
+
+  /// Produces or reuses the exact receipt-backed private stage [staging]
+  /// describes. Its rows go on [shared] when units stage side by side, and
+  /// on a board of its own otherwise.
+  Future<PreparedRelease?> complete(
+    UnitStaging staging, {
+    StageReleaseProgress? shared,
+  }) async {
+    final UnitStaging(
+      :unit,
+      :checklist,
+      :targets,
+      :targetStages,
+      :stage,
+      :inspected,
+      :claims,
+      :fromSource,
+      :signing,
+      :producerSteps,
+      :targetStagesByName,
+      :outputsByProducer,
+    ) = staging;
+    final stageProgress =
+        shared ??
+        StageReleaseProgress(
+          output,
+          title: '${unit.name} ${unit.version} · staging',
+          board: staging.board,
+        );
     final warnings = <_StageWarning>[];
     if (inspected.reusable) {
       stageProgress
@@ -1047,6 +1068,58 @@ class _StageInputs {
   const _StageInputs({required this.signing});
 
   final ReleaseSigningContext? signing;
+}
+
+/// One unit's staging, settled up to its producers: see
+/// [ReleaseStageCoordinator.begin].
+final class UnitStaging {
+  UnitStaging._({
+    required this.unit,
+    required this.checklist,
+    required this.targets,
+    required this.targetStages,
+    required this.stage,
+    required this.inspected,
+    required this.claims,
+    required this.fromSource,
+  });
+
+  final ResolvedUnit unit;
+  final Checklist checklist;
+  final List<TargetPlan> targets;
+  final List<TargetStage> targetStages;
+  final ReleaseStage stage;
+  final StageInspection inspected;
+  final List<TargetClaim> claims;
+  final Map<String, Map<String, String>> fromSource;
+
+  /// The identity a macOS build signs with; null for anything else.
+  ReleaseSigningContext? get signing => _signing;
+  ReleaseSigningContext? _signing;
+
+  /// The rows this unit's stage fills.
+  StageBoard get board => StageBoard.forUnit(unit, targets, targetStages);
+
+  late final List<Step> producerSteps = checklist.steps
+      .where(
+        (step) =>
+            !step.isPublic &&
+            step.kind != StepKind.prerequisite &&
+            step.kind != StepKind.completeStage,
+      )
+      .toList();
+
+  late final Map<String, TargetStage> targetStagesByName = {
+    for (final targetStage in targetStages)
+      targetStage.contract.step.name: targetStage,
+  };
+
+  late final Map<String, Set<String>> outputsByProducer = {
+    for (final step in producerSteps)
+      receiptNameFor(step): contractFor(unit, step).outputs.keys.toSet(),
+    for (final entry in targetStagesByName.entries)
+      entry.key: entry.value.contract.step.outputs.keys.toSet(),
+  };
 }
 
 final class _StageWorkCompletion {
