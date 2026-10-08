@@ -48,20 +48,18 @@ class GithubRelease {
     );
   }
 
-  /// Inspects the complete public release identity, including downloaded
-  /// asset bytes.
+  /// Inspects the public release against its stage, including asset bytes.
   ///
   /// Before a stage exists, [inspect] can answer only inventory. Once a receipt
-  /// exists, this is the stronger question: tag, title, body, asset names, and
-  /// every asset digest must all match. A download failure is unknown rather
+  /// exists, this is the stronger question: tag, asset names, and every asset
+  /// digest must all match. A title or notes edited on GitHub after
+  /// publishing change none of that. A download failure is unknown rather
   /// than a digest mismatch — not being able to read bytes is not evidence
   /// about them.
   Future<Inspection> inspectExact(GithubReleaseExpectation expected) =>
       _inspect(
         tag: expected.tag,
         expectedAssets: expected.assetSha256.keys.toSet(),
-        expectedTitle: expected.title,
-        expectedBody: expected.body,
         expectedDigests: expected.assetSha256,
         expectedPrerelease: expected.prerelease,
       );
@@ -133,8 +131,6 @@ class GithubRelease {
   Future<Inspection> _inspect({
     required String tag,
     required Set<String> expectedAssets,
-    String? expectedTitle,
-    String? expectedBody,
     Map<String, String>? expectedDigests,
     required bool expectedPrerelease,
   }) async {
@@ -154,8 +150,6 @@ class GithubRelease {
       observed.release!,
       tag: tag,
       expectedAssets: expectedAssets,
-      expectedTitle: expectedTitle,
-      expectedBody: expectedBody,
       expectedPrerelease: expectedPrerelease,
     );
     if (!surface.isExact) return surface;
@@ -193,35 +187,17 @@ class GithubRelease {
     }
   }
 
+  /// Compares what makes [release] this release: its tag, maturity and
+  /// asset inventory. Its title and notes are prose its owner may edit.
   Inspection _compareRelease(
     _Release release, {
     required String tag,
     Set<String>? expectedAssets,
-    String? expectedTitle,
-    String? expectedBody,
     required bool expectedPrerelease,
   }) {
-    if (expectedTitle != null && !release.titleReadable) {
-      return const Inspection.unknown(
-        'the release exists but its title could not be read',
-      );
-    }
-    if (expectedBody != null && !release.bodyReadable) {
-      return const Inspection.unknown(
-        'the release exists but its body could not be read',
-      );
-    }
-
     final differences = <String, String>{};
     if (release.tag != tag) {
       differences['tag'] = 'published ${release.tag}, expected $tag';
-    }
-    if (expectedTitle != null && release.title != expectedTitle) {
-      differences['title'] =
-          'published ${_shown(release.title)}, expected ${_shown(expectedTitle)}';
-    }
-    if (expectedBody != null && release.body != expectedBody) {
-      differences['body'] = 'published release notes differ';
     }
     if (release.isPrerelease != expectedPrerelease) {
       differences['prerelease'] = expectedPrerelease
@@ -660,9 +636,10 @@ class GithubRelease {
       }
 
       // This is the publication gate. The draft must still be private and must
-      // already carry the exact metadata, complete inventory, and staged bytes.
-      // Post-act inspection repeats the same byte check against public reality;
-      // it is confirmation, not the first point at which bad bytes are found.
+      // already carry the complete inventory and staged bytes. Its title and
+      // notes are the ones this run created or resumed. Post-act inspection
+      // repeats the byte check against public reality; it is confirmation,
+      // not the first point at which bad bytes are found.
       final beforePublish = await _viewById(draftId);
       if (beforePublish is! _Found) {
         return failed(
@@ -681,8 +658,6 @@ class GithubRelease {
         draft,
         tag: tag,
         expectedAssets: names.toSet(),
-        expectedTitle: title,
-        expectedBody: notes,
         expectedPrerelease: prerelease,
       );
       if (!surface.isExact) {
@@ -1180,15 +1155,11 @@ class GithubReleaseAssetUpload {
 class GithubReleaseExpectation {
   GithubReleaseExpectation({
     required this.tag,
-    required this.title,
-    required this.body,
     required this.prerelease,
     required Map<String, String> assetSha256,
   }) : assetSha256 = Map.unmodifiable(assetSha256);
 
   final String tag;
-  final String title;
-  final String body;
   final bool prerelease;
 
   /// Exact public asset name to lowercase or uppercase SHA-256.
@@ -1219,8 +1190,6 @@ class _ReleaseObservation {
 }
 
 bool _isSha256(String value) => RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(value);
-
-String _shown(String? value) => value == null ? '<none>' : '"$value"';
 
 /// What asking the forge about one tag produced.
 sealed class _Lookup {

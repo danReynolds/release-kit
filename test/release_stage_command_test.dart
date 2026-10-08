@@ -1642,6 +1642,44 @@ void main() {
     },
   );
 
+  test('notes edited on the published GitHub Release do not stop the '
+      'release from finishing', () async {
+    final staged = await harness.run(
+      stageOnly: true,
+      confirm: (_) async => fail('stage mode must not authorize'),
+    );
+    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    harness.tools.rejectHomebrewPush = true;
+
+    final partial = await harness.run(
+      stageOnly: false,
+      confirm: (_) async => '1.2.3',
+    );
+    expect(partial.code, ExitCodes.refused, reason: partial.text);
+    expect(harness.tools.githubReleaseExists, isTrue);
+
+    // The operator fixes the notes on GitHub; the stage is still here.
+    harness.git = harness.gitAt(
+      tags: const ['v1.2.3'],
+      tagObjects: const {'v1.2.3': _tagObject},
+      tagTargets: const {'v1.2.3': _head},
+    );
+    harness.tools
+      ..rejectHomebrewPush = false
+      ..githubTitle = 'tool 1.2.3, with a better title'
+      ..githubBody = 'Notes with the typo fixed.';
+
+    final resumed = await harness.run(
+      stageOnly: false,
+      confirm: (_) async => '1.2.3',
+    );
+
+    expect(resumed.code, ExitCodes.ok, reason: resumed.text);
+    expect(resumed.publicMutations.map((call) => call.publicKind), [
+      'homebrew',
+    ]);
+  });
+
   test('a lost stage can finish only the Homebrew channel from the public '
       'release', () async {
     final staged = await harness.run(
@@ -3234,7 +3272,10 @@ class _WorldTools implements Tools {
           'repos/example/tool/releases/7',
         ])) {
       githubDraft = false;
-      if (conflictGithubAfterPublish) githubTitle = 'wrong public title';
+      if (conflictGithubAfterPublish) {
+        final name = uploadedAssets.keys.first;
+        uploadedAssets[name] = utf8.encode('other public bytes');
+      }
       if (loseGithubFinalResponse) {
         if (unreadGithubAfterPublish) _githubPublicUnreadable = true;
         return ToolResult(

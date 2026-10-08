@@ -197,14 +197,10 @@ void main() {
     final bytes = utf8.encode('the staged archive bytes');
 
     GithubReleaseExpectation expectation({
-      String title = 'tool 1.0.0',
-      String body = 'release notes\n',
       String? digest,
       bool prerelease = false,
     }) => GithubReleaseExpectation(
       tag: 'v1.0.0',
-      title: title,
-      body: body,
       prerelease: prerelease,
       assetSha256: {asset: digest ?? Sha256.hex(bytes)},
     );
@@ -226,15 +222,12 @@ void main() {
       workingDirectory: '/repo',
     ).inspectExact(expected ?? expectation());
 
-    test(
-      'tag, title, body, inventory, and downloaded bytes can all be exact',
-      () async {
-        final state = await inspectExact(view());
-        expect(state.verdict, Verdict.exact);
-        expect(state.detail, contains('asset bytes match'));
-        expect(state.evidence[asset], 'sha256:${Sha256.hex(bytes)}');
-      },
-    );
+    test('tag, inventory, and downloaded bytes can all be exact', () async {
+      final state = await inspectExact(view());
+      expect(state.verdict, Verdict.exact);
+      expect(state.detail, contains('asset bytes match'));
+      expect(state.evidence[asset], 'sha256:${Sha256.hex(bytes)}');
+    });
 
     test('independent asset downloads run concurrently', () async {
       final downloads = {
@@ -264,8 +257,6 @@ void main() {
           ).inspectExact(
             GithubReleaseExpectation(
               tag: 'v1.0.0',
-              title: 'tool 1.0.0',
-              body: 'release notes\n',
               prerelease: false,
               assetSha256: {
                 for (final entry in downloads.entries)
@@ -285,30 +276,28 @@ void main() {
     });
 
     test(
-      'title and body differences are conflicts before any download',
+      'a title or notes edited after publishing are still the release',
       () async {
-        final state = await inspectExact(
+        // Prose its owner may correct on GitHub; the assets are the release.
+        final edited = await inspectExact(
           view(title: 'Surprise', body: 'different notes'),
         );
-        expect(state.verdict, Verdict.conflict);
-        expect(state.evidence.keys, containsAll(['title', 'body']));
+        expect(edited.verdict, Verdict.exact, reason: edited.detail);
+
+        final cleared = await inspectExact(
+          jsonEncode({
+            'tag_name': 'v1.0.0',
+            'draft': false,
+            'prerelease': false,
+            'id': 41,
+            'assets': [
+              {'name': asset},
+            ],
+          }),
+        );
+        expect(cleared.verdict, Verdict.exact, reason: cleared.detail);
       },
     );
-
-    test('missing title/body fields are unreadable, not a mismatch', () async {
-      final state = await inspectExact(
-        jsonEncode({
-          'tag_name': 'v1.0.0',
-          'draft': false,
-          'prerelease': false,
-          'id': 41,
-          'assets': [
-            {'name': asset},
-          ],
-        }),
-      );
-      expect(state.verdict, Verdict.unknown);
-    });
 
     test(
       'a downloaded digest mismatch is a conflict with both digests',
