@@ -21,7 +21,6 @@ import 'package:rk/src/output/output.dart';
 import 'package:rk/src/targets/github_release/installation.dart';
 import 'package:rk/src/targets/homebrew/installation.dart';
 import 'package:rk/src/targets/pub_dev/installation.dart';
-import 'package:rk/src/tui/installation_picker.dart';
 import 'package:rk/src/tui/use_picker.dart';
 
 const installationUsage = '''
@@ -277,7 +276,8 @@ Future<int> _run(
       ),
     },
   );
-  final action = InstallationAction.values.byName(command);
+  final commandAction = InstallationAction.values.byName(command);
+  final action = commandAction;
   final outcomes = <String>[];
   Future<List<ProjectInstallations>> refresh() async {
     final states = [
@@ -314,8 +314,10 @@ Future<int> _run(
     ExecutableProject project,
     InstallationSource source,
     void Function(String) progress,
-    InstallationCancellation cancellation,
-  ) async {
+    InstallationCancellation cancellation, [
+    InstallationAction? override,
+  ]) async {
+    final action = override ?? commandAction;
     cancellation.check();
     output.report.acted = true;
     final result = await manager.act(
@@ -370,22 +372,22 @@ Future<int> _run(
       environment['TERM'] != 'dumb';
   final states = await refresh();
   if (source == null && !list && interactive) {
-    final result = action == InstallationAction.use
-        ? await runUsePicker(
-            states: states,
-            refresh: refresh,
-            use: operate,
-            uninstall: remove,
-            checkAvailable: (project, source, check) =>
-                manager.latest(project, source, check: check),
-            downloadAvailable: downloadLatest,
-          )
-        : await runInstallationPicker(
-            action: action,
-            states: states,
-            refresh: refresh,
-            operate: operate,
-          );
+    final result = await runUsePicker(
+      states: states,
+      refresh: refresh,
+      use: (project, source, progress, cancellation) => operate(
+        project,
+        source,
+        progress,
+        cancellation,
+        InstallationAction.use,
+      ),
+      uninstall: remove,
+      command: 'rk $command',
+      checkAvailable: (project, source, check) =>
+          manager.latest(project, source, check: check),
+      downloadAvailable: downloadLatest,
+    );
     // The picker refreshes after operations. Dismissing it is not another
     // inspection: a Homebrew subprocess here delayed even an idle Ctrl+C.
     for (final message in outcomes) {

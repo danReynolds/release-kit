@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:fleury/fleury.dart';
 import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/commands/init.dart';
@@ -7,12 +6,9 @@ import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/init_plan.dart';
 import 'package:rk/src/engine/release_choice.dart';
 import 'package:rk/src/engine/source_tree.dart';
-import 'package:rk/src/installations/model.dart';
 import 'package:rk/src/tui/init_picker.dart';
-import 'package:rk/src/tui/installation_picker.dart';
 import 'package:rk/src/tui/terminal.dart';
 import 'package:test/test.dart';
-import 'fixtures.dart';
 
 Future<void> settle() => Future<void>.delayed(const Duration(milliseconds: 80));
 InitPlan plan() => InitPlan.discover(
@@ -32,51 +28,6 @@ InitPlan plan() => InitPlan.discover(
 );
 
 void main() {
-  for (final action in InstallationAction.values) {
-    test(
-      '${action.name} closes on single-project success, stays for multiple or failure',
-      () async {
-        final scratch = Directory.systemTemp.createTempSync(
-          'rk-completion-test-',
-        );
-        addTearDown(() => scratch.deleteSync(recursive: true));
-        final projects = [fixture(scratch), fixture(scratch, name: 'second')];
-        for (final count in [1, 2]) {
-          for (final fails in [false, true]) {
-            var closed = false;
-            final states = [
-              for (final project in projects.take(count))
-                ProjectInstallations(project, {
-                  InstallationSource.local: const SourceInspection(),
-                }),
-            ];
-            final model = InstallationPicker(
-              action: action,
-              states: states,
-              refresh: () async => states,
-              close: () => closed = true,
-              operate: (_, _, _, _) async {
-                if (fails) {
-                  throw const InstallationFailure(
-                    'Could not prepare',
-                    'Try again.',
-                  );
-                }
-                return 'Completed';
-              },
-            );
-            await model.apply(projects.first, InstallationSource.local);
-            expect(closed, count == 1 && !fails);
-            expect(model.failed, fails);
-            expect(model.busy, isFalse);
-            if (fails) expect(model.message, 'Could not prepare Try again.');
-            model.dispose();
-          }
-        }
-      },
-    );
-  }
-
   test(
     'an unavailable init choice reports a problem without changing the plan',
     () {
@@ -137,32 +88,6 @@ void main() {
       }
       expect(driver.restoreCallCount, 1);
       expect(driver.currentMode?.isInline, isTrue);
-    },
-  );
-  test(
-    'a failed refresh still clears busy state and honors cancellation',
-    () async {
-      final scratch = Directory.systemTemp.createTempSync('rk-refresh-test-');
-      addTearDown(() => scratch.deleteSync(recursive: true));
-      final project = fixture(scratch);
-      var closed = false;
-      late InstallationPicker model;
-      model = InstallationPicker(
-        action: InstallationAction.use,
-        states: [],
-        refresh: () async => throw const FormatException('bad metadata'),
-        close: () => closed = true,
-        operate: (p, s, progress, cancel) async {
-          model.exit();
-          return 'Prepared';
-        },
-      );
-      await model.apply(project, InstallationSource.local);
-      expect(model.busy, isFalse);
-      expect(model.failed, isTrue);
-      expect(model.message, contains('Could not refresh'));
-      expect(closed, isTrue);
-      model.dispose();
     },
   );
   test(
@@ -252,73 +177,6 @@ void main() {
     }
   });
 
-  test(
-    'Ctrl+C during preparation waits for completion and cancels selection',
-    () async {
-      final scratch = Directory.systemTemp.createTempSync('rk-tui-test-');
-      addTearDown(() => scratch.deleteSync(recursive: true));
-      final project = fixture(scratch);
-      final states = [
-        ProjectInstallations(project, {
-          InstallationSource.local: const SourceInspection(),
-          InstallationSource.pub: const SourceInspection(),
-        }),
-      ];
-      final pending = Completer<void>();
-      var operations = 0, selected = false, closed = false;
-      final model = InstallationPicker(
-        action: InstallationAction.use,
-        states: states,
-        refresh: () async => states,
-        close: () {
-          closed = true;
-          exitApp();
-        },
-        operate: (p, s, progress, cancel) async {
-          operations++;
-          await pending.future;
-          cancel.check();
-          selected = true;
-          return 'Selected';
-        },
-      );
-      final driver = FakeTerminalDriver(size: const CellSize(110, 25));
-      final done = runMatrixScreen(
-        InstallationScreen(model),
-        interrupt: model.interrupt,
-        driver: driver,
-      );
-      await settle();
-      driver.enqueue(const KeyEvent(KeyCode.enter));
-      await settle();
-      expect(operations, 0, reason: 'Opening has no hidden focus.');
-      driver.enqueue(const KeyEvent(KeyCode.tab));
-      await settle();
-      driver.enqueue(const KeyEvent(KeyCode.enter));
-      await settle();
-      expect(operations, 1);
-      driver.enqueue(
-        const KeyEvent(KeyCode.char('c'), modifiers: {KeyModifier.ctrl}),
-      );
-      await settle();
-      expect(closed, isFalse);
-      expect(model.closing, isTrue);
-      driver.enqueue(const KeyEvent(KeyCode.enter));
-      await settle();
-      expect(
-        operations,
-        1,
-        reason: 'Busy controls cannot trigger a second installer.',
-      );
-      pending.complete();
-      expect(await done.timeout(const Duration(seconds: 3)), 130);
-      expect(closed, isTrue);
-      expect(selected, isFalse);
-      expect(driver.restoreCallCount, 1);
-      model.dispose();
-    },
-  );
-
   for (final (signal, code) in [
     (AppSignal.interrupt, 130),
     (AppSignal.terminate, 143),
@@ -360,42 +218,5 @@ void main() {
     );
     await interaction.close();
     expect(interaction.signalExitCode, 130);
-  });
-
-  test('removal requires a separate confirmation; Escape cancels it', () async {
-    final scratch = Directory.systemTemp.createTempSync('rk-remove-test-');
-    addTearDown(() => scratch.deleteSync(recursive: true));
-    final project = fixture(scratch);
-    final state = ProjectInstallations(project, {
-      InstallationSource.pub: SourceInspection(
-        installation: Installation(
-          source: InstallationSource.pub,
-          version: '1.2.0',
-          location: '/test',
-          commands: const {},
-        ),
-      ),
-    });
-    var removed = false;
-    final model = InstallationPicker(
-      action: InstallationAction.uninstall,
-      states: [state],
-      refresh: () async => [state],
-      close: () {},
-      operate: (_, __, ___, ____) async {
-        removed = true;
-        return 'Removed';
-      },
-    );
-    await model.choose(state, InstallationSource.pub);
-    expect(model.removal, isNotNull);
-    expect(removed, isFalse);
-    model.exit();
-    expect(model.removal, isNull);
-    expect(removed, isFalse);
-    await model.choose(state, InstallationSource.pub);
-    await model.apply(project, InstallationSource.pub);
-    expect(removed, isTrue);
-    model.dispose();
   });
 }
