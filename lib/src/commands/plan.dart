@@ -22,7 +22,11 @@ final class PlanCommand {
 
   int run({String? only}) {
     final repositoryName = git.root.split('/').last;
-    final uncommitted = git.isBound ? git.uncommitted.length : null;
+    // Outside Git there is no worktree to count; a repository with no
+    // commit yet still has uncommitted files.
+    final uncommitted = git.hasCommit || git.uncommitted.isNotEmpty
+        ? git.uncommitted.length
+        : null;
     if (only != null && resolution.unit(only) == null) {
       output.problem(
         Diagnostic(

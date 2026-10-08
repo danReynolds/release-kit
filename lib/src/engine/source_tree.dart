@@ -321,27 +321,12 @@ class GitSourceTree implements SourceTree {
   }
 }
 
-/// A repository-shaped directory with no Git identity.
-///
-/// Configuration supplies the roots worth staging. Discovery is deliberately
-/// handled by Dart workspace membership in `rk init`; this class never
-/// guesses release units by recursively searching unrelated directories.
+/// A directory with no Git identity, read as it is: status, plan and init
+/// work outside Git, and `rk use` reads the projects it installs from.
 class FileSystemSourceTree implements SourceTree {
-  FileSystemSourceTree(
-    this.root, {
-    Iterable<String> roots = const ['.'],
-    this.rootsAreFiles = false,
-  }) : roots = List.unmodifiable(roots);
+  FileSystemSourceTree(this.root);
 
   final String root;
-  final List<String> roots;
-
-  /// Whether every declared root is an exact file coordinate.
-  ///
-  /// Plan resolution needs only release.toml and configured manifests. A
-  /// directory at one of those coordinates is a wrong type, not permission to
-  /// recursively read unrelated contents beneath it.
-  final bool rootsAreFiles;
 
   @override
   String get description => root;
@@ -367,7 +352,6 @@ class FileSystemSourceTree implements SourceTree {
         throw SourceUnreadable(
           path,
           'the path component "$part" is a symbolic link',
-          kind: SourceUnreadableKind.wrongType,
         );
       }
     }
@@ -386,11 +370,7 @@ class FileSystemSourceTree implements SourceTree {
     final type = FileSystemEntity.typeSync(file.path, followLinks: false);
     if (type == FileSystemEntityType.notFound) return null;
     if (type != FileSystemEntityType.file) {
-      throw SourceUnreadable(
-        path,
-        'the path is not a regular file',
-        kind: SourceUnreadableKind.wrongType,
-      );
+      throw SourceUnreadable(path, 'the path is not a regular file');
     }
     try {
       return file.readAsBytesSync();
@@ -407,197 +387,25 @@ class FileSystemSourceTree implements SourceTree {
 
   @override
   List<String> trackedFiles() {
-    final files = <String>{};
-    for (final declared in roots) {
-      final normalized = declared == '.' ? '' : declared;
-      final full = _resolve(normalized);
-      final type = FileSystemEntity.typeSync(full, followLinks: false);
-      if (type == FileSystemEntityType.file) {
-        files.add(normalized);
-        continue;
-      }
-      if (rootsAreFiles && type != FileSystemEntityType.notFound) {
-        throw SourceUnreadable(
-          normalized,
-          'the path is not a regular file',
-          kind: SourceUnreadableKind.wrongType,
-        );
-      }
-      if (type != FileSystemEntityType.directory) continue;
-      for (final entity in Directory(
-        full,
-      ).listSync(recursive: true, followLinks: false)) {
-        if (entity is! File) continue;
-        final relative = entity.path
-            .substring(
-              root.endsWith(Platform.pathSeparator)
-                  ? root.length
-                  : root.length + 1,
-            )
-            .split(Platform.pathSeparator)
-            .join('/');
-        if (relative == '.rk' || relative.startsWith('.rk/')) continue;
-        if (relative == '.git' || relative.startsWith('.git/')) continue;
-        files.add(relative);
-      }
-    }
-    final ordered = files.toList()..sort();
-    return ordered;
-  }
-}
-
-/// The current, non-ignored files in a Git working tree.
-///
-/// Used only when a dirty repository releases targets whose identity does not
-/// depend on Git. Tracked edits and untracked files are included; ignored
-/// build output and `.git` metadata are not. The resulting release is bound to
-/// the stage's byte snapshot, never to HEAD.
-class GitWorktreeSourceTree extends FileSystemSourceTree {
-  GitWorktreeSourceTree(super.root);
-
-  @override
-  List<String> trackedFiles() {
-    final result = timedRunSync('git', const [
-      'ls-files',
-      '--cached',
-      '--others',
-      '--exclude-standard',
-      '-z',
-    ], workingDirectory: root);
-    if (result.exitCode != 0) {
-      throw SourceUnreadable(
-        'the Git working-tree file list',
-        (result.stderr as String).trim(),
-      );
-    }
     final files = <String>[];
-    for (final path
-        in (result.stdout as String)
-            .split('\u0000')
-            .where((path) => path.isNotEmpty)
-            .where((path) => path != '.rk' && !path.startsWith('.rk/'))) {
-      final type = FileSystemEntity.typeSync('$root/$path', followLinks: false);
-      // A deleted tracked path remains in the index but is intentionally
-      // absent from this working-tree snapshot.
-      if (type == FileSystemEntityType.notFound) continue;
-      if (type != FileSystemEntityType.file) {
-        throw SourceUnreadable(
-          path,
-          'the worktree entry is not a regular file',
-          kind: SourceUnreadableKind.wrongType,
-        );
-      }
-      files.add(path);
+    for (final entity in Directory(
+      root,
+    ).listSync(recursive: true, followLinks: false)) {
+      if (entity is! File) continue;
+      final relative = entity.path
+          .substring(
+            root.endsWith(Platform.pathSeparator)
+                ? root.length
+                : root.length + 1,
+          )
+          .split(Platform.pathSeparator)
+          .join('/');
+      if (relative == '.rk' || relative.startsWith('.rk/')) continue;
+      if (relative == '.git' || relative.startsWith('.git/')) continue;
+      files.add(relative);
     }
-    files.sort();
-    return List.unmodifiable(files);
+    return files..sort();
   }
-}
-
-/// An immutable, internally consistent copy of a [SourceTree].
-///
-/// Dirty releases resolve and stage from this same copy. Capturing reads the
-/// inventory and every byte twice, refusing a source that moves while it is
-/// being frozen; a reviewed package coordinate can therefore never publish
-/// later working-tree bytes.
-final class FrozenSourceTree implements SourceTree {
-  FrozenSourceTree._(this._files, this._existing, this.description);
-
-  factory FrozenSourceTree.capture(
-    SourceTree source, {
-    Iterable<String> preservePaths = const [],
-  }) {
-    final preserved = preservePaths.map(_normalizeSourcePath).toSet();
-    final existingBefore = <String>{
-      for (final path in preserved)
-        if (source.exists(path)) path,
-    };
-    final before = source.trackedFiles().toSet();
-    final captured = <String, List<int>>{};
-    for (final path in before.toList()..sort()) {
-      final bytes = source.readBytes(path);
-      if (bytes == null) {
-        throw SourceUnreadable(
-          path,
-          'the file disappeared while freezing',
-          kind: SourceUnreadableKind.changed,
-        );
-      }
-      captured[path] = List<int>.unmodifiable(bytes);
-    }
-
-    final after = source.trackedFiles().toSet();
-    if (!before.containsAll(after) || !after.containsAll(before)) {
-      throw SourceUnreadable(
-        'the working-tree file list',
-        'files changed while the source snapshot was being frozen',
-        kind: SourceUnreadableKind.changed,
-      );
-    }
-    for (final path in after.toList()..sort()) {
-      final bytes = source.readBytes(path);
-      if (bytes == null || !_sameBytes(captured[path]!, bytes)) {
-        throw SourceUnreadable(
-          path,
-          'the file changed while the source snapshot was being frozen',
-          kind: SourceUnreadableKind.changed,
-        );
-      }
-    }
-    final existingAfter = <String>{
-      for (final path in preserved)
-        if (source.exists(path)) path,
-    };
-    if (!existingBefore.containsAll(existingAfter) ||
-        !existingAfter.containsAll(existingBefore)) {
-      throw SourceUnreadable(
-        'the working-tree path set',
-        'paths changed while the source snapshot was being frozen',
-        kind: SourceUnreadableKind.changed,
-      );
-    }
-    return FrozenSourceTree._(
-      Map<String, List<int>>.unmodifiable(captured),
-      Set<String>.unmodifiable(existingBefore),
-      source.description,
-    );
-  }
-
-  final Map<String, List<int>> _files;
-  final Set<String> _existing;
-
-  @override
-  final String description;
-
-  @override
-  String? read(String path) {
-    final bytes = readBytes(path);
-    return bytes == null ? null : utf8.decode(bytes);
-  }
-
-  @override
-  List<int>? readBytes(String path) => _files[_normalizeSourcePath(path)];
-
-  @override
-  bool exists(String path) {
-    final target = _normalizeSourcePath(path);
-    if (target.isEmpty) return true;
-    if (_existing.contains(target)) return true;
-    if (_files.containsKey(target)) return true;
-    final prefix = '$target/';
-    return _files.keys.any((candidate) => candidate.startsWith(prefix));
-  }
-
-  @override
-  List<String> trackedFiles() => List<String>.unmodifiable(_files.keys);
-}
-
-bool _sameBytes(List<int> left, List<int> right) {
-  if (left.length != right.length) return false;
-  for (var index = 0; index < left.length; index++) {
-    if (left[index] != right[index]) return false;
-  }
-  return true;
 }
 
 String _normalizeSourcePath(String path) =>
@@ -665,7 +473,6 @@ class GitCommitSourceTree implements SourceTree {
         target,
         'the committed entry is a ${entry.unsupportedKind}, not a regular '
         'file',
-        kind: SourceUnreadableKind.wrongType,
       );
     }
     return _repository.readBytesAt(commit, target);
@@ -714,18 +521,11 @@ class MemorySourceTree implements SourceTree {
 /// Distinct from absence on purpose: the two call for opposite responses, and
 /// telling an operator to create a file they already have is the kind of
 /// answer that costs them an afternoon.
-enum SourceUnreadableKind { unreadable, wrongType, changed }
-
 class SourceUnreadable implements Exception {
-  SourceUnreadable(
-    this.path,
-    this.reason, {
-    this.kind = SourceUnreadableKind.unreadable,
-  });
+  SourceUnreadable(this.path, this.reason);
 
   final String path;
   final String reason;
-  final SourceUnreadableKind kind;
 
   @override
   String toString() => '$path could not be read: $reason';

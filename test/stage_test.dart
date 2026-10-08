@@ -190,26 +190,12 @@ void main() {
       expect(() => _identity({'bad': double.nan}), throwsFormatException);
     });
 
-    test('unbound identities are invocation-scoped and claim no revision', () {
-      final first = StageIdentity.forUnboundPlan(
-        runId: 'run-a',
-        resolvedPlan: const {'unit': 'tool'},
-      );
-      final sameRun = StageIdentity.forUnboundPlan(
-        runId: 'run-a',
-        resolvedPlan: const {'unit': 'tool'},
-      );
-      final laterRun = StageIdentity.forUnboundPlan(
-        runId: 'run-b',
-        resolvedPlan: const {'unit': 'tool'},
-      );
+    test('a receipt from a stage of uncommitted source is not read', () {
+      final identity = _identity(const {'unit': 'tool'});
+      final json = {...identity.toJson(), 'run_id': 'run-a'};
 
-      expect(first.id, sameRun.id);
-      expect(first.id, isNot(laterRun.id));
-      expect(first.isGitBound, isFalse);
-      expect(first.headCommit, isNull);
-      expect(first.headTree, isNull);
-      expect(StageIdentity.fromJson(first.toJson()).id, first.id);
+      expect(() => StageIdentity.fromJson(json), throwsFormatException);
+      expect(StageIdentity.fromJson(identity.toJson()).id, identity.id);
     });
   });
 

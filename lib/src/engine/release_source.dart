@@ -4,179 +4,128 @@ import 'git.dart';
 import 'resolve.dart';
 import 'source_tree.dart';
 
-/// The source identity selected for one status or release scope.
+/// Where a command reads release.toml and the pubspecs, and the Git facts it
+/// reads them with. Status, plan, stage and release all start here, and read
+/// the configuration once.
 ///
-/// A clean Git repository stays commit-bound. A dirty repository may instead
-/// use its current working tree only when none of the selected units needs a
-/// Git identity; that mode is an unbound, single-invocation byte snapshot.
+/// A clean repository's configuration is read at its HEAD commit: those are
+/// the bytes a stage is built from, whatever the working tree does meanwhile —
+/// even a skip-worktree edit Git does not report. Anything else is read from
+/// the working tree as it is: uncommitted changes, a repository with no
+/// commit yet, or a directory outside Git. Status and plan work there; stage
+/// and release refuse it before any work ([GitState.stagingProblem]).
 final class ReleaseSource {
-  const ReleaseSource._({
-    required this.resolution,
+  ReleaseSource._({
+    required this.root,
+    required this.git,
+    required this.inRepository,
     required this.tree,
-    required this.binding,
-    required this.repository,
-    this.warning,
   });
 
-  /// [repository] is the state already read for this invocation. Reading
-  /// it again here asked git the same eleven questions twice per run.
-  static ReleaseSource? select({
-    required SourceTree tree,
-    required GitState git,
-    required GitState repository,
-    required Resolution resolution,
-    required String? only,
-    required Diagnostics diagnostics,
-  }) {
-    if (!git.isBound) {
-      final frozen = _freeze(tree, diagnostics);
-      if (frozen == null) return null;
-      final frozenResolution = _resolve(frozen, diagnostics);
-      if (frozenResolution == null) return null;
-      if (!_validateUnboundTargets(frozenResolution, only, diagnostics)) {
-        return null;
-      }
+  /// The source containing [directory].
+  static Future<ReleaseSource> open(String directory) async {
+    final gitRoot = GitSourceTree.findRoot(directory);
+    if (gitRoot == null) {
       return ReleaseSource._(
-        resolution: frozenResolution,
-        tree: frozen,
-        binding: git,
-        repository: git,
+        root: directory,
+        git: GitState.none(directory),
+        inRepository: false,
+        tree: FileSystemSourceTree(directory),
       );
     }
-
-    if (repository.worktreeStatusError != null) {
-      // The command will surface RK-GIT-008 before any stage or public act.
-      // Retain the preliminary model because rk cannot safely decide whether
-      // the worktree is a clean commit or a snapshot candidate.
-      return ReleaseSource._(
-        resolution: resolution,
-        tree: tree,
-        binding: repository,
-        repository: repository,
-      );
-    }
-
-    if (repository.isClean) {
-      final committed = GitCommitSourceTree(repository.root, repository.head);
-      final committedResolution = _resolve(committed, diagnostics);
-      if (committedResolution == null) return null;
-      return ReleaseSource._(
-        resolution: committedResolution,
-        tree: GitSourceTree(repository.root),
-        binding: repository,
-        repository: repository,
-      );
-    }
-
-    final frozen = _freeze(GitWorktreeSourceTree(repository.root), diagnostics);
-    if (frozen == null) return null;
-    final frozenResolution = _resolve(frozen, diagnostics);
-    if (frozenResolution == null) return null;
-    final selected = _selected(frozenResolution, only).toList();
-    final needsGit =
-        selected.isEmpty || selected.any((unit) => unit.requiresGit);
+    final git = await GitState.read(gitRoot);
     return ReleaseSource._(
-      resolution: frozenResolution,
-      tree: frozen,
-      binding: needsGit ? repository : GitState.unbound(repository.root),
-      repository: repository,
-      warning: needsGit ? null : repository.uncommittedSnapshotWarning(),
+      root: gitRoot,
+      git: git,
+      inRepository: true,
+      tree: GitSourceTree(gitRoot),
     );
   }
 
-  static FrozenSourceTree? _freeze(SourceTree source, Diagnostics diagnostics) {
-    try {
-      return FrozenSourceTree.capture(source);
-    } on SourceUnreadable catch (error) {
-      diagnostics.add(
-        'RK-SRC-003',
-        'the source snapshot could not be frozen',
-        remedy:
-            '${error.path}: ${error.reason}\n'
-            'Stop concurrent edits, then run rk again.',
-      );
-      return null;
-    }
-  }
+  /// The repository root, or the directory itself outside Git.
+  final String root;
 
-  static Resolution? _resolve(SourceTree source, Diagnostics diagnostics) {
-    try {
-      final configSource = source.read('release.toml');
-      if (configSource == null) {
-        diagnostics.add(
-          'RK-SRC-003',
-          'release.toml disappeared while the source snapshot was frozen',
-          remedy: 'Restore the file, then run rk again.',
-        );
-        return null;
-      }
-      final config = ReleaseConfig.parse(
-        configSource,
-        'release.toml',
-        diagnostics,
-      );
-      return config == null
-          ? null
-          : Resolution.resolve(config, source, diagnostics);
-    } on SourceUnreadable catch (error) {
-      diagnostics.add(
-        'RK-SRC-003',
-        'the selected source could not be read',
-        remedy:
-            '${error.path}: ${error.reason}\n'
-            'Make every release input a regular repository file, then run '
-            'rk again.',
-      );
-      return null;
-    }
-  }
+  final GitState git;
 
-  static bool _validateUnboundTargets(
-    Resolution resolution,
-    String? only,
-    Diagnostics diagnostics,
-  ) {
-    var valid = true;
-    for (final unit in _selected(resolution, only)) {
-      final requiringGit = <String>{
-        for (final target in unit.publish)
-          if (target.requiresGit) target.configName,
-        for (final project in unit.projects)
-          for (final target in project.publish)
-            if (target.requiresGit) target.configName,
-      }.toList()..sort();
-      if (requiringGit.isEmpty) continue;
-      valid = false;
-      diagnostics.add(
-        'RK-SRC-001',
-        '${unit.name} selects targets that require Git',
-        remedy:
-            'initialize a Git repository, or remove '
-            '${requiringGit.join(', ')} from this unit',
-      );
-    }
-    return valid;
-  }
+  /// Whether [root] is a Git repository at all.
+  final bool inRepository;
 
-  static Iterable<ResolvedUnit> _selected(
-    Resolution resolution,
-    String? only,
-  ) => only == null
-      ? resolution.units
-      : resolution.units.where((unit) => unit.name == only);
-
-  /// The release model parsed from [tree]. For dirty source, both are the
-  /// same immutable capture rather than observations made at different times.
-  final Resolution resolution;
-
+  /// The repository's files as they are. Staging reads the commit itself.
   final SourceTree tree;
 
-  /// The identity used by stages and public comparisons.
-  final GitState binding;
+  /// Parses release.toml and resolves it: at HEAD when the repository is
+  /// clean, from [tree] otherwise.
+  ConfigRead readConfig() {
+    final tree = git.isClean && git.hasCommit
+        ? GitCommitSourceTree(root, git.head)
+        : this.tree;
+    final String? text;
+    try {
+      text = tree.read('release.toml');
+    } on SourceUnreadable catch (error) {
+      return ConfigProblems([_unreadable(error)]);
+    }
+    if (text == null) {
+      return tree.exists('release.toml')
+          ? ConfigProblems([
+              wrongReleaseConfig('release.toml must be a regular file'),
+            ])
+          : const ConfigMissing();
+    }
+    final diagnostics = Diagnostics();
+    try {
+      final config = ReleaseConfig.parse(text, 'release.toml', diagnostics);
+      final resolution = config == null
+          ? null
+          : Resolution.resolve(config, tree, diagnostics);
+      if (resolution != null && diagnostics.isEmpty) {
+        return ConfigResolved(resolution);
+      }
+    } on SourceUnreadable catch (error) {
+      diagnostics.report(_unreadable(error));
+    }
+    return ConfigProblems(diagnostics.found);
+  }
 
-  /// The surrounding repository, retained for honest status metadata.
-  final GitState repository;
+  static Diagnostic _unreadable(SourceUnreadable error) =>
+      error.path == 'release.toml'
+      ? wrongReleaseConfig(error.reason)
+      : Diagnostic(
+          code: 'RK-SRC-003',
+          message: 'the source could not be read',
+          remedy:
+              '${error.path}: ${error.reason}\n'
+              'Make every release input a readable regular file in the '
+              'repository, then run rk again.',
+        );
 
-  /// Nonblocking disclosure when current working-tree bytes are captured.
-  final Diagnostic? warning;
+  static Diagnostic wrongReleaseConfig(String reason) => Diagnostic(
+    code: 'RK-CONF-034',
+    message: 'release.toml is there and rk could not read it',
+    source: const SourceLocation('release.toml', 1),
+    remedy: reason,
+  );
+}
+
+/// What reading release.toml found.
+sealed class ConfigRead {
+  const ConfigRead();
+}
+
+/// No release.toml: a repository that does not use rk, which is an answer
+/// rather than a failure.
+final class ConfigMissing extends ConfigRead {
+  const ConfigMissing();
+}
+
+final class ConfigProblems extends ConfigRead {
+  const ConfigProblems(this.problems);
+
+  final List<Diagnostic> problems;
+}
+
+final class ConfigResolved extends ConfigRead {
+  const ConfigResolved(this.resolution);
+
+  final Resolution resolution;
 }

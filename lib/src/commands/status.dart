@@ -27,24 +27,18 @@ class StatusCommand {
     required this.resolution,
     required this.tree,
     required this.git,
-    GitState? repositoryGit,
-    this.sourceWarning,
     required this.inspector,
     required this.output,
     this.stageFor,
     HostCapabilities? capabilities,
-  }) : repositoryGit = repositoryGit ?? git,
-       capabilities = capabilities ?? HostCapabilities.inspect();
+  }) : capabilities = capabilities ?? HostCapabilities.inspect();
 
   final Resolution resolution;
   final SourceTree tree;
 
-  /// The source identity used for staging and comparison.
+  /// The repository: the commit a stage is built from, and what it says
+  /// about the worktree around it.
   final GitState git;
-
-  /// The surrounding repository, even when dirty bytes use an unbound stage.
-  final GitState repositoryGit;
-  final Diagnostic? sourceWarning;
   final Inspector inspector;
   final Output output;
   final HostCapabilities capabilities;
@@ -109,9 +103,7 @@ class StatusCommand {
     String? nextCommand;
     final unfinished = snapshots.where(_workRemains).toList();
     bool readyToRelease(StatusUnitSnapshot snapshot) =>
-        _isLocalOnlyOutput(snapshot) ||
-        !git.isBound ||
-        snapshot.stage?.reusable == true;
+        _isLocalOnlyOutput(snapshot) || snapshot.stage?.reusable == true;
     if (uniqueIssues.isEmpty && unfinished.length == 1) {
       final snapshot = unfinished.single;
       nextCommand = readyToRelease(snapshot)
@@ -126,7 +118,6 @@ class StatusCommand {
     return StatusSnapshot(
       units: snapshots,
       issues: uniqueIssues,
-      warning: workRemains ? sourceWarning : null,
       nextCommand: nextCommand,
       nextUnit: unfinished.length == 1 && nextCommand != null
           ? unfinished.single.unit.name
@@ -139,15 +130,15 @@ class StatusCommand {
     final uniqueIssues = snapshot.issues;
     output.repository(
       name: tree.description.split('/').last,
-      branch: repositoryGit.branch,
-      commit: repositoryGit.hasCommit ? repositoryGit.shortHead : null,
-      uncommitted: repositoryGit.uncommitted.length,
+      branch: git.branch,
+      commit: git.hasCommit ? git.shortHead : null,
+      uncommitted: git.uncommitted.length,
       head: git.hasCommit ? git.head : null,
-      remote: repositoryGit.originUrl,
-      sourceBinding: git.isBound ? 'gitCommit' : 'unbound',
-      sourceComparison: git.isBound ? 'exact' : 'unavailable',
+      remote: git.originUrl,
+      sourceBinding: git.hasCommit ? 'gitCommit' : 'unbound',
+      sourceComparison: git.hasCommit ? 'exact' : 'unavailable',
     );
-    if (!git.isBound) {
+    if (!git.hasCommit) {
       output.line(
         'Source',
         note: 'unbound · comparison unavailable',
@@ -161,11 +152,6 @@ class StatusCommand {
       _renderUnit(snapshot);
     }
 
-    if (snapshot.warning != null) {
-      output.blank();
-      output.heading('Warnings');
-      output.warning(snapshot.warning!, depth: 1);
-    }
     if (uniqueIssues.isNotEmpty) _renderIssues(uniqueIssues);
 
     if (uniqueIssues.isNotEmpty) {
@@ -469,9 +455,7 @@ class StatusCommand {
 
   Future<_StageResult> _inspectStage(ResolvedUnit unit) async {
     final factory = stageFor ?? inspector.stageFor;
-    if (factory == null ||
-        !_isFullObjectId(git.head) ||
-        !_isFullObjectId(git.headTree)) {
+    if (factory == null || !git.hasCommit) {
       return const _StageResult(state: Inspection.absent(detail: 'not staged'));
     }
     try {
@@ -1153,8 +1137,8 @@ class StatusCommand {
       currentVersion: target.currentVersion,
       detail: state.detail,
       uses: target.expectation.uses,
-      sourceBinding: git.isBound ? 'gitCommit' : 'unbound',
-      sourceComparison: git.isBound ? 'exact' : 'unavailable',
+      sourceBinding: git.hasCommit ? 'gitCommit' : 'unbound',
+      sourceComparison: git.hasCommit ? 'exact' : 'unavailable',
       artifacts: [
         for (final artifact in target.artifacts)
           {
@@ -1252,9 +1236,6 @@ class StatusCommand {
   static String _detailSuffix(String? detail) =>
       detail == null || detail.isEmpty ? '' : ': $detail';
 
-  static bool _isFullObjectId(String value) =>
-      RegExp(r'^(?:[0-9a-f]{40}|[0-9a-f]{64})$').hasMatch(value);
-
   static String _shortObjectId(String value) =>
       value.length > 7 ? value.substring(0, 7) : value;
 
@@ -1276,16 +1257,15 @@ class StatusCommand {
     );
   }
 
+  /// What stops staging here, shown once work remains: the source must be a
+  /// clean commit, and a tag needs that commit on origin.
   void _checkRepositoryState(
     Diagnostics problems,
     Iterable<ResolvedUnit> units,
   ) {
-    if (sourceWarning == null) {
-      final uncommitted = repositoryGit.uncommittedProblem();
-      if (uncommitted != null) problems.report(uncommitted);
-    }
+    if (git.stagingProblem() case final problem?) problems.report(problem);
     if (units.any((unit) => unit.publish.contains(PublishTarget.gitTag))) {
-      final unpushed = repositoryGit.unpushedProblem();
+      final unpushed = git.unpushedProblem();
       if (unpushed != null) problems.report(unpushed);
     }
   }
@@ -1306,14 +1286,12 @@ class StatusSnapshot {
   StatusSnapshot({
     required Iterable<StatusUnitSnapshot> units,
     required Iterable<StatusIssue> issues,
-    this.warning,
     this.nextCommand,
     this.nextUnit,
   }) : units = List.unmodifiable(units),
        issues = List.unmodifiable(issues);
   final List<StatusUnitSnapshot> units;
   final List<StatusIssue> issues;
-  final Diagnostic? warning;
   final String? nextCommand;
   final String? nextUnit;
 }

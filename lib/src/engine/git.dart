@@ -24,10 +24,12 @@ class GitState {
     required this.signingConfigured,
     this.tagSigningRequested = false,
     required this.originUrl,
-    this.isBound = true,
   }) : headTree = headTree ?? head;
 
-  GitState.unbound(String root)
+  /// A directory outside any Git repository: no commit, no remote, nothing
+  /// uncommitted. Status and plan read such a directory as it is; stage and
+  /// release refuse it ([stagingProblem]).
+  GitState.none(String root)
     : this(
         root: root,
         head: '',
@@ -40,16 +42,12 @@ class GitState {
         tags: const [],
         signingConfigured: false,
         originUrl: null,
-        isBound: false,
       );
 
-  final bool isBound;
-
-  /// Whether this source has an actual commit identity.
-  ///
-  /// A freshly initialized repository is Git-bound but has no HEAD yet. It
-  /// must not serialize an empty string where reports promise a full commit.
-  bool get hasCommit => isBound && head.isNotEmpty;
+  /// Whether this source has a commit. A freshly initialized repository has
+  /// no HEAD yet, and must not serialize an empty string where reports promise
+  /// a full commit.
+  bool get hasCommit => head.isNotEmpty;
 
   final String root;
 
@@ -212,7 +210,6 @@ class GitState {
   /// named up to eight files, while release said "1 paths are uncommitted"
   /// and named none — one diagnostic code, two --json payloads.
   Diagnostic? uncommittedProblem() {
-    if (!isBound) return null;
     if (worktreeStatusError != null) {
       return Diagnostic(
         code: 'RK-GIT-008',
@@ -224,18 +221,6 @@ class GitState {
       );
     }
     if (isClean) return null;
-    return _uncommittedDiagnostic(snapshot: false);
-  }
-
-  /// The nonblocking form used when no selected target needs Git identity.
-  Diagnostic? uncommittedSnapshotWarning() {
-    if (!isBound || uncommitted.isEmpty || worktreeStatusError != null) {
-      return null;
-    }
-    return _uncommittedDiagnostic(snapshot: true);
-  }
-
-  Diagnostic _uncommittedDiagnostic({required bool snapshot}) {
     // Named, not counted: the ellipsis costs more characters than the path
     // it hides until the list is genuinely long.
     final paths = uncommitted.length <= 8
@@ -244,14 +229,29 @@ class GitState {
               '…and ${uncommitted.length - 8} more';
     return Diagnostic(
       code: 'RK-GIT-001',
-      message: snapshot
-          ? 'working-tree changes will be captured in the source snapshot'
-          : uncommitted.length == 1
+      message: uncommitted.length == 1
           ? '1 path is uncommitted'
           : '${uncommitted.length} paths are uncommitted',
-      remedy: snapshot
-          ? 'Commit them to bind this release to Git: $paths'
-          : 'a release is of a commit, and these are not in one: $paths',
+      remedy:
+          'commit first: a release is of a commit, and these are not in '
+          'one: $paths',
+    );
+  }
+
+  /// Why this source cannot be staged or released, or null when it can.
+  ///
+  /// A stage is named by the commit it is built from, so stage and release
+  /// need a clean commit: uncommitted changes, a repository with no commit
+  /// yet, and a directory outside Git are each refused before any work.
+  Diagnostic? stagingProblem() {
+    if (uncommittedProblem() case final problem?) return problem;
+    if (hasCommit) return null;
+    return const Diagnostic(
+      code: 'RK-SRC-004',
+      message: 'there is no commit to stage or release',
+      remedy:
+          'rk stage and rk release build from a commit: put this directory '
+          'in a Git repository (git init), commit it, then run again',
     );
   }
 
@@ -259,8 +259,8 @@ class GitState {
   /// how far ahead, or that there is nowhere to push to at all. Shared by
   /// status and release so the two verbs cannot describe it differently.
   Diagnostic? unpushedProblem() {
-    if (!isBound) return null;
-    if (headIsPushed) return null;
+    // With no commit there is nothing to push: [stagingProblem] says what is.
+    if (!hasCommit || headIsPushed) return null;
     if (!hasRemote) {
       return Diagnostic(
         code: 'RK-GIT-003',

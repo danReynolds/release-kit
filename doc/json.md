@@ -48,7 +48,7 @@ changes no public target.
 | `observed_at` | UTC ISO 8601 — when rk read the world |
 | `exit` | mirrors the process exit code |
 | `rerun_helps` | whether re-running would move things forward — false on conflicts, where a human has to decide. Re-running is always *safe*: the same inspection precedes every act |
-| `repository` | `{name, branch?, head?, remote, uncommitted?, source_binding?, source_comparison?}`. `head` is the full 40-char SHA and is absent for unbound source. `remote` is always present and null when no origin exists. Status, stage, and release report `source_binding` as `gitCommit` or `unbound`, independently from `source_comparison` (`exact` or `unavailable`) |
+| `repository` | `{name, branch?, head?, remote, uncommitted?, source_binding?, source_comparison?}`. `head` is the full 40-char SHA and is absent when there is no commit: outside Git, or before the first commit. `remote` is always present and null when no origin exists. Status, stage, and release report `source_binding` as `gitCommit` when the source has a commit and `unbound` when it has none, independently from `source_comparison` (`exact` or `unavailable`). Stage and release need a clean commit |
 | `init` | present on `init`: `{source: {binding, git_remote, github_repository}, notices[], candidates[]}`. `github_repository` is always present and null when unavailable. Each discovered candidate is reported even when the interactive selector hides it by default, with its unit, native project/path/version/executables and every option's `available`, redacted `reason`, `selected`, and deterministic `effects[]`. A candidate is included when at least one release output is selected |
 | `cleanup` | present on `clean`: `{root, path, found, removed}` for the frozen repository-local stage set. `root` is the absolute repository root and `path` is always `.rk/work/stages`; diagnoses are outside it and are never removed |
 | `plan` | present on `plan`: the canonical configured release topology. It is source-only and contains no observation, verdict, action, credential, or stage receipt |
@@ -68,8 +68,8 @@ credential state. The accompanying sentence states what changed and whether
 re-running can advance the work.
 
 An empty `problems[]` remains the release gate. `warnings[]` never changes the
-exit code or authorizes work by itself; it discloses facts such as a
-registry-only release capturing dirty working-tree state.
+exit code or authorizes work by itself; it discloses facts such as a staged
+binary that was built but never run.
 
 Successful stage-only and local-only releases include `stage id` and
 `stage path` in the `completeStage` step's `evidence`. The path is relative to
@@ -87,8 +87,9 @@ progress.
 
 `rk plan [unit] --json` derives topology from the configured source and native
 manifests. It does not inspect public destinations or decide what is already
-complete. A clean Git repository is read from immutable `HEAD`; dirty and
-unbound source is captured as one byte snapshot. Git is read once. The top-level `plan`
+complete. A clean Git repository is read from immutable `HEAD`; a dirty one,
+or a directory outside Git, from its working tree. The configuration is read
+once. The top-level `plan`
 object is:
 
 ```text

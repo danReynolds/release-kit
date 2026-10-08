@@ -13,7 +13,6 @@ import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
 import 'package:rk/src/engine/release_stage.dart';
 import 'package:rk/src/engine/registry.dart';
-import 'package:rk/src/engine/release_manifest.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage_inspection.dart';
@@ -392,113 +391,55 @@ void main() {
     },
   );
 
-  test(
-    'a non-Git one-shot release binds bytes but claims no revision',
-    () async {
-      final unbound = _Harness(unbound: true);
-      addTearDown(unbound.close);
+  for (final stageOnly in [true, false]) {
+    test('without a commit, ${stageOnly ? 'stage' : 'release'} refuses '
+        'before any work', () async {
+      final pub = _Harness(pubOnly: true);
+      addTearDown(pub.close);
+      pub.git = GitState.none(pub.root.path);
 
-      final run = await unbound.run(
-        stageOnly: false,
-        confirm: (_) async => '1.2.3',
+      final run = await pub.run(
+        stageOnly: stageOnly,
+        confirm: (_) async => fail('the refusal needs no authorization'),
       );
 
-      expect(run.code, ExitCodes.ok, reason: run.text);
-      expect(run.text, startsWith('Releasing tool 1.2.3\n'));
-      expect(run.text, contains('worktree · working tree'));
-      expect(run.text, isNot(contains('main@')));
-      expect(run.publicMutations.map((call) => call.publicKind), ['pub.dev']);
-      final receipt = unbound.stage.requireReceipt();
-      expect(receipt.identity.isGitBound, isFalse);
-      expect(receipt.identity.headCommit, isNull);
-      expect(receipt.steps.last.evidence['source_binding'], 'unbound');
-      final manifest = ReleaseManifest.parse(
-        File(
-          unbound.stage.directory.resolve(ReleaseAssets.manifest),
-        ).readAsStringSync(),
+      expect(run.code, ExitCodes.refused, reason: run.text);
+      expect(run.problemCodes, ['RK-SRC-004']);
+      expect(run.text, contains('git init'));
+      expect(run.publicMutations, isEmpty);
+      expect(
+        Directory('${pub.root.path}/.rk/work/stages').existsSync(),
+        isFalse,
       );
-      expect(manifest.commit, isNull);
-    },
-  );
+    });
+  }
 
-  test('a unit keeps one stage of a source with no commit', () async {
-    // No later run can reuse it, so each run's stage replaces the last.
-    final unbound = _Harness(unbound: true);
-    addTearDown(unbound.close);
-    List<FileSystemEntity> stages() =>
-        Directory('${unbound.root.path}/.rk/work/stages').listSync();
-
-    // Declined each time, so each run stages and publishes nothing.
-    final first = await unbound.run(
-      stageOnly: false,
-      confirm: (_) async => 'no',
-    );
-    expect(first.problemCodes, ['RK-AUTH-002'], reason: first.text);
-    expect(stages(), hasLength(1));
-    final earlier = stages().single.path;
-
-    // A new process: its stages resolve afresh.
-    unbound.stages = ReleaseStages(
-      source: unbound.source,
-      git: unbound.git,
-      stageContracts: TargetCatalog.builtIn().stageContractResolver(
-        unbound.resolution,
-      ),
-      repositoryRoot: unbound.root.path,
-    );
-    final second = await unbound.run(
-      stageOnly: false,
-      confirm: (_) async => 'no',
-    );
-    expect(second.problemCodes, ['RK-AUTH-002'], reason: second.text);
-    expect(stages(), hasLength(1));
-    expect(stages().single.path, isNot(earlier));
-  });
-
-  test('a dirty registry-only snapshot warns and still releases', () async {
-    final unbound = _Harness(unbound: true);
-    addTearDown(unbound.close);
-    final repository = unbound.gitAt(
+  test('uncommitted changes refuse a unit whatever it publishes', () async {
+    final pub = _Harness(pubOnly: true);
+    addTearDown(pub.close);
+    pub.git = pub.gitAt(
       isClean: false,
       uncommitted: const ['packages/tool/pubspec.yaml'],
     );
 
-    final run = await unbound.run(
+    final run = await pub.run(
       stageOnly: false,
-      confirm: (_) async => 'yes',
-      repositoryGit: repository,
-      sourceWarning: repository.uncommittedSnapshotWarning(),
-    );
-
-    expect(run.code, ExitCodes.ok, reason: run.text);
-    expect(run.publicMutations.map((call) => call.publicKind), ['pub.dev']);
-    expect(run.problemCodes, isEmpty);
-    expect(run.warningCodes, ['RK-GIT-001']);
-    expect(run.text, contains('will be captured in the source snapshot'));
-    expect(run.text, isNot(contains('RK-GIT-001')));
-    expect(unbound.stage.requireReceipt().identity.isGitBound, isFalse);
-  });
-
-  test('non-Git stage-only refuses the unusable handoff', () async {
-    final unbound = _Harness(unbound: true);
-    addTearDown(unbound.close);
-
-    final run = await unbound.run(
-      stageOnly: true,
       confirm: (_) async => fail('the refusal needs no authorization'),
     );
 
     expect(run.code, ExitCodes.refused, reason: run.text);
-    expect(run.problemCodes, ['RK-SRC-002']);
+    expect(run.problemCodes, ['RK-GIT-001']);
+    expect(run.text, contains('commit first'));
+    expect(run.warningCodes, isEmpty);
     expect(run.publicMutations, isEmpty);
-    expect(unbound.stage.inspect().receipt, isNull);
+    expect(Directory('${pub.root.path}/.rk/work/stages').existsSync(), isFalse);
   });
 
   test(
     'a binary-only release writes local archives without authorization',
     () async {
-      for (final unbound in [false, true]) {
-        final local = _Harness(localBinaryOnly: true, unbound: unbound);
+      {
+        final local = _Harness(localBinaryOnly: true);
         addTearDown(local.close);
 
         final run = await local.run(
@@ -716,30 +657,6 @@ void main() {
           'build:tool:linux-x64',
           'archive:tool:linux-x64',
         ]),
-      );
-    },
-  );
-
-  test(
-    'non-Git existing version skips without rebuilding historical bytes',
-    () async {
-      final unbound = _Harness(unbound: true);
-      addTearDown(unbound.close);
-      unbound.registry.published['tool']!.add('1.2.3');
-      unbound.registry.archives['tool@1.2.3'] = _publishedPackage();
-
-      final run = await unbound.run(
-        stageOnly: false,
-        confirm: (_) async => fail('an exact release needs no authorization'),
-      );
-
-      expect(run.code, ExitCodes.ok, reason: run.text);
-      expect(run.publicMutations, isEmpty);
-      expect(run.text, contains('already released'));
-      expect(unbound.stage.inspect().reusable, isFalse);
-      expect(
-        run.keys,
-        isNot(contains('dart pub publish --to-archive <archive>')),
       );
     },
   );
@@ -2628,7 +2545,7 @@ bool _compilesFor(_Invocation call, String platform) =>
 
 class _Harness {
   _Harness({
-    bool unbound = false,
+    bool pubOnly = false,
     bool localBinaryOnly = false,
     bool twoPlatforms = false,
     bool nativePubArchive = false,
@@ -2638,7 +2555,7 @@ class _Harness {
         ? _twoPlatformConfig
         : localBinaryOnly
         ? _localBinaryConfig
-        : unbound
+        : pubOnly
         ? _pubOnlyConfig
         : _config;
     source = _InterruptibleSourceTree({
@@ -2662,7 +2579,7 @@ class _Harness {
     }
     resolution = resolved;
     unit = resolution.unit('tool')!;
-    git = unbound ? GitState.unbound(root.path) : gitAt();
+    git = gitAt();
     stages = ReleaseStages(
       source: source,
       git: git,
@@ -2729,8 +2646,6 @@ class _Harness {
     void Function(_Invocation call)? onInvocation,
     void Function()? onRegistryRead,
     Tools? readTools,
-    GitState? repositoryGit,
-    Diagnostic? sourceWarning,
   }) async {
     final start = tools.invocations.length;
     final buffer = StringBuffer();
@@ -2757,8 +2672,6 @@ class _Harness {
       resolution: resolution,
       tree: source,
       git: git,
-      repositoryGit: repositoryGit,
-      sourceWarning: sourceWarning,
       inspector: inspector,
       tools: tools,
       output: output,

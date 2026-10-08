@@ -16,7 +16,6 @@ class StageIdentity {
     required this.headCommit,
     required this.headTree,
     required this.planSha256,
-    required this.runId,
   });
 
   /// Canonicalizes [resolvedPlan] before hashing it: what the stage is built
@@ -32,41 +31,6 @@ class StageIdentity {
       headCommit: headCommit,
       headTree: headTree,
       planSha256: Sha256.hex(utf8.encode(plan)),
-    );
-  }
-
-  /// A one-invocation stage with no source revision claim.
-  factory StageIdentity.forUnboundPlan({
-    required String runId,
-    required Object? resolvedPlan,
-  }) {
-    final plan = CanonicalJson.encode(resolvedPlan);
-    return StageIdentity.fromUnboundDigests(
-      runId: runId,
-      planSha256: Sha256.hex(utf8.encode(plan)),
-    );
-  }
-
-  factory StageIdentity.fromUnboundDigests({
-    required String runId,
-    required String planSha256,
-  }) {
-    if (runId.trim().isEmpty || runId.contains(RegExp(r'[\u0000-\u001f]'))) {
-      throw ArgumentError('unbound stage run id is empty or invalid');
-    }
-    _requireSha256('resolved plan digest', planSha256);
-    final coordinates = <String, Object?>{
-      'plan_sha256': planSha256,
-      'run_id': runId,
-      'schema': stageSchemaVersion,
-      'source': 'unbound',
-    };
-    return StageIdentity._(
-      id: Sha256.hex(utf8.encode(CanonicalJson.encode(coordinates))),
-      headCommit: null,
-      headTree: null,
-      planSha256: planSha256,
-      runId: runId,
     );
   }
 
@@ -92,10 +56,12 @@ class StageIdentity {
       headCommit: headCommit,
       headTree: headTree,
       planSha256: planSha256,
-      runId: null,
     );
   }
 
+  /// The identity a receipt records. `run_id` is always null: it named the
+  /// stages of uncommitted source rk no longer makes, and stays in the
+  /// record so stages staged before keep their receipts.
   factory StageIdentity.fromJson(Object? value) {
     final map = _strictMap(value, const {
       'id',
@@ -104,19 +70,14 @@ class StageIdentity {
       'plan_sha256',
       'run_id',
     }, 'stage identity');
-    final commit = map['head_commit'];
-    final tree = map['head_tree'];
-    final runId = map['run_id'];
-    final identity = commit == null && tree == null && runId is String
-        ? StageIdentity.fromUnboundDigests(
-            runId: runId,
-            planSha256: _string(map, 'plan_sha256'),
-          )
-        : StageIdentity.fromDigests(
-            headCommit: _string(map, 'head_commit'),
-            headTree: _string(map, 'head_tree'),
-            planSha256: _string(map, 'plan_sha256'),
-          );
+    if (map['run_id'] != null) {
+      throw const FormatException('a stage of uncommitted source');
+    }
+    final identity = StageIdentity.fromDigests(
+      headCommit: _string(map, 'head_commit'),
+      headTree: _string(map, 'head_tree'),
+      planSha256: _string(map, 'plan_sha256'),
+    );
     if (_string(map, 'id') != identity.id) {
       throw const FormatException('stage identity does not match its inputs');
     }
@@ -124,19 +85,16 @@ class StageIdentity {
   }
 
   final String id;
-  final String? headCommit;
-  final String? headTree;
+  final String headCommit;
+  final String headTree;
   final String planSha256;
-  final String? runId;
-
-  bool get isGitBound => headCommit != null;
 
   Map<String, Object?> toJson() => {
     'head_commit': headCommit,
     'head_tree': headTree,
     'id': id,
     'plan_sha256': planSha256,
-    'run_id': runId,
+    'run_id': null,
   };
 }
 

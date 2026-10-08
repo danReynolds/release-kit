@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `test/codes_index_test.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-164 codes across 28 families.
+163 codes across 28 families.
 
 
 ## RK-AUTH — Authorization
@@ -103,7 +103,7 @@ fails, and the count below is checked against the rows.
 | `RK-CONF-029` | "$platform" is listed twice | `lib/src/engine/config.dart` |
 | `RK-CONF-032` | $key must be text | `lib/src/engine/config.dart` |
 | `RK-CONF-033` | git will not accept the tag pattern for "$unit": $issue | `lib/src/engine/config.dart` |
-| `RK-CONF-034` | release.toml is there and rk could not read it | `lib/src/commands/init.dart`, `bin/rk.dart` |
+| `RK-CONF-034` | release.toml is there and rk could not read it | `lib/src/commands/init.dart`, `lib/src/engine/release_source.dart` |
 | `RK-CONF-036` | unit "$name" declares homebrew_tap but does not publish to  homebrew | `lib/src/engine/config.dart` |
 | `RK-CONF-037` | $key is empty | `lib/src/engine/config.dart` |
 | `RK-CONF-038` | a target is declared at the wrong unit or project scope | `lib/src/engine/config.dart` |
@@ -139,7 +139,7 @@ fails, and the count below is checked against the rows.
 | `RK-GIT-004` | ${unit.version} is already published, and the tag  ${unit.tag} does not exist | `lib/src/engine/inspect.dart` |
 | `RK-GIT-005` | the tag ${unit.tag} points at ${_short(target)}, and this  release would publish from ${… | `lib/src/commands/status.dart`, `lib/src/engine/inspect.dart` |
 | `RK-GIT-007` | the tag exists, and rk could not read which commit it names | `lib/src/engine/inspect.dart` |
-| `RK-GIT-008` | the worktree state could not be read | `lib/src/engine/git.dart`, `bin/rk.dart` |
+| `RK-GIT-008` | the worktree state could not be read | `lib/src/engine/git.dart` |
 | `RK-GIT-009` | $tag was released from ${_short(releasedFrom)}, and its release is unfinished | `lib/src/engine/inspect.dart` |
 | `RK-GIT-006` | the repository could not be listed | `lib/src/commands/init.dart` |
 
@@ -276,9 +276,8 @@ RK-STAGE-004, the checks a release once repeated between staging and each act.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-SRC-001` | a unit selects targets that require Git from unbound source | `lib/src/engine/release_source.dart`, `bin/rk.dart` |
-| `RK-SRC-002` | an unbound stage cannot be authorized by a later run | `lib/src/commands/release.dart` |
-| `RK-SRC-003` | the source snapshot could not be selected or read | `lib/src/engine/release_source.dart`, `bin/rk.dart` |
+| `RK-SRC-003` | the source could not be read | `lib/src/engine/release_source.dart` |
+| `RK-SRC-004` | there is no commit to stage or release | `lib/src/engine/git.dart` |
 
 ## RK-STAGE — The private release stage
 

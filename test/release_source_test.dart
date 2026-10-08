@@ -1,15 +1,17 @@
 import 'dart:io';
 
-import 'package:rk/src/engine/config.dart';
-import 'package:rk/src/engine/diagnostic.dart';
-import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/release_source.dart';
-import 'package:rk/src/engine/resolve.dart';
-import 'package:rk/src/engine/source_tree.dart';
 import 'package:test/test.dart';
 
+/// Where status, plan, stage and release read release.toml from, against
+/// real repositories.
 void main() {
   late Directory root;
+
+  void git(List<String> args) {
+    final result = Process.runSync('git', args, workingDirectory: root.path);
+    expect(result.exitCode, 0, reason: '${result.stdout}${result.stderr}');
+  }
 
   setUp(() {
     root = Directory.systemTemp.createTempSync('rk-release-source-');
@@ -21,152 +23,77 @@ publish = ["pub.dev"]
 ''');
     _write(root, 'pubspec.yaml', 'name: tool\nversion: 1.0.0\n');
     _write(root, 'CHANGELOG.md', '## 1.0.0\n');
-    for (final args in const [
-      ['init', '-q'],
-      ['config', 'user.email', 'rk@example.test'],
-      ['config', 'user.name', 'rk tests'],
-      ['add', '-A'],
-      ['commit', '-qm', 'initial'],
-    ]) {
-      final result = Process.runSync('git', args, workingDirectory: root.path);
-      expect(result.exitCode, 0, reason: '${result.stdout}${result.stderr}');
-    }
   });
 
   tearDown(() => root.deleteSync(recursive: true));
 
-  test(
-    'dirty registry-only source includes working-tree and untracked bytes',
-    () async {
-      _write(root, 'notes.txt', 'untracked release note\n');
-      final tree = GitSourceTree(root.path);
-      final git = await GitState.read(root.path);
-      final resolution = _resolve(tree);
-      _write(root, 'pubspec.yaml', 'name: tool\nversion: 1.1.0\n');
-      final diagnostics = Diagnostics();
+  void commitAll() {
+    git(['init', '-q']);
+    git(['config', 'user.email', 'rk@example.test']);
+    git(['config', 'user.name', 'rk tests']);
+    git(['add', '-A']);
+    git(['commit', '-qm', 'initial']);
+  }
 
-      final source = ReleaseSource.select(
-        tree: tree,
-        git: git,
-        repository: git,
-        resolution: resolution,
-        only: null,
-        diagnostics: diagnostics,
-      )!;
+  test('a clean repository is read at its commit, and can be staged', () async {
+    commitAll();
+    final source = await ReleaseSource.open(root.path);
+    // An edit after Git said clean does not reach what is staged.
+    _write(root, 'pubspec.yaml', 'name: tool\nversion: 9.9.9\n');
 
-      expect(source.binding.isBound, isFalse);
-      expect(source.repository.root, git.root);
-      expect(source.warning?.code, 'RK-GIT-001');
-      expect(source.tree.read('pubspec.yaml'), contains('version: 1.1.0'));
-      expect(source.tree.read('notes.txt'), 'untracked release note\n');
-      expect(source.tree.trackedFiles(), contains('notes.txt'));
-      expect(source.resolution.unit('tool')!.version.canonical, '1.1.0');
-      _write(root, 'appeared-later.txt', 'drift\n');
-      expect(
-        source.tree.trackedFiles(),
-        isNot(contains('appeared-later.txt')),
-        reason: 'resolution and staging use the same immutable capture',
-      );
-    },
-  );
+    final read = source.readConfig() as ConfigResolved;
 
-  test(
-    'a Git-bound target keeps dirty source blocking and commit-bound',
-    () async {
-      _write(root, 'release.toml', '''
-schema = 2
+    expect(source.inRepository, isTrue);
+    expect(read.resolution.unit('tool')!.version.canonical, '1.0.0');
+    expect(source.git.stagingProblem(), isNull);
+  });
 
-[release.tool]
-publish = ["git-tag", "pub.dev"]
-''');
-      final tree = GitSourceTree(root.path);
-      final git = await GitState.read(root.path);
-      final resolution = _resolve(tree);
-      final diagnostics = Diagnostics();
-
-      final source = ReleaseSource.select(
-        tree: tree,
-        git: git,
-        repository: git,
-        resolution: resolution,
-        only: null,
-        diagnostics: diagnostics,
-      )!;
-
-      expect(source.binding.isBound, isTrue);
-      expect(source.warning, isNull);
-      expect(source.binding.uncommittedProblem(), isNotNull);
-    },
-  );
-
-  test('a Git target added before freezing remains blocking', () async {
+  test('a dirty repository is read as it is, and cannot be staged', () async {
+    commitAll();
     _write(root, 'pubspec.yaml', 'name: tool\nversion: 1.1.0\n');
-    final tree = GitSourceTree(root.path);
-    final git = await GitState.read(root.path);
-    final resolution = _resolve(tree);
-    _write(root, 'release.toml', '''
-schema = 2
 
-[release.tool]
-publish = ["git-tag", "pub.dev"]
-''');
-    final diagnostics = Diagnostics();
+    final source = await ReleaseSource.open(root.path);
+    final read = source.readConfig() as ConfigResolved;
 
-    final source = ReleaseSource.select(
-      tree: tree,
-      git: git,
-      repository: git,
-      resolution: resolution,
-      only: null,
-      diagnostics: diagnostics,
-    );
-
-    expect(source, isNotNull);
-    expect(source!.binding.isBound, isTrue);
-    expect(source.warning, isNull);
-    expect(source.resolution.unit('tool')!.requiresGit, isTrue);
-    expect(source.repository.uncommittedProblem()?.code, 'RK-GIT-001');
+    expect(read.resolution.unit('tool')!.version.canonical, '1.1.0');
+    final problem = source.git.stagingProblem()!;
+    expect(problem.code, 'RK-GIT-001');
+    expect(problem.remedy, contains('commit first'));
+    expect(problem.remedy, contains('pubspec.yaml'));
   });
 
-  test('freezing refuses bytes that move during capture', () {
-    expect(
-      () => FrozenSourceTree.capture(_DriftingSourceTree()),
-      throwsA(isA<SourceUnreadable>()),
-    );
+  test('right after rk init, an uncommitted release.toml is read', () async {
+    git(['init', '-q']);
+
+    final source = await ReleaseSource.open(root.path);
+    final read = source.readConfig() as ConfigResolved;
+
+    expect(read.resolution.units.map((unit) => unit.name), ['tool']);
+    expect(source.git.hasCommit, isFalse);
+    expect(source.git.stagingProblem()?.code, 'RK-GIT-001');
   });
-}
 
-final class _DriftingSourceTree implements SourceTree {
-  var reads = 0;
+  test(
+    'outside Git the directory is read, and nothing can be staged',
+    () async {
+      final source = await ReleaseSource.open(root.path);
+      final read = source.readConfig() as ConfigResolved;
 
-  @override
-  String get description => 'drifting';
-
-  @override
-  bool exists(String path) => path == 'pubspec.yaml';
-
-  @override
-  String? read(String path) => null;
-
-  @override
-  List<int>? readBytes(String path) => [reads++];
-
-  @override
-  List<String> trackedFiles() => const ['pubspec.yaml'];
-}
-
-Resolution _resolve(SourceTree tree) {
-  final diagnostics = Diagnostics();
-  final config = ReleaseConfig.parse(
-    tree.read('release.toml')!,
-    'release.toml',
-    diagnostics,
+      expect(source.inRepository, isFalse);
+      expect(read.resolution.units.map((unit) => unit.name), ['tool']);
+      expect(source.git.stagingProblem()?.code, 'RK-SRC-004');
+      expect(source.git.unpushedProblem(), isNull);
+    },
   );
-  final resolution = config == null
-      ? null
-      : Resolution.resolve(config, tree, diagnostics);
-  expect(resolution, isNotNull, reason: diagnostics.found.join('\n'));
-  return resolution!;
+
+  test('a repository without release.toml is not onboarded', () async {
+    File('${root.path}/release.toml').deleteSync();
+    commitAll();
+
+    final source = await ReleaseSource.open(root.path);
+
+    expect(source.readConfig(), isA<ConfigMissing>());
+  });
 }
 
 void _write(Directory root, String path, String contents) {

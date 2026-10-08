@@ -45,8 +45,6 @@ class ReleaseCommand {
     required this.resolution,
     required this.tree,
     required this.git,
-    GitState? repositoryGit,
-    this.sourceWarning,
     required this.inspector,
     required this.tools,
     required this.output,
@@ -57,8 +55,7 @@ class ReleaseCommand {
     Map<String, String> Function()? refreshEnvironment,
     Future<void> Function(Duration)? wait,
     required this.capabilities,
-  }) : repositoryGit = repositoryGit ?? git,
-       _wait = wait ?? _sleep,
+  }) : _wait = wait ?? _sleep,
        _stageFor =
            stageFor ??
            ReleaseStages(
@@ -78,12 +75,9 @@ class ReleaseCommand {
   final Resolution resolution;
   final SourceTree tree;
 
-  /// The source identity used for staging and public comparison.
+  /// The repository: the commit a stage is built from, and what it says
+  /// about the worktree around it.
   final GitState git;
-
-  /// The surrounding repository, retained when dirty bytes are unbound.
-  final GitState repositoryGit;
-  final Diagnostic? sourceWarning;
 
   /// Reads reality for a step. The same one `status` uses, so the two verbs
   /// cannot answer the same question differently — release grew its own copy
@@ -167,7 +161,6 @@ class ReleaseCommand {
   }
 
   final Map<String, String> Function() _refreshEnvironment;
-  var _sourceWarningShown = false;
 
   late final ReleaseStageCoordinator _stages = ReleaseStageCoordinator(
     initialGit: git,
@@ -205,12 +198,12 @@ class ReleaseCommand {
     // scope refusals that happen before the first unit pipeline starts.
     output.report.repository(
       name: tree.description.split('/').last,
-      branch: repositoryGit.branch,
-      uncommitted: repositoryGit.uncommitted.length,
+      branch: git.branch,
+      uncommitted: git.uncommitted.length,
       head: git.hasCommit ? git.head : null,
-      remote: repositoryGit.originUrl,
-      sourceBinding: git.isBound ? 'gitCommit' : 'unbound',
-      sourceComparison: git.isBound ? 'exact' : 'unavailable',
+      remote: git.originUrl,
+      sourceBinding: git.hasCommit ? 'gitCommit' : 'unbound',
+      sourceComparison: git.hasCommit ? 'exact' : 'unavailable',
     );
     if (only != null) {
       final named = resolution.units
@@ -388,16 +381,6 @@ class ReleaseCommand {
     return false;
   }
 
-  /// Says once per run, before anything asks for a yes, that the release
-  /// is of uncommitted work.
-  void _showSourceWarning() {
-    if (sourceWarning == null || _sourceWarningShown) return;
-    _sourceWarningShown = true;
-    output.heading('Warnings');
-    output.warning(sourceWarning!, depth: 1);
-    output.blank();
-  }
-
   /// Cheap, source-owned refusals for every selected unit before preparation.
   /// Native contexts own package order; structural checklists must not reject
   /// a guessed publication cycle before discovery can select hosted fallback.
@@ -462,33 +445,12 @@ class ReleaseCommand {
     output.line(
       [
         tree.description.split('/').last,
-        if (git.hasCommit)
-          '${git.branch ?? 'detached'}@${git.shortHead}'
-        else
-          'working tree',
-        if (repositoryGit.uncommitted.isNotEmpty)
-          '${repositoryGit.uncommitted.length} uncommitted',
+        '${git.branch ?? 'detached'}@${git.shortHead}',
       ].join(' · '),
       role: VisualRole.secondary,
     );
     output.blank();
 
-    _showSourceWarning();
-
-    if (stageOnly && !git.isBound && read.publicSteps.isNotEmpty) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-SRC-002',
-          message: 'an unbound stage cannot be authorized by a later run',
-          remedy:
-              'without Git, build, authorize, and begin publication in '
-              'one invocation: rk release ${unit.name}',
-        ),
-        unit: unit.name,
-      );
-      output.halt(HaltKind.beforeActing);
-      return false;
-    }
     final progress = TargetReleaseProgress(
       output,
       title: '${unit.name} ${unit.version} · preparing release',
@@ -868,14 +830,12 @@ class ReleaseCommand {
   }
 
   void _validate(ResolvedUnit unit, Diagnostics problems) {
-    if (sourceWarning == null) {
-      final uncommitted = repositoryGit.uncommittedProblem();
-      if (uncommitted != null) problems.report(uncommitted);
-    }
+    // A stage is named by its commit, so every unit needs a clean one.
+    if (git.stagingProblem() case final problem?) problems.report(problem);
     // Staging is private: only the tag a release pushes needs a commit
     // origin can fetch.
     if (!stageOnly && unit.publish.contains(PublishTarget.gitTag)) {
-      final unpushed = repositoryGit.unpushedProblem();
+      final unpushed = git.unpushedProblem();
       if (unpushed != null) problems.report(unpushed);
     }
     for (final project in unit.projects) {

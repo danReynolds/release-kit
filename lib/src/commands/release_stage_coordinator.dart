@@ -195,12 +195,6 @@ final class ReleaseStageCoordinator {
 
     if (inspected.validProgress || inspected.planRecorded) {
       output.say('Resuming interrupted staging.', role: VisualRole.secondary);
-    } else if (!stage.directory.identity.isGitBound) {
-      output.say(
-        'Staging a temporary source snapshot; each run starts a new stage.',
-        role: VisualRole.secondary,
-      );
-      stage.discardEarlierUnboundStages();
     } else if (inspected.claimsCompletion) {
       output.say(
         'Rebuilding: the recorded stage no longer verifies.',
@@ -470,11 +464,8 @@ final class ReleaseStageCoordinator {
         releaseAssets: ReleaseAssets.bundleFor(unit),
         evidence: {
           'requested_mode': stageOnly ? 'stage' : 'one-shot',
-          if (stage.directory.identity.isGitBound)
-            'source_commit': stage.directory.identity.headCommit,
-          if (stage.directory.identity.isGitBound)
-            'source_tree': stage.directory.identity.headTree,
-          if (!stage.directory.identity.isGitBound) 'source_binding': 'unbound',
+          'source_commit': stage.directory.identity.headCommit,
+          'source_tree': stage.directory.identity.headTree,
         },
       );
     } on Object catch (error) {
@@ -989,8 +980,7 @@ final class ReleaseStageCoordinator {
           project,
           progress: progress,
           environment: {
-            if (stage.identity.headCommit case final commit?)
-              'RK_SOURCE_COMMIT': commit,
+            'RK_SOURCE_COMMIT': stage.identity.headCommit,
             if (initialGit.originUrl case final repository?)
               'RK_REPOSITORY': repository,
             'RK_VERSION': project.version.canonical,

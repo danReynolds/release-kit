@@ -35,8 +35,14 @@
   units unfinished it suggests the repository-wide `rk stage` or `rk release`.
 - rk reads YAML with package:yaml, as Pub does: anchors, aliases and tags in a
   pubspec are read rather than refused.
-- A unit keeps one stage of a source with no commit; each run's replaces the
-  last.
+- A release is of a commit. `rk stage` and `rk release` refuse uncommitted
+  changes for every unit (`RK-GIT-001`, "commit first"), and refuse a
+  directory outside Git (`RK-SRC-004`). Registry-only and local releases no
+  longer snapshot a dirty tree, and `RK-SRC-001` and `RK-SRC-002` are gone.
+  `rk status` and `rk plan` still read a dirty tree, a repository with no
+  commit yet, or a directory outside Git, once and as it is, and say what
+  staging needs: `rk status` with one edited README takes about 0.2s and 32MB,
+  down from 1.5s and 440MB.
 - `rk clean` removes what it showed, and leaves alone an entry that changed
   while you answered.
 - A stage holds only what rk publishes, and its receipt. It no longer keeps a

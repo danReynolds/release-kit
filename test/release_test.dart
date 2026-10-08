@@ -259,7 +259,6 @@ Future<Ran> release({
   String? only = 'core',
   HostCapabilities? capabilities,
   bool allowInteractiveTools = true,
-  Diagnostic? sourceWarning,
 }) async {
   final buffer = StringBuffer();
   final diagnostics = Diagnostics();
@@ -462,7 +461,6 @@ Future<Ran> release({
     wait: (_) => Future<void>.delayed(Duration.zero),
     output: Output(sink: buffer.write, isTerminal: false, useColor: false),
     allowInteractiveTools: allowInteractiveTools,
-    sourceWarning: sourceWarning,
     confirm: typed == null && answerPrompt == null
         ? null
         : (prompt) async {
@@ -1022,31 +1020,6 @@ publish = ["pub.dev"]
         );
       },
     );
-
-    test('says a release is of uncommitted work before it asks', () async {
-      final (:registry, :onRun) = world();
-      final ran = await release(
-        only: null,
-        config: config,
-        source: source(),
-        registry: registry,
-        onRun: onRun,
-        sourceWarning: const Diagnostic(
-          code: 'RK-GIT-001',
-          message: 'working-tree changes will be captured in the source',
-        ),
-        typed: 'no',
-      );
-
-      expect(ran.exitCode, ExitCodes.refused);
-      expect(
-        ran.text.indexOf('working-tree changes will be captured'),
-        allOf(
-          isNonNegative,
-          lessThan(ran.text.indexOf('\n  Release core 0.2.0\n')),
-        ),
-      );
-    });
 
     test('no answer publishes nothing', () async {
       final (:registry, :onRun) = world();
