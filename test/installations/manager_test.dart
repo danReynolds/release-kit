@@ -84,11 +84,10 @@ void main(List<String> args) {
     'cancellation at the pointer boundary rolls back newly created shims',
     () async {
       final installed = await local.install(project, (_) {});
-      final generation = await store.record(project, installed);
       await expectLater(
         store.activate(
           project,
-          generation,
+          installed,
           beforeCommit: () {
             throw const InstallationFailure('Cancelled');
           },
@@ -99,7 +98,7 @@ void main(List<String> args) {
       for (final command in project.commands) {
         expect(File('${store.bin}/$command').existsSync(), isFalse);
       }
-      await store.activate(project, generation);
+      await store.activate(project, installed);
       expect(store.selected(project)!.source, local.source);
     },
   );
@@ -147,7 +146,6 @@ void main(List<String> args) {
       expect(store.selected(project), isNull);
       expect(Directory(store.bin).existsSync(), isFalse);
       await act(local.source, InstallationAction.use);
-      final old = Link('${store.projectRoot(project)}/current').targetSync();
       for (final command in project.commands) {
         expect(
           (await Process.run('${store.bin}/$command', [
@@ -164,10 +162,6 @@ void main(List<String> args) {
         pub.installs,
         1,
         reason: 'reuse installed source without upgrading',
-      );
-      expect(
-        Link('${store.projectRoot(project)}/current').targetSync(),
-        isNot(old),
       );
       for (final command in project.commands) {
         expect(
@@ -197,7 +191,7 @@ void main(List<String> args) {
         throwsA(isA<InstallationFailure>()),
       );
       expect(store.selected(project)!.source, local.source);
-      expect(store.recorded(project, pub.source), isNotNull);
+      expect((await pub.inspect(project)).installation, isNotNull);
       expect(
         (await Process.run('${store.bin}/orbit', [])).stdout,
         'local orbit\n',
@@ -228,7 +222,7 @@ void main(List<String> args) {
       expect(local.removals, 0);
       await act(pub.source, InstallationAction.use);
       await act(local.source, InstallationAction.uninstall);
-      expect(store.recorded(project, local.source), isNull);
+      expect(store.selected(project)!.source, pub.source);
       expect(Directory(project.directory).existsSync(), isTrue);
       expect(
         (await Process.run('${store.bin}/orbit', [])).stdout,
@@ -238,31 +232,42 @@ void main(List<String> args) {
   );
 
   test(
-    'owned store parents and receipt paths cannot redirect to external files',
+    'switching back and forth leaves nothing behind but the launchers',
     () async {
-      final outside = Directory('${scratch.path}/outside')..createSync();
-      Directory(store.root).createSync();
-      Link('${store.root}/projects').createSync(outside.path);
-      await expectLater(
-        act(local.source, InstallationAction.use),
-        throwsA(isA<InstallationFailure>()),
-      );
-      expect(outside.listSync(), isEmpty);
-      Link('${store.root}/projects').deleteSync();
       await act(local.source, InstallationAction.use);
-      File('${store.projectRoot(project)}/pub.json').createSync();
-      File('${store.projectRoot(project)}/pub.json').deleteSync();
-      final sentinel = File('${outside.path}/sentinel')
-        ..writeAsStringSync('keep');
-      Link('${store.projectRoot(project)}/pub.json').createSync(sentinel.path);
-      await expectLater(
-        act(pub.source, InstallationAction.use),
-        throwsA(isA<InstallationFailure>()),
-      );
-      expect(sentinel.readAsStringSync(), 'keep');
+      await act(pub.source, InstallationAction.install);
+      await act(pub.source, InstallationAction.use);
+      await act(local.source, InstallationAction.use);
+      await act(pub.source, InstallationAction.install);
+      final state =
+          Directory(store.root)
+              .listSync(recursive: true)
+              .whereType<File>()
+              .map((file) => file.path.substring(store.root.length + 1))
+              .toList()
+            ..sort();
+      expect(state, ['bin/orbit', 'bin/orbit_admin', 'install.lock']);
       expect(store.selected(project)!.source, local.source);
     },
   );
+
+  test('a project whose origin changed takes its own launchers back', () async {
+    await act(local.source, InstallationAction.use);
+    final renamed = ExecutableProject(
+      root: project.root,
+      unit: project.unit,
+      project: project.project,
+      entrypoints: project.entrypoints,
+      repository: 'owner/renamed',
+    );
+    await manager.act(
+      renamed,
+      pub.source,
+      InstallationAction.use,
+      progress: (_) {},
+    );
+    expect((await Process.run('${store.bin}/orbit', [])).stdout, 'pub orbit\n');
+  });
 
   test(
     'native local launch preserves caller directory, arguments and edits in mapped scripts',

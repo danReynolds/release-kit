@@ -9,7 +9,7 @@ import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/tui/init_picker.dart';
 import 'package:test/test.dart';
 
-Future<void> settle() => Future<void>.delayed(const Duration(milliseconds: 80));
+import 'support/screen.dart';
 
 String textOutput(FakeTerminalDriver driver) =>
     driver.output.replaceAll(RegExp(r'\x1b\[[0-?]*[ -/]*[@-~]'), '');
@@ -70,25 +70,23 @@ void main() {
   test('discovery notes remain available through selection and review', () async {
     final driver = FakeTerminalDriver(size: const CellSize(132, 30));
     final interaction = InitInteraction(driver: driver);
-    Future<void> key(KeyEvent event) async {
-      driver.enqueue(event);
-      await settle();
-    }
+    Future<void> key(KeyEvent event) => driver.send(event);
 
     const backwards = KeyEvent(KeyCode.tab, modifiers: {KeyModifier.shift});
     try {
       var selected = false;
-      final selecting = interaction.select(discoveryPlan()).then((value) {
-        selected = true;
-        return value;
-      });
-      await settle();
+      late Future<InitPlan?> selecting;
+      await driver.redrawn(
+        () => selecting = interaction.select(discoveryPlan()).then((value) {
+          selected = true;
+          return value;
+        }),
+      );
       expect(driver.output, contains('Discovery notes (1)'));
 
       // Customize the plan before reading why another package was omitted.
       await key(const KeyEvent(KeyCode.tab));
-      driver.enqueue(const TextInputEvent(' '));
-      await settle();
+      await driver.send(const TextInputEvent(' '));
       await key(backwards); // Review configuration.
       await key(backwards); // Cancel.
       await key(backwards); // Discovery notes.
@@ -105,18 +103,20 @@ void main() {
       await key(const KeyEvent(KeyCode.escape));
       await key(const KeyEvent(KeyCode.tab)); // Cancel.
       await key(const KeyEvent(KeyCode.tab)); // Review configuration.
-      await key(const KeyEvent(KeyCode.enter));
+      driver.enqueue(const KeyEvent(KeyCode.enter));
       final plan = await selecting.timeout(const Duration(seconds: 3));
       expect(plan!.candidates.single.selected, contains(ReleaseChoice.binary));
       final proposal =
           '${List.generate(35, (index) => '# Review note $index').join('\n')}\n'
           '${plan.renderToml()}';
       var reviewed = false;
-      final reviewing = interaction.review(proposal, true).then((value) {
-        reviewed = true;
-        return value;
-      });
-      await settle();
+      late Future<InitReviewDecision> reviewing;
+      await driver.redrawn(
+        () => reviewing = interaction.review(proposal, true).then((value) {
+          reviewed = true;
+          return value;
+        }),
+      );
       expect(driver.output, contains('Discovery notes (2)'));
       await key(const KeyEvent(KeyCode.end));
       await key(const KeyEvent(KeyCode.tab)); // Create.
@@ -139,7 +139,7 @@ void main() {
       await key(const KeyEvent(KeyCode.escape));
       await key(backwards); // Cancel.
       await key(backwards); // Create.
-      await key(const KeyEvent(KeyCode.enter));
+      driver.enqueue(const KeyEvent(KeyCode.enter));
       expect(
         await reviewing.timeout(const Duration(seconds: 3)),
         InitReviewDecision.write,

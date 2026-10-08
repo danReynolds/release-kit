@@ -152,11 +152,11 @@ class InstallationManager {
           'Check the provider before retrying.',
         );
       }
-      final generation = await store.record(project, installed);
       // A package manager may already have committed its update. Finish the
-      // receipt/routing transaction even when cancellation arrived meanwhile.
-      // Updating the selected source advances that source, never selects another.
-      if (current == release.source) await store.activate(project, generation);
+      // routing even when cancellation arrived meanwhile. Updating the selected
+      // source advances that source, never selects another.
+      if (current == release.source) await store.activate(project, installed);
+      store.retire(project, installed);
       return '${project.name} · ${release.source.label} ${installed.version} installed. '
           '${current == release.source ? 'Using it on the next command.' : 'Source selection unchanged.'}';
     } finally {
@@ -228,7 +228,6 @@ class InstallationManager {
         cancellation?.check();
         progress('Removing ${project.name} from ${source.label}…');
         await _providerCall(() => provider.uninstall(project, installation));
-        store.forget(project, source);
         return '${project.name} removed from ${source.label}.${source == InstallationSource.local ? ' Checkout kept.' : ''}';
       }
       // Local preparation rebinds this exact checkout and refreshes its native
@@ -237,16 +236,17 @@ class InstallationManager {
           source == InstallationSource.local || inspected.installation == null
           ? await _providerCall(() => provider.install(project, progress))
           : inspected.installation!;
-      final generation = await store.record(project, installation);
       cancellation?.check();
       if (action == InstallationAction.install) {
+        store.retire(project, installation);
         return '${project.name} installed from ${source.label}. Selection unchanged.';
       }
       await store.activate(
         project,
-        generation,
+        installation,
         beforeCommit: cancellation?.check,
       );
+      store.retire(project, installation);
       return '${project.name} → ${source.label} · ${installation.version}';
     } finally {
       lock.unlockSync();

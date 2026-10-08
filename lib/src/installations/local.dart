@@ -49,15 +49,25 @@ class LocalInstallationProvider implements InstallationProvider {
     );
   }
 
+  /// Local is the checkout itself: selected, it is the checkout it was bound to.
   @override
   Future<SourceInspection> inspect(ExecutableProject project) async {
+    final selected = store.selected(project);
+    final installation = selected?.source == source
+        ? Installation(
+            source: source,
+            version: project.version,
+            location: selected!.location,
+            commands: const {},
+          )
+        : null;
     if (dartExecutable == null || !File(dartExecutable!).existsSync()) {
       return SourceInspection(
-        installation: store.recorded(project, source),
+        installation: installation,
         problem: 'Dart is not available on PATH.',
       );
     }
-    return SourceInspection(installation: store.recorded(project, source));
+    return SourceInspection(installation: installation);
   }
 
   @override

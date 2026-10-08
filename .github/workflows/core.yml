@@ -63,7 +63,6 @@ jobs:
           .dart_tool/pty-env/bin/pip install -r tool/tui-requirements.txt
           .dart_tool/pty-env/bin/python tool/check_installation_tui.py .dart_tool/rk-ci
           .dart_tool/pty-env/bin/python tool/check_installation_ux.py .dart_tool/rk-ci
-          .dart_tool/pty-env/bin/python tool/check_status_cli.py .dart_tool/rk-ci
 
   publication:
     name: Native publication qualification

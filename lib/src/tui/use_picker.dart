@@ -8,10 +8,16 @@ import '../installations/metadata.dart';
 import '../installations/model.dart';
 import '../installations/provider.dart';
 import '../output/output.dart' show terminalSafeText;
-import 'installation_picker.dart'
-    show InstallationOperation, InstallationPickerResult, RemovalConfirmation;
 import 'matrix.dart';
 import 'terminal.dart';
+
+typedef InstallationOperation =
+    Future<String> Function(
+      ExecutableProject,
+      InstallationSource,
+      void Function(String),
+      InstallationCancellation,
+    );
 
 typedef SourceKey = (String, InstallationSource);
 typedef CheckAvailable =
@@ -59,7 +65,7 @@ class UsePicker extends Notifier {
     required this.use,
     required this.close,
     this.uninstall,
-    this.sessionNote,
+    this.command = 'rk use',
   });
   List<ProjectInstallations> states;
   final Future<List<ProjectInstallations>> Function() refresh;
@@ -67,7 +73,9 @@ class UsePicker extends Notifier {
   final DownloadAvailable downloadAvailable;
   final InstallationOperation use;
   final InstallationOperation? uninstall;
-  final String? sessionNote;
+
+  /// The command that opened the table: bare install and uninstall open it too.
+  final String command;
   (ProjectInstallations, InstallationSource)? removal;
   final void Function() close;
   final available = <SourceKey, AvailableState>{};
@@ -373,16 +381,16 @@ Future<InstallationPickerResult> runUsePicker({
   required DownloadAvailable downloadAvailable,
   required InstallationOperation use,
   required InstallationOperation uninstall,
-  String? sessionNote,
+  String command = 'rk use',
 }) async {
   final model = UsePicker(
+    command: command,
     states: states,
     refresh: refresh,
     checkAvailable: checkAvailable,
     downloadAvailable: downloadAvailable,
     use: use,
     uninstall: uninstall,
-    sessionNote: sessionNote,
     close: exitApp,
   );
   try {
@@ -569,7 +577,7 @@ class _UseScreenState extends State<UseScreen> {
         project: request.$1.project,
         source: request.$2,
         installed: request.$1.sources[request.$2]!.installation!,
-        command: 'rk use',
+        command: model.command,
         maxWidth: commandTableWidth,
         onCancel: model.exit,
         onConfirm: () => unawaited(model.confirmRemoval()),
@@ -577,7 +585,7 @@ class _UseScreenState extends State<UseScreen> {
     }
     if (model.details case final details?) {
       return MatrixDetails(
-        command: 'rk use',
+        command: model.command,
         maxWidth: commandTableWidth,
         title: details.title,
         body: details.body,
@@ -588,7 +596,7 @@ class _UseScreenState extends State<UseScreen> {
     return KeyBindings(
       bindings: _navigation(),
       child: MatrixShell(
-        command: 'rk use',
+        command: model.command,
         maxWidth: commandTableWidth,
         count: model.states.length == 1
             ? model.states.single.project.name
@@ -637,8 +645,6 @@ class _UseScreenState extends State<UseScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  if (model.sessionNote case final note?)
-                    Text(note, style: mutedText),
                   for (final state in model.states) ...[
                     if (model.states.length > 1)
                       Text(
@@ -837,4 +843,62 @@ class _UseScreenState extends State<UseScreen> {
       ),
     );
   }
+}
+
+class InstallationPickerResult {
+  InstallationPickerResult(this.failed, this.message, this.exitCode);
+  final bool failed;
+  final String message;
+  final int exitCode;
+}
+
+/// The same scoped confirmation is used from use and uninstall.
+class RemovalConfirmation extends StatelessWidget {
+  const RemovalConfirmation({
+    super.key,
+    required this.project,
+    required this.source,
+    required this.installed,
+    required this.onCancel,
+    required this.onConfirm,
+    this.command = 'rk uninstall',
+    this.maxWidth = 128,
+  });
+  final ExecutableProject project;
+  final InstallationSource source;
+  final Installation installed;
+  final void Function() onCancel, onConfirm;
+  final String command;
+  final int maxWidth;
+  @override
+  Widget build(BuildContext context) => MatrixShell(
+    command: command,
+    maxWidth: maxWidth,
+    subtitle: 'Remove ${project.label} from ${source.label}?',
+    scrollFromActions: true,
+    onEscape: onCancel,
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Version: ${installed.version}'),
+        Text('Location: ${installed.location}'),
+        Text('Commands: ${project.commands.join(', ')}'),
+        const SizedBox(height: 1),
+        Text(
+          source == InstallationSource.local
+              ? 'Only the local registration is removed. Your checkout stays.'
+              : 'This removes the ${source.label} installation, including its use outside this repository.',
+        ),
+      ],
+    ),
+    actions: [
+      MatrixButton(text: 'Cancel', autofocus: true, onPressed: onCancel),
+      MatrixButton(
+        text: 'Remove installation',
+        variant: ButtonVariant.error,
+        onPressed: onConfirm,
+      ),
+    ],
+  );
 }

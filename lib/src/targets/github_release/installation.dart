@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -24,12 +23,12 @@ class GithubInstallationProvider
     this.tools,
     this.store,
     this.platform, {
-    this.fetch = fetchPublicRelease,
+    this.fetch = fetchHttps,
   });
   final Tools tools;
   final InstallationStore store;
   final String platform;
-  final Future<Uint8List> Function(Uri, int) fetch;
+  final HttpsFetch fetch;
   @override
   InstallationSource get source => InstallationSource.github;
 
@@ -46,36 +45,38 @@ class GithubInstallationProvider
         problem: 'This project does not publish a $platform binary.',
       );
     }
-    final installation = store.recorded(project, source);
-    if (installation != null) {
-      _validateLocation(project, installation);
-      if (installation.commands.values.any(
-        (c) =>
-            !File(c.executable).existsSync() ||
-            c.requiredFiles.any((path) => !File(path).existsSync()),
-      )) {
-        return SourceInspection(
-          installation: installation,
-          problem:
-              'The GitHub installation is incomplete. Remove it before reinstalling.',
-        );
-      }
-    }
-    return SourceInspection(installation: installation);
+    // Each download is a directory named by its version; the highest one is
+    // the installation, read from disk rather than from a receipt.
+    final downloads = Directory('${store.projectRoot(project)}/downloads');
+    final versions = [
+      if (downloads.existsSync())
+        for (final entry in downloads.listSync())
+          if (Version.tryParse(
+                entry.uri.pathSegments.lastWhere((s) => s.isNotEmpty),
+              )
+              case final version?)
+            if (File('${entry.path}/${project.commands.single}').existsSync())
+              version,
+    ]..sort();
+    if (versions.isEmpty) return const SourceInspection();
+    return SourceInspection(
+      installation: _installation(project, versions.last.canonical),
+    );
   }
 
-  void _validateLocation(ExecutableProject project, Installation installation) {
-    final parent = '${store.projectRoot(project)}/downloads/';
-    if (!installation.managed ||
-        !installation.location.startsWith(parent) ||
-        !RegExp(
-          r'^github-[a-f0-9]{64}$',
-        ).hasMatch(installation.location.substring(parent.length))) {
-      throw const InstallationFailure(
-        'The GitHub receipt is not an owned installation.',
-      );
-    }
-    store.validateManagedDirectory(installation.location);
+  Installation _installation(ExecutableProject project, String version) {
+    final location = '${store.projectRoot(project)}/downloads/$version';
+    return Installation(
+      source: source,
+      version: version,
+      location: location,
+      managed: true,
+      commands: {
+        project.commands.single: LaunchCommand(
+          '$location/${project.commands.single}',
+        ),
+      },
+    );
   }
 
   @override
@@ -96,9 +97,7 @@ class GithubInstallationProvider
         '/repos/${project.repository}/releases',
         {'per_page': '100', 'page': '$page'},
       );
-      final bytes = await (fetch == fetchPublicRelease
-          ? fetchInstallationMetadata(uri, 8 * 1024 * 1024, check: check)
-          : fetch(uri, 8 * 1024 * 1024));
+      final bytes = await fetch(uri, 8 * 1024 * 1024, check: check);
       final list = (jsonDecode(utf8.decode(bytes)) as List)
           .cast<Map<String, dynamic>>();
       final candidates = <(Map<String, dynamic>, Version)>[];
@@ -142,13 +141,11 @@ class GithubInstallationProvider
         );
         final manifest = ReleaseManifest.parse(
           utf8.decode(
-            (fetch == fetchPublicRelease
-                ? await fetchPublicRelease(
-                    asset(ReleaseAssets.manifest),
-                    2 * 1024 * 1024,
-                    check: check,
-                  )
-                : await fetch(asset(ReleaseAssets.manifest), 2 * 1024 * 1024)),
+            await fetch(
+              asset(ReleaseAssets.manifest),
+              2 * 1024 * 1024,
+              check: check,
+            ),
           ),
         );
         if (manifest.unit != project.unit.name ||
@@ -186,7 +183,6 @@ class GithubInstallationProvider
     AvailableInstallation release,
     void Function(String) progress,
   ) async {
-    release.validate(project, source);
     if (release is! _GithubRelease) {
       throw const InstallationFailure('Invalid GitHub release.');
     }
@@ -205,13 +201,9 @@ class GithubInstallationProvider
       project.commands.single,
     );
     final parent = store.managedDirectory(project, 'downloads');
-    final destination = '$parent/github-${metadata.sha256}';
-    if (FileSystemEntity.typeSync(destination, followLinks: false) !=
-        FileSystemEntityType.notFound) {
-      throw InstallationFailure(
-        'A previous download already occupies $destination.',
-        'Keep it for diagnosis or remove it before retrying.',
-      );
+    final destination = '$parent/$version';
+    if (Directory(destination).existsSync()) {
+      Directory(destination).deleteSync(recursive: true);
     }
     final temporary = Directory(parent).createTempSync('preparing-');
     try {
@@ -253,21 +245,7 @@ class GithubInstallationProvider
     } finally {
       if (temporary.existsSync()) temporary.deleteSync(recursive: true);
     }
-    return Installation(
-      source: source,
-      version: version,
-      location: destination,
-      managed: true,
-      commands: {
-        project.commands.single: LaunchCommand(
-          '$destination/${decoded.artifact.entryPoint}',
-          requiredFiles: [
-            for (final file in decoded.artifact.files)
-              '$destination/${file.path}',
-          ],
-        ),
-      },
-    );
+    return _installation(project, version);
   }
 
   @override
@@ -275,9 +253,8 @@ class GithubInstallationProvider
     ExecutableProject project,
     Installation installation,
   ) async {
-    _validateLocation(project, installation);
-    final directory = Directory(installation.location);
-    if (directory.existsSync()) directory.deleteSync(recursive: true);
+    final downloads = Directory('${store.projectRoot(project)}/downloads');
+    if (downloads.existsSync()) downloads.deleteSync(recursive: true);
   }
 }
 
@@ -314,74 +291,6 @@ Future<InstallationArchive> decodeInstallationArchive(
       'The release archive does not match its executable layout.',
       error.message,
     );
-  }
-}
-
-Future<Uint8List> fetchPublicRelease(
-  Uri uri,
-  int maxBytes, {
-  InstallationCheck? check,
-}) async {
-  final client = HttpClient()..connectionTimeout = const Duration(seconds: 20);
-  void close() => client.close(force: true);
-  check?.add(close);
-  final deadline = Timer(
-    check == null ? const Duration(minutes: 3) : const Duration(seconds: 15),
-    () => client.close(force: true),
-  );
-  try {
-    // Follow only HTTPS redirects, with a bounded response and deadline.
-    for (var redirects = 0; redirects < 6; redirects++) {
-      if (uri.scheme != 'https' ||
-          uri.port != 443 ||
-          uri.userInfo.isNotEmpty ||
-          !(const {'github.com', 'api.github.com'}.contains(uri.host) ||
-              uri.host.endsWith('.githubusercontent.com'))) {
-        throw const InstallationFailure(
-          'A release download left the supported GitHub HTTPS hosts.',
-        );
-      }
-      final request = await client
-          .getUrl(uri)
-          .timeout(const Duration(seconds: 30));
-      request.followRedirects = false;
-      request.headers.set('User-Agent', 'rk-installation');
-      final response = await request.close().timeout(
-        const Duration(seconds: 30),
-      );
-      if ({301, 302, 303, 307, 308}.contains(response.statusCode)) {
-        final location = response.headers.value('location');
-        if (location == null) {
-          throw const InstallationFailure(
-            'A release redirect has no destination.',
-          );
-        }
-        uri = uri.resolve(location);
-        await response.drain<void>().timeout(const Duration(seconds: 10));
-        continue;
-      }
-      if (response.statusCode != 200) {
-        throw InstallationFailure(
-          'GitHub download returned HTTP ${response.statusCode}.',
-          'Check the public release or choose another source. Private GitHub downloads are not supported yet.',
-        );
-      }
-      final data = BytesBuilder(copy: false);
-      await for (final chunk in response.timeout(const Duration(seconds: 30))) {
-        if (data.length + chunk.length > maxBytes) {
-          throw const InstallationFailure(
-            'Release download exceeded its expected size.',
-          );
-        }
-        data.add(chunk);
-      }
-      return data.takeBytes();
-    }
-    throw const InstallationFailure('Too many release download redirects.');
-  } finally {
-    check?.remove(close);
-    deadline.cancel();
-    client.close(force: true);
   }
 }
 

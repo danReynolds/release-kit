@@ -129,6 +129,14 @@ void main() {
     },
   );
 
+  test('switching rk itself keeps no copy of the running rk', () async {
+    final project = fixture(scratch, name: 'rk', commands: ['rk']);
+    final (used, report) = await run(project.directory, ['use', 'local']);
+    expect(used, 0, reason: '$report');
+    expect(report['installations']['projects'].single['selected'], 'local');
+    expect(Directory('${scratch.path}/data/rk/managers').existsSync(), isFalse);
+  });
+
   test(
     'local accepts development dependencies while release resolution refuses them',
     () async {

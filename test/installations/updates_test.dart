@@ -99,7 +99,7 @@ void main() {
         progress: (_) {},
       );
       expect(store.selected(project)!.source, local.source);
-      expect(store.recorded(project, pub.source)!.version, '1.3.0');
+      expect((await pub.inspect(project)).installation!.version, '1.3.0');
       await manager.act(
         project,
         pub.source,
@@ -563,7 +563,7 @@ void main() {
         }),
         '/dart',
         {},
-        fetch: (_, _) async => Uint8List.fromList(
+        fetch: (_, _, {check}) async => Uint8List.fromList(
           utf8.encode(
             jsonEncode({
               'versions': [
@@ -632,7 +632,7 @@ void main() {
           }),
           '/brew',
           platform: 'linux-x64',
-          fetch: (_, _) async => Uint8List.fromList(
+          fetch: (_, _, {check}) async => Uint8List.fromList(
             utf8.encode(
               jsonEncode({
                 'encoding': 'base64',
@@ -679,7 +679,7 @@ void main() {
         }),
         '/brew',
         platform: 'linux-x64',
-        fetch: (_, _) async => Uint8List.fromList(
+        fetch: (_, _, {check}) async => Uint8List.fromList(
           utf8.encode(
             jsonEncode({
               'encoding': 'base64',

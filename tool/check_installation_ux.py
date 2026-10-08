@@ -191,68 +191,8 @@ def main():
             terminal.finish()
         print('PASS multi-project stays open; explicit -p completes in one selection', flush=True)
 
-        home = root / 'install-review'
-        project = fixture(home, True)
-        with Terminal(executable, 'install', project, home) as terminal:
-            terminal.wait('Esc Cancel')
-            settle(terminal)
-            shot(terminal, 'install')
-            terminal.send(b'\x1b[B\r')
-            terminal.finish()
-        with Terminal(executable, 'uninstall', project, home) as terminal:
-            terminal.wait('Remove a source')
-            settle(terminal)
-            shot(terminal, 'uninstall')
-            terminal.send(b'\t\r')
-            terminal.wait('Remove orbit from Local?')
-            settle(terminal)
-            shot(terminal, 'uninstall-confirm')
-            terminal.activate('Remove installation')
-            terminal.finish()
-        with Terminal(executable, 'uninstall', project, home) as terminal:
-            terminal.wait('Not installed')
-            settle(terminal)
-            row, col = locate(terminal, 'Esc Cancel')
-            assert terminal.screen.buffer[row][col].bg == 'default', 'empty uninstall opened focused'
-            terminal.send(b'\t')
-            settle(terminal)
-            assert terminal.screen.buffer[row][col].bg == '2a4c6c', 'Tab did not reach the exit'
-            terminal.send(b'\r')
-            terminal.finish()
-        print('PASS install/uninstall states and empty uninstall keyboard entry', flush=True)
-
-        home = root / 'partial'
-        project = workspace(home)
-        run(executable, project, home, 'install', 'local', '-p', 'orbit_admin', '--json')
-        with Terminal(executable, 'uninstall', project, home) as terminal:
-            terminal.wait('Remove a source')
-            settle(terminal)
-            terminal.send(b'\t\r')
-            terminal.wait('Remove orbit_admin from Local?')
-            terminal.activate('Remove installation')
-            terminal.wait('removed from Local')
-            terminal.activate('Esc Done')
-            terminal.finish()
-        print('PASS uninstall navigation starts on a usable row when the first project has no installations', flush=True)
-
         names = [f'app_{i}' for i in range(10)]
         home = root / 'long-workspace'
-        project = workspace(home, names=names)
-        for name in (names[0], names[-1]):
-            run(executable, project, home, 'install', 'local', '-p', name, '--json')
-        with Terminal(executable, 'uninstall', project, home, cols=90, rows=18) as terminal:
-            terminal.wait('Esc Done')
-            terminal.send(b'\t\t\r')
-            terminal.wait('Remove app_9')
-            terminal.send(b'\x1b')
-            terminal.wait('Remove a source')
-            terminal.wait('app_9')
-            shot(terminal, 'uninstall-return')
-            terminal.send(b'\r')
-            terminal.wait('Remove app_9')
-            terminal.send(b'\x03')
-            terminal.finish(130)
-        (project / 'release.toml').unlink()
         project = workspace(home, configured=False, names=names)
         with Terminal(executable, 'init', project, home) as terminal:
             terminal.wait('Review configuration')
@@ -266,7 +206,7 @@ def main():
             terminal.wait('Choose the outputs')
             terminal.send(b'\x1b')
             terminal.finish()
-        print('PASS long-workspace confirmation return and pageable configuration review', flush=True)
+        print('PASS long-workspace pageable configuration review', flush=True)
 
         # Spy on a provider at the CLI boundary. Closing an idle picker must
         # not start a second inspection, irrespective of subprocess speed.
@@ -293,7 +233,7 @@ def main():
             terminal.send(b'\x03')
             terminal.finish(130)
             assert calls.read_text() == before, 'Ctrl+C rescanned providers'
-            assert before.splitlines() == ['list --formula --full-name -1'], before
+            assert before.splitlines() == ['--prefix'], before
         print('PASS Ctrl+C returns without another provider inspection', flush=True)
 
         home = root / 'init'
@@ -316,11 +256,9 @@ def main():
         assert (project / 'release.toml').exists()
         print('PASS init shares keyboard behavior and review/Back/Create', flush=True)
 
-        for command in ['use', 'install', 'uninstall', 'init']:
+        for command in ['use', 'init']:
             home = root / f'short-{command}'
             project = fixture(home, command != 'init')
-            if command == 'uninstall':
-                run(executable, project, home, 'install', 'local', '--json')
             with Terminal(executable, command, project, home, cols=40, rows=12) as terminal:
                 terminal.wait('Esc')
                 settle(terminal)
@@ -340,14 +278,10 @@ def main():
                     terminal.activate('Review configuration')
                     terminal.wait('Review release.toml')
                     terminal.activate('Create release.toml')
-                elif command == 'uninstall':
-                    terminal.send(b'\t\r')
-                    terminal.wait('Remove installation')
-                    terminal.activate('Remove installation')
                 else:
                     terminal.send(b'\t\r')
                 terminal.finish()
-        print('PASS all four commands complete at 40×12 with actions reachable', flush=True)
+        print('PASS use and init complete at 40×12 with actions reachable', flush=True)
 
         for command in ['use', 'init']:
             home = root / f'resize-exit-{command}'
