@@ -171,17 +171,6 @@ version: 0.1.0
     expect(doc.has('screenshots'), isTrue);
   });
 
-  test('tabs for indentation are refused', () {
-    final diagnostics = Diagnostics();
-    final doc = parseYaml(
-      'environment:\n\tsdk: ^3.6.0',
-      'pubspec.yaml',
-      diagnostics,
-    );
-    expect(doc, isNull);
-    expect(diagnostics.found.single.message, contains('tabs'));
-  });
-
   group('flow collections', () {
     test('topics and asset platforms, as pubspecs write them', () {
       final doc = parse('''
@@ -243,20 +232,6 @@ version: 1.0.0
       expect(doc.list('list')!.strings, ["it's", 'fine']);
       expect(doc.string('version'), '1.0.0');
     });
-
-    for (final (label, source, reason) in [
-      ('an anchor', 'list: [&a x]\n', 'anchors'),
-      ('an alias', 'list: [*a]\n', 'anchors'),
-      ('a duplicate key', 'map: {a: 1, a: 2}\n', 'more than once'),
-      ('text after the collection', 'list: [a] b\n', 'unexpected'),
-      ('mismatched brackets', 'list: [a, b}\n', 'expected "," or "]"'),
-    ]) {
-      test('$label is refused', () {
-        final diagnostics = Diagnostics();
-        expect(parseYaml(source, 'p.yaml', diagnostics), isNull);
-        expect(diagnostics.found.single.message, contains(reason));
-      });
-    }
   });
 
   group('agrees with the YAML parser', () {
@@ -357,40 +332,51 @@ version: 1.0.0
     }
   });
 
-  group('refuses what it would misread', () {
-    for (final (label, source) in [
-      (
-        'an anchor on a block',
-        'dependencies: &deps\n  core:\n    path: ../core\n',
-      ),
-      ('a tag on a flow map', 'dependencies: !!map {core: {path: ../core}}\n'),
-      ('an alias item', 'topics:\n  - *topic\n'),
-      ('a complex key', '? name\n: x\n'),
-      ('a second document', 'name: x\n---\nname: y\n'),
-      ('a list document', '- name: x\n'),
-      (
-        'a key under a scalar',
-        'dependencies: none\n  core:\n    path: ../core\n',
-      ),
-      ('entries after a flow value', 'core:\n  {path: ../core}\n  extra: 1\n'),
-      ('a tag below its key', 'resolution:\n  !!str workspace\n'),
-      ('an anchor below its key', 'x:\n  &w workspace\nresolution: y\n'),
-      ('an alias below its key', 'resolution:\n  *w\n'),
-      ('a block scalar header below its key', 'description:\n  |\n    text\n'),
-      ('a sequence nested on its item line', 'list:\n  - - x\n'),
-      ('a complex key in a sequence item', 'list:\n  - ? x\n'),
-      ('a pair in a flow sequence', 'list: [a: b]\n'),
-      ('an explicit key in a flow map', 'map: {? leaf : 1}\n'),
-      ('an explicit key in a flow sequence', "x: [? 'a # ]']\n"),
-      ('an escape YAML does not define', 'name: "a\\qb"\n'),
-      ('text after a quoted value', 'name: "a" b\n'),
-      ('a flow line at its key\'s column', 'k: [a,\nresolution: workspace]\n'),
-      ('a quoted value left open', 'name: "a\nversion: 1.0.0\n'),
+  test('a version keeps the text it was written as', () {
+    // YAML would read 1.10 as a number; rk types nothing itself.
+    final doc = parse('version: 1.10\nsdk: ^3.6.0\nflag: true\n');
+    expect(doc.string('version'), '1.10');
+    expect(doc.string('flag'), 'true');
+  });
+
+  test('reads what Pub reads: anchors, aliases, tags, explicit keys', () {
+    final doc = parse('''
+base: &base
+  path: ../core
+dependencies:
+  core: *base
+resolution: !!str workspace
+? name
+: keybay
+''');
+    expect(doc.map('dependencies')!.map('core')!.string('path'), '../core');
+    expect(doc.string('resolution'), 'workspace');
+    expect(doc.string('name'), 'keybay');
+  });
+
+  test('a nested key remembers its own line', () {
+    final doc = parse('dependencies:\n  core:\n    path: ../core\n');
+    expect(doc.lineOf('dependencies'), 1);
+    expect(doc.map('dependencies')!.lineOf('core'), 2);
+  });
+
+  group('refuses what YAML refuses, at its line', () {
+    for (final (label, source, line) in [
+      ('tabs for indentation', 'environment:\n\tsdk: ^3.6.0', 2),
+      ('a duplicate key', 'map: {a: 1, a: 2}\n', 1),
+      ('mismatched brackets', 'list: [a, b}\n', 1),
+      ('a second document', 'name: x\n---\nname: y\n', 2),
+      ('a list document', '- name: x\n', 1),
+      ('a key under a scalar', 'dependencies: none\n  core:\n    path: x\n', 2),
+      ('an escape YAML does not define', 'name: "a\\qb"\n', 1),
+      ('a quoted value left open', 'name: "a\nversion: 1.0.0\n', 3),
     ]) {
       test(label, () {
         final diagnostics = Diagnostics();
         expect(parseYaml(source, 'p.yaml', diagnostics), isNull);
-        expect(diagnostics.found, isNotEmpty);
+        final found = diagnostics.found.single;
+        expect(found.code, 'RK-YAML-001');
+        expect(found.source?.line, line, reason: found.message);
       });
     }
   });

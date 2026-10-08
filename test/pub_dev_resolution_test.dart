@@ -144,9 +144,8 @@ void main() {
         contains('a pattern rk does not read'),
       );
 
-      // Valid YAML rk does not read (an anchor) leaves the root unknown
-      // rather than empty.
-      workspace(more: 'dependency_overrides: &pins\n  leaf: 1.0.0\n');
+      // YAML that does not parse leaves the root unknown rather than empty.
+      workspace(more: 'dependency_overrides: [leaf\n');
       expect(unreadable('packages/core'), 'pubspec.yaml is not YAML rk reads');
 
       // Nor does a pubspec that is not UTF-8.

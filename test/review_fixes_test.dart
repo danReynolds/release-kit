@@ -72,7 +72,7 @@ version: 0.1.0
       diagnostics,
     );
     expect(doc, isNull);
-    expect(diagnostics.found.single.message, contains('more than once'));
+    expect(diagnostics.found.single.code, 'RK-YAML-001');
   });
 
   group('versions wider than the platform integer', () {
@@ -524,7 +524,7 @@ void yamlAndOrdering() {
     test('an unclosed flow collection is refused', () {
       final diagnostics = Diagnostics();
       expect(parseYaml('topics: [a, b\n', 'p.yaml', diagnostics), isNull);
-      expect(diagnostics.found.single.message, contains('not closed'));
+      expect(diagnostics.found.single.code, 'RK-YAML-001');
     });
 
     test('a value that merely contains a brace is fine', () {
@@ -568,7 +568,7 @@ topics:
         isNull,
         reason: 'hoisted to the root it would be the released version',
       );
-      expect(diagnostics.found.single.message, contains('mix'));
+      expect(diagnostics.found.single.code, 'RK-YAML-001');
     });
   });
 }

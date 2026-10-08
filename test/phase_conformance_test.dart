@@ -384,8 +384,14 @@ void main() {
     setUpAll(() => scratch = Directory.systemTemp.createTempSync('rk-phase3-'));
     tearDownAll(() => scratch.deleteSync(recursive: true));
 
-    test('third-party imports stay outside the release and signing engine', () {
-      expect(fileExists('lib/src/engine/registry.dart'), isTrue);
+    test('the engine imports only the Dart team\'s own packages', () {
+      // Pub's own version and YAML semantics, and its digest, rather than
+      // second implementations of them. The UI stays in the TUI.
+      const standard = {
+        'package:crypto/',
+        'package:pub_semver/',
+        'package:yaml/',
+      };
       final foreign = <String>[];
       for (final entity in Directory('lib').listSync(recursive: true)) {
         if (entity is! File || !entity.path.endsWith('.dart')) continue;
@@ -396,28 +402,15 @@ void main() {
           if (target.startsWith('dart:')) continue;
           if (target.startsWith('package:rk/')) continue;
           if (!target.contains(':')) continue; // relative
+          if (standard.any(target.startsWith)) continue;
           if (entity.path.startsWith('lib/src/tui/') &&
               target.startsWith('package:fleury/')) {
-            continue;
-          }
-          // Installation eligibility uses Pub's own SDK-constraint semantics,
-          // and so does the dependency plan's compatibility check. Keep the
-          // exception at these exact files, outside the shared engine.
-          if ((entity.path == 'lib/src/targets/pub_dev/installation.dart' ||
-                  entity.path ==
-                      'lib/src/native/dart/version_constraints.dart') &&
-              target == 'package:pub_semver/pub_semver.dart') {
             continue;
           }
           foreign.add('${entity.path}: $target');
         }
       }
-      expect(
-        foreign,
-        isEmpty,
-        reason:
-            'release and signing code must not import UI or archive packages',
-      );
+      expect(foreign, isEmpty);
     });
 
     test('git state is read from a real repository, not a fake', () {
