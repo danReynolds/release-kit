@@ -233,6 +233,7 @@ class ReleaseCommand {
 
   Future<int> _runRepository(List<ResolvedUnit> selected) async {
     final prepared = await _prepareRepository(selected);
+    output.flushWarnings();
     if (prepared.code != ExitCodes.ok || stageOnly) return prepared.code;
     final publications = prepared.publications;
     if (publications.isEmpty) return ExitCodes.ok;
@@ -243,7 +244,7 @@ class ReleaseCommand {
     if (publicUnits.isNotEmpty) {
       output.heading(
         'Release order: '
-        '${publicUnits.map((plan) => '${plan.unit.name} ${plan.unit.version}').join(' -> ')}',
+        '${publicUnits.map((plan) => '${plan.unit.name} ${plan.unit.version}').join(' › ')}',
       );
       output.blank();
     }
@@ -279,6 +280,7 @@ class ReleaseCommand {
       );
     }
     if (!_validateRepositoryScope(selected)) return result(ExitCodes.refused);
+    _sayRun(selected);
     output.timeline.phase('preparing');
     // Every unit's destinations are read at once; each unit is then shown,
     // in release order, as its answers arrive.
@@ -324,9 +326,13 @@ class ReleaseCommand {
     ];
     Future<({int code, List<PublicationPlan> publications})> finish() async {
       final prepared = await _stage(stagings);
-      // Every unit says how its staging went, even past one that failed.
+      // The warnings every unit found while staging, said once.
+      output.flushWarnings();
+      // Every unit's staging is said, even past one that failed: once, for
+      // all of them.
       var code = ExitCodes.ok;
-      final staged = <UnitSnapshot>[];
+      final ready = <UnitSnapshot>[];
+      final staged = <_Staged>[];
       for (final unit in units) {
         final finished = _finishRelease(unit, prepared[unit.read.unit.name]);
         if (finished.code != ExitCodes.ok) {
@@ -336,15 +342,38 @@ class ReleaseCommand {
         if (finished.publication case final publication?) {
           publications.add(publication);
         }
-        if (finished.readyToPublish) staged.add(unit.read);
+        if (finished.staged case final said?) staged.add(said);
+        if (finished.readyToPublish) ready.add(unit.read);
       }
-      if (code == ExitCodes.ok && staged.isNotEmpty) _sayReadyToPublish(staged);
+      if (staged.isNotEmpty) _sayStaged(staged);
+      if (code == ExitCodes.ok && ready.isNotEmpty) _sayReadyToPublish(ready);
       return result(code);
     }
 
     // Units staged side by side say how they stopped once, after all of
     // them have said what they staged.
     return stagings.length > 1 ? output.holdingHalts(finish) : finish();
+  }
+
+  /// Says once what this run stages or releases, and from which commit.
+  void _sayRun(List<ResolvedUnit> selected) {
+    final publishes = selected.any(
+      (unit) =>
+          unit.publish.isNotEmpty ||
+          unit.projects.any((project) => project.publish.isNotEmpty),
+    );
+    output.heading(
+      '${!stageOnly && publishes ? 'Releasing' : 'Staging'} '
+      '${_series([for (final unit in selected) '${unit.name} ${unit.version}'])}',
+    );
+    output.line(
+      [
+        tree.description.split('/').last,
+        '${git.branch ?? 'detached'}@${git.shortHead}',
+      ].join(' · '),
+      role: VisualRole.secondary,
+    );
+    output.blank();
   }
 
   /// Whether nothing the snapshot read stops [read]'s unit before private
@@ -443,20 +472,6 @@ class ReleaseCommand {
   Future<bool> _inspectRelease(_Unit unit) async {
     final read = unit.read;
     final ResolvedUnit(:name, :version) = read.unit;
-    final willPublish =
-        !stageOnly &&
-        (read.unit.publish.isNotEmpty ||
-            read.unit.projects.any((project) => project.publish.isNotEmpty));
-    output.heading('${willPublish ? 'Releasing' : 'Staging'} $name $version');
-    output.line(
-      [
-        tree.description.split('/').last,
-        '${git.branch ?? 'detached'}@${git.shortHead}',
-      ].join(' · '),
-      role: VisualRole.secondary,
-    );
-    output.blank();
-
     final progress = TargetReleaseProgress(
       output,
       title: '$name $version · preparing release',
@@ -490,7 +505,7 @@ class ReleaseCommand {
     }
 
     for (final warning in read.historyWarnings) {
-      output.warning(warning, unit: name);
+      output.deferWarning(warning, unit: name);
     }
     final problems = Diagnostics();
     read.historyProblems.forEach(problems.report);
@@ -596,7 +611,18 @@ class ReleaseCommand {
         ),
     ]);
     if (prepared.every((result) => result != null)) {
-      live.settle(title: '${stagings.length} units staged');
+      // A stage reused is not staged again: the title says which it was.
+      final reused = stagings
+          .where((staging) => staging.inspected.reusable)
+          .length;
+      final count = stagings.length;
+      live.settle(
+        title: reused == 0
+            ? '$count units staged'
+            : reused == count
+            ? '$count units · already staged'
+            : '$count units · ${count - reused} staged, $reused already staged',
+      );
     } else {
       live.conclude();
     }
@@ -609,7 +635,12 @@ class ReleaseCommand {
   /// Finishes [finished]'s unit once its stage is built ([prepared]; null
   /// when staging refused): says what was staged, and hands publication the
   /// plan it acts on.
-  ({int code, PublicationPlan? publication, bool readyToPublish})
+  ({
+    int code,
+    PublicationPlan? publication,
+    bool readyToPublish,
+    _Staged? staged,
+  })
   _finishRelease(_Unit finished, PreparedRelease? prepared) {
     final read = finished.read;
     final UnitSnapshot(:unit, :checklist, :targets) = read;
@@ -633,6 +664,7 @@ class ReleaseCommand {
             PreparedRelease(claims: read.claims, signing: null),
           ),
           readyToPublish: false,
+          staged: null,
         );
       }
       output.line(
@@ -640,7 +672,12 @@ class ReleaseCommand {
         mark: Mark.satisfied,
         note: 'already released',
       );
-      return (code: ExitCodes.ok, publication: null, readyToPublish: false);
+      return (
+        code: ExitCodes.ok,
+        publication: null,
+        readyToPublish: false,
+        staged: null,
+      );
     }
     if (finished.recovering) {
       prepared = PreparedRelease(claims: const [], signing: null);
@@ -650,6 +687,7 @@ class ReleaseCommand {
         code: ExitCodes.refused,
         publication: null,
         readyToPublish: false,
+        staged: null,
       );
     }
 
@@ -667,37 +705,75 @@ class ReleaseCommand {
         },
         show: false,
       );
-      _sayStageClaims(prepared.claims, localOnly ? null : prepared.signing);
-      if (unit.binaryProject case final project? when localOnly) {
-        output.blank();
-        output.line(
-          'Archives',
-          note:
-              '${stage.directory.repositoryRelativePath}/'
-              '${ReleaseAssets.producerRoot(project)}/archives',
-          role: VisualRole.secondary,
-          noteRole: VisualRole.secondary,
-        );
-      }
-      output.blank();
-      output.line(
-        '${unit.name} ${unit.version} '
-        '${read.stageReusable ? 'is already staged and verified.' : 'staged successfully.'}',
-        mark: Mark.done,
-        strong: true,
+      final staged = (
+        unit: unit,
+        reused: read.stageReusable,
+        claims: prepared.claims,
+        signing: localOnly ? null : prepared.signing,
+        archives: localOnly && unit.binaryProject != null
+            ? '${stage.directory.repositoryRelativePath}/'
+                  '${ReleaseAssets.producerRoot(unit.binaryProject!)}/archives'
+            : null,
       );
       if (stageOnly) {
         return (
           code: ExitCodes.ok,
           publication: null,
           readyToPublish: !localOnly,
+          staged: staged,
         );
       }
+      return (
+        code: ExitCodes.ok,
+        publication: publication(prepared),
+        readyToPublish: false,
+        staged: staged,
+      );
     }
     return (
       code: ExitCodes.ok,
       publication: publication(prepared),
       readyToPublish: false,
+      staged: null,
+    );
+  }
+
+  /// Says, once for the run, what every unit's stage holds: the names its
+  /// release would claim first, where local archives are, and whether each
+  /// stage was built now or was already there.
+  void _sayStaged(List<_Staged> staged) {
+    _sayStageClaims(
+      [for (final unit in staged) ...unit.claims],
+      [
+        for (final unit in staged)
+          if (unit.signing case final signing?
+              when signing.firstCertificate != null)
+            signing,
+      ],
+    );
+    for (final unit in staged) {
+      if (unit.archives case final archives?) {
+        output.blank();
+        output.line(
+          'Archives',
+          note: staged.length == 1
+              ? archives
+              : '${unit.unit.name} ${unit.unit.version} · $archives',
+          role: VisualRole.secondary,
+          noteRole: VisualRole.secondary,
+        );
+      }
+    }
+    String names(Iterable<_Staged> units) => _series([
+      for (final unit in units) '${unit.unit.name} ${unit.unit.version}',
+    ]);
+    final built = staged.where((unit) => !unit.reused).toList();
+    final reused = staged.where((unit) => unit.reused).toList();
+    output.blank();
+    output.line(
+      '${[if (built.isNotEmpty) '${names(built)} staged successfully', if (reused.isNotEmpty) '${names(reused)} ${reused.length == 1 ? 'is' : 'are'} already staged and verified'].join('; ')}.',
+      mark: Mark.done,
+      strong: true,
     );
   }
 
@@ -782,13 +858,13 @@ class ReleaseCommand {
     }
   }
 
-  /// Shows irreversible first-claim facts beside a completed private stage.
+  /// Shows irreversible first-claim facts beside the completed private
+  /// stages: every unit's, under one heading.
   void _sayStageClaims(
     List<TargetClaim> claims,
-    ReleaseSigningContext? signing,
+    List<ReleaseSigningContext> firstSignings,
   ) {
-    final firstSigning = signing?.firstCertificate == null ? null : signing;
-    if (claims.isEmpty && firstSigning == null) return;
+    if (claims.isEmpty && firstSignings.isEmpty) return;
     output.blank();
     // Tense matters: at staging nothing public has happened yet, so saying
     // these *are* permanent would be false a moment before it is true.
@@ -807,7 +883,7 @@ class ReleaseCommand {
         noteRole: VisualRole.secondary,
       );
     }
-    if (firstSigning != null) {
+    for (final firstSigning in firstSignings) {
       output.line(
         'macOS code identifier',
         note: firstSigning.codeId,
@@ -830,6 +906,20 @@ class ReleaseCommand {
   static String _shortCertificate(String certificate) =>
       certificate.replaceFirst('Developer ID Application: ', '');
 }
+
+/// What one unit's completed stage holds, for the run's closing summary.
+typedef _Staged = ({
+  ResolvedUnit unit,
+  bool reused,
+  List<TargetClaim> claims,
+  ReleaseSigningContext? signing,
+  String? archives,
+});
+
+/// "a", "a and b", "a, b and c": several names in one sentence.
+String _series(List<String> names) => names.length <= 2
+    ? names.join(' and ')
+    : '${names.sublist(0, names.length - 1).join(', ')} and ${names.last}';
 
 /// One unit's release: what was read, shared with `rk status`, and what
 /// planning made of it.

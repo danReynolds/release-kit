@@ -985,6 +985,12 @@ void main() {
 
     expect(second.code, ExitCodes.ok, reason: second.text);
     expect(second.text, isNot(contains('Rebuilding:')));
+    expect(first.text, contains('\ntool 1.2.3 · staged\n'));
+    expect(
+      second.text,
+      contains('\ntool 1.2.3 · already staged\n'),
+      reason: 'a stage reused is not said to be staged again',
+    );
     expect(
       second.text,
       contains('✓ tool 1.2.3 is already staged and verified.'),

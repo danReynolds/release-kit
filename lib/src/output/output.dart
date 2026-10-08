@@ -516,6 +516,7 @@ class Output {
       assert(false, 'a live progress board was never resolved by its owner');
       board.discard();
     }
+    flushWarnings();
     _yieldToProse();
   }
 
@@ -825,6 +826,7 @@ class Output {
       if (held == null || kind.index > held.index) _heldHalt = kind;
       return;
     }
+    flushWarnings();
     // A later unit can fail before its own first act after an earlier unit in
     // the same repository command already published. The report is for the
     // whole invocation, so "nothing changed" would be false.
@@ -870,6 +872,7 @@ class Output {
     String? target,
     int depth = 0,
   }) {
+    flushWarnings();
     report.problem(diagnostic, unit: unit, target: target);
     final where = diagnostic.source == null ? '' : '${diagnostic.source}  ';
     line(
@@ -895,6 +898,47 @@ class Output {
     }
   }
 
+  /// Warnings recorded but not yet shown: see [deferWarning].
+  final List<({Diagnostic diagnostic, String? unit})> _deferredWarnings = [];
+
+  /// Records a nonblocking diagnostic now, and shows it later with the run's
+  /// other warnings, in one section: before the run's next problem, halt or
+  /// next move, or at [flushWarnings]. Units staged side by side each find
+  /// their own; said as they arrive, they made a section per unit and
+  /// repeated the remedy they share under every one.
+  void deferWarning(Diagnostic diagnostic, {String? unit, String? target}) {
+    report.warning(diagnostic, unit: unit, target: target);
+    _deferredWarnings.add((diagnostic: diagnostic, unit: unit));
+  }
+
+  /// Shows every deferred warning under one heading. Warnings that share a
+  /// remedy are listed together, and the remedy is said once, after them.
+  void flushWarnings() {
+    if (_deferredWarnings.isEmpty) return;
+    final seen = <String>{};
+    final byRemedy = <String?, List<Diagnostic>>{};
+    for (final (:diagnostic, :unit) in _deferredWarnings) {
+      final key = '$unit\u0000${diagnostic.code}\u0000${diagnostic.message}';
+      if (!seen.add(key)) continue;
+      byRemedy.putIfAbsent(diagnostic.remedy, () => []).add(diagnostic);
+    }
+    _deferredWarnings.clear();
+    blank();
+    heading('Warnings');
+    for (final MapEntry(key: remedy, value: warnings) in byRemedy.entries) {
+      for (final diagnostic in warnings) {
+        final where = diagnostic.source == null ? '' : '${diagnostic.source}  ';
+        line(
+          '$where${diagnostic.message}',
+          mark: Mark.warning,
+          depth: 1,
+          state: RuntimeState.attention,
+        );
+      }
+      if (remedy != null) say(remedy, depth: 2);
+    }
+  }
+
   /// A nonblocking diagnostic. Its stable code remains machine-readable.
   void warning(
     Diagnostic diagnostic, {
@@ -917,6 +961,7 @@ class Output {
 
   /// The next command, which is what a reader wants after being told to act.
   void next(String command, {int depth = 0}) {
+    flushWarnings();
     report.next(command);
     // Marked by position, not by content: two identical lines are two lines,
     // and only the first is the reader's next move.

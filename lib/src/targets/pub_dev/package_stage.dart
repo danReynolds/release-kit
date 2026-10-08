@@ -332,9 +332,11 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
         Diagnostic(
           code: 'RK-PUB-012',
           message: 'pub validation for ${project.name}: ${_headline(warning)}',
+          // Said once for every warning that shares it, so it reads for
+          // one warning or several.
           remedy:
-              'fix or consciously accept this warning before release; '
-              'rk publishes past it only after explicit authorization',
+              'rk release lists pub warnings again before it asks, and '
+              'publishes past them only with your yes',
           evidence: warning.contains('\n') ? warning : null,
         ),
     ],
