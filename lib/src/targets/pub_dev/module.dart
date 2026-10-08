@@ -7,7 +7,6 @@ import '../../engine/resolve.dart';
 import '../../engine/targets.dart';
 import '../../engine/tools.dart';
 import '../../engine/verdict.dart';
-import '../../output/output.dart';
 import '../../output/progress.dart';
 import '../target_module.dart';
 import 'endpoint.dart';
@@ -361,49 +360,26 @@ final class PubDevTargetModule extends TargetModule {
   }
 
   @override
-  Future<TargetFailure> classifyUnconfirmedPublication(
-    TargetReleaseContext context,
+  ({String code, String message, String? next}) nameUnconfirmed(
     ResolvedUnit unit,
     TargetPlan target,
     Inspection state,
-    TargetActOutcome act, {
-    required bool actedBefore,
-  }) async {
-    final conflict = state.verdict == Verdict.conflict;
-    final code = conflict ? 'RK-PUB-006' : act.diagnostic?.code ?? 'RK-PUB-005';
-    final message = conflict
-        ? '${act.coordinate ?? target.project?.name}: '
-              '${state.detail ?? 'the public archive differs'}'
-        : act.diagnostic?.message ??
+    TargetActOutcome act,
+  ) => state.verdict == Verdict.conflict
+      ? (
+          code: 'RK-PUB-006',
+          message:
+              '${act.coordinate ?? target.project?.name}: '
+              '${state.detail ?? 'the public archive differs'}',
+          next: null,
+        )
+      : (
+          code: 'RK-PUB-005',
+          message:
               '${act.coordinate ?? target.project?.name}: the exact public '
-                  'archive could not be confirmed';
-    final details = <String>[
-      if (act.diagnostic?.remedy != null) act.diagnostic!.remedy!,
-      if (act.problem != null) act.problem!,
-      if (state.detail != null) state.detail!,
-      ...state.evidence.entries.map((entry) => '${entry.key}: ${entry.value}'),
-    ];
-    final halt = conflict
-        ? HaltKind.actedAndUnfixable
-        : act.mayHaveActed || state.verdict == Verdict.unknown
-        ? HaltKind.lostTrack
-        : actedBefore
-        ? HaltKind.stoppedPartway
-        : HaltKind.beforeActing;
-    return TargetFailure(
-      diagnostic: Diagnostic(
-        code: code,
-        message: message,
-        remedy: details.isEmpty
-            ? 're-run; the shared destination inspection will classify the '
-                  'public target before any retry'
-            : details.join('\n'),
-        evidence: act.evidence ?? act.diagnostic?.evidence,
-      ),
-      halt: halt,
-      nextCommand: code == 'RK-PUB-005' ? 'rk status ${unit.name}' : null,
-    );
-  }
+              'archive could not be confirmed',
+          next: 'rk status ${unit.name}',
+        );
 
   @override
   TargetStage stageInput({

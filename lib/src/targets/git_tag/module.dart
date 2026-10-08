@@ -7,7 +7,6 @@ import '../../engine/resolve.dart';
 import '../../engine/targets.dart';
 import '../../engine/verdict.dart';
 import '../../engine/version.dart';
-import '../../output/output.dart';
 import '../../output/progress.dart';
 import '../target_module.dart';
 import 'client.dart';
@@ -232,56 +231,4 @@ final class GitTagTargetModule extends TargetModule {
     TargetPlan target,
     Inspection inspected,
   ) => publishGitTag(context, unit);
-
-  @override
-  Future<TargetFailure> classifyUnconfirmedPublication(
-    TargetReleaseContext context,
-    ResolvedUnit unit,
-    TargetPlan target,
-    Inspection state,
-    TargetActOutcome act, {
-    required bool actedBefore,
-  }) async {
-    // Git refused the push because origin has another tag: the conflict a
-    // fresh inspection would have found, with the same advice.
-    if (state.verdict == Verdict.conflict) {
-      final conflict = diagnoseConflict(unit, target, state);
-      return TargetFailure(
-        diagnostic: Diagnostic(
-          code: conflict.code,
-          message: conflict.message,
-          source: conflict.source,
-          remedy: [?conflict.remedy, ?act.problem].join('\n'),
-          evidence: act.evidence,
-        ),
-        halt: actedBefore
-            ? HaltKind.actedAndUnfixable
-            : HaltKind.unfixableByRerun,
-      );
-    }
-    final diagnostic =
-        act.diagnostic ??
-        Diagnostic(
-          code: 'RK-TAG-002',
-          message: 'the tag ${target.coordinate} could not be pushed',
-        );
-    final details = [
-      ?diagnostic.remedy,
-      ?act.problem,
-      if (!state.isAbsent) ?state.detail,
-    ];
-    return TargetFailure(
-      diagnostic: Diagnostic(
-        code: diagnostic.code,
-        message: diagnostic.message,
-        remedy: details.isEmpty ? null : details.join('\n'),
-        evidence: act.evidence ?? diagnostic.evidence,
-      ),
-      halt: act.mayHaveActed || state.verdict == Verdict.unknown
-          ? HaltKind.lostTrack
-          : actedBefore
-          ? HaltKind.stoppedPartway
-          : HaltKind.beforeActing,
-    );
-  }
 }

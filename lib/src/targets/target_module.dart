@@ -119,11 +119,27 @@ abstract base class TargetModule {
     TargetActOutcome act,
   ) => inspectCandidate(context.reads, unit, target);
 
+  /// The code and sentence for an act that did not settle exact and carried
+  /// no diagnostic of its own, or whose result is a conflict, in this
+  /// target's terms; and the command to run next, if one helps.
+  ({String code, String message, String? next}) nameUnconfirmed(
+    ResolvedUnit unit,
+    TargetPlan target,
+    Inspection state,
+    TargetActOutcome act,
+  ) => (
+    code: 'RK-REL-003',
+    message:
+        '${target.step.summary}: '
+        '${act.problem ?? state.detail ?? 'the public result could not be confirmed'}',
+    next: null,
+  );
+
+  /// Whether a conflict read back after this target's act is permanent. A
+  /// moving channel's is not: the next update moves it.
+  bool get conflictIsPermanent => true;
+
   /// Classifies a provider operation that did not settle exact.
-  ///
-  /// Most append-only targets share this policy. A target overrides it only
-  /// when it has a real provider-specific recovery operation or when a public
-  /// conflict is repairable by a later run.
   Future<TargetFailure> classifyUnconfirmedPublication(
     TargetReleaseContext context,
     ResolvedUnit unit,
@@ -132,10 +148,33 @@ abstract base class TargetModule {
     TargetActOutcome act, {
     required bool actedBefore,
   }) async {
-    final details = <String>[
-      if (act.diagnostic?.remedy != null) act.diagnostic!.remedy!,
-      if (act.problem != null) act.problem!,
-      if (act.privateEffectDetail != null) act.privateEffectDetail!,
+    final conflict = state.verdict == Verdict.conflict;
+    // The provider refused the act because a permanent target was already
+    // something else: the conflict a fresh inspection would have found, with
+    // the same advice.
+    if (conflict && conflictIsPermanent && !act.ok && !act.mayHaveActed) {
+      final advice = diagnoseConflict(unit, target, state);
+      return TargetFailure(
+        diagnostic: Diagnostic(
+          code: advice.code,
+          message: advice.message,
+          source: advice.source,
+          remedy: [?advice.remedy, ?act.problem].join('\n'),
+          evidence: act.evidence ?? act.diagnostic?.evidence,
+        ),
+        halt: actedBefore
+            ? HaltKind.actedAndUnfixable
+            : HaltKind.unfixableByRerun,
+      );
+    }
+    final given = act.diagnostic;
+    final named = given == null || conflict
+        ? nameUnconfirmed(unit, target, state, act)
+        : (code: given.code, message: given.message, next: null);
+    final details = [
+      ?given?.remedy,
+      ?act.problem,
+      ?act.privateEffectDetail,
       if (act.privateEffectDetail == null &&
           act.privateEffect == TargetPrivateEffect.changed)
         'private provider state changed; this step did not confirm a public '
@@ -144,34 +183,34 @@ abstract base class TargetModule {
           act.privateEffect == TargetPrivateEffect.uncertain)
         'private provider state may have changed; no public release was '
             'confirmed.',
-      if (state.detail != null) state.detail!,
+      ?state.detail,
       ...state.evidence.entries.map((entry) => '${entry.key}: ${entry.value}'),
-      if (act.permanent != null) act.permanent!,
+      ?act.permanent,
     ];
-    final immutableConflict = state.verdict == Verdict.conflict;
-    final halt = act.permanent != null || immutableConflict
-        ? HaltKind.actedAndUnfixable
-        : act.mayHaveActed ||
-              act.privateEffect == TargetPrivateEffect.uncertain ||
-              state.verdict == Verdict.unknown
-        ? HaltKind.lostTrack
-        : act.privateEffect == TargetPrivateEffect.changed || actedBefore
-        ? HaltKind.stoppedPartway
-        : HaltKind.beforeActing;
     return TargetFailure(
       diagnostic: Diagnostic(
-        code: act.diagnostic?.code ?? 'RK-REL-003',
-        message:
-            act.diagnostic?.message ??
-            '${target.step.summary}: '
-                '${act.problem ?? state.detail ?? 'the public result could not be confirmed'}',
+        code: named.code,
+        message: named.message,
         remedy: details.isEmpty
             ? 're-run; the shared destination inspection will classify the '
                   'public target before any retry'
             : details.join('\n'),
-        evidence: act.evidence ?? act.diagnostic?.evidence,
+        evidence: act.evidence ?? given?.evidence,
       ),
-      halt: halt,
+      halt: act.permanent != null
+          ? HaltKind.actedAndUnfixable
+          : conflict
+          ? (conflictIsPermanent
+                ? HaltKind.actedAndUnfixable
+                : HaltKind.stoppedPartway)
+          : act.mayHaveActed ||
+                act.privateEffect == TargetPrivateEffect.uncertain ||
+                state.verdict == Verdict.unknown
+          ? HaltKind.lostTrack
+          : act.privateEffect == TargetPrivateEffect.changed || actedBefore
+          ? HaltKind.stoppedPartway
+          : HaltKind.beforeActing,
+      nextCommand: named.next,
     );
   }
 
