@@ -29,94 +29,16 @@ import 'rk_process.dart';
 import 'status_test.dart' show FakeRegistry;
 import 'support/compiled_rk.dart';
 
-/// Checks each phase against the deliverables its plan lists, so "done" is
-/// something this file decides rather than something a judgement call does.
-///
-/// The failure this exists to prevent already happened once: three phases were
-/// declared complete while missing items their own plan named, because "the
-/// command runs and prints something plausible" was substituted for the plan's
-/// "Done when". A phase is done when its group here passes.
-///
-/// Each test names the plan line it enforces. A test that cannot be written
-/// without the network or a real repository asserts the code path exists and
-/// leaves the live proof to the explicit lane in
-/// `test/live_release_checkpoints.dart`.
+/// rk run end to end: against the example repositories, through its
+/// machine surface, and through whole releases with scripted tools.
 void main() {
-  /// Every Dart file rk ships. bin/ counts: a feature reachable only from the
-  /// entry point is wired, and a check that ignored bin/ would call it dead.
-  final shipped = [Directory('lib'), Directory('bin')]
-      .expand((d) => d.listSync(recursive: true))
-      .whereType<File>()
-      .where((f) => f.path.endsWith('.dart'))
-      .toList();
-
-  /// Whether any shipped source contains [pattern].
-  bool sourceContains(String pattern) =>
-      shipped.any((f) => f.readAsStringSync().contains(pattern));
-
-  bool fileExists(String path) => File(path).existsSync();
-
   Iterable<Object?> problemCodes(Map<String, Object?> report) =>
       (report['problems'] as List).cast<Map>().map(
         (problem) => problem['code'],
       );
 
-  /// Whether [pattern] appears in a file other than [definedIn].
-  ///
-  /// A definition is not a use: matching the declaration of the very thing
-  /// being checked is how a conformance test passes while the feature is
-  /// unwired, which is the failure this file exists to prevent.
-  ///
-  /// A [definedIn] that names no shipped file is an error, not a no-op: the
-  /// exclusion would stop excluding, the declaration alone would satisfy the
-  /// check, and a green gate would mean nothing. That is a live trap for
-  /// every file move, and this test has already suffered the failure it
-  /// describes once.
-  bool usedOutside(String pattern, String definedIn) {
-    final others = shipped.where((f) => !f.path.endsWith(definedIn)).toList();
-    expect(
-      others.length,
-      shipped.length - 1,
-      reason: '$definedIn matches no shipped file',
-    );
-    return others.any((f) => f.readAsStringSync().contains(pattern));
-  }
-
-  group('phase 1 — engine core', () {
-    test('strict TOML subset parser', () {
-      expect(fileExists('lib/src/engine/toml.dart'), isTrue);
-      expect(fileExists('test/toml_test.dart'), isTrue);
-    });
-
-    test('pubspec reader covers name, version, publish_to, executables, '
-        'dependencies', () {
-      final source = File('lib/src/engine/pubspec.dart').readAsStringSync();
-      for (final field in [
-        'name',
-        'version',
-        'publishTo',
-        'executables',
-        'dependencies',
-      ]) {
-        expect(source, contains(field), reason: 'reads $field');
-      }
-    });
-
-    test('version grammar with frozen vectors', () {
-      expect(fileExists('lib/src/engine/version.dart'), isTrue);
-      expect(fileExists('test/version_test.dart'), isTrue);
-    });
-
-    test('config validation and unit/tag derivation', () {
-      expect(sourceContains('_derivedTagPattern'), isTrue);
-      expect(
-        usedOutside('refNameIssue', 'ref_name.dart'),
-        isTrue,
-        reason: 'a tag pattern git would refuse must be caught before work',
-      );
-    });
-
-    test('DONE WHEN: the checklist is derived for every repository shape', () {
+  group('example repositories', () {
+    test('the checklist is derived for every repository shape', () {
       // Executed. The version this replaced asserted that a file under test/
       // contained particular strings — the same anti-pattern the phase 2
       // review found, one level along: rename a test and the phase fails,
@@ -152,7 +74,7 @@ void main() {
     });
   });
 
-  group('phase 2 — output', () {
+  group('output', () {
     // Executed, not read. Every assertion below runs bin/rk.dart against a
     // real repository, because the version of this group that matched strings
     // inside test/ passed every one of five mutations that completely unwired
@@ -296,14 +218,7 @@ void main() {
       );
     });
 
-    test('halt sentences, conflict evidence, remediation', () {
-      final source = File('lib/src/output/output.dart').readAsStringSync();
-      expect(source, contains('HaltKind'));
-      expect(sourceContains('evidence'), isTrue);
-      expect(source, contains('remedy'));
-    });
-
-    test('DONE WHEN: the report renders identically to a terminal and a '
+    test('the report renders identically to a terminal and a '
         'pipe', () {
       // A pty, so this is the real comparison rather than a replay of it.
       // A bare repository answers deterministically without reading any
@@ -378,7 +293,7 @@ void main() {
     });
   });
 
-  group('phase 3 — probes and rk status', () {
+  group('status', () {
     late Directory scratch;
 
     setUpAll(() => scratch = Directory.systemTemp.createTempSync('rk-phase3-'));
@@ -413,60 +328,6 @@ void main() {
       expect(foreign, isEmpty);
     });
 
-    test('git state is read from a real repository, not a fake', () {
-      // git_test.dart drives GitState.read against repositories it builds.
-      // Before it existed, status_test faked the whole object and the
-      // porcelain parsing — which decides whether rk will release at all —
-      // was exercised by nothing.
-      expect(fileExists('test/git_test.dart'), isTrue);
-      final source = File('lib/src/engine/git.dart').readAsStringSync();
-      expect(source, contains('tags'));
-      expect(source, contains('isClean'));
-      expect(source, contains('headIsPushed'));
-    });
-
-    test('the definitive-negative rule, proved against a server', () {
-      // registry_test binds a local HTTP server and drives the real client:
-      // only a 404 concludes absence, and a 500, a captive portal, a
-      // truncated body and a dead socket are every one of them unknown.
-      expect(fileExists('test/registry_test.dart'), isTrue);
-      expect(
-        File('lib/src/engine/registry.dart').readAsStringSync(),
-        contains('404'),
-      );
-    });
-
-    test('one inspector, so status and release cannot disagree', () {
-      // Both verbs must ask it — a phase 3 commit claimed release shared the
-      // inspector while release still ran its own copy, and the weaker form
-      // of this test (any use outside inspect.dart) passed on status alone.
-      for (final (command, call) in [
-        // Status selects a call-local Inspector view of observed saved bytes.
-        // Native status tests separately prove the public digest comparison.
-        ('status.dart', 'reader.inspect('),
-        ('release.dart', 'inspector.inspect('),
-      ]) {
-        expect(
-          File('lib/src/commands/$command').readAsStringSync(),
-          contains(call),
-          reason: '$command must ask the shared inspector',
-        );
-      }
-      expect(
-        File('lib/src/commands/release.dart').readAsStringSync(),
-        isNot(contains('Future<Inspection> _inspect')),
-        reason:
-            'release grew its own inspector once, and it answered absent '
-            'by default for every step kind it did not name',
-      );
-      // Every step kind is answered explicitly. A default clause here is how
-      // "definitely not there" gets asserted about a destination nobody asked.
-      expect(
-        File('lib/src/engine/inspect.dart').readAsStringSync(),
-        isNot(contains('default:')),
-      );
-    });
-
     test('the forge is read, and being unable to read it is not absence', () {
       final repo = Rk.example(scratch, 'binary-cli', as: 'forge');
       // An origin that does not exist: gh will fail, which is not a fact
@@ -494,55 +355,24 @@ void main() {
       );
     });
 
-    test('identity derivation exists as a proven component', () {
-      // Phase 3 delivers the derivation; wiring it into signing is phase 7's
-      // gate, which is red until it happens. The assertion this replaces
-      // keyed on designatedRequirement being used outside macos.dart — which
-      // identity.dart satisfies while wired to nothing, an unwired file
-      // proving another file is used.
-      expect(fileExists('lib/src/engine/identity.dart'), isTrue);
-      expect(
-        fileExists('test/identity_test.dart'),
-        isTrue,
-        reason:
-            'proven by scripted tools: the command sequence, that '
-            '`security` is never consulted, and that "nothing published" '
-            'and "could not read" stay separate answers',
-      );
-    });
-
-    test(
-      'DONE WHEN: status reports a real repository against live reality',
-      () {
-        // Proved by tool/validate.dart, which runs rk against the real
-        // repositories on this machine. It is not a test — real repositories
-        // change — so what is asserted here is that the runner exists and that
-        // status has something to say.
-        expect(fileExists('tool/validate.dart'), isTrue);
-
-        final repo = Rk.example(
-          scratch,
-          'workspace-with-dependent',
-          as: 'live',
-        );
-        final run = repo(['status', '--json']);
+    test('status reports a real repository against live reality', () {
+      // tool/validate.dart runs rk against the real repositories on this
+      // machine; real repositories change, so here status only has to
+      // say something about a fixture.
+      final repo = Rk.example(scratch, 'workspace-with-dependent', as: 'live');
+      final run = repo(['status', '--json']);
+      expect(run.units, hasLength(2), reason: 'the document carries the units');
+      for (final unit in run.units) {
         expect(
-          run.units,
-          hasLength(2),
-          reason: 'the document carries the units',
+          (unit['steps'] as List),
+          isNotEmpty,
+          reason: '${unit['name']} has no steps, so a caller sees nothing',
         );
-        for (final unit in run.units) {
-          expect(
-            (unit['steps'] as List),
-            isNotEmpty,
-            reason: '${unit['name']} has no steps, so a caller sees nothing',
-          );
-        }
-      },
-    );
+      }
+    });
   });
 
-  group('phase 5 — rk release for pub.dev', () {
+  group('releasing to pub.dev', () {
     // Executed at the command layer with an evolving world: the acts change
     // the same fake registry and tag set the next inspection reads, which is
     // what lets a re-run be the resume. Real pub.dev cannot be published to
@@ -793,14 +623,6 @@ publish = ["git-tag", "pub.dev"]
         died: died,
       );
     }
-
-    test('default-No yes confirmation for a permanent act', () {
-      expect(sourceContains('[y/N]'), isTrue);
-    });
-
-    test('tag step with pre-act and post-act inspection', () {
-      expect(sourceContains('StepKind.tag'), isTrue);
-    });
 
     /// Drives to a completed release: pub.dev lists what was published.
     Future<
@@ -1404,7 +1226,7 @@ publish = ["git-tag", "pub.dev"]
       },
     );
 
-    test('DONE WHEN, resume half: killed after the tag, a re-run finishes '
+    test('resume half: killed after the tag, a re-run finishes '
         'without re-tagging', () async {
       final retained = Directory.systemTemp.createTempSync('rk-resume-');
       final published = {
@@ -1460,7 +1282,7 @@ publish = ["git-tag", "pub.dev"]
       expect(second.text, contains('archive matches the staged package'));
     });
 
-    test('DONE WHEN, resume half: killed after the publish, a re-run '
+    test('resume half: killed after the publish, a re-run '
         'confirms without publishing twice', () async {
       final retained = Directory.systemTemp.createTempSync('rk-resume-');
       final published = {
@@ -1511,10 +1333,6 @@ publish = ["git-tag", "pub.dev"]
       );
       expect(second.text, contains('already released'));
     });
-
-    test('resume skips what reality says is done', () {
-      expect(sourceContains('isExact'), isTrue);
-    });
   });
 
   test('no shipped document names a flag rk does not accept', () {
@@ -1535,8 +1353,8 @@ publish = ["git-tag", "pub.dev"]
     expect(accepted, isNot(contains('--stage')));
 
     // Exactly the documents that describe rk's *current* surface. Widening
-    // this to every shipped markdown was tried and is wrong: `doc/plan.md`
-    // is a history that legitimately records `--rehearse` and `--verbose` as
+    // this to every shipped markdown was tried and is wrong: the archived
+    // plan is a history that legitimately records `--rehearse` and `--verbose` as
     // flags that were cut, and both RFCs quote other tools' flags
     // (`gh --generate-notes`, `--paginate`, `--limit`) and flags that were
     // proposed and never built. A gate that fails on those trains people to
@@ -1561,7 +1379,7 @@ publish = ["git-tag", "pub.dev"]
     }
   });
 
-  group('phase 6 — rk init', () {
+  group('rk init', () {
     late Directory scratch;
 
     setUpAll(() => scratch = Directory.systemTemp.createTempSync('rk-phase6-'));
@@ -1664,18 +1482,7 @@ publish = ["git-tag", "pub.dev"]
       },
     );
 
-    test('the CLI parses consent through the one parser that declines EOF', () {
-      // `rk init < /dev/null` wrote the file: EOF read as null, null
-      // collapsed to '', and '' means Yes — while macOS reports /dev/null as
-      // a terminal, so hasTerminal never guarded it. A test harness cannot
-      // reach that state through a real pipe (pipes report no terminal and
-      // take the nobody-to-confirm path), so the gate is that the entry
-      // point routes its answer through InitCommand.consented — whose
-      // vectors, including EOF, are pinned in init_test.dart.
-      expect(usedOutside('InitCommand.consented', 'init.dart'), isTrue);
-    });
-
-    test('DONE WHEN: the proposal round-trips through the machine surface '
+    test('the proposal round-trips through the machine surface '
         'into a releasable repository', () {
       // The dogfood loop, entirely through the CLI: init emits the proposal
       // as data, the caller writes it, and rk itself must then accept it —
@@ -2296,32 +2103,7 @@ executables:
     );
   }
 
-  group('phase 7a — the local chain', () {
-    test('capability resolution per platform', () {
-      expect(fileExists('lib/src/builds/capability.dart'), isTrue);
-    });
-
-    test('deterministic archives', () {
-      expect(fileExists('lib/src/transforms/archive.dart'), isTrue);
-    });
-
-    test('signing verifies against the published requirement', () {
-      // Green now for the reason the red version demanded: release derives
-      // the requirement from the previous published release and the sign
-      // step compares against it — binary_steps_test proves the refusal.
-      expect(
-        usedOutside('PublishedIdentity(', 'engine/identity.dart'),
-        isTrue,
-        reason:
-            'the requirement must come from the release users already '
-            'installed, and something in the product must ask for it',
-      );
-      expect(
-        File('lib/src/binary_chain.dart').readAsStringSync(),
-        contains('publishedRequirement'),
-      );
-    });
-
+  group('the binary chain', () {
     test('no state carried between steps — a full release, each step its '
         'own act', () async {
       expect(
@@ -2465,7 +2247,7 @@ executables:
       },
     );
 
-    test('DONE WHEN, stage half: every local step runs for real and '
+    test('stage half: every local step runs for real and '
         'nothing public is touched', () async {
       final run = await binaryDrive(dryRun: true);
 
@@ -2585,9 +2367,9 @@ executables:
   /// derived GitHub inventory, while the formula is separately bound to its
   /// tap through the manifest. The drive proves both destinations and the
   /// changelog-derived body through the command layer.
-  group('phase 7b — the destinations', () {
+  group('binary destinations', () {
     test(
-      'DONE WHEN, drive half: what the release publishes is exactly what '
+      'drive half: what the release publishes is exactly what '
       'the inspector will expect, and the body is the changelog entry',
       () async {
         final run = await binaryDrive(

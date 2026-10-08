@@ -64,9 +64,10 @@ Complexity has to be justified by a release going wrong without it.
   This applies whether the sibling is in the same unit or another. Every
   other dependency, a published sibling included, comes from pub.dev like any
   other, even when this source has unreleased changes at that version.
-- The pub archive is built from that export with
-  `dart pub publish --to-archive`, and binaries with `dart compile`, using the
-  Dart rk identified for the stage.
+- The pub archive is built from that export with one
+  `dart pub publish --to-archive`, which resolves the package as it packages
+  it, and binaries with `dart compile`, using the Dart SDK on PATH, which rk
+  reads once per run and only when something is built.
 - Pub leaves overrides files out of archives, so the override never changes
   what is published. Pub's validation warning about overridden dependencies is
   expected, and rk says why.
@@ -97,8 +98,10 @@ lockfile and Pub's hashes keep it honest.
   - `release-manifest.json`;
   - `stage.json`.
 - It no longer holds a copy of the repository or of any dependency.
-- The stage id is computed from the commit, its tree, the unit's plan and the
-  toolchain. rk finds a stage by its id, with no scan of saved receipts.
+- The stage id is computed from the commit, its tree, the unit's plan and its
+  origin. The tools that build it do not name it: a stage outlives a Dart or
+  Xcode update, and an rk update that keeps the stage schema. rk finds a stage
+  by its id, with no scan of saved receipts.
 - Builds run in their own scratch export of the commit, outside the
   repository. Producers that run at the same time do not share one. The
   commit is read once per run, into memory, and only when something is
@@ -106,19 +109,23 @@ lockfile and Pub's hashes keep it honest.
 - Within a run, rk does not hash again a file it hashed and that has not
   moved since. A later run hashes what it reuses once.
 - What makes a saved stage reusable:
-  - its receipt is complete and names this id and plan;
+  - its receipt is complete, names this id and plan, and records the
+    producers this rk runs;
   - every published output still has its recorded size and hash.
+
+  Intermediates and files the receipt does not name are not read.
 
 ## Recovery
 
 - A partial release resumes by publishing what is not public yet.
-- **A stage must be kept only for bytes that must match what is already
-  public:**
-  - built assets on a GitHub release;
+- **A stage must be kept only while a unit's built release assets are partly
+  public**, because those bytes must match what is already public:
+  - the assets on a GitHub release;
   - a formula that names their hashes;
-  - a manifest whose hash a tag annotation records.
+  - a manifest that lists them, whose hash a tag annotation records.
 
-  `RK-STAGE-005` keeps exactly that case.
+  `RK-STAGE-005` keeps exactly that case, and never for a pub.dev target. A
+  unit without built assets stages the same manifest again from its commit.
 - **A pub package needs no saved stage to recover.**
   - If its version is on pub.dev, it is done.
   - If not, rk stages it again from the commit and publishes it.
@@ -126,28 +133,3 @@ lockfile and Pub's hashes keep it honest.
   - a tag on another commit;
   - a release with everything published but no tag;
   - a tag rk cannot read.
-
-## Not changed
-
-- Targets, consent, drift checks before acting, read-back after publishing,
-  the stage-store lock, and the progress boards.
-- `rk plan`, which was always source-only.
-
-## Delivery
-
-1. **Dependencies through Pub.**
-   - Path overrides in a scratch export, in one Pub resolution per package.
-   - Source-ordered publication.
-   - The dependency-staging machinery and the workspace pre-resolution
-     deleted: about 10,000 lines of code and 21 test files that covered only
-     them.
-2. **Registry truth.**
-   - A version on pub.dev is published; no archive comparison before acting.
-   - The narrowed recovery rule.
-3. **The stage model.**
-   - Output-only stages and direct stage ids.
-   - Verification of published outputs only.
-
-Stages saved by rk 0.1.14 are not read by the new rk. A partly published
-release staged with 0.1.14 finishes with 0.1.14, as schema-12 stages already
-did.

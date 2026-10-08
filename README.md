@@ -14,16 +14,16 @@ of a release script.
 - **Fail-closed.** The complete plan is validated before the first step
   acts, and every refusal names the problem and the fix
   ([doc/codes.md](doc/codes.md)).
-- **No secrets.** Publication sessions belong to `dart pub`, `gh`,
-  `codesign`, `notarytool`, and `git`. rk asks for them only after
-  private work is finished and checked; `status` and `stage`
-  never do. A session rk had to create is cleared when the run ends, so
-  a release leaves no credential behind; one that already existed is
-  left exactly as it was.
-- **Signed when you say so.** `tag.gpgSign`, or a release history that is
-  already signed, makes a signature required rather than incidental — and
-  rk reads it back off the tag it created instead of trusting the config.
-  A signature it cannot verify is refused, not reported as signed.
+- **No secrets.** Publication sessions belong to `dart pub`, `gh` and `git`;
+  signing and notarization credentials to `codesign` and `notarytool`. rk
+  asks for the `dart pub` and `gh` sessions once a run, after the yes;
+  `status` and `stage` never do. A `dart pub login` rk runs leaves its
+  session in place, as one you ran yourself would.
+- **Signed when you say so.** rk signs a release tag when `tag.gpgSign` is
+  set or earlier release tags are signed, as git does; a signing key alone
+  does not sign it. rk reads the signature back off the tag it created
+  instead of trusting the config, and refuses one it cannot verify rather
+  than reporting it as signed.
 - **Final bytes checked.** Linux executables and macOS Dart bundles use one
   artifact contract. Every macOS code file is signed; the installed command
   is tested before and after archiving. See [CLI artifacts](doc/cli-artifacts.md)
@@ -140,12 +140,16 @@ Staging rk 0.1.12
   release-kit · main@888444b
 ```
 
-A stage belongs to an exact commit and release plan. A new commit, SDK, RK
-installation, or release configuration can require a new stage. When recent
-stage metadata explains the change, RK tells you why it is rebuilding. A
-verified stage is reused; interrupted staging resumes from verified work.
+A stage belongs to an exact commit, the unit's configuration and the origin it
+publishes to; a new commit or origin needs a new stage. Updating Dart, Xcode or
+rk does not, unless a new rk changes how it records stages. A verified stage is
+reused; interrupted staging resumes from the outputs it recorded. `rk stage`
+rebuilds a completed stage that no longer verifies, and says so; `rk release`
+refuses one (`RK-STAGE-002`).
 
-Bare `rk stage` prepares all configured units in dependency order. Packages keep
+Bare `rk stage` prepares all configured units: each is checked, and its signing
+settled, in dependency order; then every unit that needs a stage builds at once,
+on one board. Packages keep
 independent versions, and Pub resolves their dependencies through its own cache.
 A package that depends on another package in this repository, at a version that
 satisfies its requirement, takes it from the same commit's source while staging,
@@ -184,10 +188,6 @@ $ brew install danreynolds/tap/rk
 
 The same CLI ships from pub.dev, Homebrew, and GitHub Releases —
 `rk --version` reports what you are running.
-
-The maintained [production release protocol](doc/production-alpha-plan.md)
-and [0.1.4 canary receipt](doc/production-alpha-receipt.md) show the proof
-required before calling those channels released.
 
 ### Try a local checkout
 
@@ -250,22 +250,29 @@ first claims, signing identities and preparation warnings, and asks once:
 
 ```console
 $ rk release
-Preparing: core -> cli
+Releasing core 0.3.0
   ...
-Release order: core -> cli
+2 units staged
+    core 0.3.0 · pub.dev · example_core
+✓     package archive                              staged
+    cli 0.1.0 · pub.dev · example_cli
+✓     package archive                              staged
+Release order: core 0.3.0 -> cli 0.1.0
 
-  core 0.3.0
+  Release core 0.3.0
     pub.dev                  example_core 0.3.0 · permanent · first claim
-  cli 0.1.0
-    pub.dev                  example_cli 0.1.0 · permanent
+
+  Release cli 0.1.0
+    pub.dev                  example_cli 0.1.0 · permanent · first claim
 Release core 0.3.0 and cli 0.1.0? [y/N] y
 ```
 
 A preparation failure leaves any completed private stages available for retry
-and acquires no publication session. After consent, RK checks each public act
-again. The reviewed stage receipts, signing identities, warnings, targets and
-first claims cannot change or expand; a changed plan stops for a fresh run.
-This includes targets that were already public when reviewed.
+and acquires no publication session. The yes covers exactly the targets shown
+and nothing else; a target that was already public when asked is never acted
+on. Right before each act rk reads that target again, skipping one another run
+has published since, checks the staged bytes it publishes, acts, and reads the
+result back.
 
 Packages publish in dependency order, and each waits until the version it
 uploaded is available before the next unit starts. Development-only
@@ -343,8 +350,8 @@ manifest of what was built.
 
 On a terminal, a finished step keeps how long it took once that reaches a
 second, and a successful `stage` or `release` of ten seconds or more ends
-with where the time went: `Done in 2m 53s · preparing 2s · checking stages
-31s · staging 1m 58s · publishing 22s`. Time spent at rk's confirmation
+with where the time went: `Done in 2m 53s · preparing 2s · staging 2m 29s ·
+publishing 22s`. Time spent at rk's confirmation
 prompt is not counted. For the whole breakdown, every phase and step however
 fast, pass `--timings`: it is printed to stderr after the run, and the run is
 written to `.rk/timings.json` as a trace that Perfetto opens.
@@ -353,19 +360,23 @@ written to `.rk/timings.json` as a trace that Perfetto opens.
 
 Releases are driven by agents as much as by hands. Every command
 speaks `--json` ([doc/json.md](doc/json.md)) — the same facts as the
-terminal output, with stable codes. Here, why `cli` waits for `core`:
+terminal output, with stable codes. Here, why `cli` releases after `core`:
 
 ```console
-$ rk status --json | jq .problems
-[
-  {
-    "unit": "cli",
-    "code": "RK-REL-001",
-    "message": "example_core 0.3.0 must be live on pub.dev: not published: example_core has never been published",
-    "remedy": "publish the prerequisite first: rk release core"
-  }
-]
+$ rk status --json | jq '.units[] | select(.name == "cli") | .steps[] | select(.kind == "prerequisite")'
+{
+  "id": "cli/requires/pub.dev/example_core/0.3.0",
+  "kind": "prerequisite",
+  "summary": "example_core 0.3.0 must be live on pub.dev",
+  "verdict": "absent",
+  "permanent": false,
+  "public": false,
+  "detail": "example_core has never been published"
+}
 ```
+
+It is not a problem: `rk release` publishes `core` first, so `problems` stays
+empty, and the terminal report says `Releases after core 0.3.0`.
 
 Without a terminal, a needed answer stops the selected release after private
 preparation and before publication sessions or public actions. `--yes` is the
@@ -375,12 +386,13 @@ completed command, 1 refused or failed, 2 usage, 3 rk itself crashed —
 
 ## Behavior
 
-Stages live under `.rk/work/stages`. Keep one while a release whose public bytes
-it holds is partly public: assets on a GitHub release, a Homebrew formula that
-names their hashes, or the release manifest a pushed tag records. The remaining
-targets need those exact bytes, and rk refuses without them (`RK-STAGE-005`).
-A published package needs nothing from its stage: a version on pub.dev is
-published, and a fresh stage publishes what remains. `rk clean` removes this
+Stages live under `.rk/work/stages`. Keep a unit's stage while its built release
+assets are partly public: the assets on a GitHub release, a Homebrew formula that
+names their hashes, or the release manifest a pushed tag records for them. The
+remaining targets need those exact bytes, and rk refuses without them
+(`RK-STAGE-005`). Any other unit stages again from its commit, even after its tag
+is pushed, and a published package needs nothing from its stage: a version on
+pub.dev is published, and a fresh stage publishes what remains. `rk clean` removes this
 repository's stages, lists their recorded identities, and asks first. Receipt
 metadata helps identify a stage; it does not prove that its bytes are no longer
 needed.

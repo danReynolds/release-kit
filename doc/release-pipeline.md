@@ -1,6 +1,6 @@
 # Release pipeline architecture
 
-`ReleaseCommand` is the decision ladder for one release unit. It resolves the
+`ReleaseCommand` is the decision ladder for the units a run selects. It resolves the
 shared plan, observes current truth, refuses unsafe starting states, and hands
 work to two coordinators. Targets supply destination semantics through
 `TargetModule`; they do not acquire control of the pipeline.
@@ -14,19 +14,23 @@ ReleaseCommand  ----->  initial observation and refusal
      |                          |
      |                          +---- TargetModule.inspect/history
      |
-     +----> ReleasePublicationCoordinator.prepareDestinations
-     |          safe readiness + frozen destination bindings
+     +----> ReleasePublicationCoordinator.checkReadiness
+     |          ambient readiness, before any private work
      |
-     +----> ReleaseStageCoordinator.prepare
-     |          dependency-ready target inputs + isolated producer lanes
-     |          receipt-backed stage with completion receipts
+     +----> ReleaseStageCoordinator.begin, one unit at a time
+     |          interrupted outputs cleared + signing identity settled
+     |
+     +----> ReleaseStageCoordinator.complete, every unit at once
+     |          isolated producer lanes + receipt-backed stage
      |                          |
      |                          +---- TargetModule.stageInput
      |
-     +----> ReleasePublicationCoordinator.publish
-                refresh public truth + validate reviewed stage
-                acquire sessions + authorize
-                run dependency-ready target lanes + confirm public truth
+     +----> ReleasePublicationCoordinator.authorize
+     |          one question for every unit's remaining targets
+     |
+     +----> ReleasePublicationCoordinator.publish, unit by unit
+                sessions once per provider, after the yes
+                per target: read again + check staged bytes + act + read back
                                 |
                                 +---- TargetModule.publish/confirm
 
@@ -74,23 +78,14 @@ waits for GitHub Release, and Pub can run beside GitHub once their tag is exact.
 | Owner | Owns | Does not own |
 | --- | --- | --- |
 | `ReleaseCommand` | repository/unit validation, checklist order, initial observation, cross-target refusal policy, stage-only exit | provider protocols, producer execution, sessions, authorization, publication transactions |
-| `ReleaseStageCoordinator` | stage reuse, signing continuity, reading the source once and exporting it to isolated producer lanes, target-provided stage inputs, receipt persistence and revalidation | public credentials or public mutations |
-| `ReleasePublicationCoordinator` | ambient target readiness, destination binding, late sessions, final public-state gates, authorization, target publication, authoritative read-back, and bounded availability retries | building or changing reviewed stage bytes |
+| `ReleaseStageCoordinator` | stage reuse, signing continuity, reading the source once and exporting it to isolated producer lanes, target-provided stage inputs, receipt persistence, and resuming an interrupted stage from its recorded outputs | public credentials or public mutations |
+| `ReleasePublicationCoordinator` | ambient target readiness, the one authorization question, sessions acquired once per provider after the yes, the read of each target and its staged bytes right before its act, target publication, authoritative read-back, and bounded availability retries | building or changing reviewed stage bytes |
 | `TargetModule` | one destination's plan, observations, optional history/readiness/session/stage/availability contribution, publish transaction, and provider-specific recovery semantics | global ordering, authorization timing, retry policy, progress layout, or another target |
 
 `release_progress.dart` contains presentation helpers shared by the two
 coordinators. `release_preparation.dart` contains the small typed handoff from
 private preparation to public authorization: first claims and signing
 identity. Neither file decides policy.
-
-`StageHistory` provides optional rebuild explanations from at most 32 recent
-receipts for the same unit and version. New completed receipts include the
-resolved plan in their extensible evidence; its digest must match the stage
-identity before it is used for comparison. Older receipts can still explain
-source and Dart SDK changes through their recorded manifest and compiler.
-History reads are bounded to small metadata files and never inspect or adopt
-old build artifacts. Missing, corrupt, or unsupported history suppresses the
-hint; the existing stage inspector remains the authority for reuse.
 
 ## Handoffs
 
@@ -99,10 +94,10 @@ There are two deliberate cross-subsystem values:
 - `PreparedRelease` is produced by staging and consumed by publication. It
   carries only the claims and signing facts that authorization needs; stage
   bytes remain addressed by `ReleaseStage` and proved by its receipt.
-- `PublicationPlan` is assembled after staging. It freezes the public steps,
-  complete dependency graph, target plans, observed states, destination
-  bindings, and prepared stage identity that publication must revalidate
-  before acting.
+- `PublicationPlan` is assembled after staging. It carries the public steps,
+  their dependency graph, target plans, the states the snapshot observed, and
+  the prepared stage. Its remaining targets are what the one question asks
+  about; publication reads each again right before its act.
 
 Both copy their collections at the boundary. Coordinators may update their own
 working state without letting later command code silently change what was
@@ -115,12 +110,13 @@ The split preserves the safety properties that make a release resumable:
 1. Public unknown or conflict never authorizes private work.
 2. Every producer lane has its own scratch directory; concurrent targets do
    not share mutable build space.
-3. Signing identity and all stage inputs are resolved before producers run and
-   recorded with the stage.
-4. Target readiness freezes the effective destination before any late session
-   acquisition; the binding is checked again afterwards.
-5. Public state, signing baseline, repository context, and stage bytes are
-   revalidated immediately before authorization.
+3. Signing identity is settled before producers run and recorded with the
+   stage, and the stage's plan is recorded before any producer writes.
+4. Target readiness is checked before any private work. Native sessions are
+   acquired once per provider, after the yes.
+5. Public state is read once, before staging, and that snapshot is what the yes
+   covers. Right before each act rk reads that target again and checks the
+   staged bytes it publishes.
 6. Authorization may lose work to another actor, but it cannot gain a new
    target after the operator says yes.
 7. A publish command result is never treated as proof. The target performs an

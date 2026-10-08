@@ -73,7 +73,7 @@ reason is worth that cost.
 ```sh
 dart format --output=none --set-exit-if-changed .  # what CI runs
 dart analyze
-dart test --exclude-tags publication -j 6          # about 2 minutes
+dart test --exclude-tags publication -j 6          # about a minute
 dart test --tags publication --concurrency=1       # loopback pub.dev, about 4
 ```
 

@@ -32,7 +32,7 @@ hand-built profiler next time. Two audiences want the numbers:
 
 ## Constraints
 
-From `doc/target-progress-plan.md` and the archived RFC 0002:
+From the archived target progress plan and RFC 0002:
 
 - TTY output may animate. Pipes and JSON stay deterministic: no spinner frames,
   no elapsed-time events, and "production output never serializes wall-clock
@@ -62,11 +62,11 @@ that took ten seconds or more ends with one line, leaving out phases under a
 second:
 
 ```
-Done in 2m 53s · preparing 2s · checking stages 31s · staging 1m 58s · publishing 22s
+Done in 2m 53s · preparing 2s · staging 2m 29s · publishing 22s
 ```
 
 The phases are the ones the run's boards already name: `preparing` (reading
-each unit's public targets), `checking stages`, `staging` and `publishing`.
+each unit's public targets), `staging` and `publishing`.
 Until the command names its first phase the run is `starting`, so slow setup
 (reading the repository, probing the toolchain) is named too. Time at rk's
 confirmation prompt counts toward no phase and no total: a release that
@@ -114,7 +114,7 @@ For a maintainer chasing a slow path, and undocumented on purpose: it shows
 rk's internals, which layers 1 and 2 never do. Spans sit at module
 boundaries:
 
-- command phases: inspect, restore, eligibility, bind, prepare;
+- command phases: inspect, check readiness, plan and stage, each per unit;
 - stage verification, where a stage is actually read;
 - subprocesses run through `Tools.run`, `timedRunSync` and the git source
   tree, named by the executable and the leading arguments that say what it
@@ -123,8 +123,7 @@ boundaries:
   count (not yet: `runInteractive`, `GitState`'s own reads, and the macOS
   launcher compiler);
 - tallies for work too frequent to be a span: digests (with bytes), receipt
-  parsing, canonical JSON, stage fingerprints, and stage inspections answered
-  from memory.
+  parsing and canonical JSON.
 
 Spans propagate through zones, so work started under a span is charged to it
 across awaits and `Future.wait`. Tallies are charged to the span they ran in.

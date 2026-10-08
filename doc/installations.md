@@ -197,18 +197,16 @@ The Local adapter owns Dart source preparation. The Fleury views in `tui/`
 provide input and presentation and call the same coordinator as explicit CLI
 commands. Publication modules do not import the installation adapters.
 
-The TUI dependency raises RK's minimum SDK to Dart 3.10.4. During development,
-`pubspec_overrides.yaml` pins Fleury’s inline-mode API plus the native output and shutdown fixes from Fleury #278.
-Replace this development pin with a qualified hosted Fleury dependency before
-publishing RK to pub.dev. Fleury is confined to UI imports. Pub's `pub_semver` is confined to the Pub
-installation adapter, where it evaluates SDK constraints using Pub's semantics.
-The GitHub adapter
-limits download and decompression sizes, then reuses the release engine’s exact
-archive inventory validator. Signing, digests, and archive validation have no
-third-party runtime imports.
+The TUI dependency raises RK's minimum SDK to Dart 3.10.4. Fleury is confined to
+`lib/src/tui`. Elsewhere rk imports only the Dart team's `crypto`, `pub_semver`
+and `yaml`: SHA-256 digests, Pub's version semantics (the Pub installation
+adapter evaluates SDK constraints with them), and pubspecs read as Pub reads
+them. A test in `test/end_to_end_test.dart` keeps it that way. The GitHub adapter
+limits download and decompression sizes, then reuses the release engine's exact
+archive inventory validator.
 
-See [the implementation receipt](installation-qualification.md) for the checks
-actually run and the outstanding live-provider/platform qualification.
+The [qualification record](archive/installation-qualification.md) lists the
+checks run when installations were built.
 
 ### Local packages with native build hooks
 

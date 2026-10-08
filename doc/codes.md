@@ -219,13 +219,14 @@ meaning and is not reused.
 | `RK-PUB-017` | Pub cannot resolve $package the way its consumers do | `lib/src/targets/pub_dev/package_stage.dart` |
 
 RK-PUB-002 (the consumer-resolve probe) and RK-PUB-004 are retired historical
-meanings and are not reused.
+meanings and are not reused. So are RK-AUTH-003, RK-DEST-001, RK-SIGN-013 and
+RK-STAGE-004, the checks a release once repeated between staging and each act.
 
 ## RK-REL — The release run
 
 | code | says | declared in |
 |---|---|---|
-| `RK-REL-001` | ${first.summary}:  ${state.detail ?? state.verdict.name} | `lib/src/commands/release.dart`, `lib/src/commands/release_publication_coordinator.dart`, `lib/src/commands/status.dart`, `lib/src/engine/inspect.dart`, `lib/src/targets/git_tag/module.dart`, `lib/src/targets/github_release/module.dart`, `lib/src/targets/homebrew/module.dart`, `lib/src/targets/pub_dev/module.dart` |
+| `RK-REL-001` | ${first.summary}:  ${state.detail ?? state.verdict.name} | `lib/src/commands/release_publication_coordinator.dart`, `lib/src/commands/status.dart`, `lib/src/engine/inspect.dart`, `lib/src/targets/git_tag/module.dart`, `lib/src/targets/github_release/module.dart`, `lib/src/targets/homebrew/module.dart`, `lib/src/targets/pub_dev/module.dart` |
 | `RK-REL-003` | a public target could not be proven after rk acted | `lib/src/commands/release_publication_coordinator.dart`, `lib/src/targets/target_module.dart` |
 | `RK-REL-004` | a consumer availability check could not run | `lib/src/commands/release_publication_coordinator.dart` |
 
@@ -283,10 +284,10 @@ meanings and are not reused.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-STAGE-001` | the release stage could not be located or replaced safely | `lib/src/commands/release.dart`, `lib/src/commands/release_stage_coordinator.dart`, `bin/rk.dart` |
-| `RK-STAGE-002` | the reviewed release stage no longer validates | `lib/src/commands/release_stage_coordinator.dart`, `lib/src/commands/status.dart` |
+| `RK-STAGE-001` | the release stage could not be located or replaced safely | `lib/src/commands/release.dart`, `lib/src/commands/release_stage_coordinator.dart` |
+| `RK-STAGE-002` | the reviewed release stage no longer validates, or changed before an act | `lib/src/commands/release_publication_coordinator.dart`, `lib/src/commands/release_stage_coordinator.dart`, `lib/src/commands/status.dart` |
 | `RK-STAGE-003` | committed release bytes could not be staged or did not remain valid | `lib/src/commands/release.dart`, `lib/src/commands/release_stage_coordinator.dart` |
-| `RK-STAGE-005` | a recovery-critical partial release lost the exact stage or public recovery binding it still needs | `lib/src/commands/release.dart`, `lib/src/commands/release_publication_coordinator.dart`, `lib/src/commands/status.dart` |
+| `RK-STAGE-005` | a partial release of built assets lost the exact stage it needs, or the public inputs that let it finish without one changed | `lib/src/commands/release.dart`, `lib/src/commands/release_publication_coordinator.dart`, `lib/src/commands/status.dart` |
 | `RK-STAGE-006` | staged work is locked or its fixed path is unsafe | `bin/rk.dart` |
 
 ## RK-TAG — The tag
@@ -313,7 +314,7 @@ meanings and are not reused.
 |---|---|---|
 | `RK-WORK-001` | the staged workspace has no required target artifact | `lib/src/binary_chain.dart`, `lib/src/targets/github_release/module.dart`, `lib/src/targets/homebrew/formula_stage.dart` |
 
-## RK-YAML — The YAML subset
+## RK-YAML — A YAML file rk reads
 
 | code | says | declared in |
 |---|---|---|
