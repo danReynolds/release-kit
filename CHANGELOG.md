@@ -92,6 +92,35 @@
   prepare the new launcher; earlier generations stay recoverable.
 - `rk use` finds local commands in projects that depend on path or Git
   packages. Releasing such a project still refuses those sources.
+- A repository that tracks a symbolic link, such as `CLAUDE.md -> AGENTS.md`,
+  or a submodule stages. Every stage refused it with "the committed source
+  could not be read"; a link is now exported as a link and a submodule is
+  left out, as `git archive` does.
+- A dependency written with no constraint (`foo:`, `foo: ~` or `foo: null`)
+  allows any version, as Pub reads it. It refused the release (`RK-DEP-002`).
+- A comma inside a quoted list item in `release.toml`, as in
+  `build = ["tool/build.sh", "--targets=a,b", "{out}"]`, no longer breaks the
+  list.
+- Each producer gets only the source its build reads: a Dart package, the
+  packages it takes from this repository, every pubspec, and the files
+  directly above its own directory. A project's own declared build still gets
+  everything. A fresh stage of the Fleury bench takes about 9s, down from
+  10.5s, and rk's own memory peaks at 135 MB, down from 225 MB.
+- A container runtime is asked for only when a binary for another platform
+  needs its smoke test; `docker info` no longer runs on every stage of a unit
+  that ships binaries.
+- An accepted notarization no longer fails when Apple's log cannot be
+  fetched afterwards (`RK-NOTARY-003`); rk fetches the log only to explain a
+  rejection. The stage records Apple's verdict and submission id, and no
+  longer keeps the submitted zip, the result or the log. Stages saved by
+  earlier versions are not reused.
+- macOS signing uses the certificate the preflight chose and trusts
+  codesign's exit status: rk no longer reads the keychain again for every
+  file, re-verifies what it just signed, or re-runs the archived program.
+  `RK-SIGN-012`, `RK-SIGN-015`, `RK-SIGN-016`, `RK-SIGN-018` and
+  `RK-SIGN-019` are retired.
+- `rk plan --json` no longer has `dependency_candidates`; `requires_units`
+  and the node graph carry the order.
 
 ## 0.1.14
 
