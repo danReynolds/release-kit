@@ -9,7 +9,118 @@ import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage_source.dart';
 import 'package:test/test.dart';
 
+/// A snapshot of a new repository's one commit: [files], and [links] by
+/// their targets as `ln -s` writes them.
+Future<StageSourceSnapshot> _committed(
+  Map<String, String> files, {
+  Map<String, String> links = const {},
+}) async {
+  final root = Directory.systemTemp.createTempSync('rk-source-commit-');
+  addTearDown(() => root.deleteSync(recursive: true));
+  String git(List<String> args) {
+    final result = Process.runSync('git', args, workingDirectory: root.path);
+    expect(result.exitCode, 0, reason: '${result.stderr}');
+    return '${result.stdout}'.trim();
+  }
+
+  git(['init', '--quiet']);
+  files.forEach((path, contents) {
+    File('${root.path}/$path')
+      ..parent.createSync(recursive: true)
+      ..writeAsStringSync(contents);
+  });
+  links.forEach((path, target) {
+    Link('${root.path}/$path').createSync(target, recursive: true);
+  });
+  git(['add', '-A']);
+  git([
+    '-c',
+    'user.name=RK fixture',
+    '-c',
+    'user.email=fixture@example.test',
+    '-c',
+    'commit.gpgsign=false',
+    'commit',
+    '--quiet',
+    '-m',
+    'source',
+  ]);
+  return StageSourceSnapshot.capture(
+    GitSourceTree(root.path),
+    commit: git(['rev-parse', 'HEAD']),
+  );
+}
+
+/// The regular files under [root]; links are not followed.
+List<String> _filesUnder(Directory root) => [
+  for (final entry in root.listSync(recursive: true, followLinks: false))
+    if (entry is File) entry.path.substring(root.path.length + 1),
+]..sort();
+
 void main() {
+  test('a read follows a link that stays inside the commit', () async {
+    final snapshot = await _committed(
+      {
+        'CHANGELOG.md': '## 1.0.0\n\n- First.\n',
+        'docs/usage.md': '# Usage\n',
+        'packages/app/pubspec.yaml': 'name: app\nversion: 1.0.0\n',
+      },
+      links: {
+        'packages/app/CHANGELOG.md': '../../CHANGELOG.md',
+        'packages/app/doc': '../../docs',
+        'packages/app/elsewhere.md': '../../../outside.md',
+      },
+    );
+
+    expect(
+      snapshot.read('packages/app/CHANGELOG.md'),
+      '## 1.0.0\n\n- First.\n',
+    );
+    expect(snapshot.read('packages/app/doc/usage.md'), '# Usage\n');
+    expect(snapshot.exists('packages/app/doc'), isTrue);
+    expect(snapshot.read('packages/app/elsewhere.md'), isNull);
+    expect(snapshot.exists('packages/app/elsewhere.md'), isFalse);
+  });
+
+  test('an export carries what the links it holds lead to', () async {
+    final snapshot = await _committed(
+      {
+        'shared/protocol.dart': 'const protocol = 1;\n',
+        'legal/LICENSE': 'MIT\n',
+        'art/logo.svg': '<svg/>\n',
+        'docs/guide.md': '# Nothing links here\n',
+        'packages/app/pubspec.yaml': 'name: app\nversion: 1.0.0\n',
+      },
+      links: {
+        'packages/app/lib/src/protocol.dart':
+            '../../../../shared/protocol.dart',
+        'packages/app/LICENSE': '../../legal/LICENSE',
+        'packages/app/assets': '../../art',
+      },
+    );
+    final root = Directory.systemTemp.createTempSync('rk-source-links-');
+    addTearDown(() => root.deleteSync(recursive: true));
+
+    snapshot.export(
+      root.path,
+      only: (path) => path.startsWith('packages/app/'),
+    );
+
+    expect(_filesUnder(root), [
+      'art/logo.svg',
+      'legal/LICENSE',
+      'packages/app/pubspec.yaml',
+      'shared/protocol.dart',
+    ]);
+    for (final (link, contents) in [
+      ('packages/app/lib/src/protocol.dart', 'const protocol = 1;\n'),
+      ('packages/app/LICENSE', 'MIT\n'),
+      ('packages/app/assets/logo.svg', '<svg/>\n'),
+    ]) {
+      expect(File('${root.path}/$link').readAsStringSync(), contents);
+    }
+  });
+
   test('committed source keeps Git modes and ignores worktree edits', () async {
     final root = Directory.systemTemp.createTempSync('rk-source-authority-');
     addTearDown(() => root.deleteSync(recursive: true));

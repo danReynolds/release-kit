@@ -118,8 +118,15 @@ final class StageSourceSnapshot implements SourceTree {
 
   @override
   List<String> trackedFiles() => List.unmodifiable(_files.keys);
+
+  /// The file at [path], read through any symbolic link on the way there
+  /// that stays inside this commit, as reading a checkout would.
   @override
-  List<int>? readBytes(String path) => _files[_path(path)];
+  List<int>? readBytes(String path) {
+    final resolved = _resolve(_path(path));
+    return resolved == null ? null : _files[resolved];
+  }
+
   @override
   String? read(String path) {
     final bytes = readBytes(path);
@@ -128,11 +135,40 @@ final class StageSourceSnapshot implements SourceTree {
 
   @override
   bool exists(String path) {
-    final normalized = _path(path);
-    return normalized.isEmpty ||
-        _files.containsKey(normalized) ||
-        _files.keys.any((file) => file.startsWith('$normalized/'));
+    final resolved = _resolve(_path(path));
+    return resolved != null &&
+        (resolved.isEmpty ||
+            _files.containsKey(resolved) ||
+            _files.keys.any((file) => file.startsWith('$resolved/')));
   }
+
+  /// [path] with every symbolic link on it followed, or null when a link
+  /// leads out of this commit or round in a circle.
+  String? _resolve(String path) {
+    var current = path;
+    for (var hops = 0; hops < 40; hops++) {
+      final parts = current.isEmpty ? const <String>[] : current.split('/');
+      String? through;
+      var rest = '';
+      for (var end = 1; end <= parts.length; end++) {
+        final prefix = parts.take(end).join('/');
+        if (_links.containsKey(prefix)) {
+          through = prefix;
+          rest = parts.skip(end).join('/');
+          break;
+        }
+      }
+      if (through == null) return current;
+      final target = _linkTarget(through);
+      if (target == null) return null;
+      current = [target, rest].where((part) => part.isNotEmpty).join('/');
+    }
+    return null;
+  }
+
+  /// Where the link at [link] points, as a path in this commit, or null for
+  /// a target outside it.
+  String? _linkTarget(String link) => _within(_parent(link), _links[link]!);
 
   /// The directories that hold a `pubspec.yaml`: this source's Dart
   /// packages.
@@ -175,12 +211,15 @@ final class StageSourceSnapshot implements SourceTree {
   }
 
   /// Writes the files [only] selects, every file when it is null, with
-  /// their modes, beneath [root]. Exporting into a directory that already
-  /// holds part of this source adds the rest.
+  /// their modes, beneath [root]. A link it selects is written as a link,
+  /// with what it leads to inside this commit, so that it resolves in the
+  /// export as it does in a checkout. Exporting into a directory that
+  /// already holds part of this source adds the rest.
   void export(String root, {bool Function(String path)? only}) {
+    final selected = only == null ? null : _withLinkTargets(only);
     final modes = <String, String>{};
     for (final MapEntry(key: path, value: bytes) in _files.entries) {
-      if (only != null && !only(path)) continue;
+      if (selected != null && !selected.contains(path)) continue;
       final file = File(
         [root, ...StagePath.segments(path)].join(Platform.pathSeparator),
       );
@@ -190,7 +229,7 @@ final class StageSourceSnapshot implements SourceTree {
     }
     setFileModes(modes);
     for (final MapEntry(key: path, value: target) in _links.entries) {
-      if (only != null && !only(path)) continue;
+      if (selected != null && !selected.contains(path)) continue;
       final link = Link(
         [root, ...StagePath.segments(path)].join(Platform.pathSeparator),
       );
@@ -198,6 +237,66 @@ final class StageSourceSnapshot implements SourceTree {
       link.createSync(target, recursive: true);
     }
   }
+
+  /// The files and links [only] selects, with everything a selected link
+  /// leads to inside this commit: a file, another link, or every file and
+  /// link in a directory.
+  Set<String> _withLinkTargets(bool Function(String path) only) {
+    final selected = <String>{};
+    final pending = [
+      for (final path in _files.keys)
+        if (only(path)) path,
+      for (final path in _links.keys)
+        if (only(path)) path,
+    ];
+    while (pending.isNotEmpty) {
+      final path = pending.removeLast();
+      if (!selected.add(path) || !_links.containsKey(path)) continue;
+      final target = _linkTarget(path);
+      if (target == null) continue;
+      // A link on the way to the target is followed too.
+      final parts = target.split('/');
+      for (var end = 1; end < parts.length; end++) {
+        final prefix = parts.take(end).join('/');
+        if (_links.containsKey(prefix)) pending.add(prefix);
+      }
+      if (_files.containsKey(target) || _links.containsKey(target)) {
+        pending.add(target);
+        continue;
+      }
+      final inside = target.isEmpty ? '' : '$target/';
+      pending.addAll([
+        for (final file in _files.keys)
+          if (file.startsWith(inside)) file,
+        for (final link in _links.keys)
+          if (link.startsWith(inside)) link,
+      ]);
+    }
+    return selected;
+  }
+}
+
+/// The directory holding [path], or '' at the root.
+String _parent(String path) {
+  final cut = path.lastIndexOf('/');
+  return cut < 0 ? '' : path.substring(0, cut);
+}
+
+/// [relative], written from [directory], as a path in the commit; null when
+/// it is absolute or climbs out of the commit.
+String? _within(String directory, String relative) {
+  if (relative.startsWith('/')) return null;
+  final parts = [if (directory.isNotEmpty) ...directory.split('/')];
+  for (final part in relative.split('/')) {
+    if (part.isEmpty || part == '.') continue;
+    if (part == '..') {
+      if (parts.isEmpty) return null;
+      parts.removeLast();
+    } else {
+      parts.add(part);
+    }
+  }
+  return parts.join('/');
 }
 
 String _path(String path) {
