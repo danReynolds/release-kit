@@ -370,16 +370,21 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
   return (errors: errors, warnings: warnings);
 }
 
-/// A finding's first line, and its last when the first introduces a list.
+/// A finding's first line. When that line introduces what follows, the
+/// sentence before the introduction ("… more than one version. For
+/// example:"), or, with none, the line and the last, which counts what it
+/// introduced ("`dart analyze` found …: 1 issue found.").
 String _headline(String finding) {
   final lines = [
     for (final line in finding.split('\n'))
       if (line.trim().isNotEmpty) line.trim(),
   ];
-  if (lines.length > 1 && lines.first.endsWith(':')) {
-    return '${lines.first} ${lines.last}';
-  }
-  return lines.isEmpty ? finding : lines.first;
+  if (lines.isEmpty) return finding;
+  final first = lines.first;
+  if (lines.length == 1 || !first.endsWith(':')) return first;
+  final sentence = first.lastIndexOf('. ');
+  if (sentence >= 0) return first.substring(0, sentence + 1);
+  return '$first ${lines.last}';
 }
 
 /// The path from directory [from] to [to], `/`-separated as a pubspec

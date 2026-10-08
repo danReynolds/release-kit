@@ -668,13 +668,11 @@ final class ReleasePublicationCoordinator {
       );
     }
 
-    final inspected = act.includeInspectionDetail && state.detail != null
-        ? ' · ${state.detail}'
-        : '';
-    releaseProgress.complete(
-      target,
-      note: '${act.successNote ?? 'published'}$inspected',
-    );
+    final note = [
+      ?act.successNote,
+      if (act.includeInspectionDetail) ?state.detail,
+    ].join(' · ');
+    releaseProgress.complete(target, note: note.isEmpty ? 'published' : note);
     return _PublicTargetCompletion.completed(step);
   }
 

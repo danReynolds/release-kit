@@ -1891,7 +1891,7 @@ publish = ["pub.dev"]
           exitCode: 0,
           stdout:
               'Validating package...\n'
-              'Package validation found the following 2 potential issues:\n'
+              'Package validation found the following 3 potential issues:\n'
               '* `dart analyze` found the following issue(s):\n'
               '  Analyzing lib, pubspec.yaml...\n'
               '  \n'
@@ -1904,6 +1904,16 @@ publish = ["pub.dev"]
               "* ./CHANGELOG.md doesn't mention current version (0.2.0).\n"
               '  Consider updating it with notes on this version prior to '
               'publication.\n'
+              '\n'
+              '* Your dependency on "path" should allow more than one '
+              'version. For example:\n'
+              '  \n'
+              '  dependencies:\n'
+              '    path: ^1.9.1\n'
+              '  \n'
+              '  Constraints that are too tight will make it difficult for '
+              'people to use your package\n'
+              '  along with other packages that also depend on "path".\n'
               '\n'
               'Package validation found the following hint:\n'
               '* Non-dev dependencies are overridden in '
@@ -1933,6 +1943,8 @@ publish = ["pub.dev"]
           'issue(s): 1 issue found.',
       "pub validation for keybay: ./CHANGELOG.md doesn't mention current "
           'version (0.2.0).',
+      'pub validation for keybay: Your dependency on "path" should allow '
+          'more than one version.',
     ]);
     expect(
       ran.text,
@@ -2087,6 +2099,26 @@ publish = ["pub.dev"]
       );
     },
   );
+
+  test('a published package says when it was published, once', () async {
+    final registry = _MutableRegistry(<String>['0.1.0']);
+    final ran = await release(
+      registry: registry,
+      onRun: (key) {
+        if (key == 'dart pub publish --from-archive <archive> --force') {
+          registry.goLive('0.2.0');
+          registry.archives['keybay@0.2.0'] = publishedBytes();
+        }
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    final row = ran.text
+        .split('\n')
+        .lastWhere((line) => line.contains('pub.dev · keybay'));
+    expect(row, contains(RegExp(r'published [^·]+ · archive matches')));
+    expect(row, isNot(contains('published · published')));
+  });
 
   test('a refused upload is read back briefly, not for ten minutes', () async {
     // pub.dev may take minutes to list an upload it accepted, so a publish

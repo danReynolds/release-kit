@@ -312,11 +312,11 @@ final class PubDevTargetModule extends TargetModule {
         reconciledNote: 'publish response was lost',
       );
     }
+    // The read-back says when pub.dev published it, and what it compared.
     return TargetActOutcome(
       ok: true,
       coordinate: '${project.name} ${project.version}',
       mayHaveActed: true,
-      successNote: 'published',
       includeInspectionDetail: true,
     );
   }
