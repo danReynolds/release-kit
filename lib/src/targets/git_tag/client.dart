@@ -14,12 +14,6 @@ import '../../engine/version.dart';
 /// because only the verb knows what the operator is being told, and when.
 ///
 /// The protocol is here; the halting policy remains in the target module.
-/// The signature block every git signing format writes into a tag object:
-/// OpenPGP, SSH, and X.509 (gpgsm) respectively.
-final _signatureBlock = RegExp(
-  r'^-----BEGIN (?:PGP SIGNATURE|SSH SIGNATURE|SIGNED MESSAGE)-----$',
-  multiLine: true,
-);
 
 /// The run's one read of origin's tags.
 const originTagsKey = 'git ls-remote --tags origin';
@@ -31,24 +25,6 @@ class GitTag {
 
   /// The repository every invocation runs in.
   final String root;
-
-  /// Whether origin lists [tag].
-  ///
-  /// Three answers, not two. A read that failed is not a tag that is
-  /// absent, and the sealed type makes that structural rather than a
-  /// discipline each caller has to remember — the same shape the forge
-  /// reader already uses for its own lookups.
-  Future<TagPresence> onOrigin(String tag) async {
-    final result = await tools.run('git', [
-      'ls-remote',
-      'origin',
-      'refs/tags/$tag',
-    ], workingDirectory: root);
-    if (!result.ok) return TagUnreadable(result.summary);
-    return result.stdout.contains('refs/tags/$tag')
-        ? const TagListed()
-        : const TagNotListed();
-  }
 
   /// The newest semantic version named by a tag on origin matching
   /// [tagPattern]. Direct refs are the inventory; peeled `^{}` lines describe
@@ -121,135 +97,6 @@ class GitTag {
     'origin',
   ], workingDirectory: root);
 
-  /// Whether origin's [tag] is the exact local tag object and source commit
-  /// the caller expects.
-  ///
-  /// An annotated tag has two identities on the wire: the ref points at the
-  /// tag object, while its peeled `^{}` ref points at the commit. Checking
-  /// only one loses information — the same source could carry a different
-  /// signed tag object, or the same tag-object-shaped answer could peel to a
-  /// different source. Lightweight tags use the commit for both expected
-  /// values and normally have no peeled line.
-  ///
-  /// Signature policy deliberately stays with the caller. This reader proves
-  /// which object origin has; a policy layer can separately decide whether
-  /// that local object was signed as required.
-  Future<Inspection> inspect({
-    required String tag,
-    required String expectedObject,
-    required String expectedCommit,
-  }) async {
-    if (!_isObjectId(expectedObject) || !_isObjectId(expectedCommit)) {
-      return const Inspection.unknown(
-        'the expected local tag identity could not be read',
-      );
-    }
-
-    final directRef = 'refs/tags/$tag';
-    final peeledRef = '$directRef^{}';
-    final parsed = await _read(tag);
-    if (parsed.problem != null) {
-      return Inspection.unknown(parsed.problem!);
-    }
-    if (parsed.direct == null) {
-      return const Inspection.absent(detail: 'not on origin');
-    }
-
-    final expectedObjectId = expectedObject.toLowerCase();
-    final expectedCommitId = expectedCommit.toLowerCase();
-    final remoteCommit = parsed.peeled ?? parsed.direct!;
-    final evidence = <String, String>{};
-    if (parsed.direct != expectedObjectId) {
-      evidence['tag object'] =
-          'origin ${parsed.direct}, expected $expectedObjectId';
-    }
-    if (remoteCommit != expectedCommitId) {
-      evidence['source commit'] =
-          'origin $remoteCommit, expected $expectedCommitId';
-    }
-    if (expectedObjectId != expectedCommitId && parsed.peeled == null) {
-      evidence['peeled tag'] =
-          'origin did not advertise $peeledRef, expected $expectedCommitId';
-    }
-    if (evidence.isNotEmpty) {
-      return Inspection.conflict(
-        'origin has a different tag identity',
-        evidence: evidence,
-      );
-    }
-
-    return Inspection.exact(
-      detail: parsed.peeled == null
-          ? 'origin points at $expectedCommitId'
-          : 'origin has tag object $expectedObjectId, peeled to '
-                '$expectedCommitId',
-      evidence: {
-        'tag object': expectedObjectId,
-        'source commit': expectedCommitId,
-      },
-    );
-  }
-
-  /// Reads the public-manifest digest from an exact annotated tag.
-  ///
-  /// The message is read only after [inspect] has proven that origin carries
-  /// the expected direct tag object and peeled source commit. Reading the
-  /// local object first would let a stale or unpushed tag lend its binding to
-  /// a different public ref. The object is addressed by OID rather than by
-  /// the mutable local ref for the same reason.
-  Future<TagManifestBinding> manifestBinding({
-    required String tag,
-    required String expectedObject,
-    required String expectedCommit,
-  }) async {
-    final remote = await inspect(
-      tag: tag,
-      expectedObject: expectedObject,
-      expectedCommit: expectedCommit,
-    );
-    switch (remote.verdict) {
-      case Verdict.absent:
-        return TagManifestAbsent(remote.detail ?? 'not on origin');
-      case Verdict.conflict:
-        return TagManifestConflict(
-          remote.detail ?? 'origin has a different tag identity',
-          evidence: remote.evidence,
-        );
-      case Verdict.unknown:
-        return TagManifestUnreadable(
-          remote.detail ?? 'origin could not be read',
-        );
-      case Verdict.exact:
-        break;
-    }
-
-    if (expectedObject.toLowerCase() == expectedCommit.toLowerCase()) {
-      return const TagManifestUnbound(
-        'the exact remote tag is lightweight and has no annotated message',
-      );
-    }
-
-    final ToolResult object;
-    try {
-      object = await tools.run('git', [
-        'cat-file',
-        'tag',
-        expectedObject,
-      ], workingDirectory: root);
-    } on Object catch (error) {
-      return TagManifestUnreadable(
-        'the annotated tag could not be read: '
-        '$error',
-      );
-    }
-    if (!object.ok) {
-      return TagManifestUnreadable(
-        'the annotated tag could not be read: ${object.summary}',
-      );
-    }
-    return _manifestBindingIn(object.stdout);
-  }
-
   /// Proves the release binding carried by origin's annotated tag when the
   /// caller knows the source commit but did not know the tag object id until
   /// after creating/pushing it. When [expectedManifestSha256] is present the
@@ -271,7 +118,6 @@ class GitTag {
     required String tag,
     required String expectedCommit,
     required String? expectedManifestSha256,
-    required bool requireSignature,
     List<String> sourcePaths = const [],
     Future<ToolResult>? listing,
   }) async {
@@ -344,19 +190,6 @@ class GitTag {
       );
     }
 
-    if (requireSignature) {
-      final verified = await tools.run('git', [
-        'verify-tag',
-        remote.direct!,
-      ], workingDirectory: root);
-      if (!verified.ok) {
-        return Inspection.conflict(
-          'origin\'s release tag signature could not be verified',
-          evidence: {'signature': verified.summary},
-        );
-      }
-    }
-    final signature = requireSignature ? 'verified' : 'not required';
     if (!sourceMatches) {
       return Inspection.conflict(
         'this version was released from a different source commit',
@@ -369,7 +202,6 @@ class GitTag {
           'released source commit': remote.peeled!,
           'current source commit': expectedSource,
           'manifest sha256': digest,
-          'signature': signature,
         },
       );
     }
@@ -382,7 +214,6 @@ class GitTag {
         'tag object': remote.direct!,
         'source commit': remote.peeled!,
         'manifest sha256': digest,
-        'signature': signature,
       },
       releasedFrom: sameCommit ? null : remote.peeled!,
     );
@@ -431,7 +262,6 @@ class GitTag {
     required String expectedObject,
     required String expectedCommit,
     required String? expectedManifestSha256,
-    required bool requireSignature,
   }) async {
     if (!_isObjectId(expectedObject) ||
         !_isObjectId(expectedCommit) ||
@@ -500,25 +330,12 @@ class GitTag {
       );
     }
 
-    if (requireSignature) {
-      final verified = await tools.run('git', [
-        'verify-tag',
-        expectedObject,
-      ], workingDirectory: root);
-      if (!verified.ok) {
-        return Inspection.conflict(
-          'the local release tag signature could not be verified',
-          evidence: {'signature': verified.summary},
-        );
-      }
-    }
     return Inspection.exact(
       detail: 'the local tag binds the expected source and release manifest',
       evidence: {
         'tag object': expectedObject.toLowerCase(),
         'source commit': expectedCommit.toLowerCase(),
         'manifest sha256': binding.digest,
-        'signature': requireSignature ? 'verified' : 'not required',
       },
     );
   }
@@ -553,35 +370,6 @@ class GitTag {
       peeledRef: peeledRef,
     );
   }
-
-  /// Whether the annotated tag [object] carries a signature block.
-  ///
-  /// Read from the object rather than inferred from configuration: `tag.gpgSign`
-  /// makes even a `-a` tag signed, so what git was asked to do and what the
-  /// object actually holds are different questions. Null when the object could
-  /// not be read, which is never treated as an answer either way.
-  ///
-  /// Presence is deliberately separate from `git verify-tag`, which fails both
-  /// for an unsigned tag and for a signed one this machine cannot check
-  /// (`gpg.ssh.allowedSignersFile` unset). Those need different remedies.
-  Future<bool?> hasSignature(String object) async {
-    final ToolResult read;
-    try {
-      read = await tools.run('git', [
-        'cat-file',
-        'tag',
-        object,
-      ], workingDirectory: root);
-    } on Object {
-      return null;
-    }
-    if (!read.ok) return null;
-    return _signatureBlock.hasMatch(read.stdout);
-  }
-
-  /// Whether git can authenticate [object]'s signature on this machine.
-  Future<ToolResult> verifySignature(String object) =>
-      tools.run('git', ['verify-tag', object], workingDirectory: root);
 
   /// Creates the annotated tag [tag] on [commit], never on whatever HEAD is
   /// by the time the release reaches this step; signed when [signed] says so.
@@ -812,22 +600,3 @@ class _RemoteTag {
 
 bool _isObjectId(String value) =>
     RegExp(r'^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$').hasMatch(value);
-
-/// What asking origin about a tag produced.
-sealed class TagPresence {
-  const TagPresence();
-}
-
-class TagListed extends TagPresence {
-  const TagListed();
-}
-
-class TagNotListed extends TagPresence {
-  const TagNotListed();
-}
-
-/// origin could not be asked — never the same answer as "not there".
-class TagUnreadable extends TagPresence {
-  const TagUnreadable(this.why);
-  final String why;
-}

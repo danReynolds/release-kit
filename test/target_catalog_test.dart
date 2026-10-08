@@ -470,22 +470,6 @@ publish = ["pub.dev"]
       outputs: {'shared.txt': 'test'},
     );
     const consumer = StageStepContract('consumer', inputs: {'shared.txt'});
-    final diagnostics = Diagnostics();
-    final config = ReleaseConfig.parse(
-      '''
-schema = 2
-
-[release.example]
-publish = ["pub.dev"]
-''',
-      'release.toml',
-      diagnostics,
-    )!;
-    final resolution = Resolution.resolve(
-      config,
-      MemorySourceTree({'pubspec.yaml': 'name: example\nversion: 1.0.0\n'}),
-      diagnostics,
-    )!;
     final contract = StageProducerGraph.forUnit(
       targetContributions: const [consumer, producer],
       localProducers: const [],

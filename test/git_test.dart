@@ -309,115 +309,6 @@ void main() {
     }
   });
 
-  group('exact remote tag observation', () {
-    const object = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-    const commit = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
-
-    Future<Inspection> inspect(
-      ToolResult answer, {
-      String expectedObject = object,
-      String expectedCommit = commit,
-    }) =>
-        GitTag(
-          tools: RecordingTools(answers: (_) => answer),
-          root: '/repo',
-        ).inspect(
-          tag: 'v1.0.0',
-          expectedObject: expectedObject,
-          expectedCommit: expectedCommit,
-        );
-
-    ToolResult answered(String stdout) =>
-        ToolResult(exitCode: 0, stdout: stdout, stderr: '');
-
-    test(
-      'an annotated tag compares both its object and peeled commit',
-      () async {
-        final state = await inspect(
-          answered(
-            '$object\trefs/tags/v1.0.0\n'
-            '$commit\trefs/tags/v1.0.0^{}\n',
-          ),
-        );
-        expect(state.verdict, Verdict.exact);
-        expect(state.detail, contains('peeled'));
-        expect(state.evidence['tag object'], object);
-        expect(state.evidence['source commit'], commit);
-      },
-    );
-
-    test(
-      'a lightweight tag is exact without a synthetic peeled line',
-      () async {
-        final state = await inspect(
-          answered('$commit\trefs/tags/v1.0.0\n'),
-          expectedObject: commit,
-        );
-        expect(state.verdict, Verdict.exact);
-      },
-    );
-
-    test('a definitive empty answer is absent', () async {
-      final state = await inspect(answered(''));
-      expect(state.verdict, Verdict.absent);
-    });
-
-    test('a different direct tag object is a conflict with evidence', () async {
-      const other = 'cccccccccccccccccccccccccccccccccccccccc';
-      final state = await inspect(
-        answered(
-          '$other\trefs/tags/v1.0.0\n'
-          '$commit\trefs/tags/v1.0.0^{}\n',
-        ),
-      );
-      expect(state.verdict, Verdict.conflict);
-      expect(state.evidence['tag object'], contains(other));
-      expect(state.evidence['tag object'], contains(object));
-    });
-
-    test('a tag peeled to different source is a conflict', () async {
-      const other = 'cccccccccccccccccccccccccccccccccccccccc';
-      final state = await inspect(
-        answered(
-          '$object\trefs/tags/v1.0.0\n'
-          '$other\trefs/tags/v1.0.0^{}\n',
-        ),
-      );
-      expect(state.verdict, Verdict.conflict);
-      expect(state.evidence['source commit'], contains(other));
-      expect(state.evidence['source commit'], contains(commit));
-    });
-
-    test('a failed read is unknown, never absent', () async {
-      final state = await inspect(
-        ToolResult(exitCode: 1, stdout: '', stderr: 'operation timed out'),
-      );
-      expect(state.verdict, Verdict.unknown);
-      expect(state.detail, contains('timed out'));
-    });
-
-    test('a tool exception is unknown, never allowed to escape', () async {
-      final state = await GitTag(
-        tools: RecordingTools(
-          answers: (_) => throw StateError('git executable disappeared'),
-        ),
-        root: '/repo',
-      ).inspect(tag: 'v1.0.0', expectedObject: object, expectedCommit: commit);
-      expect(state.verdict, Verdict.unknown);
-      expect(state.detail, contains('git executable disappeared'));
-    });
-
-    test('a malformed successful answer is unknown, never absent', () async {
-      final state = await inspect(answered('not-an-object refs/tags/v1.0.0'));
-      expect(state.verdict, Verdict.unknown);
-    });
-
-    test('a peeled answer without its direct ref is unknown', () async {
-      final state = await inspect(answered('$commit\trefs/tags/v1.0.0^{}\n'));
-      expect(state.verdict, Verdict.unknown);
-    });
-  });
-
   group('latest release tag on origin', () {
     Future<Inspection> latest(ToolResult result) => GitTag(
       tools: RecordingTools(results: {'git ls-remote --tags origin': result}),
@@ -469,192 +360,6 @@ void main() {
     });
   });
 
-  group('annotated tag manifest binding', () {
-    const object = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-    const commit = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
-    const other = 'cccccccccccccccccccccccccccccccccccccccc';
-    const digest =
-        'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd';
-
-    String annotated(String message) =>
-        'object $commit\n'
-        'type commit\n'
-        'tag v1.0.0\n'
-        'tagger T <a@b.c> 0 +0000\n'
-        '\n'
-        '$message';
-
-    Future<({TagManifestBinding binding, RecordingTools tools})> read({
-      ToolResult? remote,
-      ToolResult? localObject,
-      String expectedObject = object,
-      String expectedCommit = commit,
-    }) async {
-      final tools = RecordingTools(
-        answers: (key) {
-          if (key.startsWith('git ls-remote')) {
-            return remote ??
-                ToolResult(
-                  exitCode: 0,
-                  stdout:
-                      '$object\trefs/tags/v1.0.0\n'
-                      '$commit\trefs/tags/v1.0.0^{}\n',
-                  stderr: '',
-                );
-          }
-          if (key.startsWith('git cat-file tag')) {
-            return localObject ??
-                ToolResult(
-                  exitCode: 0,
-                  stdout: annotated(
-                    'cli 1.0.0\n\nrelease-manifest-sha256: $digest\n',
-                  ),
-                  stderr: '',
-                );
-          }
-          return null;
-        },
-      );
-      final binding = await GitTag(tools: tools, root: '/repo').manifestBinding(
-        tag: 'v1.0.0',
-        expectedObject: expectedObject,
-        expectedCommit: expectedCommit,
-      );
-      return (binding: binding, tools: tools);
-    }
-
-    test('an unsigned annotated tag returns its exact binding', () async {
-      final result = await read();
-      expect(result.binding, isA<TagManifestBound>());
-      expect(result.binding.sha256, digest);
-      expect(result.tools.calls, hasLength(2));
-      expect(result.tools.calls.last, 'git cat-file tag $object');
-    });
-
-    test(
-      'a signed annotated tag keeps the same valid message binding',
-      () async {
-        final result = await read(
-          localObject: ToolResult(
-            exitCode: 0,
-            stdout: annotated(
-              'cli 1.0.0\n\n'
-              'release-manifest-sha256: $digest\n'
-              '-----BEGIN PGP SIGNATURE-----\n'
-              'signed bytes\n'
-              '-----END PGP SIGNATURE-----\n',
-            ),
-            stderr: '',
-          ),
-        );
-        expect(result.binding, isA<TagManifestBound>());
-        expect(result.binding.sha256, digest);
-      },
-    );
-
-    test('a missing binding is distinct from an unreadable tag', () async {
-      final result = await read(
-        localObject: ToolResult(
-          exitCode: 0,
-          stdout: annotated('cli 1.0.0\n'),
-          stderr: '',
-        ),
-      );
-      expect(result.binding, isA<TagManifestMissing>());
-      expect(result.binding.sha256, isNull);
-    });
-
-    test('an invalid digest is a malformed binding', () async {
-      final result = await read(
-        localObject: ToolResult(
-          exitCode: 0,
-          stdout: annotated('release-manifest-sha256: not-a-digest\n'),
-          stderr: '',
-        ),
-      );
-      expect(result.binding, isA<TagManifestMalformed>());
-    });
-
-    test('duplicate binding lines are malformed', () async {
-      final result = await read(
-        localObject: ToolResult(
-          exitCode: 0,
-          stdout: annotated(
-            'release-manifest-sha256: $digest\n'
-            'release-manifest-sha256: $digest\n',
-          ),
-          stderr: '',
-        ),
-      );
-      expect(result.binding, isA<TagManifestMalformed>());
-    });
-
-    test('a remote identity conflict prevents reading the message', () async {
-      final result = await read(
-        remote: ToolResult(
-          exitCode: 0,
-          stdout:
-              '$other\trefs/tags/v1.0.0\n'
-              '$commit\trefs/tags/v1.0.0^{}\n',
-          stderr: '',
-        ),
-      );
-      expect(result.binding, isA<TagManifestConflict>());
-      expect(result.tools.calls, hasLength(1));
-      expect(result.tools.calls.single, startsWith('git ls-remote'));
-    });
-
-    test('an absent remote tag is distinct from unreadable', () async {
-      final result = await read(
-        remote: ToolResult(exitCode: 0, stdout: '', stderr: ''),
-      );
-      expect(result.binding, isA<TagManifestAbsent>());
-      expect(result.tools.calls, hasLength(1));
-    });
-
-    test('an unreadable remote never becomes absence', () async {
-      final result = await read(
-        remote: ToolResult(
-          exitCode: 1,
-          stdout: '',
-          stderr: 'operation timed out',
-        ),
-      );
-      expect(result.binding, isA<TagManifestUnreadable>());
-      expect((result.binding as TagManifestUnreadable).why, contains('timed'));
-      expect(result.tools.calls, hasLength(1));
-    });
-
-    test('an unreadable local tag object remains unreadable', () async {
-      final result = await read(
-        localObject: ToolResult(
-          exitCode: 1,
-          stdout: '',
-          stderr: 'object unavailable',
-        ),
-      );
-      expect(result.binding, isA<TagManifestUnreadable>());
-      expect(
-        (result.binding as TagManifestUnreadable).why,
-        contains('object unavailable'),
-      );
-    });
-
-    test('a lightweight tag is exact but has no message binding', () async {
-      final result = await read(
-        expectedObject: commit,
-        remote: ToolResult(
-          exitCode: 0,
-          stdout: '$commit\trefs/tags/v1.0.0\n',
-          stderr: '',
-        ),
-      );
-      expect(result.binding, isA<TagManifestUnbound>());
-      expect(result.binding.sha256, isNull);
-      expect(result.tools.calls, hasLength(1));
-    });
-  });
-
   group('post-push release tag proof', () {
     const object = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
     const commit = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -703,7 +408,6 @@ void main() {
             tag: 'v1.0.0',
             expectedCommit: expectedCommit,
             expectedManifestSha256: digest,
-            requireSignature: signed,
             sourcePaths: sourcePaths,
           );
       return (state: state, tools: tools);
@@ -901,13 +605,10 @@ void main() {
         ..writeAsStringSync(manifestBytes);
       final manifestDigest = Sha256.hex(manifest.readAsBytesSync());
       final destination = GitTag(tools: tools, root: root.path);
-
-      expect(await destination.onOrigin(tag), isA<TagNotListed>());
       final absent = await destination.inspectReleaseBinding(
         tag: tag,
         expectedCommit: sourceCommit,
         expectedManifestSha256: manifestDigest,
-        requireSignature: false,
       );
       expect(absent.verdict, Verdict.absent);
 
@@ -933,7 +634,6 @@ void main() {
         expectedObject: tagObject,
         expectedCommit: sourceCommit,
         expectedManifestSha256: manifestDigest,
-        requireSignature: false,
       );
       expect(localProof.verdict, Verdict.exact);
 
@@ -967,7 +667,6 @@ void main() {
         tag: tag,
         expectedCommit: sourceCommit,
         expectedManifestSha256: manifestDigest,
-        requireSignature: false,
       );
       expect(firstReadback.verdict, Verdict.exact);
       expect(firstReadback.evidence, {
@@ -981,12 +680,10 @@ void main() {
         await destination.pushExact(tag, tagObject),
         'idempotent release tag re-push',
       );
-      expect(await destination.onOrigin(tag), isA<TagListed>());
       final secondReadback = await destination.inspectReleaseBinding(
         tag: tag,
         expectedCommit: sourceCommit,
         expectedManifestSha256: manifestDigest,
-        requireSignature: false,
       );
       expect(secondReadback.verdict, Verdict.exact);
       expect(secondReadback.evidence, firstReadback.evidence);
