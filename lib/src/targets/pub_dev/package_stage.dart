@@ -243,6 +243,28 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
   final summary = RegExp(
     r'Package has[^\n]*',
   ).allMatches(validation).map((match) => match.group(0)!).lastOrNull;
+
+  // Pub exits 69, unavailable, when it cannot reach a registry while it
+  // resolves, and then validates nothing: no finding of Pub's is there to
+  // fix, and staging again once it can reach the registry is the remedy.
+  if (packaged.exitCode == 69 &&
+      summary == null &&
+      findings.errors.isEmpty &&
+      findings.warnings.isEmpty) {
+    return (
+      diagnostic: Diagnostic(
+        code: 'RK-PUB-019',
+        message:
+            'Pub could not resolve dependencies or reach the registry for '
+            '${project.name}',
+        remedy:
+            '${_firstLine(packaged.stderr)}. Check the network and the '
+            'registry, then stage ${project.name} again',
+        evidence: validation.isEmpty ? packaged.summary : validation,
+      ),
+      warnings: const <Diagnostic>[],
+    );
+  }
   final refused =
       findings.errors.isNotEmpty ||
       (!packaged.ok &&

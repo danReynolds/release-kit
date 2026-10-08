@@ -1965,6 +1965,37 @@ publish = ["pub.dev"]
     expect(ran.calls.where((c) => c.startsWith('git tag')), isEmpty);
   });
 
+  test('a registry Pub cannot reach is not a validation refusal', () async {
+    // What `dart pub publish --to-archive` says offline: it stops resolving,
+    // before it validates anything.
+    final ran = await release(
+      results: {
+        'dart pub publish --to-archive <archive>': ToolResult(
+          exitCode: 69,
+          stdout: 'Resolving dependencies...\n',
+          stderr:
+              'Got socket error trying to find package path at '
+              'https://pub.dev.\n',
+        ),
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    final problem = ran.problems.single;
+    expect(problem['code'], 'RK-PUB-019');
+    expect(
+      ran.text,
+      contains('Pub could not resolve dependencies or reach the registry'),
+    );
+    expect(
+      ran.text,
+      contains(
+        'Got socket error trying to find package path at https://pub.dev',
+      ),
+    );
+    expect(ran.text, isNot(contains('validation errors')));
+  });
+
   test(
     'a summary rk cannot classify blocks, because it is unrecognised',
     () async {
