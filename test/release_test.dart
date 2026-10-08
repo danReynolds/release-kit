@@ -2029,6 +2029,33 @@ publish = ["pub.dev"]
     },
   );
 
+  test('a refused upload is read back briefly, not for ten minutes', () async {
+    // pub.dev may take minutes to list an upload it accepted, so a publish
+    // that succeeded is read back for up to ten. One pub refused, or whose
+    // answer was lost, settles within a few reads.
+    final registry = _ReadCountingRegistry();
+    final ran = await release(
+      registry: registry,
+      results: {
+        'dart pub publish --from-archive <archive> --force': ToolResult(
+          exitCode: 65,
+          stdout: '',
+          stderr: "You aren't an uploader for package 'keybay'.",
+        ),
+      },
+      onRun: (key) {
+        if (key == 'dart pub publish --from-archive <archive> --force') {
+          registry.uploaded = true;
+        }
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.refused);
+    expect(ran.text, contains("You aren't an uploader"));
+    expect(ran.text, contains('does not report it after 10s'));
+    expect(registry.readsAfterUpload, 3, reason: 'now, and after two waits');
+  });
+
   test(
     'a version the registry never lists hits the deadline, honestly',
     () async {
@@ -2486,6 +2513,20 @@ final class _HeldRegistry implements RegistryReader {
 
   @override
   void forget(String name) => delegate.forget(name);
+}
+
+/// Counts version reads once `dart pub publish` has run.
+class _ReadCountingRegistry extends _MutableRegistry {
+  _ReadCountingRegistry() : super(<String>['0.1.0']);
+
+  bool uploaded = false;
+  int readsAfterUpload = 0;
+
+  @override
+  Future<PublishedVersion?> lookupVersion(String name, Version version) {
+    if (uploaded) readsAfterUpload++;
+    return super.lookupVersion(name, version);
+  }
 }
 
 class _MutableRegistry extends FakeRegistry {
