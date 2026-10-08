@@ -15,6 +15,7 @@ import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/engine/stage_archive.dart';
 import 'package:rk/src/engine/stage_inspection.dart';
 import 'package:rk/src/engine/stage_receipt.dart';
+import 'package:rk/src/engine/stage_source.dart';
 import 'package:rk/src/transforms/archive.dart';
 import 'package:test/test.dart';
 
@@ -240,7 +241,7 @@ void main() {
     },
   );
 
-  test('leaves a tracked gitlink out, as git archive does', () async {
+  test('refuses to export a tracked gitlink the export would hold', () async {
     final sourceRepository = _gitRepository(_source());
     addTearDown(() => sourceRepository.deleteSync(recursive: true));
     final nested = Directory.systemTemp.createTempSync('rk-gitlink-source-');
@@ -264,16 +265,23 @@ void main() {
     final source = await staged.captureSource();
     final exported = Directory.systemTemp.createTempSync('rk-gitlink-export-');
     addTearDown(() => exported.deleteSync(recursive: true));
-    source.export(exported.path);
 
+    // The package is the repository's root, so its build reads the
+    // submodule, whose files the commit does not hold.
     expect(
-      FileSystemEntity.typeSync(
-        '${exported.path}/vendor/dependency',
-        followLinks: false,
+      () => source.export(
+        exported.path,
+        only: source.dartBuildInputs('.'),
+        reader: 'tool',
       ),
-      FileSystemEntityType.notFound,
+      throwsA(
+        isA<StageSourceRefusal>().having(
+          (refusal) => refusal.diagnostic.message,
+          'message',
+          allOf(contains('vendor/dependency'), contains('tool')),
+        ),
+      ),
     );
-    expect(File('${exported.path}/README.md').existsSync(), isTrue);
   });
 
   test(

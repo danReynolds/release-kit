@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:yaml/yaml.dart' as yaml;
 
+import 'diagnostic.dart';
 import 'file_mode.dart';
 import 'source_tree.dart';
 import 'stage.dart';
@@ -21,6 +22,7 @@ final class StageSourceSnapshot implements SourceTree {
     this._executable,
     this.gitCommit, [
     this._links = const {},
+    this._submodules = const {},
   ]);
 
   static Future<StageSourceSnapshot> capture(
@@ -72,8 +74,12 @@ final class StageSourceSnapshot implements SourceTree {
         entry.path: entry,
     };
     final all = [...(git?.trackedFiles() ?? source.trackedFiles())]..sort();
-    // A symbolic link is exported as one, as `git archive` would; a gitlink
-    // has no bytes in this commit and is left out, as `git archive` does.
+    // A symbolic link is exported as one, as `git archive` would. A gitlink
+    // has no files in this commit: an export that would hold it refuses.
+    final submodules = {
+      for (final path in all)
+        if (entries[path] case final entry? when entry.type == 'commit') path,
+    };
     final links = [
       for (final path in all)
         if (entries[path] case final entry? when entry.mode == '120000') path,
@@ -108,6 +114,7 @@ final class StageSourceSnapshot implements SourceTree {
       },
       git?.commit,
       {for (final path in links) path: utf8.decode(batched![path]!)},
+      submodules,
     );
   }
 
@@ -117,6 +124,9 @@ final class StageSourceSnapshot implements SourceTree {
   final Map<String, Uint8List> _files;
   final Set<String> _executable;
   final Map<String, String> _links;
+
+  /// The commit's gitlinks: submodules, whose files it does not hold.
+  final Set<String> _submodules;
 
   @override
   List<String> trackedFiles() => List.unmodifiable(_files.keys);
@@ -219,8 +229,21 @@ final class StageSourceSnapshot implements SourceTree {
   /// export as it does in a checkout; so is the file an analysis options
   /// file includes by a relative path. Exporting into a directory that
   /// already holds part of this source adds the rest.
-  void export(String root, {bool Function(String path)? only}) {
-    final selected = only == null ? null : _closure(only);
+  ///
+  /// A submodule inside what the export holds refuses it with a
+  /// [StageSourceRefusal] naming the submodule and [reader], the project
+  /// built from the export: the commit records the submodule's commit and
+  /// none of its files, so leaving them out would stage, and publish, an
+  /// incomplete package.
+  void export(String root, {bool Function(String path)? only, String? reader}) {
+    final selected = only == null
+        ? null
+        : _closure(only, (submodule) => _refuse(submodule, reader));
+    // A submodule is a directory: an export holds it when it would hold a
+    // file inside it.
+    for (final submodule in _submodules) {
+      if (only == null || only('$submodule/.')) _refuse(submodule, reader);
+    }
     final modes = <String, String>{};
     for (final MapEntry(key: path, value: bytes) in _files.entries) {
       if (selected != null && !selected.contains(path)) continue;
@@ -246,7 +269,10 @@ final class StageSourceSnapshot implements SourceTree {
   /// inside this commit: what a link points to (a file, another link, or
   /// every file and link in a directory), and what an analysis options file
   /// includes by a relative path, as the analyzer reads it.
-  Set<String> _closure(bool Function(String path) only) {
+  Set<String> _closure(
+    bool Function(String path) only,
+    void Function(String submodule) refuse,
+  ) {
     final selected = <String>{};
     final options = <String>{};
     final pending = [
@@ -267,6 +293,11 @@ final class StageSourceSnapshot implements SourceTree {
         return;
       }
       final inside = target.isEmpty ? '' : '$target/';
+      for (final submodule in _submodules) {
+        if (submodule == target || submodule.startsWith(inside)) {
+          refuse(submodule);
+        }
+      }
       pending.addAll([
         for (final file in _files.keys)
           if (file.startsWith(inside)) file,
@@ -308,6 +339,31 @@ final class StageSourceSnapshot implements SourceTree {
           if (_within(_parent(path), value) case final target?) target,
     ];
   }
+}
+
+Never _refuse(String submodule, String? reader) => throw StageSourceRefusal(
+  Diagnostic(
+    code: 'RK-STAGE-003',
+    message: reader == null
+        ? '$submodule is a Git submodule, which a stage cannot hold'
+        : '$reader would be staged without $submodule, a Git submodule',
+    remedy:
+        'a stage is made from this repository\'s commit, which records the '
+        'submodule\'s commit and none of its files. Commit the files the '
+        'build needs into this repository instead, or move the submodule '
+        'out of the Dart packages; a project\'s own build reads the whole '
+        'repository.',
+  ),
+);
+
+/// A stage that cannot be made from this source as committed.
+final class StageSourceRefusal implements Exception {
+  const StageSourceRefusal(this.diagnostic);
+
+  final Diagnostic diagnostic;
+
+  @override
+  String toString() => '${diagnostic.message}: ${diagnostic.remedy}';
 }
 
 /// The directory holding [path], or '' at the root.

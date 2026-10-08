@@ -321,10 +321,9 @@ final class ReleaseStageCoordinator {
       } on Object catch (error) {
         _discardInterruptedOutputs(stage, outputsByProducer[receiptName]!);
         stageProgress.fail(receiptName);
-        _stageOperationProblem('${target.label} stage preparation', error);
         return _StageWorkCompletion.failed(
           receiptName,
-          HaltKind.stoppedPartway,
+          _stageOperationProblem('${target.label} stage preparation', error),
         );
       }
     }
@@ -391,10 +390,9 @@ final class ReleaseStageCoordinator {
       } on Object catch (error) {
         _discardInterruptedOutputs(stage, outputsByProducer[receiptName]!);
         stageProgress.fail(receiptName);
-        _stageOperationProblem('the ${unit.name} stage', error);
         return _StageWorkCompletion.failed(
           receiptName,
-          HaltKind.stoppedPartway,
+          _stageOperationProblem('the ${unit.name} stage', error),
         );
       }
     }
@@ -587,7 +585,14 @@ final class ReleaseStageCoordinator {
     );
   }
 
-  void _stageOperationProblem(String operation, Object error) {
+  /// Reports [error] from [operation], and says how the stage stopped.
+  HaltKind _stageOperationProblem(String operation, Object error) {
+    // The source cannot be staged as committed, which is known before any
+    // of it is built, and says why itself.
+    if (error is StageSourceRefusal) {
+      output.problem(error.diagnostic);
+      return HaltKind.beforeActing;
+    }
     output.problem(
       Diagnostic(
         code: 'RK-STAGE-003',
@@ -598,6 +603,7 @@ final class ReleaseStageCoordinator {
         evidence: '$error',
       ),
     );
+    return HaltKind.stoppedPartway;
   }
 
   StageStep _captureProducerStep(

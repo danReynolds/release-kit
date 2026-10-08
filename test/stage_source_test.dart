@@ -9,11 +9,12 @@ import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage_source.dart';
 import 'package:test/test.dart';
 
-/// A snapshot of a new repository's one commit: [files], and [links] by
-/// their targets as `ln -s` writes them.
+/// A snapshot of a new repository's one commit: [files], [links] by their
+/// targets as `ln -s` writes them, and [submodules] by their paths.
 Future<StageSourceSnapshot> _committed(
   Map<String, String> files, {
   Map<String, String> links = const {},
+  List<String> submodules = const [],
 }) async {
   final root = Directory.systemTemp.createTempSync('rk-source-commit-');
   addTearDown(() => root.deleteSync(recursive: true));
@@ -33,6 +34,9 @@ Future<StageSourceSnapshot> _committed(
     Link('${root.path}/$path').createSync(target, recursive: true);
   });
   git(['add', '-A']);
+  for (final path in submodules) {
+    git(['update-index', '--add', '--cacheinfo', '160000,${'a' * 40},$path']);
+  }
   git([
     '-c',
     'user.name=RK fixture',
@@ -174,6 +178,78 @@ void main() {
       'tooling/analysis_options.yaml',
       'tooling/strict.yaml',
     ]);
+  });
+
+  group('a submodule', () {
+    const files = {
+      'packages/app/pubspec.yaml': 'name: app\nversion: 1.0.0\n',
+      'packages/app/lib/app.dart': 'library;\n',
+    };
+    Matcher refusal(String submodule) => isA<StageSourceRefusal>().having(
+      (refusal) => refusal.diagnostic.message,
+      'message',
+      allOf(contains(submodule), contains('app')),
+    );
+
+    test('inside what an export holds refuses it, naming both', () async {
+      final snapshot = await _committed(
+        files,
+        submodules: ['packages/app/native/vendor'],
+      );
+      final root = Directory.systemTemp.createTempSync('rk-source-sub-');
+      addTearDown(() => root.deleteSync(recursive: true));
+
+      expect(
+        () => snapshot.export(
+          root.path,
+          only: snapshot.dartBuildInputs('packages/app'),
+          reader: 'app',
+        ),
+        throwsA(refusal('packages/app/native/vendor')),
+      );
+      expect(_filesUnder(root), isEmpty, reason: 'refused before writing');
+    });
+
+    test('a link leads into refuses the export too', () async {
+      final snapshot = await _committed(
+        files,
+        links: {'packages/app/native': '../../third_party'},
+        submodules: ['third_party/vendor'],
+      );
+      final root = Directory.systemTemp.createTempSync('rk-source-sub-');
+      addTearDown(() => root.deleteSync(recursive: true));
+
+      expect(
+        () => snapshot.export(
+          root.path,
+          only: snapshot.dartBuildInputs('packages/app'),
+          reader: 'app',
+        ),
+        throwsA(refusal('third_party/vendor')),
+      );
+    });
+
+    test('that no lane reads is left out', () async {
+      final snapshot = await _committed(
+        files,
+        submodules: ['third_party/vendor', 'vendor'],
+      );
+      final root = Directory.systemTemp.createTempSync('rk-source-sub-');
+      addTearDown(() => root.deleteSync(recursive: true));
+
+      snapshot.export(
+        root.path,
+        only: snapshot.dartBuildInputs('packages/app'),
+        reader: 'app',
+      );
+
+      expect(_filesUnder(root), [...files.keys]..sort());
+      expect(
+        () => snapshot.export(root.path, reader: 'app'),
+        throwsA(refusal('third_party/vendor')),
+        reason: 'a project\'s own build reads the whole repository',
+      );
+    });
   });
 
   test('committed source keeps Git modes and ignores worktree edits', () async {

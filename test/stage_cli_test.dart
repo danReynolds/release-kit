@@ -406,6 +406,43 @@ printf 'tarball' > "$1/src.tar.gz"
       expect(staged.code, 0, reason: staged.all);
     });
 
+    test('refuses a submodule its build would go without', () {
+      final (:repo, :environment) = crate(r'''#!/bin/bash
+set -euo pipefail
+mkdir -p "$1/assets"
+printf 'so' > "$1/assets/parser-linux-x64.so"
+printf 'dylib' > "$1/parser-macos-arm64.dylib"
+printf 'tarball' > "$1/src.tar.gz"
+''');
+      // The commit records the submodule's commit, and none of its files;
+      // the checkout has the empty directory of an uninitialized one.
+      Directory('${repo.root}/native/parser/vendor').createSync();
+      _git(repo.root, [
+        'update-index',
+        '--add',
+        '--cacheinfo',
+        '160000,${'a' * 40},native/parser/vendor',
+      ]);
+      _git(repo.root, ['commit', '-qm', 'vendor a parser library']);
+      _git(repo.root, ['push', '-q', 'origin', 'HEAD']);
+
+      final staged = repo([
+        'stage',
+        'parser',
+        '--json',
+      ], environment: environment);
+      expect(staged.code, isNot(0), reason: staged.all);
+      expect(
+        problem(staged, 'RK-STAGE-003')['message'],
+        allOf(contains('native/parser/vendor'), contains('flark_parse')),
+      );
+      expect(
+        (staged.json['halt'] as Map)['kind'],
+        'beforeActing',
+        reason: 'nothing was built: re-running cannot get past it',
+      );
+    });
+
     test('finishes an interrupted release from the commit its tag names', () {
       final (:repo, :environment) = crate(r'''#!/bin/bash
 set -euo pipefail

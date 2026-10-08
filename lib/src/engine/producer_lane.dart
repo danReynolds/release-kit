@@ -30,6 +30,7 @@ final class ProducerLaneSource {
         only: project.buildsAssets
             ? null
             : source.dartBuildInputs(project.pubspec.directory),
+        reader: project.name,
       );
     } on Object {
       directory.deleteSync(recursive: true);

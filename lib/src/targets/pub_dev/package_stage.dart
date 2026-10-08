@@ -428,6 +428,7 @@ Directory _mirrorSource(TargetStageContext context, ResolvedProject project) {
     context.source.export(
       source,
       only: context.source.dartBuildInputs(project.pubspec.directory),
+      reader: project.name,
     );
     // Records the source tracks are not Pub's answer for it, and a lockfile
     // holds versions its consumers do not get.
