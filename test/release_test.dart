@@ -1445,6 +1445,34 @@ void main() {
   );
 
   test(
+    'with no pub session stored, login goes straight to the terminal',
+    () async {
+      // Captured, `dart pub login` without a session opens a browser login
+      // and waits on it: twenty silent seconds before the operator saw it.
+      final interactive = <String>[];
+      final registry = _MutableRegistry(<String>['0.1.0']);
+      final ran = await release(
+        registry: registry,
+        onInteractive: interactive.add,
+        onRun: (key) {
+          if (key == 'dart pub publish --from-archive <archive> --force') {
+            registry.goLive('0.2.0');
+            registry.archives['keybay@0.2.0'] = publishedBytes();
+          }
+        },
+      );
+
+      expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+      expect(interactive, ['dart pub login']);
+      expect(
+        ran.calls.where((call) => call == 'dart pub login'),
+        hasLength(1),
+        reason: 'no captured attempt before the attached one',
+      );
+    },
+  );
+
+  test(
     'a redirected release never falls through to inherited-stdio login',
     () async {
       final interactive = <String>[];

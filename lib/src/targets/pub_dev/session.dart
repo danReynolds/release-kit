@@ -41,21 +41,23 @@ final class PubDevSession extends TargetSessionProvider {
       );
     }
     final runInteractive = context.runInteractive;
-    if (runInteractive == null && _sessionStored(context) != true) {
-      return _terminalRequired(unit);
-    }
-    // Try quietly first so a current or refreshable session does not surface
-    // provider chatter. A browser-assisted login must remain interactive.
-    try {
-      final quiet = await context.tools.run(
-        'dart',
-        const ['pub', 'login'],
-        workingDirectory: context.git.root,
-        timeout: const Duration(seconds: 20),
-      );
-      if (quiet.exitCode == 0) return const TargetReady(note: 'signed in');
-    } on ProcessException {
-      // The attached attempt below reports launcher failure to the operator.
+    final stored = _sessionStored(context) == true;
+    if (runInteractive == null && !stored) return _terminalRequired(unit);
+    // A stored session is checked quietly, so a current or refreshable one
+    // does not surface provider chatter. Without one, pub opens a browser
+    // login and waits on it, which only an attached terminal can answer.
+    if (stored) {
+      try {
+        final quiet = await context.tools.run(
+          'dart',
+          const ['pub', 'login'],
+          workingDirectory: context.git.root,
+          timeout: const Duration(seconds: 20),
+        );
+        if (quiet.exitCode == 0) return const TargetReady(note: 'signed in');
+      } on ProcessException {
+        // The attached attempt below reports launcher failure to the operator.
+      }
     }
 
     if (runInteractive == null) {
