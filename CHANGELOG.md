@@ -143,18 +143,24 @@
   packages. Releasing such a project still refuses those sources.
 - A repository that tracks a symbolic link, such as `CLAUDE.md -> AGENTS.md`,
   or a submodule stages. Every stage refused it with "the committed source
-  could not be read"; a link is now exported as a link and a submodule is
-  left out, as `git archive` does.
+  could not be read". A link is exported as a link, with what it leads to
+  inside the commit, and reading the source follows it, so a `CHANGELOG.md`
+  that links to the repository's own is the release notes' source too. A
+  submodule no build reads is left out, as `git archive` does; one inside a
+  Dart package, or anywhere in a repository whose project runs its own
+  build, refuses the stage (`RK-STAGE-003`), naming the submodule and the
+  project: the commit holds none of its files.
 - A dependency written with no constraint (`foo:`, `foo: ~` or `foo: null`)
   allows any version, as Pub reads it. It refused the release (`RK-DEP-002`).
 - A comma inside a quoted list item in `release.toml`, as in
   `build = ["tool/build.sh", "--targets=a,b", "{out}"]`, no longer breaks the
   list.
-- Each producer gets only the source its build reads: a Dart package, the
-  packages it takes from this repository, every pubspec, and the files
-  directly above its own directory. A project's own declared build still gets
-  everything. A fresh stage of the Fleury bench takes about 9s, down from
-  10.5s, and rk's own memory peaks at 135 MB, down from 225 MB.
+- Each producer gets only the source its build reads: for a Dart package,
+  every package in the repository, the files directly above its own
+  directory, what links in them lead to, and the analysis options they
+  include. A project's own declared build still gets everything. On the
+  Fleury bench rk's own memory during a fresh stage peaks at about 140 MB,
+  down from 225 MB; the stage takes about as long, 9s.
 - A container runtime is asked for only when a binary for another platform
   needs its smoke test; `docker info` no longer runs on every stage of a unit
   that ships binaries.
