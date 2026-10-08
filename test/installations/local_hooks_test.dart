@@ -82,8 +82,7 @@ Future<void> main(List<String> args) async {
       );
       final installed = await provider.install(project, (_) {});
       expect(installed.commands['orbit']!.workingDirectory, root.path);
-      final generation = await store.record(project, installed);
-      await store.activate(project, generation);
+      await store.activate(project, installed);
       final caller = Directory('${scratch.path}/caller')..createSync();
       // An unrelated, invalid package config must not influence the selected app.
       File('${caller.path}/.dart_tool/package_config.json')

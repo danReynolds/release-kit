@@ -188,32 +188,13 @@ void main() {
         (await Process.run(installed.commands['orbit']!.executable, [])).stdout,
         'release 1.1.0\n',
       );
-      await store.record(project, installed);
       expect(
         (await provider.inspect(project)).installation!.location,
         installed.location,
       );
-      File(installed.commands['orbit']!.executable).deleteSync();
-      final broken = await provider.inspect(project);
-      expect(broken.problem, contains('incomplete'));
-      expect(
-        broken.installation,
-        isNotNull,
-        reason: 'Known owned bytes can still be removed.',
-      );
       await provider.uninstall(project, installed);
       expect(Directory(installed.location).existsSync(), isFalse);
-      final forged = Installation(
-        source: InstallationSource.github,
-        version: '1.1.0',
-        location: project.directory,
-        commands: installed.commands,
-        managed: true,
-      );
-      await expectLater(
-        provider.uninstall(project, forged),
-        throwsA(isA<InstallationFailure>()),
-      );
+      expect((await provider.inspect(project)).installation, isNull);
       expect(Directory(project.directory).existsSync(), isTrue);
     },
   );

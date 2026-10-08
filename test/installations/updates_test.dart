@@ -99,7 +99,7 @@ void main() {
         progress: (_) {},
       );
       expect(store.selected(project)!.source, local.source);
-      expect(store.recorded(project, pub.source)!.version, '1.3.0');
+      expect((await pub.inspect(project)).installation!.version, '1.3.0');
       await manager.act(
         project,
         pub.source,

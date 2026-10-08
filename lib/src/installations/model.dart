@@ -82,13 +82,6 @@ class LaunchCommand {
     'required_files': requiredFiles,
     if (workingDirectory != null) 'working_directory': workingDirectory,
   };
-  factory LaunchCommand.fromJson(Map<String, dynamic> value) => LaunchCommand(
-    value['executable'] as String,
-    arguments: (value['arguments'] as List).cast<String>(),
-    environment: (value['environment'] as Map).cast<String, String>(),
-    requiredFiles: (value['required_files'] as List).cast<String>(),
-    workingDirectory: value['working_directory'] as String?,
-  );
 }
 
 class Installation {
@@ -97,15 +90,11 @@ class Installation {
     required this.version,
     required this.commands,
     required this.location,
-    this.managed = false,
     this.exportedPaths = const [],
   });
   final InstallationSource source;
   final String version, location;
   final Map<String, LaunchCommand> commands;
-
-  /// Whether rk owns the installed bytes (not just a routing receipt).
-  final bool managed;
 
   /// Native package-manager entrypoints, used to detect active external installs.
   final List<String> exportedPaths;
@@ -113,23 +102,11 @@ class Installation {
     'source': source.name,
     'version': version,
     'location': location,
-    'managed': managed,
     'exported_paths': exportedPaths,
     'commands': {
       for (final entry in commands.entries) entry.key: entry.value.toJson(),
     },
   };
-  factory Installation.fromJson(Map<String, dynamic> value) => Installation(
-    source: InstallationSource.values.byName(value['source'] as String),
-    version: value['version'] as String,
-    location: value['location'] as String,
-    managed: value['managed'] as bool,
-    exportedPaths: (value['exported_paths'] as List? ?? []).cast<String>(),
-    commands: (value['commands'] as Map<String, dynamic>).map(
-      (key, entry) =>
-          MapEntry(key, LaunchCommand.fromJson(entry as Map<String, dynamic>)),
-    ),
-  );
 }
 
 class SourceInspection {
