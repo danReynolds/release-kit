@@ -68,15 +68,10 @@ class GitTag {
       }
       if (ref.endsWith('^{}')) continue;
       final tag = ref.substring('refs/tags/'.length);
-      final raw = _versionIn(tag, parts);
-      if (raw == null) continue;
-      final version = Version.tryParse(raw);
-      if (version == null) {
-        return Inspection.unknown(
-          'the origin tag $tag matches the release pattern but is not a '
-          'semantic version',
-        );
-      }
+      // A tag that names no semantic version, `v1.0` or `vnext`, is no
+      // release of this lane, as the local check reads it too.
+      final version = Version.tryParse(_versionIn(tag, parts) ?? '');
+      if (version == null) continue;
       if (latest == null || version > latest) latest = version;
     }
     if (latest == null) {

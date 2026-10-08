@@ -2744,6 +2744,28 @@ publish = ["pub.dev"]
     );
   });
 
+  test('an old tag that names no version does not stop a release', () async {
+    final registry = _MutableRegistry(<String>['0.1.0']);
+    final ran = await release(
+      registry: registry,
+      results: {
+        'git ls-remote --tags origin': ToolResult(
+          exitCode: 0,
+          stdout: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb refs/tags/v1.0\n',
+          stderr: '',
+        ),
+      },
+      onRun: (key) {
+        if (key == 'dart pub publish --from-archive <archive> --force') {
+          registry.goLive('0.2.0');
+          registry.archives['keybay@0.2.0'] = publishedBytes();
+        }
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+  });
+
   test(
     'a shallow checkout cannot release behind the newest origin tag',
     () async {

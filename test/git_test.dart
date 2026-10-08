@@ -341,16 +341,31 @@ void main() {
       expect(result.verdict, Verdict.absent);
     });
 
-    test('a malformed matching semantic tag is unknown', () async {
-      final result = await latest(
-        ToolResult(
-          exitCode: 0,
-          stdout: '1111111111111111111111111111111111111111\trefs/tags/vnext\n',
-          stderr: '',
-        ),
-      );
-      expect(result.verdict, Verdict.unknown);
-    });
+    test(
+      'a matching tag that is no semantic version is not a release',
+      () async {
+        // `v1.0` and `vnext` match `v{version}` and name no version: an old
+        // or hand-made tag, which must not block every release after it.
+        const one = '1111111111111111111111111111111111111111';
+        final result = await latest(
+          ToolResult(
+            exitCode: 0,
+            stdout:
+                '$one\trefs/tags/vnext\n'
+                '$one\trefs/tags/v1.0\n'
+                '$one\trefs/tags/v0.9.0\n',
+            stderr: '',
+          ),
+        );
+        expect(result.verdict, Verdict.exact, reason: result.detail);
+        expect(result.evidence['version'], '0.9.0');
+
+        final none = await latest(
+          ToolResult(exitCode: 0, stdout: '$one\trefs/tags/v1.0\n', stderr: ''),
+        );
+        expect(none.verdict, Verdict.absent, reason: none.detail);
+      },
+    );
 
     test('an unreadable origin is unknown', () async {
       final result = await latest(
