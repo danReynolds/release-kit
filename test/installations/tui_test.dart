@@ -10,7 +10,8 @@ import 'package:rk/src/tui/init_picker.dart';
 import 'package:rk/src/tui/terminal.dart';
 import 'package:test/test.dart';
 
-Future<void> settle() => Future<void>.delayed(const Duration(milliseconds: 80));
+import '../support/screen.dart';
+
 InitPlan plan() => InitPlan.discover(
   tree: MemorySourceTree({
     'pubspec.yaml': 'name: tool\nversion: 1.0.0\nexecutables:\n  tool: tool\n',
@@ -56,26 +57,26 @@ void main() {
       final interaction = InitInteraction(driver: driver);
       try {
         var selecting = interaction.select(plan());
-        await settle();
+        await driver.drawn();
         for (var round = 0; round < 2; round++) {
-          driver.enqueue(
+          await driver.send(
             const KeyEvent(KeyCode.tab, modifiers: {KeyModifier.shift}),
           );
-          await settle();
           driver.enqueue(const KeyEvent(KeyCode.enter));
           final selected = await selecting.timeout(const Duration(seconds: 3));
           expect(selected, isNotNull);
-          final reviewing = interaction.review(selected!.renderToml(), false);
-          await settle();
+          final chosen = selected!;
+          late Future<InitReviewDecision> reviewing;
+          await driver.redrawn(
+            () => reviewing = interaction.review(chosen.renderToml(), false),
+          );
           expect(driver.restoreCallCount, 0);
           if (round == 0) {
             driver.enqueue(const KeyEvent(KeyCode.escape));
             expect(await reviewing, InitReviewDecision.back);
-            selecting = interaction.select(selected);
-            await settle();
+            await driver.redrawn(() => selecting = interaction.select(chosen));
           } else {
-            driver.enqueue(const KeyEvent(KeyCode.tab));
-            await settle();
+            await driver.send(const KeyEvent(KeyCode.tab));
             driver.enqueue(const KeyEvent(KeyCode.enter));
             expect(
               await reviewing.timeout(const Duration(seconds: 3)),
@@ -105,22 +106,19 @@ void main() {
           interrupt: () => model.finish(null),
           driver: driver,
         );
-        await settle();
+        await driver.drawn();
         expect(driver.currentMode!.mouse, isFalse);
         expect(driver.currentMode!.mouseMotion, isFalse);
         expect(driver.output, contains('rk init'));
         expect(driver.output, contains('Added'));
         expect(driver.output, isNot(contains('Included')));
-        driver.enqueue(const KeyEvent(KeyCode.tab));
-        await settle();
-        driver.enqueue(const TextInputEvent(' '));
-        await settle();
+        await driver.send(const KeyEvent(KeyCode.tab));
+        await driver.send(const TextInputEvent(' '));
         expect(
           model.plan.candidates.single.selected,
           contains(ReleaseChoice.binary),
         );
-        driver.resize(const CellSize(55, 24));
-        await settle();
+        await driver.redrawn(() => driver.resize(const CellSize(55, 24)));
         driver.enqueue(const KeyEvent(KeyCode.escape));
         await done.timeout(const Duration(seconds: 3));
         expect(result, isNull);
@@ -162,10 +160,11 @@ void main() {
       interrupt: () => model.finish(null),
       driver: driver,
     );
-    await settle();
+    await driver.drawn();
     // With no initial focus, Shift+Tab starts at the last action.
-    driver.enqueue(const KeyEvent(KeyCode.tab, modifiers: {KeyModifier.shift}));
-    await settle();
+    await driver.send(
+      const KeyEvent(KeyCode.tab, modifiers: {KeyModifier.shift}),
+    );
     driver.enqueue(const KeyEvent(KeyCode.enter));
     try {
       await done.timeout(const Duration(seconds: 3));
@@ -188,7 +187,7 @@ void main() {
         final driver = FakeTerminalDriver(size: const CellSize(100, 20));
         final interaction = InitInteraction(driver: driver);
         final selecting = interaction.select(plan());
-        await settle();
+        await driver.drawn();
         driver.enqueue(SignalEvent(signal));
         expect(await selecting.timeout(const Duration(seconds: 3)), isNull);
         await interaction.close();
@@ -202,13 +201,16 @@ void main() {
     final driver = FakeTerminalDriver(size: const CellSize(100, 20));
     final interaction = InitInteraction(driver: driver);
     final selecting = interaction.select(plan());
-    await settle();
-    driver.enqueue(const KeyEvent(KeyCode.tab, modifiers: {KeyModifier.shift}));
-    await settle();
+    await driver.drawn();
+    await driver.send(
+      const KeyEvent(KeyCode.tab, modifiers: {KeyModifier.shift}),
+    );
     driver.enqueue(const KeyEvent(KeyCode.enter));
     final selected = await selecting.timeout(const Duration(seconds: 3));
-    final reviewing = interaction.review(selected!.renderToml(), false);
-    await settle();
+    late Future<InitReviewDecision> reviewing;
+    await driver.redrawn(
+      () => reviewing = interaction.review(selected!.renderToml(), false),
+    );
     driver.enqueue(
       const KeyEvent(KeyCode.char('c'), modifiers: {KeyModifier.ctrl}),
     );
