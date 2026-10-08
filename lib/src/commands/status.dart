@@ -720,14 +720,14 @@ class StatusCommand {
       unit: unit,
       targets: targets,
     )) {
-      final blockedInputs = stage.contract.step.inputs
+      final blockedInputs = stage.contract.inputs
           .where(problems.containsKey)
           .toList();
       if (blockedInputs.isEmpty) continue;
       final reason = blockedInputs
           .map((input) => '$input: ${problems[input]}')
           .join('; ');
-      for (final output in stage.contract.step.outputs.keys) {
+      for (final output in stage.contract.outputs.keys) {
         problems[output] = 'cannot be produced until $reason';
       }
     }

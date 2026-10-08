@@ -205,7 +205,6 @@ abstract final class StageArchiveInventory {
   static List<Object?> evidence(List<StageArchiveEntry> entries) => [
     for (final entry in entries) entry.toJson(),
   ];
-
 }
 
 void _verifyHeaderChecksum(List<int> header) {

@@ -96,7 +96,7 @@ final class RepositoryReleasePlan {
         receiptNameFor(step): step,
     };
     final targetStagesByProducer = {
-      for (final stage in targetStages) stage.contract.step.name: stage,
+      for (final stage in targetStages) stage.contract.name: stage,
     };
     final publicTargetByStep = {
       for (final target in publicTargets) target.step.id: target,

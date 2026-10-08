@@ -14,7 +14,6 @@ import '../engine/producers.dart';
 import '../engine/publish_target.dart';
 import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
-import '../engine/stage_contract.dart';
 import '../engine/stage_board.dart';
 import '../engine/stage_inspection.dart';
 import '../engine/stage_receipt.dart';
@@ -303,9 +302,7 @@ final class ReleaseStageCoordinator {
       try {
         final result = await targetStage.prepare(
           TargetStageContext(
-            contract: StageContributionContract(
-              step: stage.producerContract(receiptName),
-            ),
+            contract: stage.producerContract(receiptName),
             tools: tools,
             git: initialGit,
             attach: output.report.attach,
@@ -1101,14 +1098,14 @@ final class UnitStaging {
 
   late final Map<String, TargetStage> targetStagesByName = {
     for (final targetStage in targetStages)
-      targetStage.contract.step.name: targetStage,
+      targetStage.contract.name: targetStage,
   };
 
   late final Map<String, Set<String>> outputsByProducer = {
     for (final step in producerSteps)
       receiptNameFor(step): contractFor(unit, step).outputs.keys.toSet(),
     for (final entry in targetStagesByName.entries)
-      entry.key: entry.value.contract.step.outputs.keys.toSet(),
+      entry.key: entry.value.contract.outputs.keys.toSet(),
   };
 }
 

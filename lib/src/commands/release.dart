@@ -462,8 +462,7 @@ class ReleaseCommand {
         for (final step in checklist.steps)
           step.id: _observeForRelease(step, unit, stageInspection)..ignore(),
       },
-      history: inspector.releaseMonotonicity(unit, targets, problems)
-        ..ignore(),
+      history: inspector.releaseMonotonicity(unit, targets, problems)..ignore(),
       problems: problems,
     );
   }
@@ -533,10 +532,10 @@ class ReleaseCommand {
     final observed = await Future.wait([
       for (final step in checklist.steps)
         reads.states[step.id]!.then((state) {
-              final target = targetByStep[step.id];
-              if (target != null) initialProgress.observe(target, state);
-              return state;
-            }),
+          final target = targetByStep[step.id];
+          if (target != null) initialProgress.observe(target, state);
+          return state;
+        }),
     ]);
     final states = <String, Inspection>{
       for (final (index, step) in checklist.steps.indexed)

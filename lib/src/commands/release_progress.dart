@@ -189,9 +189,8 @@ final class StageReleaseProgress {
 
   Map<String, ProgressHandle> handlesFor(TargetStage stage) => {
     for (final view in stage.progress)
-      view.id:
-          _controllers[board.progressRow(stage.contract.step.name, view.id)!]!
-              .handle,
+      view.id: _controllers[board.progressRow(stage.contract.name, view.id)!]!
+          .handle,
   };
 
   void begin(String producer, ProgressActivity activity) {

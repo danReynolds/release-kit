@@ -25,11 +25,9 @@ TargetPlan _target() => TargetPlan(
   artifacts: const ['one.txt', 'two.txt'],
 );
 
-StageContributionContract _contract() => const StageContributionContract(
-  step: StageStepContract(
-    'example-stage',
-    outputs: {'private/one': 'one', 'private/two': 'two'},
-  ),
+StageStepContract _contract() => const StageStepContract(
+  'example-stage',
+  outputs: {'private/one': 'one', 'private/two': 'two'},
 );
 
 void main() {

@@ -25,12 +25,10 @@ TargetStage homebrewFormulaStage({
     for (final platform in project.binaryPlatforms)
       ReleaseAssets.archivePath(project, platform),
   };
-  final contract = StageContributionContract(
-    step: StageStepContract(
-      'homebrew-formula:${project.name}',
-      inputs: archives,
-      outputs: {ReleaseAssets.formulaPath(project): 'formula'},
-    ),
+  final contract = StageStepContract(
+    'homebrew-formula:${project.name}',
+    inputs: archives,
+    outputs: {ReleaseAssets.formulaPath(project): 'formula'},
   );
   return TargetStage(
     target: target,
@@ -53,7 +51,7 @@ Future<TargetStageOutcome> _prepareStage(
   TargetPlan target,
 ) async {
   final tag = requiredTargetTag(unit, PublishTarget.homebrew);
-  final receiptName = context.contract.step.name;
+  final receiptName = context.contract.name;
   final repository = context.repository;
   if (repository == null) {
     return TargetStageFailure(

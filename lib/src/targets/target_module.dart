@@ -293,7 +293,7 @@ final class TargetStageContext {
        _attach = attach,
        _progress = Map.unmodifiable(progress);
 
-  final StageContributionContract contract;
+  final StageStepContract contract;
   final Tools tools;
   final GitState git;
   String? get repository => git.originUrl;
@@ -410,21 +410,21 @@ final class TargetStage {
         throw ArgumentError('duplicate target stage progress id ${view.id}');
       }
       final output = view.output;
-      if (output != null && !contract.step.outputs.containsKey(output)) {
+      if (output != null && !contract.outputs.containsKey(output)) {
         throw ArgumentError(
-          '${contract.step.name} progress binds undeclared output $output',
+          '${contract.name} progress binds undeclared output $output',
         );
       }
       if (output != null && !outputs.add(output)) {
         throw ArgumentError(
-          '${contract.step.name} progress binds output $output twice',
+          '${contract.name} progress binds output $output twice',
         );
       }
     }
   }
 
   final TargetPlan target;
-  final StageContributionContract contract;
+  final StageStepContract contract;
   final String planLabel;
   final List<TargetStageProgress> progress;
   final TargetStageProducer prepare;

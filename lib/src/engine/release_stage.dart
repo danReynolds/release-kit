@@ -94,12 +94,12 @@ class ReleaseStage {
     this.repository,
     this.enforceUnitContract = false,
     Map<String, Object?>? resolvedPlan,
-    Iterable<StageContributionContract> targetContributions = const [],
+    Iterable<StageStepContract> targetContributions = const [],
   }) : _readSdk = sdk ?? DartSdk.ambient,
        resolvedPlan = resolvedPlan == null
            ? null
            : CanonicalJson.normalize(resolvedPlan) as Map<String, Object?>,
-       targetContributions = List<StageContributionContract>.unmodifiable(
+       targetContributions = List<StageStepContract>.unmodifiable(
          targetContributions,
        );
 
@@ -116,7 +116,7 @@ class ReleaseStage {
   /// What the stage is built from beyond its commit, recorded in the
   /// receipt so a person can read it.
   final Map<String, Object?>? resolvedPlan;
-  final List<StageContributionContract> targetContributions;
+  final List<StageStepContract> targetContributions;
 
   /// Direct construction is used by low-level receipt tests whose
   /// deliberately partial producer graphs are not a release plan. Every
@@ -128,13 +128,11 @@ class ReleaseStage {
   /// and the inspector so canonical order and validation cannot drift.
   /// Null exactly when [enforceUnitContract] is off: a deliberately partial
   /// graph has no unit contract to order by or validate against.
-  late final StageReceiptContract? _unitContract = _resolveContract();
+  late final StageProducerGraph? _unitContract = _resolveContract();
 
-  StageReceiptContract? _resolveContract() {
+  StageProducerGraph? _resolveContract() {
     if (!enforceUnitContract) return null;
-    return StageReceiptContract.forUnit(
-      unit: unit,
-      repository: repository,
+    return StageProducerGraph.forUnit(
       targetContributions: targetContributions,
       localProducers: localProducerContracts(unit),
     );

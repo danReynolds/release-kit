@@ -129,7 +129,7 @@ final class TargetCatalog {
           );
         }
         final targets = derive(unit, checklist, repository: repository);
-        return List<StageContributionContract>.unmodifiable([
+        return List<StageStepContract>.unmodifiable([
           for (final stage in stages(unit: unit, targets: targets))
             stage.contract,
         ]);

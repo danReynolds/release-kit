@@ -23,11 +23,9 @@ TargetStage pubDevPackageStage({
   required ResolvedUnit unit,
 }) {
   final archivePath = ReleaseAssets.pubArchivePath(target.project!);
-  final contract = StageContributionContract(
-    step: StageStepContract(
-      'pub-archive:${target.project!.name}',
-      outputs: {archivePath: 'pub-archive'},
-    ),
+  final contract = StageStepContract(
+    'pub-archive:${target.project!.name}',
+    outputs: {archivePath: 'pub-archive'},
   );
   return TargetStage(
     target: target,
@@ -56,7 +54,7 @@ Future<TargetStageOutcome> _prepareStage(
   TargetStageContext context,
   ResolvedProject project,
 ) async {
-  final receiptName = context.contract.step.name;
+  final receiptName = context.contract.name;
   context.progress('source').begin(CommonProgressActivities.validating);
   final validation = await _packageArchive(context, project);
   if (validation.diagnostic case final diagnostic?) {

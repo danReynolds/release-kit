@@ -18,50 +18,19 @@ final class StageStepContract {
   final Map<String, String> outputs;
 }
 
-final class StageContributionContract {
-  const StageContributionContract({required this.step});
-
-  final StageStepContract step;
-}
-
-/// Validates and canonically orders target-owned stage work by stable name.
-///
-/// Actual dependencies are resolved with the shared producer contracts by
-/// [StageReceiptContract]. A target can therefore consume another producer's
-/// artifact without inventing a lifecycle phase.
+/// Target-owned stage work in its canonical order: by producer name. The
+/// producer graph checks names and outputs once, with the local producers.
 List<T> orderStageContributions<T>(
   Iterable<T> values,
-  StageContributionContract Function(T value) contractOf,
-) {
-  final entries = List<T>.of(values);
-  final names = <String>{};
-  final outputs = <String, String>{};
-  for (final entry in entries) {
-    final contract = contractOf(entry);
-    final name = contract.step.name;
-    if (!names.add(name)) {
-      throw StateError('two stage contracts claim the producer "$name"');
-    }
-    for (final output in contract.step.outputs.keys) {
-      final previous = outputs[output];
-      if (previous != null) {
-        throw StateError(
-          'stage artifact "$output" is produced by both "$previous" and '
-          '"$name"',
-        );
-      }
-      outputs[output] = name;
-    }
-  }
-  entries.sort(
-    (left, right) =>
-        contractOf(left).step.name.compareTo(contractOf(right).step.name),
-  );
-  return List<T>.unmodifiable(entries);
-}
+  StageStepContract Function(T value) contractOf,
+) => List<T>.unmodifiable(
+  List<T>.of(values)..sort(
+    (left, right) => contractOf(left).name.compareTo(contractOf(right).name),
+  ),
+);
 
 typedef StageContractResolver =
-    List<StageContributionContract> Function({
+    List<StageStepContract> Function({
       required ResolvedUnit unit,
       required String? repository,
     });
@@ -80,7 +49,7 @@ final class StageProducerGraph {
        _dependencies = Map<String, Set<String>>.unmodifiable(dependencies);
 
   factory StageProducerGraph.forUnit({
-    required Iterable<StageContributionContract> targetContributions,
+    required Iterable<StageStepContract> targetContributions,
     required Iterable<StageStepContract> localProducers,
   }) {
     final contributions = orderStageContributions(
@@ -88,7 +57,7 @@ final class StageProducerGraph {
       (contract) => contract,
     );
     final declared = <StageStepContract>[
-      ...contributions.map((item) => item.step),
+      ...contributions,
       ...localProducers,
       const StageStepContract(
         'complete-stage',
@@ -152,59 +121,11 @@ final class StageProducerGraph {
   Set<String> dependenciesOf(String producer) =>
       _dependencies[producer] ??
       (throw StateError('the stage graph has no producer "$producer"'));
-}
-
-/// The producers one resolved unit runs, in the order its receipt records
-/// them. A receipt written by an rk that produced differently for the same
-/// plan does not match it.
-class StageReceiptContract {
-  StageReceiptContract._({
-    required this.unit,
-    required this.repository,
-    required List<StageStepContract> steps,
-    required Map<String, Set<String>> dependencies,
-  }) : _steps = List<StageStepContract>.unmodifiable(steps),
-       _dependencies = Map<String, Set<String>>.unmodifiable(dependencies);
-
-  factory StageReceiptContract.forUnit({
-    required ResolvedUnit unit,
-    required String? repository,
-    required Iterable<StageContributionContract> targetContributions,
-    required Iterable<StageStepContract> localProducers,
-  }) {
-    final graph = StageProducerGraph.forUnit(
-      targetContributions: targetContributions,
-      localProducers: localProducers,
-    );
-    return StageReceiptContract._(
-      unit: unit,
-      repository: repository,
-      steps: graph.steps,
-      dependencies: {
-        for (final producer in graph.producerNames)
-          producer: graph.dependenciesOf(producer),
-      },
-    );
-  }
-
-  final ResolvedUnit unit;
-  final String? repository;
-  final List<StageStepContract> _steps;
-  final Map<String, Set<String>> _dependencies;
-
-  /// Every producer name this contract expects, in canonical order — the
-  /// order receipts are written in, however the work was scheduled.
-  List<String> get producerNames => [for (final step in _steps) step.name];
-
-  StageStepContract producerContract(String producer) => _steps.singleWhere(
+  StageStepContract producerContract(String producer) => steps.singleWhere(
     (step) => step.name == producer,
     orElse: () =>
         throw StateError('the stage contract has no producer "$producer"'),
   );
-
-  Set<String> dependenciesOf(String producer) =>
-      _dependencies[producer] ??
-      (throw StateError('the stage contract has no producer "$producer"'));
 
   /// Whether [receipt] records these producers, in order, with the outputs
   /// each one writes. Reads no files.
@@ -229,7 +150,7 @@ class StageReceiptContract {
       );
     }
 
-    final contracts = {for (final step in _steps) step.name: step};
+    final contracts = {for (final step in steps) step.name: step};
     for (final step in receipt.steps) {
       final contract = contracts[step.name];
       if (contract == null) continue;
