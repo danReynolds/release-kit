@@ -155,33 +155,6 @@ class ReleaseStage {
       _unitContract?.producerContract(producer) ??
       (throw StateError('this partial stage has no producer contract'));
 
-  /// The recorded output of [producer] at [path], for a later producer in
-  /// the same stage. Only recorded steps are trusted.
-  StageArtifact requireProducerArtifact({
-    required String producer,
-    required String path,
-    required String type,
-  }) {
-    if (!enforceUnitContract ||
-        producerContract(producer).outputs[path] != type) {
-      throw StateError(
-        'dependency artifact does not match the producer contract',
-      );
-    }
-    final inspected = inspect();
-    if (!inspected.reusable && !inspected.validProgress) {
-      throw StateError(
-        'the stage does not validate: ${inspected.issues.join('; ')}',
-      );
-    }
-    return inspected.receipt!.steps
-        .singleWhere((step) => step.name == producer)
-        .outputs
-        .singleWhere(
-          (artifact) => artifact.path == path && artifact.type == type,
-        );
-  }
-
   /// What this stage is: its receipt, checked against the files it records
   /// and against the producers this rk runs for the unit.
   StageInspection inspect() =>

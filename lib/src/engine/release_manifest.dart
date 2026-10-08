@@ -97,21 +97,6 @@ final class StagedHomebrewBinding {
     _requireFormulaPath(path);
   }
 
-  factory StagedHomebrewBinding.fromEvidence(Object? value) {
-    final map = _strictMap(value, const {
-      'path',
-      'project',
-      'staged_path',
-      'tap',
-    }, 'staged Homebrew binding');
-    return StagedHomebrewBinding(
-      project: _string(map, 'project'),
-      tap: _string(map, 'tap'),
-      path: _string(map, 'path'),
-      stagedPath: _string(map, 'staged_path'),
-    );
-  }
-
   final String project;
   final String tap;
   final String path;

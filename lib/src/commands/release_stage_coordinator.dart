@@ -117,9 +117,9 @@ final class ReleaseStageCoordinator {
       inspected,
       staging.outputsByProducer.values.expand((outputs) => outputs).toSet(),
     );
-    final inputs = await _prepareStageInputs(unit, inspected);
-    if (inputs == null) return null;
-    return staging.._signing = inputs.signing;
+    final signing = await _prepareStageInputs(unit, inspected);
+    if (signing == null) return null;
+    return staging.._signing = signing.value;
   }
 
   /// Produces or reuses the exact receipt-backed private stage [staging]
@@ -643,7 +643,7 @@ final class ReleaseStageCoordinator {
   }
 
   /// Resolves unit-scoped claims and signing identity before producers run.
-  Future<_StageInputs?> _prepareStageInputs(
+  Future<({ReleaseSigningContext? value})?> _prepareStageInputs(
     ResolvedUnit unit,
     StageInspection inspected,
   ) async {
@@ -732,7 +732,7 @@ final class ReleaseStageCoordinator {
 
     row.complete(note: 'checked');
     live.discard();
-    return _StageInputs(signing: signing);
+    return (value: signing);
   }
 
   Future<({bool ok, SigningIdentity? identity, String? certificateSha256})>
@@ -1058,12 +1058,6 @@ final class _StageWarning {
 
   final Diagnostic diagnostic;
   final String? target;
-}
-
-class _StageInputs {
-  const _StageInputs({required this.signing});
-
-  final ReleaseSigningContext? signing;
 }
 
 /// One unit's staging, settled up to its producers: see

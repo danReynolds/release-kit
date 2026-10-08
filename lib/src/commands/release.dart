@@ -474,14 +474,6 @@ class ReleaseCommand {
     ResolvedUnit unit,
     _UnitReads reads,
   ) async {
-    // The machine surface carries the same identity facts on every verb, as
-    // doc/json.md promises: repository, and the unit's version and tag.
-    output.report.unit(
-      name: unit.name,
-      version: unit.version.canonical,
-      tag: unit.tag,
-    );
-
     final willPublish =
         !stageOnly &&
         (unit.publish.isNotEmpty ||
@@ -638,11 +630,6 @@ class ReleaseCommand {
   /// staging, and settles what its staging needs first. Null when refused.
   Future<_ReleasePlan?> _planRelease(_InspectedUnit inspected) async {
     final unit = inspected.unit;
-    output.report.unit(
-      name: unit.name,
-      version: unit.version.canonical,
-      tag: unit.tag,
-    );
     final checklist = inspected.checklist;
     final targets = inspected.targets;
     final states = inspected.states;

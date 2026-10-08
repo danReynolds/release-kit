@@ -35,39 +35,6 @@ final class StageStore {
     return _join(directory, 'stage.json');
   }
 
-  /// Includes non-stage residue in the enumeration budget. Early cancellation
-  /// avoids materializing the entire directory before a limit can take effect.
-  Future<({List<StageEntry> entries, bool complete})> inventoryBounded(
-    int limit,
-  ) async {
-    if (limit < 1) {
-      throw ArgumentError('stage inventory limit must be positive');
-    }
-    final root = _fixedDirectory(const [
-      '.rk',
-      'work',
-      'stages',
-    ], create: false);
-    if (root == null) return (entries: const <StageEntry>[], complete: true);
-    final entries = <StageEntry>[];
-    await for (final entity in Directory(root).list(followLinks: false)) {
-      if (entries.length == limit) {
-        return (
-          entries: List<StageEntry>.unmodifiable(entries),
-          complete: false,
-        );
-      }
-      entries.add(
-        StageEntry(
-          name: _directName(root, entity.path),
-          type: FileSystemEntity.typeSync(entity.path, followLinks: false),
-        ),
-      );
-    }
-    entries.sort((a, b) => a.name.compareTo(b.name));
-    return (entries: List<StageEntry>.unmodifiable(entries), complete: true);
-  }
-
   /// Excludes cleanup from an active release that may write staged bytes.
   StageStoreLock acquireForMutation() {
     final work = _fixedDirectory(const ['.rk', 'work'], create: true)!;

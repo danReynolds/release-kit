@@ -887,16 +887,8 @@ final class ReleasePublicationCoordinator {
     output.halt(failures.map((failure) => failure.halt).reduce(_strongerHalt));
   }
 
-  HaltKind _strongerHalt(HaltKind left, HaltKind right) {
-    const severity = {
-      HaltKind.beforeActing: 0,
-      HaltKind.stoppedPartway: 1,
-      HaltKind.lostTrack: 2,
-      HaltKind.unfixableByRerun: 3,
-      HaltKind.actedAndUnfixable: 4,
-    };
-    return severity[left]! >= severity[right]! ? left : right;
-  }
+  HaltKind _strongerHalt(HaltKind left, HaltKind right) =>
+      left.index >= right.index ? left : right;
 
   List<({String platform, String reason})> _unprovable(ReleaseStage stage) {
     final unprovable = <({String platform, String reason})>[];

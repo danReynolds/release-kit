@@ -650,6 +650,5 @@ final class TargetFailure {
 
   final Diagnostic diagnostic;
   final HaltKind halt;
-  bool get rerunHelps => halt != HaltKind.actedAndUnfixable;
   final String? nextCommand;
 }

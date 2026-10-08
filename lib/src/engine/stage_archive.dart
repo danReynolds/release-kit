@@ -15,47 +15,6 @@ class StageArchiveEntry {
     required this.sha256,
   });
 
-  factory StageArchiveEntry.fromJson(Object? value) {
-    if (value is! Map) {
-      throw const FormatException('archive inventory entry is not an object');
-    }
-    final map = value.cast<Object?, Object?>();
-    const fields = {'mode', 'name', 'sha256', 'size'};
-    if (map.keys.any((key) => key is! String) ||
-        map.keys.cast<String>().toSet().difference(fields).isNotEmpty ||
-        fields.difference(map.keys.cast<String>().toSet()).isNotEmpty) {
-      throw const FormatException(
-        'archive inventory entry has unknown or missing fields',
-      );
-    }
-    final name = map['name'];
-    final mode = map['mode'];
-    final size = map['size'];
-    final sha256 = map['sha256'];
-    if (name is! String ||
-        mode is! String ||
-        size is! int ||
-        sha256 is! String) {
-      throw const FormatException('archive inventory entry has wrong types');
-    }
-    _requireSafeName(name);
-    if (!RegExp(r'^0[0-7]{3}$').hasMatch(mode)) {
-      throw const FormatException('archive inventory mode is invalid');
-    }
-    if (size < 0) {
-      throw const FormatException('archive inventory size is negative');
-    }
-    if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(sha256)) {
-      throw const FormatException('archive inventory digest is invalid');
-    }
-    return StageArchiveEntry(
-      name: name,
-      mode: mode,
-      size: size,
-      sha256: sha256,
-    );
-  }
-
   final String name;
   final String mode;
   final int size;
@@ -86,9 +45,6 @@ class StageArchiveContents {
   final List<StageArchiveEntry> inventory;
   final BinaryArtifact artifact;
   final Map<String, List<int>> files;
-  StageArchiveEntry get executable =>
-      inventory.singleWhere((entry) => entry.name == artifact.entryPoint);
-  List<int> get executableBytes => files[artifact.entryPoint]!;
 
   /// Extract only validated regular files, into a new empty private directory.
   void extractTo(Directory directory) {
@@ -246,46 +202,10 @@ abstract final class StageArchiveInventory {
     );
   }
 
-  static List<StageArchiveEntry> parseEvidence(Object? value) {
-    if (value is! List) {
-      throw const FormatException('archive inventory evidence is not a list');
-    }
-    final entries = value.map(StageArchiveEntry.fromJson).toList();
-    final names = <String>{};
-    for (final entry in entries) {
-      if (!names.add(entry.name)) {
-        throw FormatException(
-          'archive inventory evidence repeats ${entry.name}',
-        );
-      }
-    }
-    return entries;
-  }
-
   static List<Object?> evidence(List<StageArchiveEntry> entries) => [
     for (final entry in entries) entry.toJson(),
   ];
 
-  static void requireSame(
-    List<StageArchiveEntry> expected,
-    List<StageArchiveEntry> actual,
-  ) {
-    if (expected.length != actual.length) {
-      throw const FormatException(
-        'archive inventory differs from its receipt evidence',
-      );
-    }
-    for (var index = 0; index < expected.length; index++) {
-      final left = expected[index];
-      final right = actual[index];
-      if (left.name != right.name ||
-          left.mode != right.mode ||
-          left.size != right.size ||
-          left.sha256 != right.sha256) {
-        throw FormatException('archive inventory differs at ${right.name}');
-      }
-    }
-  }
 }
 
 void _verifyHeaderChecksum(List<int> header) {
