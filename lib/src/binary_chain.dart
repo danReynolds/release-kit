@@ -357,16 +357,22 @@ class BinaryChain {
     }
 
     // The zip is Apple's input only: built beside the stage, never in it,
-    // from the signed files exactly as the build left them.
+    // from the artifact's files exactly as the build left them, and nothing
+    // else that is there, such as what an interrupted codesign left.
     final scratch = Directory.systemTemp.createTempSync('rk-notary-');
     try {
+      final root = ReleaseAssets.binaryRoot(project, platform);
+      final payload = '${scratch.path}/payload';
+      for (final file in ReleaseAssets.binaryArtifact(
+        project,
+        platform,
+      ).files) {
+        final copy = File('$payload/${file.path}')
+          ..parent.createSync(recursive: true);
+        File(workspace.pathOf('$root/${file.path}')).copySync(copy.path);
+      }
       final zip = '${scratch.path}/${project.executable}.zip';
-      final zipped = await tools.run('ditto', [
-        '-c',
-        '-k',
-        workspace.pathOf(ReleaseAssets.binaryRoot(project, platform)),
-        zip,
-      ]);
+      final zipped = await tools.run('ditto', ['-c', '-k', payload, zip]);
       if (!zipped.ok) {
         output.problem(
           Diagnostic(

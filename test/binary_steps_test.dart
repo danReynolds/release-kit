@@ -442,6 +442,42 @@ executables:
     );
   });
 
+  test(
+    'notarization submits the artifact\'s files and nothing beside them',
+    () async {
+      // A codesign killed mid-write leaves its temporary file next to the
+      // binary, and nothing else removes it. Submitted, Apple rejects the
+      // whole payload, run after run.
+      final tools = scripted();
+      final built = await chain(tools).buildStep(
+        step(StepKind.build),
+        project,
+        signing: MacSigning(
+          identity: _identity,
+          publishedRequirement: null,
+          codeId: 'com.example.tool',
+        ),
+      );
+      expect(built.ok, isTrue, reason: built.problem ?? buffer.toString());
+      workspace.write(
+        '${ReleaseAssets.binaryRoot(project, 'macos-arm64')}/lib/tool/'
+        'dartaotruntime.cstemp',
+        utf8.encode('half-written signature'),
+      );
+
+      final notarized = await chain(
+        tools,
+      ).notarizeStep(step(StepKind.notarize), project);
+
+      // The scripted ditto checks that its payload is the artifact's files.
+      expect(
+        notarized.ok,
+        isTrue,
+        reason: notarized.problem ?? buffer.toString(),
+      );
+    },
+  );
+
   test('an accepted submission is notarized without its log', () async {
     // Apple's log is evidence, not an output: fetching it after an
     // acceptance once failed the step on a transient error, and the run
