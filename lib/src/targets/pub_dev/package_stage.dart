@@ -134,6 +134,7 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
   final consumer = _mirrorSource(context);
   late final ToolResult packaged;
   late final String resolvedAs;
+  late final Set<String> takenFromSource;
   try {
     final sourceRoot = _join(consumer.path, const ['source']);
     String inSource(String directory) => directory == '.'
@@ -172,29 +173,7 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
           name: _relativePath(directory, path),
       }, inWorkspace: inWorkspace(directory)),
     );
-    final get = await context.tools.run(
-      'dart',
-      const ['pub', 'get', '--no-example'],
-      workingDirectory: directory,
-      environment: const {'PUB_SUMMARY_ONLY': '0'},
-    );
-    final report = '${get.stdout}\n${get.stderr}'.trim();
-    final unexpected = reportedOverrides(
-      report,
-    ).difference(fromSource.keys.toSet());
-    if (!get.ok || unexpected.isNotEmpty) {
-      return (
-        diagnostic: _consumerDiagnostic(
-          project.name,
-          !get.ok
-              ? 'dart pub get failed: ${_firstLine(get.stderr)}'
-              : 'Pub applied overrides rk did not write: '
-                    '${unexpected.join(', ')}',
-          report,
-        ),
-        warnings: const <Diagnostic>[],
-      );
-    }
+    takenFromSource = fromSource.keys.toSet();
     final names = fromSource.keys.toList()..sort();
     final taken = names.isEmpty
         ? ''
@@ -204,12 +183,15 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
         'Pub validated ${project.name} the way its consumers resolve it: as '
         'a root of its own, with no lockfile and no dependency override'
         '$taken.';
-    packaged = await context.tools.run('dart', [
-      'pub',
-      'publish',
-      '--to-archive',
-      archive.path,
-    ], workingDirectory: directory);
+    // Pub resolves the package before it validates and archives it, and
+    // names each override it applied in a full report, which
+    // PUB_SUMMARY_ONLY would turn off.
+    packaged = await context.tools.run(
+      'dart',
+      ['pub', 'publish', '--to-archive', archive.path],
+      workingDirectory: directory,
+      environment: const {'PUB_SUMMARY_ONLY': '0'},
+    );
   } finally {
     consumer.deleteSync(recursive: true);
   }
@@ -218,8 +200,6 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
     'pub-package-${project.name}.txt',
     '$resolvedAs\n\n$validation',
   );
-  final findings = _validationFindings(validation);
-
   if (!packaged.ok) {
     final lower = validation.toLowerCase();
     if (lower.contains('to-archive') &&
@@ -240,6 +220,25 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
       );
     }
   }
+  // Pub's solver explains a resolution it cannot make, and stops there.
+  final unresolved =
+      !packaged.ok && validation.contains('version solving failed');
+  final unexpected = reportedOverrides(validation).difference(takenFromSource);
+  if (unresolved || unexpected.isNotEmpty) {
+    return (
+      diagnostic: _consumerDiagnostic(
+        project.name,
+        unresolved
+            ? 'Pub could not resolve it: ${_firstLine(packaged.stderr)}'
+            : 'Pub applied overrides rk did not write: '
+                  '${unexpected.join(', ')}',
+        validation,
+      ),
+      warnings: const <Diagnostic>[],
+    );
+  }
+  final findings = _validationFindings(validation);
+
   // Pub refuses an archive with errors. With warnings alone, current Pub
   // writes the archive and exits 0; earlier Pub exited non-zero and said
   // so in a summary.

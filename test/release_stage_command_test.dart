@@ -26,7 +26,6 @@ import 'package:rk/src/transforms/archive.dart';
 import 'package:rk/src/transforms/digest.dart';
 import 'package:test/test.dart';
 
-import 'pub_get_double.dart';
 import 'status_test.dart' show FakeRegistry;
 
 const _head = '1111111111111111111111111111111111111111';
@@ -3053,24 +3052,6 @@ class _WorldTools implements Tools {
       return failPubLogin
           ? ToolResult(exitCode: 1, stdout: '', stderr: 'authentication failed')
           : _ok(stdout: 'You are already logged in as <dev@example.com>\n');
-    }
-    // The pub.dev stage resolves its mirror before packaging it. A native
-    // archive resolves for real; otherwise Pub's reports and records are
-    // modeled.
-    final resolving =
-        _isDart(executable) &&
-        _starts(arguments, ['pub', 'get', '--no-example']);
-    if (resolving && nativePubArchive) {
-      return const SystemTools().run(
-        executable,
-        arguments,
-        workingDirectory: workingDirectory,
-        environment: environment,
-        timeout: timeout,
-      );
-    }
-    if (resolving && workingDirectory != null) {
-      return pubGetIn(workingDirectory, environment: environment);
     }
     if (_isDart(executable) && _starts(arguments, ['pub', 'get'])) {
       return _ok();
