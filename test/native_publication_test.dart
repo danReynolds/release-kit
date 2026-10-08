@@ -221,43 +221,21 @@ void main() {
     },
   );
 
-  test('an archive propagation wait recovers without reupload', () async {
+  test('an archive pub.dev does not serve yet delays nothing, and nothing is '
+      'uploaded twice', () async {
     final staged = await _stage(fixture);
+    // pub.dev lists a version before its archive downloads. A release reads
+    // the listing; it downloads nothing, so it waits on nothing.
     fixture.registry.unavailableArchives.add(_core);
-    final unavailable = Completer<void>();
-    fixture.registry.onEvent = (event) {
-      if (event.kind == 'archive_unavailable' &&
-          event.name == _core &&
-          !unavailable.isCompleted) {
-        unavailable.complete();
-      }
-    };
-    final interrupted = await fixture.rk([
-      'release',
-      '--yes',
-      '--json',
-    ], interruptWhen: unavailable.future);
-    expect(interrupted.code, 130, reason: interrupted.all);
-    expect(unavailable.isCompleted, isTrue);
-    fixture.registry.onEvent = null;
-    expect(fixture.registry.committed.keys, ['$_core@0.2.0']);
-
-    // Whole-stack release waits for propagation after committing core. A
-    // named consumer needs only core's version to be listed, as Pub's
-    // resolution does; neither run waits out the ten-minute poll.
-    _ok(await fixture.rk(['release', 'format', '--yes', '--json']));
-    expect(
-      fixture.registry.committed.keys,
-      unorderedEquals(['$_core@0.2.0', '$_format@0.3.0']),
-    );
+    _ok(await fixture.rk(['release', '--yes', '--json']));
     expect(
       fixture.registry.events.where((e) => e.kind == 'archive_unavailable'),
-      isNotEmpty,
+      isEmpty,
     );
 
     fixture.registry.unavailableArchives.clear();
     _ok(await fixture.rk(['release', '--yes', '--json']));
-    for (final name in [_core, _format]) {
+    for (final name in _versions.keys) {
       expect(
         fixture.registry.events.where(
           (e) => e.kind == 'upload_attempted' && e.name == name,
