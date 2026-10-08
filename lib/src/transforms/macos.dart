@@ -297,16 +297,21 @@ class MacOsNotarizer {
       );
     }
 
-    // The submission id is what a later run correlates against, so it is
-    // reported even on success.
-    final id = RegExp(
-      r'"id"\s*:\s*"([^"]+)"',
-    ).firstMatch(result.stdout)?.group(1);
-    final accepted =
-        result.stdout.contains('"status":"Accepted"') ||
-        result.stdout.contains('"status": "Accepted"');
+    // One answer, read once: notarytool's JSON names the submission and
+    // Apple's verdict.
+    String? id;
+    String? status;
+    try {
+      final answer = jsonDecode(result.stdout);
+      if (answer is Map) {
+        id = answer['id'] is String ? answer['id'] as String : null;
+        status = answer['status'] is String ? answer['status'] as String : null;
+      }
+    } on FormatException {
+      // Not JSON: no verdict, which is not an acceptance.
+    }
 
-    if (!accepted) {
+    if (status != 'Accepted') {
       // A rejection exits 0, so the submit output is a status line and not a
       // reason. The reason is in Apple's log, which rk can fetch as easily
       // as it can tell a person to — and telling them to run a command that
@@ -327,14 +332,10 @@ class MacOsNotarizer {
         ].join('\n'),
       );
     }
-    return NotarizeOutcome.accepted(id, raw: result.stdout);
+    return NotarizeOutcome.accepted(id);
   }
 
-  /// Apple's log for a submission — the evidence of what was checked.
-  ///
-  /// Published with the release: the result says Accepted, the log says what
-  /// that claim covered, and a user who trusts neither can ask Apple with
-  /// the id inside them.
+  /// Apple's log for a submission: what it checked, and why it refused.
   Future<ToolResult> log(String submissionId) => tools.run('xcrun', [
     'notarytool',
     'log',
@@ -365,27 +366,23 @@ class NotarizeOutcome {
     this.submissionId,
     this.problem,
     this.remedy, {
-    this.raw,
     this.transcript,
   });
-  const NotarizeOutcome.accepted(String? id, {String? raw})
-    : this._(id, null, null, raw: raw);
+  const NotarizeOutcome.accepted(String? id) : this._(id, null, null);
   const NotarizeOutcome.failed(
     String problem, {
     String? remedy,
     String? transcript,
   }) : this._(null, problem, remedy, transcript: transcript);
 
+  /// Apple's id for an accepted submission, which a person can ask Apple
+  /// about later.
   final String? submissionId;
   final String? problem;
   final String? remedy;
 
-  /// notarytool's own words for an accepted submission, kept verbatim
-  /// because they become a published asset.
-  final String? raw;
-
-  /// notarytool's own words for a rejected or failed one, which become
-  /// nothing unless they are carried out.
+  /// notarytool's own words for a rejected or failed submission, with
+  /// Apple's log when rk could fetch it.
   final String? transcript;
 
   bool get ok => problem == null;

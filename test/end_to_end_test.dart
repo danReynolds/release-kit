@@ -2128,7 +2128,6 @@ executables:
         'codesign --force',
         'ditto',
         'xcrun notarytool submit',
-        'xcrun notarytool log',
         'gh api -X POST repos/example/tool/releases --input',
       ];
       var at = -1;

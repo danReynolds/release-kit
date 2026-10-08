@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'builds/capability.dart';
@@ -14,7 +13,6 @@ import 'engine/tools.dart';
 import 'engine/verdict.dart';
 import 'engine/workspace.dart';
 import 'transforms/archive.dart';
-import 'transforms/digest.dart';
 import 'transforms/macos.dart';
 
 /// The local half of shipping binaries, one checklist step at a time.
@@ -384,100 +382,67 @@ class BinaryChain {
       }
     }
 
-    final resultName = ReleaseAssets.notaryResultPath(project, platform);
-    final logName = ReleaseAssets.notaryLogPath(project, platform);
-
-    final zip = ReleaseAssets.notaryInputPath(project, platform);
-    File(workspace.pathOf(zip)).parent.createSync(recursive: true);
-    final payload = Directory.systemTemp.createTempSync('rk-notary-payload-');
-    final ToolResult zipped;
+    // The zip is Apple's input only: built beside the stage, never in it,
+    // from the signed files exactly as the build left them.
+    final scratch = Directory.systemTemp.createTempSync('rk-notary-');
     try {
-      for (final file in ReleaseAssets.binaryArtifact(
-        project,
-        platform,
-      ).files) {
-        final destination = File('${payload.path}/${file.path}');
-        destination.parent.createSync(recursive: true);
-        File(
-          workspace.pathOf(
-            '${ReleaseAssets.binaryRoot(project, platform)}/${file.path}',
-          ),
-        ).copySync(destination.path);
-      }
-      zipped = await tools.run('ditto', [
+      final zip = '${scratch.path}/${project.executable}.zip';
+      final zipped = await tools.run('ditto', [
         '-c',
         '-k',
-        payload.path,
-        workspace.pathOf(zip),
+        workspace.pathOf(ReleaseAssets.binaryRoot(project, platform)),
+        zip,
       ]);
+      if (!zipped.ok) {
+        output.problem(
+          Diagnostic(
+            code: 'RK-NOTARY-001',
+            message: '$platform: the archive for notarization failed',
+            remedy: zipped.summary,
+            evidence: zipped.transcript,
+          ),
+          unit: step.unit,
+        );
+        return LocalProducerOutcome.failed(zipped.summary);
+      }
+
+      // The wait is Apple's, and silence during it reads as a hang — this is
+      // the step Activity exists for.
+      final notarized = await MacOsNotarizer(tools: tools).submit(zip);
+      if (!notarized.ok) {
+        output.problem(
+          Diagnostic(
+            code: 'RK-NOTARY-002',
+            message: '$platform: notarization did not complete',
+            remedy: notarized.remedy ?? notarized.problem ?? 'see notarytool',
+            evidence: notarized.transcript,
+          ),
+          unit: step.unit,
+        );
+        return LocalProducerOutcome.failed(
+          notarized.problem ?? 'Apple rejected the submission',
+        );
+      }
+      output.step(
+        step,
+        verdict: Verdict.exact,
+        detail: 'notarized',
+        show: false,
+      );
+      // Apple's verdict is about the signed files, which the archive step
+      // packs as they are; a consumer asks Apple about the exact bytes.
+      return LocalProducerOutcome.succeeded(
+        outputs: const [],
+        evidence: {
+          'notary': {
+            'status': 'Accepted',
+            'submission_id': notarized.submissionId,
+          },
+        },
+      );
     } finally {
-      payload.deleteSync(recursive: true);
+      scratch.deleteSync(recursive: true);
     }
-    if (!zipped.ok) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-NOTARY-001',
-          message: '$platform: the archive for notarization failed',
-          remedy: zipped.summary,
-          evidence: zipped.transcript,
-        ),
-        unit: step.unit,
-      );
-      return LocalProducerOutcome.failed(zipped.summary);
-    }
-
-    // The wait is Apple's, and silence during it reads as a hang — this is
-    // the step Activity exists for.
-    final notarized = await MacOsNotarizer(
-      tools: tools,
-    ).submit(workspace.pathOf(zip));
-    if (!notarized.ok) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-NOTARY-002',
-          message: '$platform: notarization did not complete',
-          remedy: notarized.remedy ?? notarized.problem ?? 'see notarytool',
-          evidence: notarized.transcript,
-        ),
-        unit: step.unit,
-      );
-      return LocalProducerOutcome.failed(
-        notarized.problem ?? 'Apple rejected the submission',
-      );
-    }
-
-    // The verdict and its log are stage evidence, receipt-bound for
-    // diagnosis; a consumer verifies the binary with Apple directly.
-    workspace.write(resultName, utf8.encode(notarized.raw ?? '{}'));
-    final submission = notarized.submissionId;
-    final log = submission == null
-        ? null
-        : await MacOsNotarizer(tools: tools).log(submission);
-    if (log == null || !log.ok) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-NOTARY-003',
-          message:
-              '$platform: Apple accepted the submission and the log '
-              'could not be fetched',
-          remedy: log == null
-              ? 'the submission id was not in notarytool\'s answer'
-              : log.summary,
-          evidence: log?.transcript,
-        ),
-        unit: step.unit,
-      );
-      return const LocalProducerOutcome.failed(
-        'the notarization log could not be fetched',
-      );
-    }
-    workspace.write(logName, utf8.encode(log.stdout));
-    output.step(step, verdict: Verdict.exact, detail: 'notarized', show: false);
-    return _notaryOutcome(
-      resultName: resultName,
-      logName: logName,
-      zipName: zip,
-    );
   }
 
   // ---- archive ----
@@ -526,43 +491,6 @@ class BinaryChain {
     );
     return LocalProducerOutcome.succeeded(
       outputs: [LocalProducerOutput(name, 'archive')],
-    );
-  }
-
-  LocalProducerOutcome _notaryOutcome({
-    required String resultName,
-    required String logName,
-    required String zipName,
-  }) {
-    final resultBytes = workspace.readBytes(resultName)!;
-    final logBytes = workspace.readBytes(logName)!;
-    Object? status;
-    Object? submissionId;
-    try {
-      final decoded = jsonDecode(utf8.decode(resultBytes));
-      if (decoded is Map) {
-        status = decoded['status'];
-        submissionId = decoded['id'];
-      }
-    } on Object {
-      // The stage inspector owns the strict semantic decision. Carry the
-      // evidence exactly as observed so it can refuse without this producer
-      // inventing a successful status or submission id.
-    }
-    return LocalProducerOutcome.succeeded(
-      outputs: [
-        LocalProducerOutput(zipName, 'notary-input'),
-        LocalProducerOutput(resultName, 'notary'),
-        LocalProducerOutput(logName, 'notary'),
-      ],
-      evidence: {
-        'notary': {
-          'status': status,
-          'submission_id': submissionId,
-          'result_sha256': Sha256.hex(resultBytes),
-          'log_sha256': Sha256.hex(logBytes),
-        },
-      },
     );
   }
 

@@ -153,13 +153,7 @@ executables:
             reason:
                 'notarization submits every companion, including the app module',
           );
-          File(
-              workspace.pathOf(
-                BinaryChain.zipName('tool', 'macos-arm64', 'tool'),
-              ),
-            )
-            ..parent.createSync(recursive: true)
-            ..writeAsBytesSync(utf8.encode('ZIP'));
+          File(key.split(' ').last).writeAsBytesSync(utf8.encode('ZIP'));
         }
       },
     );
@@ -213,16 +207,15 @@ executables:
       isTrue,
       reason: notarized.problem ?? buffer.toString(),
     );
-    expect(notarized.outputs.map((output) => (output.path, output.type)), [
-      (ReleaseAssets.notaryInputPath(project, 'macos-arm64'), 'notary-input'),
-      (ReleaseAssets.notaryResultPath(project, 'macos-arm64'), 'notary'),
-      (ReleaseAssets.notaryLogPath(project, 'macos-arm64'), 'notary'),
-    ]);
-    final notary = notarized.evidence['notary']! as Map;
-    expect(notary['status'], 'Accepted');
-    expect(notary['submission_id'], 'abc-123');
-    expect(notary['result_sha256'], hasLength(64));
-    expect(notary['log_sha256'], hasLength(64));
+    expect(
+      notarized.outputs,
+      isEmpty,
+      reason: 'the zip is Apple\'s input, made outside the stage',
+    );
+    expect(notarized.evidence['notary'], {
+      'status': 'Accepted',
+      'submission_id': 'abc-123',
+    });
 
     final archived = await chain(
       tools,
@@ -450,54 +443,81 @@ executables:
     );
   });
 
-  test(
-    'an accepted submission whose log cannot be fetched fails the step',
-    () async {
-      // The log is a published asset; proceeding without it would ship a
-      // release missing one of its expected files — and the fake-log
-      // alternative would publish evidence nobody issued.
-      final tools = BundleRecordingTools(
-        answers: (key) {
-          if (key.startsWith('xcrun notarytool submit')) {
-            return ToolResult(
-              exitCode: 0,
-              stdout: '{"id": "s-9", "status": "Accepted"}',
-              stderr: '',
-            );
-          }
-          if (key.startsWith('xcrun notarytool log')) {
-            return ToolResult(
-              exitCode: 1,
-              stdout: '',
-              stderr: 'log not available yet',
-            );
-          }
-          return null;
-        },
-        onRun: (key) {
-          if (key.startsWith('ditto')) {
-            File(
-                workspace.pathOf(
-                  BinaryChain.zipName('tool', 'macos-arm64', 'tool'),
-                ),
-              )
-              ..parent.createSync(recursive: true)
-              ..writeAsBytesSync(utf8.encode('ZIP'));
-          }
-        },
-      );
-      for (final file in ReleaseAssets.binaryOutputs(
-        project,
-        'macos-arm64',
-      ).keys) {
-        workspace.write(file, utf8.encode('BINARY'));
-      }
+  test('an accepted submission is notarized without its log', () async {
+    // Apple's log is evidence, not an output: fetching it after an
+    // acceptance once failed the step on a transient error, and the run
+    // after it notarized the same bytes again.
+    final tools = BundleRecordingTools(
+      answers: (key) {
+        if (key.startsWith('xcrun notarytool submit')) {
+          return ToolResult(
+            exitCode: 0,
+            stdout: '{"id": "s-9", "status": "Accepted"}',
+            stderr: '',
+          );
+        }
+        if (key.startsWith('xcrun notarytool log')) {
+          return ToolResult(
+            exitCode: 1,
+            stdout: '',
+            stderr: 'log not available yet',
+          );
+        }
+        return null;
+      },
+    );
+    for (final file in ReleaseAssets.binaryOutputs(
+      project,
+      'macos-arm64',
+    ).keys) {
+      workspace.write(file, utf8.encode('BINARY'));
+    }
 
-      final ok = await chain(
-        tools,
-      ).notarizeStep(step(StepKind.notarize), project);
-      expect(ok.ok, isFalse);
-      expect(buffer.toString(), contains('the log could not be fetched'));
-    },
-  );
+    final ok = await chain(
+      tools,
+    ).notarizeStep(step(StepKind.notarize), project);
+    expect(ok.ok, isTrue, reason: buffer.toString());
+    expect(
+      tools.calls.where((call) => call.startsWith('xcrun notarytool log')),
+      isEmpty,
+    );
+  });
+
+  test('a rejected submission carries Apple\'s log as the reason', () async {
+    final tools = BundleRecordingTools(
+      answers: (key) {
+        if (key.startsWith('xcrun notarytool submit')) {
+          return ToolResult(
+            exitCode: 0,
+            stdout: '{"id": "s-9", "status": "Invalid"}',
+            stderr: '',
+          );
+        }
+        if (key.startsWith('xcrun notarytool log s-9')) {
+          return ToolResult(
+            exitCode: 0,
+            stdout: '{"issues": [{"message": "The binary is not signed."}]}',
+            stderr: '',
+          );
+        }
+        return null;
+      },
+    );
+    for (final file in ReleaseAssets.binaryOutputs(
+      project,
+      'macos-arm64',
+    ).keys) {
+      workspace.write(file, utf8.encode('BINARY'));
+    }
+
+    final ok = await chain(
+      tools,
+    ).notarizeStep(step(StepKind.notarize), project);
+    expect(ok.ok, isFalse);
+    expect(
+      output.report.attachments.values.join('\n'),
+      contains('The binary is not signed.'),
+      reason: 'Apple\'s log is the reason, and travels with the problem',
+    );
+  });
 }

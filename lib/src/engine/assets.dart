@@ -53,20 +53,9 @@ abstract final class ReleaseAssets {
       '${binaryRoot(project, platform)}/${file.path}': file.type,
   };
 
-  static String notaryInputPath(ResolvedProject project, String platform) =>
-      '${producerRoot(project)}/notary/$platform/${project.executable}.zip';
-
   static String archivePath(ResolvedProject project, String platform) =>
       '${producerRoot(project)}/archives/'
       '${archiveName(project.executable!, project.version.canonical, platform)}';
-
-  static String notaryResultPath(ResolvedProject project, String platform) =>
-      '${producerRoot(project)}/evidence/'
-      '${notaryResultName(project.executable!, project.version.canonical, platform)}';
-
-  static String notaryLogPath(ResolvedProject project, String platform) =>
-      '${producerRoot(project)}/evidence/'
-      '${notaryLogName(project.executable!, project.version.canonical, platform)}';
 
   static String formulaPath(ResolvedProject project) =>
       '${producerRoot(project)}/homebrew/${formulaName(project.executable!)}';
@@ -98,23 +87,6 @@ abstract final class ReleaseAssets {
     String version,
     String platform,
   ) => standaloneArchiveName(executable, version, platform);
-
-  /// Apple's verdict, verbatim — and its log, which says what the verdict
-  /// covered. Stage evidence, not published assets: a consumer verifies the
-  /// binary itself (`codesign -R=notarized --check-notarization` asks Apple
-  /// about the exact bytes), which no JSON beside it can strengthen. The
-  /// receipt records both files for diagnosis.
-  static String notaryResultName(
-    String executable,
-    String version,
-    String platform,
-  ) => '$executable-$version-$platform.notary-result.json';
-
-  static String notaryLogName(
-    String executable,
-    String version,
-    String platform,
-  ) => '$executable-$version-$platform.notary-log.json';
 
   /// The formula's public filename inside its Homebrew tap.
   ///

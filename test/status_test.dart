@@ -2586,52 +2586,11 @@ Future<ReleaseStage> _completedStage({
       ),
     );
     if (platform.startsWith('macos-')) {
-      final zip = '$platform/$executable.zip';
-      final result = ReleaseAssets.notaryResultName(
-        executable,
-        project.version.canonical,
-        platform,
-      );
-      final log = ReleaseAssets.notaryLogName(
-        executable,
-        project.version.canonical,
-        platform,
-      );
-      stage.directory.writeBytesAtomically(zip, utf8.encode('zip:$platform'));
-      stage.directory.writeBytesAtomically(
-        result,
-        utf8.encode('{"id":"status-test","status":"Accepted"}'),
-      );
-      stage.directory.writeBytesAtomically(log, utf8.encode('{"issues":[]}'));
-      final resultArtifact = StageArtifact.capture(
-        stage: stage.directory,
-        path: result,
-        type: 'notary',
-      );
-      final logArtifact = StageArtifact.capture(
-        stage: stage.directory,
-        path: log,
-        type: 'notary',
-      );
       steps.add(
         StageStep(
           name: 'notarize:$platform',
-          outputs: [
-            StageArtifact.capture(
-              stage: stage.directory,
-              path: zip,
-              type: 'notary-input',
-            ),
-            resultArtifact,
-            logArtifact,
-          ],
           evidence: {
-            'notary': {
-              'status': 'Accepted',
-              'submission_id': 'status-test',
-              'result_sha256': resultArtifact.sha256,
-              'log_sha256': logArtifact.sha256,
-            },
+            'notary': {'status': 'Accepted', 'submission_id': 'status-test'},
           },
         ),
       );
