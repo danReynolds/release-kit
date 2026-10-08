@@ -17,9 +17,8 @@ final class ProducerLaneSource {
   /// directory of its own.
   ///
   /// A project's own declared build may read anything, so it gets the whole
-  /// source. A Dart build gets the files Dart reads (see
-  /// [StageSourceSnapshot.dartBuildInputs]) with every package in this
-  /// source, which its workspace or an override may name.
+  /// source. A Dart build gets what Dart reads (see
+  /// [StageSourceSnapshot.dartBuildInputs]).
   factory ProducerLaneSource.export(
     StageSourceSnapshot source, {
     required ResolvedProject project,
@@ -30,10 +29,7 @@ final class ProducerLaneSource {
         directory.path,
         only: project.buildsAssets
             ? null
-            : StageSourceSnapshot.dartBuildInputs(
-                project.pubspec.directory,
-                packages: source.packageDirectories,
-              ),
+            : source.dartBuildInputs(project.pubspec.directory),
       );
     } on Object {
       directory.deleteSync(recursive: true);

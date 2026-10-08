@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:yaml/yaml.dart' as yaml;
+
 import 'file_mode.dart';
 import 'source_tree.dart';
 import 'stage.dart';
@@ -181,42 +183,44 @@ final class StageSourceSnapshot implements SourceTree {
   };
 
   /// The files a Dart build of the package at [directory] reads from this
-  /// source: the package itself, the [packages] it takes from here (their
-  /// directories), every `pubspec.yaml`, which is how Pub and rk find a
-  /// workspace and its members, and the files directly inside each
-  /// directory above the package, such as analysis options and ignore
-  /// rules. Nothing else in the repository reaches the build.
-  static bool Function(String path) dartBuildInputs(
-    String directory, {
-    Iterable<String> packages = const [],
-  }) {
-    final trees = {directory, ...packages}.map(_path).toSet();
+  /// source: that package, every other package in it, since a workspace, an
+  /// override, a path dependency or an analysis options include can reach
+  /// any of them, and the files directly inside each directory above
+  /// [directory], such as a workspace's pubspec, analysis options and
+  /// ignore rules. A package that encloses [directory], such as a workspace
+  /// root, adds its `lib/` rather than everything beneath it, which is the
+  /// rest of the repository. An export adds what links and analysis
+  /// options includes lead to (see [export]).
+  bool Function(String path) dartBuildInputs(String directory) {
+    final own = _path(directory);
     final above = <String>{''};
-    final parts = _path(directory).split('/');
+    final parts = own.split('/');
     for (var end = 1; end < parts.length; end++) {
       above.add(parts.take(end).join('/'));
     }
-    return (path) {
-      if (trees.any(
-        (tree) => tree.isEmpty || path == tree || path.startsWith('$tree/'),
-      )) {
-        return true;
-      }
-      if (path == 'pubspec.yaml' || path.endsWith('/pubspec.yaml')) {
-        return true;
-      }
-      final cut = path.lastIndexOf('/');
-      return above.contains(cut < 0 ? '' : path.substring(0, cut));
+    if (own.isEmpty) above.clear();
+    final trees = {
+      for (final package in packageDirectories.map(_path))
+        if (above.contains(package))
+          [package, 'lib'].where((part) => part.isNotEmpty).join('/')
+        else
+          package,
     };
+    return (path) =>
+        trees.any(
+          (tree) => tree.isEmpty || path == tree || path.startsWith('$tree/'),
+        ) ||
+        above.contains(_parent(path));
   }
 
   /// Writes the files [only] selects, every file when it is null, with
   /// their modes, beneath [root]. A link it selects is written as a link,
   /// with what it leads to inside this commit, so that it resolves in the
-  /// export as it does in a checkout. Exporting into a directory that
+  /// export as it does in a checkout; so is the file an analysis options
+  /// file includes by a relative path. Exporting into a directory that
   /// already holds part of this source adds the rest.
   void export(String root, {bool Function(String path)? only}) {
-    final selected = only == null ? null : _withLinkTargets(only);
+    final selected = only == null ? null : _closure(only);
     final modes = <String, String>{};
     for (final MapEntry(key: path, value: bytes) in _files.entries) {
       if (selected != null && !selected.contains(path)) continue;
@@ -238,22 +242,20 @@ final class StageSourceSnapshot implements SourceTree {
     }
   }
 
-  /// The files and links [only] selects, with everything a selected link
-  /// leads to inside this commit: a file, another link, or every file and
-  /// link in a directory.
-  Set<String> _withLinkTargets(bool Function(String path) only) {
+  /// The files and links [only] selects, with everything they lead to
+  /// inside this commit: what a link points to (a file, another link, or
+  /// every file and link in a directory), and what an analysis options file
+  /// includes by a relative path, as the analyzer reads it.
+  Set<String> _closure(bool Function(String path) only) {
     final selected = <String>{};
+    final options = <String>{};
     final pending = [
       for (final path in _files.keys)
         if (only(path)) path,
       for (final path in _links.keys)
         if (only(path)) path,
     ];
-    while (pending.isNotEmpty) {
-      final path = pending.removeLast();
-      if (!selected.add(path) || !_links.containsKey(path)) continue;
-      final target = _linkTarget(path);
-      if (target == null) continue;
+    void reach(String target) {
       // A link on the way to the target is followed too.
       final parts = target.split('/');
       for (var end = 1; end < parts.length; end++) {
@@ -262,7 +264,7 @@ final class StageSourceSnapshot implements SourceTree {
       }
       if (_files.containsKey(target) || _links.containsKey(target)) {
         pending.add(target);
-        continue;
+        return;
       }
       final inside = target.isEmpty ? '' : '$target/';
       pending.addAll([
@@ -272,7 +274,39 @@ final class StageSourceSnapshot implements SourceTree {
           if (link.startsWith(inside)) link,
       ]);
     }
+
+    while (pending.isNotEmpty) {
+      final path = pending.removeLast();
+      if (!selected.add(path)) continue;
+      if (_links.containsKey(path)) {
+        if (_linkTarget(path) case final target?) reach(target);
+      } else if (path.split('/').last == 'analysis_options.yaml' ||
+          options.contains(path)) {
+        for (final included in _includes(path)) {
+          options.add(included);
+          reach(included);
+        }
+      }
+    }
     return selected;
+  }
+
+  /// The files the analysis options at [path] include by a relative path,
+  /// as paths in this commit. `package:` includes name a package, and every
+  /// package is exported whole.
+  List<String> _includes(String path) {
+    final Object? include;
+    try {
+      final options = yaml.loadYaml(utf8.decode(_files[path]!));
+      include = options is Map ? options['include'] : null;
+    } on Object {
+      return const [];
+    }
+    return [
+      for (final value in include is List ? include : [include])
+        if (value is String && !value.startsWith('package:'))
+          if (_within(_parent(path), value) case final target?) target,
+    ];
   }
 }
 

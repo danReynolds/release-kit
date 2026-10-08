@@ -121,6 +121,61 @@ void main() {
     }
   });
 
+  test(
+    'a workspace root adds its own files and lib, not the repository',
+    () async {
+      final snapshot = await _committed({
+        'pubspec.yaml': 'name: ws\nworkspace:\n  - packages/app\n',
+        'lib/ws.dart': 'library;\n',
+        'docs/guide.md': '# Nothing builds this\n',
+        'packages/app/pubspec.yaml': 'name: app\nresolution: workspace\n',
+        'packages/app/lib/app.dart': 'library;\n',
+        'packages/helper/pubspec.yaml': 'name: helper\n',
+        'packages/helper/hook/build.dart': 'void main() {}\n',
+      });
+      final root = Directory.systemTemp.createTempSync('rk-source-workspace-');
+      addTearDown(() => root.deleteSync(recursive: true));
+
+      snapshot.export(
+        root.path,
+        only: snapshot.dartBuildInputs('packages/app'),
+      );
+
+      expect(_filesUnder(root), [
+        'lib/ws.dart',
+        'packages/app/lib/app.dart',
+        'packages/app/pubspec.yaml',
+        'packages/helper/hook/build.dart',
+        'packages/helper/pubspec.yaml',
+        'pubspec.yaml',
+      ]);
+    },
+  );
+
+  test('a Dart lane carries the analysis options its own include', () async {
+    final snapshot = await _committed({
+      'packages/app/pubspec.yaml': 'name: app\nversion: 1.0.0\n',
+      'packages/app/analysis_options.yaml':
+          'include: ../../tooling/analysis_options.yaml\n',
+      'tooling/analysis_options.yaml':
+          'include:\n  - strict.yaml\n  - package:lints/recommended.yaml\n',
+      'tooling/strict.yaml': 'analyzer:\n  language:\n    strict-casts: true\n',
+      'tooling/unrelated.yaml': 'nothing: here\n',
+      'docs/guide.md': '# Nothing includes this\n',
+    });
+    final root = Directory.systemTemp.createTempSync('rk-source-options-');
+    addTearDown(() => root.deleteSync(recursive: true));
+
+    snapshot.export(root.path, only: snapshot.dartBuildInputs('packages/app'));
+
+    expect(_filesUnder(root), [
+      'packages/app/analysis_options.yaml',
+      'packages/app/pubspec.yaml',
+      'tooling/analysis_options.yaml',
+      'tooling/strict.yaml',
+    ]);
+  });
+
   test('committed source keeps Git modes and ignores worktree edits', () async {
     final root = Directory.systemTemp.createTempSync('rk-source-authority-');
     addTearDown(() => root.deleteSync(recursive: true));
@@ -279,15 +334,13 @@ assets = ["parser.so"]
     );
     final root = Directory.systemTemp.createTempSync('rk-source-scope-');
     addTearDown(() => root.deleteSync(recursive: true));
-    snapshot.export(root.path, only: StageSourceSnapshot.dartBuildInputs('a'));
+    snapshot.export(root.path, only: (path) => path.startsWith('a/'));
     snapshot.export(root.path, only: (path) => path.startsWith('b/'));
-    expect(
-      [
-        for (final entry in root.listSync(recursive: true))
-          if (entry is File) entry.path.substring(root.path.length + 1),
-      ]..sort(),
-      ['a/lib/a.dart', 'a/pubspec.yaml', 'b/lib/b.dart', 'pubspec.yaml'],
-    );
+    expect(_filesUnder(root), [
+      'a/lib/a.dart',
+      'a/pubspec.yaml',
+      'b/lib/b.dart',
+    ]);
     expect(snapshot.packageDirectories, {'.', 'a'});
   });
 

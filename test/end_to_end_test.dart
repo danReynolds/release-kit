@@ -1032,7 +1032,9 @@ publish = ["git-tag", "pub.dev"]
             [
               'README.md',
               'analysis_options.yaml',
+              'packages/base/lib/base.dart',
               'packages/base/pubspec.yaml',
+              'packages/host/lib/host.dart',
               'packages/host/pubspec.yaml',
               'packages/keybay/CHANGELOG.md',
               'packages/keybay/lib/keybay.dart',
@@ -1042,9 +1044,8 @@ publish = ["git-tag", "pub.dev"]
               'pubspec.yaml',
             ],
             reason:
-                'keybay, testkit it develops with, every pubspec, and the '
-                'files beside the directories above keybay; base comes from '
-                'pub.dev, and docs and host are not read',
+                'every package, and the files beside the directories above '
+                'keybay; the workspace root adds its pubspec, not docs',
           );
         });
 
