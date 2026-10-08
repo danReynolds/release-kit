@@ -367,29 +367,14 @@ class ReleaseCommand {
       );
       if (!ready) return result(ExitCodes.refused);
     }
-    final work = [
-      for (final unit in selected)
-        if (!isNoop(inspected[unit.name]!)) unit,
-    ];
-    Future<({int code, List<PublicationPlan> publications})>
-    finishNoops() async {
-      for (final unit in selected.where((u) => isNoop(inspected[u.name]!))) {
-        final prepared = await _prepareRelease(inspected[unit.name]!);
-        if (prepared.code != ExitCodes.ok) return result(prepared.code);
-        if (prepared.publication case final publication?) {
-          publications.add(publication);
-        }
-      }
-      return result(ExitCodes.ok);
+    if (!selected.every((unit) => isNoop(inspected[unit.name]!))) {
+      output.timeline.phase('staging');
     }
-
-    if (work.isEmpty) return finishNoops();
-    output.timeline.phase('staging');
     // Each unit is checked, and its signing settled, one at a time in
     // release order. Then every unit that needs a stage builds at once, and
     // each is finished in release order again.
     final planned = <_ReleasePlan>[];
-    for (final unit in work) {
+    for (final unit in selected) {
       final plan = await Timings.span(
         'plan ${unit.name}',
         () => _planRelease(inspected[unit.name]!),
@@ -415,8 +400,7 @@ class ReleaseCommand {
           publications.add(publication);
         }
       }
-      if (code != ExitCodes.ok) return result(code);
-      return finishNoops();
+      return result(code);
     }
 
     // Units staged side by side say how they stopped once, after all of
@@ -593,15 +577,6 @@ class ReleaseCommand {
       stage: reads.stage,
       stageInspection: reads.stageInspection,
     );
-  }
-
-  Future<({int code, PublicationPlan? publication})> _prepareRelease(
-    _InspectedUnit inspected,
-  ) async {
-    final plan = await _planRelease(inspected);
-    if (plan == null) return (code: ExitCodes.refused, publication: null);
-    final prepared = await _stage([?plan.staging]);
-    return _finishRelease(plan, prepared[plan.unit.name]);
   }
 
   /// Checks [inspected]'s unit against everything that refuses it before
