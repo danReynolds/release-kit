@@ -56,20 +56,6 @@ class StageBoard {
       for (final stage in targetStages.where(
         (stage) => stage.target.step.id == target.step.id,
       )) {
-        final outputBindings = <String>{};
-        for (final view in stage.progress) {
-          final output = view.output;
-          if (output != null && !stage.contract.outputs.containsKey(output)) {
-            throw StateError(
-              '${stage.contract.name} progress binds undeclared output '
-              '$output',
-            );
-          }
-          if (output != null && !outputBindings.add(output)) {
-            throw StateError(
-              '${stage.contract.name} binds output $output twice',
-            );
-          }
           final row = view.artifact == null
               ? StageBoardRow(
                   '${target.step.id}/${stage.contract.name}/${view.id}',
