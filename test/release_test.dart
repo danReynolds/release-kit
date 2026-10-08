@@ -2772,6 +2772,47 @@ publish = ["pub.dev"]
     );
   });
 
+  test('a package pub.dev lists under another repository is released after '
+      'a warning: the repository may have moved', () async {
+    final registry = FakeRegistry(
+      {
+        'keybay': ['0.1.0'],
+      },
+      repositories: {'keybay': 'https://github.com/old/keybay'},
+    );
+    final ran = await release(
+      registry: registry,
+      source: MemorySourceTree({
+        'packages/keybay/pubspec.yaml':
+            'name: keybay\nversion: 0.2.0\n'
+            'repository: https://github.com/danReynolds/keybay\n',
+        'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
+      }, description: '/repo/keybay'),
+      onRun: (key) {
+        if (key == 'dart pub publish --from-archive <archive> --force') {
+          registry.published['keybay']!.add('0.2.0');
+        }
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    const warning =
+        'keybay on pub.dev points to https://github.com/old/keybay, not '
+        'https://github.com/danReynolds/keybay';
+    expect(
+      ran.text.indexOf(warning),
+      allOf(
+        greaterThanOrEqualTo(0),
+        lessThan(ran.text.indexOf('Authorized in the reviewed')),
+      ),
+      reason: 'the operator sees it before the one question',
+    );
+    expect(
+      (ran.report['warnings'] as List).cast<Map>().map((w) => w['code']),
+      contains('RK-PUB-010'),
+    );
+  });
+
   test('an old tag that names no version does not stop a release', () async {
     final registry = _MutableRegistry(<String>['0.1.0']);
     final ran = await release(

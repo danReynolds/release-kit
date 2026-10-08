@@ -603,38 +603,33 @@ void classificationTables() {
     );
 
     test(
-      'a foreign pub.dev repository keeps its provider-specific remedy',
+      "a lane's warning travels with its history, and refuses nothing",
       () async {
         final fixture = await releaseTargets();
         final inspector = _LatestInspector(
           answers: {
-            'pubDev': const Inspection.conflict(
-              'example_cli points to another repository on pub.dev',
-              evidence: {
-                'published repository':
-                    'https://github.com/another/example_cli',
-                'this repository': 'https://github.com/example/tool',
-              },
+            'pubDev': const Inspection.exact(evidence: {'version': '0.9.0'}),
+          },
+          warnings: {
+            'pubDev': const Diagnostic(
+              code: 'RK-PUB-010',
+              message:
+                  'example_cli on pub.dev points to '
+                  'https://github.com/old/example_cli, not '
+                  'https://github.com/example/tool',
             ),
           },
         );
         final problems = Diagnostics();
 
-        await inspector.releaseMonotonicity(
+        final history = await inspector.releaseMonotonicity(
           fixture.unit,
           fixture.targets,
           problems,
         );
 
-        final diagnostic = problems.found.singleWhere(
-          (problem) => problem.code == 'RK-PUB-010',
-        );
-        expect(diagnostic.message, contains('another/example_cli'));
-        expect(diagnostic.remedy, contains('choose an unclaimed package name'));
-        expect(
-          problems.found.where((problem) => problem.code == 'RK-REL-001'),
-          isEmpty,
-        );
+        expect(problems.found, isEmpty);
+        expect(history.warnings.map((warning) => warning.code), ['RK-PUB-010']);
       },
     );
 
@@ -909,6 +904,7 @@ Future<ResolvedUnit> _binaryUnit() async =>
 class _LatestInspector extends Inspector {
   _LatestInspector({
     this.answers = const {},
+    this.warnings = const {},
     this.expectedConcurrent = 0,
     List<String> tags = const [],
   }) : super(
@@ -927,6 +923,7 @@ class _LatestInspector extends Inspector {
        );
 
   final Map<String, Inspection> answers;
+  final Map<String, Diagnostic> warnings;
   final int expectedConcurrent;
   final Completer<void> allStarted = Completer<void>();
   final Completer<void> _finish = Completer<void>();
@@ -951,29 +948,10 @@ class _LatestInspector extends Inspector {
       active--;
     }
     final inspection = answers[target.kind] ?? const Inspection.absent();
-    if (target.kind == 'pubDev' && inspection.verdict == Verdict.conflict) {
-      final project = target.project!;
-      final published = inspection.evidence['published repository'];
-      final local = inspection.evidence['this repository'];
-      return TargetHistory(
-        inspection: inspection,
-        problems: [
-          Diagnostic(
-            code: 'RK-PUB-010',
-            message:
-                '${project.name} on pub.dev points to $published, not '
-                '$local',
-            remedy:
-                'choose an unclaimed package name in pubspec.yaml; '
-                'pub.dev package names cannot be reclaimed by publishing '
-                'a newer version',
-          ),
-        ],
-      );
-    }
     return TargetHistory.versioned(
       inspection: inspection,
       target: target,
+      warnings: [?warnings[target.kind]],
       regressionDiagnostic: target.kind == 'pubDev'
           ? (publicVersion) => Diagnostic(
               code: 'RK-MONO-002',

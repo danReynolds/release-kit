@@ -2720,30 +2720,32 @@ void _reviewFixes() {
     expect(_targetLine(run.text, 'pub.dev ').trimLeft(), startsWith('✗'));
   });
 
-  test('a package name owned by another repository is named plainly', () async {
+  test('a package pub.dev lists under another repository is a warning: the '
+      'repository may have moved', () async {
     final run = await statusRun(
       source: tree(coreVersion: '0.2.0'),
-      state: git(tags: ['v0.2.0']),
+      state: git(),
       registry: FakeRegistry(
         {
-          'keybay': ['0.5.0'],
+          'keybay': ['0.1.0'],
         },
-        repositories: const {'keybay': 'https://github.com/another/keybay'},
+        repositories: const {'keybay': 'https://github.com/old/keybay'},
       ),
     );
 
     expect(
       run.text,
       contains(
-        'keybay on pub.dev points to https://github.com/another/keybay, '
+        'keybay on pub.dev points to https://github.com/old/keybay, '
         'not https://github.com/danReynolds/keybay',
       ),
     );
-    expect(run.text, isNot(contains('behind published version')));
-    final problem = (run.report['problems'] as List).cast<Map>().singleWhere(
+    expect(run.text, contains('if the repository moved'));
+    expect(run.report['problems'], isEmpty);
+    final warning = (run.report['warnings'] as List).cast<Map>().singleWhere(
       (item) => item['code'] == 'RK-PUB-010',
     );
-    expect(problem['target'], isNotNull);
+    expect(warning['target'], isNotNull);
   });
 }
 

@@ -161,10 +161,25 @@ class StatusCommand {
       _renderUnit(snapshot);
     }
 
-    if (snapshot.warning != null) {
+    final targetWarnings = [
+      for (final unit in snapshots)
+        for (final target in unit.targets)
+          for (final warning in target.historyWarnings)
+            (
+              unit: unit.unit.name,
+              target: target.expectation.step.id,
+              warning: warning,
+            ),
+    ];
+    if (snapshot.warning != null || targetWarnings.isNotEmpty) {
       output.blank();
       output.heading('Warnings');
-      output.warning(snapshot.warning!, depth: 1);
+      if (snapshot.warning case final warning?) {
+        output.warning(warning, depth: 1);
+      }
+      for (final (:unit, :target, :warning) in targetWarnings) {
+        output.warning(warning, unit: unit, target: target, depth: 1);
+      }
     }
     if (uniqueIssues.isNotEmpty) _renderIssues(uniqueIssues);
 
@@ -292,6 +307,7 @@ class StatusCommand {
             currentKnown: target.currentKnown,
             currentDetail: target.currentDetail,
             historyProblems: target.historyProblems,
+            historyWarnings: target.historyWarnings,
             artifacts: [
               for (final artifact in target.artifacts)
                 artifact.status == ArtifactStatus.invalid
@@ -463,6 +479,7 @@ class StatusCommand {
       currentKnown: target.currentKnown,
       currentDetail: target.currentDetail,
       historyProblems: target.historyProblems,
+      historyWarnings: target.historyWarnings,
       artifacts: target.artifacts,
     );
   }
@@ -578,6 +595,7 @@ class StatusCommand {
       currentKnown: current.known,
       currentDetail: currentInspection.detail,
       historyProblems: currentHistory.problems,
+      historyWarnings: currentHistory.warnings,
       artifacts: [
         for (final name in expectation.artifacts)
           _observeArtifact(expectation, name, stage, artifactProblems[name]),

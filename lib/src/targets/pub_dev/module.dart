@@ -145,24 +145,27 @@ final class PubDevTargetModule extends TargetModule {
               : const [],
         );
       }
+      // pub.dev keeps the repository the latest version named. One that
+      // differs is a repository that moved or was renamed, or another
+      // project's package, which pub.dev refuses to let this one upload to.
+      final project = target.project!;
       final publishedRepository = latest.repository;
-      final localRepository = target.project!.pubspec.repository;
+      final localRepository = project.pubspec.repository;
       final publishedIdentity = _repositoryIdentity(publishedRepository);
       final localIdentity = _repositoryIdentity(localRepository);
-      if (publishedIdentity != null &&
+      final moved =
+          publishedIdentity != null &&
           localIdentity != null &&
-          publishedIdentity != localIdentity) {
-        final inspection = Inspection.conflict(
-          '${target.coordinate} points to another repository on pub.dev',
-          evidence: {
-            'published repository': publishedRepository!,
-            'this repository': localRepository!,
-          },
-        );
-        final project = target.project!;
-        return TargetHistory(
-          inspection: inspection,
-          problems: [
+          publishedIdentity != localIdentity;
+      final inspection = Inspection.exact(
+        detail: 'latest published package is ${latest.version}',
+        evidence: {'version': latest.version.canonical},
+      );
+      return TargetHistory.versioned(
+        inspection: inspection,
+        target: target,
+        warnings: [
+          if (moved)
             Diagnostic(
               code: 'RK-PUB-010',
               message:
@@ -173,21 +176,12 @@ final class PubDevTargetModule extends TargetModule {
                 project.pubspec.nameLine,
               ),
               remedy:
-                  'choose an unclaimed package name in pubspec.yaml; '
-                  'pub.dev package names cannot be reclaimed by publishing '
-                  'a newer version',
+                  'if the repository moved, this release records where it '
+                  'is now. If the package on pub.dev is another '
+                  "project's, pub.dev will refuse the upload: choose an "
+                  'unclaimed package name in pubspec.yaml',
             ),
-          ],
-        );
-      }
-      final inspection = Inspection.exact(
-        detail: 'latest published package is ${latest.version}',
-        evidence: {'version': latest.version.canonical},
-      );
-      final project = target.project!;
-      return TargetHistory.versioned(
-        inspection: inspection,
-        target: target,
+        ],
         regressionDiagnostic: (publicVersion) => Diagnostic(
           code: 'RK-MONO-002',
           message:

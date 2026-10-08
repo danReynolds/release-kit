@@ -527,7 +527,11 @@ class ReleaseCommand {
       );
     }
 
-    read.claims = (await read.historyRead).claims;
+    final history = await read.historyRead;
+    read.claims = history.claims;
+    for (final warning in history.warnings) {
+      output.warning(warning, unit: unit.name);
+    }
     final problems = Diagnostics();
     read.historyProblems.found.forEach(problems.report);
     inspector.tagGuards(unit, checklist, read.states).forEach(problems.report);
