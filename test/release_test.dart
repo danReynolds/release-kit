@@ -17,6 +17,7 @@ import 'package:rk/src/engine/release_stage.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/engine/version.dart';
 import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/transforms/digest.dart';
 import 'package:rk/src/targets/catalog.dart';
@@ -793,6 +794,22 @@ publish = ["pub.dev"]
         },
       );
     }
+
+    test('reads every unit\'s destinations at once', () async {
+      // Each unit's pub.dev read is held until both are being read: one
+      // unit after another, the first would wait forever.
+      final registry = _HeldRegistry(world().registry, together: 2);
+      final staged = await release(
+        only: null,
+        config: config,
+        source: source(),
+        registry: registry,
+        dryRun: true,
+      );
+
+      expect(staged.exitCode, ExitCodes.ok, reason: staged.text);
+      expect(registry.reading, {'keybay', 'other'});
+    });
 
     test('stages its units side by side', () async {
       // Each unit's package archive is held until both have started: one
@@ -2445,6 +2462,31 @@ publish = ["pub.dev"]
 /// second inspection, a behavior the real client cannot exhibit, and it hid
 /// the bug where the confirming read answered from the pre-act memo and
 /// every successful publish reported failure.
+/// A registry whose version reads wait until [together] packages are being
+/// read, so reads made one after another never finish.
+final class _HeldRegistry implements RegistryReader {
+  _HeldRegistry(this.delegate, {required this.together});
+
+  final RegistryReader delegate;
+  final int together;
+  final reading = <String>{};
+  final _all = Completer<void>();
+
+  @override
+  Future<PublishedVersion?> lookupVersion(String name, Version version) async {
+    reading.add(name);
+    if (reading.length >= together && !_all.isCompleted) _all.complete();
+    await _all.future.timeout(const Duration(seconds: 10));
+    return delegate.lookupVersion(name, version);
+  }
+
+  @override
+  Future<RegistryPackage?> lookup(String name) => delegate.lookup(name);
+
+  @override
+  void forget(String name) => delegate.forget(name);
+}
+
 class _MutableRegistry extends FakeRegistry {
   _MutableRegistry(List<String> live) : super({'keybay': live});
 
