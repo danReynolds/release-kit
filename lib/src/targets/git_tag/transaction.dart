@@ -21,10 +21,12 @@ Future<TargetActOutcome> publishGitTag(
   final git = context.git;
   final tag = requiredTargetTag(unit, PublishTarget.gitTag);
   final destination = GitTag(tools: context.tools, root: git.root);
-  final signed = git.signingConfigured;
-  final required = await _signatureRequired(context, unit, destination);
+  // As Git itself does, rk signs a tag when tag.gpgSign asks it to, and
+  // keeps signing once a release tag was signed. A signing key alone, which
+  // may be there for commits, does not sign release tags.
+  final signed = await _signatureRequired(context, unit, destination);
 
-  if (required && !signed) {
+  if (signed && !git.signingConfigured) {
     return TargetActOutcome(
       ok: false,
       coordinate: tag,
@@ -50,7 +52,7 @@ Future<TargetActOutcome> publishGitTag(
       final signature = await _signatureState(
         destination,
         existing,
-        required: required,
+        required: signed,
         tag: tag,
         unit: unit,
       );
@@ -75,8 +77,10 @@ Future<TargetActOutcome> publishGitTag(
   }
 
   final manifestSha256 = _manifestDigest(context);
+  // The run's commit is the one its stage was built from.
   final created = await destination.create(
     tag,
+    commit: git.head,
     signed: signed,
     message:
         '${unit.name} ${unit.version}\n\n'
@@ -121,7 +125,7 @@ Future<TargetActOutcome> publishGitTag(
   final signature = await _signatureState(
     destination,
     object,
-    required: required,
+    required: signed,
     tag: tag,
     unit: unit,
   );

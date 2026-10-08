@@ -4,7 +4,6 @@ import 'dart:io';
 
 import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/builds/dart_cli.dart';
-import 'package:rk/src/engine/stage_plan.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:test/test.dart';
 
@@ -29,9 +28,7 @@ void main(List<String> args) {
   exitCode = 7;
 }
 ''');
-      final compiler = DartCompilerIdentity.readResolved(
-        Platform.resolvedExecutable,
-      );
+      final compiler = Platform.resolvedExecutable;
       final platform = Abi.current() == Abi.macosArm64
           ? 'macos-arm64'
           : 'macos-x64';
@@ -39,8 +36,7 @@ void main(List<String> args) {
       final result =
           await DartCliBuilder(
             tools: const SystemTools(),
-            compilerExecutable: compiler.executable,
-            runtimeSha256: compiler.runtimeSha256,
+            compilerExecutable: compiler,
             capabilities: HostCapabilities(
               hostPlatform: platform,
               containerRuntime: null,

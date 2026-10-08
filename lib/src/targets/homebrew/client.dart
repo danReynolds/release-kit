@@ -16,7 +16,7 @@ class HomebrewFormula {
   /// Renders rk's complete formula for one GitHub-hosted release.
   ///
   /// Target adapters supply only release facts. Provider presentation stays
-  /// here so staging, validation, and lost-stage recovery cannot drift.
+  /// here so staging and lost-stage recovery cannot drift.
   static String renderRelease({
     required String className,
     required String version,
@@ -286,13 +286,6 @@ class HomebrewUpdateAuthority {
   /// Intended bytes recovered from an authenticated public release when the
   /// local stage is gone. Null for ordinary stage-backed updates.
   final List<int>? replacement;
-
-  /// Binds the public compare-and-swap base and recovered replacement.
-  String? get recoveryBinding {
-    final bytes = replacement;
-    if (bytes == null) return null;
-    return '${sha256 ?? 'absent'}:${Sha256.hex(bytes)}';
-  }
 
   bool accepts(List<int>? bytes) {
     final expected = sha256;

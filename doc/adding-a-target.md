@@ -36,23 +36,22 @@ operations. Its complete surface is small enough to read as one table:
 | `diagnoseConflict` | yes | Names a conflicting public state and its safe next action in provider terms. |
 | `publishActivity` | yes | Names the module's one meaningful public mutation. |
 | `checkReadiness` | yes | Checks ambient requirements before private preparation. |
-| `authentication` | no | Acquires a native-tool session late in the pipeline. |
-| `destinationBinding` | usually no | Freezes the effective destination across authentication. |
+| `authentication` | no | Names the native-tool session it needs; core acquires it once per run, after the yes. |
 | `publish` | yes | Performs one provider publication transaction. |
 | `confirmPublication` | usually no | Reads public state after publication; defaults to `inspectCandidate`. |
 | `checkAvailability` | no | Checks a delayed consumer path after exact publication; pending availability warns and never republishes. |
 | `classifyUnconfirmedPublication` | usually no | Refines shared failure handling for a real recovery semantic. |
 | `stageInput` | no | Derives a private, receipt-backed input required by this target. |
-| `stageRecoveryBinding` | no | Identifies public inputs that let a moving channel resume without its stage. |
+| `recoversWithoutStage` | no | Says whether an observation carries the authenticated public inputs a moving channel needs to finish without its stage. |
 
 `TargetHistory` is deliberately one result rather than several hooks. A target
 translates provider data into its current `version`, any provider-specific
 `problems`, and any irreversible `claims`; core does not parse evidence maps or
 ask a second callback what the first callback meant.
 
-Defaults cover shared read-back, destination binding, failure classification,
-and targets without history, authentication, delayed consumer availability,
-stage inputs, or moving-channel recovery. Override one only for a concrete
+Defaults cover shared read-back, failure classification, and targets without
+history, authentication, delayed consumer availability, stage inputs, or
+moving-channel recovery. Override one only for a concrete
 provider semantic.
 
 ## GitHub Release as the worked example
@@ -149,9 +148,10 @@ lib/src/targets/homebrew/
 ```
 
 These differences did not require more core hooks. Git tag's signing and
-rollback steps form one transaction behind `publish`; pub.dev alone contributes a
-native authentication session; pub.dev and Homebrew contribute target-owned
-stage inputs. Each module overrides shared failure handling only where the
+rollback steps form one transaction behind `publish`; pub.dev and GitHub Release
+each name a native session (`dart pub`, `gh`), which core acquires once per run
+after the yes; pub.dev, GitHub Release and Homebrew contribute target-owned stage
+inputs. Each module overrides shared failure handling only where the
 destination's public-state semantics genuinely differ.
 
 ## Adding target N+1

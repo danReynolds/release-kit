@@ -9,26 +9,11 @@ import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'fixtures.dart';
+import '../support/compiled_rk.dart';
 
 void main() {
-  // Compile once: each case still runs a separate real CLI process, without
-  // repeatedly compiling the full CLI while testing installation behavior.
-  late Directory compiled;
-  late String executable;
-  setUpAll(() async {
-    compiled = Directory.systemTemp.createTempSync('rk-install-cli-binary-');
-    addTearDown(() => compiled.deleteSync(recursive: true));
-    executable = '${compiled.path}/rk';
-    final result = await Process.run(Platform.resolvedExecutable, [
-      '--suppress-analytics',
-      'compile',
-      'exe',
-      'bin/rk.dart',
-      '-o',
-      executable,
-    ]);
-    expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
-  });
+  // Each case runs a separate real CLI process, sharing one compiled rk.
+  late final executable = compiledRk();
   late Directory scratch;
   late Map<String, String> environment;
   setUp(() {

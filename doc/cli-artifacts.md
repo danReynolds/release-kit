@@ -67,9 +67,10 @@ the program identity would stop the release.
 
 rk checks the signed command, verifies every signature again, notarizes the
 whole payload, and verifies and runs the extracted final archive. Receipts bind
-all companion files and their signatures. The stage key includes the matching
-Dart runtime and the launcher compiler/SDK identity, as well as the existing
-source and Dart compiler identities. Older stage receipts must be rebuilt.
+all companion files and their signatures. The stage is named by the commit and
+the unit's configuration, not by the Dart SDK or Xcode tools that built it, so
+updating either does not orphan a stage that a partly published release still
+needs.
 
 These checks establish release artifact integrity and launch behavior. An
 application with persistent OS credentials still needs its own upgrade and

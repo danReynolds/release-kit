@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+- A stage is named by what it is built from: its commit, tree, configuration
+  and origin. Updating rk, Dart or Xcode, or setting up a signing key, no
+  longer orphans the stage a partly published release still needs. Reusing a
+  stage checks what it publishes: its receipt, and the recorded size and
+  digest of every published file. Files the receipt does not name are
+  ignored. Stages saved by earlier versions are not reused.
+- A release reads public state once, and asks one question for every unit's
+  remaining targets; the yes covers exactly those. Right before publishing a
+  target, rk reads it again (skipping one another run published since),
+  checks the staged bytes it publishes, publishes, and reads the result back.
+  The re-checks of public state, the signing baseline, the repository and
+  destination settings at a dozen boundaries are gone, with `RK-DEST-001`,
+  `RK-AUTH-003`, `RK-SIGN-013` and `RK-STAGE-004`.
+  - The release tag is made on the staged commit, not on whatever HEAD is by
+    then.
+  - rk signs a release tag when `tag.gpgSign` asks it to, or earlier release
+    tags are signed, as git does. A signing key alone no longer signs tags.
+  - rk signs in to pub.dev and GitHub once a run, after the yes, and no
+    longer logs out of a pub session it created.
+  - Recovering a Homebrew formula without its stage checks the archives
+    GitHub serves against the release manifest the tag binds, before pushing.
+- A repository's units stage side by side, from one read of the commit, and
+  each Pub package resolves and archives in one `pub publish --to-archive`. A
+  fresh stage of Fleury's four packages takes about 12s, down from 28s, and
+  reusing their stages about 1.5s.
+- `rk stage` no longer needs HEAD on origin; only the tag `rk release` pushes
+  does.
+- `rk status` shows a package another unit in the repository releases first
+  as "Releases after", not as an issue that prevents release. With several
+  units unfinished it suggests the repository-wide `rk stage` or `rk release`.
+- rk reads YAML with package:yaml, as Pub does: anchors, aliases and tags in a
+  pubspec are read rather than refused.
+- A unit keeps one stage of a source with no commit; each run's replaces the
+  last.
+- `rk clean` removes what it showed, and leaves alone an entry that changed
+  while you answered.
 - A stage holds only what rk publishes, and its receipt. It no longer keeps a
   copy of the repository's source, which rk hashed file by file several times
   a run: 148 MB for each of Fleury's packages. Producers build from the
@@ -19,7 +55,7 @@
   - A published package no longer makes a unit's original stage required
     (`RK-STAGE-005`). A stage is needed only while public bytes must match the
     ones it holds: assets on a GitHub release, a Homebrew formula that names
-    their hashes, or the release manifest a pushed tag records.
+    their hashes, or a release manifest that names them.
 - Stage packages with Pub's own dependency resolution. Pub resolves each
   package once, the way its consumers will, through its normal cache. A
   package from this repository whose version is not on pub.dev yet comes from

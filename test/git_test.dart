@@ -914,6 +914,7 @@ void main() {
       expectOk(
         await destination.create(
           tag,
+          commit: sourceCommit,
           signed: false,
           message:
               'tool 1.0.0\n\n'

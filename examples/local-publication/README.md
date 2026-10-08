@@ -73,5 +73,6 @@ These tests do not wait out either wall-clock deadline or qualify the normal
 rejection completion report. Existing lower-level tests cover normal failure
 reporting with injected native results and waits. Production polling is unchanged.
 
-Keep RK source files unchanged during a run: its implementation fingerprint is
-part of stage identity, so changing the tool correctly invalidates saved stages.
+Tests that run rk share one binary compiled from its sources
+(`test/support/compiled_rk.dart`); editing rk during a run makes later test
+files compile and run a different rk.

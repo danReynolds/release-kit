@@ -2,8 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'digest.dart';
-
 /// Builds the tar.gz a platform ships, byte-reproducibly.
 ///
 /// Determinism is a requirement rather than polish: without it, "is this the
@@ -65,29 +63,16 @@ class ArchiveBuilder {
     return header;
   }
 
-  /// Compresses [bytes] without recording a timestamp, so the same input
-  /// produces the same output on any day.
+  /// Compresses [bytes] without recording a timestamp or the machine that
+  /// built it, so the same input produces the same output on any day and
+  /// any host.
   static List<int> gzip(List<int> bytes) {
-    final deflated = ZLibCodec(raw: true, level: 9).encode(bytes);
-    return [
-      0x1f, 0x8b, // magic
-      0x08, // deflate
-      0x00, // no flags
-      0, 0, 0, 0, // mtime, zeroed
-      0x00, // no extra flags
-      0xff, // unknown OS, rather than the one that happened to build it
-      ...deflated,
-      ..._le32(Crc32.hash(bytes)),
-      ..._le32(bytes.length & 0xffffffff),
-    ];
+    final out = GZipCodec(level: 9).encode(bytes);
+    out.setRange(4, 8, const [0, 0, 0, 0]); // no timestamp
+    out[8] = 0x00; // no extra flags, rather than the compression level
+    out[9] = 0xff; // unknown OS, rather than the one that happened to build it
+    return out;
   }
-
-  static List<int> _le32(int value) => [
-    value & 0xff,
-    (value >> 8) & 0xff,
-    (value >> 16) & 0xff,
-    (value >> 24) & 0xff,
-  ];
 }
 
 class ArchiveEntry {

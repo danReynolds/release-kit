@@ -206,7 +206,7 @@ void main() {
     },
   );
 
-  test('review-time drift refuses before deleting the frozen set', () async {
+  test('an entry changed during review is left alone', () async {
     final repository = Directory('${scratch.path}/clean-partial')..createSync();
     final store = StageStore(repository.path);
     Directory('${store.path}/a-first').createSync(recursive: true);
@@ -231,14 +231,15 @@ void main() {
     ).run();
     final json = jsonDecode(output.report.encode(exit: code)) as Map;
 
+    // What was shown is removed; what changed is not what was shown.
     expect(code, 1);
     expect(json['cleanup'], {
       'root': store.repositoryRoot,
       'path': '.rk/work/stages',
       'found': 2,
-      'removed': 0,
+      'removed': 1,
     });
-    expect(Directory('${store.path}/a-first').existsSync(), isTrue);
+    expect(Directory('${store.path}/a-first').existsSync(), isFalse);
     expect(Directory(changed.path).existsSync(), isTrue);
   });
 
@@ -279,10 +280,7 @@ StageEntry _writeReceipt(StageStore store, {required bool complete}) {
   final receipt = StageReceipt(
     identity: identity,
     plan: plan,
-    steps: [
-      if (complete)
-        StageStep(name: 'complete-stage', inputs: const [], outputs: const []),
-    ],
+    steps: [if (complete) StageStep(name: 'complete-stage', outputs: const [])],
   );
   File('${directory.path}/stage.json').writeAsStringSync(receipt.encode());
   return StageEntry(name: identity.id, type: FileSystemEntityType.directory);

@@ -25,27 +25,32 @@ and local preparation still needed. Publication and staging are separate:
   published version when one is known.
 - **Does not match** means published content conflicts with the candidate.
 - **Could not be read** means a check failed; it is not evidence of absence.
-- **Staged** means the exact local stage's recorded bytes and current contracts
-  validate. A missing stage does not undo an existing publication.
+- **Staged** means the exact local stage's receipt records the producers this
+  rk runs, and every file it publishes still has its recorded size and digest.
+  A missing stage does not undo an existing publication.
 
 If the checkout has changed since its version was released, the report keeps
 that publication visible and explains that the source now differs. The release
 issue asks for a new version rather than replacing the existing tag.
 
 Issues include the affected target, evidence and a remedy. When the checks can
-identify a next step, the report prints the command. `rk release` rechecks its
-prerequisites before publishing; status itself changes nothing. A prerequisite
-is a version of a package from this repository that a unit needs and another
-unit publishes: `rk release` publishes it first when both are released
-together, and otherwise waits for it to be public.
+identify a next step, the report prints the command; with several units
+unfinished and no issues, that is the repository-wide `rk stage` or
+`rk release`. Status itself changes nothing. A prerequisite is a version of a
+package from this repository that a unit needs and another unit publishes.
+While it is not on pub.dev, status shows it under the unit as **Releases after**
+`core 0.3.0`, not as an issue: `rk release` publishes it first when both are
+released together, and a release of the dependent unit alone refuses until it
+is public.
 
 A version on pub.dev counts as published; status does not compare archives
-with it. The original stage is required only while public bytes must match the
-ones it holds: assets on a GitHub release, a Homebrew formula that names their
-hashes, or the release manifest a pushed tag records. Status reports
-`RK-STAGE-005` when that stage is missing. Otherwise it recommends fresh
-preparation for what remains when all public destinations are readable. An
-unread destination remains a blocking issue.
+with it. The original stage is required only while a unit's built release
+assets are partly public: the assets on a GitHub release, a Homebrew formula
+that names their hashes, or the release manifest a pushed tag records for them.
+Status reports `RK-STAGE-005` when that stage is missing. Otherwise it
+recommends fresh preparation for what remains when all public destinations are
+readable, even for a unit whose tag is already pushed. An unread destination
+remains a blocking issue.
 
 ## Scripts and redirected output
 

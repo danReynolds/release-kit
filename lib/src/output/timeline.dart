@@ -94,7 +94,7 @@ final class RunTimeline {
   );
 
   /// The closing line on a terminal, such as
-  /// `Done in 2m 31s · checking stages 31s · staging 1m 58s`, or null when
+  /// `Done in 2m 31s · preparing 2s · staging 2m 29s`, or null when
   /// the run took under ten seconds, quick enough that nobody wondered where
   /// the time went. Phases under a second are left out.
   String? summaryLine() {

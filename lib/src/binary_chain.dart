@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'builds/capability.dart';
 import 'builds/dart_cli.dart';
-import 'builds/launcher_compiler.dart';
 import 'engine/assets.dart';
 import 'engine/checklist.dart';
 import 'engine/diagnostic.dart';
@@ -54,9 +53,6 @@ class BinaryChain {
     required this.repositoryRoot,
     required this.capabilities,
     this.compilerExecutable = 'dart',
-    this.runtimeSha256,
-    this.runtimeLicenseSha256,
-    this.launcherCompiler,
     this.stage,
   });
 
@@ -66,9 +62,6 @@ class BinaryChain {
   final String repositoryRoot;
   final HostCapabilities capabilities;
   final String compilerExecutable;
-  final String? runtimeSha256;
-  final String? runtimeLicenseSha256;
-  final LauncherCompiler? launcherCompiler;
   final ReleaseStage? stage;
 
   // ---- workspace-internal names ----
@@ -126,9 +119,6 @@ class BinaryChain {
           tools: tools,
           capabilities: capabilities,
           compilerExecutable: compilerExecutable,
-          runtimeSha256: runtimeSha256,
-          runtimeLicenseSha256: runtimeLicenseSha256,
-          launcherCompiler: launcherCompiler,
         ).build(
           platform: platform,
           entryPoint: 'bin/$executable.dart',

@@ -115,7 +115,10 @@ class Registry implements RegistryReader {
   /// ships rather than against a fake that hand-writes the answer.
   final bool secure;
 
-  final _cache = <String, RegistryPackage?>{};
+  /// Lookups by package, kept from the first ask: reads of one package that
+  /// overlap share one request. A failed read is forgotten, so the next ask
+  /// tries again.
+  final _cache = <String, Future<RegistryPackage?>>{};
 
   static const _acceptV2 = 'application/vnd.pub.v2+json';
   static const _userAgent =
@@ -125,10 +128,18 @@ class Registry implements RegistryReader {
   /// throwing [RegistryUnavailable] when rk could not find out.
   @override
   Future<RegistryPackage?> lookup(String name) async {
-    if (_cache.containsKey(name)) return _cache[name];
+    final read = _cache[name] ??= _lookup(name);
+    try {
+      return await read;
+    } on Object {
+      if (identical(_cache[name], read)) _cache.remove(name);
+      rethrow;
+    }
+  }
 
+  Future<RegistryPackage?> _lookup(String name) async {
     final decoded = await _read('/api/packages/$name', name);
-    if (decoded == null) return _cache[name] = null;
+    if (decoded == null) return null;
     try {
       final entries = decoded['versions'];
       if (entries is! List) {
@@ -142,7 +153,7 @@ class Registry implements RegistryReader {
         if (published != null) versions.add(published);
       }
 
-      return _cache[name] = RegistryPackage(name: name, versions: versions);
+      return RegistryPackage(name: name, versions: versions);
     } on RegistryUnavailable {
       rethrow;
     } on Object catch (error) {

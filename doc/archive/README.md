@@ -14,3 +14,13 @@ other documents in [`doc/`](..).
   [native evidence](dependency-staging-native-proof.md): rk's own dependency
   resolution and archive staging, replaced by
   [practical staging](../practical-staging.md).
+- The [development plan](plan.md) rk was built against, phase by phase.
+- Plans and qualification records for work since finished:
+  [target progress](target-progress-plan.md),
+  [init targets and artifacts](init-target-artifact-plan.md),
+  [installations](installation-plan.md) and their
+  [qualification](installation-qualification.md),
+  [local publication qualification](local-publication-qualification-plan.md),
+  [Dart bundle verification](dart-bundle-verification.md), and the
+  [production alpha](production-alpha-plan.md) with its
+  [0.1.4 receipt](production-alpha-receipt.md).

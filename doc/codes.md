@@ -9,11 +9,11 @@ They are declared where they fire, not in a central table — each producer
 names its own, and all are reported in one pass. This index exists because
 search cost is not a failure but an unindexed vocabulary is.
 
-Hand-maintained, and checked both ways by `dart run tool/validate.dart`: a
+Hand-maintained, and checked both ways by `test/codes_index_test.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-168 codes across 29 families.
+164 codes across 28 families.
 
 
 ## RK-AUTH — Authorization
@@ -22,7 +22,6 @@ fails, and the count below is checked against the rows.
 |---|---|---|
 | `RK-AUTH-001` | nobody is here to authorize this release | `lib/src/commands/release_publication_coordinator.dart` |
 | `RK-AUTH-002` | the release was not authorized | `lib/src/commands/release_publication_coordinator.dart` |
-| `RK-AUTH-003` | reviewed release inputs or disclosures changed, or omitted public work grew | `lib/src/commands/release_publication_coordinator.dart` |
 
 ## RK-BREW — The Homebrew tap
 
@@ -115,12 +114,6 @@ fails, and the count below is checked against the rows.
 | `RK-CONF-043` | assets must name distinct files inside the build's output | `lib/src/engine/config.dart` |
 | `RK-CONF-044` | a project declares build and assets together, and not with binary_platforms | `lib/src/engine/config.dart` |
 | `RK-CONF-045` | a unit that builds release assets must publish a GitHub release | `lib/src/engine/config.dart` |
-
-## RK-DEST — Effective publication destinations
-
-| code | says | declared in |
-|---|---|---|
-| `RK-DEST-001` | a target changed destination while preparing publication | `lib/src/commands/release_publication_coordinator.dart` |
 
 ## RK-DART — Dart-specific facts
 
@@ -226,13 +219,14 @@ meaning and is not reused.
 | `RK-PUB-017` | Pub cannot resolve $package the way its consumers do | `lib/src/targets/pub_dev/package_stage.dart` |
 
 RK-PUB-002 (the consumer-resolve probe) and RK-PUB-004 are retired historical
-meanings and are not reused.
+meanings and are not reused. So are RK-AUTH-003, RK-DEST-001, RK-SIGN-013 and
+RK-STAGE-004, the checks a release once repeated between staging and each act.
 
 ## RK-REL — The release run
 
 | code | says | declared in |
 |---|---|---|
-| `RK-REL-001` | ${first.summary}:  ${state.detail ?? state.verdict.name} | `lib/src/commands/release.dart`, `lib/src/commands/release_publication_coordinator.dart`, `lib/src/commands/status.dart`, `lib/src/engine/inspect.dart`, `lib/src/targets/git_tag/module.dart`, `lib/src/targets/github_release/module.dart`, `lib/src/targets/homebrew/module.dart`, `lib/src/targets/pub_dev/module.dart` |
+| `RK-REL-001` | ${first.summary}:  ${state.detail ?? state.verdict.name} | `lib/src/commands/release_publication_coordinator.dart`, `lib/src/commands/status.dart`, `lib/src/engine/inspect.dart`, `lib/src/targets/git_tag/module.dart`, `lib/src/targets/github_release/module.dart`, `lib/src/targets/homebrew/module.dart`, `lib/src/targets/pub_dev/module.dart` |
 | `RK-REL-003` | a public target could not be proven after rk acted | `lib/src/commands/release_publication_coordinator.dart`, `lib/src/targets/target_module.dart` |
 | `RK-REL-004` | a consumer availability check could not run | `lib/src/commands/release_publication_coordinator.dart` |
 
@@ -277,7 +271,6 @@ meanings and are not reused.
 | `RK-SIGN-010` | no certificate for the team the published release names | `lib/src/commands/release_stage_coordinator.dart` |
 | `RK-SIGN-011` | several certificates for the published team | `lib/src/commands/release_stage_coordinator.dart` |
 | `RK-SIGN-012` | the selected signing certificate fingerprint could not be read | `lib/src/commands/release_stage_coordinator.dart` |
-| `RK-SIGN-013` | the published signing identity changed after staging | `lib/src/commands/release_stage_coordinator.dart` |
 
 ## RK-SRC — Source binding
 
@@ -291,11 +284,10 @@ meanings and are not reused.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-STAGE-001` | the release stage could not be located or replaced safely | `lib/src/commands/release.dart`, `lib/src/commands/release_stage_coordinator.dart`, `bin/rk.dart` |
-| `RK-STAGE-002` | the reviewed release stage no longer validates | `lib/src/commands/release_stage_coordinator.dart`, `lib/src/commands/status.dart` |
+| `RK-STAGE-001` | the release stage could not be located or replaced safely | `lib/src/commands/release.dart`, `lib/src/commands/release_stage_coordinator.dart` |
+| `RK-STAGE-002` | the reviewed release stage no longer validates, or changed before an act | `lib/src/commands/release_publication_coordinator.dart`, `lib/src/commands/release_stage_coordinator.dart`, `lib/src/commands/status.dart` |
 | `RK-STAGE-003` | committed release bytes could not be staged or did not remain valid | `lib/src/commands/release.dart`, `lib/src/commands/release_stage_coordinator.dart` |
-| `RK-STAGE-004` | the repository or canonical release plan changed after staging | `lib/src/commands/release_publication_coordinator.dart`, `lib/src/commands/release_stage_coordinator.dart` |
-| `RK-STAGE-005` | a recovery-critical partial release lost the exact stage or public recovery binding it still needs | `lib/src/commands/release.dart`, `lib/src/commands/release_publication_coordinator.dart`, `lib/src/commands/status.dart` |
+| `RK-STAGE-005` | a partial release of built assets lost the exact stage it needs, or the public inputs that let it finish without one changed | `lib/src/commands/release.dart`, `lib/src/commands/release_publication_coordinator.dart`, `lib/src/commands/status.dart` |
 | `RK-STAGE-006` | staged work is locked or its fixed path is unsafe | `bin/rk.dart` |
 
 ## RK-TAG — The tag
@@ -322,7 +314,7 @@ meanings and are not reused.
 |---|---|---|
 | `RK-WORK-001` | the staged workspace has no required target artifact | `lib/src/binary_chain.dart`, `lib/src/targets/github_release/module.dart`, `lib/src/targets/homebrew/formula_stage.dart` |
 
-## RK-YAML — The YAML subset
+## RK-YAML — A YAML file rk reads
 
 | code | says | declared in |
 |---|---|---|

@@ -333,6 +333,21 @@ publish = ["pub.dev"]
       );
     });
 
+    test('overlapping reads of one package share one request', () async {
+      body = '{"versions": [{"version": "1.0.0"}]}';
+      delay = const Duration(milliseconds: 50);
+      final reads = await Future.wait([
+        registry.lookup('keybay'),
+        registry.lookup('keybay'),
+        registry.lookup('keybay'),
+      ]);
+      expect(
+        [for (final package in reads) package!.latest!.version.canonical],
+        ['1.0.0', '1.0.0', '1.0.0'],
+      );
+      expect(requestUris, hasLength(1));
+    });
+
     test('an unreadable answer is not cached as a fact', () async {
       status = 500;
       await expectLater(

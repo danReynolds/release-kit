@@ -140,7 +140,7 @@ void main() {
   );
 
   test(
-    'loopback sessions require an exact native token and never public login/logout',
+    'loopback sessions require an exact native token and never public login',
     () async {
       final tools = ScriptedTools({
         'dart': ok('You have 1 token.\n${local.origin}/\n'),
@@ -150,12 +150,10 @@ void main() {
         tools,
         environment: {'PUB_HOSTED_URL': local.origin},
       );
-      expect(await session.established(ready), isTrue);
       expect(
         await session.acquire(ready, unit(), const []),
         isA<TargetReady>(),
       );
-      expect(await session.restore(ready), isNull);
       expect(tools.calls, everyElement(['dart', 'pub', 'token', 'list']));
     },
   );
@@ -175,11 +173,9 @@ void main() {
             );
           },
         );
-        expect(await session.established(ready), isFalse);
         final refused = await session.acquire(ready, unit(), const []);
         expect(refused, isA<TargetNotReady>());
         expect((refused as TargetNotReady).diagnostic.code, 'RK-PUB-007');
-        expect(await session.restore(ready), isNull);
         expect(tools.calls, everyElement(['dart', 'pub', 'token', 'list']));
       }
     },

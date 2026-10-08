@@ -142,8 +142,8 @@ Runs configured builds, signing, notarization, and package checks.
 May contact private services; does not ask for publication approval.
 
 $_unitHelp
-Omit the unit to prepare the whole repository in dependency order.
-A named unit may use a verified sibling stage or published dependencies.
+Omit the unit to prepare the whole repository; units build side by side.
+A named unit takes a sibling not yet on pub.dev from the same commit.
 Naming a unit never builds other units. No publication is performed.
 --timings print how long each phase and step took, once the run ends,
           and write it to .rk/timings.json as a trace
@@ -673,9 +673,6 @@ Future<int> _release(
       git: git,
       stageContracts: targets.stageContractResolver(resolution),
     );
-    Future<GitState> readGit() async => git.isBound
-        ? await GitState.read(context.root)
-        : GitState.unbound(context.root);
     const targetTools = SystemTools(timeout: Duration(minutes: 2));
     return await ReleaseCommand(
       resolution: resolution,
@@ -710,8 +707,6 @@ Future<int> _release(
           interactive && stdin.hasTerminal && stdout.hasTerminal,
       stageOnly: stageOnly,
       stageFor: stages.call,
-      refreshStage: stages.refresh,
-      refreshGit: readGit,
     ).run(only: unit);
   } finally {
     stageLock?.close();
@@ -919,24 +914,22 @@ Future<int> _plan(Output output, String? unit) async {
 /// target is valid topology even when this directory has no Git identity.
 /// Readiness belongs to status and release. Like release, a clean repository
 /// with a commit resolves from immutable HEAD while a dirty, unborn, or
-/// unbound repository gets one double-read byte snapshot. Bound Git identity
-/// is re-read before returning so topology and its displayed branch/commit
-/// cannot come from two moments.
+/// unbound repository gets one byte snapshot. Git is read once.
 Future<_Prepared> _selectPlanSource(
   SourceContext context,
   Output output,
 ) async {
-  final initialGit = context.git;
-  if (initialGit.worktreeStatusError != null) {
+  final git = context.git;
+  if (git.worktreeStatusError != null) {
     _showPlanSourceProblem(
       output,
       context,
-      initialGit.uncommittedProblem() ??
+      git.uncommittedProblem() ??
           Diagnostic(
             code: 'RK-GIT-008',
             message: 'the worktree state could not be read',
             remedy:
-                '${initialGit.worktreeStatusError}\n'
+                '${git.worktreeStatusError}\n'
                 '`git status --porcelain` must succeed before rk can select '
                 'the source for this plan.',
           ),
@@ -946,10 +939,10 @@ Future<_Prepared> _selectPlanSource(
 
   final SourceTree selected;
   try {
-    selected = !initialGit.isBound
+    selected = !git.isBound
         ? _captureUnboundPlanSource(context.root)
-        : initialGit.isClean && initialGit.head.isNotEmpty
-        ? GitCommitSourceTree(context.root, initialGit.head)
+        : git.isClean && git.head.isNotEmpty
+        ? GitCommitSourceTree(context.root, git.head)
         : FrozenSourceTree.capture(GitWorktreeSourceTree(context.root));
   } on SourceUnreadable catch (error) {
     _showPlanSourceProblem(
@@ -999,49 +992,14 @@ Future<_Prepared> _selectPlanSource(
       );
     }
   }
-  var selectedGit = initialGit;
-  if (initialGit.isBound) {
-    selectedGit = await GitState.read(context.root);
-    if (selectedGit.worktreeStatusError != null) {
-      _showPlanSourceProblem(
-        output,
-        context,
-        selectedGit.uncommittedProblem() ??
-            Diagnostic(
-              code: 'RK-GIT-008',
-              message: 'the worktree state could not be re-read',
-              remedy:
-                  '${selectedGit.worktreeStatusError}\n'
-                  '`git status --porcelain` must remain readable while rk '
-                  'selects the source for this plan.',
-            ),
-      );
-      return _Prepared.stopped(ExitCodes.refused);
-    }
-    if (!_samePlanGitIdentity(initialGit, selectedGit)) {
-      _showPlanSourceProblem(
-        output,
-        context,
-        const Diagnostic(
-          code: 'RK-SRC-003',
-          message: 'Git changed while the release plan was being captured',
-          remedy:
-              'Stop concurrent edits or checkouts, then run rk plan '
-              'again.',
-        ),
-      );
-      return _Prepared.stopped(ExitCodes.refused);
-    }
-  }
-
   if (diagnostics.isNotEmpty) {
     output.repository(
       name: context.root.split('/').last,
-      branch: selectedGit.branch,
-      commit: selectedGit.hasCommit ? selectedGit.shortHead : null,
-      uncommitted: selectedGit.isBound ? selectedGit.uncommitted.length : null,
-      head: selectedGit.hasCommit ? selectedGit.head : null,
-      remote: selectedGit.originUrl,
+      branch: git.branch,
+      commit: git.hasCommit ? git.shortHead : null,
+      uncommitted: git.isBound ? git.uncommitted.length : null,
+      head: git.hasCommit ? git.head : null,
+      remote: git.originUrl,
     );
     output.blank();
     output.problems(diagnostics.found);
@@ -1054,7 +1012,7 @@ Future<_Prepared> _selectPlanSource(
   if (resolution == null) {
     _showPlanSourceProblem(
       output,
-      SourceContext(tree: selected, git: selectedGit),
+      SourceContext(tree: selected, git: git),
       const Diagnostic(
         code: 'RK-SRC-003',
         message: 'the selected source could not be resolved',
@@ -1063,10 +1021,7 @@ Future<_Prepared> _selectPlanSource(
     );
     return _Prepared.stopped(ExitCodes.refused);
   }
-  return _Prepared.ready(
-    resolution,
-    SourceContext(tree: selected, git: selectedGit),
-  );
+  return _Prepared.ready(resolution, SourceContext(tree: selected, git: git));
 }
 
 /// Freezes only the files plan resolution consumes in an unbound directory.
@@ -1107,21 +1062,6 @@ FrozenSourceTree _captureUnboundPlanSource(String root) {
     'the unbound source',
     'the file changed while plan inputs were being selected',
   );
-}
-
-bool _samePlanGitIdentity(GitState before, GitState after) =>
-    after.worktreeStatusError == null &&
-    before.head == after.head &&
-    before.branch == after.branch &&
-    before.originUrl == after.originUrl &&
-    _sameStrings(before.uncommitted, after.uncommitted);
-
-bool _sameStrings(List<String> before, List<String> after) {
-  if (before.length != after.length) return false;
-  for (var index = 0; index < before.length; index++) {
-    if (before[index] != after[index]) return false;
-  }
-  return true;
 }
 
 void _showNoReleaseConfig(Output output, String root) {

@@ -9,6 +9,7 @@ import '../../engine/release_manifest.dart';
 import '../../engine/resolve.dart';
 import '../../engine/targets.dart';
 import '../../engine/verdict.dart';
+import '../../transforms/digest.dart';
 import '../../output/output.dart';
 import '../../output/progress.dart';
 import '../github_release/client.dart';
@@ -136,6 +137,28 @@ final class HomebrewTargetModule extends TargetModule {
         return publicFormula;
       }
       return current.inspection;
+    }
+
+    // Without its stage, the formula is rendered from what the forge serves
+    // now. The release manifest the tag binds names the formula the release
+    // staged, so a rendering that differs means the public archives changed.
+    final historical = await _historicalFormulaIdentity(
+      context,
+      unit,
+      project: project,
+      tap: tap,
+      formulaPath: 'Formula/$name',
+    );
+    if (!historical.inspection.isExact) return historical.inspection;
+    final rendered = Sha256.hex(current.bytes!);
+    if (rendered != historical.formulaSha256) {
+      return Inspection.conflict(
+        'the GitHub Release archives no longer match its release manifest',
+        evidence: {
+          'formula sha256':
+              'rendered $rendered, manifest ${historical.formulaSha256}',
+        },
+      );
     }
 
     return destination.inspect(
@@ -334,10 +357,10 @@ final class HomebrewTargetModule extends TargetModule {
   }
 
   @override
-  String? stageRecoveryBinding(Inspection inspected) =>
+  bool recoversWithoutStage(Inspection inspected) =>
       switch (inspected.authority) {
-        HomebrewUpdateAuthority(:final recoveryBinding) => recoveryBinding,
-        _ => null,
+        HomebrewUpdateAuthority(:final replacement) => replacement != null,
+        _ => false,
       };
 
   @override

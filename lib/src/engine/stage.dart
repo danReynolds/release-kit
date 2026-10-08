@@ -5,10 +5,9 @@ import 'atomic_file.dart';
 import '../transforms/digest.dart';
 import 'canonical_json.dart';
 import 'workspace.dart';
-import 'timings.dart';
 
 /// Increment this only when the identity or receipt contract changes.
-const stageSchemaVersion = 14;
+const stageSchemaVersion = 15;
 
 /// The content address of one resolved release plan at one exact Git tree.
 class StageIdentity {
@@ -20,9 +19,9 @@ class StageIdentity {
     required this.runId,
   });
 
-  /// Canonicalizes [resolvedPlan] before hashing it. The caller must include
-  /// every release-affecting choice in that value, including targets,
-  /// platforms, signing policy, and toolchain identity.
+  /// Canonicalizes [resolvedPlan] before hashing it: what the stage is built
+  /// from beyond the commit's bytes, the unit's configuration and its origin
+  /// (see `stagePlanFor`). The tools that build it are left out.
   factory StageIdentity.forPlan({
     required String headCommit,
     required String headTree,
@@ -165,59 +164,7 @@ class StageDirectory {
   String resolve(String relativePath) =>
       _join(path, StagePath.segments(relativePath));
 
-  /// What the stage looks like right now, without reading a byte of it.
-  ///
-  /// Verifying a stage means re-reading and re-hashing everything in it,
-  /// and a release asks whether the stage is still good dozens of times
-  /// over a run in which nothing touched it. This is the cheap half of that
-  /// question — the half that can say "nothing moved" — so the expensive
-  /// half only runs when something did.
-  ///
-  /// Every entry contributes its path, kind, size, mode, and both
-  /// timestamps. Modification time alone would not be enough: whoever
-  /// rewrote a file can restore it. Change time is set by the kernel on
-  /// every write and the writer cannot set it back, so a rewrite that keeps
-  /// the same size and modification time still shows up here.
-  ///
-  /// That argument is only as good as the clock rk can read. APFS and ext4
-  /// keep nanoseconds, but Dart reports both timestamps to the millisecond,
-  /// and a volume that keeps them to the second — HFS+, some network mounts
-  /// — is coarser still. A rewrite of exactly the same length inside one
-  /// tick does not show, and the guarantee degrades to size and mode. rk's
-  /// threat model is the operator's own machine, and everything a release
-  /// publishes was hashed at least once with nothing else holding the stage
-  /// lock.
-  ///
-  /// A missing directory has a fingerprint too — the empty one — so the
-  /// answer for a stage that does not exist is as cacheable as any other.
-  /// Something else at the path, a file or a dangling link, has its own, so
-  /// an answer about it is never taken for an answer about nothing there.
-  String fingerprint() => Timings.enabled
-      ? Timings.timeTally('stage fingerprint', _fingerprint)
-      : _fingerprint();
-
-  String _fingerprint() {
-    final directory = Directory(path);
-    if (!directory.existsSync()) {
-      final type = FileSystemEntity.typeSync(path, followLinks: false);
-      return type == FileSystemEntityType.notFound
-          ? 'absent'
-          : 'not a directory: $type';
-    }
-    final entries = directory.listSync(recursive: true, followLinks: false)
-      ..sort((left, right) => left.path.compareTo(right.path));
-    final described = StringBuffer();
-    for (final entry in entries) {
-      described
-        ..write(entry.path.substring(path.length))
-        ..write('\u0000')
-        ..write(_describe(entry.statSync()))
-        ..write('\n');
-    }
-    return described.toString();
-  }
-
-  /// One entry's cheap description: what a rewrite cannot leave untouched.
+  /// One file's cheap description: what a rewrite cannot leave untouched.
   static String _describe(FileStat stat) => [
     stat.type,
     stat.size,
@@ -226,55 +173,33 @@ class StageDirectory {
     stat.changed.microsecondsSinceEpoch,
   ].join('\u0000');
 
-  /// How each file looked when its bytes were last read and digested.
-  ///
-  /// Empty until something in this process actually hashes a file, so the
-  /// first verification of anything always reads it.
-  final Map<String, String> _digested = {};
+  /// How each file looked when this process last read and digested it, by
+  /// absolute path, shared by every view of every stage.
+  static final Map<String, String> _digested = {};
 
   /// Records that [relativePath] was read and digested — provided it held
-  /// still while it was being read.
-  ///
-  /// [beforeReading] is how the file looked when the read began. A file
-  /// rewritten between then and now was digested as bytes it no longer has,
-  /// and remembering that would let a later confirmation vouch for bytes
-  /// nobody digested. Such a file is not remembered at all, so the next
-  /// confirmation reads it again.
+  /// still while it was being read. A file rewritten during the read is not
+  /// remembered, so the next check reads it again.
   void noteDigested(
     String relativePath,
     FileStat beforeReading,
     String sha256,
   ) {
-    final settled = _describe(File(resolve(relativePath)).statSync());
+    final resolved = resolve(relativePath);
+    final settled = _describe(File(resolved).statSync());
     if (settled != _describe(beforeReading)) return;
-    _digested[relativePath] = '$settled\u0000$sha256';
+    _digested[resolved] = '$settled\u0000$sha256';
   }
 
   /// Whether [relativePath] is still the file this process digested to
-  /// [sha256].
-  ///
-  /// Both halves are needed. A digest that no longer matches the file is
-  /// re-read, which is the point; but so is a file that has not moved since
-  /// a digest of *different* bytes — that is what a failed confirmation
-  /// leaves behind, and answering it from memory would let the second
-  /// confirmation pass what the first one refused.
-  ///
-  /// The trade [fingerprint] rests on, narrowed to one file — and it is
-  /// the weaker half of it. A rewrite moves the size, the mode, or a
-  /// timestamp, and change time is the kernel's to set rather than the
-  /// writer's. But [fingerprint] also stats the directories above a file,
-  /// so a path unlinked and recreated moves its parent even when the new
-  /// file's own stat collides; nothing here looks up. What this cannot see
-  /// is a rewrite landing in the same microsecond as the digest, at the
-  /// same size and mode — and on a volume whose timestamps are coarser
-  /// than that, correspondingly more.
+  /// [sha256]: its size, mode and both timestamps are unchanged. Change time
+  /// is the kernel's to set, so a rewrite shows; within one run that is
+  /// enough to trust rk's own writes.
   bool digestStillStands(String relativePath, String sha256) {
-    final when = _digested[relativePath];
-    if (when == null) return false;
     final resolved = resolve(relativePath);
-    // A path that has become a link is not the file that was digested,
-    // whatever it now points at — and stat would describe the target.
-    // Reading it again is what refuses it, as it always did.
+    final when = _digested[resolved];
+    if (when == null) return false;
+    // A path that has become a link is not the file that was digested.
     if (FileSystemEntity.typeSync(resolved, followLinks: false) !=
         FileSystemEntityType.file) {
       return false;

@@ -74,9 +74,8 @@ abstract base class TargetModule {
   Future<TargetHistory?> inspectHistory(
     TargetReadContext context,
     ResolvedUnit unit,
-    TargetPlan target, {
-    bool fresh = false,
-  }) async => null;
+    TargetPlan target,
+  ) async => null;
 
   /// Explains one conflicting public observation in this target's terms.
   ///
@@ -101,28 +100,9 @@ abstract base class TargetModule {
     ResolvedUnit unit,
   );
 
-  /// Acquires or refreshes the native publication session after the exact
-  /// stage exists and before authorization.
-  ///
-  /// Returning false means the module already reported a refusal. Every
-  /// module chooses explicitly, including destinations whose native tool has
-  /// no separate session-acquisition command.
+  /// The native publication session this target needs, acquired once per
+  /// run after the yes and before the first act that needs it.
   TargetSessionProvider? get authentication => null;
-
-  /// The effective destination bound before staging and checked after native
-  /// credential acquisition. It is never serialized: an origin URL can carry
-  /// credentials even though GitState normally redacts it for reports.
-  String destinationBinding(
-    TargetReadinessContext context,
-    ResolvedUnit unit,
-    List<TargetPlan> targets,
-  ) {
-    final coordinates = targets.map((item) => item.coordinate).toList()..sort();
-    return [
-      if (target.requiresGit) context.git.originUrl ?? 'unbound',
-      ...coordinates,
-    ].join('\n');
-  }
 
   Future<TargetActOutcome> publish(
     TargetReleaseContext context,
@@ -210,12 +190,10 @@ abstract base class TargetModule {
     required TargetPlan target,
   }) => null;
 
-  /// Stable, non-secret identity of the public inputs authorizing recovery.
-  ///
-  /// Core freezes this before consent and compares it with the final
-  /// observation immediately before the act. The adapter retains the actual
-  /// authority and payload; orchestration needs only equality.
-  String? stageRecoveryBinding(Inspection inspected) => null;
+  /// Whether [inspected] carries what this target needs to publish without
+  /// its stage: authenticated public inputs a moving channel can finish
+  /// from once the local stage is gone.
+  bool recoversWithoutStage(Inspection inspected) => false;
 }
 
 /// One typed read of a target's independent public history.
@@ -382,7 +360,6 @@ StageStep _recordTargetStageWarnings(
   if (recorded.isEmpty) return step;
   return StageStep(
     name: step.name,
-    inputs: step.inputs,
     outputs: step.outputs,
     evidence: {
       ...step.evidence,
@@ -607,32 +584,6 @@ abstract base class TargetSessionProvider {
     ResolvedUnit unit,
     List<TargetPlan> targets,
   );
-
-  /// Whether a usable session already exists, before [acquire] is called.
-  ///
-  /// Null means the question could not be answered, which is never read as
-  /// either answer: rk leaves a session it cannot account for alone. Providers
-  /// that keep no local session say nothing here.
-  Future<bool?> established(TargetReadinessContext context) async => null;
-
-  /// Ends a session that this run created, returning what to disclose.
-  ///
-  /// Only called when [established] answered false before [acquire] — a machine
-  /// that was already signed in is left signed in, because a release should not
-  /// change how the operator's tools are configured.
-  Future<String?> restore(TargetReadinessContext context) async => null;
-}
-
-final class TargetSessionRequirement {
-  const TargetSessionRequirement({
-    required this.key,
-    required this.provider,
-    required this.targets,
-  });
-
-  final String key;
-  final TargetSessionProvider provider;
-  final List<TargetPlan> targets;
 }
 
 /// Provider-neutral facts returned by one target act.

@@ -4,6 +4,7 @@ import 'dart:io';
 
 import '../rk_process.dart';
 import 'pub_registry_fixture.dart';
+import 'compiled_rk.dart';
 
 /// Runs RK's shared command entry point and the unchanged Dart SDK frontend.
 ///
@@ -151,12 +152,9 @@ final class NativePublicationFixture {
     String? workingDirectory,
     Future<void>? interruptWhen,
   }) async {
-    final result = await runDart(
-      [
-        '--packages=$_project/.dart_tool/package_config.json',
-        '$_project/test/support/local_pub_rk.dart',
-        ...arguments,
-      ],
+    final result = await runProcess(
+      compiledLocalPubRk(),
+      arguments,
       workingDirectory: workingDirectory,
       timeout: const Duration(minutes: 3),
       interruptWhen: interruptWhen,

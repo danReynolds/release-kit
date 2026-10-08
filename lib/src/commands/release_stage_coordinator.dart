@@ -14,11 +14,9 @@ import '../engine/producers.dart';
 import '../engine/publish_target.dart';
 import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
-import '../engine/stage.dart';
 import '../engine/stage_contract.dart';
 import '../engine/stage_board.dart';
 import '../engine/stage_inspection.dart';
-import '../engine/stage_history.dart';
 import '../engine/stage_receipt.dart';
 import '../engine/stage_source.dart';
 import '../engine/targets.dart';
@@ -31,14 +29,12 @@ import '../transforms/macos.dart';
 import 'release_preparation.dart';
 import 'release_progress.dart';
 
-/// Owns the private stage boundary and the ambient facts that authorize its
-/// reuse at a later public boundary.
+/// Owns the private stage boundary: building, resuming or reusing the stage
+/// a release publishes from.
 final class ReleaseStageCoordinator {
   const ReleaseStageCoordinator({
     required this.initialGit,
     required this.output,
-    required this.refreshGit,
-    required this.refreshStage,
     required this.tools,
     required this.capabilities,
     required this.stageFor,
@@ -47,8 +43,6 @@ final class ReleaseStageCoordinator {
 
   final GitState initialGit;
   final Output output;
-  final Future<GitState> Function() refreshGit;
-  final ReleaseStage Function(ResolvedUnit unit, GitState git) refreshStage;
   final Tools tools;
   final HostCapabilities capabilities;
   final ReleaseStage Function(ResolvedUnit unit) stageFor;
@@ -69,19 +63,6 @@ final class ReleaseStageCoordinator {
         code: 'RK-STAGE-001',
         message: 'the release stage path is unsafe',
         remedy: unsafe.toString(),
-      );
-    }
-
-    if (inspected.receipt?.plan != null &&
-        inspected.receipt!.steps.isEmpty &&
-        !inspected.planRecorded) {
-      return Diagnostic(
-        code: 'RK-STAGE-003',
-        message: 'the interrupted stage could not be resumed safely',
-        remedy:
-            '${inspected.issues.join('\n')}\n'
-            'Resolve the recorded residue, then re-run '
-            'rk stage ${unit.name}. The frozen receipt has been preserved.',
       );
     }
 
@@ -106,117 +87,12 @@ final class ReleaseStageCoordinator {
     return null;
   }
 
-  bool stageStillValid(
-    ReleaseStage stage,
-    ResolvedUnit unit, {
-    required String changed,
-    required HaltKind halt,
-  }) {
-    final inspected = stage.inspect();
-    if (inspected.reusable) return true;
-    output.problem(
-      Diagnostic(
-        code: 'RK-STAGE-002',
-        message: 'the reviewed release stage changed $changed',
-        remedy:
-            '${inspected.issues.join('\n')}\n'
-            'rebuild it explicitly: rk stage ${unit.name}',
-      ),
-    );
-    output.halt(halt);
-    return false;
-  }
-
-  /// Re-reads every ambient input that authorizes reuse of [stage].
-  Future<bool> contextStillValid(
-    ReleaseStage stage,
-    ResolvedUnit unit, {
-    required String changed,
-    required HaltKind halt,
-  }) async {
-    final drift = <String>[];
-    final GitState current;
-    try {
-      current = await refreshGit();
-    } on Object catch (error) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-STAGE-004',
-          message: 'the release context could not be refreshed $changed',
-          remedy:
-              'restore a readable repository, then re-run '
-              'rk stage ${unit.name}',
-          evidence: '$error',
-        ),
-      );
-      output.halt(halt);
-      return false;
-    }
-
-    if (current.isBound != initialGit.isBound) {
-      drift.add('the source binding changed');
-    } else if (initialGit.isBound && current.head != initialGit.head) {
-      drift.add(
-        'HEAD is ${current.shortHead}; staged HEAD was '
-        '${initialGit.shortHead}',
-      );
-    }
-    if (initialGit.isBound && current.headTree != initialGit.headTree) {
-      drift.add('the HEAD tree changed');
-    }
-    if (initialGit.isBound && !current.isClean) {
-      final detail =
-          current.worktreeStatusError ??
-          (current.uncommitted.isEmpty
-              ? 'the worktree is not clean'
-              : 'uncommitted: ${current.uncommitted.join(', ')}');
-      drift.add(detail);
-    }
-    if (unit.publish.contains(PublishTarget.gitTag) && !current.headIsPushed) {
-      drift.add('HEAD is no longer present on a remote branch');
-    }
-    if (initialGit.isBound && current.originUrl != initialGit.originUrl) {
-      drift.add(
-        'origin is ${current.originUrl ?? 'unreadable'}; staged origin '
-        'was ${initialGit.originUrl ?? 'unreadable'}',
-      );
-    }
-    if (unit.publish.contains(PublishTarget.gitTag) &&
-        current.signingConfigured != initialGit.signingConfigured) {
-      drift.add('the Git tag-signing policy changed');
-    }
-    try {
-      final refreshed = refreshStage(unit, current);
-      if (refreshed.directory.identity.id != stage.directory.identity.id) {
-        drift.add(
-          'the release plan now resolves to '
-          '${refreshed.directory.identity.id}; the reviewed stage is '
-          '${stage.directory.identity.id}',
-        );
-      }
-    } on Object catch (error) {
-      drift.add('the release plan could not be resolved: $error');
-    }
-
-    if (drift.isEmpty) return true;
-    output.problem(
-      Diagnostic(
-        code: 'RK-STAGE-004',
-        message: 'the repository or release plan changed $changed',
-        remedy:
-            '${drift.join('\n')}\n'
-            'restore those inputs or review a replacement stage: '
-            'rk stage ${unit.name}',
-      ),
-    );
-    output.halt(halt);
-    return false;
-  }
-
-  /// Produces or reuses the exact receipt-backed private stage. [fromSource]
-  /// names, for each Pub package, the repository packages it takes from
-  /// this source: see [TargetStageContext.fromSource].
-  Future<PreparedRelease?> prepare({
+  /// Settles what staging [unit] needs before its producers run: leftovers
+  /// of an interrupted run are cleared, and its signing identity is chosen.
+  /// Units do this one at a time, since choosing an identity may ask the
+  /// operator. [fromSource] names, for each Pub package, the repository
+  /// packages it takes from this source: see [TargetStageContext.fromSource].
+  Future<UnitStaging?> begin({
     required ResolvedUnit unit,
     required Checklist checklist,
     required List<TargetPlan> targets,
@@ -226,35 +102,54 @@ final class ReleaseStageCoordinator {
     required List<TargetClaim> claims,
     Map<String, Map<String, String>> fromSource = const {},
   }) async {
-    final producerSteps = checklist.steps.where((step) {
-      return !step.isPublic &&
-          step.kind != StepKind.prerequisite &&
-          step.kind != StepKind.completeStage;
-    }).toList();
-    final targetStagesByName = {
-      for (final targetStage in targetStages)
-        targetStage.contract.step.name: targetStage,
-    };
-    final outputsByProducer = <String, Set<String>>{
-      for (final step in producerSteps)
-        receiptNameFor(step): contractFor(unit, step).outputs.keys.toSet(),
-      for (final entry in targetStagesByName.entries)
-        entry.key: entry.value.contract.step.outputs.keys.toSet(),
-    };
-    inspected = _recoverInterruptedOutputs(
+    final staging = UnitStaging._(
+      unit: unit,
+      checklist: checklist,
+      targets: targets,
+      targetStages: targetStages,
+      stage: stage,
+      inspected: inspected,
+      claims: claims,
+      fromSource: fromSource,
+    );
+    _discardUnrecordedOutputs(
       stage,
       inspected,
-      outputsByProducer.values.expand((outputs) => outputs).toSet(),
+      staging.outputsByProducer.values.expand((outputs) => outputs).toSet(),
     );
-
     final inputs = await _prepareStageInputs(unit, inspected);
     if (inputs == null) return null;
-    final signing = inputs.signing;
-    final stageProgress = StageReleaseProgress(
-      output,
-      title: '${unit.name} ${unit.version} · staging',
-      board: StageBoard.forUnit(unit, targets, targetStages),
-    );
+    return staging.._signing = inputs.signing;
+  }
+
+  /// Produces or reuses the exact receipt-backed private stage [staging]
+  /// describes. Its rows go on [shared] when units stage side by side, and
+  /// on a board of its own otherwise.
+  Future<PreparedRelease?> complete(
+    UnitStaging staging, {
+    StageReleaseProgress? shared,
+  }) async {
+    final UnitStaging(
+      :unit,
+      :checklist,
+      :targets,
+      :targetStages,
+      :stage,
+      :inspected,
+      :claims,
+      :fromSource,
+      :signing,
+      :producerSteps,
+      :targetStagesByName,
+      :outputsByProducer,
+    ) = staging;
+    final stageProgress =
+        shared ??
+        StageReleaseProgress(
+          output,
+          title: '${unit.name} ${unit.version} · staging',
+          board: staging.board,
+        );
     final warnings = <_StageWarning>[];
     if (inspected.reusable) {
       stageProgress
@@ -318,19 +213,12 @@ final class ReleaseStageCoordinator {
         'Staging a temporary source snapshot; each run starts a new stage.',
         role: VisualRole.secondary,
       );
+      stage.discardEarlierUnboundStages();
     } else if (inspected.claimsCompletion) {
       output.say(
         'Rebuilding: the recorded stage no longer verifies.',
         role: VisualRole.secondary,
       );
-    } else {
-      final reasons = StageHistory.rebuildReasons(stage);
-      if (reasons.isNotEmpty) {
-        output.say(
-          'Rebuilding: ${reasons.join('; ')}.',
-          role: VisualRole.secondary,
-        );
-      }
     }
 
     final progress = <StageStep>[];
@@ -394,7 +282,6 @@ final class ReleaseStageCoordinator {
     }
     final laneSources = <String, ProducerLaneSource>{};
     final laneChains = <String, BinaryChain>{};
-    final activeTargets = <PublishTarget>{};
     final failures = <HaltKind>[];
 
     void record(StageStep recorded) {
@@ -510,7 +397,7 @@ final class ReleaseStageCoordinator {
           );
         }
         try {
-          record(_captureProducerStep(stage, step, progress, act));
+          record(_captureProducerStep(stage, step, act));
           return _StageWorkCompletion.succeeded(receiptName);
         } on Object catch (error) {
           stageProgress.fail(receiptName);
@@ -548,8 +435,6 @@ final class ReleaseStageCoordinator {
             .where(runnable.contains)
             .toList();
         for (final name in ready) {
-          final target = targetStagesByName[name]?.target.target;
-          if (target != null && !activeTargets.add(target)) continue;
           active[name] = runWork(name);
         }
         if (active.isEmpty && ready.isEmpty) {
@@ -564,8 +449,6 @@ final class ReleaseStageCoordinator {
       if (active.isEmpty) break;
       final result = await Future.any(active.values);
       active.remove(result.producer);
-      final target = targetStagesByName[result.producer]?.target.target;
-      if (target != null) activeTargets.remove(target);
       if (result.halt case final halt?) {
         failures.add(halt);
       } else {
@@ -641,43 +524,18 @@ final class ReleaseStageCoordinator {
     return PreparedRelease(claims: claims, signing: signing);
   }
 
-  /// Restores a valid receipt prefix after an interrupted producer left its
-  /// own declared output behind. Unknown paths and changed recorded bytes are
-  /// never cleaned here: either means the stage cannot be resumed safely.
-  StageInspection _recoverInterruptedOutputs(
+  /// Removes what an interrupted run's producers wrote but never recorded,
+  /// so they run again from a clean slate. Recorded outputs are kept.
+  void _discardUnrecordedOutputs(
     ReleaseStage stage,
     StageInspection inspected,
     Set<String> declaredOutputs,
   ) {
-    if (inspected.receipt?.complete != false ||
-        inspected.validProgress ||
-        inspected.planRecorded) {
-      return inspected;
-    }
-    final allowedExtras = <String>{};
-    for (final output in declaredOutputs) {
-      allowedExtras.add(output);
-      final parts = StagePath.segments(output);
-      for (var index = 1; index < parts.length; index++) {
-        allowedExtras.add(parts.take(index).join('/'));
-      }
-    }
-    final recoverable = inspected.issues.every(
-      (issue) =>
-          issue.kind == StageIssueKind.incompleteReceipt ||
-          (issue.kind == StageIssueKind.extraArtifact &&
-              issue.path != null &&
-              allowedExtras.contains(issue.path)),
-    );
-    if (!recoverable) return inspected;
+    if (!inspected.validProgress && !inspected.planRecorded) return;
     try {
       stage.discardUnrecordedOutputs(declaredOutputs);
-      final recovered = stage.inspect();
-      return recovered.validProgress || recovered.planRecorded
-          ? recovered
-          : inspected;
     } on Object {
-      return inspected;
+      // The producer that needs the path reports what it finds there.
     }
   }
 
@@ -695,33 +553,6 @@ final class ReleaseStageCoordinator {
       // run will inspect the leftover and either recover it or replace the
       // incomplete stage; cleanup cannot make publication less safe.
     }
-  }
-
-  /// Confirms that the public identity used to sign the reviewed stage has
-  /// not changed while staging and remote reads were in flight.
-  Future<bool> signingStillValid(
-    ResolvedUnit unit,
-    PreparedRelease prepared,
-  ) async {
-    final project = _macosProject(unit);
-    if (project == null) return true;
-    final refreshed = await _signingBaseline(unit, project);
-    if (!refreshed.ok) return false;
-    if (prepared.signing != null &&
-        refreshed.requirement == prepared.signing!.publishedRequirement) {
-      return true;
-    }
-    output.problem(
-      Diagnostic(
-        code: 'RK-SIGN-013',
-        message: 'the published signing identity changed after staging',
-        remedy:
-            'The reviewed signature was built against a different public '
-            'baseline. Rebuild it explicitly: rk stage ${unit.name}.',
-      ),
-    );
-    output.halt(HaltKind.beforeActing);
-    return false;
   }
 
   List<_StageWarning> _recordedStageWarnings(
@@ -794,13 +625,11 @@ final class ReleaseStageCoordinator {
   StageStep _captureProducerStep(
     ReleaseStage stage,
     Step step,
-    List<StageStep> progress,
     LocalProducerOutcome outcome,
   ) {
     final contract = stage.producerContract(receiptNameFor(step));
     return StageStep(
       name: contract.name,
-      inputs: stage.producerInputs(contract.name, progress),
       outputs: [
         for (final artifact in outcome.outputs)
           StageArtifact.capture(
@@ -1198,10 +1027,7 @@ final class ReleaseStageCoordinator {
       workspace: stage.directory.workspace,
       repositoryRoot: repositoryRoot,
       capabilities: capabilities,
-      compilerExecutable: stage.compiler?.executable ?? 'dart',
-      runtimeSha256: stage.compiler?.runtimeSha256,
-      runtimeLicenseSha256: stage.compiler?.runtimeLicenseSha256,
-      launcherCompiler: stage.launcherCompiler,
+      compilerExecutable: stage.sdk.executable,
       stage: stage,
     );
   }
@@ -1238,6 +1064,58 @@ class _StageInputs {
   const _StageInputs({required this.signing});
 
   final ReleaseSigningContext? signing;
+}
+
+/// One unit's staging, settled up to its producers: see
+/// [ReleaseStageCoordinator.begin].
+final class UnitStaging {
+  UnitStaging._({
+    required this.unit,
+    required this.checklist,
+    required this.targets,
+    required this.targetStages,
+    required this.stage,
+    required this.inspected,
+    required this.claims,
+    required this.fromSource,
+  });
+
+  final ResolvedUnit unit;
+  final Checklist checklist;
+  final List<TargetPlan> targets;
+  final List<TargetStage> targetStages;
+  final ReleaseStage stage;
+  final StageInspection inspected;
+  final List<TargetClaim> claims;
+  final Map<String, Map<String, String>> fromSource;
+
+  /// The identity a macOS build signs with; null for anything else.
+  ReleaseSigningContext? get signing => _signing;
+  ReleaseSigningContext? _signing;
+
+  /// The rows this unit's stage fills.
+  StageBoard get board => StageBoard.forUnit(unit, targets, targetStages);
+
+  late final List<Step> producerSteps = checklist.steps
+      .where(
+        (step) =>
+            !step.isPublic &&
+            step.kind != StepKind.prerequisite &&
+            step.kind != StepKind.completeStage,
+      )
+      .toList();
+
+  late final Map<String, TargetStage> targetStagesByName = {
+    for (final targetStage in targetStages)
+      targetStage.contract.step.name: targetStage,
+  };
+
+  late final Map<String, Set<String>> outputsByProducer = {
+    for (final step in producerSteps)
+      receiptNameFor(step): contractFor(unit, step).outputs.keys.toSet(),
+    for (final entry in targetStagesByName.entries)
+      entry.key: entry.value.contract.step.outputs.keys.toSet(),
+  };
 }
 
 final class _StageWorkCompletion {

@@ -6,7 +6,6 @@ import '../../engine/release_stage.dart';
 import '../../engine/resolve.dart';
 import '../../engine/stage.dart';
 import '../../engine/stage_contract.dart';
-import '../../engine/stage_inspection.dart';
 import '../../engine/stage_receipt.dart';
 import '../../engine/targets.dart';
 import '../../engine/tools.dart';
@@ -28,16 +27,6 @@ TargetStage pubDevPackageStage({
     step: StageStepContract(
       'pub-archive:${target.project!.name}',
       outputs: {archivePath: 'pub-archive'},
-      validateEvidence: (context, step) =>
-          step.evidence['package_archive'] == 'staged'
-          ? const []
-          : [
-              StageIssue(
-                StageIssueKind.invalidStructure,
-                '${step.name} has no staged native package evidence',
-                path: 'stage.json',
-              ),
-            ],
     ),
   );
   return TargetStage(
@@ -76,9 +65,6 @@ Future<TargetStageOutcome> _prepareStage(
   return TargetStageSuccess(
     StageStep(
       name: receiptName,
-      inputs: context.stage.enforceUnitContract
-          ? context.stage.producerInputs(receiptName, context.priorSteps)
-          : const [],
       outputs: [
         StageArtifact.capture(
           stage: context.stage.directory,
@@ -86,7 +72,6 @@ Future<TargetStageOutcome> _prepareStage(
           type: 'pub-archive',
         ),
       ],
-      evidence: const {'package_archive': 'staged'},
     ),
     warnings: validation.warnings,
   );
@@ -149,6 +134,7 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
   final consumer = _mirrorSource(context);
   late final ToolResult packaged;
   late final String resolvedAs;
+  late final Set<String> takenFromSource;
   try {
     final sourceRoot = _join(consumer.path, const ['source']);
     String inSource(String directory) => directory == '.'
@@ -171,12 +157,9 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
 
     // A Flutter package, or one that takes a Flutter package from this
     // source, needs a Flutter SDK's Dart, whose pub finds its own Flutter.
-    // The Dart rk identified for this stage is the one that packages and
-    // publishes; a standalone one would depend on an ambient FLUTTER_ROOT
-    // the stage does not record.
     if (needsFlutter([directory, ...fromSource.values])) {
-      final dart = context.stage.compiler?.executable;
-      if (dart != null && !dartInFlutterSdk(dart)) {
+      final dart = context.stage.sdk.executable;
+      if (!dartInFlutterSdk(dart)) {
         return (
           diagnostic: _flutterDiagnostic(project.name, dart),
           warnings: const <Diagnostic>[],
@@ -190,29 +173,7 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
           name: _relativePath(directory, path),
       }, inWorkspace: inWorkspace(directory)),
     );
-    final get = await context.tools.run(
-      'dart',
-      const ['pub', 'get', '--no-example'],
-      workingDirectory: directory,
-      environment: const {'PUB_SUMMARY_ONLY': '0'},
-    );
-    final report = '${get.stdout}\n${get.stderr}'.trim();
-    final unexpected = reportedOverrides(
-      report,
-    ).difference(fromSource.keys.toSet());
-    if (!get.ok || unexpected.isNotEmpty) {
-      return (
-        diagnostic: _consumerDiagnostic(
-          project.name,
-          !get.ok
-              ? 'dart pub get failed: ${_firstLine(get.stderr)}'
-              : 'Pub applied overrides rk did not write: '
-                    '${unexpected.join(', ')}',
-          report,
-        ),
-        warnings: const <Diagnostic>[],
-      );
-    }
+    takenFromSource = fromSource.keys.toSet();
     final names = fromSource.keys.toList()..sort();
     final taken = names.isEmpty
         ? ''
@@ -222,12 +183,15 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
         'Pub validated ${project.name} the way its consumers resolve it: as '
         'a root of its own, with no lockfile and no dependency override'
         '$taken.';
-    packaged = await context.tools.run('dart', [
-      'pub',
-      'publish',
-      '--to-archive',
-      archive.path,
-    ], workingDirectory: directory);
+    // Pub resolves the package before it validates and archives it, and
+    // names each override it applied in a full report, which
+    // PUB_SUMMARY_ONLY would turn off.
+    packaged = await context.tools.run(
+      'dart',
+      ['pub', 'publish', '--to-archive', archive.path],
+      workingDirectory: directory,
+      environment: const {'PUB_SUMMARY_ONLY': '0'},
+    );
   } finally {
     consumer.deleteSync(recursive: true);
   }
@@ -236,8 +200,6 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
     'pub-package-${project.name}.txt',
     '$resolvedAs\n\n$validation',
   );
-  final findings = _validationFindings(validation);
-
   if (!packaged.ok) {
     final lower = validation.toLowerCase();
     if (lower.contains('to-archive') &&
@@ -258,6 +220,25 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
       );
     }
   }
+  // Pub's solver explains a resolution it cannot make, and stops there.
+  final unresolved =
+      !packaged.ok && validation.contains('version solving failed');
+  final unexpected = reportedOverrides(validation).difference(takenFromSource);
+  if (unresolved || unexpected.isNotEmpty) {
+    return (
+      diagnostic: _consumerDiagnostic(
+        project.name,
+        unresolved
+            ? 'Pub could not resolve it: ${_firstLine(packaged.stderr)}'
+            : 'Pub applied overrides rk did not write: '
+                  '${unexpected.join(', ')}',
+        validation,
+      ),
+      warnings: const <Diagnostic>[],
+    );
+  }
+  final findings = _validationFindings(validation);
+
   // Pub refuses an archive with errors. With warnings alone, current Pub
   // writes the archive and exits 0; earlier Pub exited non-zero and said
   // so in a summary.

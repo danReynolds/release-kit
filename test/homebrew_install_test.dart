@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/builds/dart_cli.dart';
-import 'package:rk/src/engine/stage_plan.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/targets/homebrew/client.dart';
 import 'package:rk/src/transforms/digest.dart';
@@ -35,15 +34,12 @@ void main() {
       File(
         '${root.path}/main.dart',
       ).writeAsStringSync("void main() => print('$name 1.2.3');\n");
-      final compiler = DartCompilerIdentity.readResolved(
-        Platform.resolvedExecutable,
-      );
+      final compiler = Platform.resolvedExecutable;
       final capabilities = HostCapabilities.inspect();
       final built =
           await DartCliBuilder(
             tools: const SystemTools(),
-            compilerExecutable: compiler.executable,
-            runtimeSha256: compiler.runtimeSha256,
+            compilerExecutable: compiler,
             capabilities: capabilities,
           ).build(
             platform: 'macos-arm64',

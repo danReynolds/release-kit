@@ -1,147 +1,61 @@
-import 'dart:convert';
-
 import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
-import 'package:rk/src/engine/release_asset.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
-import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/engine/stage_completion.dart';
-import 'package:rk/src/engine/stage_plan.dart';
 import 'package:rk/src/engine/stage_receipt.dart';
-import 'package:rk/src/transforms/digest.dart';
 import 'package:test/test.dart';
 
 void main() {
   for (final homebrew in [false, true]) {
     for (final prerelease in [false, true]) {
       test(
-        'portable completion binds ${homebrew ? 'Homebrew' : 'binary'} ${prerelease ? 'prerelease' : 'stable'} inventory without files',
+        'completion binds the ${homebrew ? 'Homebrew' : 'binary'} '
+        '${prerelease ? 'prerelease' : 'stable'} inventory by public name',
         () {
           final unit = _unit(homebrew: homebrew, prerelease: prerelease);
           final artifacts = _artifacts(unit);
-          final compiler = DartCompilerIdentity.recorded(
-            executable: '/old/dart',
-            version: '3.12.2',
-            sha256: 'e' * 64,
+          final completion = StageCompletion(
+            unit: unit,
+            repository: 'owner/repo',
+            commit: '1' * 40,
+            artifacts: artifacts,
+            releaseAssets: ReleaseAssets.bundleFor(unit),
           );
-          final receipt = _receipt(unit, artifacts, compiler: compiler);
-          final relocated = DartCompilerIdentity.recorded(
-            executable: '/new/dart',
-            version: compiler.version,
-            sha256: compiler.sha256,
-          );
+
+          final manifest = completion.manifest;
+          expect(manifest.unit, unit.name);
+          expect(manifest.version, unit.version.canonical);
+          expect(manifest.commit, '1' * 40);
           expect(
-            StageCompletion.validate(
-              receipt,
-              unit: unit,
-              repository: 'owner/repo',
-              compiler: relocated,
-            ),
-            isEmpty,
+            manifest.artifacts.map((artifact) => artifact.name),
+            ReleaseAssets.bundleFor(unit).map((spec) => spec.publicName),
           );
-          final complete = receipt.steps.last;
+          // A prerelease never moves a Homebrew formula.
+          expect(manifest.homebrew != null, homebrew && !prerelease);
           expect(
-            complete.evidence['homebrew_binding'] != null,
+            completion.evidence['homebrew_binding'] != null,
             homebrew && !prerelease,
           );
-          for (final change in [
-            'inputs',
-            'bindings',
-            'manifest hash',
-            'compiler',
-          ]) {
-            final altered = StageReceipt(
-              identity: receipt.identity,
-              plan: receipt.plan,
-              steps: [
-                ...receipt.steps.take(receipt.steps.length - 1),
-                StageStep(
-                  name: complete.name,
-                  inputs: change == 'inputs' ? const [] : complete.inputs,
-                  outputs: change == 'manifest hash'
-                      ? [
-                          StageArtifact(
-                            path: complete.outputs.single.path,
-                            type: 'manifest',
-                            mode: '0644',
-                            size: complete.outputs.single.size,
-                            sha256: 'f' * 64,
-                          ),
-                        ]
-                      : complete.outputs,
-                  evidence: {
-                    ...complete.evidence,
-                    if (change == 'bindings')
-                      'release_assets': const <String, String>{},
-                    if (change == 'compiler')
-                      'dart_compiler': {
-                        ...compiler.toJson(),
-                        'sha256': 'f' * 64,
-                      },
-                  },
-                ),
-              ],
-            );
-            expect(
-              StageCompletion.validate(
-                altered,
-                unit: unit,
-                repository: 'owner/repo',
-                compiler: compiler,
-              ),
-              isNotEmpty,
-              reason: change,
-            );
-          }
         },
       );
     }
   }
 
-  test(
-    'a self-consistent alternate publication inventory cannot authorize completion',
-    () {
-      final unit = _unit();
-      final artifacts = _artifacts(unit);
-      final receipt = _receipt(
-        unit,
-        artifacts,
-        specs: [
-          ReleaseAssetSpec(
-            publicName: 'other.tar.gz',
-            stagedPath: artifacts.first.path,
-          ),
-        ],
-      );
-      expect(
-        StageCompletion.validate(receipt, unit: unit, repository: 'owner/repo'),
-        isNotEmpty,
-      );
-      final omitted = _receipt(unit, artifacts, specs: const []);
-      expect(
-        StageCompletion.validate(omitted, unit: unit, repository: 'owner/repo'),
-        isNotEmpty,
-      );
-    },
-  );
-
-  test(
-    'a self-consistent formula destination must still match current configuration',
-    () {
-      final unit = _unit(homebrew: true);
-      final receipt = _receipt(
-        unit,
-        _artifacts(unit),
-        repository: 'someone/else',
-      );
-      expect(
-        StageCompletion.validate(receipt, unit: unit, repository: 'owner/repo'),
-        isNotEmpty,
-      );
-    },
-  );
+  test('a staged file missing from the inventory refuses completion', () {
+    final unit = _unit();
+    expect(
+      () => StageCompletion(
+        unit: unit,
+        repository: 'owner/repo',
+        commit: '1' * 40,
+        artifacts: const [],
+        releaseAssets: ReleaseAssets.bundleFor(unit),
+      ),
+      throwsStateError,
+    );
+  });
 }
 
 ResolvedUnit _unit({bool homebrew = false, bool prerelease = false}) {
@@ -185,50 +99,3 @@ List<StageArtifact> _artifacts(ResolvedUnit unit) => [
       sha256: 'b' * 64,
     ),
 ];
-
-StageReceipt _receipt(
-  ResolvedUnit unit,
-  List<StageArtifact> artifacts, {
-  List<ReleaseAssetSpec>? specs,
-  String repository = 'owner/repo',
-  DartCompilerIdentity? compiler,
-}) {
-  final plan = <String, Object?>{'unit': unit.name};
-  final identity = StageIdentity.forPlan(
-    headCommit: '1' * 40,
-    headTree: '2' * 40,
-    resolvedPlan: plan,
-  );
-  final completion = StageCompletion(
-    unit: unit,
-    repository: repository,
-    commit: identity.headCommit,
-    artifacts: artifacts,
-    releaseAssets: specs ?? ReleaseAssets.bundleFor(unit),
-  );
-  final bytes = utf8.encode(completion.manifest.encode());
-  return StageReceipt(
-    identity: identity,
-    plan: plan,
-    steps: [
-      StageStep(name: 'fixtures', outputs: artifacts),
-      StageStep(
-        name: 'complete-stage',
-        inputs: completion.inputs,
-        outputs: [
-          StageArtifact(
-            path: ReleaseAssets.manifest,
-            type: 'manifest',
-            mode: '0644',
-            size: bytes.length,
-            sha256: Sha256.hex(bytes),
-          ),
-        ],
-        evidence: {
-          ...completion.evidence,
-          if (compiler != null) 'dart_compiler': compiler.toJson(),
-        },
-      ),
-    ],
-  );
-}

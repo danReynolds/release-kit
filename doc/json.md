@@ -31,14 +31,13 @@ that run.
 `command` identifies the operation: `"stage"` prepares without publishing;
 `"release"` prepares as needed and publishes. There is no separate mode field.
 
-Release consent freezes exact stage receipts, public recovery bindings, signing
-and warning disclosures,
-remaining targets and first claims. New or changed disclosures refuse with
-`RK-AUTH-003`; already-public targets and whole no-op units cannot silently become
+The yes covers exactly the remaining targets that run reported, by step, and
+nothing else. Right before each act rk reads that target again: one another run
+published since is skipped, and a target already public when asked never becomes
 work. `authorization-disclosures/run` retains the aggregate disclosure in
-`attachments`. A later public failure can leave earlier targets completed;
-preparation/review failures acquire no publication sessions and change no public
-targets.
+`attachments`. A later public failure can leave earlier targets completed; a
+failure before the yes, or a declined yes, acquires no publication session and
+changes no public target.
 
 ## Top level
 
@@ -78,9 +77,9 @@ the repository root. These storage details stay out of the human success
 summary; `next[]` contains the publish command when publication is configured.
 
 Status reads the saved stage for the current source, if any. Its
-`completeStage` evidence includes the actual `stage id` and `stage path`. An
-exact local stage verdict means the current source/producer contracts and
-recorded bytes validate locally. Status performs no dependency resolution or
+`completeStage` evidence includes the actual `stage id`. An exact local stage
+verdict means the receipt names this stage and records the producers this rk
+runs, and every file it publishes still has its recorded size and digest. Status performs no dependency resolution or
 producer work. An incomplete saved stage reports only its recorded local
 progress.
 
@@ -89,8 +88,7 @@ progress.
 `rk plan [unit] --json` derives topology from the configured source and native
 manifests. It does not inspect public destinations or decide what is already
 complete. A clean Git repository is read from immutable `HEAD`; dirty and
-unbound source is captured as one double-read byte snapshot, and bound Git
-identity is revalidated before the document is emitted. The top-level `plan`
+unbound source is captured as one byte snapshot. Git is read once. The top-level `plan`
 object is:
 
 ```text
@@ -141,8 +139,9 @@ requirement is satisfied. Plan nodes deliberately have no `verdict` or
 `rk clean --json` never prompts or deletes without `--yes`. When staged work
 exists it returns exit `1`, records `found` with `removed: 0`, and names
 `rk clean --yes` in `next[]`. The authorized form deletes only the entries it
-inventoried under the current repository; entries that appear later or change
-entity type are left alone and the run refuses. Cleanup does not inspect
+inventoried under the current repository. An entry that appears later is left
+alone; one that vanished or changed entity type is left alone and the run
+refuses (`RK-CLEAN-003`). Cleanup does not inspect
 publishers and does not claim a completed stage is disposable: deleting staged
 bytes can prevent a partially completed release from resuming.
 
