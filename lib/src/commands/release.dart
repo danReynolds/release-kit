@@ -319,7 +319,22 @@ class ReleaseCommand {
             for (final step in publicSteps)
               (step, observation.states[step.id]!),
           ]);
-      final blocked = publicSteps.where((step) {
+      final alreadyReleased =
+          publicSteps.isNotEmpty &&
+          publicSteps.every((step) => observation.states[step.id]!.isExact);
+      final blocked = observation.checklist.steps.where((step) {
+        if (step.kind == StepKind.completeStage) return false;
+        // A sibling the stage can take from this source waits for nothing
+        // while staging, which is private. A sibling released in this run
+        // publishes first, in dependency order, and is public before this
+        // unit uploads. Only a release that needs a package some other run
+        // must publish waits for it here.
+        if (step.kind == StepKind.prerequisite &&
+            (alreadyReleased ||
+                stageOnly ||
+                _releasing.contains(_prerequisitePackage(step)))) {
+          return false;
+        }
         final state = observation.states[step.id]!;
         return !(partialStageLoss && state.verdict == Verdict.unknown) &&
             Inspector.blocks(step, state);
@@ -605,45 +620,6 @@ class ReleaseCommand {
     final alreadyReleased =
         publicSteps.isNotEmpty &&
         publicSteps.every((step) => states[step.id]!.isExact);
-
-    // Unknown destination state never grants permission to produce locally.
-    // Native preparation can defer public dependency availability, and a lost
-    // recovery-critical partial stage retains its specific refusal below.
-    final partialStageLoss =
-        !_releasedElsewhere(publicSteps, states) &&
-        !stageInspection.reusable &&
-        hasRecoveryCriticalPublicProgress(unit, [
-          for (final step in publicSteps) (step, states[step.id]!),
-        ]);
-    final initialBlock = checklist.steps.where((step) {
-      if (step.kind == StepKind.completeStage) return false;
-      if (step.kind == StepKind.prerequisite) {
-        // A sibling the stage can take from this source waits for nothing
-        // while staging, which is private. A sibling released in this run
-        // publishes first, in dependency order, and is public before this
-        // unit uploads. Only a release that needs a package some other run
-        // must publish waits for it here.
-        if (alreadyReleased ||
-            stageOnly ||
-            _releasing.contains(_prerequisitePackage(step))) {
-          return false;
-        }
-      }
-      final state = states[step.id]!;
-      if (partialStageLoss && state.verdict == Verdict.unknown) {
-        return false;
-      }
-      return Inspector.blocks(step, state);
-    }).firstOrNull;
-    if (initialBlock != null) {
-      _publication.haltForState(
-        unit,
-        initialBlock,
-        states[initialBlock.id]!,
-        target: targetByStep[initialBlock.id],
-      );
-      return null;
-    }
 
     final publicActions = {
       for (final step in publicSteps)
