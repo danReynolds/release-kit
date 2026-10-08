@@ -185,7 +185,6 @@ abstract base class TargetModule {
             'confirmed.',
       ?state.detail,
       ...state.evidence.entries.map((entry) => '${entry.key}: ${entry.value}'),
-      ?act.permanent,
     ];
     return TargetFailure(
       diagnostic: Diagnostic(
@@ -197,9 +196,7 @@ abstract base class TargetModule {
             : details.join('\n'),
         evidence: act.evidence ?? given?.evidence,
       ),
-      halt: act.permanent != null
-          ? HaltKind.actedAndUnfixable
-          : conflict
+      halt: conflict
           ? (conflictIsPermanent
                 ? HaltKind.actedAndUnfixable
                 : HaltKind.stoppedPartway)
@@ -619,7 +616,6 @@ final class TargetActOutcome {
     this.mayHaveActed = false,
     this.privateEffect = TargetPrivateEffect.none,
     this.privateEffectDetail,
-    this.permanent,
     this.diagnostic,
     this.coordinate,
     this.successNote,
@@ -634,7 +630,6 @@ final class TargetActOutcome {
   final bool mayHaveActed;
   final TargetPrivateEffect privateEffect;
   final String? privateEffectDetail;
-  final String? permanent;
   final Diagnostic? diagnostic;
   final String? coordinate;
   final String? successNote;

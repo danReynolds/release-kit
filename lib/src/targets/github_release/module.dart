@@ -232,7 +232,6 @@ final class GithubReleaseTargetModule extends TargetModule {
           'GitHub private draft state may have changed; no GitHub Release '
               'was confirmed public.',
       },
-      permanent: outcome.permanent,
       evidence: outcome.ok ? null : outcome.transcript,
     );
   }

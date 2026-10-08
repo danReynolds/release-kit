@@ -228,8 +228,6 @@ class GithubRelease {
   Future<Inspection> _inspectAssetBytes(
     String tag,
     Map<String, String> expectedDigests, {
-    Map<String, List<int>> knownBytes = const {},
-    String expectedBy = 'staged release',
     _Release? release,
   }) async {
     try {
@@ -241,8 +239,7 @@ class GithubRelease {
       // precedence remain deterministic.
       final reads = <String, Future<({List<int>? bytes, String? problem})>>{
         for (final name in names)
-          if (!knownBytes.containsKey(name) &&
-              _publishedDigest(release, name) == null)
+          if (_publishedDigest(release, name) == null)
             name: _downloadAssetBytes(tag, name),
       };
       final completed = await Future.wait([
@@ -254,7 +251,7 @@ class GithubRelease {
       final publishedDigests = <String, String>{};
       final unreadable = <String, String>{};
       for (final name in names) {
-        final bytes = knownBytes[name] ?? downloaded[name]?.bytes;
+        final bytes = downloaded[name]?.bytes;
         final providerDigest = _publishedDigest(release, name);
         final problem = downloaded[name]?.problem;
         if (bytes == null && providerDigest == null) {
@@ -282,7 +279,7 @@ class GithubRelease {
       );
       if (compared.verdict == Verdict.conflict) {
         return Inspection.conflict(
-          'published asset bytes differ from the $expectedBy',
+          'published asset bytes differ from the staged release',
           evidence: compared.evidence,
         );
       }
@@ -1117,7 +1114,6 @@ class PublishOutcome {
     this.url,
     this.problem,
     this.confirmed, {
-    this.permanent,
     this.draftEffect = DraftEffect.none,
     this.transcript,
   });
@@ -1157,28 +1153,11 @@ class PublishOutcome {
          transcript: transcript,
        );
 
-  /// rk read back what it did and it is wrong, and it cannot be taken back.
-  const PublishOutcome.terminal(
-    String problem, {
-    required String url,
-    required String permanent,
-    DraftEffect draftEffect = DraftEffect.none,
-  }) : this._(
-         url,
-         problem,
-         false,
-         permanent: permanent,
-         draftEffect: draftEffect,
-       );
-
   final String? url;
   final String? problem;
 
   /// Whether rk read back what it did.
   final bool confirmed;
-
-  /// What is already public and cannot be undone, stated before any remedy.
-  final String? permanent;
 
   /// What this attempt did to GitHub's private draft surface.
   final DraftEffect draftEffect;

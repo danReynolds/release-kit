@@ -157,23 +157,13 @@ class GitTag {
         'origin\'s annotated tag object could not be read: ${object.summary}',
       );
     }
-    final binding = _manifestBindingIn(object.stdout);
-    if (binding is! TagManifestBound) {
-      final why = switch (binding) {
-        TagManifestAbsent(:final why) ||
-        TagManifestMissing(:final why) ||
-        TagManifestMalformed(:final why) ||
-        TagManifestConflict(:final why) ||
-        TagManifestUnreadable(:final why) ||
-        TagManifestUnbound(:final why) => why,
-        TagManifestBound() => 'unexpected manifest binding state',
-      };
+    final (:digest, :problem) = _manifestBindingIn(object.stdout);
+    if (digest == null) {
       return Inspection.conflict(
         'origin\'s release tag does not carry one valid manifest binding',
-        evidence: {'manifest binding': why},
+        evidence: {'manifest binding': problem!},
       );
     }
-    final digest = binding.digest;
     final expectedDigest = expectedManifestSha256?.toLowerCase();
     if (sameCommit && expectedDigest != null && digest != expectedDigest) {
       return Inspection.conflict(
@@ -297,29 +287,19 @@ class GitTag {
       );
     }
 
-    final binding = _manifestBindingIn(object.stdout);
-    if (binding is! TagManifestBound) {
-      final why = switch (binding) {
-        TagManifestAbsent(:final why) ||
-        TagManifestMissing(:final why) ||
-        TagManifestMalformed(:final why) ||
-        TagManifestConflict(:final why) ||
-        TagManifestUnreadable(:final why) ||
-        TagManifestUnbound(:final why) => why,
-        TagManifestBound() => 'unexpected manifest binding state',
-      };
+    final (:digest, :problem) = _manifestBindingIn(object.stdout);
+    if (digest == null) {
       return Inspection.conflict(
         'the local release tag does not carry one valid manifest binding',
-        evidence: {'manifest binding': why},
+        evidence: {'manifest binding': problem!},
       );
     }
     final expectedDigest = expectedManifestSha256?.toLowerCase();
-    if (expectedDigest != null && binding.digest != expectedDigest) {
+    if (expectedDigest != null && digest != expectedDigest) {
       return Inspection.conflict(
         'the local release tag binds a different manifest',
         evidence: {
-          'manifest sha256':
-              'local ${binding.digest}, expected $expectedDigest',
+          'manifest sha256': 'local $digest, expected $expectedDigest',
         },
       );
     }
@@ -329,7 +309,7 @@ class GitTag {
       evidence: {
         'tag object': expectedObject.toLowerCase(),
         'source commit': expectedCommit.toLowerCase(),
-        'manifest sha256': binding.digest,
+        'manifest sha256': digest,
       },
     );
   }
@@ -466,91 +446,35 @@ String? _versionIn(String tag, List<String> pattern) {
   return tag.substring(prefix.length, end);
 }
 
-TagManifestBinding _manifestBindingIn(String tagObject) {
+/// The release-manifest digest an annotated tag object's message binds, or
+/// why it binds none.
+({String? digest, String? problem}) _manifestBindingIn(String tagObject) {
+  ({String? digest, String? problem}) none(String problem) =>
+      (digest: null, problem: problem);
   final messageAt = tagObject.indexOf('\n\n');
   if (messageAt < 0) {
-    return const TagManifestMalformed(
-      'the annotated tag object has no readable message',
-    );
+    return none('the annotated tag object has no readable message');
   }
-  final message = tagObject.substring(messageAt + 2);
-  final candidates = message
+  final candidates = tagObject
+      .substring(messageAt + 2)
       .split('\n')
       .where((line) => line.contains('release-manifest-sha256'))
       .toList();
   if (candidates.isEmpty) {
-    return const TagManifestMissing(
+    return none(
       'the annotated tag message has no release-manifest-sha256 binding',
     );
   }
   if (candidates.length != 1) {
-    return const TagManifestMalformed(
-      'the annotated tag message has more than one manifest binding',
-    );
+    return none('the annotated tag message has more than one manifest binding');
   }
   final match = RegExp(
     r'^release-manifest-sha256: ([0-9a-f]{64})$',
   ).firstMatch(candidates.single);
   if (match == null) {
-    return const TagManifestMalformed(
-      'the annotated tag message has a malformed manifest binding',
-    );
+    return none('the annotated tag message has a malformed manifest binding');
   }
-  return TagManifestBound(match.group(1)!);
-}
-
-/// What reading an exact remote tag's release-manifest binding produced.
-sealed class TagManifestBinding {
-  const TagManifestBinding();
-
-  /// Present only when the tag carries one exact lowercase SHA-256 binding.
-  String? get sha256 => null;
-}
-
-class TagManifestBound extends TagManifestBinding {
-  const TagManifestBound(this.digest);
-
-  final String digest;
-
-  @override
-  String get sha256 => digest;
-}
-
-/// No tag exists at the remote coordinate.
-class TagManifestAbsent extends TagManifestBinding {
-  const TagManifestAbsent(this.why);
-  final String why;
-}
-
-/// The exact annotated tag has no binding line.
-class TagManifestMissing extends TagManifestBinding {
-  const TagManifestMissing(this.why);
-  final String why;
-}
-
-/// A binding-like line or tag message exists but does not meet the contract.
-class TagManifestMalformed extends TagManifestBinding {
-  const TagManifestMalformed(this.why);
-  final String why;
-}
-
-/// Origin carries a different tag object or source commit.
-class TagManifestConflict extends TagManifestBinding {
-  const TagManifestConflict(this.why, {this.evidence = const {}});
-  final String why;
-  final Map<String, String> evidence;
-}
-
-/// The tag or its object could not be read.
-class TagManifestUnreadable extends TagManifestBinding {
-  const TagManifestUnreadable(this.why);
-  final String why;
-}
-
-/// The tag is exact but has no annotated message by construction.
-class TagManifestUnbound extends TagManifestBinding {
-  const TagManifestUnbound(this.why);
-  final String why;
+  return (digest: match.group(1)!, problem: null);
 }
 
 class _RemoteTag {
