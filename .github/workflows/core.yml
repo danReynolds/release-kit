@@ -32,12 +32,9 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # Most tests drive `dart run bin/rk.dart`, which compiles rk and Fleury
-    # for every command; with Fleury 0.1 the Linux suite takes about 22
-    # minutes on hosted runners, and macOS, which adds real Homebrew and
-    # terminal qualification, about 35. Each allowance bounds a hang above
-    # that.
-    timeout-minutes: ${{ matrix.os == 'macos-latest' && 50 || 30 }}
+    # Tests share one compiled rk. Each allowance bounds a hang well above a
+    # normal run.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -50,8 +47,13 @@ jobs:
         with:
           sdk: stable
       - run: dart pub get
-      - run: dart test --exclude-tags publication
+      - name: Compile rk once for every test that runs it
+        run: dart compile exe bin/rk.dart -o .dart_tool/rk-ci
+      # dart test runs half as many files at once as there are cores by
+      # default: one on a three-core macOS runner.
+      - run: dart test --exclude-tags publication --concurrency=4
         env:
+          RK_TEST_EXECUTABLE: ${{ github.workspace }}/.dart_tool/rk-ci
           # The Homebrew install test changes the host's Homebrew, so it runs
           # only on CI's disposable macOS runners.
           RK_BREW_INSTALL_TEST: ${{ matrix.os == 'macos-latest' && '1' || '' }}
@@ -59,10 +61,9 @@ jobs:
         run: |
           python3 -m venv .dart_tool/pty-env
           .dart_tool/pty-env/bin/pip install -r tool/tui-requirements.txt
-          dart compile exe bin/rk.dart -o .dart_tool/rk-inline-check
-          .dart_tool/pty-env/bin/python tool/check_installation_tui.py .dart_tool/rk-inline-check
-          .dart_tool/pty-env/bin/python tool/check_installation_ux.py .dart_tool/rk-inline-check
-          .dart_tool/pty-env/bin/python tool/check_status_cli.py .dart_tool/rk-inline-check
+          .dart_tool/pty-env/bin/python tool/check_installation_tui.py .dart_tool/rk-ci
+          .dart_tool/pty-env/bin/python tool/check_installation_ux.py .dart_tool/rk-ci
+          .dart_tool/pty-env/bin/python tool/check_status_cli.py .dart_tool/rk-ci
 
   publication:
     name: Native publication qualification

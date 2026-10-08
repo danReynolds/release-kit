@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:test/test.dart';
 
 import 'rk_process.dart';
+import 'support/compiled_rk.dart';
 
 /// The CLI surface, run rather than inspected — argument parsing, usage
 /// refusals, and the paths that answer before any target is read. Each test
@@ -215,23 +216,13 @@ void main() {
   test(
     'the shipped form — a compiled binary, invoked by bare name — works',
     () {
-      // Every other test drives `dart run bin/rk.dart`, which is not what a
-      // user installs. A compiled binary resolves Platform.script from
-      // argv[0]: passed a bare name, Dart resolves it against the current
-      // directory and names a file that is not there. rk read it anyway, so
-      // every stage inspection under an installed rk answered RK-STAGE-002 —
-      // and the alpha gate's consume step only runs --version and --help,
-      // which never inspect a stage, so nothing here would have caught it.
-      final compiled = '${scratch.path}/rk-compiled';
-      final built = Process.runSync(Platform.resolvedExecutable, [
-        '--suppress-analytics',
-        'compile',
-        'exe',
-        'bin/rk.dart',
-        '-o',
-        compiled,
-      ]);
-      expect(built.exitCode, 0, reason: '${built.stdout}${built.stderr}');
+      // A compiled binary resolves Platform.script from argv[0]: passed a
+      // bare name, Dart resolves it against the current directory and names
+      // a file that is not there. rk read it anyway, so every stage
+      // inspection under an installed rk answered RK-STAGE-002 — and
+      // --version and --help never inspect a stage, so they would not catch
+      // it.
+      final compiled = compiledRk();
 
       final repo = Rk.example(scratch, 'binary-cli', as: 'shipped')..commit();
       // Committed: without a HEAD there is no stage to inspect, so the

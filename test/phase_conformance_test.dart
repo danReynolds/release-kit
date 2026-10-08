@@ -27,6 +27,7 @@ import 'package:test/test.dart';
 import 'pub_get_double.dart';
 import 'rk_process.dart';
 import 'status_test.dart' show FakeRegistry;
+import 'support/compiled_rk.dart';
 
 /// Checks each phase against the deliverables its plan lists, so "done" is
 /// something this file decides rather than something a judgement call does.
@@ -311,11 +312,7 @@ void main() {
       final piped = bare(['status']).stdout;
 
       ProcessResult runInPty(Map<String, String> environment) {
-        final command = [
-          Platform.resolvedExecutable,
-          File('bin/rk.dart').absolute.path,
-          'status',
-        ];
+        final command = [compiledRk(), 'status'];
         // BSD script(1) accepts the command as trailing arguments. The
         // util-linux implementation used by Ubuntu accepts it through -c.
         final arguments = Platform.isLinux

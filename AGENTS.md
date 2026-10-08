@@ -71,10 +71,14 @@ reason is worth that cost.
 ## Before a pull request
 
 ```sh
-dart format .
+dart format --output=none --set-exit-if-changed .  # what CI runs
 dart analyze
-dart test --exclude-tags publication   # about 10–15 minutes
+dart test --exclude-tags publication -j 6          # about 2 minutes
+dart test --tags publication --concurrency=1       # loopback pub.dev, about 4
 ```
+
+Tests that run rk as a process share one compiled binary
+(`test/support/compiled_rk.dart`), rebuilt when rk's sources change.
 
 Add an entry under `## Unreleased` in `CHANGELOG.md` for anything a user
 would notice.

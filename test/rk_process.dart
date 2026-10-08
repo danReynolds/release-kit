@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 
+import 'support/compiled_rk.dart';
+
 /// Runs the real `rk` in a real repository.
 ///
 /// Shared so that a conformance check can execute the program rather than read
@@ -76,13 +78,11 @@ class Rk {
 
   final String root;
 
-  static final _bin = File('bin/rk.dart').absolute.path;
-
   /// Runs rk with [args]; [environment] adds to rk's inherited one.
   Run call(List<String> args, {Map<String, String>? environment}) {
     final result = Process.runSync(
-      Platform.resolvedExecutable,
-      [_bin, ...args],
+      compiledRk(),
+      args,
       workingDirectory: root,
       environment: environment,
     );
