@@ -37,7 +37,7 @@ void main() {
     ProgressInteractiveRunner? runInteractive,
   }) => TargetReadinessContext(
     tools: tools,
-    git: GitState.unbound('/fixture'),
+    git: GitState.none('/fixture'),
     environment: environment,
     runInteractive: runInteractive,
   );

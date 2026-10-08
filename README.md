@@ -397,10 +397,10 @@ repository's stages, lists their recorded identities, and asks first. Receipt
 metadata helps identify a stage; it does not prove that its bytes are no longer
 needed.
 
-Git-identified targets (`git-tag`, `github-release`, `homebrew`) need a
-clean working tree. A registry-only or local release may include
-uncommitted work: rk warns, snapshots that tree once, and builds and
-publishes from that snapshot.
+A release is of a commit. `rk stage` and `rk release` build from a clean,
+committed working tree, and refuse uncommitted changes or a directory outside
+Git before doing anything. `rk status` and `rk plan` read either as it is, and
+say what staging needs.
 
 Releases run from your machine. The design anticipates CI; support is
 deferred.

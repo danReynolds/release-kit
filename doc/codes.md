@@ -103,7 +103,7 @@ fails, and the count below is checked against the rows.
 | `RK-CONF-029` | "$platform" is listed twice | `lib/src/engine/config.dart` |
 | `RK-CONF-032` | $key must be text | `lib/src/engine/config.dart` |
 | `RK-CONF-033` | git will not accept the tag pattern for "$unit": $issue | `lib/src/engine/config.dart` |
-| `RK-CONF-034` | release.toml is there and rk could not read it | `lib/src/commands/init.dart`, `bin/rk.dart` |
+| `RK-CONF-034` | release.toml is there and rk could not read it | `lib/src/commands/init.dart`, `lib/src/engine/release_source.dart` |
 | `RK-CONF-036` | unit "$name" declares homebrew_tap but does not publish to  homebrew | `lib/src/engine/config.dart` |
 | `RK-CONF-037` | $key is empty | `lib/src/engine/config.dart` |
 | `RK-CONF-038` | a target is declared at the wrong unit or project scope | `lib/src/engine/config.dart` |
@@ -141,7 +141,7 @@ stages the package) is retired and not reused.
 | `RK-GIT-004` | ${unit.version} is already published, and the tag  ${unit.tag} does not exist | `lib/src/engine/inspect.dart` |
 | `RK-GIT-005` | the tag ${unit.tag} points at ${_short(target)}, and this  release would publish from ${… | `lib/src/commands/status.dart`, `lib/src/engine/inspect.dart` |
 | `RK-GIT-007` | the tag exists, and rk could not read which commit it names | `lib/src/engine/inspect.dart` |
-| `RK-GIT-008` | the worktree state could not be read | `lib/src/engine/git.dart`, `bin/rk.dart` |
+| `RK-GIT-008` | the worktree state could not be read | `lib/src/engine/git.dart` |
 | `RK-GIT-009` | $tag was released from ${_short(releasedFrom)}, and its release is unfinished | `lib/src/engine/inspect.dart` |
 | `RK-GIT-006` | the repository could not be listed | `lib/src/commands/init.dart` |
 
@@ -216,7 +216,6 @@ meanings and are not reused.
 | `RK-PUB-010` | a pub.dev package points to another repository | `lib/src/targets/pub_dev/module.dart` |
 | `RK-PUB-011` | this Dart SDK cannot stage the native Pub archive | `lib/src/targets/pub_dev/module.dart`, `lib/src/targets/pub_dev/package_stage.dart` |
 | `RK-PUB-012` | pub validation reported a package warning | `lib/src/targets/pub_dev/package_stage.dart` |
-| `RK-PUB-013` | a published version is not available to a fresh Dart resolver yet | `lib/src/targets/pub_dev/module.dart` |
 | `RK-PUB-014` | ${project.name} resolves with Flutter packages, and the Dart rk uses is not part of a Flutter SDK | `lib/src/targets/pub_dev/package_stage.dart` |
 | `RK-PUB-017` | Pub cannot resolve $package the way its consumers do | `lib/src/targets/pub_dev/package_stage.dart` |
 
@@ -230,7 +229,6 @@ RK-STAGE-004, the checks a release once repeated between staging and each act.
 |---|---|---|
 | `RK-REL-001` | ${first.summary}:  ${state.detail ?? state.verdict.name} | `lib/src/commands/release_publication_coordinator.dart`, `lib/src/commands/status.dart`, `lib/src/engine/inspect.dart`, `lib/src/targets/git_tag/module.dart`, `lib/src/targets/github_release/module.dart`, `lib/src/targets/homebrew/module.dart`, `lib/src/targets/pub_dev/module.dart` |
 | `RK-REL-003` | a public target could not be proven after rk acted | `lib/src/commands/release_publication_coordinator.dart`, `lib/src/targets/target_module.dart` |
-| `RK-REL-004` | a consumer availability check could not run | `lib/src/commands/release_publication_coordinator.dart` |
 
 ## RK-RES — The config resolved against the repository
 
@@ -277,9 +275,8 @@ that read back signatures rk had just written, are retired and not reused.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-SRC-001` | a unit selects targets that require Git from unbound source | `lib/src/engine/release_source.dart`, `bin/rk.dart` |
-| `RK-SRC-002` | an unbound stage cannot be authorized by a later run | `lib/src/commands/release.dart` |
-| `RK-SRC-003` | the source snapshot could not be selected or read | `lib/src/engine/release_source.dart`, `bin/rk.dart` |
+| `RK-SRC-003` | the source could not be read | `lib/src/engine/release_source.dart` |
+| `RK-SRC-004` | there is no commit to stage or release | `lib/src/engine/git.dart` |
 
 ## RK-STAGE — The private release stage
 

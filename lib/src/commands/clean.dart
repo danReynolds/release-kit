@@ -226,10 +226,7 @@ Usage
       return [
         if (unit is Map && unit['name'] is String && unit['version'] is String)
           '${unit['name']} ${unit['version']}',
-        if (commit != null)
-          'commit ${commit.substring(0, 7)}'
-        else
-          'unbound source',
+        'commit ${commit.substring(0, 7)}',
         receipt.complete ? 'completion recorded' : 'incomplete stage',
       ].join(' · ');
     } on Object {

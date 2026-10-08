@@ -29,7 +29,7 @@ final class ReleaseBundle {
     ResolvedUnit unit,
   ) {
     final receipt = stage.requireReceipt();
-    final frozen = stage.releaseAssets();
+    final frozen = ReleaseStage.releaseAssetsIn(receipt);
     final manifest = receipt.artifacts.where(
       (artifact) => artifact.path == ReleaseAssets.manifest,
     );

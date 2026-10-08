@@ -221,25 +221,42 @@ class Inspector {
 
     // Start every independent provider read before awaiting one. A slow
     // forge must not postpone asking origin or pub.dev.
-    final reads = [
-      for (final target in candidates)
-        () async {
-          try {
-            return await inspectHistory(target, unit);
-          } on Object catch (error) {
-            return TargetHistory(
-              inspection: Inspection.unknown(
-                'the latest public version could not be read: $error',
-              ),
-            );
-          }
-        }(),
-    ];
-    final latest = await Future.wait(reads);
+    final latest = await Future.wait([
+      for (final target in candidates) readHistory(target, unit),
+    ]);
+    return ReleaseHistoryCheck(
+      claims: historyFindings([
+        for (final (index, target) in candidates.indexed)
+          (target, latest[index]),
+      ], problems),
+    );
+  }
 
+  /// [target]'s public history; a read that throws is unknown, never absent.
+  Future<TargetHistory?> readHistory(
+    TargetPlan target,
+    ResolvedUnit unit,
+  ) async {
+    try {
+      return await inspectHistory(target, unit);
+    } on Object catch (error) {
+      return TargetHistory(
+        inspection: Inspection.unknown(
+          'the latest public version could not be read: $error',
+        ),
+      );
+    }
+  }
+
+  /// What a release learns from its lanes' histories: the names it claims
+  /// for the first time, and in [problems], every history that refuses it —
+  /// a version regression, or a history that could not be read.
+  static List<TargetClaim> historyFindings(
+    Iterable<(TargetPlan, TargetHistory?)> histories,
+    Diagnostics problems,
+  ) {
     final claims = <TargetClaim>[];
-    for (final (index, target) in candidates.indexed) {
-      final history = latest[index];
+    for (final (target, history) in histories) {
       if (history == null) continue;
       claims.addAll(history.claims);
       history.problems.forEach(problems.report);
@@ -268,10 +285,9 @@ class Inspector {
               'restore a readable version listing for ${target.label} '
               'and re-run',
         );
-        continue;
       }
     }
-    return ReleaseHistoryCheck(claims: claims);
+    return claims;
   }
 
   /// Cross-step judgments about the tag, which no single step can make.

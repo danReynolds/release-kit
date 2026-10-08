@@ -221,43 +221,19 @@ void main() {
     },
   );
 
-  test('an archive propagation wait recovers without reupload', () async {
+  test('archive propagation does not hold the release', () async {
     final staged = await _stage(fixture);
+    // The registry lists core as soon as it accepts it, and serves its
+    // archive later. Publishing reads the listing, as Pub's own resolution
+    // does, so the stack releases without waiting for the archive.
     fixture.registry.unavailableArchives.add(_core);
-    final unavailable = Completer<void>();
-    fixture.registry.onEvent = (event) {
-      if (event.kind == 'archive_unavailable' &&
-          event.name == _core &&
-          !unavailable.isCompleted) {
-        unavailable.complete();
-      }
-    };
-    final interrupted = await fixture.rk([
-      'release',
-      '--yes',
-      '--json',
-    ], interruptWhen: unavailable.future);
-    expect(interrupted.code, 130, reason: interrupted.all);
-    expect(unavailable.isCompleted, isTrue);
-    fixture.registry.onEvent = null;
-    expect(fixture.registry.committed.keys, ['$_core@0.2.0']);
-
-    // Whole-stack release waits for propagation after committing core. A
-    // named consumer needs only core's version to be listed, as Pub's
-    // resolution does; neither run waits out the ten-minute poll.
-    _ok(await fixture.rk(['release', 'format', '--yes', '--json']));
-    expect(
-      fixture.registry.committed.keys,
-      unorderedEquals(['$_core@0.2.0', '$_format@0.3.0']),
-    );
-    expect(
-      fixture.registry.events.where((e) => e.kind == 'archive_unavailable'),
-      isNotEmpty,
-    );
+    _ok(await fixture.rk(['release', '--yes', '--json']));
+    _published(fixture.registry, staged);
 
     fixture.registry.unavailableArchives.clear();
     _ok(await fixture.rk(['release', '--yes', '--json']));
-    for (final name in [_core, _format]) {
+    for (final coordinate in fixture.registry.committed.keys) {
+      final name = coordinate.split('@').first;
       expect(
         fixture.registry.events.where(
           (e) => e.kind == 'upload_attempted' && e.name == name,
@@ -266,7 +242,6 @@ void main() {
         reason: '$name is uploaded once',
       );
     }
-    _published(fixture.registry, staged);
     _unchanged(staged);
     await _consume(fixture);
   });

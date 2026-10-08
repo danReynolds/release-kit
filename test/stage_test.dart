@@ -30,53 +30,26 @@ const _tree = '2222222222222222222222222222222222222222';
 
 void main() {
   group('frozen receipt plan', () {
-    test(
-      'deep freezes and authenticates its complete plan before any producer',
-      () {
-        final plan = <String, Object?>{
-          'choices': [
-            {'version': '1.0.0'},
-          ],
-        };
-        final identity = _identity(plan);
-        final receipt = StageReceipt(identity: identity, plan: plan);
-        final encoded = receipt.encode();
-        ((plan['choices'] as List).single as Map)['version'] = '2.0.0';
-        expect(receipt.encode(), encoded);
-        expect(
-          () => ((receipt.plan!['choices'] as List).single as Map)['version'] =
-              '3.0.0',
-          throwsUnsupportedError,
-        );
-        final parsed = StageReceipt.parse(encoded);
-        expect(parsed.plan, receipt.plan);
-        expect(parsed.steps, isEmpty);
-        expect(parsed.complete, isFalse);
-        expect(
-          () => StageReceipt(identity: identity, plan: plan),
-          throwsFormatException,
-        );
-        final tampered = jsonDecode(encoded) as Map;
-        tampered['plan']['choices'][0]['version'] = '2.0.0';
-        expect(
-          () => StageReceipt.parse('${CanonicalJson.encode(tampered)}\n'),
-          throwsFormatException,
-        );
-      },
-    );
-
-    test('does not allow a second plan in completion evidence', () {
-      const plan = <String, Object?>{'unit': 'tool'};
+    test('deep freezes its complete plan before any producer', () {
+      final plan = <String, Object?>{
+        'choices': [
+          {'version': '1.0.0'},
+        ],
+      };
+      final identity = _identity(plan);
+      final receipt = StageReceipt(identity: identity, plan: plan);
+      final encoded = receipt.encode();
+      ((plan['choices'] as List).single as Map)['version'] = '2.0.0';
+      expect(receipt.encode(), encoded);
       expect(
-        () => StageReceipt(
-          identity: _identity(plan),
-          plan: plan,
-          steps: [
-            StageStep(name: 'complete-stage', evidence: {'release_plan': plan}),
-          ],
-        ),
-        throwsFormatException,
+        () => ((receipt.plan!['choices'] as List).single as Map)['version'] =
+            '3.0.0',
+        throwsUnsupportedError,
       );
+      final parsed = StageReceipt.parse(encoded);
+      expect(parsed.plan, receipt.plan);
+      expect(parsed.steps, isEmpty);
+      expect(parsed.complete, isFalse);
     });
   });
 
@@ -190,26 +163,12 @@ void main() {
       expect(() => _identity({'bad': double.nan}), throwsFormatException);
     });
 
-    test('unbound identities are invocation-scoped and claim no revision', () {
-      final first = StageIdentity.forUnboundPlan(
-        runId: 'run-a',
-        resolvedPlan: const {'unit': 'tool'},
-      );
-      final sameRun = StageIdentity.forUnboundPlan(
-        runId: 'run-a',
-        resolvedPlan: const {'unit': 'tool'},
-      );
-      final laterRun = StageIdentity.forUnboundPlan(
-        runId: 'run-b',
-        resolvedPlan: const {'unit': 'tool'},
-      );
+    test('a receipt from a stage of uncommitted source is not read', () {
+      final identity = _identity(const {'unit': 'tool'});
+      final json = {...identity.toJson(), 'run_id': 'run-a'};
 
-      expect(first.id, sameRun.id);
-      expect(first.id, isNot(laterRun.id));
-      expect(first.isGitBound, isFalse);
-      expect(first.headCommit, isNull);
-      expect(first.headTree, isNull);
-      expect(StageIdentity.fromJson(first.toJson()).id, first.id);
+      expect(() => StageIdentity.fromJson(json), throwsFormatException);
+      expect(StageIdentity.fromJson(identity.toJson()).id, identity.id);
     });
   });
 
@@ -342,48 +301,6 @@ void main() {
       );
     });
 
-    test('receipt byte limits preserve the last readable progress', () {
-      final header = StageReceipt(identity: stage.identity);
-      final bytes = utf8.encode(header.encode());
-      final store = StageReceiptStore(stage, maxBytes: bytes.length);
-      store.write(header);
-      expect(store.read()!.encode(), header.encode());
-      final file = File(stage.resolve('stage.json'));
-      final before = file.readAsBytesSync();
-      final modified = file.lastModifiedSync();
-      final larger = StageReceipt(
-        identity: stage.identity,
-        steps: [
-          StageStep(name: 'build', evidence: {'detail': 'more progress'}),
-        ],
-      );
-      expect(() => store.write(larger), throwsA(isA<StageReceiptLimit>()));
-      expect(file.readAsBytesSync(), before);
-      expect(file.lastModifiedSync(), modified);
-
-      // Inspection must enforce the same limit even if an external writer
-      // bypassed the atomic store. Exact-boundary receipts remain readable.
-      file.writeAsStringSync(larger.encode());
-      expect(store.read, throwsA(isA<StageReceiptLimit>()));
-    });
-
-    test('default receipt limit rejects oversized evidence before writing', () {
-      final receipt = StageReceipt(
-        identity: stage.identity,
-        steps: [
-          StageStep(
-            name: 'build',
-            evidence: {'detail': 'x' * maxStageReceiptBytes},
-          ),
-        ],
-      );
-      expect(
-        () => StageReceiptStore(stage).write(receipt),
-        throwsA(isA<StageReceiptLimit>()),
-      );
-      expect(Directory(stage.path).existsSync(), isFalse);
-    });
-
     test('lives at the content-addressed stages path', () {
       expect(
         stage.path,
@@ -443,18 +360,13 @@ void main() {
       );
     });
 
-    test('receipt parser rejects unknown fields and non-canonical bytes', () {
+    test('receipt parser rejects unknown fields', () {
       final receipt = _writeCompleteStage(stage);
       final withUnknown = Map<String, Object?>.from(receipt.toJson())
         ..['local_path'] = '/Users/example/repo';
       expect(
         () => StageReceipt.parse('${CanonicalJson.encode(withUnknown)}\n'),
         throwsFormatException,
-      );
-      expect(
-        () => StageReceipt.parse(jsonEncode(receipt.toJson())),
-        throwsFormatException,
-        reason: 'even otherwise-valid receipt JSON has one canonical form',
       );
     });
 

@@ -429,8 +429,6 @@ Future<String> statusOf({
 Future<({String text, Map<String, Object?> report})> statusRun({
   required MemorySourceTree source,
   required GitState state,
-  GitState? repositoryState,
-  Diagnostic? sourceWarning,
   required RegistryReader registry,
   String withConfig = config,
   Tools? tools,
@@ -442,6 +440,7 @@ Future<({String text, Map<String, Object?> report})> statusRun({
   bool useColor = false,
   int? terminalWidth,
   void Function(StringBuffer buffer)? onOutputReady,
+  String? only,
 }) async {
   final buffer = StringBuffer();
   onOutputReady?.call(buffer);
@@ -472,8 +471,6 @@ Future<({String text, Map<String, Object?> report})> statusRun({
     resolution: resolution!,
     tree: source,
     git: state,
-    repositoryGit: repositoryState,
-    sourceWarning: sourceWarning,
     // Origin agrees with local unless a test says otherwise; without a
     // repository the forge still reports as unread, which is what rk says
     // when it has not been given a way to look.
@@ -483,7 +480,7 @@ Future<({String text, Map<String, Object?> report})> statusRun({
     capabilities:
         capabilities ??
         HostCapabilities(hostPlatform: 'macos-arm64', containerRuntime: null),
-  ).run();
+  ).run(only: only);
   return (
     text: buffer.toString(),
     report:
@@ -675,7 +672,7 @@ path = "packages/keybay"
 publish = ["pub.dev"]
 ''',
         source: tree(),
-        state: GitState.unbound('/repo'),
+        state: GitState.none('/repo'),
         registry: FakeRegistry({
           'keybay': ['0.2.0'],
         }),
@@ -1709,13 +1706,10 @@ publish = ["pub.dev"]
     );
   });
 
-  test('a dirty unbound snapshot is a warning, not a release issue', () async {
-    final repository = git(clean: false);
+  test('uncommitted work stops staging whatever a unit publishes', () async {
     final run = await statusRun(
       source: tree(),
-      state: GitState.unbound(repository.root),
-      repositoryState: repository,
-      sourceWarning: repository.uncommittedSnapshotWarning(),
+      state: git(clean: false),
       withConfig: '''
 schema = 2
 
@@ -1728,13 +1722,11 @@ publish = ["pub.dev"]
       }),
     );
 
-    expect(run.text, contains('Warnings'));
-    expect(run.text, contains('will be captured in the source snapshot'));
-    expect(run.text, isNot(contains('issue prevents release')));
-    expect(run.report['problems'], isEmpty);
-    expect((run.report['warnings'] as List).single['code'], 'RK-GIT-001');
-    expect((run.report['repository'] as Map)['source_binding'], 'unbound');
-    expect(run.report['next'], ['rk release core']);
+    expect(run.text, contains('issue prevents release'));
+    expect((run.report['problems'] as List).single['code'], 'RK-GIT-001');
+    expect(run.report['warnings'], isEmpty);
+    expect((run.report['repository'] as Map)['source_binding'], 'gitCommit');
+    expect(run.report['next'], isEmpty);
   });
 
   for (final code in const ['RK-GIT-004', 'RK-GIT-005', 'RK-GIT-007']) {
@@ -2877,6 +2869,69 @@ dependencies:
       reason: 'a repository release publishes core before cli',
     );
     expect(run.report['next'], ['rk stage']);
+  });
+
+  group('a unit that releases after a sibling not on pub.dev yet', () {
+    const siblings = '''
+schema = 2
+
+[release.cli]
+path = "packages/cli"
+publish = ["pub.dev"]
+
+[release.core]
+path = "packages/keybay"
+publish = ["pub.dev"]
+''';
+    MemorySourceTree source() => MemorySourceTree({
+      'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
+      'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
+      'packages/cli/pubspec.yaml':
+          'name: keybay_cli\nversion: 0.2.0\ndependencies:\n  keybay: 0.2.0\n',
+      'packages/cli/CHANGELOG.md': '## 0.2.0\n',
+    }, description: '/repo/keybay');
+
+    test('is shown after it, in the order they release', () async {
+      final run = await statusRun(
+        withConfig: siblings,
+        source: source(),
+        state: git(),
+        registry: FakeRegistry({
+          'keybay': ['0.1.0'],
+          'keybay_cli': ['0.1.0'],
+        }),
+      );
+
+      expect(
+        (run.report['units'] as List).map((unit) => (unit as Map)['name']),
+        ['core', 'cli'],
+      );
+      expect(
+        run.text.indexOf('\n  core 0.1.0'),
+        allOf(isNonNegative, lessThan(run.text.indexOf('\n  cli 0.1.0'))),
+      );
+    });
+
+    test('is released with it, by the repository command', () async {
+      final run = await statusRun(
+        withConfig: siblings,
+        source: source(),
+        state: git(),
+        registry: FakeRegistry({
+          'keybay': ['0.1.0'],
+          'keybay_cli': ['0.1.0'],
+        }),
+        only: 'cli',
+      );
+
+      expect(run.text, contains('Releases after'));
+      expect(run.report['problems'], isEmpty);
+      expect(
+        run.report['next'],
+        ['rk stage'],
+        reason: 'rk stage cli and rk release cli would wait for core',
+      );
+    });
   });
 
   test('a prerequisite rk cannot read still blocks', () async {

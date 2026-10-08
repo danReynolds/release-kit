@@ -25,13 +25,10 @@ import 'package:rk/src/commands/status.dart';
 import 'package:rk/src/commands/target.dart';
 import 'package:rk/src/targets/pub_dev/client.dart';
 import 'package:rk/src/targets/pub_dev/endpoint.dart';
-import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/output/diagnosis.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
-import 'package:rk/src/engine/dart_workspace.dart';
-import 'package:rk/src/engine/publish_target.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/engine/registry.dart';
 import 'package:rk/src/engine/resolve.dart';
@@ -39,7 +36,6 @@ import 'package:rk/src/engine/release_stage.dart';
 import 'package:rk/src/engine/release_source.dart';
 import 'package:rk/src/engine/stage_store.dart';
 import 'package:rk/src/engine/source_tree.dart';
-import 'package:rk/src/engine/source_context.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/targets/catalog.dart';
 import 'package:rk/src/version.dart';
@@ -517,9 +513,7 @@ Future<int> _init(
   final tree = gitRoot == null
       ? FileSystemSourceTree(root)
       : GitSourceTree(gitRoot) as SourceTree;
-  final git = gitRoot == null
-      ? GitState.unbound(root)
-      : await GitState.read(root);
+  final git = gitRoot == null ? null : await GitState.read(root);
   final selectorEnabled = interactive && !write && _usableInitTerminal();
 
   if (selectorEnabled) await init_ui.loadLibrary();
@@ -541,13 +535,13 @@ Future<int> _init(
       tree: tree,
       output: commandOutput,
       capabilities: HostCapabilities.inspect(),
-      origin: git.originUrl,
-      gitBound: git.isBound,
-      hasRemote: git.hasRemote,
+      origin: git?.originUrl,
+      gitBound: git != null,
+      hasRemote: git?.hasRemote ?? false,
       ambientPubHostedUrl: Platform.environment['PUB_HOSTED_URL'],
       select: interaction?.select,
       review: interaction?.review,
-      updateGitignore: git.isBound ? () => _ensureRkIgnored(root) : null,
+      updateGitignore: git != null ? () => _ensureRkIgnored(root) : null,
       write: (path, contents) {
         if (path == 'release.toml') {
           final file = File('$root/$path')..createSync(exclusive: true);
@@ -643,9 +637,16 @@ Future<int> _release(
 }) async {
   final prepared = await _prepare(output);
   if (!prepared.isReady) return prepared.code!;
-  final context = prepared.context!;
-  final source = _selectReleaseSource(prepared, unit, output);
-  if (source == null) return ExitCodes.refused;
+  final source = prepared.source!;
+  // Outside Git there is nothing to stage, and nothing of rk's — not even
+  // the stage lock — belongs in this directory.
+  if (!source.inRepository) {
+    _showRepository(output, source);
+    output.problem(source.git.stagingProblem()!);
+    output.halt(HaltKind.beforeActing);
+    return ExitCodes.refused;
+  }
+  final resolution = prepared.resolution!;
   final registry = Registry(
     host: pubEndpoint.uri.authority,
     secure: pubEndpoint.uri.scheme == 'https',
@@ -655,7 +656,7 @@ Future<int> _release(
   StageStoreLock? stageLock;
   try {
     try {
-      stageLock = StageStore(context.root).acquireForMutation();
+      stageLock = StageStore(source.root).acquireForMutation();
     } on StageStoreBusy catch (error) {
       output.problem(_stageStoreProblem(error));
       return ExitCodes.refused;
@@ -663,9 +664,8 @@ Future<int> _release(
       output.problem(_stageStoreProblem(error));
       return ExitCodes.refused;
     }
-    final resolution = source.resolution;
     final tree = source.tree;
-    final git = source.binding;
+    final git = source.git;
     final targets = TargetCatalog.builtIn(pubEndpoint: pubEndpoint);
     final stages = ReleaseStages(
       source: tree,
@@ -677,8 +677,6 @@ Future<int> _release(
       resolution: resolution,
       tree: tree,
       git: git,
-      repositoryGit: source.repository,
-      sourceWarning: source.warning,
       inspector: Inspector(
         registry: registry,
         pubDev: PubDevTarget(registry: registry),
@@ -735,366 +733,61 @@ Future<String?> _promptOnTerminal(Output output, String prompt) async {
 /// correct answer rather than a failure — an agent sweeping a fleet must not
 /// see a fault for every repository that simply does not use rk.
 class _Prepared {
-  _Prepared.ready(this.resolution, this.context) : code = null;
-  _Prepared.stopped(this.code) : resolution = null, context = null;
+  _Prepared.ready(this.source, this.resolution) : code = null;
+  _Prepared.stopped(this.code) : source = null, resolution = null;
 
+  final ReleaseSource? source;
   final Resolution? resolution;
-  final SourceContext? context;
   final int? code;
 
   bool get isReady => code == null;
 }
 
+/// Reads the release configuration once — at HEAD for a clean repository,
+/// from the working tree otherwise — for status, plan, stage and release.
 Future<_Prepared> _prepare(Output output) async {
-  final gitRoot = GitSourceTree.findRoot(Directory.current.path);
-  final root = gitRoot ?? Directory.current.absolute.path;
-  SourceTree tree = gitRoot == null
-      ? FileSystemSourceTree(root)
-      : GitSourceTree(gitRoot);
-  final git = gitRoot == null
-      ? GitState.unbound(root)
-      : await GitState.read(root);
-  if (git.isClean && git.hasCommit) {
-    tree = GitCommitSourceTree(root, git.head);
-  }
-  final String? source;
-  try {
-    source = tree.read('release.toml');
-  } on SourceUnreadable catch (error) {
-    output.repository(name: root.split('/').last);
-    output.problem(
-      error.path == 'release.toml'
-          ? _wrongReleaseConfigProblem(error.reason)
-          : Diagnostic(
-              code: 'RK-SRC-003',
-              message: 'the selected source could not be read',
-              remedy:
-                  '${error.path}: ${error.reason}\n'
-                  'Repair the repository source, then run rk again.',
-            ),
-    );
-    return _Prepared.stopped(ExitCodes.refused);
-  }
-  if (source == null) {
-    if (tree.exists('release.toml')) {
-      output.repository(name: root.split('/').last);
-      output.problem(
-        _wrongReleaseConfigProblem('release.toml must be a regular file'),
-      );
+  final source = await ReleaseSource.open(Directory.current.absolute.path);
+  switch (source.readConfig()) {
+    case ConfigMissing():
+      output.repository(name: source.root.split('/').last);
+      output.blank();
+      output.line('no release.toml', mark: Mark.none);
+      output.next('rk init');
+      return _Prepared.stopped(ExitCodes.ok);
+    case ConfigProblems(:final problems):
+      _showRepository(output, source);
+      output.blank();
+      output.problems(problems);
       return _Prepared.stopped(ExitCodes.refused);
-    }
-    _showNoReleaseConfig(output, root);
-    return _Prepared.stopped(ExitCodes.ok);
+    case ConfigResolved(:final resolution):
+      return _Prepared.ready(source, resolution);
   }
-
-  final diagnostics = Diagnostics();
-  ReleaseConfig? config;
-  Resolution? resolution;
-  try {
-    config = ReleaseConfig.parse(source, 'release.toml', diagnostics);
-    resolution = config == null
-        ? null
-        : Resolution.resolve(config, tree, diagnostics);
-
-    if (resolution != null && !git.isBound) {
-      tree = FileSystemSourceTree(
-        root,
-        roots: _filesystemSourceRoots(tree, resolution),
-      );
-      final narrowedDiagnostics = Diagnostics();
-      resolution = Resolution.resolve(config!, tree, narrowedDiagnostics);
-      for (final diagnostic in narrowedDiagnostics.found) {
-        diagnostics.report(diagnostic);
-      }
-    }
-  } on SourceUnreadable catch (error) {
-    diagnostics.add(
-      'RK-SRC-003',
-      'the source snapshot could not be read',
-      remedy:
-          '${error.path}: ${error.reason}\n'
-          'Make that path a readable repository-local regular file or '
-          'directory, then run rk again.',
-    );
-    resolution = null;
-  }
-
-  if (resolution != null && !git.isBound) {
-    for (final unit in resolution.units) {
-      final requiringGit = <PublishTarget>{
-        ...unit.publish.where((target) => target.requiresGit),
-        for (final project in unit.projects)
-          ...project.publish.where((target) => target.requiresGit),
-      };
-      if (requiringGit.isEmpty) continue;
-      final names = requiringGit.map((target) => target.configName).toList()
-        ..sort();
-      diagnostics.add(
-        'RK-SRC-001',
-        '${unit.name} selects targets that require Git',
-        remedy:
-            'initialize a Git repository, or remove '
-            '${names.join(', ')} from this unit',
-      );
-    }
-  }
-
-  if (resolution == null || diagnostics.isNotEmpty) {
-    output.repository(name: root.split('/').last);
-    output.blank();
-    output.problems(diagnostics.found);
-    return _Prepared.stopped(ExitCodes.refused);
-  }
-
-  return _Prepared.ready(resolution, SourceContext(tree: tree, git: git));
 }
 
-Set<String> _filesystemSourceRoots(SourceTree tree, Resolution resolution) {
-  final roots = <String>{
-    'release.toml',
-    ...DartWorkspaceDiscovery(tree).sourceRoots,
-    for (final unit in resolution.units)
-      for (final project in unit.projects) project.pubspec.directory,
-  };
-  return roots;
-}
-
-ReleaseSource? _selectReleaseSource(
-  _Prepared prepared,
-  String? unit,
-  Output output,
-) {
-  final context = prepared.context!;
-  final diagnostics = Diagnostics();
-  final source = ReleaseSource.select(
-    tree: context.tree,
-    git: context.git,
-    repository: context.git,
-    resolution: prepared.resolution!,
-    only: unit,
-    diagnostics: diagnostics,
-  );
-  if (source != null) return source;
-
-  final git = context.git;
+/// The repository line a refusal before any command starts is shown under.
+void _showRepository(Output output, ReleaseSource source) {
+  final git = source.git;
   output.repository(
-    name: context.root.split('/').last,
+    name: source.root.split('/').last,
     branch: git.branch,
     commit: git.hasCommit ? git.shortHead : null,
-    uncommitted: git.uncommitted.length,
-    head: git.hasCommit ? git.head : null,
-    remote: git.originUrl,
-  );
-  output.blank();
-  output.problems(diagnostics.found);
-  return null;
-}
-
-Future<int> _plan(Output output, String? unit) async {
-  final gitRoot = GitSourceTree.findRoot(Directory.current.path);
-  final root = gitRoot ?? Directory.current.absolute.path;
-  final initial = SourceContext(
-    tree: gitRoot == null ? FileSystemSourceTree(root) : GitSourceTree(gitRoot),
-    git: gitRoot == null ? GitState.unbound(root) : await GitState.read(root),
-  );
-  final prepared = await _selectPlanSource(initial, output);
-  if (!prepared.isReady) return prepared.code!;
-  return PlanCommand(
-    resolution: prepared.resolution!,
-    git: prepared.context!.git,
-    output: output,
-    targets: TargetCatalog.builtIn(),
-  ).run(only: unit);
-}
-
-/// Captures one immutable current-source view for `rk plan`.
-///
-/// This intentionally does less than [ReleaseSource.select]: a configured Git
-/// target is valid topology even when this directory has no Git identity.
-/// Readiness belongs to status and release. Like release, a clean repository
-/// with a commit resolves from immutable HEAD while a dirty, unborn, or
-/// unbound repository gets one byte snapshot. Git is read once.
-Future<_Prepared> _selectPlanSource(
-  SourceContext context,
-  Output output,
-) async {
-  final git = context.git;
-  if (git.worktreeStatusError != null) {
-    _showPlanSourceProblem(
-      output,
-      context,
-      git.uncommittedProblem() ??
-          Diagnostic(
-            code: 'RK-GIT-008',
-            message: 'the worktree state could not be read',
-            remedy:
-                '${git.worktreeStatusError}\n'
-                '`git status --porcelain` must succeed before rk can select '
-                'the source for this plan.',
-          ),
-    );
-    return _Prepared.stopped(ExitCodes.refused);
-  }
-
-  final SourceTree selected;
-  try {
-    selected = !git.isBound
-        ? _captureUnboundPlanSource(context.root)
-        : git.isClean && git.head.isNotEmpty
-        ? GitCommitSourceTree(context.root, git.head)
-        : FrozenSourceTree.capture(GitWorktreeSourceTree(context.root));
-  } on SourceUnreadable catch (error) {
-    _showPlanSourceProblem(
-      output,
-      context,
-      error.path == 'release.toml' &&
-              error.kind == SourceUnreadableKind.wrongType
-          ? _wrongReleaseConfigProblem(error.reason)
-          : Diagnostic(
-              code: 'RK-SRC-003',
-              message: 'the source snapshot could not be selected',
-              remedy:
-                  '${error.path}: ${error.reason}\n'
-                  'Stop concurrent edits, then run rk plan again.',
-            ),
-    );
-    return _Prepared.stopped(ExitCodes.refused);
-  }
-
-  final diagnostics = Diagnostics();
-  String? configSource;
-  Resolution? resolution;
-  try {
-    configSource = selected.read('release.toml');
-    if (configSource == null && selected.exists('release.toml')) {
-      diagnostics.report(
-        _wrongReleaseConfigProblem('release.toml must be a regular file'),
-      );
-    }
-    final config = configSource == null
-        ? null
-        : ReleaseConfig.parse(configSource, 'release.toml', diagnostics);
-    resolution = config == null
-        ? null
-        : Resolution.resolve(config, selected, diagnostics);
-  } on SourceUnreadable catch (error) {
-    if (error.path == 'release.toml' &&
-        error.kind == SourceUnreadableKind.wrongType) {
-      diagnostics.report(_wrongReleaseConfigProblem(error.reason));
-    } else {
-      diagnostics.add(
-        'RK-SRC-003',
-        'the selected source could not be read',
-        remedy:
-            '${error.path}: ${error.reason}\n'
-            'Repair the repository, then run rk plan again.',
-      );
-    }
-  }
-  if (diagnostics.isNotEmpty) {
-    output.repository(
-      name: context.root.split('/').last,
-      branch: git.branch,
-      commit: git.hasCommit ? git.shortHead : null,
-      uncommitted: git.isBound ? git.uncommitted.length : null,
-      head: git.hasCommit ? git.head : null,
-      remote: git.originUrl,
-    );
-    output.blank();
-    output.problems(diagnostics.found);
-    return _Prepared.stopped(ExitCodes.refused);
-  }
-  if (configSource == null) {
-    _showNoReleaseConfig(output, context.root);
-    return _Prepared.stopped(ExitCodes.ok);
-  }
-  if (resolution == null) {
-    _showPlanSourceProblem(
-      output,
-      SourceContext(tree: selected, git: git),
-      const Diagnostic(
-        code: 'RK-SRC-003',
-        message: 'the selected source could not be resolved',
-        remedy: 'Run rk plan again. If this repeats, report an rk bug.',
-      ),
-    );
-    return _Prepared.stopped(ExitCodes.refused);
-  }
-  return _Prepared.ready(resolution, SourceContext(tree: selected, git: git));
-}
-
-/// Freezes only the files plan resolution consumes in an unbound directory.
-///
-/// The first release.toml read discovers that finite manifest set; the frozen
-/// copy must contain the same release.toml bytes or discovery is retried. This
-/// avoids both an unbounded recursive snapshot and a plan assembled from two
-/// configurations when the file changes between scope discovery and capture.
-FrozenSourceTree _captureUnboundPlanSource(String root) {
-  final discovery = FileSystemSourceTree(root);
-  for (var attempt = 0; attempt < 2; attempt++) {
-    final source = discovery.read('release.toml');
-    final roots = <String>{'release.toml'};
-    final projectPaths = <String>{};
-    if (source != null) {
-      final diagnostics = Diagnostics();
-      final config = ReleaseConfig.parse(source, 'release.toml', diagnostics);
-      if (config != null) {
-        for (final unit in config.units) {
-          for (final project in unit.projects) {
-            projectPaths.add(project.path);
-            roots.add(
-              project.path == '.'
-                  ? 'pubspec.yaml'
-                  : '${project.path}/pubspec.yaml',
-            );
-          }
-        }
-      }
-    }
-    final frozen = FrozenSourceTree.capture(
-      FileSystemSourceTree(root, roots: roots, rootsAreFiles: true),
-      preservePaths: projectPaths,
-    );
-    if (frozen.read('release.toml') == source) return frozen;
-  }
-  throw SourceUnreadable(
-    'the unbound source',
-    'the file changed while plan inputs were being selected',
-  );
-}
-
-void _showNoReleaseConfig(Output output, String root) {
-  output.repository(name: root.split('/').last);
-  output.blank();
-  output.line('no release.toml', mark: Mark.none);
-  output.next('rk init');
-}
-
-Diagnostic _wrongReleaseConfigProblem(String reason) => Diagnostic(
-  code: 'RK-CONF-034',
-  message: 'release.toml is there and rk could not read it',
-  source: const SourceLocation('release.toml', 1),
-  remedy: reason,
-);
-
-void _showPlanSourceProblem(
-  Output output,
-  SourceContext context,
-  Diagnostic problem,
-) {
-  final git = context.git;
-  output.repository(
-    name: context.root.split('/').last,
-    branch: git.branch,
-    commit: git.hasCommit ? git.shortHead : null,
-    uncommitted: git.worktreeStatusError == null && git.isBound
+    uncommitted: source.inRepository && git.worktreeStatusError == null
         ? git.uncommitted.length
         : null,
     head: git.hasCommit ? git.head : null,
     remote: git.originUrl,
   );
-  output.blank();
-  output.problem(problem);
+}
+
+Future<int> _plan(Output output, String? unit) async {
+  final prepared = await _prepare(output);
+  if (!prepared.isReady) return prepared.code!;
+  return PlanCommand(
+    resolution: prepared.resolution!,
+    git: prepared.source!.git,
+    output: output,
+    targets: TargetCatalog.builtIn(),
+  ).run(only: unit);
 }
 
 Future<int> _status(
@@ -1104,16 +797,15 @@ Future<int> _status(
 }) async {
   final prepared = await _prepare(output);
   if (!prepared.isReady) return prepared.code!;
-  final source = _selectReleaseSource(prepared, unit, output);
-  if (source == null) return ExitCodes.refused;
+  final source = prepared.source!;
   final registry = Registry(
     host: pubEndpoint.uri.authority,
     secure: pubEndpoint.uri.scheme == 'https',
   );
   final cancellation = ToolCancellation();
-  final resolution = source.resolution;
+  final resolution = prepared.resolution!;
   final tree = source.tree;
-  final git = source.binding;
+  final git = source.git;
   try {
     final targets = TargetCatalog.builtIn(pubEndpoint: pubEndpoint);
     final stages = ReleaseStages(
@@ -1129,8 +821,6 @@ Future<int> _status(
       resolution: resolution,
       tree: tree,
       git: git,
-      repositoryGit: source.repository,
-      sourceWarning: source.warning,
       inspector: Inspector(
         registry: registry,
         pubDev: PubDevTarget(registry: registry),

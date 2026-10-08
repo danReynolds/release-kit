@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:math';
 
 import 'canonical_json.dart';
 import 'release_asset.dart';
@@ -16,14 +15,6 @@ import 'stage_receipt.dart';
 import 'stage_source.dart';
 import 'git.dart';
 import 'timings.dart';
-
-String _newRunId() {
-  final random = Random.secure();
-  return List.generate(
-    4,
-    (_) => random.nextInt(0x40000000).toRadixString(16).padLeft(8, '0'),
-  ).join();
-}
 
 /// One shared, cached stage resolver for status and release composition.
 class ReleaseStages {
@@ -42,37 +33,32 @@ class ReleaseStages {
   final StageContractResolver stageContracts;
   final DartSdk Function() _sdk;
   final Map<String, ReleaseStage> _stages = {};
-  final String _unboundRunId = _newRunId();
 
+  /// [unit]'s stage at this commit. A stage is named by its commit, so this
+  /// is asked only of a source that has one.
   ReleaseStage call(ResolvedUnit unit) =>
-      _stages.putIfAbsent(unit.name, () => _resolve(unit, git));
+      _stages.putIfAbsent(unit.name, () => _resolve(unit));
 
-  ReleaseStage _resolve(ResolvedUnit unit, GitState currentGit) {
-    final plan = stagePlanFor(unit, currentGit);
-    final identity = currentGit.isBound
-        ? StageIdentity.forPlan(
-            headCommit: currentGit.head,
-            headTree: currentGit.headTree,
-            resolvedPlan: plan,
-          )
-        : StageIdentity.forUnboundPlan(
-            runId: _unboundRunId,
-            resolvedPlan: plan,
-          );
+  ReleaseStage _resolve(ResolvedUnit unit) {
+    final plan = stagePlanFor(unit, git);
     return ReleaseStage(
       unit: unit,
       source: source,
       sdk: _sdk,
-      repository: currentGit.originUrl,
+      repository: git.originUrl,
       enforceUnitContract: true,
       directory: StageDirectory(
         repositoryRoot: repositoryRoot,
-        identity: identity,
+        identity: StageIdentity.forPlan(
+          headCommit: git.head,
+          headTree: git.headTree,
+          resolvedPlan: plan,
+        ),
       ),
       resolvedPlan: plan,
       targetContributions: stageContracts(
         unit: unit,
-        repository: currentGit.originUrl,
+        repository: git.originUrl,
       ),
     );
   }
@@ -189,34 +175,6 @@ class ReleaseStage {
         'stage changed before it could be reset',
         directory.path,
       );
-    }
-  }
-
-  /// Removes this unit's earlier stages of a source with no commit. Each such
-  /// run starts a stage no later run can reuse, so the one before it is
-  /// garbage once this one begins.
-  void discardEarlierUnboundStages() {
-    if (directory.identity.isGitBound) return;
-    final store = StageStore(directory.repositoryRoot);
-    for (final entry in store.inventory()) {
-      if (entry.name == directory.identity.id ||
-          entry.type != FileSystemEntityType.directory) {
-        continue;
-      }
-      try {
-        final receipt = StageReceipt.parse(
-          File(store.receiptPath(entry.name)!).readAsStringSync(),
-        );
-        final planned = receipt.plan?['unit'];
-        if (receipt.identity.isGitBound ||
-            planned is! Map ||
-            planned['name'] != unit.name) {
-          continue;
-        }
-        store.deleteEntry(entry);
-      } on Object {
-        // Not a stage rk can read as this unit's; rk clean shows it.
-      }
     }
   }
 
@@ -369,8 +327,11 @@ class ReleaseStage {
   }
 
   /// Exact public-name to private-blob mapping frozen by complete-stage.
-  Map<String, StageArtifact> releaseAssets() {
-    final receipt = requireReceipt();
+  Map<String, StageArtifact> releaseAssets() =>
+      releaseAssetsIn(requireReceipt());
+
+  /// The same mapping in a completed [receipt] already in hand.
+  static Map<String, StageArtifact> releaseAssetsIn(StageReceipt receipt) {
     final complete = receipt.steps.last;
     final encoded = complete.evidence['release_assets'];
     final byPath = {
