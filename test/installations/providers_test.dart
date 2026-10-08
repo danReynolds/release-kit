@@ -142,7 +142,7 @@ void main() {
         const SystemTools(),
         store,
         'linux-x64',
-        fetch: (uri, limit) async {
+        fetch: (uri, limit, {check}) async {
           if (uri.host == 'api.github.com') {
             return Uint8List.fromList(
               utf8.encode(

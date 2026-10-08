@@ -17,9 +17,9 @@ class PubInstallationProvider
     this.tools,
     this.dart,
     this.environment, {
-    this.fetch = fetchInstallationMetadata,
+    this.fetch = fetchHttps,
   });
-  final MetadataFetch fetch;
+  final HttpsFetch fetch;
   final Tools tools;
   final String? dart;
   final Map<String, String> environment;
@@ -158,10 +158,6 @@ class PubInstallationProvider
     ExecutableProject project, {
     InstallationCheck? check,
   }) async {
-    Future<List<int>> metadata(Uri uri, int max) =>
-        fetch == fetchInstallationMetadata
-        ? fetchInstallationMetadata(uri, max, check: check)
-        : fetch(uri, max);
     if (dart == null || !project.project.pubspec.declaresPubDev) {
       throw const InstallationFailure(
         'This source needs Dart and a pub.dev package.',
@@ -182,9 +178,10 @@ class PubInstallationProvider
     final data =
         jsonDecode(
               utf8.decode(
-                await metadata(
+                await fetch(
                   Uri.https('pub.dev', '/api/packages/${project.name}'),
                   8 * 1024 * 1024,
+                  check: check,
                 ),
               ),
             )
@@ -226,35 +223,29 @@ class PubInstallationProvider
     ExecutableProject project,
     AvailableInstallation release,
     void Function(String) progress,
-  ) async {
-    release.validate(project, source);
+  ) {
     if (release is! _PubRelease) {
       throw const InstallationFailure('Invalid Pub release.');
     }
-    progress('Installing ${project.name} ${release.version} from pub.dev…');
-    await checked(tools, dart!, [
-      '--suppress-analytics',
-      'pub',
-      'global',
-      'activate',
-      '--no-executables',
-      project.name,
-      release.version,
-    ], environment: _environment);
-    final state = await inspect(project);
-    return state.installation ??
-        (throw InstallationFailure(
-          state.problem ?? 'Pub did not activate the release.',
-        ));
+    return _activate(project, release.version, progress);
   }
 
   @override
   Future<Installation> install(
     ExecutableProject project,
     void Function(String) progress,
+  ) => _activate(project, null, progress);
+
+  /// Pub picks the newest version this SDK allows unless [version] is named.
+  /// No native binstubs: install prepares; only use selects.
+  Future<Installation> _activate(
+    ExecutableProject project,
+    String? version,
+    void Function(String) progress,
   ) async {
-    progress('Installing ${project.name} from pub.dev…');
-    // No native binstub changes: install prepares; only use selects.
+    progress(
+      'Installing ${project.name}${version == null ? '' : ' $version'} from pub.dev…',
+    );
     await checked(tools, dart!, [
       '--suppress-analytics',
       'pub',
@@ -262,12 +253,9 @@ class PubInstallationProvider
       'activate',
       '--no-executables',
       project.name,
+      ?version,
     ], environment: _environment);
-    final state = await inspect(project);
-    return state.installation ??
-        (throw InstallationFailure(
-          state.problem ?? 'Pub did not install ${project.name}.',
-        ));
+    return inspectedAfterInstall(this, project);
   }
 
   @override

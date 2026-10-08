@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -24,12 +23,12 @@ class GithubInstallationProvider
     this.tools,
     this.store,
     this.platform, {
-    this.fetch = fetchPublicRelease,
+    this.fetch = fetchHttps,
   });
   final Tools tools;
   final InstallationStore store;
   final String platform;
-  final Future<Uint8List> Function(Uri, int) fetch;
+  final HttpsFetch fetch;
   @override
   InstallationSource get source => InstallationSource.github;
 
@@ -97,9 +96,7 @@ class GithubInstallationProvider
         '/repos/${project.repository}/releases',
         {'per_page': '100', 'page': '$page'},
       );
-      final bytes = await (fetch == fetchPublicRelease
-          ? fetchInstallationMetadata(uri, 8 * 1024 * 1024, check: check)
-          : fetch(uri, 8 * 1024 * 1024));
+      final bytes = await fetch(uri, 8 * 1024 * 1024, check: check);
       final list = (jsonDecode(utf8.decode(bytes)) as List)
           .cast<Map<String, dynamic>>();
       final candidates = <(Map<String, dynamic>, Version)>[];
@@ -143,13 +140,11 @@ class GithubInstallationProvider
         );
         final manifest = ReleaseManifest.parse(
           utf8.decode(
-            (fetch == fetchPublicRelease
-                ? await fetchPublicRelease(
-                    asset(ReleaseAssets.manifest),
-                    2 * 1024 * 1024,
-                    check: check,
-                  )
-                : await fetch(asset(ReleaseAssets.manifest), 2 * 1024 * 1024)),
+            await fetch(
+              asset(ReleaseAssets.manifest),
+              2 * 1024 * 1024,
+              check: check,
+            ),
           ),
         );
         if (manifest.unit != project.unit.name ||
@@ -187,7 +182,6 @@ class GithubInstallationProvider
     AvailableInstallation release,
     void Function(String) progress,
   ) async {
-    release.validate(project, source);
     if (release is! _GithubRelease) {
       throw const InstallationFailure('Invalid GitHub release.');
     }
@@ -296,74 +290,6 @@ Future<InstallationArchive> decodeInstallationArchive(
       'The release archive does not match its executable layout.',
       error.message,
     );
-  }
-}
-
-Future<Uint8List> fetchPublicRelease(
-  Uri uri,
-  int maxBytes, {
-  InstallationCheck? check,
-}) async {
-  final client = HttpClient()..connectionTimeout = const Duration(seconds: 20);
-  void close() => client.close(force: true);
-  check?.add(close);
-  final deadline = Timer(
-    check == null ? const Duration(minutes: 3) : const Duration(seconds: 15),
-    () => client.close(force: true),
-  );
-  try {
-    // Follow only HTTPS redirects, with a bounded response and deadline.
-    for (var redirects = 0; redirects < 6; redirects++) {
-      if (uri.scheme != 'https' ||
-          uri.port != 443 ||
-          uri.userInfo.isNotEmpty ||
-          !(const {'github.com', 'api.github.com'}.contains(uri.host) ||
-              uri.host.endsWith('.githubusercontent.com'))) {
-        throw const InstallationFailure(
-          'A release download left the supported GitHub HTTPS hosts.',
-        );
-      }
-      final request = await client
-          .getUrl(uri)
-          .timeout(const Duration(seconds: 30));
-      request.followRedirects = false;
-      request.headers.set('User-Agent', 'rk-installation');
-      final response = await request.close().timeout(
-        const Duration(seconds: 30),
-      );
-      if ({301, 302, 303, 307, 308}.contains(response.statusCode)) {
-        final location = response.headers.value('location');
-        if (location == null) {
-          throw const InstallationFailure(
-            'A release redirect has no destination.',
-          );
-        }
-        uri = uri.resolve(location);
-        await response.drain<void>().timeout(const Duration(seconds: 10));
-        continue;
-      }
-      if (response.statusCode != 200) {
-        throw InstallationFailure(
-          'GitHub download returned HTTP ${response.statusCode}.',
-          'Check the public release or choose another source. Private GitHub downloads are not supported yet.',
-        );
-      }
-      final data = BytesBuilder(copy: false);
-      await for (final chunk in response.timeout(const Duration(seconds: 30))) {
-        if (data.length + chunk.length > maxBytes) {
-          throw const InstallationFailure(
-            'Release download exceeded its expected size.',
-          );
-        }
-        data.add(chunk);
-      }
-      return data.takeBytes();
-    }
-    throw const InstallationFailure('Too many release download redirects.');
-  } finally {
-    check?.remove(close);
-    deadline.cancel();
-    client.close(force: true);
   }
 }
 

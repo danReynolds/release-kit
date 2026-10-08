@@ -14,11 +14,11 @@ class HomebrewInstallationProvider
   HomebrewInstallationProvider(
     this.tools,
     this.brew, {
-    this.fetch = fetchInstallationMetadata,
+    this.fetch = fetchHttps,
     String? platform,
   }) : platform = platform ?? HostCapabilities.inspect().hostPlatform;
   final String platform;
-  final MetadataFetch fetch;
+  final HttpsFetch fetch;
   final Tools tools;
   final String? brew;
   @override
@@ -132,10 +132,6 @@ class HomebrewInstallationProvider
     ExecutableProject project, {
     InstallationCheck? check,
   }) async {
-    Future<List<int>> metadata(Uri uri, int max) =>
-        fetch == fetchInstallationMetadata
-        ? fetchInstallationMetadata(uri, max, check: check)
-        : fetch(uri, max);
     if (brew == null) {
       throw const InstallationFailure('Install Homebrew to use this source.');
     }
@@ -144,12 +140,13 @@ class HomebrewInstallationProvider
     final json =
         jsonDecode(
               utf8.decode(
-                await metadata(
+                await fetch(
                   Uri.https(
                     'api.github.com',
                     '/repos/$tap/contents/Formula/$token.rb',
                   ),
                   1024 * 1024,
+                  check: check,
                 ),
               ),
             )
@@ -188,7 +185,6 @@ class HomebrewInstallationProvider
     AvailableInstallation release,
     void Function(String) progress,
   ) async {
-    release.validate(project, source);
     if (release is! _BrewRelease || brew == null) {
       throw const InstallationFailure('Invalid Homebrew release.');
     }
@@ -222,17 +218,7 @@ class HomebrewInstallationProvider
     }
     progress('Installing ${project.name} ${release.version} with Homebrew…');
     final installed = (await inspect(project)).installation;
-    await checked(tools, brew!, [
-      installed == null ? 'install' : 'upgrade',
-      '--formula',
-      if (installed == null) '--skip-link',
-      project.formula,
-    ], environment: _environment);
-    final state = await inspect(project);
-    return state.installation ??
-        (throw InstallationFailure(
-          state.problem ?? 'Homebrew did not install the release.',
-        ));
+    return _brew(project, upgrade: installed != null);
   }
 
   @override
@@ -241,17 +227,22 @@ class HomebrewInstallationProvider
     void Function(String) progress,
   ) async {
     progress('Installing ${project.formula}…');
+    return _brew(project, upgrade: false);
+  }
+
+  /// Installs without linking into Homebrew's bin, or upgrades only this
+  /// formula; the launcher runs it through `opt/<name>`.
+  Future<Installation> _brew(
+    ExecutableProject project, {
+    required bool upgrade,
+  }) async {
     await checked(tools, brew!, [
-      'install',
+      upgrade ? 'upgrade' : 'install',
       '--formula',
-      '--skip-link',
+      if (!upgrade) '--skip-link',
       project.formula,
     ], environment: _environment);
-    final state = await inspect(project);
-    return state.installation ??
-        (throw InstallationFailure(
-          state.problem ?? 'Homebrew did not install ${project.formula}.',
-        ));
+    return inspectedAfterInstall(this, project);
   }
 
   @override

@@ -563,7 +563,7 @@ void main() {
         }),
         '/dart',
         {},
-        fetch: (_, _) async => Uint8List.fromList(
+        fetch: (_, _, {check}) async => Uint8List.fromList(
           utf8.encode(
             jsonEncode({
               'versions': [
@@ -632,7 +632,7 @@ void main() {
           }),
           '/brew',
           platform: 'linux-x64',
-          fetch: (_, _) async => Uint8List.fromList(
+          fetch: (_, _, {check}) async => Uint8List.fromList(
             utf8.encode(
               jsonEncode({
                 'encoding': 'base64',
@@ -679,7 +679,7 @@ void main() {
         }),
         '/brew',
         platform: 'linux-x64',
-        fetch: (_, _) async => Uint8List.fromList(
+        fetch: (_, _, {check}) async => Uint8List.fromList(
           utf8.encode(
             jsonEncode({
               'encoding': 'base64',
