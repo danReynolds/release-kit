@@ -114,9 +114,8 @@ final class PubDevTargetModule extends TargetModule {
   Future<TargetHistory> inspectHistory(
     TargetReadContext context,
     ResolvedUnit unit,
-    TargetPlan target, {
-    bool fresh = false,
-  }) async {
+    TargetPlan target,
+  ) async {
     final reader = context.registry;
     if (reader == null) {
       return TargetHistory(
@@ -125,7 +124,6 @@ final class PubDevTargetModule extends TargetModule {
         ),
       );
     }
-    if (fresh) reader.forget(target.coordinate);
     try {
       final package = await reader.lookup(target.coordinate);
       final latest = package?.latest;
@@ -255,21 +253,6 @@ final class PubDevTargetModule extends TargetModule {
       ),
       unit: unit.name,
     );
-  }
-
-  @override
-  String destinationBinding(
-    TargetReadinessContext context,
-    ResolvedUnit unit,
-    List<TargetPlan> targets,
-  ) {
-    final endpoints = <String>[
-      for (final target in targets)
-        target.project!.pubspec.effectivePublishDestination(
-          context.environment,
-        ),
-    ]..sort();
-    return endpoints.join('\n');
   }
 
   @override

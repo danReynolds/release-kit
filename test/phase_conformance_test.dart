@@ -786,8 +786,6 @@ publish = ["git-tag", "pub.dev"]
           // running it.
           refreshEnvironment: () => const {'HOME': '/nowhere'},
           stageFor: stages.call,
-          refreshStage: stages.refresh,
-          refreshGit: () async => git,
         ).run(only: 'core');
       } on Object catch (error) {
         died = error;
@@ -2284,7 +2282,6 @@ executables:
         confirm: (_) async => 'yes',
         stageOnly: stageOnly,
         stageFor: stageFor,
-        refreshStage: (unit, _) => stageFor(unit),
         wait: (_) => Future<void>.delayed(Duration.zero),
         // A conformance run must not read the pub session of whoever is
         // running it.
@@ -2798,28 +2795,6 @@ executables:
           reason:
               'first-identity is receipt data, not inferred from the mere '
               'presence of a signing certificate',
-        );
-      },
-    );
-
-    test(
-      'a changed public signing baseline refuses before authorization',
-      () async {
-        final run = await binaryDrive(
-          dryRun: false,
-          label: '-baseline-race',
-          previousTag: 'v0.9.0',
-          baselineChangesBeforeConsent: true,
-        );
-
-        expect(run.code, ExitCodes.refused, reason: run.text);
-        expect(problemCodes(run.json), contains('RK-SIGN-013'));
-        expect(
-          run.calls.where((call) => call.startsWith('git push origin')),
-          isEmpty,
-          reason:
-              'the baseline refresh is before consent and the first public '
-              'act',
         );
       },
     );

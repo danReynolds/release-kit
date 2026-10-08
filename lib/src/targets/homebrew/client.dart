@@ -287,13 +287,6 @@ class HomebrewUpdateAuthority {
   /// local stage is gone. Null for ordinary stage-backed updates.
   final List<int>? replacement;
 
-  /// Binds the public compare-and-swap base and recovered replacement.
-  String? get recoveryBinding {
-    final bytes = replacement;
-    if (bytes == null) return null;
-    return '${sha256 ?? 'absent'}:${Sha256.hex(bytes)}';
-  }
-
   bool accepts(List<int>? bytes) {
     final expected = sha256;
     if (expected == null) return bytes == null;

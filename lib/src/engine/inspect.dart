@@ -57,20 +57,6 @@ class Inspector {
   /// The one closed target catalog shared by status and release.
   final TargetCatalog targets;
 
-  /// A call-local view of the same public readers using observed stage bytes.
-  /// This does not install the candidate into a release-stage resolver or grant
-  /// permission to publish it. Status supplies its locally checked snapshot.
-  Inspector forStages(ReleaseStage Function(ResolvedUnit unit) stageFor) =>
-      Inspector(
-        registry: registry,
-        git: git,
-        pubDev: pubDev,
-        tools: tools,
-        repository: repository,
-        stageFor: stageFor,
-        targets: targets,
-      );
-
   /// The read-only dependencies every target receives.
   TargetReadContext get targetReads => TargetReadContext(
     registry: registry,
@@ -154,13 +140,8 @@ class Inspector {
   /// This is status metadata, not a substitute for inspecting the exact
   /// candidate coordinate. The candidate answers whether acting is needed;
   /// this answers the separate operator question, "what is this lane at?"
-  Future<TargetHistory?> inspectHistory(
-    TargetPlan target,
-    ResolvedUnit unit, {
-    bool fresh = false,
-  }) => targets
-      .moduleForTarget(target)
-      .inspectHistory(targetReads, unit, target, fresh: fresh);
+  Future<TargetHistory?> inspectHistory(TargetPlan target, ResolvedUnit unit) =>
+      targets.moduleForTarget(target).inspectHistory(targetReads, unit, target);
 
   Inspection _stageInspection(ResolvedUnit unit) {
     final factory = stageFor;
@@ -171,17 +152,6 @@ class Inspector {
       return factory(unit).inspect().asInspection;
     } on Object catch (error) {
       return Inspection.unknown('the release stage could not be read: $error');
-    }
-  }
-
-  /// Discard public prerequisite observations before a delayed preparation
-  /// phase. The inspector owns their native coordinates and registry cache;
-  /// command orchestration only supplies the checklist it will observe again.
-  void invalidatePrerequisites(Iterable<Step> steps) {
-    for (final step in steps) {
-      if (step.kind != StepKind.prerequisite) continue;
-      final coordinate = _prerequisiteCoordinate(step);
-      if (coordinate != null) registry?.forget(coordinate.name);
     }
   }
 
@@ -237,9 +207,8 @@ class Inspector {
   Future<ReleaseHistoryCheck> releaseMonotonicity(
     ResolvedUnit unit,
     Iterable<TargetPlan> targets,
-    Diagnostics problems, {
-    bool refreshRegistry = false,
-  }) async {
+    Diagnostics problems,
+  ) async {
     final candidates = <TargetPlan>[];
     final seen = <String>{};
     for (final target in targets) {
@@ -253,7 +222,7 @@ class Inspector {
       for (final target in candidates)
         () async {
           try {
-            return await inspectHistory(target, unit, fresh: refreshRegistry);
+            return await inspectHistory(target, unit);
           } on Object catch (error) {
             return TargetHistory(
               inspection: Inspection.unknown(
@@ -265,12 +234,10 @@ class Inspector {
     ];
     final latest = await Future.wait(reads);
 
-    var readIndependentHistory = false;
     final claims = <TargetClaim>[];
     for (final (index, target) in candidates.indexed) {
       final history = latest[index];
       if (history == null) continue;
-      readIndependentHistory = true;
       claims.addAll(history.claims);
       history.problems.forEach(problems.report);
       final inspection = history.inspection;
@@ -301,10 +268,7 @@ class Inspector {
         continue;
       }
     }
-    return ReleaseHistoryCheck(
-      readIndependentHistory: readIndependentHistory,
-      claims: claims,
-    );
+    return ReleaseHistoryCheck(claims: claims);
   }
 
   /// Cross-step judgments about the tag, which no single step can make.
@@ -453,16 +417,11 @@ class Inspector {
       sha.length > 12 ? sha.substring(0, 12) : sha;
 }
 
-/// Provider-neutral facts produced by one complete public-history pass.
-///
-/// Release carries these forward so authorization does not trigger a second
-/// set of remote reads merely to rediscover first-publication claims.
+/// What one read of every lane's public history found: the names this
+/// release would claim for the first time.
 final class ReleaseHistoryCheck {
-  ReleaseHistoryCheck({
-    required this.readIndependentHistory,
-    Iterable<TargetClaim> claims = const [],
-  }) : claims = List.unmodifiable(claims);
+  ReleaseHistoryCheck({Iterable<TargetClaim> claims = const []})
+    : claims = List.unmodifiable(claims);
 
-  final bool readIndependentHistory;
   final List<TargetClaim> claims;
 }

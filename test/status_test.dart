@@ -286,9 +286,8 @@ class FixedInspector extends Inspector {
   @override
   Future<TargetHistory?> inspectHistory(
     TargetPlan target,
-    ResolvedUnit unit, {
-    bool fresh = false,
-  }) async {
+    ResolvedUnit unit,
+  ) async {
     final configured = latest;
     if (configured != null) {
       return TargetHistory.versioned(inspection: configured, target: target);
@@ -304,7 +303,7 @@ class FixedInspector extends Inspector {
       );
     }
     if (targetAnswer.isAbsent && target.kind == 'pubDev') {
-      return super.inspectHistory(target, unit, fresh: fresh);
+      return super.inspectHistory(target, unit);
     }
     return TargetHistory.versioned(inspection: targetAnswer, target: target);
   }

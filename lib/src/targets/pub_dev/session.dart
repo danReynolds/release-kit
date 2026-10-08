@@ -115,13 +115,6 @@ final class PubDevSession extends TargetSessionProvider {
     }
   }
 
-  @override
-  Future<bool?> established(TargetReadinessContext context) async {
-    if (await _tokenConfigured(context)) return true;
-    if (!endpoint.isPubDev) return false;
-    return _sessionStored(context);
-  }
-
   /// Whether this machine already holds a pub session, or null when rk
   /// cannot tell where one would be kept.
   static bool? _sessionStored(TargetReadinessContext context) {
@@ -132,20 +125,6 @@ final class PubDevSession extends TargetSessionProvider {
     } on FileSystemException {
       return null;
     }
-  }
-
-  @override
-  Future<String?> restore(TargetReadinessContext context) async {
-    // A local composition only uses preexisting tokens and never creates a
-    // public OAuth session. In particular, it must never run pub logout.
-    if (!endpoint.isPubDev) return null;
-    final out = await context.tools.run('dart', const [
-      'pub',
-      'logout',
-    ], workingDirectory: context.git.root);
-    return out.ok
-        ? 'pub session cleared — it did not exist before this release'
-        : 'pub session could not be cleared: ${out.summary}';
   }
 }
 

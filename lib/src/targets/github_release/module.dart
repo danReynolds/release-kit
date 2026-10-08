@@ -121,9 +121,8 @@ final class GithubReleaseTargetModule extends TargetModule {
   Future<TargetHistory> inspectHistory(
     TargetReadContext context,
     ResolvedUnit unit,
-    TargetPlan target, {
-    bool fresh = false,
-  }) async {
+    TargetPlan target,
+  ) async {
     final tools = context.tools;
     if (tools == null) {
       return TargetHistory.versioned(

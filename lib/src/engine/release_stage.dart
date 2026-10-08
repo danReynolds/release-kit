@@ -48,11 +48,6 @@ class ReleaseStages {
   ReleaseStage call(ResolvedUnit unit) =>
       _stages.putIfAbsent(unit.name, () => _resolve(unit, git));
 
-  /// Resolves the stage again from Git state read at a later boundary, so a
-  /// changed commit, tree, origin or configuration names another stage.
-  ReleaseStage refresh(ResolvedUnit unit, GitState currentGit) =>
-      _resolve(unit, currentGit);
-
   ReleaseStage _resolve(ResolvedUnit unit, GitState currentGit) {
     final plan = stagePlanFor(unit, currentGit);
     final identity = currentGit.isBound

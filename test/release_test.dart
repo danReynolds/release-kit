@@ -455,8 +455,6 @@ Future<Ran> release({
           },
     stageOnly: dryRun,
     stageFor: stageFor,
-    refreshStage: (unit, _) => stageFor(unit),
-    refreshGit: () async => effectiveGit,
     // A release must not read the machine running the tests. Without a
     // HOME of its own, rk finds whatever pub session the developer happens
     // to have, and a test about a missing session passes or fails on that.
@@ -1533,7 +1531,10 @@ void main() {
       'dart pub publish --to-archive <archive>',
     );
     final tag = ran.calls.indexWhere(
-      (call) => call.startsWith('git tag -s v0.2.0 -m core 0.2.0'),
+      (call) => call.startsWith(
+        'git tag -a v0.2.0 1111111111111111111111111111111111111111 '
+        '-m core 0.2.0',
+      ),
     );
     final push = ran.calls.indexOf(_tagPush);
     final publish = ran.calls.indexOf(
@@ -1638,40 +1639,6 @@ publish = ["pub.dev"]
         hasLength(1),
         reason: 'only other is published',
       );
-    },
-  );
-
-  test(
-    'a destination redirected during login refuses without disclosing it',
-    () async {
-      var redirected = false;
-      final ran = await release(
-        typed: 'yes',
-        refreshEnvironment: () => {
-          'PUB_HOSTED_URL': redirected
-              ? 'https://token:secret@packages.example.invalid/private'
-              : 'https://pub.dev',
-        },
-        onRun: (key) {
-          if (key == 'dart pub login') redirected = true;
-        },
-      );
-
-      expect(ran.exitCode, ExitCodes.refused);
-      expect(
-        ran.problems.map((problem) => problem['code']),
-        contains('RK-DEST-001'),
-      );
-      expect(ran.calls, contains('dart pub publish --to-archive <archive>'));
-      expect(ran.calls, contains('dart pub login'));
-      expect(ran.calls.where((call) => call.startsWith('git tag ')), isEmpty);
-      expect(
-        ran.calls,
-        isNot(contains('dart pub publish --from-archive <archive> --force')),
-      );
-      expect(ran.text, isNot(contains('token')));
-      expect(ran.text, isNot(contains('secret')));
-      expect(ran.text, isNot(contains('packages.example.invalid')));
     },
   );
 
@@ -1992,6 +1959,20 @@ publish = ["pub.dev"]
     },
   );
 
+  test('a signing key alone does not sign release tags', () async {
+    // As with git tag -a: a key that is there for commits does not make a
+    // release tag signed. tag.gpgSign, or a signed release history, does.
+    final ran = await release(
+      state: _git(signing: true),
+      registry: _MutableRegistry(<String>['0.1.0']),
+    );
+    expect(
+      ran.calls.firstWhere((c) => c.startsWith('git tag')),
+      startsWith('git tag -a'),
+    );
+    expect(ran.text, contains('unsigned, pushed'));
+  });
+
   test('an unsigned repository still tags, and says so', () async {
     final ran = await release(
       state: _git(signing: false),
@@ -2026,17 +2007,6 @@ publish = ["pub.dev"]
       }
       return (environment: () => {'HOME': root.path}, credentials: credentials);
     }
-
-    test('is cleared when the release is what created it', () async {
-      final machine = home(signedIn: false);
-      final ran = await release(
-        refreshEnvironment: machine.environment,
-        registry: _MutableRegistry(<String>['0.1.0']),
-      );
-      expect(ran.calls, contains('dart pub login'));
-      expect(ran.calls, contains('dart pub logout'));
-      expect(ran.text, contains('pub session cleared'));
-    });
 
     test('is left alone when the machine was already signed in', () async {
       final machine = home(signedIn: true);
@@ -2100,7 +2070,6 @@ publish = ["pub.dev"]
         contains('dart pub login'),
         reason: 'that token is for another registry entirely',
       );
-      expect(ran.calls, contains('dart pub logout'));
     });
 
     test('a missing dart executable refuses instead of crashing', () async {
@@ -2119,27 +2088,6 @@ publish = ["pub.dev"]
         ran.exitCode,
         isNot(ExitCodes.crashed),
         reason: 'an unanswerable question is not a crash',
-      );
-    });
-
-    test('is cleared even when the release stops partway', () async {
-      final machine = home(signedIn: false);
-      final ran = await release(
-        refreshEnvironment: machine.environment,
-        registry: _MutableRegistry(<String>['0.1.0']),
-        results: {
-          'git push origin $_tagObject:refs/tags/v0.2.0': ToolResult(
-            exitCode: 1,
-            stdout: '',
-            stderr: 'remote rejected',
-          ),
-        },
-      );
-      expect(ran.exitCode, isNot(ExitCodes.ok));
-      expect(
-        ran.calls,
-        contains('dart pub logout'),
-        reason: 'a run that failed still must not leave a session behind',
       );
     });
   });
@@ -2687,120 +2635,6 @@ publish = ["pub.dev"]
   });
 
   test(
-    'public history is refreshed after staging and before authorization',
-    () async {
-      var inventories = 0;
-      var staged = false;
-      final ran = await release(
-        onRun: (key) {
-          if (key == 'dart pub publish --to-archive <archive>') staged = true;
-        },
-        answers: (key) {
-          if (key != 'git ls-remote --tags origin') return null;
-          inventories++;
-          return ToolResult(
-            exitCode: 0,
-            stdout: !staged
-                ? ''
-                : 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa '
-                      'refs/tags/v0.5.0\n',
-            stderr: '',
-          );
-        },
-      );
-
-      expect(inventories, greaterThanOrEqualTo(2));
-      expect(ran.exitCode, ExitCodes.refused);
-      expect(
-        ran.problems.map((problem) => problem['code']),
-        contains('RK-MONO-003'),
-      );
-      expect(
-        ran.calls,
-        contains('dart pub publish --to-archive <archive>'),
-        reason: 'the newer tag appeared only after the private stage was made',
-      );
-      expect(
-        ran.calls.where((call) => call.startsWith('git tag ')),
-        isEmpty,
-        reason: 'the refreshed gate still runs before authorization or act',
-      );
-    },
-  );
-
-  test(
-    'history advancing after authorization refuses before the first act',
-    () async {
-      var inventories = 0;
-      final ran = await release(
-        answers: (key) {
-          if (key != 'git ls-remote --tags origin') return null;
-          inventories++;
-          return ToolResult(
-            exitCode: 0,
-            stdout: inventories < 4
-                ? ''
-                : 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa '
-                      'refs/tags/v0.5.0\n',
-            stderr: '',
-          );
-        },
-      );
-
-      expect(
-        inventories,
-        4,
-        reason:
-            'initial, post-stage, authorization, and immediate pre-act '
-            'reads',
-      );
-      expect(ran.exitCode, ExitCodes.refused);
-      expect(
-        ran.problems.map((problem) => problem['code']),
-        contains('RK-MONO-003'),
-      );
-      expect(ran.calls.where((call) => call.startsWith('git tag ')), isEmpty);
-      expect(
-        ran.calls,
-        isNot(contains('dart pub publish --from-archive <archive> --force')),
-        reason: 'no later public step can run after the first lane advances',
-      );
-    },
-  );
-
-  test('the authorization snapshot refreshes public history last', () async {
-    var inventories = 0;
-    final ran = await release(
-      typed: 'stop',
-      answers: (key) {
-        if (key != 'git ls-remote --tags origin') return null;
-        inventories++;
-        return ToolResult(
-          exitCode: 0,
-          stdout: inventories < 3
-              ? ''
-              : 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa '
-                    'refs/tags/v0.5.0\n',
-          stderr: '',
-        );
-      },
-    );
-
-    expect(inventories, 3);
-    expect(ran.exitCode, ExitCodes.refused);
-    expect(
-      ran.problems.map((problem) => problem['code']),
-      contains('RK-MONO-003'),
-    );
-    expect(
-      ran.problems.map((problem) => problem['code']),
-      isNot(contains('RK-AUTH-001')),
-      reason: 'the final public snapshot runs before authorization is asked',
-    );
-    expect(ran.calls.where((call) => call.startsWith('git tag ')), isEmpty);
-  });
-
-  test(
     'a fully published version with no tag is not tagged after the fact',
     () async {
       final ran = await release(
@@ -2961,7 +2795,9 @@ void mutationCloseout() {
 
     expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
     expect(
-      ran.calls.where((c) => c.startsWith('git tag -s')),
+      ran.calls.where(
+        (c) => c.startsWith('git tag -s') || c.startsWith('git tag -a'),
+      ),
       isEmpty,
       reason: 'the tag exists; re-creating it would fail',
     );

@@ -29,14 +29,12 @@ import '../transforms/macos.dart';
 import 'release_preparation.dart';
 import 'release_progress.dart';
 
-/// Owns the private stage boundary and the ambient facts that authorize its
-/// reuse at a later public boundary.
+/// Owns the private stage boundary: building, resuming or reusing the stage
+/// a release publishes from.
 final class ReleaseStageCoordinator {
   const ReleaseStageCoordinator({
     required this.initialGit,
     required this.output,
-    required this.refreshGit,
-    required this.refreshStage,
     required this.tools,
     required this.capabilities,
     required this.stageFor,
@@ -45,8 +43,6 @@ final class ReleaseStageCoordinator {
 
   final GitState initialGit;
   final Output output;
-  final Future<GitState> Function() refreshGit;
-  final ReleaseStage Function(ResolvedUnit unit, GitState git) refreshStage;
   final Tools tools;
   final HostCapabilities capabilities;
   final ReleaseStage Function(ResolvedUnit unit) stageFor;
@@ -89,113 +85,6 @@ final class ReleaseStageCoordinator {
       );
     }
     return null;
-  }
-
-  bool stageStillValid(
-    ReleaseStage stage,
-    ResolvedUnit unit, {
-    required String changed,
-    required HaltKind halt,
-  }) {
-    final inspected = stage.inspect();
-    if (inspected.reusable) return true;
-    output.problem(
-      Diagnostic(
-        code: 'RK-STAGE-002',
-        message: 'the reviewed release stage changed $changed',
-        remedy:
-            '${inspected.issues.join('\n')}\n'
-            'rebuild it explicitly: rk stage ${unit.name}',
-      ),
-    );
-    output.halt(halt);
-    return false;
-  }
-
-  /// Re-reads every ambient input that authorizes reuse of [stage].
-  Future<bool> contextStillValid(
-    ReleaseStage stage,
-    ResolvedUnit unit, {
-    required String changed,
-    required HaltKind halt,
-  }) async {
-    final drift = <String>[];
-    final GitState current;
-    try {
-      current = await refreshGit();
-    } on Object catch (error) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-STAGE-004',
-          message: 'the release context could not be refreshed $changed',
-          remedy:
-              'restore a readable repository, then re-run '
-              'rk stage ${unit.name}',
-          evidence: '$error',
-        ),
-      );
-      output.halt(halt);
-      return false;
-    }
-
-    if (current.isBound != initialGit.isBound) {
-      drift.add('the source binding changed');
-    } else if (initialGit.isBound && current.head != initialGit.head) {
-      drift.add(
-        'HEAD is ${current.shortHead}; staged HEAD was '
-        '${initialGit.shortHead}',
-      );
-    }
-    if (initialGit.isBound && current.headTree != initialGit.headTree) {
-      drift.add('the HEAD tree changed');
-    }
-    if (initialGit.isBound && !current.isClean) {
-      final detail =
-          current.worktreeStatusError ??
-          (current.uncommitted.isEmpty
-              ? 'the worktree is not clean'
-              : 'uncommitted: ${current.uncommitted.join(', ')}');
-      drift.add(detail);
-    }
-    if (unit.publish.contains(PublishTarget.gitTag) && !current.headIsPushed) {
-      drift.add('HEAD is no longer present on a remote branch');
-    }
-    if (initialGit.isBound && current.originUrl != initialGit.originUrl) {
-      drift.add(
-        'origin is ${current.originUrl ?? 'unreadable'}; staged origin '
-        'was ${initialGit.originUrl ?? 'unreadable'}',
-      );
-    }
-    if (unit.publish.contains(PublishTarget.gitTag) &&
-        current.signingConfigured != initialGit.signingConfigured) {
-      drift.add('the Git tag-signing policy changed');
-    }
-    try {
-      final refreshed = refreshStage(unit, current);
-      if (refreshed.directory.identity.id != stage.directory.identity.id) {
-        drift.add(
-          'the release plan now resolves to '
-          '${refreshed.directory.identity.id}; the reviewed stage is '
-          '${stage.directory.identity.id}',
-        );
-      }
-    } on Object catch (error) {
-      drift.add('the release plan could not be resolved: $error');
-    }
-
-    if (drift.isEmpty) return true;
-    output.problem(
-      Diagnostic(
-        code: 'RK-STAGE-004',
-        message: 'the repository or release plan changed $changed',
-        remedy:
-            '${drift.join('\n')}\n'
-            'restore those inputs or review a replacement stage: '
-            'rk stage ${unit.name}',
-      ),
-    );
-    output.halt(halt);
-    return false;
   }
 
   /// Produces or reuses the exact receipt-backed private stage. [fromSource]
@@ -647,33 +536,6 @@ final class ReleaseStageCoordinator {
       // run will inspect the leftover and either recover it or replace the
       // incomplete stage; cleanup cannot make publication less safe.
     }
-  }
-
-  /// Confirms that the public identity used to sign the reviewed stage has
-  /// not changed while staging and remote reads were in flight.
-  Future<bool> signingStillValid(
-    ResolvedUnit unit,
-    PreparedRelease prepared,
-  ) async {
-    final project = _macosProject(unit);
-    if (project == null) return true;
-    final refreshed = await _signingBaseline(unit, project);
-    if (!refreshed.ok) return false;
-    if (prepared.signing != null &&
-        refreshed.requirement == prepared.signing!.publishedRequirement) {
-      return true;
-    }
-    output.problem(
-      Diagnostic(
-        code: 'RK-SIGN-013',
-        message: 'the published signing identity changed after staging',
-        remedy:
-            'The reviewed signature was built against a different public '
-            'baseline. Rebuild it explicitly: rk stage ${unit.name}.',
-      ),
-    );
-    output.halt(HaltKind.beforeActing);
-    return false;
   }
 
   List<_StageWarning> _recordedStageWarnings(

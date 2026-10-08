@@ -673,9 +673,6 @@ Future<int> _release(
       git: git,
       stageContracts: targets.stageContractResolver(resolution),
     );
-    Future<GitState> readGit() async => git.isBound
-        ? await GitState.read(context.root)
-        : GitState.unbound(context.root);
     const targetTools = SystemTools(timeout: Duration(minutes: 2));
     return await ReleaseCommand(
       resolution: resolution,
@@ -710,8 +707,6 @@ Future<int> _release(
           interactive && stdin.hasTerminal && stdout.hasTerminal,
       stageOnly: stageOnly,
       stageFor: stages.call,
-      refreshStage: stages.refresh,
-      refreshGit: readGit,
     ).run(only: unit);
   } finally {
     stageLock?.close();
