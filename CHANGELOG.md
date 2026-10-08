@@ -30,6 +30,11 @@
   their stages about half a second, down from 4s.
 - `rk stage` no longer needs HEAD on origin; only the tag `rk release` pushes
   does.
+- `rk status` and `rk release` read a unit through one shared snapshot, so
+  they agree on it. `rk status` no longer asks for a lost stage that `rk
+  release` does not need (a Homebrew formula finished from the public
+  release), and no longer reports a GitHub Release's current version as
+  unreadable when it was never read.
 - `rk status` shows a package another unit in the repository releases first
   as "Releases after", not as an issue that prevents release. With several
   units unfinished it suggests the repository-wide `rk stage` or `rk release`.

@@ -5,13 +5,13 @@ import '../engine/assets.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
 import '../engine/inspect.dart';
-import '../engine/stage_recovery.dart';
 import '../engine/publish_target.dart';
 import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
 import '../engine/source_tree.dart';
 import '../engine/stage_inspection.dart';
 import '../engine/targets.dart';
+import '../engine/unit_snapshot.dart';
 import '../engine/verdict.dart';
 import '../engine/version.dart';
 import '../output/output.dart';
@@ -103,7 +103,9 @@ class StatusCommand {
     String? nextCommand;
     final unfinished = snapshots.where(_workRemains).toList();
     bool readyToRelease(StatusUnitSnapshot snapshot) =>
-        _isLocalOnlyOutput(snapshot) || snapshot.stage?.reusable == true;
+        _isLocalOnlyOutput(snapshot) ||
+        snapshot.stage?.reusable == true ||
+        snapshot.observed.recoversWithoutStage;
     if (uniqueIssues.isEmpty && unfinished.length == 1) {
       final snapshot = unfinished.single;
       nextCommand = readyToRelease(snapshot)
@@ -175,9 +177,18 @@ class StatusCommand {
     TargetChecks? checking, {
     required String? group,
   }) async {
+    final observed = UnitSnapshot.start(
+      unit,
+      resolution: resolution,
+      inspector: inspector,
+      repository: git.originUrl,
+      hasCommit: git.hasCommit,
+      stageFor: stageFor ?? inspector.stageFor,
+    );
+    final stageResult = _stageResult(observed);
+    final checklist = observed.checklist;
     final diagnostics = Diagnostics();
-    final stageResult = await _inspectStage(unit);
-    final checklist = Checklist.derive(unit, resolution, diagnostics);
+    observed.checklistProblems.forEach(diagnostics.report);
 
     for (final project in unit.projects) {
       Changelog.check(
@@ -189,64 +200,44 @@ class StatusCommand {
       );
     }
 
-    final reader = inspector;
-    final expectations = inspector.targets.derive(
-      unit,
-      checklist,
-      repository: git.originUrl,
-    );
+    final expectations = observed.targets;
     final artifactProblems = _artifactProductionProblems(unit, expectations);
     for (final expectation in expectations) {
       checking?.add(expectation.step.id, expectation.label, group: group);
     }
 
-    // Calling every async operation before awaiting one is intentional: the
-    // targets are independent network reads, and a slow forge must not delay
-    // asking pub.dev (or vice versa).
-    final targetFutures = [
+    // Each row settles as its own reads answer, in whatever order they do;
+    // the report keeps the configured order.
+    var targets = await Future.wait([
       for (final expectation in expectations)
-        _observeAndFinish(
-          expectation,
-          unit,
-          stageResult.inspection,
-          artifactProblems,
-          checking,
-          reader,
-        ),
-    ];
+        () async {
+          final target = _publicationObservation(
+            _observeTarget(
+              expectation,
+              await observed.reads[expectation.step.id]!,
+              await observed.historyReads[expectation.step.id]!,
+              stageResult.inspection,
+              artifactProblems,
+            ),
+          );
+          checking?.finish(expectation.step.id, target.inspection.verdict);
+          return target;
+        }(),
+    ]);
+    await observed.settle();
+    final releasedSource = _releasedSourceMismatch(targets);
     final prerequisiteSteps = checklist.steps
         .where((step) => step.kind == StepKind.prerequisite)
         .toList();
-    final prerequisiteFutures = [
-      for (final step in prerequisiteSteps) _inspectSafely(step, unit, reader),
-    ];
-    var targets = await Future.wait(targetFutures);
-    final prerequisites = await Future.wait(prerequisiteFutures);
-    final releasedSource = _releasedSourceMismatch(targets);
 
     final states = <String, Inspection>{
+      ...observed.states,
       for (final target in targets)
         target.expectation.step.id: target.inspection,
-      for (final (index, step) in prerequisiteSteps.indexed)
-        step.id: prerequisites[index],
     };
 
-    for (final step in checklist.steps) {
-      if (states.containsKey(step.id)) continue;
-      states[step.id] = step.kind == StepKind.completeStage
-          ? stageResult.state
-          : step.phase == StepPhase.stage
-          ? stageResult.inspection?.reusable == true
-                ? const Inspection.exact(
-                    detail: 'validated in the release stage',
-                  )
-                : const Inspection.unknown('local work, decided when it runs')
-          // Public targets and prerequisites were populated above.
-          : const Inspection.unknown('the target was not inspected');
-    }
-
     final tagGuardProblems = [
-      for (final diagnostic in inspector.tagGuards(unit, checklist, states))
+      for (final diagnostic in observed.tagProblems)
         if (!(releasedSource != null && diagnostic.code == 'RK-GIT-005'))
           diagnostic,
     ];
@@ -254,20 +245,11 @@ class StatusCommand {
       diagnostics.report(diagnostic);
     }
 
-    // A version an earlier commit released is public from that commit's
-    // stage, not from one this commit could have lost.
-    final partialReleaseWithoutStage =
-        stageResult.inspection?.reusable != true &&
-        !targets.any((target) => target.inspection.releasedFrom != null) &&
-        hasRecoveryCriticalPublicProgress(unit, [
-          for (final target in targets)
-            (target.expectation.step, target.inspection),
-        ]) &&
-        targets.any(
-          (target) =>
-              target.inspection.isAbsent ||
-              target.inspection.verdict == Verdict.unknown,
-        );
+    // The same answer `rk release` gives: a partial release needs its exact
+    // stage unless what it has left can finish from public inputs.
+    final partialReleaseWithoutStage = observed.needsLostStage(
+      recovering: true,
+    );
     if (partialReleaseWithoutStage) {
       targets = [
         for (final target in targets)
@@ -343,14 +325,17 @@ class StatusCommand {
             !(target.inspection.verdict == Verdict.conflict &&
                 target.historyProblems.isNotEmpty))
           _targetIssue(unit, target),
+      // As in `rk release`: a lane whose history was read and cannot say
+      // its version is an issue; a lane that keeps no history is not.
       for (final target in targets)
         if (!target.currentKnown &&
+            observed.histories[target.expectation.step.id] != null &&
             target.inspection.verdict != Verdict.unknown &&
             target.inspection.verdict != Verdict.conflict)
           _currentVersionIssue(unit, target),
       for (final step in prerequisiteSteps)
         if (Inspector.blocks(step, states[step.id]!) &&
-            _releasedFirst(step, states[step.id]!) == null)
+            observed.releasedFirstBy(step) == null)
           _prerequisiteIssue(unit, step, states[step.id]!),
       if (stageResult.issue != null &&
           !partialReleaseWithoutStage &&
@@ -358,20 +343,7 @@ class StatusCommand {
               localOutputPending))
         stageResult.issue!,
       if (partialReleaseWithoutStage)
-        StatusIssue(
-          unit: unit.name,
-          diagnostic: Diagnostic(
-            code: 'RK-STAGE-005',
-            message: unit.shipsBinaries
-                ? '${unit.name}: the partial binary release needs its exact stage'
-                : '${unit.name}: the partial release needs its exact stage',
-            remedy:
-                'restore ${stageResult.path ?? '.rk/work/stages/<stage-id>'} '
-                'from the machine that staged this release. '
-                '${unit.shipsBinaries ? 'Signed or notarized bytes' : 'Recorded archive bytes'} '
-                'cannot be recreated byte-for-byte after a public target has bound them.',
-          ),
-        ),
+        StatusIssue(unit: unit.name, diagnostic: observed.lostStageProblem),
       if (artifactProblems.isNotEmpty &&
           !partialReleaseWithoutStage &&
           stageResult.inspection?.reusable != true &&
@@ -381,11 +353,9 @@ class StatusCommand {
     ];
 
     return StatusUnitSnapshot(
-      unit: unit,
-      checklist: checklist,
+      observed: observed,
       states: states,
       targets: targets,
-      stage: stageResult.inspection,
       stageState: stageResult.state,
       issues: issues,
       sourceVersionAlreadyReleased: releasedSource != null,
@@ -410,21 +380,6 @@ class StatusCommand {
       releasedCommit: mismatch.releasedCommit,
       currentCommit: mismatch.currentCommit,
     );
-  }
-
-  Future<TargetObservation> _observeAndFinish(
-    TargetPlan expectation,
-    ResolvedUnit unit,
-    StageInspection? stage,
-    Map<String, String> artifactProblems,
-    TargetChecks? checking,
-    Inspector reader,
-  ) async {
-    final observed = _publicationObservation(
-      await _observeTarget(expectation, unit, stage, artifactProblems, reader),
-    );
-    checking?.finish(expectation.step.id, observed.inspection.verdict);
-    return observed;
   }
 
   TargetObservation _publicationObservation(TargetObservation target) {
@@ -453,84 +408,65 @@ class StatusCommand {
     );
   }
 
-  Future<_StageResult> _inspectStage(ResolvedUnit unit) async {
-    final factory = stageFor ?? inspector.stageFor;
-    if (factory == null || !git.hasCommit) {
-      return const _StageResult(state: Inspection.absent(detail: 'not staged'));
-    }
-    try {
-      final stage = factory(unit);
-      final inspected = stage.inspect();
-      final ordinaryAbsence =
-          inspected.receipt?.complete != true &&
-          inspected.issues.every(
-            (issue) =>
-                issue.kind == StageIssueKind.missingReceipt ||
-                issue.kind == StageIssueKind.incompleteReceipt,
-          );
-      final state = inspected.asInspection;
+  /// The stage as status shows it: what it is, and the issue it raises
+  /// when it is there and cannot be used.
+  _StageResult _stageResult(UnitSnapshot observed) {
+    final unit = observed.unit;
+    if (observed.stageReadProblem case final problem?) {
       return _StageResult(
-        inspection: inspected,
-        candidate: stage,
-        state: state,
-        path: stage.directory.path,
-        issue: ordinaryAbsence || inspected.issues.isEmpty
-            ? null
-            : StatusIssue(
-                unit: unit.name,
-                diagnostic: Diagnostic(
-                  code: 'RK-STAGE-002',
-                  message: inspected.incomplete
-                      ? 'the incomplete release stage cannot be resumed safely'
-                      : inspected.claimsCompletion
-                      ? 'the reviewed release stage no longer validates'
-                      : 'the release stage receipt is invalid',
-                  remedy: inspected.incomplete
-                      ? 're-run rk stage ${unit.name}. rk keeps '
-                            'validated completed lanes when it can and replaces '
-                            'only incomplete work'
-                      : 'rebuild it explicitly: '
-                            'rk stage ${unit.name}',
-                ),
-                evidence: {
-                  for (final issue in inspected.issues)
-                    issue.path ?? issue.kind.name: issue.message,
-                },
-              ),
-      );
-    } on Object catch (error) {
-      return _StageResult(
-        state: Inspection.unknown(
-          'the release stage could not be read: $error',
-        ),
+        state: observed.stageState,
         issue: StatusIssue(
           unit: unit.name,
-          diagnostic: Diagnostic(
-            code: 'RK-STAGE-002',
-            message: 'the release stage could not be inspected',
-            remedy:
-                'fix the recorded stage read error, then rebuild it with '
-                'rk stage ${unit.name}',
-            evidence: '$error',
-          ),
-          evidence: {'Cause': '$error'},
+          diagnostic: problem,
+          evidence: {'Cause': '${observed.stageError}'},
         ),
       );
     }
+    final inspected = observed.stageInspection;
+    if (inspected == null) return _StageResult(state: observed.stageState);
+    final ordinaryAbsence =
+        inspected.receipt?.complete != true &&
+        inspected.issues.every(
+          (issue) =>
+              issue.kind == StageIssueKind.missingReceipt ||
+              issue.kind == StageIssueKind.incompleteReceipt,
+        );
+    return _StageResult(
+      inspection: inspected,
+      state: observed.stageState,
+      issue: ordinaryAbsence || inspected.issues.isEmpty
+          ? null
+          : StatusIssue(
+              unit: unit.name,
+              diagnostic: Diagnostic(
+                code: 'RK-STAGE-002',
+                message: inspected.incomplete
+                    ? 'the incomplete release stage cannot be resumed safely'
+                    : inspected.claimsCompletion
+                    ? 'the reviewed release stage no longer validates'
+                    : 'the release stage receipt is invalid',
+                remedy: inspected.incomplete
+                    ? 're-run rk stage ${unit.name}. rk keeps '
+                          'validated completed lanes when it can and replaces '
+                          'only incomplete work'
+                    : 'rebuild it explicitly: '
+                          'rk stage ${unit.name}',
+              ),
+              evidence: {
+                for (final issue in inspected.issues)
+                  issue.path ?? issue.kind.name: issue.message,
+              },
+            ),
+    );
   }
 
-  Future<TargetObservation> _observeTarget(
+  TargetObservation _observeTarget(
     TargetPlan expectation,
-    ResolvedUnit unit,
+    Inspection inspection,
+    TargetHistory? history,
     StageInspection? stage,
     Map<String, String> artifactProblems,
-    Inspector reader,
-  ) async {
-    final inspectionFuture = _inspectSafely(expectation.step, unit, reader);
-    final historyFuture = _inspectHistorySafely(expectation, unit, reader);
-
-    final inspection = await inspectionFuture;
-    final history = await historyFuture;
+  ) {
     // A direct read of the candidate coordinate answers whether this release
     // exists. It does not answer whether a newer release exists. For registry,
     // tag, and forge lanes, only the provider's history/listing can answer the
@@ -567,34 +503,6 @@ class StatusCommand {
           _observeArtifact(expectation, name, stage, artifactProblems[name]),
       ],
     );
-  }
-
-  Future<Inspection> _inspectSafely(
-    Step step,
-    ResolvedUnit unit,
-    Inspector reader,
-  ) async {
-    try {
-      return await reader.inspect(step, unit);
-    } on Object catch (error) {
-      return Inspection.unknown('the target read failed: $error');
-    }
-  }
-
-  Future<TargetHistory?> _inspectHistorySafely(
-    TargetPlan target,
-    ResolvedUnit unit,
-    Inspector reader,
-  ) async {
-    try {
-      return await reader.inspectHistory(target, unit);
-    } on Object catch (error) {
-      return TargetHistory(
-        inspection: Inspection.unknown(
-          'the current version read failed: $error',
-        ),
-      );
-    }
   }
 
   ArtifactObservation _observeArtifact(
@@ -790,23 +698,6 @@ class StatusCommand {
     },
   );
 
-  /// The project in this repository that publishes [step]'s package at the
-  /// version it needs, or null for a package released elsewhere.
-  ResolvedProject? _declaring(Step step) {
-    for (final project in resolution.allProjects) {
-      if (step.coordinate == 'pub.dev/${project.name}/${project.version}') {
-        return project;
-      }
-    }
-    return null;
-  }
-
-  /// The project this repository releases before [step]'s unit, when the
-  /// package [step] needs is not on pub.dev yet. A repository release
-  /// publishes it first, so this orders the release rather than blocking it.
-  ResolvedProject? _releasedFirst(Step step, Inspection state) =>
-      state.isAbsent ? _declaring(step) : null;
-
   StatusIssue _prerequisiteIssue(
     ResolvedUnit unit,
     Step step,
@@ -859,9 +750,8 @@ class StatusCommand {
     );
     final first = {
       for (final step in snapshot.checklist.steps)
-        if (step.kind == StepKind.prerequisite)
-          if (_releasedFirst(step, snapshot.states[step.id]!) case final p?)
-            '${p.unitName} ${p.version}',
+        if (snapshot.observed.releasedFirstBy(step) case final project?)
+          '${project.unitName} ${project.version}',
     };
     if (first.isNotEmpty) {
       output.blank();
@@ -1298,11 +1188,9 @@ class StatusSnapshot {
 
 class StatusUnitSnapshot {
   StatusUnitSnapshot({
-    required this.unit,
-    required this.checklist,
+    required this.observed,
     required Map<String, Inspection> states,
     required Iterable<TargetObservation> targets,
-    required this.stage,
     required this.stageState,
     required Iterable<StatusIssue> issues,
     required this.sourceVersionAlreadyReleased,
@@ -1310,11 +1198,13 @@ class StatusUnitSnapshot {
        targets = List<TargetObservation>.unmodifiable(targets),
        issues = List<StatusIssue>.unmodifiable(issues);
 
-  final ResolvedUnit unit;
-  final Checklist checklist;
+  /// What was read, shared with `rk release`.
+  final UnitSnapshot observed;
+  ResolvedUnit get unit => observed.unit;
+  Checklist get checklist => observed.checklist;
+  StageInspection? get stage => observed.stageInspection;
   final Map<String, Inspection> states;
   final List<TargetObservation> targets;
-  final StageInspection? stage;
   final Inspection stageState;
   final List<StatusIssue> issues;
   final bool sourceVersionAlreadyReleased;
@@ -1364,19 +1254,11 @@ bool _localBinaryWorkRemains({
 }
 
 class _StageResult {
-  const _StageResult({
-    required this.state,
-    this.inspection,
-    this.issue,
-    this.path,
-    this.candidate,
-  });
+  const _StageResult({required this.state, this.inspection, this.issue});
 
   final StageInspection? inspection;
   final Inspection state;
   final StatusIssue? issue;
-  final String? path;
-  final ReleaseStage? candidate;
 }
 
 class _CurrentVersion {

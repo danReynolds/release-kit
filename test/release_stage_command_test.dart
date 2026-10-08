@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/commands/release.dart';
+import 'package:rk/src/commands/status.dart';
 import 'package:rk/src/targets/pub_dev/client.dart';
 import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/engine/config.dart';
@@ -1687,6 +1688,76 @@ void main() {
       isNot(contains('dart pub publish --to-archive <archive>')),
     );
     expect(harness.stage.inspect().reusable, isFalse);
+  });
+
+  test('status agrees that a lost stage can finish Homebrew from the public '
+      'release', () async {
+    final staged = await harness.run(
+      stageOnly: true,
+      confirm: (_) async => fail('stage mode must not authorize'),
+    );
+    expect(staged.code, ExitCodes.ok, reason: staged.text);
+    harness.tools.rejectHomebrewPush = true;
+    final partial = await harness.run(
+      stageOnly: false,
+      confirm: (_) async => '1.2.3',
+    );
+    expect(partial.code, ExitCodes.refused, reason: partial.text);
+    harness.stage.reset();
+    harness.git = harness.gitAt(
+      tags: const ['v1.2.3'],
+      tagObjects: const {'v1.2.3': _tagObject},
+      tagTargets: const {'v1.2.3': _head},
+    );
+    harness.tools.rejectHomebrewPush = false;
+
+    final buffer = StringBuffer();
+    final output = Output(
+      sink: buffer.write,
+      isTerminal: false,
+      useColor: false,
+    );
+    final code = await StatusCommand(
+      resolution: harness.resolution,
+      tree: harness.source,
+      git: harness.git,
+      inspector: Inspector(
+        registry: harness.registry,
+        pubDev: PubDevTarget(registry: harness.registry),
+        git: harness.git,
+        tools: harness.tools,
+        repository: harness.git.originUrl,
+        stageFor: harness.stages.call,
+      ),
+      stageFor: harness.stages.call,
+      output: output,
+      capabilities: HostCapabilities(
+        hostPlatform: 'linux-x64',
+        containerRuntime: null,
+        hasNativeAssets: false,
+      ),
+    ).run(only: 'tool');
+    final status =
+        jsonDecode(output.report.encode(exit: code)) as Map<String, Object?>;
+
+    expect(
+      [
+        for (final problem in status['problems'] as List)
+          (problem as Map)['code'],
+      ],
+      isNot(contains('RK-STAGE-005')),
+      reason: buffer.toString(),
+    );
+    expect(status['next'], ['rk release tool'], reason: buffer.toString());
+
+    final resumed = await harness.run(
+      stageOnly: false,
+      confirm: (_) async => '1.2.3',
+    );
+    expect(resumed.code, ExitCodes.ok, reason: resumed.text);
+    expect(resumed.publicMutations.map((call) => call.publicKind), [
+      'homebrew',
+    ]);
   });
 
   test(
