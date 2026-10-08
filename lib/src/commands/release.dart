@@ -313,7 +313,7 @@ class ReleaseCommand {
           .where((s) => s.isPublic)
           .toList();
       final partialStageLoss =
-          !observation.stageReusable &&
+          !observation.stageInspection.reusable &&
           !_releasedElsewhere(publicSteps, observation.states) &&
           hasRecoveryCriticalPublicProgress(unit, [
             for (final step in publicSteps)
@@ -445,29 +445,28 @@ class ReleaseCommand {
   /// nothing, so every unit's reads run at once. A unit whose reads cannot
   /// start reads them itself, and its inspection says what is wrong.
   _UnitReads _startReads(ResolvedUnit unit) {
-    try {
-      final checklist = Checklist.derive(unit, resolution, Diagnostics());
-      final stage = _stageFor(unit).inspect();
-      final problems = Diagnostics();
-      return _UnitReads(
-        states: {
-          for (final step in checklist.steps)
-            step.id: _observeForRelease(step, unit, stage)..ignore(),
-        },
-        history: inspector.releaseMonotonicity(
-          unit,
-          inspector.targets.derive(
-            unit,
-            checklist,
-            repository: inspector.repository,
-          ),
-          problems,
-        )..ignore(),
-        problems: problems,
-      );
-    } on Object {
-      return _UnitReads(states: const {}, problems: Diagnostics());
-    }
+    final checklist = Checklist.derive(unit, resolution, Diagnostics());
+    final targets = inspector.targets.derive(
+      unit,
+      checklist,
+      repository: inspector.repository,
+    );
+    final stage = _stageFor(unit);
+    final stageInspection = stage.inspect();
+    final problems = Diagnostics();
+    return _UnitReads(
+      checklist: checklist,
+      targets: targets,
+      stage: stage,
+      stageInspection: stageInspection,
+      states: {
+        for (final step in checklist.steps)
+          step.id: _observeForRelease(step, unit, stageInspection)..ignore(),
+      },
+      history: inspector.releaseMonotonicity(unit, targets, problems)
+        ..ignore(),
+      problems: problems,
+    );
   }
 
   Future<_InspectedUnit?> _inspectRelease(
@@ -498,19 +497,7 @@ class ReleaseCommand {
     _showSourceWarning();
 
     final problems = Diagnostics();
-    _validate(unit, problems);
-    if (problems.isNotEmpty) {
-      output.halt(HaltKind.beforeActing);
-      output.problems(problems.found);
-      return null;
-    }
-
-    final checklist = Checklist.derive(unit, resolution, problems);
-    if (problems.isNotEmpty) {
-      output.halt(HaltKind.beforeActing);
-      output.problems(problems.found);
-      return null;
-    }
+    final checklist = reads.checklist;
     final publicSteps = checklist.steps.where((step) => step.isPublic).toList();
     final localOnly = publicSteps.isEmpty;
     if (stageOnly && !git.isBound && !localOnly) {
@@ -527,34 +514,13 @@ class ReleaseCommand {
       output.halt(HaltKind.beforeActing);
       return null;
     }
-    final targets = inspector.targets.derive(
-      unit,
-      checklist,
-      repository: inspector.repository,
-    );
+    final targets = reads.targets;
     final targetByStep = {for (final target in targets) target.step.id: target};
     final initialProgress = TargetReleaseProgress(
       output,
       title: '${unit.name} ${unit.version} · preparing release',
       targets: targets,
     );
-
-    final ReleaseStage stage;
-    try {
-      stage = _stageFor(unit);
-    } on Object catch (error) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-STAGE-001',
-          message: 'the release stage identity could not be resolved',
-          remedy: '$error',
-        ),
-      );
-      output.halt(HaltKind.beforeActing);
-      return null;
-    }
-
-    final stageInspection = stage.inspect();
 
     // Destinations are independent, so they are read together: every row
     // says what it is doing at once, and the wait is the slowest read
@@ -567,9 +533,7 @@ class ReleaseCommand {
     }
     final observed = await Future.wait([
       for (final step in checklist.steps)
-        (reads.states[step.id] ??
-                _observeForRelease(step, unit, stageInspection))
-            .then((state) {
+        reads.states[step.id]!.then((state) {
               final target = targetByStep[step.id];
               if (target != null) initialProgress.observe(target, state);
               return state;
@@ -595,9 +559,7 @@ class ReleaseCommand {
       );
     }
 
-    final releaseHistory =
-        await (reads.history ??
-            inspector.releaseMonotonicity(unit, targets, reads.problems));
+    final releaseHistory = await reads.history;
     reads.problems.found.forEach(problems.report);
     inspector.tagGuards(unit, checklist, states).forEach(problems.report);
     initialProgress.discard();
@@ -613,7 +575,8 @@ class ReleaseCommand {
       targets: targets,
       states: states,
       history: releaseHistory,
-      stageReusable: stageInspection.reusable,
+      stage: reads.stage,
+      stageInspection: reads.stageInspection,
     );
   }
 
@@ -636,21 +599,8 @@ class ReleaseCommand {
     final releaseHistory = inspected.history;
     final publicSteps = checklist.steps.where((step) => step.isPublic).toList();
     final targetByStep = {for (final target in targets) target.step.id: target};
-    final ReleaseStage stage;
-    try {
-      stage = _stageFor(unit);
-    } on Object catch (error) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-STAGE-001',
-          message: 'the release stage identity could not be resolved',
-          remedy: '$error',
-        ),
-      );
-      output.halt(HaltKind.beforeActing);
-      return null;
-    }
-    final stageInspection = stage.inspect();
+    final stage = inspected.stage;
+    final stageInspection = inspected.stageInspection;
 
     final alreadyReleased =
         publicSteps.isNotEmpty &&
@@ -885,19 +835,6 @@ class ReleaseCommand {
       prepared = PreparedRelease(claims: const [], signing: null);
     } else {
       if (prepared == null) {
-        if (!stageOnly) _publication.showActions(targets, publicActions);
-        return (code: ExitCodes.refused, publication: null);
-      }
-      final stageInspection = stage.inspect();
-      if (!stageInspection.reusable) {
-        output.problem(
-          Diagnostic(
-            code: 'RK-STAGE-003',
-            message: 'the release stage did not remain valid',
-            remedy: stageInspection.issues.join('\n'),
-          ),
-        );
-        output.halt(HaltKind.beforeActing);
         if (!stageOnly) _publication.showActions(targets, publicActions);
         return (code: ExitCodes.refused, publication: null);
       }
@@ -1151,13 +1088,26 @@ class ReleaseCommand {
 
 /// One unit's public reads, started before any unit is shown.
 final class _UnitReads {
-  _UnitReads({required this.states, this.history, required this.problems});
+  _UnitReads({
+    required this.checklist,
+    required this.targets,
+    required this.stage,
+    required this.stageInspection,
+    required this.states,
+    required this.history,
+    required this.problems,
+  });
+
+  final Checklist checklist;
+  final List<TargetPlan> targets;
+  final ReleaseStage stage;
+  final StageInspection stageInspection;
 
   /// Each step's state as it arrives, by step id.
   final Map<String, Future<Inspection>> states;
 
-  /// The lanes' version history; null when the unit reads it itself.
-  final Future<ReleaseHistoryCheck>? history;
+  /// The lanes' version history.
+  final Future<ReleaseHistoryCheck> history;
 
   /// What the history read refuses.
   final Diagnostics problems;
@@ -1199,7 +1149,8 @@ final class _InspectedUnit {
     required Iterable<TargetPlan> targets,
     required Map<String, Inspection> states,
     required this.history,
-    required this.stageReusable,
+    required this.stage,
+    required this.stageInspection,
   }) : targets = List.unmodifiable(targets),
        states = Map.unmodifiable(states);
 
@@ -1208,5 +1159,6 @@ final class _InspectedUnit {
   final List<TargetPlan> targets;
   final Map<String, Inspection> states;
   final ReleaseHistoryCheck history;
-  final bool stageReusable;
+  final ReleaseStage stage;
+  final StageInspection stageInspection;
 }
