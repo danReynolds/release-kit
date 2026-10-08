@@ -56,6 +56,7 @@ class StageBoard {
       for (final stage in targetStages.where(
         (stage) => stage.target.step.id == target.step.id,
       )) {
+        for (final view in stage.progress) {
           final row = view.artifact == null
               ? StageBoardRow(
                   '${target.step.id}/${stage.contract.name}/${view.id}',
