@@ -5,7 +5,6 @@ import '../engine/tools.dart';
 import 'binary_artifact.dart';
 import 'capability.dart';
 import 'dart_launcher.dart';
-import 'launcher_compiler.dart';
 
 /// Builds a Dart executable for one platform, and runs what it produced.
 ///
@@ -159,9 +158,8 @@ class DartCliBuilder {
     final source = File('${scratch.path}/launcher.c');
     try {
       source.writeAsStringSync(dartLauncherSource(artifact.entryPoint));
-      final clang = LauncherCompiler.read();
-      final launcher = await tools.run(clang.executable, [
-        ...['-isysroot', clang.sdk],
+      // Xcode's clang shim finds the SDK itself.
+      final launcher = await tools.run('/usr/bin/clang', [
         '-O2',
         '-Wall',
         '-Werror',

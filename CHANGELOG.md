@@ -24,9 +24,10 @@
   - Recovering a Homebrew formula without its stage checks the archives
     GitHub serves against the release manifest the tag binds, before pushing.
 - A repository's units stage side by side, from one read of the commit, and
-  each Pub package resolves and archives in one `pub publish --to-archive`. A
-  fresh stage of Fleury's four packages takes about 12s, down from 28s, and
-  reusing their stages about 1.5s.
+  each Pub package resolves and archives in one `pub publish --to-archive`.
+  `rk stage` and `rk release` read every unit's destinations at once. A fresh
+  stage of Fleury's four packages takes about 12s, down from 28s, and reusing
+  their stages about half a second, down from 4s.
 - `rk stage` no longer needs HEAD on origin; only the tag `rk release` pushes
   does.
 - `rk status` shows a package another unit in the repository releases first

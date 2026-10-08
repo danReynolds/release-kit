@@ -289,11 +289,14 @@ class ReleaseCommand {
     }
     if (!_validateRepositoryScope(selected)) return result(ExitCodes.refused);
     output.timeline.phase('preparing');
+    // Every unit's destinations are read at once; each unit is then shown,
+    // in release order, as its answers arrive.
+    final reads = {for (final unit in selected) unit.name: _startReads(unit)};
     final inspected = <String, _InspectedUnit>{};
     for (final unit in selected) {
       final observation = await Timings.span(
         'inspect ${unit.name}',
-        () => _inspectRelease(unit),
+        () => _inspectRelease(unit, reads[unit.name]!),
       );
       if (observation == null) return result(ExitCodes.refused);
       inspected[unit.name] = observation;
@@ -438,7 +441,39 @@ class ReleaseCommand {
     return false;
   }
 
-  Future<_InspectedUnit?> _inspectRelease(ResolvedUnit unit) async {
+  /// Starts reading [unit]'s destinations and version history, showing
+  /// nothing, so every unit's reads run at once. A unit whose reads cannot
+  /// start reads them itself, and its inspection says what is wrong.
+  _UnitReads _startReads(ResolvedUnit unit) {
+    try {
+      final checklist = Checklist.derive(unit, resolution, Diagnostics());
+      final stage = _stageFor(unit).inspect();
+      final problems = Diagnostics();
+      return _UnitReads(
+        states: {
+          for (final step in checklist.steps)
+            step.id: _observeForRelease(step, unit, stage)..ignore(),
+        },
+        history: inspector.releaseMonotonicity(
+          unit,
+          inspector.targets.derive(
+            unit,
+            checklist,
+            repository: inspector.repository,
+          ),
+          problems,
+        )..ignore(),
+        problems: problems,
+      );
+    } on Object {
+      return _UnitReads(states: const {}, problems: Diagnostics());
+    }
+  }
+
+  Future<_InspectedUnit?> _inspectRelease(
+    ResolvedUnit unit,
+    _UnitReads reads,
+  ) async {
     // The machine surface carries the same identity facts on every verb, as
     // doc/json.md promises: repository, and the unit's version and tag.
     output.report.unit(
@@ -540,11 +575,13 @@ class ReleaseCommand {
     }
     final observed = await Future.wait([
       for (final step in checklist.steps)
-        _observeForRelease(step, unit, stageInspection).then((state) {
-          final target = targetByStep[step.id];
-          if (target != null) initialProgress.observe(target, state);
-          return state;
-        }),
+        (reads.states[step.id] ??
+                _observeForRelease(step, unit, stageInspection))
+            .then((state) {
+              final target = targetByStep[step.id];
+              if (target != null) initialProgress.observe(target, state);
+              return state;
+            }),
     ]);
     final states = <String, Inspection>{
       for (final (index, step) in checklist.steps.indexed)
@@ -566,11 +603,10 @@ class ReleaseCommand {
       );
     }
 
-    final releaseHistory = await inspector.releaseMonotonicity(
-      unit,
-      targets,
-      problems,
-    );
+    final releaseHistory =
+        await (reads.history ??
+            inspector.releaseMonotonicity(unit, targets, reads.problems));
+    reads.problems.found.forEach(problems.report);
     inspector.tagGuards(unit, checklist, states).forEach(problems.report);
     initialProgress.discard();
     if (problems.isNotEmpty) {
@@ -1124,6 +1160,20 @@ class ReleaseCommand {
   /// team it names.
   static String _shortCertificate(String certificate) =>
       certificate.replaceFirst('Developer ID Application: ', '');
+}
+
+/// One unit's public reads, started before any unit is shown.
+final class _UnitReads {
+  _UnitReads({required this.states, this.history, required this.problems});
+
+  /// Each step's state as it arrives, by step id.
+  final Map<String, Future<Inspection>> states;
+
+  /// The lanes' version history; null when the unit reads it itself.
+  final Future<ReleaseHistoryCheck>? history;
+
+  /// What the history read refuses.
+  final Diagnostics problems;
 }
 
 /// One unit's release after its checks: what staging it needs, if any.

@@ -1,5 +1,8 @@
 # Release pipeline architecture
 
+How rk works, and the commitments it keeps, are in
+[AGENTS.md](../AGENTS.md#how-rk-works); this document maps them onto the code.
+
 `ReleaseCommand` is the decision ladder for the units a run selects. It resolves the
 shared plan, observes current truth, refuses unsafe starting states, and hands
 work to two coordinators. Targets supply destination semantics through
