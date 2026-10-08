@@ -6,7 +6,6 @@ import '../../engine/release_stage.dart';
 import '../../engine/resolve.dart';
 import '../../engine/stage.dart';
 import '../../engine/stage_contract.dart';
-import '../../engine/stage_inspection.dart';
 import '../../engine/stage_receipt.dart';
 import '../../engine/targets.dart';
 import '../../engine/tools.dart';
@@ -28,16 +27,6 @@ TargetStage pubDevPackageStage({
     step: StageStepContract(
       'pub-archive:${target.project!.name}',
       outputs: {archivePath: 'pub-archive'},
-      validateEvidence: (context, step) =>
-          step.evidence['package_archive'] == 'staged'
-          ? const []
-          : [
-              StageIssue(
-                StageIssueKind.invalidStructure,
-                '${step.name} has no staged native package evidence',
-                path: 'stage.json',
-              ),
-            ],
     ),
   );
   return TargetStage(
@@ -76,9 +65,6 @@ Future<TargetStageOutcome> _prepareStage(
   return TargetStageSuccess(
     StageStep(
       name: receiptName,
-      inputs: context.stage.enforceUnitContract
-          ? context.stage.producerInputs(receiptName, context.priorSteps)
-          : const [],
       outputs: [
         StageArtifact.capture(
           stage: context.stage.directory,
@@ -86,7 +72,6 @@ Future<TargetStageOutcome> _prepareStage(
           type: 'pub-archive',
         ),
       ],
-      evidence: const {'package_archive': 'staged'},
     ),
     warnings: validation.warnings,
   );
@@ -171,12 +156,9 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
 
     // A Flutter package, or one that takes a Flutter package from this
     // source, needs a Flutter SDK's Dart, whose pub finds its own Flutter.
-    // The Dart rk identified for this stage is the one that packages and
-    // publishes; a standalone one would depend on an ambient FLUTTER_ROOT
-    // the stage does not record.
     if (needsFlutter([directory, ...fromSource.values])) {
-      final dart = context.stage.compiler?.executable;
-      if (dart != null && !dartInFlutterSdk(dart)) {
+      final dart = context.stage.sdk.executable;
+      if (!dartInFlutterSdk(dart)) {
         return (
           diagnostic: _flutterDiagnostic(project.name, dart),
           warnings: const <Diagnostic>[],

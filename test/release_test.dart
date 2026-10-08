@@ -1564,8 +1564,11 @@ void main() {
   });
 
   test(
-    'an exact configured tag prevents rebuilding a lost package stage',
+    'a public tag does not stop a lost package stage from being rebuilt',
     () async {
+      // Pub stages nothing a consumer can compare against a rebuild: the
+      // version on pub.dev is what counts.
+      var prompts = 0;
       final registry = FakeRegistry(
         {
           'keybay': ['0.1.0', '0.2.0'],
@@ -1598,25 +1601,42 @@ publish = ["pub.dev"]
         registry: registry,
         state: _git(tags: const ['v0.2.0']),
         onRemote: const ['v0.2.0'],
-        onConfirm: () => fail('lost unit stage must refuse before consent'),
+        onConfirm: () => prompts++,
+        onRun: (key) {
+          if (key != 'dart pub publish --from-archive <archive> --force') {
+            return;
+          }
+          registry.published['other']!.add('0.2.0');
+          registry.archives['other@0.2.0'] = ArchiveBuilder.gzip(
+            ArchiveBuilder.tar([
+              ArchiveEntry(
+                name: 'pubspec.yaml',
+                bytes: 'name: other\nversion: 0.2.0\n'.codeUnits,
+              ),
+              ArchiveEntry(name: 'CHANGELOG.md', bytes: '## 0.2.0\n'.codeUnits),
+            ]),
+          );
+          registry.forget('other');
+        },
       );
 
-      expect(ran.exitCode, ExitCodes.refused);
+      expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+      expect(prompts, 1);
       expect(
         ran.problems.map((problem) => problem['code']),
-        contains('RK-STAGE-005'),
-        reason: ran.text,
+        isNot(contains('RK-STAGE-005')),
+      );
+      expect(
+        ran.calls.where((call) => call.startsWith('git tag ')),
+        isEmpty,
+        reason: 'the public tag is already in place',
       );
       expect(
         ran.calls.where(
-          (call) =>
-              call.startsWith('git tag ') ||
-              call.contains('pub get') ||
-              call.contains('pub publish'),
+          (call) => call == 'dart pub publish --from-archive <archive> --force',
         ),
-        isEmpty,
-        reason:
-            'missing recorded bytes refuse before preparation or authorization',
+        hasLength(1),
+        reason: 'only other is published',
       );
     },
   );

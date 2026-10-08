@@ -382,7 +382,6 @@ StageStep _recordTargetStageWarnings(
   if (recorded.isEmpty) return step;
   return StageStep(
     name: step.name,
-    inputs: step.inputs,
     outputs: step.outputs,
     evidence: {
       ...step.evidence,

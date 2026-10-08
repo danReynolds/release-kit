@@ -72,7 +72,6 @@ Future<TargetStageOutcome> _prepareReleaseNotes(
   return TargetStageSuccess(
     StageStep(
       name: receiptName,
-      inputs: const [],
       outputs: [
         StageArtifact.capture(
           stage: context.stage.directory,

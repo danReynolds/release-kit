@@ -6,6 +6,7 @@ import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/commands/status.dart';
 import 'package:rk/src/targets/pub_dev/client.dart';
 import 'package:rk/src/engine/assets.dart';
+import 'package:rk/src/engine/canonical_json.dart';
 import 'package:rk/src/engine/checklist.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
@@ -18,7 +19,6 @@ import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/engine/stage_archive.dart';
-import 'package:rk/src/engine/stage_plan.dart';
 import 'package:rk/src/transforms/digest.dart';
 import 'package:rk/src/engine/stage_receipt.dart';
 import 'package:rk/src/engine/targets.dart';
@@ -2221,6 +2221,10 @@ publish = ["pub.dev"]
         steps: receipt.steps.take(2),
       ),
     );
+    // A recorded output changed since, so the progress cannot be resumed.
+    File(
+      made.directory.resolve(receipt.steps.first.outputs.first.path),
+    ).writeAsStringSync('changed');
 
     final run = await statusRun(
       withConfig: binaryConfig,
@@ -2257,17 +2261,21 @@ publish = ["pub.dev"]
         config: binaryConfig,
         source: binaryTree,
       );
-      final made = ReleaseStage(
-        unit: complete.unit,
-        source: binaryTree,
-        directory: complete.directory,
-        compiler: DartCompilerIdentity.recorded(
-          executable: '/status-test/dart',
-          version: 'Dart SDK version: status test compiler',
-          sha256: 'c' * 64,
+      // A completed receipt that names another stage.
+      final receipt = complete.requireReceipt();
+      final another = StageReceipt(
+        identity: StageIdentity.forPlan(
+          headCommit: testHead,
+          headTree: testTree,
+          resolvedPlan: {'unit': 'another'},
         ),
+        plan: receipt.plan,
+        steps: receipt.steps,
       );
-      ReleaseStage stageFor(ResolvedUnit unit) => made;
+      File(
+        complete.directory.resolve('stage.json'),
+      ).writeAsStringSync('${CanonicalJson.encode(another.toJson())}\n');
+      ReleaseStage stageFor(ResolvedUnit unit) => complete;
 
       final run = await statusRun(
         withConfig: binaryConfig,
@@ -2299,7 +2307,7 @@ publish = ["pub.dev"]
         ),
       );
       expect(run.text, isNot(matches(RegExp(r'^\s+Staged$', multiLine: true))));
-      expect(run.text, contains('does not record its Dart compiler'));
+      expect(run.text, contains('receipt identity does not name this stage'));
       expect(run.text, isNot(contains('RK-STAGE-002')));
       expect(
         (run.report['problems'] as List).cast<Map>().map(
@@ -2315,8 +2323,10 @@ publish = ["pub.dev"]
     const Inspection.unknown('public package read unavailable'),
   ]) {
     test(
-      'an exact configured tag makes a package stage required with ${pending.verdict.name} publication',
+      'a public tag leaves a package stage rebuildable with ${pending.verdict.name} publication',
       () async {
+        // Pub stages nothing a consumer can compare against a rebuild: the
+        // version on pub.dev is what counts, so a lost stage is rebuilt.
         final registry = FakeRegistry(const {});
         final run = await statusRun(
           withConfig: config,
@@ -2332,14 +2342,12 @@ publish = ["pub.dev"]
             },
           ),
         );
-        expect(run.text, contains('the partial release needs its exact stage'));
-        expect(run.text, contains('Recorded archive bytes cannot be'));
-        expect(run.report['next'], isEmpty);
+        expect(run.text, isNot(contains('needs its exact stage')));
         final problems = (run.report['problems'] as List).cast<Map>();
-        expect(
-          problems.where((p) => p['code'] == 'RK-STAGE-005'),
-          hasLength(1),
-        );
+        expect(problems.map((p) => p['code']), isNot(contains('RK-STAGE-005')));
+        if (pending.verdict == Verdict.absent) {
+          expect(run.text, contains('rk stage core'));
+        }
       },
     );
   }
@@ -2559,7 +2567,6 @@ Future<ReleaseStage> _completedStage({
     steps.add(
       StageStep(
         name: '${platform.startsWith('macos-') ? 'sign' : 'build'}:$platform',
-        inputs: const [],
         outputs: [binary],
         evidence: {
           'smoke': {'status': 'passed'},
@@ -2610,7 +2617,6 @@ Future<ReleaseStage> _completedStage({
       steps.add(
         StageStep(
           name: 'notarize:$platform',
-          inputs: [StageInput.artifact(binary)],
           outputs: [
             StageArtifact.capture(
               stage: stage.directory,
@@ -2655,7 +2661,6 @@ Future<ReleaseStage> _completedStage({
     steps.add(
       StageStep(
         name: 'archive:$platform',
-        inputs: [StageInput.artifact(binary)],
         outputs: [archive],
         evidence: {
           'inventory': StageArchiveInventory.evidence(
@@ -2671,7 +2676,6 @@ Future<ReleaseStage> _completedStage({
     steps.add(
       StageStep(
         name: 'homebrew-formula',
-        inputs: [for (final archive in archives) StageInput.artifact(archive)],
         outputs: [
           StageArtifact.capture(
             stage: stage.directory,

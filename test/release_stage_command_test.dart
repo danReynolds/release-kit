@@ -17,7 +17,6 @@ import 'package:rk/src/engine/release_manifest.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage_inspection.dart';
-import 'package:rk/src/engine/stage_plan.dart';
 import 'package:rk/src/engine/stage_receipt.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/version.dart';
@@ -119,7 +118,7 @@ void main() {
         expect(header.steps, isEmpty);
         expect(header.plan, harness.stage.resolvedPlan);
         expect(harness.stage.inspect().validProgress, isFalse);
-        expect(harness.stage.requireProducerProgress, throwsStateError);
+        expect(harness.stage.inspect().planRecorded, isTrue);
 
         // Recreate the resolver to prove the header survives a new process's
         // stage object. Native intent lookup is tested separately when wired.
@@ -154,37 +153,18 @@ void main() {
     );
   }
 
-  test('an interrupted stage refuses unknown residue without removing its '
-      'frozen header', () async {
+  test('an interrupted stage resumes past files it does not own', () async {
     final stage = harness.stage;
     stage.writeProgress(const []);
-    final file = File(stage.directory.resolve('stage.json'));
-    final bytes = file.readAsBytesSync();
+    final plan = stage.inspect().receipt!.plan;
     final extra = File(stage.directory.resolve('unowned'))
       ..writeAsStringSync('keep');
     final run = await harness.run(stageOnly: true, confirm: null);
-    expect(run.code, ExitCodes.refused, reason: run.text);
-    expect(
-      run.text,
-      contains('the interrupted stage could not be resumed safely'),
-    );
+    expect(run.code, ExitCodes.ok, reason: run.text);
     expect(run.publicMutations, isEmpty);
-    expect(file.readAsBytesSync(), bytes);
+    expect(stage.inspect().reusable, isTrue);
+    expect(stage.inspect().receipt!.plan, plan);
     expect(extra.readAsStringSync(), 'keep');
-  });
-
-  test('a production receipt cannot omit its frozen plan', () {
-    final stage = harness.stage;
-    StageReceiptStore(
-      stage.directory,
-    ).write(StageReceipt(identity: stage.directory.identity));
-    expect(stage.inspect().planRecorded, isFalse);
-    expect(
-      stage.inspect().issues.any(
-        (issue) => issue.kind == StageIssueKind.wrongStage,
-      ),
-      isTrue,
-    );
   });
 
   for (final stageOnly in [true, false]) {
@@ -2503,12 +2483,9 @@ publish = ["pub.dev"]
             )
             ..parent.createSync(recursive: true)
             ..writeAsStringSync('untrusted interrupted output');
-      final interrupted = harness.stage.inspect();
-      expect(interrupted.validProgress, isFalse);
-      expect(
-        interrupted.issues.map((issue) => issue.kind),
-        contains(StageIssueKind.extraArtifact),
-      );
+      // The receipt never recorded it, so it is not part of the stage; the
+      // archive producer runs again over it.
+      expect(harness.stage.inspect().validProgress, isTrue);
 
       final resumed = await harness.run(
         stageOnly: true,
@@ -2602,7 +2579,6 @@ publish = ["pub.dev"]
       );
       final renamed = StageStep(
         name: 'compiled-something',
-        inputs: build.inputs,
         outputs: build.outputs,
         evidence: build.evidence,
       );
@@ -2668,40 +2644,6 @@ publish = ["pub.dev"]
     );
   });
 
-  test('a digest-consistent receipt cannot invent smoke evidence', () async {
-    final staged = await harness.run(
-      stageOnly: true,
-      confirm: (_) async => fail('stage mode must not authorize'),
-    );
-    expect(staged.code, ExitCodes.ok, reason: staged.text);
-    final receipt = harness.stage.requireReceipt();
-    final build = receipt.steps.singleWhere(
-      (step) => step.name == 'build:tool:linux-x64',
-    );
-    final noSmoke = StageStep(
-      name: build.name,
-      inputs: build.inputs,
-      outputs: build.outputs,
-    );
-    StageReceiptStore(harness.stage.directory).write(
-      StageReceipt(
-        identity: receipt.identity,
-        plan: receipt.plan,
-        steps: [
-          for (final step in receipt.steps)
-            if (step.name == build.name) noSmoke else step,
-        ],
-      ),
-    );
-
-    final inspected = harness.stage.inspect();
-    expect(inspected.reusable, isFalse);
-    expect(
-      inspected.issues.map((issue) => issue.toString()),
-      contains(contains('invalid smoke-test evidence')),
-    );
-  });
-
   test(
     'stage tampering during refreshed target reads is caught before consent',
     () async {
@@ -2713,7 +2655,10 @@ publish = ["pub.dev"]
       var releaseReads = 0;
       var prompts = 0;
       final archive = harness.stage.directory.resolve(
-        ReleaseAssets.archiveName('tool', '1.2.3', 'linux-x64'),
+        ReleaseAssets.archivePath(
+          harness.stage.unit.binaryProject!,
+          'linux-x64',
+        ),
       );
 
       final refused = await harness.run(
@@ -2752,7 +2697,10 @@ publish = ["pub.dev"]
       );
       expect(staged.code, ExitCodes.ok, reason: staged.text);
       final archive = harness.stage.directory.resolve(
-        ReleaseAssets.archiveName('tool', '1.2.3', 'linux-x64'),
+        ReleaseAssets.archivePath(
+          harness.stage.unit.binaryProject!,
+          'linux-x64',
+        ),
       );
       var prompts = 0;
 
@@ -2779,7 +2727,7 @@ publish = ["pub.dev"]
     );
     expect(staged.code, ExitCodes.ok, reason: staged.text);
     final archive = harness.stage.directory.resolve(
-      ReleaseAssets.archiveName('tool', '1.2.3', 'linux-x64'),
+      ReleaseAssets.archivePath(harness.stage.unit.binaryProject!, 'linux-x64'),
     );
 
     final refused = await harness.run(
@@ -2858,72 +2806,6 @@ publish = ["pub.dev"]
         harness,
         harness.gitAt(signingConfigured: true),
       );
-    },
-  );
-
-  test(
-    'a changed compiler plan refuses before consent or public acts',
-    () async {
-      final staged = await harness.run(
-        stageOnly: true,
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-      expect(staged.code, ExitCodes.ok, reason: staged.text);
-
-      var authorizationPrompts = 0;
-      final drifted = await harness.run(
-        stageOnly: false,
-        refreshStage: (unit, currentGit) => ReleaseStages(
-          source: harness.source,
-          git: currentGit,
-          stageContracts: TargetCatalog.builtIn().stageContractResolver(
-            harness.resolution,
-          ),
-          repositoryRoot: harness.root.path,
-          compilerIdentity: () => DartCompilerIdentity.recorded(
-            executable: '/different/dart',
-            version: 'different Dart compiler',
-            sha256: 'd' * 64,
-          ),
-        ).call(unit),
-        confirm: (_) async {
-          authorizationPrompts++;
-          return '1.2.3';
-        },
-      );
-
-      expect(drifted.code, ExitCodes.refused, reason: drifted.text);
-      expect(drifted.problemCodes, contains('RK-STAGE-004'));
-      expect(authorizationPrompts, 0);
-      expect(drifted.publicMutations, isEmpty);
-    },
-  );
-
-  test(
-    'stage-only refuses if its compiler plan changed while building',
-    () async {
-      final drifted = await harness.run(
-        stageOnly: true,
-        refreshStage: (unit, currentGit) => ReleaseStages(
-          source: harness.source,
-          git: currentGit,
-          stageContracts: TargetCatalog.builtIn().stageContractResolver(
-            harness.resolution,
-          ),
-          repositoryRoot: harness.root.path,
-          compilerIdentity: () => DartCompilerIdentity.recorded(
-            executable: '/different/dart',
-            version: 'different Dart compiler',
-            sha256: 'd' * 64,
-          ),
-        ).call(unit),
-        confirm: (_) async => fail('stage mode must not authorize'),
-      );
-
-      expect(drifted.code, ExitCodes.refused, reason: drifted.text);
-      expect(drifted.problemCodes, contains('RK-STAGE-004'));
-      expect(drifted.publicMutations, isEmpty);
-      expect(drifted.text, isNot(contains('tool 1.2.3 staged')));
     },
   );
 }

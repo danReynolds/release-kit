@@ -16,8 +16,6 @@ import 'package:rk/src/engine/public_release_gate.dart';
 import 'package:rk/src/engine/release_stage.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
-import 'package:rk/src/engine/stage.dart';
-import 'package:rk/src/engine/stage_plan.dart';
 import 'package:rk/src/engine/stage_receipt.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/targets.dart';
@@ -112,20 +110,16 @@ void main() {
     'declined aggregate confirmation keeps stages and acquires no sessions',
     () async {
       f.answer = 'no';
-      final before = [
-        for (final plan in f.plans) plan.stage.directory.fingerprint(),
-      ];
+      final before = [for (final plan in f.plans) _snapshot(plan.stage)];
       expect(await f.coordinator.authorizeRepository(f.plans), isFalse);
       expect(f.problemCodes, contains('RK-AUTH-002'));
       expect(f.sessionCalls, isEmpty);
       expect(f.output.report.acted, isFalse);
-      expect([
-        for (final plan in f.plans) plan.stage.directory.fingerprint(),
-      ], before);
+      expect([for (final plan in f.plans) _snapshot(plan.stage)], before);
     },
   );
 
-  for (final change in ['bytes', 'compiler', 'endpoint']) {
+  for (final change in ['bytes', 'endpoint']) {
     test('later unit review cannot hide earlier $change drift', () async {
       var changed = false;
       f.onRead = (unit) {
@@ -136,8 +130,6 @@ void main() {
             File(
               f.plans.first.stage.directory.resolve('release-manifest.json'),
             ).writeAsStringSync('changed');
-          case 'compiler':
-            f.compiler = 'd';
           case 'endpoint':
             f.environment['PUB_HOSTED_URL'] = 'https://elsewhere.invalid';
         }
@@ -521,7 +513,7 @@ void main() {
     },
   );
 
-  for (final change in ['endpoint', 'compiler']) {
+  for (final change in ['endpoint']) {
     test('final provider read cannot hide changed $change', () async {
       final original = f.plans.first;
       final plan = f.copy(original);
@@ -530,8 +522,6 @@ void main() {
         switch (change) {
           case 'endpoint':
             f.environment['PUB_HOSTED_URL'] = 'https://elsewhere.invalid';
-          case 'compiler':
-            f.compiler = 'e';
         }
       };
       expect(await f.coordinator.publish(plan), ExitCodes.refused);
@@ -619,7 +609,6 @@ final class _Fixture {
   final plans = <PublicationPlan>[];
   final inspections = <String, Inspection Function()>{};
   final environment = <String, String>{};
-  String compiler = 'c';
   int archiveStamp = 0;
   String? answer = 'yes';
   void Function(String)? onRead;
@@ -632,17 +621,6 @@ final class _Fixture {
     source: source,
     git: git,
     stageContracts: catalog.stageContractResolver(resolution),
-    compilerIdentity: () => DartCompilerIdentity.recorded(
-      executable: '/sdk/dart',
-      version: 'fixture',
-      sha256: compiler * 64,
-    ),
-    rkIdentity: () => RkImplementationIdentity.recorded(
-      version: '0.1.0',
-      stageSchema: stageSchemaVersion,
-      sha256: 'd' * 64,
-    ),
-    environment: () => const {},
   );
   late final inspector = _Inspector(this);
   late final coordinator = ReleasePublicationCoordinator(
@@ -708,7 +686,6 @@ final class _Fixture {
       steps.add(
         StageStep(
           name: name,
-          inputs: stage.producerInputs(name, steps),
           outputs: [
             StageArtifact.capture(
               stage: stage.directory,
@@ -883,3 +860,11 @@ final class _Tools implements Tools {
     String? workingDirectory,
   }) async => throw StateError('unexpected interactive tool');
 }
+
+/// Every file in [stage], by path, with its bytes.
+Map<String, List<int>> _snapshot(ReleaseStage stage) => {
+  for (final file in Directory(
+    stage.directory.path,
+  ).listSync(recursive: true).whereType<File>())
+    file.path: file.readAsBytesSync(),
+};

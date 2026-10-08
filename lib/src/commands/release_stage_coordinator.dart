@@ -14,11 +14,9 @@ import '../engine/producers.dart';
 import '../engine/publish_target.dart';
 import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
-import '../engine/stage.dart';
 import '../engine/stage_contract.dart';
 import '../engine/stage_board.dart';
 import '../engine/stage_inspection.dart';
-import '../engine/stage_history.dart';
 import '../engine/stage_receipt.dart';
 import '../engine/stage_source.dart';
 import '../engine/targets.dart';
@@ -69,19 +67,6 @@ final class ReleaseStageCoordinator {
         code: 'RK-STAGE-001',
         message: 'the release stage path is unsafe',
         remedy: unsafe.toString(),
-      );
-    }
-
-    if (inspected.receipt?.plan != null &&
-        inspected.receipt!.steps.isEmpty &&
-        !inspected.planRecorded) {
-      return Diagnostic(
-        code: 'RK-STAGE-003',
-        message: 'the interrupted stage could not be resumed safely',
-        remedy:
-            '${inspected.issues.join('\n')}\n'
-            'Resolve the recorded residue, then re-run '
-            'rk stage ${unit.name}. The frozen receipt has been preserved.',
       );
     }
 
@@ -241,7 +226,7 @@ final class ReleaseStageCoordinator {
       for (final entry in targetStagesByName.entries)
         entry.key: entry.value.contract.step.outputs.keys.toSet(),
     };
-    inspected = _recoverInterruptedOutputs(
+    _discardUnrecordedOutputs(
       stage,
       inspected,
       outputsByProducer.values.expand((outputs) => outputs).toSet(),
@@ -323,14 +308,6 @@ final class ReleaseStageCoordinator {
         'Rebuilding: the recorded stage no longer verifies.',
         role: VisualRole.secondary,
       );
-    } else {
-      final reasons = StageHistory.rebuildReasons(stage);
-      if (reasons.isNotEmpty) {
-        output.say(
-          'Rebuilding: ${reasons.join('; ')}.',
-          role: VisualRole.secondary,
-        );
-      }
     }
 
     final progress = <StageStep>[];
@@ -510,7 +487,7 @@ final class ReleaseStageCoordinator {
           );
         }
         try {
-          record(_captureProducerStep(stage, step, progress, act));
+          record(_captureProducerStep(stage, step, act));
           return _StageWorkCompletion.succeeded(receiptName);
         } on Object catch (error) {
           stageProgress.fail(receiptName);
@@ -641,43 +618,18 @@ final class ReleaseStageCoordinator {
     return PreparedRelease(claims: claims, signing: signing);
   }
 
-  /// Restores a valid receipt prefix after an interrupted producer left its
-  /// own declared output behind. Unknown paths and changed recorded bytes are
-  /// never cleaned here: either means the stage cannot be resumed safely.
-  StageInspection _recoverInterruptedOutputs(
+  /// Removes what an interrupted run's producers wrote but never recorded,
+  /// so they run again from a clean slate. Recorded outputs are kept.
+  void _discardUnrecordedOutputs(
     ReleaseStage stage,
     StageInspection inspected,
     Set<String> declaredOutputs,
   ) {
-    if (inspected.receipt?.complete != false ||
-        inspected.validProgress ||
-        inspected.planRecorded) {
-      return inspected;
-    }
-    final allowedExtras = <String>{};
-    for (final output in declaredOutputs) {
-      allowedExtras.add(output);
-      final parts = StagePath.segments(output);
-      for (var index = 1; index < parts.length; index++) {
-        allowedExtras.add(parts.take(index).join('/'));
-      }
-    }
-    final recoverable = inspected.issues.every(
-      (issue) =>
-          issue.kind == StageIssueKind.incompleteReceipt ||
-          (issue.kind == StageIssueKind.extraArtifact &&
-              issue.path != null &&
-              allowedExtras.contains(issue.path)),
-    );
-    if (!recoverable) return inspected;
+    if (!inspected.validProgress && !inspected.planRecorded) return;
     try {
       stage.discardUnrecordedOutputs(declaredOutputs);
-      final recovered = stage.inspect();
-      return recovered.validProgress || recovered.planRecorded
-          ? recovered
-          : inspected;
     } on Object {
-      return inspected;
+      // The producer that needs the path reports what it finds there.
     }
   }
 
@@ -794,13 +746,11 @@ final class ReleaseStageCoordinator {
   StageStep _captureProducerStep(
     ReleaseStage stage,
     Step step,
-    List<StageStep> progress,
     LocalProducerOutcome outcome,
   ) {
     final contract = stage.producerContract(receiptNameFor(step));
     return StageStep(
       name: contract.name,
-      inputs: stage.producerInputs(contract.name, progress),
       outputs: [
         for (final artifact in outcome.outputs)
           StageArtifact.capture(
@@ -1198,10 +1148,7 @@ final class ReleaseStageCoordinator {
       workspace: stage.directory.workspace,
       repositoryRoot: repositoryRoot,
       capabilities: capabilities,
-      compilerExecutable: stage.compiler?.executable ?? 'dart',
-      runtimeSha256: stage.compiler?.runtimeSha256,
-      runtimeLicenseSha256: stage.compiler?.runtimeLicenseSha256,
-      launcherCompiler: stage.launcherCompiler,
+      compilerExecutable: stage.sdk.executable,
       stage: stage,
     );
   }

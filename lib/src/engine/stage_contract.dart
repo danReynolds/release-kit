@@ -1,32 +1,21 @@
 import 'assets.dart';
 import 'dependency_graph.dart';
 import 'resolve.dart';
-import 'stage.dart';
 import 'stage_inspection.dart';
 import 'stage_receipt.dart';
 
-typedef StageStepContractValidator =
-    Iterable<StageIssue> Function(StageContractContext context, StageStep step);
-
-typedef StageStepEvidenceValidator =
-    Iterable<StageIssue> Function(StageEvidenceContext context, StageStep step);
-
+/// One stage producer: its receipt name, what it reads from earlier
+/// producers (artifact paths or `step:` names), and what it writes.
 final class StageStepContract {
   const StageStepContract(
     this.name, {
     this.inputs = const {},
     this.outputs = const {},
-    this.validateEvidence,
-    this.validate,
   });
 
   final String name;
   final Set<String> inputs;
   final Map<String, String> outputs;
-  final StageStepEvidenceValidator? validateEvidence;
-
-  /// Additional checks that require the staged artifact files.
-  final StageStepContractValidator? validate;
 }
 
 final class StageContributionContract {
@@ -69,34 +58,6 @@ List<T> orderStageContributions<T>(
         contractOf(left).step.name.compareTo(contractOf(right).step.name),
   );
   return List<T>.unmodifiable(entries);
-}
-
-/// Receipt evidence, without access to staged outputs. These checks do not
-/// prove that any retained artifact bytes have been inspected.
-final class StageEvidenceContext {
-  const StageEvidenceContext({
-    required this.unit,
-    required this.repository,
-    required this.receipt,
-  });
-
-  final ResolvedUnit unit;
-  final String? repository;
-  final StageReceipt receipt;
-}
-
-final class StageContractContext {
-  const StageContractContext({
-    required this.unit,
-    required this.repository,
-    required this.stage,
-    required this.receipt,
-  });
-
-  final ResolvedUnit unit;
-  final String? repository;
-  final StageDirectory stage;
-  final StageReceipt receipt;
 }
 
 typedef StageContractResolver =
@@ -193,13 +154,9 @@ final class StageProducerGraph {
       (throw StateError('the stage graph has no producer "$producer"'));
 }
 
-/// The exact receipt shape one resolved unit is allowed to trust.
-///
-/// [StageInspector] proves that recorded bytes and dependency digests agree.
-/// This contract supplies the semantic half of that proof: every configured
-/// producer is present, in the order rk can resume, with the filenames,
-/// inputs, and evidence its operation owns. A canonical JSON document is not
-/// trusted merely because all of its hashes agree with itself.
+/// The producers one resolved unit runs, in the order its receipt records
+/// them. A receipt written by an rk that produced differently for the same
+/// plan does not match it.
 class StageReceiptContract {
   StageReceiptContract._({
     required this.unit,
@@ -249,8 +206,8 @@ class StageReceiptContract {
       _dependencies[producer] ??
       (throw StateError('the stage contract has no producer "$producer"'));
 
-  /// Pure canonical producer shape checks. Evidence and artifact checks are
-  /// separate; this method alone cannot authorize a provider.
+  /// Whether [receipt] records these producers, in order, with the outputs
+  /// each one writes. Reads no files.
   List<StageIssue> validateDeclarations(StageReceipt receipt) {
     final issues = <StageIssue>[];
     final names = receipt.steps.map((step) => step.name).toList();
@@ -276,53 +233,8 @@ class StageReceiptContract {
     for (final step in receipt.steps) {
       final contract = contracts[step.name];
       if (contract == null) continue;
-      if (step.name != 'complete-stage' &&
-          !_sameSet(
-            step.inputs.map((input) => input.name).toSet(),
-            contract.inputs,
-          )) {
-        _issue(issues, '${step.name} has the wrong producer inputs');
-      }
       if (!_outputsMatch(step, contract)) {
         _issue(issues, '${step.name} has the wrong output inventory');
-      }
-    }
-    return issues;
-  }
-
-  /// Validates producer evidence. No stage directory is needed, and artifact
-  /// payloads are neither read nor vouched for.
-  List<StageIssue> validateEvidence(StageReceipt receipt) {
-    final issues = <StageIssue>[];
-    final context = StageEvidenceContext(
-      unit: unit,
-      repository: repository,
-      receipt: receipt,
-    );
-    final contracts = {for (final step in _steps) step.name: step};
-    for (final step in receipt.steps) {
-      if (contracts[step.name]?.validateEvidence case final validate?) {
-        issues.addAll(validate(context, step));
-      }
-    }
-    return issues;
-  }
-
-  List<StageIssue> validate(StageDirectory stage, StageReceipt receipt) {
-    final issues = [
-      ...validateDeclarations(receipt),
-      ...validateEvidence(receipt),
-    ];
-    final context = StageContractContext(
-      unit: unit,
-      repository: repository,
-      stage: stage,
-      receipt: receipt,
-    );
-    final contracts = {for (final step in _steps) step.name: step};
-    for (final step in receipt.steps) {
-      if (contracts[step.name]?.validate case final validate?) {
-        issues.addAll(validate(context, step));
       }
     }
     return issues;
@@ -373,6 +285,3 @@ bool _isOrderedSubsequence(List<String> names, List<String> whole) {
 
 bool _sameList(List<String> left, List<String> right) =>
     left.length == right.length && _isPrefix(left, right);
-
-bool _sameSet(Set<String> left, Set<String> right) =>
-    left.length == right.length && left.containsAll(right);

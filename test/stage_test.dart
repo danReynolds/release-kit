@@ -342,43 +342,6 @@ void main() {
       );
     });
 
-    test('a receipt refuses to record bytes that changed under it', () {
-      stage.ensureExists();
-      final artifact = File(stage.resolve('out/tool'))
-        ..parent.createSync(recursive: true)
-        ..writeAsBytesSync(utf8.encode('one'));
-      final recorded = StageArtifact.capture(
-        stage: stage,
-        path: 'out/tool',
-        type: 'executable',
-      );
-      final receipt = StageReceipt(
-        identity: stage.identity,
-        steps: [
-          StageStep(name: 'build', inputs: const [], outputs: [recorded]),
-        ],
-      );
-      // Writing the receipt straight away is the ordinary case, and the
-      // bytes were digested a moment ago.
-      StageReceiptStore(stage).write(receipt);
-
-      // Same length, so only the timestamps separate these bytes from the
-      // ones that were digested. A confirmation that trusts its own memory
-      // records a digest for bytes that are no longer there.
-      _rewriteAfterAMoment(artifact, 'two');
-
-      expect(
-        () => StageReceiptStore(stage).write(receipt),
-        throwsA(
-          isA<StateError>().having(
-            (error) => error.message,
-            'message',
-            contains('artifact changed before receipt write'),
-          ),
-        ),
-      );
-    });
-
     test('receipt byte limits preserve the last readable progress', () {
       final header = StageReceipt(identity: stage.identity);
       final bytes = utf8.encode(header.encode());
@@ -428,7 +391,7 @@ void main() {
       );
     });
 
-    test('round-trips strict step, input, signature, and notary evidence', () {
+    test('round-trips step, signature, and notary evidence', () {
       final receipt = _writeCompleteStage(stage);
       final document = File(stage.resolve('stage.json')).readAsStringSync();
       final parsed = StageReceipt.parse(document);
@@ -438,7 +401,6 @@ void main() {
       final build = parsed.steps.singleWhere(
         (step) => step.name == 'build:rk:macos-arm64',
       );
-      expect(build.inputs, isEmpty);
       expect(
         (build.evidence['signature']! as Map)['certificate_sha256'],
         'a' * 64,
@@ -496,82 +458,36 @@ void main() {
       );
     });
 
-    test('a receipt cannot bless bytes changed after capture', () {
-      stage.writeBytesAtomically('rk', utf8.encode('original'));
-      final artifact = StageArtifact.capture(
-        stage: stage,
-        path: 'rk',
-        type: 'executable',
-      );
-      File(stage.resolve('rk')).writeAsStringSync('changed');
-      final receipt = StageReceipt(
-        identity: stage.identity,
-        steps: [
-          StageStep(name: 'build', outputs: [artifact]),
-        ],
-      );
-
-      expect(() => StageReceiptStore(stage).write(receipt), throwsStateError);
-      expect(File(stage.resolve('stage.json')).existsSync(), isFalse);
-    });
-
-    test('a failed receipt replacement preserves the previous receipt', () {
-      final previous = _writeCompleteStage(stage);
-      final previousBytes = File(stage.resolve('stage.json')).readAsBytesSync();
-      stage.writeBytesAtomically('candidate', utf8.encode('captured'));
-      final candidate = StageArtifact.capture(
-        stage: stage,
-        path: 'candidate',
-        type: 'test',
-      );
-      File(stage.resolve('candidate')).writeAsStringSync('changed');
-
-      expect(
-        () => StageReceiptStore(stage).write(
-          StageReceipt(
-            identity: previous.identity,
-            plan: previous.plan,
-            steps: [
-              ...previous.steps,
-              StageStep(name: 'candidate', outputs: [candidate]),
-            ],
-          ),
-        ),
-        throwsStateError,
-      );
-      expect(
-        File(stage.resolve('stage.json')).readAsBytesSync(),
-        previousBytes,
-        reason: 'validation fails before the receipt rename boundary',
-      );
-      File(stage.resolve('candidate')).deleteSync();
-      expect(StageInspector().inspect(stage).reusable, isTrue);
-    });
-
     test('correctly named but unreceipted files are never reusable', () {
       stage.writeBytesAtomically('rk', utf8.encode('binary'));
 
       final result = StageInspector().inspect(stage);
       expect(result.reusable, isFalse);
-      expect(
-        result.issues.map((issue) => issue.kind),
-        containsAll([
-          StageIssueKind.missingReceipt,
-          StageIssueKind.extraArtifact,
-        ]),
-      );
+      expect(result.issues.map((issue) => issue.kind), [
+        StageIssueKind.missingReceipt,
+      ]);
     });
 
     test('missing artifacts are rejected', () {
       _writeCompleteStage(stage);
-      File(stage.resolve('rk')).deleteSync();
+      File(stage.resolve('rk.tar.gz')).deleteSync();
 
       _expectIssue(stage, StageIssueKind.missingArtifact);
     });
 
+    test('a completed stage is checked for what it publishes', () {
+      // The executable reaches the public only inside its archive, whose
+      // own bytes are checked.
+      _writeCompleteStage(stage);
+      File(stage.resolve('rk')).deleteSync();
+
+      final result = StageInspector().inspect(stage);
+      expect(result.reusable, isTrue, reason: '${result.issues}');
+    });
+
     test('changed bytes, size, or mode are rejected', () {
       _writeCompleteStage(stage);
-      File(stage.resolve('rk')).writeAsStringSync('tampered');
+      File(stage.resolve('rk.tar.gz')).writeAsStringSync('tampered');
 
       final result = StageInspector().inspect(stage);
       expect(result.reusable, isFalse);
@@ -597,7 +513,7 @@ void main() {
       expect(StageInspector().inspect(again).reusable, isTrue);
 
       // ...but not once a staged file is rewritten, even at the same length.
-      final file = File(stage.resolve('rk'));
+      final file = File(stage.resolve('rk.tar.gz'));
       _rewriteAfterAMoment(file, '*' * file.lengthSync());
       final result = StageInspector().inspect(again);
       expect(result.reusable, isFalse);
@@ -607,27 +523,22 @@ void main() {
       );
     });
 
-    test('extra files and empty directories are rejected', () {
+    test('files and directories the receipt does not name are ignored', () {
+      // Nothing reads them: publication reads only what the receipt records.
       _writeCompleteStage(stage);
       stage.writeBytesAtomically('planted.txt', utf8.encode('planted'));
       Directory(stage.resolve('empty')).createSync();
 
       final result = StageInspector().inspect(stage);
-      expect(result.reusable, isFalse);
-      expect(
-        result.issues
-            .where((issue) => issue.kind == StageIssueKind.extraArtifact)
-            .map((issue) => issue.path),
-        containsAll(['planted.txt', 'empty']),
-      );
+      expect(result.reusable, isTrue, reason: '${result.issues}');
     });
 
     test(
       'artifact and ancestor symlinks are rejected without following them',
       () {
         _writeCompleteStage(stage);
-        File(stage.resolve('rk')).deleteSync();
-        Link(stage.resolve('rk')).createSync('/private/tmp/outside');
+        File(stage.resolve('rk.tar.gz')).deleteSync();
+        Link(stage.resolve('rk.tar.gz')).createSync('/private/tmp/outside');
 
         _expectIssue(stage, StageIssueKind.symlink);
       },
@@ -664,19 +575,23 @@ void main() {
       );
     });
 
-    test('a stage that cannot be listed is reported, not thrown', () {
-      _writeCompleteStage(stage);
-      final locked = Directory(stage.resolve('locked'))..createSync();
-      Process.runSync('chmod', ['000', locked.path]);
-      addTearDown(() => Process.runSync('chmod', ['755', locked.path]));
+    test(
+      'an artifact that cannot be read is reported, not thrown',
+      () {
+        _writeCompleteStage(stage);
+        final locked = File(stage.resolve('rk.tar.gz'));
+        Process.runSync('chmod', ['000', locked.path]);
+        addTearDown(() => Process.runSync('chmod', ['644', locked.path]));
 
-      final result = StageInspector().inspect(stage);
-      expect(result.reusable, isFalse);
-      expect(
-        result.issues.map((issue) => issue.kind),
-        contains(StageIssueKind.unreadable),
-      );
-    }, testOn: '!windows');
+        final result = StageInspector().inspect(stage);
+        expect(result.reusable, isFalse);
+        expect(
+          result.issues.map((issue) => issue.kind),
+          contains(StageIssueKind.unreadable),
+        );
+      },
+      testOn: '!windows',
+    );
 
     test('path-escaping records invalidate the receipt', () {
       final receipt = _writeCompleteStage(stage);
@@ -689,7 +604,7 @@ void main() {
         stage.resolve('stage.json'),
       ).writeAsStringSync('${CanonicalJson.encode(malformed)}\n', flush: true);
 
-      _expectIssue(stage, StageIssueKind.unsafePath);
+      _expectIssue(stage, StageIssueKind.invalidReceipt);
     });
 
     test('incomplete receipts preserve progress but cannot be reused', () {
@@ -709,85 +624,6 @@ void main() {
       );
 
       _expectIssue(stage, StageIssueKind.incompleteReceipt);
-    });
-
-    test('a signed macOS build requires a certificate SHA-256 binding', () {
-      final receipt = _writeCompleteStage(stage);
-      final build = receipt.steps.singleWhere(
-        (step) => step.name == 'build:rk:macos-arm64',
-      );
-      final binary = build.outputs.single;
-      final sign = StageStep(
-        name: 'build:rk:macos-arm64',
-        inputs: build.inputs,
-        outputs: build.outputs,
-        evidence: {
-          'signed_smoke': {'status': 'pass', 'command': '--version'},
-          'signature': {
-            'certificate': 'Developer ID Application: Test (TEAM123456)',
-            'code_id': 'io.example.rk',
-            'unsigned_sha256': 'c' * 64,
-            'signed_sha256': binary.sha256,
-            'verified_after_smoke': true,
-          },
-        },
-      );
-      StageReceiptStore(stage).write(
-        StageReceipt(
-          identity: receipt.identity,
-          plan: receipt.plan,
-          steps: [sign, receipt.steps.last],
-        ),
-      );
-
-      final inspected = StageInspector().inspect(stage);
-      expect(inspected.reusable, isFalse);
-      expect(
-        inspected.issues.map((issue) => issue.kind),
-        contains(StageIssueKind.invalidStructure),
-      );
-      expect(
-        inspected.issues.map((issue) => issue.message).join('\n'),
-        contains('certificate SHA-256 fingerprint'),
-      );
-    });
-
-    test('a signed macOS build states whether the identity is first', () {
-      final receipt = _writeCompleteStage(stage);
-      final build = receipt.steps.singleWhere(
-        (step) => step.name == 'build:rk:macos-arm64',
-      );
-      final binary = build.outputs.single;
-      final sign = StageStep(
-        name: 'build:rk:macos-arm64',
-        inputs: build.inputs,
-        outputs: build.outputs,
-        evidence: {
-          'signed_smoke': {'status': 'pass', 'command': '--version'},
-          'signature': {
-            'certificate': 'Developer ID Application: Test (TEAM123456)',
-            'certificate_sha256': 'a' * 64,
-            'code_id': 'io.example.rk',
-            'unsigned_sha256': 'c' * 64,
-            'signed_sha256': binary.sha256,
-            'verified_after_smoke': true,
-          },
-        },
-      );
-      StageReceiptStore(stage).write(
-        StageReceipt(
-          identity: receipt.identity,
-          plan: receipt.plan,
-          steps: [sign, receipt.steps.last],
-        ),
-      );
-
-      final inspected = StageInspector().inspect(stage);
-      expect(inspected.reusable, isFalse);
-      expect(
-        inspected.issues.map((issue) => issue.message).join('\n'),
-        contains('whether identity is first'),
-      );
     });
 
     test('inspection is read-only and does not create an absent stage', () {
@@ -961,13 +797,22 @@ StageReceipt _writeCompleteStage(StageDirectory stage) {
       'notary': {'status': 'accepted', 'log_sha256': 'b' * 64},
     },
   );
+  stage.writeBytesAtomically('rk.tar.gz', utf8.encode('archive'));
+  final archive = StageArtifact.capture(
+    stage: stage,
+    path: 'rk.tar.gz',
+    type: 'archive',
+  );
   ReleaseManifest(
     unit: 'rk',
     version: '1.0.0',
     tag: 'v1.0.0',
     commit: stage.identity.headCommit,
     artifacts: [
-      ReleaseManifestArtifact.fromStage(publicName: 'rk', artifact: artifact),
+      ReleaseManifestArtifact.fromStage(
+        publicName: 'rk-1.0.0-macos-arm64.tar.gz',
+        artifact: archive,
+      ),
     ],
   ).writeTo(stage);
   final manifest = StageArtifact.capture(
@@ -979,12 +824,12 @@ StageReceipt _writeCompleteStage(StageDirectory stage) {
     identity: stage.identity,
     steps: [
       build,
+      StageStep(name: 'archive:rk:macos-arm64', outputs: [archive]),
       StageStep(
         name: 'complete-stage',
-        inputs: [StageInput.artifact(artifact)],
         outputs: [manifest],
         evidence: const {
-          'release_assets': {'rk': 'rk'},
+          'release_assets': {'rk-1.0.0-macos-arm64.tar.gz': 'rk.tar.gz'},
           'homebrew_binding': null,
         },
       ),

@@ -9,8 +9,8 @@ import 'file_mode.dart';
 import 'stage.dart';
 import 'timings.dart';
 
-/// A persisted receipt must remain readable by inspection and frozen lookup.
-/// Apply the same bound before writes so progress cannot outgrow its reader.
+/// The largest receipt rk reads or writes. A receipt records producer
+/// outputs, so a real one is a few kilobytes.
 const maxStageReceiptBytes = 4 * 1024 * 1024;
 
 final class StageReceiptLimit implements Exception {
@@ -18,52 +18,7 @@ final class StageReceiptLimit implements Exception {
   final int limit;
 
   @override
-  String toString() =>
-      'stage receipt byte limit exceeded ($limit bytes); reduce the source '
-      'inventory before staging';
-}
-
-/// One digest-bearing input to a completed release step.
-class StageInput {
-  StageInput({required this.name, required this.sha256}) {
-    _requireLabel('input name', name);
-    _requireSha256('input $name', sha256);
-  }
-
-  factory StageInput.fromJson(Object? value) {
-    final map = _strictMap(value, const {'name', 'sha256'}, 'stage input');
-    return StageInput(
-      name: _string(map, 'name'),
-      sha256: _string(map, 'sha256'),
-    );
-  }
-
-  final String name;
-  final String sha256;
-
-  /// Binds a consumer directly to exact bytes emitted by an earlier step.
-  factory StageInput.artifact(StageArtifact artifact) =>
-      StageInput(name: artifact.path, sha256: artifact.sha256);
-
-  /// Binds a consumer to the complete, ordered output set of an earlier
-  /// step, for multi-file inputs.
-  factory StageInput.step(StageStep step) =>
-      StageInput(name: 'step:${step.name}', sha256: step.outputSha256);
-
-  factory StageInput.plan(StageIdentity identity) =>
-      StageInput(name: 'stage:plan', sha256: identity.planSha256);
-
-  factory StageInput.commit(StageIdentity identity) => StageInput(
-    name: 'stage:commit',
-    sha256: Sha256.hex(utf8.encode(identity.headCommit!)),
-  );
-
-  factory StageInput.tree(StageIdentity identity) => StageInput(
-    name: 'stage:tree',
-    sha256: Sha256.hex(utf8.encode(identity.headTree!)),
-  );
-
-  Map<String, Object?> toJson() => {'name': name, 'sha256': sha256};
+  String toString() => 'stage receipt exceeds $limit bytes';
 }
 
 /// Exact bytes emitted by a completed release step.
@@ -112,13 +67,6 @@ class StageArtifact {
 
   /// [recorded] again, read afresh unless the file has not moved since this
   /// process digested it.
-  ///
-  /// A release confirms the same artifacts repeatedly — every receipt write
-  /// re-checks everything already recorded, and a stage of forty megabytes
-  /// makes that the largest cost in staging. Confirming is not the same as
-  /// trusting: a file whose size, mode, or timestamps differ by so much as a
-  /// microsecond is read and digested again, and one this process never
-  /// digested is always read.
   static StageArtifact confirm(
     StageArtifact recorded, {
     required StageDirectory stage,
@@ -170,64 +118,44 @@ class StageArtifact {
   };
 }
 
-/// Inputs, outputs, and bounded evidence for one completed operation.
+/// The outputs and evidence of one completed operation.
 class StageStep {
   StageStep({
     required this.name,
-    Iterable<StageInput> inputs = const [],
     Iterable<StageArtifact> outputs = const [],
     Map<String, Object?> evidence = const {},
-  }) : inputs = List<StageInput>.unmodifiable(inputs),
-       outputs = List<StageArtifact>.unmodifiable(outputs),
+  }) : outputs = List<StageArtifact>.unmodifiable(outputs),
        evidence = _evidence(evidence) {
     _requireLabel('step name', name);
-    _requireUnique(this.inputs.map((input) => input.name), 'input name');
     _requireUnique(this.outputs.map((output) => output.path), 'output path');
   }
 
   factory StageStep.fromJson(Object? value) {
     final map = _strictMap(value, const {
       'evidence',
-      'inputs',
       'name',
       'outputs',
     }, 'stage step');
-    final inputs = _list(map, 'inputs');
-    final outputs = _list(map, 'outputs');
     final evidence = map['evidence'];
     if (evidence is! Map) {
       throw const FormatException('step evidence is not an object');
     }
     return StageStep(
       name: _string(map, 'name'),
-      inputs: inputs.map(StageInput.fromJson),
-      outputs: outputs.map(StageArtifact.fromJson),
+      outputs: _list(map, 'outputs').map(StageArtifact.fromJson),
       evidence: evidence.cast<String, Object?>(),
     );
   }
 
   final String name;
-  final List<StageInput> inputs;
   final List<StageArtifact> outputs;
 
-  /// Extensible structured evidence. Signing and notarization producers can
-  /// record identities, certificate fingerprints, ticket bindings, results,
-  /// and log digests here without changing the receipt schema.
+  /// What the producer recorded about its work: signing identities,
+  /// notarization results, smoke tests.
   final Map<String, Object?> evidence;
-
-  /// One digest for this step's complete ordered output relation.
-  ///
-  /// Paths and metadata are included as well as byte hashes, so substituting
-  /// the same bytes under another name or mode changes the dependency.
-  String get outputSha256 => Sha256.hex(
-    utf8.encode(
-      CanonicalJson.encode([for (final output in outputs) output.toJson()]),
-    ),
-  );
 
   Map<String, Object?> toJson() => {
     'evidence': evidence,
-    'inputs': inputs.map((input) => input.toJson()).toList(),
     'name': name,
     'outputs': outputs.map((output) => output.toJson()).toList(),
   };
@@ -285,9 +213,8 @@ class StageReceipt {
 
   final StageIdentity identity;
 
-  /// Frozen choices recorded before any producer. Parsing establishes digest
-  /// consistency only; adoption must authorize current source and contracts.
-  /// Null is reserved for deliberately partial low-level receipt fixtures.
+  /// What the stage is built from, recorded before any producer; the stage
+  /// identity is its digest. Null only in partial low-level fixtures.
   final Map<String, Object?>? plan;
   final List<StageStep> steps;
 
@@ -312,8 +239,6 @@ class StageReceipt {
 
   String encode() => '${CanonicalJson.encode(toJson())}\n';
 
-  /// Validates the exact persisted representation before artifacts or an
-  /// existing receipt are changed. Portable proof encoding remains separate.
   List<int> encodeForStorage({int maxBytes = maxStageReceiptBytes}) {
     final bytes = utf8.encode(encode());
     if (bytes.length > maxBytes) throw StageReceiptLimit(maxBytes);
@@ -339,23 +264,13 @@ class StageReceiptStore {
   final StageDirectory stage;
   final int maxBytes;
 
-  /// Writes only after every referenced output matches the record. The
-  /// receipt rename is the final operation, so a crash cannot make partial
-  /// artifact bytes appear complete.
+  /// Writes the receipt by an atomic rename, so a crash leaves the previous
+  /// one. Producers recorded each output when they wrote it.
   void write(StageReceipt receipt) {
     if (receipt.identity.id != stage.identity.id) {
       throw StateError('receipt belongs to a different stage');
     }
-    final bytes = receipt.encodeForStorage(maxBytes: maxBytes);
-    for (final expected in receipt.artifacts) {
-      final actual = StageArtifact.confirm(expected, stage: stage);
-      if (!_sameArtifact(expected, actual)) {
-        throw StateError(
-          'artifact changed before receipt write: ${expected.path}',
-        );
-      }
-    }
-    stage.writeReceiptBytes(bytes);
+    stage.writeReceiptBytes(receipt.encodeForStorage(maxBytes: maxBytes));
   }
 
   /// Reads without creating the stage or changing any bytes.
@@ -367,13 +282,11 @@ class StageReceiptStore {
     return document == null ? null : StageReceipt.parse(document);
   }
 
-  /// Shared bounded, no-follow file read. Lookup also accounts these bytes
-  /// against its aggregate scan budget. A growing file is never read past the
-  /// initial allowed size, and a changed size refuses the result.
+  /// A bounded, no-follow read: a growing file is never read past its
+  /// initial size, and a changed size refuses the result.
   static String? readDocument(
     String path, {
     int maxBytes = maxStageReceiptBytes,
-    void Function(int)? consume,
   }) {
     final type = FileSystemEntity.typeSync(path, followLinks: false);
     if (type == FileSystemEntityType.notFound) return null;
@@ -387,7 +300,6 @@ class StageReceiptStore {
       final bytes = BytesBuilder(copy: false);
       while (bytes.length < size) {
         final chunk = file.readSync(min(64 * 1024, size - bytes.length));
-        consume?.call(chunk.length);
         if (chunk.isEmpty) {
           throw const FormatException('receipt changed while reading');
         }
@@ -402,13 +314,6 @@ class StageReceiptStore {
     }
   }
 }
-
-bool _sameArtifact(StageArtifact left, StageArtifact right) =>
-    left.path == right.path &&
-    left.type == right.type &&
-    left.mode == right.mode &&
-    left.size == right.size &&
-    left.sha256 == right.sha256;
 
 File _regularArtifact(StageDirectory stage, String path) {
   final unsafe = stage.unsafeFixedPath();

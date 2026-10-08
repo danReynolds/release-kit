@@ -279,10 +279,7 @@ StageEntry _writeReceipt(StageStore store, {required bool complete}) {
   final receipt = StageReceipt(
     identity: identity,
     plan: plan,
-    steps: [
-      if (complete)
-        StageStep(name: 'complete-stage', inputs: const [], outputs: const []),
-    ],
+    steps: [if (complete) StageStep(name: 'complete-stage', outputs: const [])],
   );
   File('${directory.path}/stage.json').writeAsStringSync(receipt.encode());
   return StageEntry(name: identity.id, type: FileSystemEntityType.directory);

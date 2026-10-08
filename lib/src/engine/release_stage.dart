@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'dart:math';
 
-import '../builds/launcher_compiler.dart';
 import 'canonical_json.dart';
 import 'release_asset.dart';
 import 'release_manifest.dart';
@@ -34,68 +33,28 @@ class ReleaseStages {
     required this.git,
     required this.stageContracts,
     String? repositoryRoot,
-    DartCompilerIdentity Function()? compilerIdentity,
-    RkImplementationIdentity Function()? rkIdentity,
-    Map<String, String> Function()? environment,
+    DartSdk Function()? sdk,
   }) : repositoryRoot = repositoryRoot ?? git.root,
-       _compilerIdentity = compilerIdentity ?? DartCompilerIdentity.readAmbient,
-       _rkIdentity = rkIdentity ?? RkImplementationIdentity.readAmbient,
-       _environment =
-           environment ?? (() => Map<String, String>.of(Platform.environment));
+       _sdk = sdk ?? DartSdk.ambient;
 
   final SourceTree source;
   final GitState git;
   final String repositoryRoot;
   final StageContractResolver stageContracts;
-  final DartCompilerIdentity Function() _compilerIdentity;
-  final RkImplementationIdentity Function() _rkIdentity;
-  final Map<String, String> Function() _environment;
+  final DartSdk Function() _sdk;
   final Map<String, ReleaseStage> _stages = {};
   final String _unboundRunId = _newRunId();
-  DartCompilerIdentity? _compiler;
 
-  ReleaseStage call(ResolvedUnit unit) => _stages.putIfAbsent(
-    unit.name,
-    () => _resolve(
-      unit,
-      git,
-      _compiler ??= _readCompilerIdentity(),
-      _readRkIdentity(),
-    ),
-  );
+  ReleaseStage call(ResolvedUnit unit) =>
+      _stages.putIfAbsent(unit.name, () => _resolve(unit, git));
 
-  /// Resolves the stage again from facts read at the release boundary.
-  ///
-  /// Unlike [call], this deliberately does not reuse the compiler reading or
-  /// the initial Git state. Publication must notice a PATH-selected compiler,
-  /// signing policy, origin, commit, tree, platform, or plan change that
-  /// happened while private preparation or authorization was in progress.
+  /// Resolves the stage again from Git state read at a later boundary, so a
+  /// changed commit, tree, origin or configuration names another stage.
   ReleaseStage refresh(ResolvedUnit unit, GitState currentGit) =>
-      _resolve(unit, currentGit, _readCompilerIdentity(), _readRkIdentity());
+      _resolve(unit, currentGit);
 
-  ReleaseStage _resolve(
-    ResolvedUnit unit,
-    GitState currentGit,
-    DartCompilerIdentity compiler,
-    RkImplementationIdentity rk,
-  ) {
-    final launcher =
-        Platform.isMacOS &&
-            unit.projects.any(
-              (project) => project.binaryPlatforms.any(
-                (platform) => platform.startsWith('macos-'),
-              ),
-            )
-        ? LauncherCompiler.read()
-        : null;
-    final plan = stagePlanFor(
-      unit,
-      currentGit,
-      launcherCompiler: launcher?.identity,
-      compiler: compiler,
-      rk: rk,
-      environment: _environment(),
-    );
+  ReleaseStage _resolve(ResolvedUnit unit, GitState currentGit) {
+    final plan = stagePlanFor(unit, currentGit);
     final identity = currentGit.isBound
         ? StageIdentity.forPlan(
             headCommit: currentGit.head,
@@ -106,45 +65,22 @@ class ReleaseStages {
             runId: _unboundRunId,
             resolvedPlan: plan,
           );
-    final directory = StageDirectory(
-      repositoryRoot: repositoryRoot,
-      identity: identity,
-    );
     return ReleaseStage(
       unit: unit,
       source: source,
-      compiler: compiler,
-      launcherCompiler: launcher,
+      sdk: _sdk,
       repository: currentGit.originUrl,
       enforceUnitContract: true,
-      directory: directory,
+      directory: StageDirectory(
+        repositoryRoot: repositoryRoot,
+        identity: identity,
+      ),
       resolvedPlan: plan,
       targetContributions: stageContracts(
         unit: unit,
         repository: currentGit.originUrl,
       ),
     );
-  }
-
-  DartCompilerIdentity _readCompilerIdentity() {
-    try {
-      return _compilerIdentity();
-    } on DartCompilerUnavailable {
-      rethrow;
-    } on Object catch (error) {
-      throw DartCompilerUnavailable('$error');
-    }
-  }
-
-  RkImplementationIdentity _readRkIdentity() {
-    try {
-      return _rkIdentity();
-    } on Object catch (error) {
-      throw StateError(
-        'the rk implementation could not be identified: '
-        '$error',
-      );
-    }
   }
 }
 
@@ -159,13 +95,13 @@ class ReleaseStage {
     required this.unit,
     required this.source,
     required this.directory,
-    this.compiler,
-    this.launcherCompiler,
+    DartSdk Function()? sdk,
     this.repository,
     this.enforceUnitContract = false,
     Map<String, Object?>? resolvedPlan,
     Iterable<StageContributionContract> targetContributions = const [],
-  }) : resolvedPlan = resolvedPlan == null
+  }) : _readSdk = sdk ?? DartSdk.ambient,
+       resolvedPlan = resolvedPlan == null
            ? null
            : CanonicalJson.normalize(resolvedPlan) as Map<String, Object?>,
        targetContributions = List<StageContributionContract>.unmodifiable(
@@ -175,19 +111,22 @@ class ReleaseStage {
   final ResolvedUnit unit;
   final SourceTree source;
   final StageDirectory directory;
-  final DartCompilerIdentity? compiler;
-  final LauncherCompiler? launcherCompiler;
   final String? repository;
 
-  /// Recorded before production for restoration and rebuild explanations.
-  /// Its digest alone cannot authorize reuse of source or provider artifacts.
+  /// The Dart SDK producers build with, read the first time one asks.
+  DartSdk get sdk => _sdk ??= _readSdk();
+  final DartSdk Function() _readSdk;
+  DartSdk? _sdk;
+
+  /// What the stage is built from beyond its commit, recorded in the
+  /// receipt so a person can read it.
   final Map<String, Object?>? resolvedPlan;
   final List<StageContributionContract> targetContributions;
 
-  /// Direct construction is used by low-level receipt/atomicity tests whose
+  /// Direct construction is used by low-level receipt tests whose
   /// deliberately partial producer graphs are not a release plan. Every
-  /// production resolver sets this, so status and release always enforce the
-  /// resolved unit's complete semantic receipt contract.
+  /// production resolver sets this, so status and release always check a
+  /// receipt against the producers this rk runs for the unit.
   final bool enforceUnitContract;
 
   /// The one receipt contract for this stage, shared by the receipt writer
@@ -221,25 +160,8 @@ class ReleaseStage {
       _unitContract?.producerContract(producer) ??
       (throw StateError('this partial stage has no producer contract'));
 
-  /// Bind every declared input, including same-unit archive edges, to a
-  /// completed producer's receipt. This does not require unit completion.
-  List<StageInput> producerInputs(String producer, Iterable<StageStep> prior) {
-    final steps = {for (final step in prior) 'step:${step.name}': step};
-    final artifacts = {
-      for (final step in prior)
-        for (final artifact in step.outputs) artifact.path: artifact,
-    };
-    return [
-      for (final input in producerContract(producer).inputs)
-        if (steps[input] case final step?)
-          StageInput.step(step)
-        else if (artifacts[input] case final artifact?)
-          StageInput.artifact(artifact)
-        else
-          throw StateError('$producer input $input is not recorded'),
-    ];
-  }
-
+  /// The recorded output of [producer] at [path], for a later producer in
+  /// the same stage. Only recorded steps are trusted.
   StageArtifact requireProducerArtifact({
     required String producer,
     required String path,
@@ -251,7 +173,13 @@ class ReleaseStage {
         'dependency artifact does not match the producer contract',
       );
     }
-    return requireProducerProgress().steps
+    final inspected = inspect();
+    if (!inspected.reusable && !inspected.validProgress) {
+      throw StateError(
+        'the stage does not validate: ${inspected.issues.join('; ')}',
+      );
+    }
+    return inspected.receipt!.steps
         .singleWhere((step) => step.name == producer)
         .outputs
         .singleWhere(
@@ -259,185 +187,22 @@ class ReleaseStage {
         );
   }
 
-  /// Validated completed producer inputs during an active preparation run.
-  /// Another producer may already be writing its declared output. Such bytes
-  /// are neither adopted nor returned here: only recorded steps are trusted.
-  /// Persisted inspection and public completion keep their strict inventory.
-  StageReceipt requireProducerProgress() {
-    if (!enforceUnitContract) {
-      throw StateError('producer input reads require a complete unit contract');
-    }
-    final inspected = inspect();
-    final receipt = inspected.receipt;
-    if (inspected.reusable || inspected.validProgress) return receipt!;
-    final pendingFiles = <String>{};
-    if (receipt != null && !receipt.complete) {
-      final recorded = receipt.steps.map((step) => step.name).toSet();
-      for (final name in producerNames.where(
-        (name) => !recorded.contains(name),
-      )) {
-        pendingFiles.addAll(producerContract(name).outputs.keys);
-      }
-    }
-    final pendingDirectories = <String>{};
-    for (final path in pendingFiles) {
-      final parts = StagePath.segments(path);
-      for (var i = 1; i < parts.length; i++) {
-        pendingDirectories.add(parts.take(i).join('/'));
-      }
-    }
-    final remaining = inspected.issues.where((issue) {
-      if (issue.kind != StageIssueKind.extraArtifact || issue.path == null) {
-        return true;
-      }
-      final type = FileSystemEntity.typeSync(
-        directory.resolve(issue.path!),
-        followLinks: false,
-      );
-      return !((type == FileSystemEntityType.file &&
-              pendingFiles.contains(issue.path)) ||
-          (type == FileSystemEntityType.directory &&
-              pendingDirectories.contains(issue.path)));
-    });
-    if (!StageInspection(receipt: receipt, issues: remaining).validProgress) {
-      throw StateError(
-        'dependency provider stage does not validate: ${remaining.join('; ')}',
-      );
-    }
-    return receipt!;
-  }
-
-  /// What this stage is, verified.
-  ///
-  /// The answer is a pure function of the bytes under the stage directory,
-  /// so it is remembered against a fingerprint of that directory: a run
-  /// asks this question dozens of times, and re-reading and re-hashing tens
-  /// of megabytes to answer it again is the largest cost in a release that
-  /// changed nothing.
-  ///
-  /// This is a memo, not a promise that the stage is unchanged. Every call
-  /// still re-reads the directory; only hashing is skipped, and only while
-  /// every path, size, mode, and timestamp is exactly as it was. Anything
-  /// that writes to the stage — rk's own producers included — moves a
-  /// timestamp, so the next call verifies from disk again. What a stale
-  /// answer would require is a rewrite that restores size, mode, and both
-  /// timestamps, which a writer cannot do to change time: the kernel sets
-  /// it. Concurrent writers are excluded separately, by the stage lock.
-  StageInspection inspect() {
-    final now = directory.fingerprint();
-    final remembered = _inspected;
-    if (remembered != null && _inspectedAt == now) {
-      Timings.tally('release stage inspection remembered');
-      return remembered;
-    }
-    // The span covers the reading, not the asking, so a trace counts the
-    // stages that were read rather than every time one was asked about.
-    final fresh = Timings.spanSync(
-      'inspect stage ${unit.name}',
-      () => _inspectFromDisk(now),
-    );
-    _inspected = fresh;
-    _inspectedAt = now;
-    return fresh;
-  }
-
-  StageInspection? _inspected;
-  String? _inspectedAt;
-
-  StageInspection _inspectFromDisk(String fingerprint) {
-    final inspected = const StageInspector().inspect(
-      directory,
-      fingerprint: fingerprint,
-    );
-    final receipt = inspected.receipt;
-    final issues = [...inspected.issues];
-    if (receipt != null &&
-        enforceUnitContract &&
-        (receipt.plan == null ||
-            CanonicalJson.encode(receipt.plan) !=
-                CanonicalJson.encode(resolvedPlan))) {
-      issues.add(
-        const StageIssue(
-          StageIssueKind.wrongStage,
-          'the receipt does not record this resolved release plan',
-          path: 'stage.json',
-        ),
-      );
-    }
-    if (receipt?.complete == true &&
-        !issues.any(
-          (issue) =>
-              issue.kind == StageIssueKind.invalidManifest ||
-              issue.path == 'release-manifest.json',
-        )) {
-      try {
-        final manifest = ReleaseManifest.parse(
-          File(directory.resolve('release-manifest.json')).readAsStringSync(),
-        );
-        final wantedHomebrew = _homebrewBinding()?.identity;
-        final manifestHomebrew = manifest.homebrew?.identity;
-        if (manifest.unit != unit.name ||
-            manifest.version != unit.version.canonical ||
-            manifest.tag != unit.tag ||
-            manifestHomebrew != wantedHomebrew) {
-          issues.add(
-            const StageIssue(
-              StageIssueKind.invalidManifest,
-              'release manifest names different release coordinates or '
-              'Homebrew formulae',
-              path: 'release-manifest.json',
-            ),
-          );
-        }
-      } on Object catch (error) {
-        issues.add(
-          StageIssue(
-            StageIssueKind.invalidManifest,
-            'release manifest Homebrew binding could not be validated: $error',
-            path: 'release-manifest.json',
-          ),
-        );
-      }
-    }
-    if (receipt != null && _unitContract != null) {
-      issues.addAll(_unitContract.validate(directory, receipt));
-      issues.addAll(
-        StageCompletion.validate(
-          receipt,
-          unit: unit,
-          repository: repository,
-          compiler: compiler,
-        ),
-      );
-    }
-    final expectedCompiler = compiler;
-    if (expectedCompiler == null || receipt?.complete != true) {
-      return StageInspection(receipt: receipt, issues: issues);
-    }
-
-    final recorded = receipt!.steps.last.evidence['dart_compiler'];
-    try {
-      final actual = DartCompilerIdentity.fromJson(recorded);
-      if (actual != expectedCompiler) {
-        issues.add(
-          const StageIssue(
-            StageIssueKind.wrongStage,
-            'the completed stage records a different Dart compiler',
-            path: 'stage.json',
-          ),
-        );
-      }
-    } on Object {
-      issues.add(
-        const StageIssue(
-          StageIssueKind.invalidStructure,
-          'the completed stage does not record its Dart compiler',
-          path: 'stage.json',
-        ),
-      );
-    }
-    return StageInspection(receipt: receipt, issues: issues);
-  }
+  /// What this stage is: its receipt, checked against the files it records
+  /// and against the producers this rk runs for the unit.
+  StageInspection inspect() =>
+      Timings.spanSync('inspect stage ${unit.name}', () {
+        final inspected = const StageInspector().inspect(directory);
+        final receipt = inspected.receipt;
+        final contract = _unitContract;
+        if (receipt == null || contract == null) return inspected;
+        final mismatched = contract.validateDeclarations(receipt);
+        return mismatched.isEmpty
+            ? inspected
+            : StageInspection(
+                receipt: receipt,
+                issues: [...inspected.issues, ...mismatched],
+              );
+      });
 
   /// Removes only this already-resolved content-addressed stage.
   ///
@@ -462,15 +227,9 @@ class ReleaseStage {
     }
   }
 
-  /// Removes declared producer outputs that were written but never receipted.
-  ///
-  /// A producer writes bytes before rk can hash and record them. If that
-  /// producer fails, those exact paths are untrusted leftovers, not progress;
-  /// retaining them makes the otherwise-valid receipt prefix look corrupt and
-  /// forces unrelated completed lanes to run again. Recovery may delete only
-  /// output paths from the resolved stage contract and only while an
-  /// incomplete receipt proves they were never recorded. It never adopts
-  /// bytes and never traverses a symlink.
+  /// Removes declared producer outputs that were written but never recorded,
+  /// so the producer can run again. It never adopts bytes and never follows
+  /// a symlink.
   void discardUnrecordedOutputs(Iterable<String> declaredOutputs) {
     if (directory.unsafeFixedPath() != null) {
       throw FileSystemException(
@@ -527,9 +286,8 @@ class ReleaseStage {
           );
       }
 
-      // Producer-owned directories are not artifacts. Remove empty ones so
-      // the strict inventory sees the same tree the receipt describes, but
-      // stop at the stage root and retain anything another lane owns.
+      // Remove the producer's directories it left empty, stopping at the
+      // stage root and at anything another lane owns.
       for (var index = parts.length - 1; index > 0; index--) {
         final parent = directory.resolve(parts.take(index).join('/'));
         final parentType = FileSystemEntity.typeSync(
@@ -551,125 +309,65 @@ class ReleaseStage {
     commit: directory.identity.headCommit,
   );
 
-  /// Finalizes the public manifest and the strict local receipt.
+  /// Writes the release manifest and completes the receipt.
   ///
-  /// The manifest deliberately does not list itself, avoiding a self-digest
-  /// cycle; the local receipt does capture it like every other staged file.
+  /// The manifest does not list itself, avoiding a self-digest cycle; the
+  /// receipt records it like every other staged file.
   StageReceipt finalize({
     required Iterable<ReleaseAssetSpec> releaseAssets,
     Map<String, Object?> evidence = const {},
   }) {
-    final bindings = [
-      for (final asset in validateReleaseAssetSpecs(releaseAssets))
-        _PublicArtifactBinding(
-          publicName: asset.publicName,
-          stagedPath: asset.stagedPath,
-        ),
-    ];
-    final publicNames = bindings.map((binding) => binding.publicName).toSet();
-    final stagedPaths = bindings.map((binding) => binding.stagedPath).toSet();
-    if (publicNames.length != bindings.length ||
-        stagedPaths.length != bindings.length) {
+    final specs = validateReleaseAssetSpecs(releaseAssets).toList();
+    final stagedPaths = specs.map((asset) => asset.stagedPath).toSet();
+    if (specs.map((asset) => asset.publicName).toSet().length != specs.length ||
+        stagedPaths.length != specs.length) {
       throw ArgumentError(
         'release assets must name unique public files and blobs',
       );
     }
-    final homebrewBinding = _homebrewBinding();
-    final homebrewStagedPaths = {
-      if (homebrewBinding != null) homebrewBinding.stagedPath,
-    };
-    final duplicatedHomebrew = stagedPaths.intersection(homebrewStagedPaths);
-    if (duplicatedHomebrew.isNotEmpty) {
+    final homebrew = _homebrewBinding();
+    if (homebrew != null && stagedPaths.contains(homebrew.stagedPath)) {
       throw ArgumentError(
         'Homebrew formulae cannot also be release assets: '
-        '${duplicatedHomebrew.join(', ')}',
+        '${homebrew.stagedPath}',
       );
     }
-    StageReceipt? progress;
-    try {
-      progress = StageReceiptStore(directory).read();
-    } on Object catch (error) {
-      throw StateError('the in-progress stage receipt is invalid: $error');
-    }
-    if (progress?.complete == true) {
-      final inspected = inspect();
-      if (!inspected.reusable) {
-        throw StateError(
-          'the completed stage is invalid and cannot be replaced',
-        );
-      }
-      final existingManifest = ReleaseManifest.parse(
-        File(directory.resolve('release-manifest.json')).readAsStringSync(),
-      );
-      final existingPublic = existingManifest.artifacts
-          .map((artifact) => artifact.name)
-          .toSet();
-      final existingHomebrew = existingManifest.homebrew?.identity;
-      final wantedHomebrew = homebrewBinding?.identity;
-      if (existingPublic.length != publicNames.length ||
-          existingPublic.difference(publicNames).isNotEmpty ||
-          existingHomebrew != wantedHomebrew) {
-        throw StateError(
-          'the completed stage has a different publication inventory',
-        );
-      }
-      return progress!;
-    }
-    if (progress == null) {
-      throw StateError(
-        'stage has no producer receipt; files cannot vouch for themselves',
-      );
-    }
-    if (progress.identity.id != directory.identity.id) {
-      throw StateError('the in-progress receipt belongs to another stage');
-    }
-
-    // A crash between the manifest write and the complete receipt rename can
-    // leave only this deterministic, reserved output. It was never trusted;
-    // remove and derive it again from the validated producer receipt.
-    final oldManifest = File(directory.resolve('release-manifest.json'));
-    if (oldManifest.existsSync() &&
-        !progress.artifacts.any(
-          (artifact) => artifact.path == 'release-manifest.json',
-        )) {
-      oldManifest.deleteSync();
-    }
-
-    // Valid progress holds exactly what producers recorded, each hashed
-    // when it was written; nothing else is in the stage. A unit with no
-    // producers has recorded only its plan.
-    final inspectedProgress = inspect();
-    if (!inspectedProgress.validProgress && !inspectedProgress.planRecorded) {
+    final inspected = inspect();
+    final progress = inspected.receipt;
+    if (inspected.reusable) return progress!;
+    if (progress == null ||
+        !(inspected.validProgress || inspected.planRecorded)) {
       throw StateError(
         'the in-progress stage does not validate: '
-        '${inspectedProgress.issues.join('; ')}',
+        '${inspected.issues.join('; ')}',
       );
     }
+
+    // A crash between the manifest write and the receipt rename can leave a
+    // manifest the receipt never recorded; it is derived again.
+    final oldManifest = File(directory.resolve('release-manifest.json'));
+    if (oldManifest.existsSync()) oldManifest.deleteSync();
+
     final byPath = {
       for (final artifact in progress.artifacts) artifact.path: artifact,
     };
-    final boundStagedPaths = {...stagedPaths, ...homebrewStagedPaths};
-    final missing = boundStagedPaths.difference(byPath.keys.toSet());
+    final missing = {
+      ...stagedPaths,
+      if (homebrew != null) homebrew.stagedPath,
+    }.difference(byPath.keys.toSet());
     if (missing.isNotEmpty) {
       throw StateError(
         'stage is missing publication artifacts: ${missing.join(', ')}',
       );
     }
-
     final completion = StageCompletion(
       unit: unit,
       repository: repository,
       commit: directory.identity.headCommit,
       artifacts: byPath.values,
-      releaseAssets: releaseAssets,
+      releaseAssets: specs,
     );
     completion.manifest.writeTo(directory);
-
-    final manifestArtifact = StageArtifact.capture(
-      stage: directory,
-      path: 'release-manifest.json',
-      type: 'manifest',
-    );
     final receipt = StageReceipt(
       identity: directory.identity,
       plan: resolvedPlan,
@@ -677,23 +375,22 @@ class ReleaseStage {
         ...progress.steps,
         StageStep(
           name: 'complete-stage',
-          inputs: completion.inputs,
-          outputs: [manifestArtifact],
+          outputs: [
+            StageArtifact.capture(
+              stage: directory,
+              path: 'release-manifest.json',
+              type: 'manifest',
+            ),
+          ],
           evidence: {
             ...evidence,
             ...completion.evidence,
-            if (compiler != null) 'dart_compiler': compiler!.toJson(),
+            if (_sdk != null) 'dart_sdk': _sdk!.toJson(),
           },
         ),
       ],
     );
     StageReceiptStore(directory).write(receipt);
-    final inspected = inspect();
-    if (!inspected.reusable) {
-      throw StateError(
-        'completed stage did not validate: ${inspected.issues.join('; ')}',
-      );
-    }
     return receipt;
   }
 
@@ -725,15 +422,12 @@ class ReleaseStage {
     });
   }
 
-  /// Atomically records producer progress without making it reusable.
+  /// Atomically records producer progress without completing the stage;
+  /// only [finalize] completes it.
   ///
-  /// A crash can preserve useful evidence, but only [finalize] may flip the
-  /// receipt to complete. Outputs must already have been captured explicitly;
-  /// an inventory scan never adopts an unrelated file.
-  ///
-  /// Concurrent platform lanes complete in scheduling order; the record is
-  /// canonical. Steps are written in contract order so the receipt reads
-  /// the same however the work interleaved.
+  /// Concurrent platform lanes complete in scheduling order; steps are
+  /// written in contract order so the receipt reads the same however the
+  /// work interleaved.
   void writeProgress(Iterable<StageStep> steps) {
     if (enforceUnitContract && resolvedPlan == null) {
       throw StateError('production receipts require their frozen release plan');
@@ -777,14 +471,4 @@ class ReleaseStage {
   StagedHomebrewBinding? _homebrewBinding() {
     return StageCompletion.homebrewFor(unit, repository);
   }
-}
-
-final class _PublicArtifactBinding {
-  const _PublicArtifactBinding({
-    required this.publicName,
-    required this.stagedPath,
-  });
-
-  final String publicName;
-  final String stagedPath;
 }

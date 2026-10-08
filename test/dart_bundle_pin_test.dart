@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:rk/src/builds/capability.dart';
 import 'package:rk/src/builds/dart_cli.dart';
-import 'package:rk/src/engine/stage_plan.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/transforms/macos.dart';
 import 'package:test/test.dart';
@@ -22,16 +21,13 @@ void main() {
       File(
         '${root.path}/other.dart',
       ).writeAsStringSync("void main() => print('another module');\n");
-      final compiler = DartCompilerIdentity.readResolved(
-        Platform.resolvedExecutable,
-      );
+      final compiler = Platform.resolvedExecutable;
       final capabilities = HostCapabilities.inspect();
       final platform = capabilities.hostPlatform;
       final built =
           await DartCliBuilder(
             tools: const SystemTools(),
-            compilerExecutable: compiler.executable,
-            runtimeSha256: compiler.runtimeSha256,
+            compilerExecutable: compiler,
             capabilities: capabilities,
           ).build(
             platform: platform,
@@ -45,7 +41,7 @@ void main() {
       final runtime = '${root.path}/bundle/lib/tool/dartaotruntime';
       final module = '${root.path}/bundle/lib/tool/app.aot';
       final other = '${root.path}/other.aot';
-      final compiled = await Process.run(compiler.executable, [
+      final compiled = await Process.run(compiler, [
         'compile',
         'aot-snapshot',
         'other.dart',

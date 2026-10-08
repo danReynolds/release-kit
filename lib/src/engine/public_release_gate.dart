@@ -10,10 +10,10 @@ import '../targets/target_module.dart';
 /// Whether public progress requires preserving this unit's original stage:
 /// whether bytes already public must match the ones it holds.
 ///
-/// They must for assets on a GitHub release, a Homebrew formula that names
-/// their hashes, and the release manifest whose hash a tag annotation
-/// records. A published package binds nothing: a fresh stage publishes the
-/// unit's remaining targets.
+/// Only built release assets do: on a GitHub release, in a Homebrew formula
+/// that names their hashes, and in the release manifest a tag annotation
+/// records. A unit without them stages the same manifest again from its
+/// commit, and a published package binds nothing.
 bool hasRecoveryCriticalPublicProgress(
   ResolvedUnit unit,
   Iterable<(Step, Inspection)> observations,
@@ -22,10 +22,8 @@ bool hasRecoveryCriticalPublicProgress(
   return step.isPublic &&
       step.unit == unit.name &&
       state.isExact &&
-      // A published package binds nothing: its version on pub.dev is the
-      // truth, and a fresh stage publishes what remains.
-      step.target != PublishTarget.pubDev &&
-      (unit.buildsReleaseAssets || step.target == PublishTarget.gitTag);
+      unit.buildsReleaseAssets &&
+      step.target != PublishTarget.pubDev;
 });
 
 /// One fresh, coherent read of every public coordinate for a release.

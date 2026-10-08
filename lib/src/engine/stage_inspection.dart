@@ -1,15 +1,8 @@
 import 'dart:io';
 
-import '../builds/binary_artifact.dart';
-import 'canonical_json.dart';
 import '../transforms/digest.dart';
-import 'release_manifest.dart';
-import 'producers.dart';
 import 'stage.dart';
-import 'stage_archive.dart';
-import 'stage_binary_evidence.dart';
 import 'stage_receipt.dart';
-import 'stage_receipt_structure.dart';
 import 'timings.dart';
 import 'verdict.dart';
 
@@ -23,12 +16,8 @@ enum StageIssueKind {
   changedArtifact,
   wrongType,
   symlink,
-  extraArtifact,
   unreadable,
   invalidStructure,
-  invalidManifest,
-  invalidArchive,
-  invalidNotary,
 }
 
 class StageIssue {
@@ -51,9 +40,8 @@ class StageInspection {
 
   bool get reusable => receipt?.complete == true && issues.isEmpty;
 
-  /// Whether this receipt describes work that stopped before reviewable
-  /// completion. Its recorded prefix may be reusable, but it must never be
-  /// described as a completed or reviewed stage.
+  /// Whether this receipt describes work that stopped before completion. Its
+  /// recorded steps may be reused, but it is never a completed stage.
   bool get incomplete => receipt?.complete == false;
 
   /// Whether the receipt claims the completion barrier was reached.
@@ -61,17 +49,15 @@ class StageInspection {
       receipt?.complete == true ||
       receipt?.steps.any((step) => step.name == 'complete-stage') == true;
 
-  /// Whether an interrupted receipt can be resumed without adopting any
-  /// unchecked file. Every recorded byte and dependency has validated; only
-  /// the deliberately incomplete barrier remains.
+  /// Whether an interrupted stage can be resumed: every recorded output is
+  /// intact, and only completion remains.
   bool get validProgress =>
       receipt?.complete == false &&
       receipt!.steps.isNotEmpty &&
       issues.isNotEmpty &&
       issues.every((issue) => issue.kind == StageIssueKind.incompleteReceipt);
 
-  /// Frozen choices survived, but source production has not completed. This
-  /// grants no producer inputs and is never a completed or reusable stage.
+  /// Whether only the plan was recorded: nothing produced yet.
   bool get planRecorded =>
       receipt?.plan != null &&
       receipt!.steps.isEmpty &&
@@ -111,68 +97,31 @@ class StageInspection {
   }
 }
 
-/// Hashes and inventories an existing stage without executing artifacts,
-/// contacting a service, or changing the filesystem. A stage unchanged since
-/// this process last inspected it is answered from that inspection.
+/// What gets published from a stage. Intermediates — executables, notary
+/// submissions and their logs — reach the public only inside an archive
+/// whose own bytes are checked, so a completed stage checks only these.
+const publishedArtifactTypes = {
+  'archive',
+  'asset',
+  'formula',
+  'manifest',
+  'notes',
+  'pub-archive',
+};
+
+/// Reads a stage's receipt and checks the files it records, without
+/// executing anything, contacting a service, or changing the filesystem.
+///
+/// A completed stage is checked for what it publishes; an interrupted one
+/// for everything it recorded, since producers resume from those files.
+/// Files the receipt does not name are not the stage's: nothing reads them.
 class StageInspector {
   const StageInspector();
 
-  /// Inspects [stage], from this process's last [verify] of it when the stage
-  /// has not changed since. A caller that has just taken the stage's
-  /// [fingerprint] passes it, so the stage is not listed and statted twice in
-  /// a row.
-  StageInspection inspect(StageDirectory stage, {String? fingerprint}) {
-    final before = fingerprint ?? _fingerprint(stage);
-    final known = _made[stage.path];
-    // The fixed-path check looks above the stage, where the fingerprint does
-    // not, so it runs every time; it costs a few lstat calls.
-    if (before != null &&
-        known != null &&
-        known.fingerprint == before &&
-        stage.unsafeFixedPath() == null) {
-      Timings.tally('stage inspection remembered');
-      return known.inspection;
-    }
-    final inspection = verify(stage);
-    // Kept under the fingerprint taken before the read. A stage that moved
-    // while it was read no longer has that fingerprint, so this answer is
-    // never given for it; nor is one read where the path was unsafe.
-    if (before != null && stage.unsafeFixedPath() == null) {
-      _made[stage.path] = (fingerprint: before, inspection: inspection);
-    } else {
-      _made.remove(stage.path);
-    }
-    return inspection;
-  }
+  StageInspection inspect(StageDirectory stage) =>
+      Timings.spanSync('verify stage files', () => _inspect(stage));
 
-  /// [stage]'s fingerprint, or null when it cannot be listed. Such a stage is
-  /// inspected afresh every time, and the inspection says what is unreadable.
-  static String? _fingerprint(StageDirectory stage) {
-    try {
-      return stage.fingerprint();
-    } on FileSystemException {
-      return null;
-    }
-  }
-
-  /// Inspections this process has already made, by stage path, with the
-  /// fingerprint each stage had while it was read.
-  ///
-  /// A release opens the same stage many times, through a new
-  /// [StageDirectory] each time, and each opening re-read and re-hashed
-  /// every file: twenty full verifications, 16s, to reuse four stages. The
-  /// answer for an unchanged stage is the same answer, on the same evidence
-  /// [ReleaseStage] already trusts to skip a re-read: the fingerprint.
-  static final Map<String, ({String fingerprint, StageInspection inspection})>
-  _made = {};
-
-  /// Verifies [stage]: re-reads and re-hashes every file in it, whatever
-  /// this process already knows.
-  StageInspection verify(StageDirectory stage) =>
-      Timings.spanSync('verify stage files', () => _verify(stage));
-
-  StageInspection _verify(StageDirectory stage) {
-    final issues = <StageIssue>[];
+  StageInspection _inspect(StageDirectory stage) {
     final unsafe = stage.unsafeFixedPath();
     if (unsafe != null) {
       return StageInspection(
@@ -213,61 +162,60 @@ class StageInspector {
       );
     }
 
-    StageReceipt? receipt;
+    final StageReceipt? receipt;
     try {
       receipt = StageReceiptStore(stage).read();
-      if (receipt == null) {
-        issues.add(
-          const StageIssue(
+    } on Object catch (error) {
+      return StageInspection(
+        receipt: null,
+        issues: [
+          StageIssue(
+            StageIssueKind.invalidReceipt,
+            'stage receipt is invalid: $error',
+            path: 'stage.json',
+          ),
+        ],
+      );
+    }
+    if (receipt == null) {
+      return StageInspection(
+        receipt: null,
+        issues: const [
+          StageIssue(
             StageIssueKind.missingReceipt,
             'files without a stage receipt are not reusable',
             path: 'stage.json',
           ),
-        );
-      }
-    } on Object catch (error) {
+        ],
+      );
+    }
+
+    final issues = <StageIssue>[];
+    if (receipt.identity.id != stage.identity.id) {
       issues.add(
-        StageIssue(
-          '$error'.contains('escapes the stage')
-              ? StageIssueKind.unsafePath
-              : StageIssueKind.invalidReceipt,
-          'stage receipt is invalid: $error',
+        const StageIssue(
+          StageIssueKind.wrongStage,
+          'receipt identity does not name this stage',
           path: 'stage.json',
         ),
       );
     }
-
-    if (receipt != null) {
-      if (receipt.identity.id != stage.identity.id) {
-        issues.add(
-          const StageIssue(
-            StageIssueKind.wrongStage,
-            'receipt identity does not name this stage',
-            path: 'stage.json',
-          ),
-        );
-      }
-      if (!receipt.complete) {
-        issues.add(
-          const StageIssue(
-            StageIssueKind.incompleteReceipt,
-            'receipt records an incomplete stage',
-            path: 'stage.json',
-          ),
-        );
-      }
-      for (final artifact in receipt.artifacts) {
-        _inspectArtifact(stage, artifact, issues);
-      }
-      _inspectStructure(stage, receipt, issues);
+    if (!receipt.complete) {
+      issues.add(
+        const StageIssue(
+          StageIssueKind.incompleteReceipt,
+          'receipt records an incomplete stage',
+          path: 'stage.json',
+        ),
+      );
     }
-
-    _inspectInventory(stage, receipt, issues);
-    issues.sort((left, right) {
-      final byPath = (left.path ?? '').compareTo(right.path ?? '');
-      return byPath != 0 ? byPath : left.kind.index.compareTo(right.kind.index);
-    });
-    return StageInspection(receipt: receipt, issues: _deduplicate(issues));
+    for (final artifact in receipt.artifacts) {
+      if (receipt.complete && !publishedArtifactTypes.contains(artifact.type)) {
+        continue;
+      }
+      _inspectArtifact(stage, artifact, issues);
+    }
+    return StageInspection(receipt: receipt, issues: issues);
   }
 
   static void _inspectArtifact(
@@ -321,7 +269,7 @@ class StageInspector {
     try {
       // Within one run rk trusts its own writes: a file this process hashed
       // to the recorded digest, and that has not moved since, is not read
-      // again. A later run reads and hashes everything once.
+      // again. A later run reads and hashes it once.
       if (stage.digestStillStands(expected.path, expected.sha256)) return;
       final file = File(stage.resolve(expected.path));
       final stat = file.statSync();
@@ -352,358 +300,6 @@ class StageInspector {
       );
     }
   }
-
-  static void _inspectStructure(
-    StageDirectory stage,
-    StageReceipt receipt,
-    List<StageIssue> issues,
-  ) {
-    issues.addAll(StageReceiptStructure.validate(receipt));
-    issues.addAll(StageBinaryEvidence.validate(receipt));
-    if (receipt.steps.isEmpty) return;
-    // Progress is reusable only if semantic producer evidence validates too;
-    // otherwise a crash after a bad archive was receipted would turn that
-    // false claim into a trusted input on the next run.
-    for (final step in receipt.steps) {
-      if (isMacosBuildReceipt(step.name)) {
-        _inspectBundleManifest(stage, step, issues);
-      }
-      if (step.name.startsWith('archive:')) {
-        for (final output in step.outputs.where(
-          (artifact) => artifact.type == 'archive',
-        )) {
-          _inspectArchive(stage, output.path, step, issues);
-        }
-      }
-    }
-
-    if (receipt.complete) {
-      final complete = receipt.steps.last;
-      if (complete.outputs.length == 1 &&
-          complete.outputs.single.path == 'release-manifest.json' &&
-          complete.outputs.single.type == 'manifest') {
-        _inspectManifest(stage, receipt, complete, issues);
-      }
-    }
-  }
-
-  static void _inspectManifest(
-    StageDirectory stage,
-    StageReceipt receipt,
-    StageStep complete,
-    List<StageIssue> issues,
-  ) {
-    final ReleaseManifest manifest;
-    try {
-      manifest = ReleaseManifest.parse(
-        File(stage.resolve('release-manifest.json')).readAsStringSync(),
-      );
-    } on Object catch (error) {
-      issues.add(
-        StageIssue(
-          StageIssueKind.invalidManifest,
-          'release manifest is invalid: $error',
-          path: 'release-manifest.json',
-        ),
-      );
-      return;
-    }
-    if (manifest.commit != receipt.identity.headCommit) {
-      issues.add(
-        const StageIssue(
-          StageIssueKind.invalidManifest,
-          'release manifest belongs to another stage',
-          path: 'release-manifest.json',
-        ),
-      );
-    }
-
-    final beforeComplete = <String, StageArtifact>{};
-    final producers = <String, StageStep>{};
-    for (final step in receipt.steps.take(receipt.steps.length - 1)) {
-      for (final output in step.outputs) {
-        beforeComplete[output.path] = output;
-        producers[output.path] = step;
-      }
-    }
-    final manifestNames = manifest.artifacts.map((item) => item.name).toSet();
-    final completeInputs = {
-      for (final input in complete.inputs) input.name: input.sha256,
-    };
-    final encodedBindings = complete.evidence['release_assets'];
-    final bindings = encodedBindings is Map
-        ? {
-            for (final entry in encodedBindings.entries)
-              if (entry.key is String && entry.value is String)
-                entry.key as String: entry.value as String,
-          }
-        : <String, String>{};
-    final StagedHomebrewBinding? homebrewBinding;
-    try {
-      final encoded = complete.evidence['homebrew_binding'];
-      homebrewBinding = encoded == null
-          ? null
-          : StagedHomebrewBinding.fromEvidence(encoded);
-    } on Object catch (error) {
-      issues.add(
-        StageIssue(
-          StageIssueKind.invalidManifest,
-          'complete-stage has malformed Homebrew bindings: $error',
-          path: 'release-manifest.json',
-        ),
-      );
-      return;
-    }
-    final expectedCompleteInputs = {
-      ...bindings.values,
-      if (homebrewBinding != null) homebrewBinding.stagedPath,
-    };
-    if (encodedBindings is! Map ||
-        encodedBindings.length != bindings.length ||
-        bindings.length != manifestNames.length ||
-        bindings.keys.toSet().difference(manifestNames).isNotEmpty ||
-        manifestNames.difference(bindings.keys.toSet()).isNotEmpty ||
-        completeInputs.keys
-            .toSet()
-            .difference(expectedCompleteInputs)
-            .isNotEmpty ||
-        expectedCompleteInputs
-            .difference(completeInputs.keys.toSet())
-            .isNotEmpty) {
-      issues.add(
-        const StageIssue(
-          StageIssueKind.invalidManifest,
-          'complete-stage inputs do not exactly bind the publication inventory',
-          path: 'release-manifest.json',
-        ),
-      );
-    }
-
-    for (final item in manifest.artifacts) {
-      final stagedPath = bindings[item.name];
-      final local = stagedPath == null ? null : beforeComplete[stagedPath];
-      if (local == null ||
-          local.type != item.type ||
-          local.size != item.size ||
-          local.sha256 != item.sha256 ||
-          completeInputs[stagedPath] != item.sha256) {
-        issues.add(
-          StageIssue(
-            StageIssueKind.invalidManifest,
-            'manifest metadata does not match the producer receipt',
-            path: item.name,
-          ),
-        );
-        continue;
-      }
-    }
-    final manifestHomebrew = manifest.homebrew;
-    if (homebrewBinding?.identity != manifestHomebrew?.identity) {
-      issues.add(
-        const StageIssue(
-          StageIssueKind.invalidManifest,
-          'complete-stage Homebrew evidence does not match the manifest',
-          path: 'release-manifest.json',
-        ),
-      );
-    }
-    if (manifestHomebrew != null) {
-      final local = homebrewBinding == null
-          ? null
-          : beforeComplete[homebrewBinding.stagedPath];
-      if (homebrewBinding == null ||
-          local == null ||
-          local.type != 'formula' ||
-          local.size != manifestHomebrew.size ||
-          local.sha256 != manifestHomebrew.sha256 ||
-          completeInputs[homebrewBinding.stagedPath] !=
-              manifestHomebrew.sha256) {
-        issues.add(
-          StageIssue(
-            StageIssueKind.invalidManifest,
-            'Homebrew metadata does not match the producer receipt',
-            path: '${manifestHomebrew.tap}/${manifestHomebrew.path}',
-          ),
-        );
-      }
-    }
-  }
-
-  static void _inspectArchive(
-    StageDirectory stage,
-    String path,
-    StageStep? producer,
-    List<StageIssue> issues,
-  ) {
-    try {
-      final contents = StageArchiveInventory.decode(
-        File(stage.resolve(path)).readAsBytesSync(),
-      );
-      final actual = contents.inventory;
-      if (producer == null || !producer.name.startsWith('archive:')) {
-        throw const FormatException(
-          'archive has no archive producer in the receipt',
-        );
-      }
-      final expected = StageArchiveInventory.parseEvidence(
-        producer.evidence['inventory'],
-      );
-      StageArchiveInventory.requireSame(expected, actual);
-      StageBinaryEvidence.requireArchiveEvidence(
-        producer,
-        artifact: contents.artifact,
-      );
-    } on Object catch (error) {
-      issues.add(
-        StageIssue(
-          StageIssueKind.invalidArchive,
-          'archive evidence is invalid: $error',
-          path: path,
-        ),
-      );
-    }
-  }
-
-  static void _inspectBundleManifest(
-    StageDirectory stage,
-    StageStep producer,
-    List<StageIssue> issues,
-  ) {
-    try {
-      if (!producer.evidence.containsKey('artifact')) return;
-      final artifact = BinaryArtifact.fromJson(producer.evidence['artifact']);
-      if (!artifact.isBundle) return;
-      final parts = producer.name.split(':');
-      final root = 'producers/${parts[1]}/${parts[2]}';
-      final manifest = CanonicalJson.decodeDocument(
-        File(
-          stage.resolve('$root/${BinaryArtifact.manifestName}'),
-        ).readAsStringSync(),
-      );
-      if (CanonicalJson.encode(manifest) !=
-          CanonicalJson.encode(artifact.toJson())) {
-        throw const FormatException(
-          'signed build manifest differs from its receipt',
-        );
-      }
-    } on Object catch (error) {
-      issues.add(
-        StageIssue(
-          StageIssueKind.invalidStructure,
-          '$error',
-          path: 'stage.json',
-        ),
-      );
-    }
-  }
-
-  static void _inspectInventory(
-    StageDirectory stage,
-    StageReceipt? receipt,
-    List<StageIssue> issues,
-  ) {
-    final expectedFiles = <String>{
-      'stage.json',
-      if (receipt != null)
-        ...receipt.artifacts.map((artifact) => artifact.path),
-    };
-    final expectedDirectories = <String>{};
-    for (final path in expectedFiles) {
-      final parts = path.split('/');
-      for (var i = 1; i < parts.length; i++) {
-        expectedDirectories.add(parts.take(i).join('/'));
-      }
-    }
-
-    void walk(Directory directory) {
-      final entities = directory.listSync(followLinks: false)
-        ..sort((left, right) => left.path.compareTo(right.path));
-      for (final entity in entities) {
-        final relative = _relative(stage.path, entity.path);
-        final type = FileSystemEntity.typeSync(entity.path, followLinks: false);
-        if (type == FileSystemEntityType.link) {
-          issues.add(
-            StageIssue(
-              StageIssueKind.symlink,
-              'symlinks are not permitted in a stage',
-              path: relative,
-            ),
-          );
-          if (!expectedFiles.contains(relative) &&
-              !expectedDirectories.contains(relative)) {
-            issues.add(
-              StageIssue(
-                StageIssueKind.extraArtifact,
-                'path is not named by the receipt',
-                path: relative,
-              ),
-            );
-          }
-        } else if (type == FileSystemEntityType.directory) {
-          if (!expectedDirectories.contains(relative)) {
-            issues.add(
-              StageIssue(
-                StageIssueKind.extraArtifact,
-                'directory is not needed by a receipt artifact',
-                path: relative,
-              ),
-            );
-          }
-          walk(Directory(entity.path));
-        } else if (type == FileSystemEntityType.file) {
-          if (!expectedFiles.contains(relative)) {
-            issues.add(
-              StageIssue(
-                StageIssueKind.extraArtifact,
-                'file is not named by the receipt',
-                path: relative,
-              ),
-            );
-          }
-        } else {
-          issues.add(
-            StageIssue(
-              StageIssueKind.wrongType,
-              'unsupported filesystem entity in stage',
-              path: relative,
-            ),
-          );
-        }
-      }
-    }
-
-    try {
-      walk(Directory(stage.path));
-    } on FileSystemException catch (error) {
-      issues.add(
-        StageIssue(
-          StageIssueKind.unreadable,
-          'stage inventory could not be read: ${error.message}',
-        ),
-      );
-    }
-  }
-}
-
-String _relative(String root, String path) {
-  final prefix = root.endsWith(Platform.pathSeparator)
-      ? root
-      : '$root${Platform.pathSeparator}';
-  if (!path.startsWith(prefix)) {
-    throw FileSystemException('inventory path escaped the stage', path);
-  }
-  return path.substring(prefix.length).split(Platform.pathSeparator).join('/');
 }
 
 String _mode(int mode) => (mode & 0xfff).toRadixString(8).padLeft(4, '0');
-
-List<StageIssue> _deduplicate(List<StageIssue> issues) {
-  final keys = <String>{};
-  return [
-    for (final issue in issues)
-      if (keys.add(
-        '${issue.kind.index}\u0000${issue.path}\u0000${issue.message}',
-      ))
-        issue,
-  ];
-}

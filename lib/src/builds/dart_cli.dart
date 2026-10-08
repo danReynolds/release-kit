@@ -2,7 +2,6 @@ import 'dart:io';
 
 import '../engine/stage_plan.dart';
 import '../engine/tools.dart';
-import '../transforms/digest.dart';
 import 'binary_artifact.dart';
 import 'capability.dart';
 import 'dart_launcher.dart';
@@ -19,17 +18,13 @@ class DartCliBuilder {
     required this.tools,
     required this.capabilities,
     this.compilerExecutable = 'dart',
-    this.runtimeSha256,
-    this.runtimeLicenseSha256,
-    this.launcherCompiler,
   });
 
   final Tools tools;
   final HostCapabilities capabilities;
+
+  /// The SDK's `dart`; beside it, the runtime a bundle ships.
   final String compilerExecutable;
-  final String? runtimeSha256;
-  final String? runtimeLicenseSha256;
-  final LauncherCompiler? launcherCompiler;
 
   /// Compiles [entryPoint] for [platform], writing to [output].
   Future<BuildOutcome> build({
@@ -105,7 +100,7 @@ class DartCliBuilder {
         return BuildOutcome.failed(
           'the Dart bundle could not be assembled: $error',
         );
-      } on DartCompilerUnavailable catch (error) {
+      } on DartSdkUnavailable catch (error) {
         return BuildOutcome.failed('$error');
       } on StateError catch (error) {
         return BuildOutcome.failed('$error');
@@ -138,7 +133,7 @@ class DartCliBuilder {
     String root,
   ) async {
     final compiler = compilerExecutable == 'dart'
-        ? DartCompilerIdentity.readAmbient().executable
+        ? DartSdk.ambient().executable
         : File(compilerExecutable).absolute.path;
     final runtime = '${File(compiler).parent.path}/dartaotruntime';
     final installedRuntime = '$root/${artifact.identityFile}';
@@ -147,12 +142,6 @@ class DartCliBuilder {
       return BuildOutcome.failed(
         'the matching Dart runtime could not be copied',
         transcript: copied.transcript,
-      );
-    }
-    if (runtimeSha256 != null &&
-        Sha256.hex(File(installedRuntime).readAsBytesSync()) != runtimeSha256) {
-      return const BuildOutcome.failed(
-        'the Dart runtime changed after the stage was identified',
       );
     }
     final licensePath = '$root/lib/${artifact.entryPoint}/LICENSE.dart';
@@ -166,34 +155,20 @@ class DartCliBuilder {
         transcript: license.transcript,
       );
     }
-    if (runtimeLicenseSha256 != null &&
-        Sha256.hex(File(licensePath).readAsBytesSync()) !=
-            runtimeLicenseSha256) {
-      return const BuildOutcome.failed(
-        'the Dart runtime license changed after the stage was identified',
-      );
-    }
     final scratch = Directory.systemTemp.createTempSync('rk-dart-launcher-');
     final source = File('${scratch.path}/launcher.c');
     try {
       source.writeAsStringSync(dartLauncherSource(artifact.entryPoint));
-      if (launcherCompiler != null && !launcherCompiler!.isCurrent) {
-        return const BuildOutcome.failed(
-          'the launcher toolchain changed after the stage was identified',
-        );
-      }
-      final launcher = await tools.run(
-        launcherCompiler?.executable ?? '/usr/bin/clang',
-        [
-          if (launcherCompiler != null) ...['-isysroot', launcherCompiler!.sdk],
-          '-O2',
-          '-Wall',
-          '-Werror',
-          source.path,
-          '-o',
-          '$root/${artifact.entryPoint}',
-        ],
-      );
+      final clang = LauncherCompiler.read();
+      final launcher = await tools.run(clang.executable, [
+        ...['-isysroot', clang.sdk],
+        '-O2',
+        '-Wall',
+        '-Werror',
+        source.path,
+        '-o',
+        '$root/${artifact.entryPoint}',
+      ]);
       if (!launcher.ok) {
         return BuildOutcome.failed(
           'the native launcher could not be built',

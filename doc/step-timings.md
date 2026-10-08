@@ -13,9 +13,7 @@ wrong; the only symptom was a person wondering whether rk had hung.
 
 Finding the cause took timing a real run by hand, because no step said what it
 cost. Once a run could report its own spans, four costs stood out of an
-80-second stage reuse, none of them visible in the output or in
-`tool/bench.dart` (which times components in isolation, not a real run's
-composition):
+80-second stage reuse, none of them visible in the output:
 
 | Cost | Calls | Time | Cause |
 | --- | --- | --- | --- |
@@ -176,8 +174,7 @@ rk timings (wall clock; nested spans overlap their parent)
    the trace file is the machine-readable timing until a step's own time is
    measured where its outcome is recorded.
 5. No per-run history for now. Timings on a developer machine move with load,
-   caches and the network, which is why `tool/bench.dart` asserts almost
-   nothing; history can come later if a need shows.
+   caches and the network; history can come later if a need shows.
 6. Boards do not show a total in their settled title. The closing line covers
    the same question per phase, and a board total would have needed another
    clock read in a path whose tests count them.

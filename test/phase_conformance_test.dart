@@ -584,7 +584,7 @@ void main() {
       Map<String, String> sourceFiles = const {},
       String? config,
       void Function(String key)? onRun,
-      DartCompilerIdentity Function()? compiler,
+      DartSdk Function()? sdk,
       PubResolution pub = const PubResolution(),
       void Function(String key, String workingDirectory)? inspect,
     }) async {
@@ -752,7 +752,7 @@ publish = ["git-tag", "pub.dev"]
             resolution,
           ),
           repositoryRoot: stageRoot.path,
-          compilerIdentity: compiler,
+          sdk: sdk,
         );
         code = await ReleaseCommand(
           allowInteractiveTools: true,
@@ -825,7 +825,7 @@ publish = ["git-tag", "pub.dev"]
       Map<String, ToolResult> results = const {},
       Map<String, String> sourceFiles = const {},
       String? config,
-      DartCompilerIdentity Function()? compiler,
+      DartSdk Function()? sdk,
       PubResolution pub = const PubResolution(),
       void Function(String key, String workingDirectory)? inspect,
     }) {
@@ -840,7 +840,7 @@ publish = ["git-tag", "pub.dev"]
         results: results,
         sourceFiles: sourceFiles,
         config: config,
-        compiler: compiler,
+        sdk: sdk,
         pub: pub,
         inspect: inspect,
         onRun: (key) {
@@ -1288,11 +1288,10 @@ publish = ["git-tag", "pub.dev"]
         return '${sdks.path}/$path';
       }
 
-      DartCompilerIdentity Function() dart(String executable) =>
-          () => DartCompilerIdentity.recorded(
+      DartSdk Function() dart(String executable) =>
+          () => DartSdk(
             executable: executable,
             version: 'Dart SDK version: 3.12.2',
-            sha256: 'a' * 64,
           );
 
       const workspace = {
@@ -1341,7 +1340,7 @@ publish = ["git-tag", "pub.dev"]
         final run = await release(
           config: config,
           sourceFiles: workspace,
-          compiler: dart(file('dart-sdk/bin/dart')),
+          sdk: dart(file('dart-sdk/bin/dart')),
         );
 
         expect(run.code, ExitCodes.ok, reason: run.text);
@@ -1351,7 +1350,7 @@ publish = ["git-tag", "pub.dev"]
         final run = await release(
           config: config,
           sourceFiles: flutterKeybay,
-          compiler: dart(file('dart-sdk/bin/dart')),
+          sdk: dart(file('dart-sdk/bin/dart')),
         );
 
         expect(run.code, ExitCodes.refused);
@@ -1369,7 +1368,7 @@ publish = ["git-tag", "pub.dev"]
         final run = await release(
           config: config,
           sourceFiles: flutterKeybay,
-          compiler: dart(file('flutter/bin/dart')),
+          sdk: dart(file('flutter/bin/dart')),
         );
 
         expect(run.code, ExitCodes.ok, reason: run.text);
@@ -1844,6 +1843,9 @@ executables:
           return ReleaseStage(
             unit: unit,
             source: tree,
+            // The scripted tools answer `dart compile`, not this machine's
+            // SDK.
+            sdk: () => const DartSdk(executable: 'dart', version: 'fixture'),
             repository: git.originUrl,
             directory: directory,
             enforceUnitContract: true,

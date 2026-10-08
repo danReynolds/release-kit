@@ -1,20 +1,12 @@
-import 'dart:convert';
-
-import '../transforms/digest.dart';
 import 'assets.dart';
-import 'canonical_json.dart';
 import 'publish_target.dart';
 import 'release_asset.dart';
 import 'release_manifest.dart';
 import 'resolve.dart';
-import 'stage_inspection.dart';
-import 'stage_plan.dart';
 import 'stage_receipt.dart';
 
-/// The deterministic terminal publication inventory. Construction reads no
-/// stage files: it binds current release coordinates to prior producer records.
-/// Production writes these exact bytes; portable authorization checks the same
-/// commitment without pretending to have read an ancestor's manifest payload.
+/// The release manifest and publication bindings a stage completes with,
+/// derived from the unit and its producers' recorded outputs.
 final class StageCompletion {
   StageCompletion({
     required ResolvedUnit unit,
@@ -54,10 +46,6 @@ final class StageCompletion {
       ],
       homebrew: homebrew?.bind(byPath[homebrew.stagedPath]!),
     );
-    inputs = List.unmodifiable([
-      for (final path in paths.toList()..sort())
-        StageInput.artifact(byPath[path]!),
-    ]);
     evidence = Map.unmodifiable({
       'release_assets': Map.unmodifiable(bindings),
       'homebrew_binding': homebrew?.toEvidence(),
@@ -65,7 +53,6 @@ final class StageCompletion {
   }
 
   late final ReleaseManifest manifest;
-  late final List<StageInput> inputs;
   late final Map<String, Object?> evidence;
 
   static StagedHomebrewBinding? homebrewFor(
@@ -88,65 +75,5 @@ final class StageCompletion {
       path: 'Formula/${ReleaseAssets.formulaName(project.executable!)}',
       stagedPath: ReleaseAssets.formulaPath(project),
     );
-  }
-
-  static List<StageIssue> validate(
-    StageReceipt receipt, {
-    required ResolvedUnit unit,
-    required String? repository,
-    DartCompilerIdentity? compiler,
-  }) {
-    if (!receipt.complete) return const [];
-    try {
-      final expected = StageCompletion(
-        unit: unit,
-        repository: repository,
-        commit: receipt.identity.headCommit,
-        artifacts: receipt.steps
-            .take(receipt.steps.length - 1)
-            .expand((s) => s.outputs),
-        releaseAssets: ReleaseAssets.bundleFor(unit),
-      );
-      final complete = receipt.steps.last;
-      if (CanonicalJson.encode(
-                complete.inputs.map((i) => i.toJson()).toList(),
-              ) !=
-              CanonicalJson.encode(
-                expected.inputs.map((i) => i.toJson()).toList(),
-              ) ||
-          expected.evidence.entries.any(
-            (entry) =>
-                CanonicalJson.encode(complete.evidence[entry.key]) !=
-                CanonicalJson.encode(entry.value),
-          )) {
-        throw StateError(
-          'complete-stage does not bind the current publication inventory',
-        );
-      }
-      final bytes = utf8.encode(expected.manifest.encode());
-      final output = complete.outputs.single;
-      if (output.path != ReleaseAssets.manifest ||
-          output.type != 'manifest' ||
-          output.size != bytes.length ||
-          output.sha256 != Sha256.hex(bytes)) {
-        throw StateError(
-          'release manifest commitment differs from the current producer inventory',
-        );
-      }
-      if (compiler != null &&
-          DartCompilerIdentity.fromJson(complete.evidence['dart_compiler']) !=
-              compiler) {
-        throw StateError('completed stage records a different Dart compiler');
-      }
-      return const [];
-    } on Object catch (error) {
-      return [
-        StageIssue(
-          StageIssueKind.invalidManifest,
-          '$error',
-          path: 'stage.json',
-        ),
-      ];
-    }
   }
 }

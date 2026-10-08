@@ -9,7 +9,6 @@ import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage_archive.dart';
-import 'package:rk/src/engine/stage_plan.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/transforms/archive.dart';
 import 'package:test/test.dart';
@@ -209,73 +208,5 @@ $metadata
         );
       }
     });
-  });
-
-  test('an SDK launcher resolves to its actual compiler/runtime pair', () {
-    if (Platform.isWindows) return;
-    final root = Directory.systemTemp.createTempSync('rk-sdk-launcher-');
-    addTearDown(() => root.deleteSync(recursive: true));
-    final wrapper = File('${root.path}/dart')
-      ..writeAsStringSync(
-        '#!/bin/sh\nexec "${Platform.resolvedExecutable}" "\$@"\n',
-      );
-    Process.runSync('chmod', ['755', wrapper.path]);
-    final actual = DartCompilerIdentity.readResolved(
-      Platform.resolvedExecutable,
-    );
-    final wrapped = DartCompilerIdentity.readResolved(wrapper.path);
-    expect(wrapped, actual);
-    expect(wrapped.executable, actual.executable);
-    expect(wrapped.runtimeSha256, isNotNull);
-  });
-
-  test('an unchanged SDK launcher is probed once', () {
-    if (Platform.isWindows) return;
-    final root = Directory.systemTemp.createTempSync('rk-sdk-probe-');
-    addTearDown(() => root.deleteSync(recursive: true));
-    final runs = File('${root.path}/runs');
-    final wrapper = File('${root.path}/dart');
-    void writeWrapper(String note) {
-      wrapper.writeAsStringSync(
-        '#!/bin/sh\n# $note\necho run >> "${runs.path}"\n'
-        'exec "${Platform.resolvedExecutable}" "\$@"\n',
-      );
-      Process.runSync('chmod', ['755', wrapper.path]);
-    }
-
-    int probes() => runs.existsSync() ? runs.readAsLinesSync().length : 0;
-
-    writeWrapper('one');
-    final first = DartCompilerIdentity.readResolved(wrapper.path);
-    expect(probes(), 1);
-    expect(DartCompilerIdentity.readResolved(wrapper.path), first);
-    expect(probes(), 1, reason: 'an unchanged launcher runs the same SDK');
-
-    writeWrapper('two, a different launcher');
-    expect(DartCompilerIdentity.readResolved(wrapper.path), first);
-    expect(probes(), 2, reason: 'a changed launcher is asked again');
-
-    // A version manager's shim can switch SDKs without changing on disk, so
-    // authorization forgets every answer before and after the yes.
-    DartCompilerIdentity.askWrappersAgain();
-    expect(DartCompilerIdentity.readResolved(wrapper.path), first);
-    expect(probes(), 3, reason: 'an unchanged launcher is asked again');
-  });
-
-  test('the runtime bytes participate in compiler identity and round trip', () {
-    final root = Directory.systemTemp.createTempSync('rk-runtime-identity-');
-    addTearDown(() => root.deleteSync(recursive: true));
-    final compiler = File('${root.path}/dart')
-      ..writeAsStringSync('#!/bin/sh\necho Dart-fixture\n');
-    Process.runSync('chmod', ['755', compiler.path]);
-    final runtime = File('${root.path}/dartaotruntime')
-      ..writeAsStringSync('runtime-one');
-    final before = DartCompilerIdentity.readResolved(compiler.path);
-    runtime.writeAsStringSync('runtime-two');
-    final after = DartCompilerIdentity.readResolved(compiler.path);
-    expect(before.sha256, after.sha256);
-    expect(before, isNot(after));
-    expect(before.toPlanJson(), isNot(after.toPlanJson()));
-    expect(DartCompilerIdentity.fromJson(after.toJson()), after);
   });
 }
