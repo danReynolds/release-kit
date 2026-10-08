@@ -89,9 +89,31 @@
   builds the hooks and starts the command's entrypoint with the caller's
   working directory, arguments, standard input, defines and exit status. A
   project without hooks keeps the direct launcher. Select Local again to
-  prepare the new launcher; earlier generations stay recoverable.
+  prepare the new launcher.
 - `rk use` finds local commands in projects that depend on path or Git
   packages. Releasing such a project still refuses those sources.
+- `rk use` opens and lists in about 0.1s, down from about 1s with a Homebrew
+  installation: rk reads Homebrew's `opt` link and keg receipt instead of
+  running `brew list` and `brew info`. Switching a source takes about 0.2s.
+  `RK_TIMINGS=1` traces the installation commands.
+- A Homebrew selection keeps running after `brew upgrade`: launchers go
+  through Homebrew's `opt` link instead of a versioned keg that the upgrade
+  removes.
+- Switching rk's own source no longer copies the running rk first (and, from
+  a source checkout, no longer compiles it), and no longer keeps those copies.
+- A GitHub update replaces the previous download, and uninstall removes every
+  download. A run interrupted after unpacking a download finishes on the next
+  run instead of refusing with "A previous download already occupies".
+- Each launcher records its project and source, and rk reads the selection
+  back from the launchers; the selection pointer, its generations and the
+  per-source receipts are gone. Adding or renaming a project's GitHub remote
+  no longer makes rk refuse its own commands. A selection made by 0.1.14
+  keeps running; run `rk use` once to move it to the new launchers. What
+  0.1.14 kept under `~/.local/share/rk` (`managers`, and each project's
+  `current`, `generations` and receipts) is no longer read and can be
+  deleted.
+- Bare `rk install` and `rk uninstall` open the `rk use` table, which already
+  installs, updates and removes.
 
 ## 0.1.14
 
