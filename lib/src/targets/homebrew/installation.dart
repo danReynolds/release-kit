@@ -94,16 +94,15 @@ class HomebrewInstallationProvider
         problem: 'Homebrew returned an unsupported formula directory.',
       );
     }
-    final cellar = (await checked(tools, brew!, [
-      '--cellar',
-    ], environment: _environment)).stdout.trim();
-    if (!cellar.startsWith('/')) {
-      throw const InstallationFailure('Homebrew returned a relative cellar.');
-    }
-    final prefix = '$cellar/$rack/$version';
     final globalPrefix = (await checked(tools, brew!, [
       '--prefix',
     ], environment: _environment)).stdout.trim();
+    if (!globalPrefix.startsWith('/')) {
+      throw const InstallationFailure('Homebrew returned a relative prefix.');
+    }
+    // Launch through the opt link: Homebrew keeps it on the current keg across
+    // upgrades and cleanups, and creates it even with --skip-link.
+    final prefix = '$globalPrefix/opt/$rack';
     for (final command in project.commands) {
       if (!File('$prefix/bin/$command').existsSync()) {
         return SourceInspection(

@@ -289,8 +289,8 @@ void main() {
     'Homebrew uses exact formula identity and installs without linking or upgrading',
     () async {
       final project = fixture(scratch, commands: ['orbit'], binary: true);
-      final cellar = '${scratch.path}/Cellar/orbit';
-      File('$cellar/1.2.0/bin/orbit')
+      final opt = '${scratch.path}/brew/opt/orbit';
+      File('$opt/bin/orbit')
         ..createSync(recursive: true)
         ..writeAsStringSync('binary');
       var installed = false;
@@ -328,10 +328,6 @@ void main() {
             }),
           );
         }
-        if (args.first == '--cellar') {
-          expect(args, ['--cellar']);
-          return ok('${scratch.path}/Cellar');
-        }
         if (args.first == '--prefix') return ok('${scratch.path}/brew');
         if (args.first == 'install') {
           installed = true;
@@ -350,7 +346,7 @@ void main() {
             'A different tap is not our installation or a reason to query it.',
       );
       final result = await provider.install(project, (_) {});
-      expect(result.commands['orbit']!.executable, '$cellar/1.2.0/bin/orbit');
+      expect(result.commands['orbit']!.executable, '$opt/bin/orbit');
       expect(calls.where((c) => c.first == 'install').single, [
         'install',
         '--formula',
