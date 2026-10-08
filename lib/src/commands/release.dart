@@ -326,6 +326,7 @@ class ReleaseCommand {
       final prepared = await _stage(stagings);
       // Every unit says how its staging went, even past one that failed.
       var code = ExitCodes.ok;
+      final staged = <UnitSnapshot>[];
       for (final unit in units) {
         final finished = _finishRelease(unit, prepared[unit.read.unit.name]);
         if (finished.code != ExitCodes.ok) {
@@ -335,7 +336,9 @@ class ReleaseCommand {
         if (finished.publication case final publication?) {
           publications.add(publication);
         }
+        if (finished.readyToPublish) staged.add(unit.read);
       }
+      if (code == ExitCodes.ok && staged.isNotEmpty) _sayReadyToPublish(staged);
       return result(code);
     }
 
@@ -371,6 +374,26 @@ class ReleaseCommand {
           Inspector.blocks(step, state);
     }).firstOrNull;
     if (blocked == null) return true;
+    if (read.releasedFirstBy(blocked) case final sibling?) {
+      // Released by itself, this unit would wait for a package its sibling
+      // has yet to put on pub.dev. A repository release publishes it first.
+      output.problem(
+        Diagnostic(
+          code: 'RK-REL-001',
+          message:
+              '${blocked.summary}: '
+              '${read.states[blocked.id]!.detail ?? 'not published yet'}; '
+              '${sibling.unitName} releases it',
+          remedy:
+              'release them together, in order: rk release — or release '
+              '${sibling.unitName} first: rk release ${sibling.unitName}',
+        ),
+        unit: read.unit.name,
+      );
+      output.halt(HaltKind.beforeActing);
+      output.next('rk release');
+      return false;
+    }
     _publication.haltForState(
       read.unit,
       blocked,
@@ -583,10 +606,8 @@ class ReleaseCommand {
   /// Finishes [finished]'s unit once its stage is built ([prepared]; null
   /// when staging refused): says what was staged, and hands publication the
   /// plan it acts on.
-  ({int code, PublicationPlan? publication}) _finishRelease(
-    _Unit finished,
-    PreparedRelease? prepared,
-  ) {
+  ({int code, PublicationPlan? publication, bool readyToPublish})
+  _finishRelease(_Unit finished, PreparedRelease? prepared) {
     final read = finished.read;
     final UnitSnapshot(:unit, :checklist, :targets) = read;
     final stage = read.stage!;
@@ -608,6 +629,7 @@ class ReleaseCommand {
           publication: publication(
             PreparedRelease(claims: read.claims, signing: null),
           ),
+          readyToPublish: false,
         );
       }
       output.line(
@@ -615,13 +637,17 @@ class ReleaseCommand {
         mark: Mark.satisfied,
         note: 'already released',
       );
-      return (code: ExitCodes.ok, publication: null);
+      return (code: ExitCodes.ok, publication: null, readyToPublish: false);
     }
     if (finished.recovering) {
       prepared = PreparedRelease(claims: const [], signing: null);
     } else if (prepared == null) {
       if (!stageOnly) _publication.showActions(targets, finished.actions);
-      return (code: ExitCodes.refused, publication: null);
+      return (
+        code: ExitCodes.refused,
+        publication: null,
+        readyToPublish: false,
+      );
     }
 
     final localOnly = read.publicSteps.isEmpty;
@@ -657,19 +683,36 @@ class ReleaseCommand {
         mark: Mark.done,
         strong: true,
       );
-      if (!localOnly) {
-        final command = 'rk release ${unit.name}';
-        output.report.next(command);
-        output.blank();
-        output.line(
-          'Ready to publish: $command',
-          depth: 1,
-          role: VisualRole.operatorAction,
+      if (stageOnly) {
+        return (
+          code: ExitCodes.ok,
+          publication: null,
+          readyToPublish: !localOnly,
         );
       }
-      if (stageOnly) return (code: ExitCodes.ok, publication: null);
     }
-    return (code: ExitCodes.ok, publication: publication(prepared));
+    return (
+      code: ExitCodes.ok,
+      publication: publication(prepared),
+      readyToPublish: false,
+    );
+  }
+
+  /// Says, once for the run, the command that publishes what [staged]
+  /// holds: the unit's own `rk release`, unless several units were staged or
+  /// the unit releases after a sibling — then the repository's, which
+  /// publishes them in order.
+  void _sayReadyToPublish(List<UnitSnapshot> staged) {
+    final command = staged.length == 1 && !staged.single.releasesAfterSibling
+        ? 'rk release ${staged.single.unit.name}'
+        : 'rk release';
+    output.report.next(command);
+    output.blank();
+    output.line(
+      'Ready to publish: $command',
+      depth: 1,
+      role: VisualRole.operatorAction,
+    );
   }
 
   /// Refuses what this machine cannot finish, before any work rather than at

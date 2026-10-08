@@ -440,6 +440,7 @@ Future<({String text, Map<String, Object?> report})> statusRun({
   bool useColor = false,
   int? terminalWidth,
   void Function(StringBuffer buffer)? onOutputReady,
+  String? only,
 }) async {
   final buffer = StringBuffer();
   onOutputReady?.call(buffer);
@@ -483,7 +484,7 @@ Future<({String text, Map<String, Object?> report})> statusRun({
           containerRuntime: null,
           hasNativeAssets: false,
         ),
-  ).run();
+  ).run(only: only);
   return (
     text: buffer.toString(),
     report:
@@ -2920,6 +2921,69 @@ dependencies:
       reason: 'a repository release publishes core before cli',
     );
     expect(run.report['next'], ['rk stage']);
+  });
+
+  group('a unit that releases after a sibling not on pub.dev yet', () {
+    const siblings = '''
+schema = 2
+
+[release.cli]
+path = "packages/cli"
+publish = ["pub.dev"]
+
+[release.core]
+path = "packages/keybay"
+publish = ["pub.dev"]
+''';
+    MemorySourceTree source() => MemorySourceTree({
+      'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
+      'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
+      'packages/cli/pubspec.yaml':
+          'name: keybay_cli\nversion: 0.2.0\ndependencies:\n  keybay: 0.2.0\n',
+      'packages/cli/CHANGELOG.md': '## 0.2.0\n',
+    }, description: '/repo/keybay');
+
+    test('is shown after it, in the order they release', () async {
+      final run = await statusRun(
+        withConfig: siblings,
+        source: source(),
+        state: git(),
+        registry: FakeRegistry({
+          'keybay': ['0.1.0'],
+          'keybay_cli': ['0.1.0'],
+        }),
+      );
+
+      expect(
+        (run.report['units'] as List).map((unit) => (unit as Map)['name']),
+        ['core', 'cli'],
+      );
+      expect(
+        run.text.indexOf('\n  core 0.1.0'),
+        allOf(isNonNegative, lessThan(run.text.indexOf('\n  cli 0.1.0'))),
+      );
+    });
+
+    test('is released with it, by the repository command', () async {
+      final run = await statusRun(
+        withConfig: siblings,
+        source: source(),
+        state: git(),
+        registry: FakeRegistry({
+          'keybay': ['0.1.0'],
+          'keybay_cli': ['0.1.0'],
+        }),
+        only: 'cli',
+      );
+
+      expect(run.text, contains('Releases after'));
+      expect(run.report['problems'], isEmpty);
+      expect(
+        run.report['next'],
+        ['rk stage'],
+        reason: 'rk stage cli and rk release cli would wait for core',
+      );
+    });
   });
 
   test('a prerequisite rk cannot read still blocks', () async {

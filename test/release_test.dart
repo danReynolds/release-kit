@@ -670,6 +670,104 @@ dependencies:
     expect(ran.calls.where((call) => call.contains('--from-archive')), isEmpty);
   });
 
+  group('a unit that releases after a sibling not on pub.dev yet', () {
+    const config = '''
+schema = 2
+
+[release.core]
+path = "packages/keybay"
+publish = ["pub.dev"]
+
+[release.cli]
+path = "packages/cli"
+publish = ["pub.dev"]
+''';
+    MemorySourceTree source() => MemorySourceTree({
+      'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
+      'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
+      'packages/cli/pubspec.yaml':
+          'name: keybay_cli\nversion: 0.2.0\ndependencies:\n  keybay: 0.2.0\n',
+      'packages/cli/CHANGELOG.md': '## 0.2.0\n',
+    }, description: '/repo/keybay');
+    FakeRegistry registry() => FakeRegistry({
+      'keybay': ['0.1.0'],
+      'keybay_cli': ['0.1.0'],
+    });
+
+    test('is refused alone, naming the command that releases it', () async {
+      final ran = await release(
+        only: 'cli',
+        config: config,
+        source: source(),
+        registry: registry(),
+      );
+
+      expect(ran.exitCode, ExitCodes.refused, reason: ran.text);
+      final problem = ran.problems.single;
+      expect(problem['code'], 'RK-REL-001');
+      expect(problem['message'], contains('core releases it'));
+      expect(
+        problem['remedy'],
+        allOf(
+          contains('release them together, in order: rk release'),
+          contains('rk release core'),
+        ),
+      );
+      expect(ran.report['next'], ['rk release']);
+      expect((ran.report['halt'] as Map)['kind'], 'beforeActing');
+    });
+
+    test(
+      'stages alone, and says the repository release publishes it',
+      () async {
+        final ran = await release(
+          only: 'cli',
+          dryRun: true,
+          config: config,
+          source: source(),
+          registry: registry(),
+        );
+
+        expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+        expect(ran.report['next'], ['rk release']);
+        expect(ran.text.trimRight(), endsWith('Ready to publish: rk release'));
+      },
+    );
+  });
+
+  test('staging several units says once how to publish them', () async {
+    final ran = await release(
+      only: null,
+      dryRun: true,
+      config: '''
+schema = 2
+
+[release.core]
+path = "packages/keybay"
+publish = ["pub.dev"]
+
+[release.other]
+path = "packages/other"
+publish = ["pub.dev"]
+''',
+      source: MemorySourceTree({
+        'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
+        'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
+        'packages/other/pubspec.yaml': 'name: other\nversion: 0.2.0\n',
+        'packages/other/CHANGELOG.md': '## 0.2.0\n',
+      }, description: '/repo/keybay'),
+      registry: FakeRegistry({
+        'keybay': ['0.1.0'],
+        'other': ['0.1.0'],
+      }),
+    );
+
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    expect(ran.report['next'], ['rk release']);
+    expect('Ready to publish'.allMatches(ran.text), hasLength(1));
+    expect(ran.text.trimRight(), endsWith('Ready to publish: rk release'));
+  });
+
   test('a dependency already published comes from pub.dev', () async {
     final ran = await release(
       only: 'cli',

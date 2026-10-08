@@ -73,15 +73,19 @@ class StatusCommand {
   /// Read once for the text and JSON reports. Progress uses the same publication
   /// interpretation as the completed snapshot, including release blockers.
   Future<StatusSnapshot> collect({String? only, TargetChecks? checking}) async {
+    // Units are shown in the order a repository release takes them,
+    // dependencies first. A circle has no order, and refuses the release.
+    final ordering = Diagnostics();
+    final ordered = resolution.dependencyPlan.units(ordering);
     final units = only == null
-        ? resolution.units
-        : resolution.units.where((u) => u.name == only).toList();
+        ? ordered
+        : ordered.where((u) => u.name == only).toList();
     if (units.isEmpty) throw ArgumentError('No release unit named $only');
     final repositoryProblems = Diagnostics();
     _checkRepositoryState(repositoryProblems, units);
 
     // Every public read is started before rendering. Future.wait preserves
-    // this configured order even when providers answer in another one.
+    // this order even when providers answer in another one.
     final List<StatusUnitSnapshot> snapshots;
     try {
       snapshots = await Future.wait([
@@ -94,6 +98,9 @@ class StatusCommand {
 
     final workRemains = snapshots.any(_workRemains);
     final issues = <StatusIssue>[
+      for (final diagnostic in ordering.found)
+        if (diagnostic.code == 'RK-DEP-004')
+          StatusIssue(diagnostic: diagnostic),
       for (final snapshot in snapshots) ...snapshot.issues,
       if (workRemains)
         for (final diagnostic in repositoryProblems.found)
@@ -106,24 +113,22 @@ class StatusCommand {
         _isLocalOnlyOutput(snapshot) ||
         snapshot.stage?.reusable == true ||
         snapshot.observed.recoversWithoutStage;
-    if (uniqueIssues.isEmpty && unfinished.length == 1) {
-      final snapshot = unfinished.single;
-      nextCommand = readyToRelease(snapshot)
-          ? 'rk release ${snapshot.unit.name}'
-          : 'rk stage ${snapshot.unit.name}';
-    } else if (uniqueIssues.isEmpty && unfinished.length > 1) {
-      // A repository release takes every unit, in dependency order.
-      nextCommand = unfinished.every(readyToRelease)
-          ? 'rk release'
-          : 'rk stage';
+    if (uniqueIssues.isEmpty && unfinished.isNotEmpty) {
+      // A repository release takes every unit, in dependency order — and is
+      // the only one that takes a unit with the sibling it releases after:
+      // that unit alone would wait for the sibling to be on pub.dev.
+      final repositoryWide =
+          unfinished.length > 1 ||
+          unfinished.single.observed.releasesAfterSibling;
+      final verb = unfinished.every(readyToRelease) ? 'release' : 'stage';
+      nextCommand = repositoryWide
+          ? 'rk $verb'
+          : 'rk $verb ${unfinished.single.unit.name}';
     }
     return StatusSnapshot(
       units: snapshots,
       issues: uniqueIssues,
       nextCommand: nextCommand,
-      nextUnit: unfinished.length == 1 && nextCommand != null
-          ? unfinished.single.unit.name
-          : null,
     );
   }
 
@@ -1177,13 +1182,11 @@ class StatusSnapshot {
     required Iterable<StatusUnitSnapshot> units,
     required Iterable<StatusIssue> issues,
     this.nextCommand,
-    this.nextUnit,
   }) : units = List.unmodifiable(units),
        issues = List.unmodifiable(issues);
   final List<StatusUnitSnapshot> units;
   final List<StatusIssue> issues;
   final String? nextCommand;
-  final String? nextUnit;
 }
 
 class StatusUnitSnapshot {

@@ -35,6 +35,14 @@
   release` does not need (a Homebrew formula finished from the public
   release), and no longer reports a GitHub Release's current version as
   unreadable when it was never read.
+- `rk status` lists units in the order they release, dependencies first, and
+  reports a circle between units as the release does. For a unit that
+  releases after a sibling not on pub.dev yet, it suggests the repository's
+  `rk stage` or `rk release` rather than the unit's, which would wait for
+  the sibling; `rk release <unit>` refused that way now says to release them
+  together (`rk release`) or the sibling first.
+- `rk stage` says once how to publish what it staged: `rk release` for
+  several units, or for a unit that releases after a sibling.
 - `rk status` shows a package another unit in the repository releases first
   as "Releases after", not as an issue that prevents release. With several
   units unfinished it suggests the repository-wide `rk stage` or `rk release`.

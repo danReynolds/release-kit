@@ -251,6 +251,12 @@ final class UnitSnapshot {
         'them.',
   );
 
+  /// Whether this unit needs a package another unit of this repository has
+  /// yet to put on pub.dev: only a repository release, which publishes that
+  /// unit first, can release it.
+  bool get releasesAfterSibling =>
+      checklist.steps.any((step) => releasedFirstBy(step) != null);
+
   /// The project in this repository that publishes the package [step] needs,
   /// when it is not on pub.dev yet: a repository release publishes it first,
   /// so it orders this release rather than blocking it.
