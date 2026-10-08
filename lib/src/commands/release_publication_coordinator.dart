@@ -198,8 +198,6 @@ final class ReleasePublicationCoordinator {
     required ResolvedUnit unit,
     required List<TargetPlan> targets,
     required Map<String, Inspection> states,
-    required Map<String, ReleaseAction> actions,
-    required bool stageOnly,
   }) async {
     final outstanding = targets
         .where((target) => !states[target.step.id]!.isExact)
@@ -236,7 +234,6 @@ final class ReleasePublicationCoordinator {
           ..settle();
         output.problem(diagnostic, unit: unit);
         output.halt(HaltKind.beforeActing);
-        if (!stageOnly) showActions(targets, actions);
         return false;
       }
       final note = (readiness as TargetReady).note;

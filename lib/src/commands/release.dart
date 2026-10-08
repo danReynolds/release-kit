@@ -356,13 +356,6 @@ class ReleaseCommand {
           unit: unit,
           targets: observation.targets,
           states: observation.states,
-          actions: {
-            for (final target in observation.targets)
-              target.step.id: observation.states[target.step.id]!.isExact
-                  ? ReleaseAction.alreadyPublished
-                  : ReleaseAction.notAttempted,
-          },
-          stageOnly: true,
         ),
       );
       if (!ready) return result(ExitCodes.refused);
