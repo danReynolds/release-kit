@@ -776,6 +776,28 @@ publish = ["pub.dev"]
   });
 
   group('dirty source follows the selected targets', () {
+    test('right after rk init, status shows the uncommitted units', () {
+      final repo = Rk.repository(scratch, 'init-then-status', {
+        'pubspec.yaml': 'name: fresh_tool\nversion: 1.0.0\n',
+        'CHANGELOG.md': '## 1.0.0\n\nFirst release.\n',
+      })..commit();
+      final init = repo(['init', '--write']);
+      expect(init.code, 0, reason: init.all);
+
+      final status = repo(['status', '--json']);
+
+      expect(status.code, 0, reason: status.all);
+      expect(
+        (status.json['units'] as List).map((unit) => (unit as Map)['name']),
+        isNotEmpty,
+      );
+      expect(
+        status.problems.map((problem) => problem['code']),
+        contains('RK-GIT-001'),
+        reason: 'staging needs release.toml committed',
+      );
+    });
+
     test('a local output is refused until it is committed', () {
       final platform = Platform.isMacOS ? 'macos-arm64' : 'linux-x64';
       final repo = Rk.repository(scratch, 'dirty-local-output', {
