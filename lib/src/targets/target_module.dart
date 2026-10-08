@@ -111,10 +111,12 @@ abstract base class TargetModule {
     Inspection inspected,
   );
 
+  /// Reads back what [act] did, when the act did not confirm it itself.
   Future<Inspection> confirmPublication(
     TargetReleaseContext context,
     ResolvedUnit unit,
     TargetPlan target,
+    TargetActOutcome act,
   ) => inspectCandidate(context.reads, unit, target);
 
   /// Classifies a provider operation that did not settle exact.
@@ -264,9 +266,6 @@ final class TargetReadContext {
     if (memo == null) return read();
     return (memo[key] ??= read()).then((value) => value as T);
   }
-
-  /// Drops [key] after rk acted on what it describes.
-  void forget(String key) => shared?.remove(key);
 
   ReleaseStage? reusableStage(ResolvedUnit unit) {
     final factory = stageFor;
@@ -577,11 +576,11 @@ final class TargetActOutcome {
     this.permanent,
     this.diagnostic,
     this.coordinate,
-    this.cleanupIfAbsent,
     this.successNote,
     this.includeInspectionDetail = false,
     this.reconciledNote,
     this.evidence,
+    this.confirmed,
   });
 
   final bool ok;
@@ -592,7 +591,6 @@ final class TargetActOutcome {
   final String? permanent;
   final Diagnostic? diagnostic;
   final String? coordinate;
-  final TargetCleanup? cleanupIfAbsent;
   final String? successNote;
   final bool includeInspectionDetail;
   final String? reconciledNote;
@@ -605,20 +603,15 @@ final class TargetActOutcome {
   /// so the account of a half-finished publish survives the sentence
   /// summarizing it.
   final String? evidence;
+
+  /// The public state the act itself established, when the provider's own
+  /// answer is the read-back: Git accepts a tag push only as the exact
+  /// object it was given. Null means the target is read back.
+  final Inspection? confirmed;
 }
 
 /// A private provider-side effect that is not itself a published release.
 enum TargetPrivateEffect { none, changed, uncertain }
-
-/// A target-owned recovery action safe only after public absence is proven.
-typedef TargetCleanup = Future<TargetCleanupResult> Function();
-
-final class TargetCleanupResult {
-  const TargetCleanupResult({required this.ok, required this.detail});
-
-  final bool ok;
-  final String detail;
-}
 
 /// The target's final classification after an act and authoritative read-back.
 final class TargetFailure {

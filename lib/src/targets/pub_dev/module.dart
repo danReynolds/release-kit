@@ -332,7 +332,14 @@ final class PubDevTargetModule extends TargetModule {
     TargetReleaseContext context,
     ResolvedUnit unit,
     TargetPlan target,
+    TargetActOutcome act,
   ) async {
+    // pub.dev can take minutes to list an upload it accepted. One it refused,
+    // or that never arrived, is not worth that wait: a lost response shows
+    // within a few reads.
+    final deadline = act.ok
+        ? context.confirmDeadline
+        : context.confirmInterval * 2;
     var waited = Duration.zero;
     while (true) {
       context.reads.registry?.forget(target.coordinate);
@@ -342,8 +349,8 @@ final class PubDevTargetModule extends TargetModule {
         target,
         againstStage: true,
       );
-      if (!state.isAbsent || waited >= context.confirmDeadline) {
-        if (state.isAbsent && waited >= context.confirmDeadline) {
+      if (!state.isAbsent || waited >= deadline) {
+        if (state.isAbsent && waited >= deadline) {
           final project = target.project!;
           return Inspection.absent(
             detail:

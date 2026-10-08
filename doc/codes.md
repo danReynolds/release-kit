@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `test/codes_index_test.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-160 codes across 28 families.
+158 codes across 28 families.
 
 
 ## RK-AUTH — Authorization
@@ -294,8 +294,6 @@ RK-STAGE-004, the checks a release once repeated between staging and each act.
 |---|---|---|
 | `RK-TAG-001` | the tag ${unit.tag} could not be created | `lib/src/targets/git_tag/transaction.dart` |
 | `RK-TAG-002` | the tag ${unit.tag} could not be pushed | `lib/src/targets/git_tag/transaction.dart` |
-| `RK-TAG-003` | the push reported success, and origin does not list  ${unit.tag} | `lib/src/targets/git_tag/module.dart` |
-| `RK-TAG-004` | origin did not confirm the release binding on ${act.coordinate ?? target.coordinate} | `lib/src/targets/git_tag/module.dart` |
 | `RK-TAG-005` | this project signs its release tags, and no signing key is configured | `lib/src/targets/git_tag/transaction.dart` |
 
 ## RK-TOML — The TOML subset

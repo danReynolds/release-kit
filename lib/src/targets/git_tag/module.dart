@@ -242,53 +242,46 @@ final class GitTagTargetModule extends TargetModule {
     TargetActOutcome act, {
     required bool actedBefore,
   }) async {
-    String? cleanup;
-    var cleanupFailed = false;
-    final recovery = act.cleanupIfAbsent;
-    if (state.isAbsent && recovery != null) {
-      final result = await recovery();
-      cleanupFailed = !result.ok;
-      cleanup = result.detail;
+    // Git refused the push because origin has another tag: the conflict a
+    // fresh inspection would have found, with the same advice.
+    if (state.verdict == Verdict.conflict) {
+      final conflict = diagnoseConflict(unit, target, state);
+      return TargetFailure(
+        diagnostic: Diagnostic(
+          code: conflict.code,
+          message: conflict.message,
+          source: conflict.source,
+          remedy: [?conflict.remedy, ?act.problem].join('\n'),
+          evidence: act.evidence,
+        ),
+        halt: actedBefore
+            ? HaltKind.actedAndUnfixable
+            : HaltKind.unfixableByRerun,
+      );
     }
-
-    final conflict = state.verdict == Verdict.conflict;
-    final code = conflict ? 'RK-TAG-004' : act.diagnostic?.code ?? 'RK-TAG-003';
-    final message = conflict
-        ? 'origin did not confirm the release binding on '
-              '${act.coordinate ?? target.coordinate}'
-        : act.diagnostic?.message ??
-              'the push reported success, and origin did not confirm the exact '
-                  'tag ${act.coordinate ?? target.coordinate}';
-    final details = <String>[
-      if (act.diagnostic?.remedy != null) act.diagnostic!.remedy!,
-      if (act.problem != null) act.problem!,
-      if (state.detail != null) state.detail!,
-      ...state.evidence.entries.map((entry) => '${entry.key}: ${entry.value}'),
-      if (cleanup != null) cleanup,
+    final diagnostic =
+        act.diagnostic ??
+        Diagnostic(
+          code: 'RK-TAG-002',
+          message: 'the tag ${target.coordinate} could not be pushed',
+        );
+    final details = [
+      ?diagnostic.remedy,
+      ?act.problem,
+      if (!state.isAbsent) ?state.detail,
     ];
-    final pushProvedAbsent = !act.ok && state.isAbsent;
-    final halt = conflict
-        ? HaltKind.actedAndUnfixable
-        : cleanupFailed
-        ? HaltKind.stoppedPartway
-        : pushProvedAbsent
-        ? (actedBefore ? HaltKind.stoppedPartway : HaltKind.beforeActing)
-        : act.mayHaveActed || state.verdict == Verdict.unknown
-        ? HaltKind.lostTrack
-        : actedBefore
-        ? HaltKind.stoppedPartway
-        : HaltKind.beforeActing;
     return TargetFailure(
       diagnostic: Diagnostic(
-        code: code,
-        message: message,
-        remedy: details.isEmpty
-            ? 're-run; the shared destination inspection will classify the '
-                  'public target before any retry'
-            : details.join('\n'),
-        evidence: act.evidence ?? act.diagnostic?.evidence,
+        code: diagnostic.code,
+        message: diagnostic.message,
+        remedy: details.isEmpty ? null : details.join('\n'),
+        evidence: act.evidence ?? diagnostic.evidence,
       ),
-      halt: halt,
+      halt: act.mayHaveActed || state.verdict == Verdict.unknown
+          ? HaltKind.lostTrack
+          : actedBefore
+          ? HaltKind.stoppedPartway
+          : HaltKind.beforeActing,
     );
   }
 }

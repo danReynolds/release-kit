@@ -384,8 +384,11 @@ void main() {
     }) async {
       final tools = RecordingTools(
         results: {
-          'git ls-remote origin refs/tags/v1.0.0 refs/tags/v1.0.0^{}':
-              ToolResult(exitCode: 0, stdout: remote, stderr: ''),
+          'git ls-remote --tags origin': ToolResult(
+            exitCode: 0,
+            stdout: '$remote$commit\trefs/tags/v0.9.0\n',
+            stderr: '',
+          ),
           'git cat-file tag $object': ToolResult(
             exitCode: 0,
             stdout: objectBytes,
@@ -485,9 +488,9 @@ void main() {
         'manifest sha256': digest,
       });
       expect(
-        result.tools.calls.where((call) => call.startsWith('git verify-tag')),
-        isEmpty,
-        reason: 'git checked the signature when it signed',
+        result.tools.calls,
+        ['git ls-remote --tags origin', 'git cat-file tag $object'],
+        reason: 'the tag is read from the listing of every tag',
       );
     });
 
@@ -651,6 +654,15 @@ void main() {
       );
       expect(secondReadback.verdict, Verdict.exact);
       expect(secondReadback.evidence, firstReadback.evidence);
+
+      // Git refuses to replace the tag origin has, which is why a push's
+      // answer settles it with no read before or after.
+      final replaced = await destination.pushExact(tag, replacementObject);
+      expect(replaced.ok, isFalse);
+      expect(replaced.stderr, contains('already exists'));
+      final origin = await destination.onOrigin(tag);
+      expect(origin.object, tagObject);
+      expect(origin.commit, sourceCommit);
     },
   );
 }

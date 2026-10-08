@@ -249,6 +249,7 @@ Future<Ran> release({
   bool dryRun = false,
   Map<String, ToolResult> results = const {},
   void Function(String key)? onRun,
+  void Function(String key)? onRawRun,
   void Function(String key)? onInteractive,
   void Function()? onConfirm,
   ToolResult? Function(String key)? answers,
@@ -404,7 +405,11 @@ Future<Ran> release({
         if (scripted == null || scripted.exitCode == 0) {
           final tag = key.split(' ')[3];
           localTags.add(tag);
-          tagObjects[tag] = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+          // Each tag is its own object. The default unit's keeps the id the
+          // scripted results name.
+          tagObjects[tag] = tag == 'v0.2.0'
+              ? _tagObject
+              : Sha256.hex(utf8.encode(tag)).substring(0, 40);
           if (key.startsWith('git tag -s ')) signedTags.add(tag);
         }
       }
@@ -430,6 +435,7 @@ Future<Ran> release({
           }
         }
       }
+      onRawRun?.call(key);
       onRun?.call(_normalizedPubKey(key));
     },
   );
@@ -1376,6 +1382,7 @@ executables:
 
 void main() {
   releaseCommandContract();
+  originRoundTrips();
   reviewRegressions();
   mutationCloseout();
   signingBaselineRegressions();
@@ -1992,7 +1999,7 @@ publish = ["pub.dev"]
   );
 
   test(
-    'a failed tag cleanup is a known partial state, not before publishing',
+    'a failed tag cleanup leaves a local tag, and no public target changed',
     () async {
       final ran = await release(
         registry: _MutableRegistry(<String>['0.1.0']),
@@ -2011,8 +2018,9 @@ publish = ["pub.dev"]
       );
 
       expect(ran.exitCode, ExitCodes.refused);
-      expect((ran.report['halt'] as Map?)?['kind'], 'stoppedPartway');
-      expect(ran.text, isNot(contains('no public target changed')));
+      // The tag left behind is local: no public target changed, and a re-run
+      // inspects it before pushing.
+      expect((ran.report['halt'] as Map?)?['kind'], 'beforeActing');
       expect(ran.text, contains('local tag could not be removed'));
       expect(
         ran.calls.where((call) => call.contains('publish --force')),
@@ -2925,26 +2933,33 @@ void mutationCloseout() {
   });
 
   test(
-    'a push that origin does not confirm is lostTrack, not success',
+    'a push git accepts is confirmed without reading origin again',
     () async {
-      // The push exits 0 and ls-remote still lists nothing: the verify leg the
-      // RFC names, which trusting the exit code alone skipped.
+      // Git accepts a tag push only as the exact object it was given, and
+      // refuses to replace a tag origin has, so its answer is the read-back:
+      // origin is read once, before staging, and not again around the push.
+      final registry = _MutableRegistry(<String>['0.1.0']);
       final ran = await release(
-        registry: _MutableRegistry(<String>['0.1.0']),
-        results: {
-          // A push the harness's world-model does not believe: script the
-          // remote read directly to answer empty despite the "successful" push.
-          'git ls-remote --tags origin': ToolResult(
-            exitCode: 0,
-            stdout: '',
-            stderr: '',
-          ),
+        registry: registry,
+        onRun: (key) {
+          if (key == 'dart pub publish --from-archive <archive> --force') {
+            registry.goLive('0.2.0');
+            registry.archives['keybay@0.2.0'] = publishedBytes();
+          }
         },
       );
 
-      expect(ran.exitCode, ExitCodes.refused);
-      expect(ran.problems.map((p) => p['code']), contains('RK-TAG-003'));
-      expect(ran.text, contains('an effect may exist'));
+      expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+      expect(
+        ran.calls.where(
+          (call) =>
+              call.startsWith('git ls-remote') || call.startsWith('git push'),
+        ),
+        ['git ls-remote --tags origin', _tagPush],
+      );
+      final tag = ran.steps.singleWhere((step) => step['kind'] == 'tag');
+      expect(tag['verdict'], 'exact');
+      expect(tag['evidence'], containsPair('tag object', _tagObject));
     },
   );
 
@@ -3072,4 +3087,89 @@ void mutationCloseout() {
       );
     },
   );
+}
+
+/// Every `git ls-remote` and `git push` is a round trip to origin: over SSH
+/// to GitHub each costs most of a second.
+void originRoundTrips() {
+  test('a repository release reads origin\'s tags once and pushes each tag '
+      'once', () async {
+    final registry = FakeRegistry({
+      for (final name in const [
+        'fleury',
+        'fleury_mcp',
+        'fleury_test',
+        'fleury_web',
+      ])
+        name: ['0.1.1'],
+    });
+    final ran = await release(
+      only: null,
+      registry: registry,
+      config: '''
+schema = 2
+
+[release.fleury]
+path = "packages/fleury"
+tag = "fleury-v{version}"
+publish = ["pub.dev", "git-tag"]
+
+[release.fleury_mcp]
+path = "packages/fleury_mcp"
+publish = ["pub.dev"]
+
+[release.fleury_test]
+path = "packages/fleury_test"
+publish = ["pub.dev"]
+
+[release.fleury_web]
+path = "packages/fleury_web"
+tag = "fleury_web-v{version}"
+publish = ["pub.dev", "git-tag"]
+''',
+      source: MemorySourceTree({
+        'packages/fleury/pubspec.yaml': 'name: fleury\nversion: 0.1.2\n',
+        'packages/fleury/CHANGELOG.md': '## 0.1.2\n',
+        for (final name in const [
+          'fleury_mcp',
+          'fleury_test',
+          'fleury_web',
+        ]) ...{
+          'packages/$name/pubspec.yaml':
+              'name: $name\nversion: 0.1.2\n'
+              'dependencies:\n  fleury: 0.1.2\n',
+          'packages/$name/CHANGELOG.md': '## 0.1.2\n',
+        },
+      }, description: '/repo/fleury'),
+      // pub.dev lists what `dart pub publish` uploads.
+      onRawRun: (key) {
+        final upload = RegExp(
+          r'pub publish --from-archive \S*/pub/(\w+)-([0-9.]+)\.tar\.gz',
+        ).firstMatch(key);
+        if (upload != null) registry.published[upload[1]!]!.add(upload[2]!);
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    expect(
+      ran.calls.where(
+        (call) =>
+            call.startsWith('git ls-remote') || call.startsWith('git push'),
+      ),
+      [
+        'git ls-remote --tags origin',
+        allOf(
+          startsWith('git push origin '),
+          endsWith('refs/tags/fleury-v0.1.2'),
+        ),
+        allOf(
+          startsWith('git push origin '),
+          endsWith('refs/tags/fleury_web-v0.1.2'),
+        ),
+      ],
+      reason:
+          'one listing answers every tag target before and after staging; '
+          'each push is its own read-back',
+    );
+  });
 }

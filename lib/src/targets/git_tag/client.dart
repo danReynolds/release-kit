@@ -97,17 +97,16 @@ class GitTag {
     'origin',
   ], workingDirectory: root);
 
-  /// Proves the release binding carried by origin's annotated tag when the
-  /// caller knows the source commit but did not know the tag object id until
-  /// after creating/pushing it. When [expectedManifestSha256] is present the
-  /// binding must name those exact staged bytes; without a stage, one valid
-  /// binding is still required so a malformed release tag is never exact.
+  /// Proves the release binding carried by origin's annotated tag, read from
+  /// [listing], the run's one read of origin's tags. When
+  /// [expectedManifestSha256] is present the binding must name those exact
+  /// staged bytes; without a stage, one valid binding is still required so a
+  /// malformed release tag is never exact.
   ///
   /// The direct object id is read from origin, its peel must be the expected
   /// source, and `cat-file` addresses that immutable id rather than the mutable
   /// local ref. Thus the message parsed here is the message origin actually
-  /// names. When [requireSignature] is true, Git must also authenticate that
-  /// same object before the tag step can be called exact.
+  /// names.
   ///
   /// A tag on an earlier commit still releases this version when nothing
   /// under [sourcePaths], the unit's own directories, has changed since:
@@ -128,7 +127,7 @@ class GitTag {
         'could not read the expected release tag binding',
       );
     }
-    final remote = await _read(tag, listing: listing);
+    final remote = await _read(tag, listing: listing ?? listTags());
     if (remote.problem != null) return Inspection.unknown(remote.problem!);
     if (remote.direct == null) {
       return const Inspection.absent(detail: 'not on origin');
@@ -254,9 +253,9 @@ class GitTag {
   /// Whether a local tag is safe to use as the input to the next push.
   ///
   /// A remote absence is permission to push only after the existing local
-  /// object has passed the same source, manifest, and signature policy as a
-  /// public tag. Otherwise a harmless preflight absence would turn a malformed
-  /// local tag into an immutable public conflict before rk discovered it.
+  /// object has passed the same source and manifest policy as a public tag.
+  /// Otherwise a harmless preflight absence would turn a malformed local tag
+  /// into an immutable public conflict before rk discovered it.
   Future<Inspection> inspectLocalReleaseBinding({
     required String tag,
     required String expectedObject,
@@ -340,6 +339,19 @@ class GitTag {
     );
   }
 
+  /// Origin's [tag] now, read on its own rather than from the run's listing:
+  /// the object it names, and the commit that object peels to.
+  Future<({String? object, String? commit, String? problem})> onOrigin(
+    String tag,
+  ) async {
+    final remote = await _read(tag);
+    return (
+      object: remote.direct,
+      commit: remote.peeled ?? remote.direct,
+      problem: remote.problem,
+    );
+  }
+
   Future<_RemoteTag> _read(String tag, {Future<ToolResult>? listing}) async {
     final directRef = 'refs/tags/$tag';
     final peeledRef = '$directRef^{}';
@@ -389,9 +401,8 @@ class GitTag {
 
   /// Resolves the immutable annotated-tag object currently named by [tag].
   ///
-  /// The caller validates that object and then passes its OID to [pushExact].
-  /// Keeping the mutable ref name out of the push closes the interval in which
-  /// another local process could replace the tag after validation.
+  /// The caller passes its OID to [pushExact]. Keeping the mutable ref name
+  /// out of the push means the object pushed is the one rk created.
   Future<({String? object, String? problem})> localObject(String tag) async {
     final ToolResult result;
     try {
@@ -418,7 +429,10 @@ class GitTag {
     return (object: lines.single.toLowerCase(), problem: null);
   }
 
-  /// Pushes the exact validated tag object to the public tag ref.
+  /// Pushes the exact tag object to the public tag ref.
+  ///
+  /// Git refuses to replace a tag origin already has, and pushing the object
+  /// origin already has succeeds, so its answer settles the push.
   Future<ToolResult> pushExact(String tag, String object) {
     if (!_isObjectId(object)) {
       throw ArgumentError.value(object, 'object', 'invalid Git object id');
