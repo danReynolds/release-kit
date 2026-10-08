@@ -279,6 +279,7 @@ class Output {
   LiveProgress progressBoard(
     String title, {
     Duration delay = const Duration(milliseconds: 80),
+    Duration pipeDelay = const Duration(seconds: 10),
     bool emitSlowToNonTerminal = false,
     bool showElapsed = true,
   }) {
@@ -296,6 +297,7 @@ class Output {
       this,
       title,
       delay,
+      pipeDelay: pipeDelay,
       emitSlowToNonTerminal: emitSlowToNonTerminal,
       showElapsed: showElapsed,
     );
@@ -999,9 +1001,10 @@ final class LiveProgress {
     this._output,
     String title,
     this._delayDuration, {
+    required Duration pipeDelay,
     required this.emitSlowToNonTerminal,
     required this.showElapsed,
-  }) {
+  }) : _pipeDelay = pipeDelay {
     model = ProgressModel(
       title: title,
       clock: _output._clock,
@@ -1014,6 +1017,12 @@ final class LiveProgress {
 
   final Output _output;
   final Duration _delayDuration;
+
+  /// How long a row runs before a pipe is told about it. Only a wait a
+  /// reader would wonder about, such as a long build or a sign-in, is
+  /// worth a line: shorter ones made the transcript differ from one run to
+  /// the next with how fast a read happened to answer.
+  final Duration _pipeDelay;
   final bool emitSlowToNonTerminal;
   final bool showElapsed;
   late final ProgressModel model;
@@ -1078,7 +1087,7 @@ final class LiveProgress {
     }
     _nonTerminalDelays.remove(row.id)?.cancel();
     _nonTerminalScheduled[row.id] = activity;
-    _nonTerminalDelays[row.id] = Timer(_delayDuration, () {
+    _nonTerminalDelays[row.id] = Timer(_pipeDelay, () {
       if (_closed ||
           row.state != ProgressRowState.active ||
           row.activity != activity) {
@@ -1088,7 +1097,7 @@ final class LiveProgress {
       _nonTerminalPrinted[row.id] = activity;
       final attached = identical(_output._progressBoard, this);
       if (attached) _output._progressBoard = null;
-      _writeDurableRow(row, active: true);
+      _writeDurableRow(row, active: true, inPipe: true);
       if (attached && !_closed) _output._progressBoard = this;
     });
   }
@@ -1331,7 +1340,7 @@ final class LiveProgress {
       _output._progressBoard = null;
     }
     for (final row in printedRows) {
-      _writeDurableRow(row);
+      _writeDurableRow(row, inPipe: true);
     }
   }
 
@@ -1404,10 +1413,17 @@ final class LiveProgress {
         took: took,
       );
 
-  void _writeDurableRow(ProgressRow row, {int depth = 1, bool active = false}) {
+  /// [inPipe] is a row a pipe is told about on its own, outside the
+  /// board's snapshot: it names what it belongs to, and carries no time.
+  void _writeDurableRow(
+    ProgressRow row, {
+    int depth = 1,
+    bool active = false,
+    bool inPipe = false,
+  }) {
     var (glyph, status, glyphState, textState) = _rowPresentation(
       row,
-      active: active,
+      active: active && !inPipe,
     );
     // A finished row that ran long enough for its counter to tick keeps its
     // total, on a terminal. A pipe's transcript stays the same every run.
@@ -1424,7 +1440,9 @@ final class LiveProgress {
       '✗' => Mark.blocked,
       _ => Mark.none,
     };
-    final subject = row.subject;
+    final subject = inPipe
+        ? '${row.group ?? model.title} · ${row.subject}'
+        : row.subject;
     final label = glyph == '—' || glyph == '…' ? '$glyph $subject' : subject;
     _output.line(
       label,
