@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `test/codes_index_test.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-158 codes across 28 families.
+157 codes across 28 families.
 
 
 ## RK-AUTH — Authorization
@@ -125,9 +125,11 @@ fails, and the count below is checked against the rows.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-DEP-002` | rk cannot tell whether "${project.name}" accepts $name ${sibling.version}: it requires … | `lib/src/engine/release_dependencies.dart` |
 | `RK-DEP-003` | the packages in "${unit.name}" depend on each other in a circle, so there is no order t… | `lib/src/engine/release_dependencies.dart` |
 | `RK-DEP-004` | the release units depend on each other in a circle | `lib/src/engine/release_dependencies.dart` |
+
+RK-DEP-002 (a version constraint Pub cannot parse, which Pub reports when it
+stages the package) is retired and not reused.
 
 ## RK-GIT — The repository
 

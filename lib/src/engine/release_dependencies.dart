@@ -1,72 +1,64 @@
-import '../native/dart/dependencies.dart';
 import 'diagnostic.dart';
-import 'native_dependencies.dart';
 import 'publish_target.dart';
+import 'pubspec.dart';
 import 'resolve.dart';
 import 'version.dart';
 
-/// Source-only dependency facts and candidate projections for this repository.
+/// The repository's own packages that its packages depend on, read from
+/// their pubspecs.
 ///
-/// One instance lives on [Resolution.dependencyPlan]. Source-only readers use
-/// this provisional projection; preparation and publication derive their actual
-/// orders from adapter-validated native contexts. Incompatible local candidates
-/// remain unresolved hosted requirements. Destination state stays out.
+/// A hosted pub.dev requirement on a package this repository publishes, at a
+/// version the requirement allows, is met by that package. Every other
+/// requirement is Pub's to resolve from its registry, and a malformed one is
+/// Pub's to report when it stages the package.
 final class ReleaseDependencyPlan {
   ReleaseDependencyPlan(this.resolution);
 
   final Resolution resolution;
 
-  /// Native source facts; no registry/cache/compiler access. Only hosted
-  /// package requirements participate in configured provider selection.
-  List<NativeRequirement> requirements(
-    ResolvedUnit unit,
-    Diagnostics diagnostics,
-  ) {
-    final result = <NativeRequirement>[];
-    for (final project in unit.projects) {
-      try {
-        result.addAll(
-          dartRequirements(
-            project,
-            publicPackage: project.publish.contains(PublishTarget.pubDev),
-          ),
-        );
-      } on InvalidNativeRequirement catch (error) {
-        diagnostics.report(
-          Diagnostic(
-            code: 'RK-DEP-002',
-            message:
-                'Pub cannot parse ${error.requirement.package.name} ${error.requirement.constraint} required by "${project.name}"',
-            source: error.requirement.location,
-            remedy:
-                'correct the native Pub version constraint in this manifest',
-            evidence: error.detail,
-          ),
-        );
-      }
-    }
-    return List.unmodifiable(result);
+  late final Map<String, ResolvedProject> _onPubDev = {
+    for (final project in resolution.allProjects)
+      if (project.publish.contains(PublishTarget.pubDev)) project.name: project,
+  };
+
+  /// The repository's packages [project] requires: at runtime, or with
+  /// [development], only to develop it. A name it also requires at runtime
+  /// is a runtime requirement.
+  List<ResolvedProject> _providers(
+    ResolvedProject project, {
+    bool development = false,
+  }) {
+    final runtime = project.pubspec.dependencies;
+    final requirements = development
+        ? {
+            for (final MapEntry(:key, :value)
+                in project.pubspec.devDependencies.entries)
+              if (!runtime.containsKey(key)) key: value,
+          }
+        : runtime;
+    return [
+      for (final MapEntry(key: name, value: dependency) in requirements.entries)
+        if (_onPubDev[name] case final provider?)
+          if (provider != project &&
+              _fromPubDev(dependency.hostedUrl) &&
+              dependency.satisfiedBy(provider.version) == true)
+            provider,
+    ];
   }
 
-  List<NativeCandidateSelection> selections(
-    ResolvedUnit unit,
-    Diagnostics diagnostics, {
-    required DependencyPhase phase,
-  }) => _select(requirements(unit, diagnostics), phase);
+  /// Whether a hosted requirement names pub.dev, where this repository's
+  /// packages are published: by default, by its URL, or by its old name.
+  static bool _fromPubDev(String? hostedUrl) =>
+      hostedUrl == null ||
+      isPubDevDestination(hostedUrl) ||
+      canonicalPublishDestination(hostedUrl) == 'https://pub.dartlang.org';
 
-  List<NativeCandidateSelection> _select(
-    Iterable<NativeRequirement> requirements,
-    DependencyPhase phase,
-  ) => selectNativeCandidates(
-    requirements: requirements,
-    candidates: [
-      for (final project in resolution.allProjects)
-        if (project.publish.contains(PublishTarget.pubDev))
-          dartCandidate(project),
-    ],
-    semantics: const DartDependencySemantics(),
-    phase: phase,
-  );
+  /// What [project]'s consumers need from this repository: nothing for a
+  /// package that is not published to pub.dev.
+  List<ResolvedProject> requires(ResolvedProject project) =>
+      project.publish.contains(PublishTarget.pubDev)
+      ? _providers(project)
+      : const [];
 
   /// The repository's packages [project] takes from this source when it is
   /// staged, so that Pub resolves it as its consumers will.
@@ -82,52 +74,19 @@ final class ReleaseDependencyPlan {
     ResolvedProject project,
     Future<bool> Function(String package, String version) published,
   ) async {
-    final projects = {
-      for (final project in resolution.allProjects) project.name: project,
-    };
-    List<NativeCandidate> needs(
-      ResolvedProject owner,
-      bool Function(NativeRequirement requirement) needed,
-      DependencyPhase phase,
-    ) => [
-      for (final selection in _select(
-        requirements(
-          resolution.unit(owner.unitName)!,
-          Diagnostics(),
-        ).where((requirement) => requirement.owner == owner.name).where(needed),
-        phase,
-      ))
-        if (selection.candidate case final provider?) provider,
-    ];
-    bool runtime(NativeRequirement requirement) =>
-        requirement.kind == 'runtime';
-
-    final runtimeNames = project.pubspec.dependencies.keys.toSet();
-    final sourced = <ResolvedProject>[
-      for (final provider in needs(
-        project,
-        (requirement) =>
-            requirement.kind == 'development' &&
-            !runtimeNames.contains(requirement.slot),
-        DependencyPhase.preparation,
-      ))
-        if (provider.project != project.name) projects[provider.project]!,
-    ];
+    final sourced = _providers(project, development: true);
     final seen = {project.name, for (final sibling in sourced) sibling.name};
     final pending = [
-      ...needs(project, runtime, DependencyPhase.publication),
-      for (final sibling in sourced)
-        ...needs(sibling, runtime, DependencyPhase.publication),
+      for (final owner in [project, ...sourced]) ...requires(owner),
     ];
     while (pending.isNotEmpty) {
       final provider = pending.removeLast();
-      if (!seen.add(provider.project) ||
-          await published(provider.package.name, provider.version)) {
+      if (!seen.add(provider.name) ||
+          await published(provider.name, provider.version.canonical)) {
         continue;
       }
-      final sibling = projects[provider.project]!;
-      sourced.add(sibling);
-      pending.addAll(needs(sibling, runtime, DependencyPhase.publication));
+      sourced.add(provider);
+      pending.addAll(requires(provider));
     }
     return sourced;
   }
@@ -140,21 +99,11 @@ final class ReleaseDependencyPlan {
       resolution.units.contains(unit),
       'the unit must belong to this plan\'s resolution',
     );
-    final byName = {for (final project in unit.projects) project.name: project};
-    final selected = selections(
-      unit,
-      diagnostics,
-      phase: DependencyPhase.publication,
-    );
     final needs = {
       for (final project in unit.projects)
-        project: <ResolvedProject>[
-          for (final selection in selected)
-            if (selection.requirements.any(
-              (requirement) => requirement.owner == project.name,
-            ))
-              if (selection.candidate case final provider?)
-                if (provider.unit == unit.name) byName[provider.project]!,
+        project: [
+          for (final provider in requires(project))
+            if (provider.unitName == unit.name) provider,
         ],
     };
     return _ordered(
@@ -180,23 +129,15 @@ final class ReleaseDependencyPlan {
     Diagnostics diagnostics,
   ) {
     return [
-      for (final selection in selections(
-        unit,
-        diagnostics,
-        phase: DependencyPhase.publication,
-      ))
-        if (selection.candidate case final provider?)
-          if (provider.unit != unit.name)
-            for (final dependent
-                in selection.requirements
-                    .map((requirement) => requirement.owner)
-                    .toSet())
-              ExternalPrerequisite(
-                dependent: dependent,
-                package: provider.package.name,
-                version: Version.tryParse(provider.version)!,
-                declaredBy: provider.unit,
-              ),
+      for (final project in unit.projects)
+        for (final provider in requires(project))
+          if (provider.unitName != unit.name)
+            ExternalPrerequisite(
+              dependent: project.name,
+              package: provider.name,
+              version: provider.version,
+              declaredBy: provider.unitName,
+            ),
     ];
   }
 

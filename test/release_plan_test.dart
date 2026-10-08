@@ -501,12 +501,6 @@ dependencies:
       expect(plan, isNotNull);
       expect(diagnostics.found, isEmpty);
       expect(plan!.units.last.requiresUnits, isEmpty);
-      final dependencyCandidates =
-          plan.units.last.toJson()['dependency_candidates'] as Map;
-      final selection =
-          (dependencyCandidates['publication'] as List).single as Map;
-      expect(selection['candidate'], isNull);
-      expect(selection['resolution'], 'registry');
     });
   });
 

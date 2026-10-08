@@ -95,7 +95,7 @@ object is:
 {
   source_only: true,
   destinations_inspected: false,
-  units: [{name, version, tag, requires_units[], nodes[], dependency_candidates}]
+  units: [{name, version, tag, requires_units[], nodes[]}]
 }
 ```
 
@@ -107,20 +107,10 @@ in `needs[]`. Optional typed context is `producer`, `project`, `platform`,
 `buildAssets`, `completeStage`, `tag`, `publishRegistry`, `publishRelease`,
 and `publishHomebrew`. `buildAssets` runs a project's own declared build.
 
-`dependency_candidates` has `preparation` and `publication` lists, projected
-from the same native requirements. Each selection contains `requirements[]`,
-an optional configured `candidate`, and `resolution`. A candidate has native
-`package` identity (`ecosystem`, opaque credential-free `source`, `name`),
-`version`, provider `unit`, `project`, and `producer`. Each requirement records
-its native `context`, owning configured root `owner`, installation `slot`,
-immediate declaring `consumer`, `package`, opaque
-`constraint`, native `kind`, manifest `location`, and applicable `phases`.
-`resolution` is `repository` when the candidate is taken from this
-repository's source while staging, its version satisfying every requirement on
-it, or `registry` when Pub resolves the requirement from its registry. Neither
-is proof that a registry version is available. An incompatible local candidate
-leaves the requirement to the registry; it does not force the dependent package
-to change version. Development requirements do not become publication edges.
+`requires_units[]` names the units whose packages this one depends on, which
+release first. A requirement on a package this repository publishes counts
+when it names pub.dev and its constraint allows the version here; any other
+requirement is Pub's to resolve from its registry.
 
 Node ids and `needs[]` are the machine graph. `lane`, when present, is an
 opaque equality key scoped to one unit and phase: nodes with the same key are

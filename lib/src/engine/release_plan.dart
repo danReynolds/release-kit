@@ -3,7 +3,6 @@ import '../targets/target_module.dart';
 import 'checklist.dart';
 import 'dependency_graph.dart';
 import 'diagnostic.dart';
-import 'native_dependencies.dart';
 import 'producers.dart';
 import 'publish_target.dart';
 import 'release_dependencies.dart';
@@ -53,14 +52,6 @@ final class RepositoryReleasePlan {
           prerequisites,
           publicTargets,
           targetStages,
-          {
-            for (final phase in DependencyPhase.values)
-              phase: resolution.dependencyPlan.selections(
-                unit,
-                diagnostics,
-                phase: phase,
-              ),
-          },
         ),
       );
     }
@@ -83,7 +74,6 @@ final class RepositoryReleasePlan {
     List<ExternalPrerequisite> prerequisites,
     List<TargetPlan> publicTargets,
     List<TargetStage> targetStages,
-    Map<DependencyPhase, List<NativeCandidateSelection>> dependencyCandidates,
   ) {
     final localSteps = {
       for (final step in checklist.steps.where(
@@ -236,7 +226,6 @@ final class RepositoryReleasePlan {
       tag: unit.tag,
       requiresUnits: [for (final candidate in directUnits) candidate],
       nodes: canonical,
-      dependencyCandidates: dependencyCandidates,
     );
   }
 }
@@ -248,22 +237,14 @@ final class ReleaseUnitPlan {
     required this.tag,
     required List<String> requiresUnits,
     required List<ReleasePlanNode> nodes,
-    Map<DependencyPhase, List<NativeCandidateSelection>> dependencyCandidates =
-        const {},
   }) : requiresUnits = List.unmodifiable(requiresUnits),
-       nodes = List.unmodifiable(nodes),
-       dependencyCandidates = Map.unmodifiable({
-         for (final entry in dependencyCandidates.entries)
-           entry.key: List<NativeCandidateSelection>.unmodifiable(entry.value),
-       });
+       nodes = List.unmodifiable(nodes);
 
   final String name;
   final String version;
   final String? tag;
   final List<String> requiresUnits;
   final List<ReleasePlanNode> nodes;
-  final Map<DependencyPhase, List<NativeCandidateSelection>>
-  dependencyCandidates;
 
   Iterable<ReleasePlanNode> get requirements =>
       nodes.where((node) => node.phase == StepPhase.inspect);
@@ -278,12 +259,6 @@ final class ReleaseUnitPlan {
     'tag': tag,
     'requires_units': requiresUnits,
     'nodes': [for (final node in nodes) node.toJson()],
-    'dependency_candidates': {
-      for (final entry in dependencyCandidates.entries)
-        entry.key.name: [
-          for (final selection in entry.value) selection.toJson(),
-        ],
-    },
   };
 }
 

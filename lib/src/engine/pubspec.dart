@@ -1,5 +1,6 @@
+import 'package:pub_semver/pub_semver.dart' as pub;
+
 import 'diagnostic.dart';
-import '../native/dart/version_constraints.dart';
 import 'version.dart';
 import 'yaml.dart';
 
@@ -284,7 +285,9 @@ class Dependency {
     final text = constraint?.trim();
     if (text == null || text.isEmpty) return null;
     try {
-      return dartConstraintAllows(text, version.canonical);
+      return pub.VersionConstraint.parse(
+        text,
+      ).allows(pub.Version.parse(version.canonical));
     } on FormatException {
       return null;
     }
