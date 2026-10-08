@@ -1959,6 +1959,36 @@ publish = ["pub.dev"]
     },
   );
 
+  test(
+    'a release refuses a HEAD origin cannot fetch, and staging does not',
+    () async {
+      // The tag a release pushes must name a commit origin has; staging is
+      // private and needs nothing from origin.
+      final released = await release(
+        state: _git(pushed: false),
+        registry: _MutableRegistry(<String>['0.1.0']),
+        onConfirm: () =>
+            fail('an unpushed HEAD must refuse before the question'),
+      );
+      expect(released.exitCode, ExitCodes.refused, reason: released.text);
+      expect(
+        released.problems.map((problem) => problem['code']),
+        contains('RK-GIT-003'),
+      );
+
+      final staged = await release(
+        state: _git(pushed: false),
+        registry: _MutableRegistry(<String>['0.1.0']),
+        dryRun: true,
+      );
+      expect(staged.exitCode, ExitCodes.ok, reason: staged.text);
+      expect(
+        staged.problems.map((problem) => problem['code']),
+        isNot(contains('RK-GIT-003')),
+      );
+    },
+  );
+
   test('a signing key alone does not sign release tags', () async {
     // As with git tag -a: a key that is there for commits does not make a
     // release tag signed. tag.gpgSign, or a signed release history, does.

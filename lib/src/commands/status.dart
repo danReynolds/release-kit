@@ -108,22 +108,29 @@ class StatusCommand {
     final uniqueIssues = _deduplicate(issues);
     String? nextCommand;
     final unfinished = snapshots.where(_workRemains).toList();
+    bool readyToRelease(StatusUnitSnapshot snapshot) =>
+        _isLocalOnlyOutput(snapshot) ||
+        !git.isBound ||
+        snapshot.stage?.reusable == true;
     if (uniqueIssues.isEmpty && unfinished.length == 1) {
       final snapshot = unfinished.single;
-      nextCommand = (_isLocalOnlyOutput(snapshot)
+      nextCommand = readyToRelease(snapshot)
           ? 'rk release ${snapshot.unit.name}'
-          : !git.isBound
-          ? 'rk release ${snapshot.unit.name}'
-          : snapshot.stage?.reusable == true
-          ? 'rk release ${snapshot.unit.name}'
-          : 'rk stage ${snapshot.unit.name}');
+          : 'rk stage ${snapshot.unit.name}';
+    } else if (uniqueIssues.isEmpty && unfinished.length > 1) {
+      // A repository release takes every unit, in dependency order.
+      nextCommand = unfinished.every(readyToRelease)
+          ? 'rk release'
+          : 'rk stage';
     }
     return StatusSnapshot(
       units: snapshots,
       issues: uniqueIssues,
       warning: workRemains ? sourceWarning : null,
       nextCommand: nextCommand,
-      nextUnit: nextCommand == null ? null : unfinished.single.unit.name,
+      nextUnit: unfinished.length == 1 && nextCommand != null
+          ? unfinished.single.unit.name
+          : null,
     );
   }
 
@@ -356,7 +363,8 @@ class StatusCommand {
             target.inspection.verdict != Verdict.conflict)
           _currentVersionIssue(unit, target),
       for (final step in prerequisiteSteps)
-        if (Inspector.blocks(step, states[step.id]!))
+        if (Inspector.blocks(step, states[step.id]!) &&
+            _releasedFirst(step, states[step.id]!) == null)
           _prerequisiteIssue(unit, step, states[step.id]!),
       if (stageResult.issue != null &&
           !partialReleaseWithoutStage &&
@@ -798,18 +806,29 @@ class StatusCommand {
     },
   );
 
+  /// The project in this repository that publishes [step]'s package at the
+  /// version it needs, or null for a package released elsewhere.
+  ResolvedProject? _declaring(Step step) {
+    for (final project in resolution.allProjects) {
+      if (step.coordinate == 'pub.dev/${project.name}/${project.version}') {
+        return project;
+      }
+    }
+    return null;
+  }
+
+  /// The project this repository releases before [step]'s unit, when the
+  /// package [step] needs is not on pub.dev yet. A repository release
+  /// publishes it first, so this orders the release rather than blocking it.
+  ResolvedProject? _releasedFirst(Step step, Inspection state) =>
+      state.isAbsent ? _declaring(step) : null;
+
   StatusIssue _prerequisiteIssue(
     ResolvedUnit unit,
     Step step,
     Inspection state,
   ) {
-    ResolvedProject? declaring;
-    for (final project in resolution.allProjects) {
-      if (step.coordinate == 'pub.dev/${project.name}/${project.version}') {
-        declaring = project;
-        break;
-      }
-    }
+    final declaring = _declaring(step);
     return StatusIssue(
       unit: unit.name,
       diagnostic: Diagnostic(
@@ -856,6 +875,21 @@ class StatusCommand {
       tag: resolvedTag,
       display: displayedTag == null ? movement : '$movement · $displayedTag',
     );
+    final first = {
+      for (final step in snapshot.checklist.steps)
+        if (step.kind == StepKind.prerequisite)
+          if (_releasedFirst(step, snapshot.states[step.id]!) case final p?)
+            '${p.unitName} ${p.version}',
+    };
+    if (first.isNotEmpty) {
+      output.blank();
+      output.line(
+        'Releases after',
+        note: first.join(', '),
+        depth: 1,
+        role: VisualRole.secondary,
+      );
+    }
     for (final step in snapshot.checklist.steps) {
       // Public targets are recorded once, in targets[], where the settled
       // observation lives; recording them under steps[] too made two

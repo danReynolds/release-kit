@@ -2841,7 +2841,7 @@ void statusReviewRegressions() {
   });
 
   test(
-    'several unfinished units do not suggest one arbitrary next command',
+    'several unfinished units suggest the repository command, not one unit',
     () async {
       final run = await statusRun(
         withConfig: '''
@@ -2866,8 +2866,9 @@ publish = ["pub.dev"]
       );
 
       expect(run.report['problems'], isEmpty);
-      expect(run.report['next'], isEmpty);
-      expect(run.text, isNot(contains('→ rk release')));
+      expect(run.report['next'], ['rk stage']);
+      expect(run.text, isNot(contains('rk stage core')));
+      expect(run.text, isNot(contains('rk stage cli')));
     },
   );
 
@@ -2889,8 +2890,8 @@ publish = ["pub.dev"]
     },
   );
 
-  test('an absent prerequisite blocks readiness and points at the '
-      'unit that must go first', () async {
+  test('a prerequisite this repository releases orders the release '
+      'rather than blocking it', () async {
     final run = await statusRun(
       withConfig: '''
 schema = 2
@@ -2920,16 +2921,47 @@ dependencies:
       registry: FakeRegistry({}),
     );
 
+    expect(run.text, contains('Releases after'));
+    expect(run.text, contains('core 0.2.0'));
     expect(
       run.text,
-      isNot(contains('rk release cli')),
-      reason: 'release would refuse it on the spot',
+      isNot(contains('prevents release')),
+      reason: 'a repository release publishes core before cli',
     );
-    expect(
-      run.text,
-      contains('rk release core'),
-      reason: 'the honest next command is the unit that must go first',
+    expect(run.report['next'], ['rk stage']);
+  });
+
+  test('a prerequisite rk cannot read still blocks', () async {
+    final run = await statusRun(
+      withConfig: '''
+schema = 2
+
+[release.core]
+tag = "keybay-v{version}"
+path = "packages/keybay"
+publish = ["git-tag", "pub.dev"]
+
+[release.cli]
+tag = "keybay_cli-v{version}"
+path = "packages/cli"
+publish = ["git-tag", "pub.dev"]
+''',
+      source: MemorySourceTree({
+        'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
+        'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
+        'packages/cli/pubspec.yaml': '''
+name: keybay_cli
+version: 0.2.0
+dependencies:
+  keybay: 0.2.0
+''',
+        'packages/cli/CHANGELOG.md': '## 0.2.0\n',
+      }, description: '/repo/keybay'),
+      state: git(),
+      registry: FakeRegistry({}, unreachable: true),
     );
+    expect(run.text, contains('restore read access to the prerequisite'));
+    expect(run.text, contains('prevent release'));
   });
 
   test(

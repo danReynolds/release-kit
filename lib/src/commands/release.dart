@@ -957,7 +957,9 @@ class ReleaseCommand {
       final uncommitted = repositoryGit.uncommittedProblem();
       if (uncommitted != null) problems.report(uncommitted);
     }
-    if (unit.publish.contains(PublishTarget.gitTag)) {
+    // Staging is private: only the tag a release pushes needs a commit
+    // origin can fetch.
+    if (!stageOnly && unit.publish.contains(PublishTarget.gitTag)) {
       final unpushed = repositoryGit.unpushedProblem();
       if (unpushed != null) problems.report(unpushed);
     }
