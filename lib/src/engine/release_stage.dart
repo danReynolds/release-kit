@@ -3,7 +3,6 @@ import 'dart:math';
 
 import 'canonical_json.dart';
 import 'release_asset.dart';
-import 'release_manifest.dart';
 import 'resolve.dart';
 import 'source_tree.dart';
 import 'stage.dart';
@@ -311,21 +310,6 @@ class ReleaseStage {
     required Iterable<ReleaseAssetSpec> releaseAssets,
     Map<String, Object?> evidence = const {},
   }) {
-    final specs = validateReleaseAssetSpecs(releaseAssets).toList();
-    final stagedPaths = specs.map((asset) => asset.stagedPath).toSet();
-    if (specs.map((asset) => asset.publicName).toSet().length != specs.length ||
-        stagedPaths.length != specs.length) {
-      throw ArgumentError(
-        'release assets must name unique public files and blobs',
-      );
-    }
-    final homebrew = _homebrewBinding();
-    if (homebrew != null && stagedPaths.contains(homebrew.stagedPath)) {
-      throw ArgumentError(
-        'Homebrew formulae cannot also be release assets: '
-        '${homebrew.stagedPath}',
-      );
-    }
     final inspected = inspect();
     final progress = inspected.receipt;
     if (inspected.reusable) return progress!;
@@ -342,24 +326,12 @@ class ReleaseStage {
     final oldManifest = File(directory.resolve('release-manifest.json'));
     if (oldManifest.existsSync()) oldManifest.deleteSync();
 
-    final byPath = {
-      for (final artifact in progress.artifacts) artifact.path: artifact,
-    };
-    final missing = {
-      ...stagedPaths,
-      if (homebrew != null) homebrew.stagedPath,
-    }.difference(byPath.keys.toSet());
-    if (missing.isNotEmpty) {
-      throw StateError(
-        'stage is missing publication artifacts: ${missing.join(', ')}',
-      );
-    }
     final completion = StageCompletion(
       unit: unit,
       repository: repository,
       commit: directory.identity.headCommit,
-      artifacts: byPath.values,
-      releaseAssets: specs,
+      artifacts: progress.artifacts,
+      releaseAssets: releaseAssets,
     );
     completion.manifest.writeTo(directory);
     final receipt = StageReceipt(
@@ -460,9 +432,5 @@ class ReleaseStage {
         return byContract != 0 ? byContract : left.$1.compareTo(right.$1);
       });
     return [for (final (_, step) in decorated) step];
-  }
-
-  StagedHomebrewBinding? _homebrewBinding() {
-    return StageCompletion.homebrewFor(unit, repository);
   }
 }
