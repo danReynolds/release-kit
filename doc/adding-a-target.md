@@ -14,7 +14,7 @@ It creates and verifies a private draft before making the release public.
 Core owns the pipeline:
 
 ```text
-plan -> inspect -> stage -> authorize -> publish -> confirm -> availability
+plan -> inspect -> stage -> authorize -> publish -> confirm
 ```
 
 See [Release pipeline architecture](release-pipeline.md) for the coordinator
@@ -32,26 +32,25 @@ operations. Its complete surface is small enough to read as one table:
 | `target` | yes | The configuration target this module implements. |
 | `plan` | yes | Describes the destination, intended version, and public artifacts. |
 | `inspectCandidate` | yes | Reads whether this exact release already exists. |
-| `inspectHistory` | no | Returns typed current-version, refusal, and first-publication facts when candidate inspection is not enough. |
+| `inspectHistory` | no | Returns typed current-version, refusal, warning, and first-publication facts when candidate inspection is not enough. |
 | `diagnoseConflict` | yes | Names a conflicting public state and its safe next action in provider terms. |
 | `publishActivity` | yes | Names the module's one meaningful public mutation. |
 | `checkReadiness` | yes | Checks ambient requirements before private preparation. |
 | `authentication` | no | Names the native-tool session it needs; core acquires it once per run, after the yes. |
 | `publish` | yes | Performs one provider publication transaction. |
-| `confirmPublication` | usually no | Reads public state after publication; defaults to `inspectCandidate`. |
-| `checkAvailability` | no | Checks a delayed consumer path after exact publication; pending availability warns and never republishes. |
-| `classifyUnconfirmedPublication` | usually no | Refines shared failure handling for a real recovery semantic. |
+| `confirmPublication` | usually no | Reads public state after publication; defaults to `inspectCandidate`. An act whose provider answer is its read-back, as a Git tag push is, returns that state with the act instead. |
+| `nameUnconfirmed` | usually no | Names, in the target's own code and sentence, an act that did not settle exact; core classifies the halt. |
+| `conflictIsPermanent` | usually no | Whether a conflict read back after acting is final; a moving channel's is not. |
 | `stageInput` | no | Derives a private, receipt-backed input required by this target. |
 | `recoversWithoutStage` | no | Says whether an observation carries the authenticated public inputs a moving channel needs to finish without its stage. |
 
 `TargetHistory` is deliberately one result rather than several hooks. A target
 translates provider data into its current `version`, any provider-specific
-`problems`, and any irreversible `claims`; core does not parse evidence maps or
-ask a second callback what the first callback meant.
+`problems` and `warnings`, and any irreversible `claims`; core does not parse
+evidence maps or ask a second callback what the first callback meant.
 
 Defaults cover shared read-back, failure classification, and targets without
-history, authentication, delayed consumer availability, stage inputs, or
-moving-channel recovery. Override one only for a concrete
+history, authentication, stage inputs, or moving-channel recovery. Override one only for a concrete
 provider semantic.
 
 ## GitHub Release as the worked example
@@ -133,7 +132,7 @@ lifecycles actually need:
 lib/src/targets/git_tag/
   module.dart                 lifecycle and rollback classification
   client.dart                 exact git protocol reads and writes
-  transaction.dart            create, sign, validate, and push one tag
+  transaction.dart            create, sign, and push one tag
 
 lib/src/targets/pub_dev/
   module.dart                 lifecycle and immutable-registry semantics
