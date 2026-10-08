@@ -65,23 +65,17 @@ class HostCapabilities {
   HostCapabilities({
     required this.hostPlatform,
     required String? containerRuntime,
-    required this.hasNativeAssets,
   }) : _known = true,
        _answer = containerRuntime,
        _probe = null;
 
   HostCapabilities._probing(this.hostPlatform, Future<String?> Function() probe)
-    : hasNativeAssets = false,
-      _known = false,
+    : _known = false,
       _answer = null,
       _probe = probe;
 
   /// The platform identifier of the machine rk is running on.
   final String hostPlatform;
-
-  /// Whether the project compiles native code, which the SDK cannot
-  /// cross-compile because it ships no C toolchain for another target.
-  final bool hasNativeAssets;
 
   final bool _known;
   final String? _answer;
@@ -120,16 +114,6 @@ class HostCapabilities {
       );
     }
 
-    if (hasNativeAssets) {
-      return PlatformCapability(
-        platform,
-        Capability.blocked,
-        reason:
-            'this project compiles native code, and the SDK ships no C '
-            'toolchain for another target',
-      );
-    }
-
     // A host that has not asked yet may still find a runtime when a smoke
     // test needs one.
     if (_known && _answer == null) {
@@ -165,12 +149,8 @@ class HostCapabilities {
   /// contact Apple. Linux cross-targets remain producible-but-unproven without
   /// a runtime, while targets the SDK cannot produce from this OS are known
   /// blockers and can be reported before `rk stage` is attempted.
-  static HostCapabilities inspect({bool hasNativeAssets = false}) =>
-      HostCapabilities(
-        hostPlatform: _hostPlatform(),
-        containerRuntime: null,
-        hasNativeAssets: hasNativeAssets,
-      );
+  static HostCapabilities inspect() =>
+      HostCapabilities(hostPlatform: _hostPlatform(), containerRuntime: null);
 
   static String _hostPlatform() {
     final os = Platform.isMacOS

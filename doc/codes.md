@@ -155,7 +155,7 @@ stages the package) is retired and not reused.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-HOST-001` | this machine cannot produce $platform | `lib/src/binary_chain.dart`, `lib/src/commands/release.dart`, `lib/src/commands/status.dart` |
+| `RK-HOST-001` | this machine cannot produce $platform | `lib/src/commands/release.dart`, `lib/src/commands/status.dart` |
 
 ## RK-INIT — init
 

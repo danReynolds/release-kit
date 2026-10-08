@@ -484,7 +484,6 @@ Future<Ran> release({
         HostCapabilities(
           hostPlatform: 'macos-arm64',
           containerRuntime: 'docker',
-          hasNativeAssets: false,
         ),
   );
   final code = await command.run(only: only);

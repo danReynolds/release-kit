@@ -603,7 +603,6 @@ publish = ["git-tag", "pub.dev"]
           capabilities: HostCapabilities(
             hostPlatform: 'linux-x64',
             containerRuntime: null,
-            hasNativeAssets: false,
           ),
           // A conformance run must not read the pub session of whoever is
           // running it.
@@ -2126,7 +2125,6 @@ executables:
         capabilities: HostCapabilities(
           hostPlatform: 'macos-arm64',
           containerRuntime: containerRuntime,
-          hasNativeAssets: false,
         ),
       ).run(only: 'cli');
       return (code: code, output: output);

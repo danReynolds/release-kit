@@ -482,11 +482,7 @@ Future<({String text, Map<String, Object?> report})> statusRun({
     output: output,
     capabilities:
         capabilities ??
-        HostCapabilities(
-          hostPlatform: 'macos-arm64',
-          containerRuntime: null,
-          hasNativeAssets: false,
-        ),
+        HostCapabilities(hostPlatform: 'macos-arm64', containerRuntime: null),
   ).run();
   return (
     text: buffer.toString(),
@@ -748,7 +744,6 @@ executables:
         capabilities: HostCapabilities(
           hostPlatform: 'linux-x64',
           containerRuntime: null,
-          hasNativeAssets: false,
         ),
       );
 
@@ -791,7 +786,6 @@ executables:
       capabilities: HostCapabilities(
         hostPlatform: 'linux-x64',
         containerRuntime: null,
-        hasNativeAssets: false,
       ),
     );
 
@@ -1558,7 +1552,6 @@ publish = ["pub.dev"]
         capabilities: HostCapabilities(
           hostPlatform: 'linux-x64',
           containerRuntime: null,
-          hasNativeAssets: false,
         ),
         inspectorBuilder: (git, _) => FixedInspector(
           registry: FakeRegistry(const {}),
@@ -1795,7 +1788,6 @@ publish = ["pub.dev"]
         capabilities: HostCapabilities(
           hostPlatform: 'linux-x64',
           containerRuntime: null,
-          hasNativeAssets: false,
         ),
       );
       expect(run.text, contains('Staged'));
@@ -1992,7 +1984,6 @@ publish = ["pub.dev"]
         capabilities: HostCapabilities(
           hostPlatform: 'linux-x64',
           containerRuntime: null,
-          hasNativeAssets: false,
         ),
         isTerminal: true,
         useColor: true,
@@ -2023,7 +2014,6 @@ publish = ["pub.dev"]
         capabilities: HostCapabilities(
           hostPlatform: 'linux-x64',
           containerRuntime: null,
-          hasNativeAssets: false,
         ),
         isTerminal: true,
         useColor: true,
@@ -2146,7 +2136,6 @@ publish = ["pub.dev"]
         capabilities: HostCapabilities(
           hostPlatform: 'linux-x64',
           containerRuntime: null,
-          hasNativeAssets: false,
         ),
         inspectorBuilder: (git, _) => FixedInspector(
           registry: FakeRegistry(const {}),

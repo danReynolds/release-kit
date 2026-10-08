@@ -43,30 +43,13 @@ class Diagnostic {
 
 /// A position in a file, one-based, for pointing a reader at a problem.
 class SourceLocation {
-  const SourceLocation(this.path, [this.line, this.column]);
+  const SourceLocation(this.path, [this.line]);
 
   final String path;
   final int? line;
-  final int? column;
 
   @override
-  String toString() {
-    if (line == null) return path;
-    if (column == null) return '$path:$line';
-    return '$path:$line:$column';
-  }
-}
-
-/// Thrown when rk refuses. Carries every problem found in one pass, so a fix
-/// cycle is one edit round rather than several.
-class RkFailure implements Exception {
-  RkFailure(this.diagnostics)
-    : assert(diagnostics.isNotEmpty, 'a failure needs at least one problem');
-
-  final List<Diagnostic> diagnostics;
-
-  @override
-  String toString() => diagnostics.map((d) => d.toString()).join('\n');
+  String toString() => line == null ? path : '$path:$line';
 }
 
 /// Collects problems so a caller can report all of them at once.

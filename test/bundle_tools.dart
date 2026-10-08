@@ -5,7 +5,7 @@ import 'dart:typed_data';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/transforms/digest.dart';
 
-/// Models compiler/copy/launcher outputs for release orchestration tests, and
+/// Models compiler and launcher outputs for release orchestration tests, and
 /// what codesign reports about the files it signed: identifiers and code
 /// hashes, which depend on any embedded library load constraint. No platform
 /// executable runs. Real launcher and pinning behavior have separate tests.
@@ -45,14 +45,8 @@ class BundleRecordingTools extends RecordingTools {
       File(output)
         ..parent.createSync(recursive: true)
         ..writeAsStringSync('BINARY 1.0.0');
-    } else if (executable == '/bin/cp') {
-      File(arguments.first).copySync(arguments.last);
-      // A copy carries its source's signature, not one made here.
-      _signatures.remove(arguments.last);
     } else if (executable.endsWith('/clang')) {
       File(arguments.last).writeAsStringSync('LAUNCHER');
-    } else if (executable == '/bin/chmod') {
-      Process.runSync(executable, arguments);
     } else if (executable == 'codesign' && arguments.contains('--identifier')) {
       final path = arguments.last;
       final identifier = arguments[arguments.indexOf('--identifier') + 1];

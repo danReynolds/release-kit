@@ -26,7 +26,6 @@ InitPlan plan() => InitPlan.discover(
     HostCapabilities(
       hostPlatform: 'macos-arm64',
       containerRuntime: null,
-      hasNativeAssets: false,
     ).resolve,
   ),
 );

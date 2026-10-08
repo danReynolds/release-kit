@@ -61,20 +61,6 @@ class BinaryChain {
   final String compilerExecutable;
   final ReleaseStage? stage;
 
-  // ---- workspace-internal names ----
-  //
-  // These two are not public asset names: they name what lives under
-  // `.rk/work/` between steps. The published grammar is ReleaseAssets.
-
-  static String binaryName(
-    String project,
-    String platform,
-    String executable,
-  ) => 'producers/$project/$platform/$executable';
-
-  static String zipName(String project, String platform, String executable) =>
-      'producers/$project/notary/$platform/$executable.zip';
-
   // ---- build ----
 
   /// Compiles — and on macOS signs — the platform binary, as one step.
@@ -89,22 +75,10 @@ class BinaryChain {
     MacSigning? signing,
     ProgressHandle? progress,
   }) async {
+    // The release refused a platform this host cannot produce before any
+    // work began (RK-HOST-001).
     final platform = step.platform!;
     final executable = project.executable!;
-    final capability = capabilities.resolve(platform);
-    if (!capability.canProduce) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-HOST-001',
-          message: 'this machine cannot produce $platform',
-          remedy: capability.reason ?? 'it needs a different host',
-        ),
-        unit: step.unit,
-      );
-      return LocalProducerOutcome.failed(
-        capability.reason ?? 'this host cannot produce $platform',
-      );
-    }
 
     final name = ReleaseAssets.binaryPath(project, platform);
 

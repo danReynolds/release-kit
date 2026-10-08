@@ -74,7 +74,6 @@ executables:
       capabilities: HostCapabilities(
         hostPlatform: 'linux-x64',
         containerRuntime: null,
-        hasNativeAssets: false,
       ),
       select: (plan) async => plan.toggle(0, ReleaseChoice.homebrew).plan,
       write: (path, contents) => written[path] = contents,
@@ -164,7 +163,6 @@ executables:
         capabilities: HostCapabilities(
           hostPlatform: 'linux-x64',
           containerRuntime: null,
-          hasNativeAssets: false,
         ),
         output: output,
         select: (plan) async => plan

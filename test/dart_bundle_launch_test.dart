@@ -40,7 +40,6 @@ void main(List<String> args) {
             capabilities: HostCapabilities(
               hostPlatform: platform,
               containerRuntime: null,
-              hasNativeAssets: false,
             ),
           ).build(
             platform: platform,

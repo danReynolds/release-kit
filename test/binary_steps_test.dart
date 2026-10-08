@@ -88,7 +88,6 @@ executables:
     capabilities: HostCapabilities(
       hostPlatform: 'macos-arm64',
       containerRuntime: null,
-      hasNativeAssets: false,
     ),
   );
 
@@ -129,7 +128,7 @@ executables:
         if (key.startsWith('dart compile exe')) {
           File(
               workspace.pathOf(
-                BinaryChain.binaryName('tool', 'macos-arm64', 'tool'),
+                ReleaseAssets.binaryPath(project, 'macos-arm64'),
               ),
             )
             ..parent.createSync(recursive: true)

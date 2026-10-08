@@ -1915,7 +1915,6 @@ void main() {
       capabilities: HostCapabilities(
         hostPlatform: 'macos-arm64',
         containerRuntime: null,
-        hasNativeAssets: false,
       ),
     );
 
@@ -2781,11 +2780,7 @@ class _Harness {
       refreshEnvironment: () => const {'HOME': '/nowhere'},
       capabilities:
           capabilities ??
-          HostCapabilities(
-            hostPlatform: 'linux-x64',
-            containerRuntime: null,
-            hasNativeAssets: false,
-          ),
+          HostCapabilities(hostPlatform: 'linux-x64', containerRuntime: null),
     );
     final code = await command.run(only: 'tool');
     tools.onInvocation = null;

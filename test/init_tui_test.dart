@@ -31,7 +31,6 @@ InitPlan discoveryPlan({List<String> notices = const [missingPackage]}) {
       HostCapabilities(
         hostPlatform: 'linux-x64',
         containerRuntime: null,
-        hasNativeAssets: false,
       ).resolve,
     ),
   );

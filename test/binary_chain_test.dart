@@ -13,7 +13,6 @@ void main() {
     final onAppleSilicon = HostCapabilities(
       hostPlatform: 'macos-arm64',
       containerRuntime: 'docker',
-      hasNativeAssets: false,
     );
 
     test('the host platform is native', () {
@@ -39,7 +38,6 @@ void main() {
       final noRuntime = HostCapabilities(
         hostPlatform: 'macos-arm64',
         containerRuntime: null,
-        hasNativeAssets: false,
       );
       final resolved = noRuntime.resolve('linux-x64');
       expect(resolved.capability, Capability.buildableUnproven);
@@ -56,7 +54,6 @@ void main() {
       final noRuntime = HostCapabilities(
         hostPlatform: 'macos-arm64',
         containerRuntime: null,
-        hasNativeAssets: false,
       );
       final resolved = noRuntime.resolve('macos-arm64');
       expect(
@@ -67,17 +64,6 @@ void main() {
             'catches the commonest failure — a stale artifact reporting '
             'the wrong version',
       );
-    });
-
-    test('native assets block cross-compilation, naming why', () {
-      final withNative = HostCapabilities(
-        hostPlatform: 'macos-arm64',
-        containerRuntime: 'docker',
-        hasNativeAssets: true,
-      );
-      final resolved = withNative.resolve('linux-x64');
-      expect(resolved.capability, Capability.blocked);
-      expect(resolved.reason, contains('C toolchain'));
     });
 
     test('an x64 macOS binary needs an x64 macOS host', () {
@@ -253,10 +239,15 @@ void main() {
     final capabilities = HostCapabilities(
       hostPlatform: 'macos-arm64',
       containerRuntime: 'docker',
-      hasNativeAssets: false,
     );
 
     test('a native build passes the target flags nowhere', () async {
+      // A bundle carries the runtime and licence of the SDK that compiled
+      // it.
+      final sdk = Directory('${buildRoot.path}/sdk/bin')
+        ..createSync(recursive: true);
+      File('${sdk.path}/dartaotruntime').writeAsStringSync('RUNTIME');
+      File('${sdk.parent.path}/LICENSE').writeAsStringSync('LICENSE');
       final tools = _TimeoutRecordingTools(
         results: {
           '${buildRoot.path}/keybay --version': ToolResult(
@@ -270,7 +261,7 @@ void main() {
           await DartCliBuilder(
             tools: tools,
             capabilities: capabilities,
-            compilerExecutable: '/sdk/bin/dart',
+            compilerExecutable: '${sdk.path}/dart',
           ).build(
             platform: 'macos-arm64',
             entryPoint: 'bin/keybay.dart',
@@ -282,7 +273,11 @@ void main() {
       expect(outcome.ok, isTrue, reason: outcome.problem);
       expect(
         tools.calls.first,
-        startsWith('/sdk/bin/dart compile aot-snapshot'),
+        startsWith('${sdk.path}/dart compile aot-snapshot'),
+      );
+      expect(
+        File('${buildRoot.path}/lib/keybay/dartaotruntime').readAsStringSync(),
+        'RUNTIME',
       );
       expect(tools.calls.first, isNot(contains('--target-os')));
       expect(tools.timeouts.last, const Duration(minutes: 2));
@@ -441,7 +436,6 @@ void main() {
           capabilities: HostCapabilities(
             hostPlatform: 'macos-arm64',
             containerRuntime: 'podman',
-            hasNativeAssets: false,
           ),
         ).build(
           platform: 'linux-x64',
@@ -470,7 +464,6 @@ void main() {
             capabilities: HostCapabilities(
               hostPlatform: 'macos-arm64',
               containerRuntime: null,
-              hasNativeAssets: false,
             ),
           ).build(
             platform: 'linux-x64',

@@ -158,7 +158,6 @@ $metadata
               capabilities: HostCapabilities(
                 hostPlatform: 'macos-arm64',
                 containerRuntime: null,
-                hasNativeAssets: false,
               ),
             ).build(
               platform: 'linux-x64',
