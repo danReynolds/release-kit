@@ -457,15 +457,16 @@ class GithubRelease {
         );
 
     final url = 'https://github.com/$repository/releases/tag/$tag';
-    final local = _validateUploadRequest(
-      tag: tag,
-      title: title,
-      notesPath: notesPath,
-      assets: assets,
-    );
-    if (local.problem != null) return failed(local.problem!);
-    final notes = local.notes!;
-    final ordered = local.assets!;
+    // The stage was checked against its receipt just before this act, so
+    // its files are read here, not checked again.
+    final String notes;
+    try {
+      notes = File(notesPath).readAsStringSync();
+    } on Object catch (error) {
+      return failed('the staged release notes could not be read: $error');
+    }
+    final ordered = [...assets]
+      ..sort((left, right) => left.publicName.compareTo(right.publicName));
     final names = [for (final asset in ordered) asset.publicName];
     final assetSha256 = {
       for (final asset in ordered) asset.publicName: asset.sha256,
@@ -474,8 +475,6 @@ class GithubRelease {
       for (final asset in ordered) asset.publicName: asset.size,
     };
 
-    // Local shape and bytes are validated before this first remote read. A
-    // malformed request can therefore never delete, create, or fill a draft.
     onProgress?.call(GithubPublishEvent.drafting, 0, ordered.length);
     final existing = await _drafts(tag);
     if (existing == null) return failed('GitHub could not be read');
@@ -712,101 +711,6 @@ class GithubRelease {
         // Public truth does not depend on scratch cleanup.
       }
     }
-  }
-
-  ({String? problem, String? notes, List<GithubReleaseAssetUpload>? assets})
-  _validateUploadRequest({
-    required String tag,
-    required String title,
-    required String notesPath,
-    required List<GithubReleaseAssetUpload> assets,
-  }) {
-    if (tag.trim().isEmpty || title.trim().isEmpty) {
-      return (
-        problem: 'the release tag or title is empty',
-        notes: null,
-        assets: null,
-      );
-    }
-    final notesType = FileSystemEntity.typeSync(notesPath, followLinks: false);
-    if (notesType != FileSystemEntityType.file) {
-      return (
-        problem: 'the staged release notes are missing or not a regular file',
-        notes: null,
-        assets: null,
-      );
-    }
-    final String notes;
-    try {
-      notes = File(notesPath).readAsStringSync();
-    } on Object catch (error) {
-      return (
-        problem: 'the staged release notes could not be read: $error',
-        notes: null,
-        assets: null,
-      );
-    }
-
-    final ordered = List<GithubReleaseAssetUpload>.of(assets)
-      ..sort((left, right) => left.publicName.compareTo(right.publicName));
-    final names = <String>{};
-    final paths = <String>{};
-    for (final asset in ordered) {
-      final normalized = asset.publicName.toLowerCase();
-      if (!names.add(normalized)) {
-        return (
-          problem: 'two staged assets have the same public filename',
-          notes: null,
-          assets: null,
-        );
-      }
-      if (!paths.add(asset.stagedPath)) {
-        return (
-          problem: 'two public assets refer to the same staged file',
-          notes: null,
-          assets: null,
-        );
-      }
-      if (!_isPublicAssetName(asset.publicName)) {
-        return (
-          problem: 'invalid public asset filename: ${asset.publicName}',
-          notes: null,
-          assets: null,
-        );
-      }
-      if (!_isSha256(asset.sha256) || asset.size < 0) {
-        return (
-          problem: 'invalid size or SHA-256 for ${asset.publicName}',
-          notes: null,
-          assets: null,
-        );
-      }
-      if (FileSystemEntity.typeSync(asset.stagedPath, followLinks: false) !=
-          FileSystemEntityType.file) {
-        return (
-          problem: '${asset.publicName} is missing or not a regular file',
-          notes: null,
-          assets: null,
-        );
-      }
-      try {
-        final bytes = File(asset.stagedPath).readAsBytesSync();
-        if (bytes.length != asset.size || Sha256.hex(bytes) != asset.sha256) {
-          return (
-            problem: '${asset.publicName} differs from its staged receipt',
-            notes: null,
-            assets: null,
-          );
-        }
-      } on Object catch (error) {
-        return (
-          problem: '${asset.publicName} could not be read: $error',
-          notes: null,
-          assets: null,
-        );
-      }
-    }
-    return (problem: null, notes: notes, assets: List.unmodifiable(ordered));
   }
 
   ({Inspection inspection, List<GithubReleaseAssetUpload> missing})
@@ -1082,14 +986,6 @@ class GithubRelease {
 }
 
 enum GithubPublishEvent { drafting, uploading, publishing }
-
-bool _isPublicAssetName(String name) =>
-    name.isNotEmpty &&
-    name != '.' &&
-    name != '..' &&
-    !name.contains('/') &&
-    !name.contains(r'\') &&
-    !name.codeUnits.any((unit) => unit < 0x20 || unit == 0x7f);
 
 class _Release {
   _Release({

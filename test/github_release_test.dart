@@ -442,7 +442,6 @@ void main() {
     publish({
       String slurp = '[[]]',
       bool prerelease = false,
-      bool duplicateAssetNames = false,
       List<String> initialDraftNames = const [],
       String draftTitle = 'tool 1.0.0',
       String draftBody = 'notes',
@@ -466,10 +465,7 @@ void main() {
       final notes = File('${scratch.path}/notes.md')
         ..writeAsStringSync('notes');
       final paths = <String>[];
-      for (final name
-          in duplicateAssetNames
-              ? const ['left/a.tar.gz', 'right/a.tar.gz']
-              : const ['a.tar.gz', 'b.tar.gz']) {
+      for (final name in const ['a.tar.gz', 'b.tar.gz']) {
         final file = File('${scratch.path}/$name');
         file.parent.createSync(recursive: true);
         file.writeAsStringSync(name);
@@ -713,30 +709,6 @@ void main() {
           ),
           isFalse,
         );
-      },
-    );
-
-    test(
-      'local request validation runs before any remote read or mutation',
-      () async {
-        final run = await publish(
-          slurp: jsonEncode([
-            [
-              {
-                'tag_name': 'v1.0.0',
-                'draft': true,
-                'prerelease': false,
-                'id': 11,
-              },
-            ],
-          ]),
-          duplicateAssetNames: true,
-        );
-
-        expect(run.outcome.ok, isFalse);
-        expect(run.outcome.mayHaveActed, isFalse);
-        expect(run.outcome.draftEffect, DraftEffect.none);
-        expect(run.tools.calls, isEmpty);
       },
     );
 
