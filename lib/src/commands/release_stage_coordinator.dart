@@ -193,18 +193,6 @@ final class ReleaseStageCoordinator {
       return PreparedRelease(claims: claims, signing: recoveredSigning);
     }
 
-    final stageProblem = preparationProblem(
-      unit,
-      inspected,
-      mayReplaceReviewed: stageOnly,
-    );
-    if (stageProblem != null) {
-      stageProgress.discard();
-      output.problem(stageProblem, unit: unit.name);
-      output.halt(HaltKind.beforeActing);
-      return null;
-    }
-
     if (inspected.validProgress || inspected.planRecorded) {
       output.say('Resuming interrupted staging.', role: VisualRole.secondary);
     } else if (!stage.directory.identity.isGitBound) {

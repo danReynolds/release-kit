@@ -650,23 +650,21 @@ class ReleaseCommand {
       }
     }
 
-    if (!stageOnly) {
-      // Stage-only mode keeps its explicit ability to replace
-      // reviewed-but-invalid bytes. A real release refuses that ambiguity
-      // before any local preparation.
-      final stageProblem = plan.recoversWithoutStage
-          ? null
-          : _stages.preparationProblem(
-              unit,
-              stageInspection,
-              mayReplaceReviewed: false,
-            );
-      if (stageProblem != null) {
-        output.problem(stageProblem, unit: unit.name);
-        output.halt(HaltKind.beforeActing);
-        _publication.showActions(targets, publicActions);
-        return null;
-      }
+    // Stage-only mode keeps its explicit ability to replace
+    // reviewed-but-invalid bytes. A real release refuses that ambiguity
+    // before any local preparation.
+    final stageProblem = plan.recoversWithoutStage
+        ? null
+        : _stages.preparationProblem(
+            unit,
+            stageInspection,
+            mayReplaceReviewed: stageOnly,
+          );
+    if (stageProblem != null) {
+      output.problem(stageProblem, unit: unit.name);
+      output.halt(HaltKind.beforeActing);
+      if (!stageOnly) _publication.showActions(targets, publicActions);
+      return null;
     }
 
     if (plan.recoversWithoutStage) return plan;
