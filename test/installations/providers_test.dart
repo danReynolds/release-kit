@@ -332,4 +332,70 @@ void main() {
       expect(upgraded.stdout, 'brew 1.3.0\n');
     },
   );
+
+  group('GitHub downloads', () {
+    late ExecutableProject project;
+    late InstallationStore store;
+    late FakeReleases releases;
+    late GithubInstallationProvider github;
+    late StubProvider local;
+    late InstallationManager manager;
+    late Directory downloads;
+    setUp(() {
+      project = fixture(scratch, commands: ['orbit'], binary: true);
+      store = InstallationStore('${scratch.path}/data', const SystemTools());
+      releases = FakeReleases(project, ['1.1.0']);
+      github = GithubInstallationProvider(
+        const SystemTools(),
+        store,
+        'linux-x64',
+        fetch: releases.fetch,
+      );
+      local = StubProvider(InstallationSource.local);
+      manager = InstallationManager(
+        store: store,
+        providers: {github.source: github, local.source: local},
+        environment: {'PATH': '${store.bin}:/usr/bin:/bin'},
+      );
+      downloads = Directory('${store.projectRoot(project)}/downloads');
+    });
+    Future<String> act(InstallationSource source, InstallationAction action) =>
+        manager.act(project, source, action, progress: (_) {});
+    Future<String> orbit() async =>
+        (await Process.run('${store.bin}/orbit', [])).stdout as String;
+
+    test(
+      'an update replaces the previous download; uninstall removes every one',
+      () async {
+        await act(github.source, InstallationAction.use);
+        expect(await orbit(), 'release 1.1.0\n');
+        releases.publish('1.2.0');
+        await manager.download(
+          project,
+          await manager.latest(project, github.source),
+          progress: (_) {},
+        );
+        expect(await orbit(), 'release 1.2.0\n');
+        expect(downloads.listSync(), hasLength(1));
+        await act(local.source, InstallationAction.use);
+        await act(github.source, InstallationAction.uninstall);
+        expect(downloads.existsSync(), isFalse);
+      },
+    );
+
+    test(
+      'a re-run after an interrupted install finishes it without downloading again',
+      () async {
+        // Interrupted after unpacking, before rk routed anything; and an
+        // earlier run that stopped while unpacking.
+        await github.install(project, (_) {});
+        Directory('${downloads.path}/preparing-interrupted').createSync();
+        final fetched = releases.archiveFetches;
+        await act(github.source, InstallationAction.use);
+        expect(releases.archiveFetches, fetched);
+        expect(await orbit(), 'release 1.1.0\n');
+        expect(downloads.listSync(), hasLength(1));
+      },
+    );
+  });
 }

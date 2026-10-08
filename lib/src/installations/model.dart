@@ -90,11 +90,16 @@ class Installation {
     required this.version,
     required this.commands,
     required this.location,
+    this.managed = false,
     this.exportedPaths = const [],
   });
   final InstallationSource source;
   final String version, location;
   final Map<String, LaunchCommand> commands;
+
+  /// Whether rk owns the installed bytes: a download under rk's data
+  /// directory, which rk replaces on update and removes on uninstall.
+  final bool managed;
 
   /// Native package-manager entrypoints, used to detect active external installs.
   final List<String> exportedPaths;
@@ -102,6 +107,7 @@ class Installation {
     'source': source.name,
     'version': version,
     'location': location,
+    'managed': managed,
     'exported_paths': exportedPaths,
     'commands': {
       for (final entry in commands.entries) entry.key: entry.value.toJson(),

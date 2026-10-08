@@ -155,6 +155,21 @@ class InstallationStore {
     ];
   }
 
+  /// Once [kept] is installed and routed, removes what it replaced: rk's own
+  /// earlier downloads, and any an interrupted run left half unpacked. The
+  /// download the current launchers run is never removed.
+  void retire(ExecutableProject project, Installation kept) {
+    if (!kept.managed) return;
+    final parent = Directory(kept.location).parent;
+    if (!parent.path.startsWith('${projectRoot(project)}/')) return;
+    final inUse = selected(project)?.location;
+    for (final entry in parent.listSync(followLinks: false)) {
+      if (entry.path != kept.location && entry.path != inUse) {
+        entry.deleteSync(recursive: true);
+      }
+    }
+  }
+
   String managedDirectory(ExecutableProject project, String name) {
     final directory = '${projectRoot(project)}/$name';
     Directory(directory).createSync(recursive: true);

@@ -1,5 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:rk/src/transforms/digest.dart';
+import 'package:rk/src/transforms/archive.dart';
+import 'package:rk/src/installations/metadata.dart';
+import 'package:rk/src/engine/release_manifest.dart';
+import 'package:rk/src/engine/assets.dart';
+import 'dart:typed_data';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/resolve.dart';
@@ -241,5 +247,83 @@ class FakeHomebrew {
         return ok();
     }
     throw StateError('unexpected brew $args');
+  }
+}
+
+/// Public GitHub releases of a single-command [project], served without a
+/// network. Each release's archive holds a script that prints its version.
+class FakeReleases {
+  FakeReleases(this.project, Iterable<String> versions) {
+    versions.forEach(publish);
+  }
+  final ExecutableProject project;
+  final _archives = <String, Uint8List>{};
+  int archiveFetches = 0;
+
+  void publish(String version) {
+    _archives[version] = Uint8List.fromList(
+      ArchiveBuilder.gzip(
+        ArchiveBuilder.tar([
+          ArchiveEntry(
+            name: project.commands.single,
+            bytes: utf8.encode('#!/bin/sh\nprintf "release $version\\n"\n'),
+            executable: true,
+          ),
+        ]),
+      ),
+    );
+  }
+
+  String _archive(String version) =>
+      ReleaseAssets.archiveName(project.commands.single, version, 'linux-x64');
+
+  Future<Uint8List> fetch(
+    Uri uri,
+    int limit, {
+    InstallationCheck? check,
+  }) async {
+    if (uri.host == 'api.github.com') {
+      return Uint8List.fromList(
+        utf8.encode(
+          jsonEncode([
+            for (final version in _archives.keys.toList().reversed)
+              {
+                'tag_name': 'v$version',
+                'draft': false,
+                'prerelease': false,
+                'assets': [
+                  {'name': ReleaseAssets.manifest},
+                  {'name': _archive(version)},
+                ],
+              },
+          ]),
+        ),
+      );
+    }
+    final tag = uri.pathSegments[uri.pathSegments.length - 2];
+    final version = tag.substring(1);
+    final archive = _archives[version]!;
+    if (uri.pathSegments.last == ReleaseAssets.manifest) {
+      return Uint8List.fromList(
+        utf8.encode(
+          ReleaseManifest(
+            unit: project.unit.name,
+            version: version,
+            tag: tag,
+            commit: 'a' * 40,
+            artifacts: [
+              ReleaseManifestArtifact(
+                name: _archive(version),
+                type: 'archive',
+                size: archive.length,
+                sha256: Sha256.hex(archive),
+              ),
+            ],
+          ).encode(),
+        ),
+      );
+    }
+    archiveFetches++;
+    return archive;
   }
 }

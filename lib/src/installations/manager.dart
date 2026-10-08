@@ -156,6 +156,7 @@ class InstallationManager {
       // routing even when cancellation arrived meanwhile. Updating the selected
       // source advances that source, never selects another.
       if (current == release.source) await store.activate(project, installed);
+      store.retire(project, installed);
       return '${project.name} · ${release.source.label} ${installed.version} installed. '
           '${current == release.source ? 'Using it on the next command.' : 'Source selection unchanged.'}';
     } finally {
@@ -237,6 +238,7 @@ class InstallationManager {
           : inspected.installation!;
       cancellation?.check();
       if (action == InstallationAction.install) {
+        store.retire(project, installation);
         return '${project.name} installed from ${source.label}. Selection unchanged.';
       }
       await store.activate(
@@ -244,6 +246,7 @@ class InstallationManager {
         installation,
         beforeCommit: cancellation?.check,
       );
+      store.retire(project, installation);
       return '${project.name} → ${source.label} · ${installation.version}';
     } finally {
       lock.unlockSync();
