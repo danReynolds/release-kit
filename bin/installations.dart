@@ -9,6 +9,7 @@ import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
+import 'package:rk/src/engine/timings.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/installations/discovery.dart';
 import 'package:rk/src/installations/local.dart';
@@ -85,6 +86,7 @@ Future<void> installationMain(List<String> args, String command) async {
   } finally {
     output.close();
   }
+  Timings.report(stderr);
   exitCode = code;
   if (json) stdout.write(output.report.encode(exit: code));
 }
