@@ -7,13 +7,8 @@ rk                           # same as rk status
 rk status --json             # structured report for scripts
 ```
 
-Status reads the destinations and exact local stage for the configured release.
-It shows progress while checks run, prints the completed report, and returns to
-the prompt. The report stays in terminal scrollback. Run it again for a fresh check.
-
-It does not build, sign, install, or publish. `rk use` is the interactive picker
-for which executable runs locally; `rk status` reports what this repository is
-releasing.
+Status reads the destinations and exact local stage for the configured release,
+and reports what it found. It does not build, sign, install, or publish.
 
 ## Read the report
 

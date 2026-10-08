@@ -883,14 +883,7 @@ class Output {
       depth: depth,
       state: RuntimeState.failure,
     );
-    if (diagnostic.remedy != null) {
-      if (diagnostic.code.startsWith('RK-CLI-') &&
-          diagnostic.remedy!.contains('\nUsage\n')) {
-        help(diagnostic.remedy!, depth: depth + 1);
-      } else {
-        say(diagnostic.remedy!, depth: depth + 1);
-      }
-    }
+    if (diagnostic.remedy != null) say(diagnostic.remedy!, depth: depth + 1);
   }
 
   /// Every problem in one pass, so a fix cycle is one edit round.

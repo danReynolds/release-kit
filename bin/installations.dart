@@ -159,7 +159,7 @@ Future<int> _run(
       Diagnostic(
         code: 'RK-CLI-005',
         message: usageError,
-        remedy: installationUsage,
+        remedy: 'rk help $command',
       ),
     );
     return ExitCodes.usage;

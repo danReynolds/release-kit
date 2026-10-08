@@ -78,11 +78,69 @@ void main() {
         final run = loose([...args, '--json']);
         expect(run.code, 2, reason: run.all);
         final remedy = run.problems.single['remedy'] as String;
-        expect(remedy, contains('rk init [--write] [--json]'));
-        expect(remedy, isNot(contains('rk release [unit]')));
+        expect(remedy, contains('rk help init'));
+        expect(remedy, isNot(contains('rk release')));
       }
       expect(Directory('${loose.root}/.rk').existsSync(), isFalse);
       expect(File('${loose.root}/release.toml').existsSync(), isFalse);
+    });
+
+    test('a misused flag is refused in two lines, not the whole usage', () {
+      final run = loose(['status', '--yes']);
+      expect(run.code, 2, reason: run.all);
+      expect(run.stdout.trimRight().split('\n'), [
+        '✗ rk status does not have --yes',
+        '    rk status takes --json · rk help status',
+      ]);
+      final unknown = loose(['stage', '--force']);
+      expect(unknown.code, 2, reason: unknown.all);
+      expect(unknown.stdout.trimRight().split('\n'), [
+        '✗ rk does not have --force',
+        '    rk stage takes --json and --timings · rk help stage',
+      ]);
+    });
+
+    test('rk help prints the index, or one command\'s help', () {
+      final index = loose(['help']);
+      expect(index.code, 0, reason: index.all);
+      expect(index.stdout, loose(['--help']).stdout);
+
+      final status = loose(['help', 'status']);
+      expect(status.code, 0, reason: status.all);
+      expect(status.stdout, loose(['status', '--help']).stdout);
+
+      final use = loose(['help', 'use']);
+      expect(use.code, 0, reason: use.all);
+      expect(use.stdout, contains('rk use [source] [-p project]'));
+
+      final machine = loose(['help', 'stage', '--json']);
+      expect(machine.code, 0, reason: machine.all);
+      expect(
+        (machine.json['next'] as List).single,
+        loose(['stage', '--help']).stdout.trim(),
+      );
+
+      final unknown = loose(['help', 'verify', '--json']);
+      expect(unknown.code, 2, reason: unknown.all);
+      expect(unknown.problems.single['code'], 'RK-CLI-008');
+    });
+
+    test('the index leads with the release loop, and says each thing once', () {
+      final help = loose(['--help']).stdout;
+      expect(help, startsWith('rk makes releasing code simple\n'));
+      expect(help, isNot(contains('austere')));
+      expect(help, isNot(contains('return to the prompt')));
+      expect('--version'.allMatches(help), hasLength(1));
+      final order = [
+        for (final command in ['init', 'status', 'stage', 'release', 'plan'])
+          help.indexOf('\n  rk $command'),
+      ];
+      expect(order, everyElement(isNonNegative));
+      expect(order, orderedEquals([...order]..sort()));
+      expect(
+        loose(['status', '--help']).stdout,
+        isNot(contains('no interaction is required')),
+      );
     });
   });
 
@@ -173,7 +231,7 @@ void main() {
         expect(run.code, 2, reason: run.all);
         expect(run.problems.single['code'], 'RK-CLI-005');
         expect(run.problems.single['message'], 'rk stage does not have $flag');
-        expect(run.problems.single['remedy'], contains('rk stage [unit]'));
+        expect(run.problems.single['remedy'], contains('rk help stage'));
         expect(run.json['command'], 'stage');
         expect(run.json, isNot(contains('mode')));
       }

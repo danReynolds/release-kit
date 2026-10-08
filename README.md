@@ -1,8 +1,19 @@
 # rk
 
-Release kit manages releasing a project to your configured targets: Git tags,
-a GitHub Release, Homebrew, standalone binaries — as one checked plan instead
-of a release script.
+rk makes releasing code simple. A repository says what it releases and where
+each piece goes — Dart packages to pub.dev, Git tags, GitHub Releases,
+Homebrew formulas, standalone binaries — and rk turns that into one plan for
+the whole repository and carries it out with one command:
+
+```console
+$ rk init       # say what to release: writes release.toml
+$ rk status     # what is released, staged and left to do
+$ rk release    # release the rest, in dependency order, asking once
+```
+
+`rk release` builds what is not built, shows every remaining target, asks
+once, and publishes providers before the packages that need them. Re-running
+it finishes a release that stopped anywhere, and publishes nothing twice.
 
 ## Features
 
@@ -30,19 +41,6 @@ of a release script.
   for layouts, signing and compile-time metadata.
 - **Monorepos.** Cross-unit version constraints are checked before
   anything acts.
-
-## Dogfood your commands
-
-```sh
-rk use                     # compare installed and available versions; choose a source
-rk use local               # bind this checkout; edits work on the next run
-rk install pub             # prepare without switching
-rk use --list              # sources, installation state and PATH resolution
-```
-
-Run inside the configured project. With multiple executable packages, select
-one in the inline table or add `-p package_name`. Every command in a package
-switches together; SDK dependencies follow that installation. See [installation management](doc/installations.md).
 
 ## Getting Started
 
@@ -95,9 +93,6 @@ terminals receive the tree; narrow terminals and pipes receive an outline, and
 destinations themselves, not a log; "Not staged" is the private work
 that must finish before anything goes public.
 
-`rk status` shows progress while checking, prints its report, and returns to the
-prompt. The report stays in terminal scrollback; rerun it for a fresh check.
-`rk use` is interactive because it manages local executables.
 See [release status](doc/status.md) for the report's evidence and meaning.
 
 When Binary or Homebrew is selected, `rk init` proposes every binary platform
@@ -124,7 +119,7 @@ release-kit · main@888444b
         producers/rk/archives/rk-0.1.0-linux-arm64.tar.gz
         producers/rk/archives/rk-0.1.0-linux-x64.tar.gz
         producers/rk/archives/rk-0.1.0-macos-arm64.tar.gz
-      pub.dev                    rk source
+      pub.dev                    rk package archive
       GitHub Release             4 artifacts
       Homebrew                   rk.rb
 ```
@@ -329,25 +324,38 @@ The rest is an ordinary rk release. The build runs once per stage, the
 release is drafted, published and read back, and its tag carries the
 manifest of what was built.
 
+## Dogfood your commands
+
+```sh
+rk use                     # compare installed and available versions; choose a source
+rk use local               # bind this checkout; edits work on the next run
+rk install pub             # prepare without switching
+rk use --list              # sources, installation state and PATH resolution
+```
+
+Run inside the configured project. With multiple executable packages, select
+one in the inline table or add `-p package_name`. Every command in a package
+switches together; SDK dependencies follow that installation. See [installation management](doc/installations.md).
+
 ## Commands
 
 | | |
 |---|---|
 | `rk init` | choose outputs and review `release.toml` |
+| `rk status [unit]` | what is released, staged and left to do |
+| `rk stage [unit]` | prepare and validate artifacts; publish nothing |
+| `rk release` | publish unfinished units, in dependency order |
+| `rk release <unit>` | one unit |
+| `rk plan [unit]` | show the configured source-only release graph |
+| `rk target [name]` | what this binary can create or publish, or one target in detail |
+| `rk clean` | remove this repository's private stages |
 | `rk use [source] [-p project]` | install if needed, then select command source |
 | `rk install [source] [-p project]` | prepare a source without switching |
 | `rk uninstall [source] [-p project]` | remove a confirmed inactive installation |
-| `rk plan [unit]` | show the configured source-only release graph |
-| `rk status` | inspect this repository |
-| `rk stage [unit]` | prepare and validate artifacts; publish nothing |
-| `rk release` | publish unfinished units |
-| `rk release <unit>` | one unit |
-| `rk target list` | what this binary can create or publish |
-| `rk target <name>` | one target: requirements and a minimal example |
-| `rk clean` | remove this repository's private stages |
+| `rk help [command]` | the commands, output marks and exit codes, or one command's flags |
 
-`rk -h` lists the commands, output marks, and exit codes. Use
-`rk <command> -h` for its flags and examples.
+`rk help` (or `rk -h`) lists the commands, output marks, and exit codes.
+`rk help <command>` (or `rk <command> -h`) shows its flags and examples.
 
 On a terminal, a finished step keeps how long it took once that reaches a
 second, and a successful `stage` or `release` of ten seconds or more ends

@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- `rk stage` and `rk release` of several units say what they stage once:
+  one heading for the run, one Warnings section where warnings that share a
+  remedy share one line of it, "already staged" for a board whose stages
+  were all reused, one "First release" block, and one closing line for
+  every unit. "Release order" reads `a › b`, as elsewhere.
+- Piped output is the same from one run to the next. A pipe hears of a step
+  only after it has run ten seconds, not 80 milliseconds, and that line names
+  its unit and carries no time.
+- `rk status` lists the warnings the stage recorded, such as Pub's
+  validation warnings, which `rk release` asks about; `warnings[]` carries
+  them too. A staged pub.dev package reads "package archive", and a
+  repository without a commit reads "no commit yet · commit to stage or
+  release".
+- `rk help [command]` prints the help `rk --help` and `rk <command> --help`
+  do. The index lists the release loop first and `--version` once, and the
+  status help no longer describes the removed interactive report. A flag a
+  command does not take is refused in two lines, naming the flags it does
+  take, instead of the whole usage. `rk target` without a name lists the
+  targets, as `rk target list` does.
+
 - A release reads origin's tags once, for every tag target, and takes git's
   answer to a tag push as its read-back: git accepts a push only as the
   exact object it was given and refuses to replace a tag origin has. A

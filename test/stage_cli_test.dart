@@ -190,7 +190,10 @@ publish = ["git-tag"]
         expect(refused.code, 2, reason: refused.all);
         expect(refused.problems.single['code'], 'RK-CLI-001');
         expect(refused.problems.single['message'], 'rk does not have --stage');
-        expect(refused.problems.single['remedy'], contains('rk stage'));
+        expect(
+          refused.problems.single['remedy'],
+          contains('rk help ${args[0]}'),
+        );
         expect(refused.json, isNot(contains('mode')));
         expect(refused.units, isEmpty);
         expect(Directory('${repo.root}/.rk').existsSync(), isFalse);
