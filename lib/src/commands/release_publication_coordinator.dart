@@ -18,7 +18,6 @@ import 'release_progress.dart';
 
 enum ReleaseAction {
   notAttempted('not_attempted', 'not attempted'),
-  attempted('attempted', 'attempted; result unknown'),
   alreadyPublished('already_published', 'already published'),
   completed('completed', 'completed'),
   failed('failed', 'failed');
@@ -257,7 +256,7 @@ final class ReleasePublicationCoordinator {
         ReleaseAction.completed => Mark.done,
         ReleaseAction.alreadyPublished => Mark.satisfied,
         ReleaseAction.failed => Mark.blocked,
-        ReleaseAction.notAttempted || ReleaseAction.attempted => Mark.none,
+        ReleaseAction.notAttempted => Mark.none,
       };
       output.line(
         target.label,
@@ -267,7 +266,6 @@ final class ReleasePublicationCoordinator {
         role: VisualRole.releaseTarget,
         state: switch (action) {
           ReleaseAction.notAttempted => RuntimeState.neutral,
-          ReleaseAction.attempted => RuntimeState.attention,
           ReleaseAction.alreadyPublished => RuntimeState.satisfied,
           ReleaseAction.completed => RuntimeState.success,
           ReleaseAction.failed => RuntimeState.failure,
@@ -675,15 +673,6 @@ final class ReleasePublicationCoordinator {
 
     final actedBefore = output.report.acted;
     output.report.acted = true;
-    publicActions[step.id] = ReleaseAction.attempted;
-    output.step(
-      step,
-      verdict: state.verdict,
-      detail: state.detail,
-      evidence: state.evidence,
-      action: publicActions[step.id]!.wire,
-      show: false,
-    );
     final releaseContext = TargetReleaseContext(
       reads: inspector.targetReads,
       tools: tools,
@@ -739,15 +728,6 @@ final class ReleasePublicationCoordinator {
       final note =
           '${act.reconciledNote ?? 'command response was lost · public target confirmed exact'}$inspected';
       releaseProgress.complete(target, note: note);
-      output.step(
-        step,
-        mark: Mark.done,
-        verdict: state.verdict,
-        detail: state.detail,
-        note: note,
-        action: publicActions[step.id]!.wire,
-        show: false,
-      );
       return _PublicTargetCompletion.completed(step);
     }
     if (!act.ok || !state.isExact) {
@@ -778,17 +758,6 @@ final class ReleasePublicationCoordinator {
       target,
       note: '${act.successNote ?? 'published'}$inspected',
     );
-    if (act.successNote != null) {
-      output.step(
-        step,
-        mark: Mark.done,
-        verdict: state.verdict,
-        detail: state.detail,
-        note: '${act.successNote}$inspected',
-        action: publicActions[step.id]!.wire,
-        show: false,
-      );
-    }
     return _PublicTargetCompletion.completed(step);
   }
 
