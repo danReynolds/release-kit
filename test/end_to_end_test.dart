@@ -2670,11 +2670,9 @@ executables:
       test(
         'a certificate for the wrong team refuses before the publish',
         () async {
-          // The likeliest signing failure there is, and the costliest to catch
-          // late: `publishRegistry` is emitted before `build`, so for every
-          // unit in this fleet a signing problem the preflight misses costs a
-          // permanently burned version number. MacOsSigner.sign refuses this —
-          // after the tag is public and pub.dev has published.
+          // The likeliest signing failure there is: the preflight chooses
+          // the certificate, and refuses before any work when none is for
+          // the team users installed.
           final run = await binaryDrive(
             dryRun: false,
             label: '-wrongteam',

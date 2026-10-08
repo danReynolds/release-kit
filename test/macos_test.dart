@@ -6,84 +6,37 @@ import 'package:test/test.dart';
 
 const _name = 'Developer ID Application: Dan (TEAM123456)';
 final _sha1 = 'a' * 40;
-final _otherSha1 = 'b' * 40;
-final _sha256 = 'c' * 64;
-final _otherSha256 = 'd' * 64;
+final _identity = SigningIdentity(name: _name, team: 'TEAM123456', sha1: _sha1);
 
 void main() {
-  test(
-    'correlates the selected identity to its SHA-256 certificate block',
-    () async {
-      final tools = _tools(
-        certificateOutput:
-            '''
-SHA-256 hash: $_otherSha256
-SHA-1 hash: $_otherSha1
-keychain: "/tmp/other.keychain"
-SHA-256 hash: $_sha256
-SHA-1 hash: $_sha1
-keychain: "/tmp/login.keychain-db"
-''',
-      );
-      final signer = MacOsSigner(tools: tools);
+  test('lists Developer ID identities by the token codesign selects', () async {
+    final identities = await MacOsSigner(tools: _tools()).availableIdentities();
 
-      final identities = await signer.availableIdentities();
-
-      expect(identities, hasLength(1));
-      expect(identities!.single.sha1, _sha1);
-      expect(await signer.certificateSha256(identities.single), _sha256);
-      expect(
-        tools.calls,
-        contains('security find-certificate -a -c $_name -Z'),
-      );
-    },
-  );
-
-  test('signing carries the exact certificate SHA-256 fingerprint', () async {
-    final tools = _tools(
-      certificateOutput:
-          '''
-SHA-256 hash: $_sha256
-SHA-1 hash: $_sha1
-''',
-    );
-    final signer = MacOsSigner(tools: tools);
-    final identity = (await signer.availableIdentities())!.single;
-
-    final signed = await signer.sign(
-      binary: '/tmp/tool',
-      team: 'TEAM123456',
-      codeId: 'io.example.tool',
-      selectedIdentity: identity,
-      expectedCertificateSha256: _sha256,
-    );
-
-    expect(signed.ok, isTrue);
-    expect(signed.certificate, _name);
-    expect(signed.certificateSha256, _sha256);
-    expect(
-      tools.calls.where((call) => call.startsWith('codesign --force')).single,
-      contains('--sign $_sha1 /tmp/tool'),
-    );
+    expect(identities, hasLength(1));
+    expect(identities!.single.name, _name);
+    expect(identities.single.team, 'TEAM123456');
+    expect(identities.single.sha1, _sha1);
   });
 
   test(
-    'an unreadable fingerprint fails before codesign can mutate bytes',
+    'signs with the identity it is given, asking the keychain nothing',
     () async {
-      final tools = _tools(certificateOutput: '');
-      final signer = MacOsSigner(tools: tools);
+      final tools = _tools();
 
-      final signed = await signer.sign(
+      final signed = await MacOsSigner(tools: tools).sign(
         binary: '/tmp/tool',
-        team: 'TEAM123456',
+        identity: _identity,
         codeId: 'io.example.tool',
       );
 
-      expect(signed.ok, isFalse);
-      expect(signed.problem, contains('fingerprint could not be read'));
+      expect(signed.ok, isTrue);
       expect(
-        tools.calls.where((call) => call.startsWith('codesign --force')),
-        isEmpty,
+        tools.calls.single,
+        allOf(
+          startsWith('codesign --force --timestamp --options=runtime'),
+          contains('--identifier io.example.tool'),
+          endsWith('--sign $_sha1 /tmp/tool'),
+        ),
       );
     },
   );
@@ -99,7 +52,6 @@ SHA-1 hash: $_sha1
         String? constraint;
         String? constraintPath;
         final tools = _tools(
-          certificateOutput: 'SHA-256 hash: $_sha256\nSHA-1 hash: $_sha1\n',
           onSign: (key) {
             call = key;
             constraintPath = key
@@ -114,12 +66,12 @@ SHA-1 hash: $_sha1
 
         final signed = await MacOsSigner(tools: tools).sign(
           binary: '/tmp/runtime',
-          team: 'TEAM123456',
+          identity: _identity,
           codeId: 'io.example.tool',
           pinnedLibraries: [module, other],
         );
 
-        expect(signed.ok, isTrue, reason: signed.problem);
+        expect(signed.ok, isTrue, reason: signed.transcript);
         expect(
           call,
           contains('--enforce-constraint-validity'),
@@ -144,13 +96,11 @@ SHA-1 hash: $_sha1
     );
 
     test('a signature with nothing to pin carries no constraint', () async {
-      final tools = _tools(
-        certificateOutput: 'SHA-256 hash: $_sha256\nSHA-1 hash: $_sha1\n',
-      );
+      final tools = _tools();
 
       await MacOsSigner(
         tools: tools,
-      ).sign(binary: '/tmp/tool', team: 'TEAM123456', codeId: 'io.example');
+      ).sign(binary: '/tmp/tool', identity: _identity, codeId: 'io.example');
 
       expect(
         tools.calls.singleWhere((call) => call.startsWith('codesign --force')),
@@ -158,29 +108,8 @@ SHA-1 hash: $_sha1
       );
     });
 
-    test(
-      'a malformed code hash is refused before anything is signed',
-      () async {
-        final tools = _tools(
-          certificateOutput: 'SHA-256 hash: $_sha256\nSHA-1 hash: $_sha1\n',
-        );
-
-        final signed = await MacOsSigner(tools: tools).sign(
-          binary: '/tmp/runtime',
-          team: 'TEAM123456',
-          codeId: 'io.example.tool',
-          pinnedLibraries: ['not a hash'],
-        );
-
-        expect(signed.ok, isFalse);
-        expect(signed.problem, contains('malformed'));
-        expect(tools.calls, isEmpty);
-      },
-    );
-
     test('code hashes are every candidate codesign displays', () async {
       final tools = _tools(
-        certificateOutput: '',
         displays: {
           'codesign -dvvv /tmp/app.aot': ToolResult(
             exitCode: 0,
@@ -207,7 +136,6 @@ SHA-1 hash: $_sha1
       'a module whose code hash cannot be read answers null with codesign',
       () async {
         final tools = _tools(
-          certificateOutput: '',
           displays: {
             'codesign -dvvv /tmp/app.aot': ToolResult(
               exitCode: 1,
@@ -232,7 +160,6 @@ SHA-1 hash: $_sha1
 }
 
 RecordingTools _tools({
-  required String certificateOutput,
   void Function(String key)? onSign,
   Map<String, ToolResult> displays = const {},
 }) => RecordingTools(
@@ -253,9 +180,6 @@ RecordingTools _tools({
   answers: (key) {
     if (key == 'security find-identity -v -p codesigning') {
       return ToolResult(exitCode: 0, stdout: '1) $_sha1 "$_name"', stderr: '');
-    }
-    if (key.startsWith('security find-certificate')) {
-      return ToolResult(exitCode: 0, stdout: certificateOutput, stderr: '');
     }
     if (key.startsWith('codesign -d -r-')) {
       return ToolResult(

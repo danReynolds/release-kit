@@ -174,6 +174,27 @@ void main() {
         isNull,
       );
     });
+
+    // Letter-leading team ids print bare (leaf[subject.OU] = Q6L2SF6YDW),
+    // digit-leading ones quoted (= "2DC432GLL2"). The leading quoted
+    // identifier is a decoy: only anchoring on subject.OU finds the team.
+    test('the team is read from a bare or a quoted OU', () {
+      expect(
+        BinaryChain.teamOf(
+          'designated => identifier "TOOL" and certificate '
+          'leaf[subject.OU] = Q6L2SF6YDW',
+        ),
+        'Q6L2SF6YDW',
+      );
+      expect(
+        BinaryChain.teamOf(
+          'designated => identifier rk and certificate '
+          'leaf[subject.OU] = "2DC432GLL2"',
+        ),
+        '2DC432GLL2',
+      );
+      expect(BinaryChain.teamOf('designated => identifier "TOOL"'), isNull);
+    });
   });
 
   group('builds', () {

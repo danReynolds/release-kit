@@ -167,7 +167,6 @@ final class ReleaseStageCoordinator {
           publishedRequirement: signature['published_requirement'] as String?,
           firstIdentity: signature['first_identity']! as bool,
           certificateName: signature['certificate']! as String,
-          certificateSha256: signature['certificate_sha256']! as String,
           designatedRequirement: signature['designated_requirement'] as String?,
           codeId: signature['code_id']! as String,
         );
@@ -710,7 +709,6 @@ final class ReleaseStageCoordinator {
           certificateName: keychain.identity!.name,
           codeId: codeId,
           identity: keychain.identity,
-          certificateSha256: keychain.certificateSha256,
         );
       }
     }
@@ -720,8 +718,10 @@ final class ReleaseStageCoordinator {
     return (value: signing);
   }
 
-  Future<({bool ok, SigningIdentity? identity, String? certificateSha256})>
-  _signingCertificate(ResolvedUnit unit, String? publishedRequirement) async {
+  Future<({bool ok, SigningIdentity? identity})> _signingCertificate(
+    ResolvedUnit unit,
+    String? publishedRequirement,
+  ) async {
     final signer = MacOsSigner(tools: tools);
     final certificates = await signer.availableIdentities();
     Diagnostic? refusal;
@@ -745,10 +745,10 @@ final class ReleaseStageCoordinator {
       );
     } else if (publishedRequirement != null &&
         BinaryChain.teamOf(publishedRequirement) == null) {
-      // The sign step also refuses this as RK-SIGN-001. The requirement is in
-      // hand here, so the question "can rk tell which certificate reproduces
-      // this?" is answerable before stage work begins and does not change by
-      // waiting.
+      // The requirement is in hand here, so the question "can rk tell which
+      // certificate reproduces this?" is answerable before stage work begins
+      // and does not change by waiting. The sign step signs with the
+      // certificate chosen here.
       refusal = Diagnostic(
         code: 'RK-SIGN-001',
         message: 'the published release names no team rk can read',
@@ -762,10 +762,9 @@ final class ReleaseStageCoordinator {
             .where((c) => c.team == BinaryChain.teamOf(publishedRequirement))
             .isEmpty) {
       // The likeliest signing failure of all — a machine that has a
-      // certificate, just not the one the published release names — and the
-      // last one this preflight learned to catch. `MacOsSigner.sign` also
-      // refuses it, but checking here avoids spending time producing a stage
-      // whose signing identity can never match the published baseline.
+      // certificate, just not the one the published release names — caught
+      // before any time goes into a stage whose signing identity can never
+      // match the published baseline.
       refusal = Diagnostic(
         code: 'RK-SIGN-010',
         message: 'no certificate for the team the published release names',
@@ -812,7 +811,7 @@ final class ReleaseStageCoordinator {
     if (refusal != null) {
       output.problem(refusal, unit: unit.name);
       output.halt(HaltKind.beforeActing);
-      return (ok: false, identity: null, certificateSha256: null);
+      return (ok: false, identity: null);
     }
     final selected = publishedRequirement == null
         ? certificates!.single
@@ -820,26 +819,7 @@ final class ReleaseStageCoordinator {
             (certificate) =>
                 certificate.team == BinaryChain.teamOf(publishedRequirement),
           );
-    final fingerprint = await signer.certificateSha256(selected);
-    if (fingerprint == null) {
-      output.problem(
-        Diagnostic(
-          code: 'RK-SIGN-012',
-          message:
-              'the selected signing certificate fingerprint could not '
-              'be read',
-          remedy:
-              '`security find-certificate -a -c '
-              '"${selected.name}" -Z` must report the SHA-256 and SHA-1 '
-              'hashes for the exact identity selected by '
-              '`security find-identity`.',
-        ),
-        unit: unit.name,
-      );
-      output.halt(HaltKind.beforeActing);
-      return (ok: false, identity: null, certificateSha256: null);
-    }
-    return (ok: true, identity: selected, certificateSha256: fingerprint);
+    return (ok: true, identity: selected);
   }
 
   /// The designated requirement of the newest already-published release,
@@ -960,8 +940,7 @@ final class ReleaseStageCoordinator {
               ? MacSigning(
                   publishedRequirement: signing!.publishedRequirement,
                   codeId: signing.codeId,
-                  identity: signing.identity,
-                  certificateSha256: signing.certificateSha256,
+                  identity: signing.identity!,
                 )
               : null,
         );

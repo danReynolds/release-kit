@@ -201,7 +201,6 @@ class BinaryChain {
     final artifact = ReleaseAssets.binaryArtifact(project, platform);
     final root = ReleaseAssets.binaryRoot(project, platform);
     final published = signing.publishedRequirement;
-    final team = published == null ? null : teamOf(published);
     LocalProducerOutcome fail(
       String code,
       String message, {
@@ -219,73 +218,32 @@ class BinaryChain {
       return LocalProducerOutcome.failed(message);
     }
 
-    if (published != null && team == null) {
-      return fail(
-        'RK-SIGN-001',
-        'the published requirement has no readable team',
-      );
-    }
     final signer = MacOsSigner(tools: tools);
     final signatures = <String, Map<String, Object?>>{};
     // Library validation admits any library signed by the same team, so the
     // runtime's signature also admits only the modules this bundle ships.
     // Those are signed first and their final code hashes go into it.
     final shipped = <String>{};
-    String? fingerprint = signing.certificateSha256;
     for (final file in artifact.signingOrder) {
       final name = '$root/${file.path}';
       final codeId = '${signing.codeId}${file.codeSuffix}';
-      final isIdentity = file.path == artifact.identityFile;
-      final pins = isIdentity ? (shipped.toList()..sort()) : const <String>[];
+      final pins = file.path == artifact.identityFile
+          ? (shipped.toList()..sort())
+          : const <String>[];
       final signed = await signer.sign(
         binary: workspace.pathOf(name),
-        team: team,
+        identity: signing.identity,
         codeId: codeId,
-        selectedIdentity: signing.identity,
-        expectedCertificateSha256: fingerprint,
         pinnedLibraries: pins,
       );
       if (!signed.ok) {
         return fail(
           'RK-SIGN-002',
-          signed.problem ?? 'signing failed',
+          signed.summary,
           transcript: signed.transcript,
         );
       }
-      fingerprint ??= signed.certificateSha256;
-      if (isIdentity && published != null && signed.requirement != published) {
-        output.problem(
-          Diagnostic(
-            code: 'RK-SIGN-003',
-            message:
-                'the signature does not match the identity users already installed',
-            remedy:
-                'Restore the published signing identity. A deliberate identity migration requires a separate plan.',
-          ),
-          unit: step.unit,
-        );
-        output.step(
-          step,
-          mark: Mark.blocked,
-          verdict: Verdict.conflict,
-          evidence: {'published': published, 'produced': signed.requirement!},
-          show: true,
-        );
-        return LocalProducerOutcome.failed(
-          'the produced signature differs from the published identity',
-          output.report.acted
-              ? HaltKind.actedAndUnfixable
-              : HaltKind.unfixableByRerun,
-        );
-      }
-      final record = <String, Object?>{
-        'first_identity': published == null,
-        'published_requirement': isIdentity ? published : null,
-        'designated_requirement': signed.requirement,
-        'code_id': codeId,
-        'certificate': signed.certificate,
-        'certificate_sha256': signed.certificateSha256,
-      };
+      final record = <String, Object?>{'code_id': codeId};
       if (file.loadedByIdentity) {
         final reading = await signer.codeDirectoryHashes(
           workspace.pathOf(name),
@@ -301,11 +259,51 @@ class BinaryChain {
         shipped.addAll(hashes);
         record['cdhashes'] = hashes;
       }
-      if (isIdentity && pins.isNotEmpty) {
-        record['pinned_library_cdhashes'] = pins;
-      }
+      if (pins.isNotEmpty) record['pinned_library_cdhashes'] = pins;
       signatures[file.path] = record;
     }
+
+    // The process identity users' Keychain items and permissions are tied
+    // to: the runtime's designated requirement, which must be the one
+    // already published.
+    final requirement = await signer.designatedRequirement(
+      workspace.pathOf('$root/${artifact.identityFile}'),
+    );
+    if (requirement == null) {
+      return fail('RK-SIGN-002', 'the signature could not be read back');
+    }
+    if (published != null && requirement != published) {
+      output.problem(
+        Diagnostic(
+          code: 'RK-SIGN-003',
+          message:
+              'the signature does not match the identity users already installed',
+          remedy:
+              'Restore the published signing identity. A deliberate identity migration requires a separate plan.',
+        ),
+        unit: step.unit,
+      );
+      output.step(
+        step,
+        mark: Mark.blocked,
+        verdict: Verdict.conflict,
+        evidence: {'published': published, 'produced': requirement},
+        show: true,
+      );
+      return LocalProducerOutcome.failed(
+        'the produced signature differs from the published identity',
+        output.report.acted
+            ? HaltKind.actedAndUnfixable
+            : HaltKind.unfixableByRerun,
+      );
+    }
+    signatures[artifact.identityFile] = {
+      ...signatures[artifact.identityFile]!,
+      'first_identity': published == null,
+      'published_requirement': published,
+      'designated_requirement': requirement,
+      'certificate': signing.identity.name,
+    };
     final signedSmoke = await tools.run(
       workspace.pathOf('$root/${artifact.entryPoint}'),
       const ['--version'],
@@ -593,8 +591,7 @@ final class MacSigning {
   const MacSigning({
     required this.publishedRequirement,
     required this.codeId,
-    this.identity,
-    this.certificateSha256,
+    required this.identity,
   });
 
   /// The designated requirement of the release users already installed, or
@@ -602,8 +599,10 @@ final class MacSigning {
   final String? publishedRequirement;
 
   final String codeId;
-  final SigningIdentity? identity;
-  final String? certificateSha256;
+
+  /// The certificate the preflight chose: the one Developer ID on a first
+  /// release, or the one for the published release's team.
+  final SigningIdentity identity;
 }
 
 /// One stage-relative file a local producer created or authoritatively reused.

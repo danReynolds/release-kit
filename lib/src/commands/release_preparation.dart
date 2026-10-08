@@ -24,7 +24,6 @@ final class ReleaseSigningContext {
     required this.certificateName,
     required this.codeId,
     this.identity,
-    this.certificateSha256,
     this.designatedRequirement,
   });
 
@@ -36,7 +35,6 @@ final class ReleaseSigningContext {
   /// Present only while producing a new stage. Reuse needs recorded facts,
   /// not live keychain state.
   final SigningIdentity? identity;
-  final String? certificateSha256;
   final String? designatedRequirement;
 
   String? get firstCertificate => firstIdentity ? certificateName : null;
@@ -45,7 +43,6 @@ final class ReleaseSigningContext {
       publishedRequirement == other.publishedRequirement &&
       firstIdentity == other.firstIdentity &&
       certificateName == other.certificateName &&
-      certificateSha256 == other.certificateSha256 &&
       designatedRequirement == other.designatedRequirement &&
       codeId == other.codeId;
 }

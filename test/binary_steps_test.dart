@@ -13,11 +13,17 @@ import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/workspace.dart';
+import 'package:rk/src/transforms/macos.dart';
 import 'package:test/test.dart';
 
 final _certificateSha1 = 'a' * 40;
-final _otherCertificateSha1 = 'b' * 40;
-final _certificateSha256 = 'c' * 64;
+
+/// The certificate the preflight chose.
+final _identity = SigningIdentity(
+  name: 'Developer ID Application: Dan (TEAM123456)',
+  team: 'TEAM123456',
+  sha1: _certificateSha1,
+);
 
 /// The chain, one step at a time — each step gets a FRESH chain instance
 /// over the same workspace, which is the no-state proof: everything a later
@@ -105,24 +111,6 @@ executables:
             stderr: '',
           );
         }
-        if (key.startsWith('security find-identity')) {
-          return ToolResult(
-            exitCode: 0,
-            stdout:
-                '1) $_certificateSha1 '
-                '"Developer ID Application: Dan (TEAM123456)"',
-            stderr: '',
-          );
-        }
-        if (key.startsWith('security find-certificate')) {
-          return ToolResult(
-            exitCode: 0,
-            stdout:
-                'SHA-256 hash: $_certificateSha256\n'
-                'SHA-1 hash: $_certificateSha1\n',
-            stderr: '',
-          );
-        }
         if (key.startsWith('xcrun notarytool submit')) {
           return ToolResult(
             exitCode: 0,
@@ -184,7 +172,8 @@ executables:
     final built = await chain(tools).buildStep(
       step(StepKind.build),
       project,
-      signing: const MacSigning(
+      signing: MacSigning(
+        identity: _identity,
         publishedRequirement: null,
         codeId: 'com.example.tool',
       ),
@@ -215,7 +204,6 @@ executables:
       signature['certificate'],
       'Developer ID Application: Dan (TEAM123456)',
     );
-    expect(signature['certificate_sha256'], _certificateSha256);
 
     final notarized = await chain(
       tools,
@@ -255,7 +243,8 @@ executables:
   });
 
   group('the runtime admits only the module it ships', () {
-    const signing = MacSigning(
+    final signing = MacSigning(
+      identity: _identity,
       publishedRequirement: null,
       codeId: 'com.example.tool',
     );
@@ -334,7 +323,8 @@ executables:
     final ok = await chain(tools).buildStep(
       step(StepKind.build),
       project,
-      signing: const MacSigning(
+      signing: MacSigning(
+        identity: _identity,
         publishedRequirement:
             'designated => identifier "com.example.tool" and certificate '
             'leaf[subject.OU] = "TEAM123456" and leaf "OLD"',
@@ -361,27 +351,6 @@ executables:
     expect(buffer.toString(), contains('leaf "NEW"'));
   });
 
-  test(
-    'the team is derived from the published requirement, not declared',
-    () async {
-      final tools = scripted(
-        designatedRequirement:
-            'designated => identifier "com.example.tool" and certificate leaf[subject.OU] = "TEAM123456"',
-      );
-      final ok = await chain(tools).buildStep(
-        step(StepKind.build),
-        project,
-        signing: const MacSigning(
-          // Nothing declared: derivation must carry the team.
-          publishedRequirement:
-              'designated => identifier "com.example.tool" and certificate leaf[subject.OU] = "TEAM123456"',
-          codeId: 'com.example.tool',
-        ),
-      );
-      expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
-    },
-  );
-
   test('a first release discovers the one certificate, and names the '
       'identity it just made permanent', () async {
     // Nothing to declare: capabilities are discovered, and a machine with
@@ -393,7 +362,8 @@ executables:
     final ok = await chain(tools).buildStep(
       step(StepKind.build),
       project,
-      signing: const MacSigning(
+      signing: MacSigning(
+        identity: _identity,
         publishedRequirement: null,
         codeId: 'io.github.example.tool',
       ),
@@ -423,138 +393,6 @@ executables:
     );
   });
 
-  test(
-    'several certificates and nothing published is a refusal, not a guess',
-    () async {
-      final tools = BundleRecordingTools(
-        answers: (key) {
-          if (key.startsWith('dart compile exe')) {
-            return ToolResult(exitCode: 0, stdout: '', stderr: '');
-          }
-          if (key.contains('--version')) {
-            return ToolResult(exitCode: 0, stdout: '1.0.0', stderr: '');
-          }
-          if (key.startsWith('security find-identity')) {
-            return ToolResult(
-              exitCode: 0,
-              stdout:
-                  '1) $_certificateSha1 '
-                  '"Developer ID Application: One (TEAM111111)"\n'
-                  '2) $_otherCertificateSha1 '
-                  '"Developer ID Application: Two (TEAM222222)"',
-              stderr: '',
-            );
-          }
-          return null;
-        },
-        onRun: (key) {
-          if (key.startsWith('dart compile exe')) {
-            File(
-                workspace.pathOf(
-                  BinaryChain.binaryName('tool', 'macos-arm64', 'tool'),
-                ),
-              )
-              ..parent.createSync(recursive: true)
-              ..writeAsBytesSync(utf8.encode('BINARY 1.0.0'));
-          }
-        },
-      );
-
-      final ok = await chain(tools).buildStep(
-        step(StepKind.build),
-        project,
-        signing: const MacSigning(publishedRequirement: null, codeId: 'tool'),
-      );
-      expect(ok.ok, isFalse);
-      expect(buffer.toString(), contains('TEAM111111'));
-      expect(buffer.toString(), contains('TEAM222222'));
-    },
-  );
-
-  test('the team is read from an unquoted OU — codesign only quotes teams '
-      'that need it', () async {
-    // Live evidence: letter-leading team ids print bare
-    // (leaf[subject.OU] = Q6L2SF6YDW), digit-leading print quoted
-    // (= "2DC432GLL2"). The quoted-only parser returned null for every
-    // letter-leading team and misread an established identity as "no team
-    // rk can read".
-    final tools = BundleRecordingTools(
-      answers: (key) {
-        if (key.startsWith('dart compile exe')) {
-          return ToolResult(exitCode: 0, stdout: '', stderr: '');
-        }
-        if (key.contains('--version')) {
-          return ToolResult(exitCode: 0, stdout: '1.0.0', stderr: '');
-        }
-        if (key.startsWith('codesign -d -r-')) {
-          // The leading quoted identifier is a decoy: a parser matching any
-          // quoted uppercase token reads "TOOL" as the team and picks no
-          // certificate at all. Only anchoring on subject.OU finds the team.
-          return ToolResult(
-            exitCode: 0,
-            stdout:
-                'designated => identifier "TOOL" and certificate '
-                'leaf[subject.OU] = Q6L2SF6YDW',
-            stderr: '',
-          );
-        }
-        if (key.startsWith('security find-identity')) {
-          return ToolResult(
-            exitCode: 0,
-            stdout:
-                '1) $_certificateSha1 '
-                '"Developer ID Application: Dan (Q6L2SF6YDW)"',
-            stderr: '',
-          );
-        }
-        if (key.startsWith('security find-certificate')) {
-          return ToolResult(
-            exitCode: 0,
-            stdout:
-                'SHA-256 hash: $_certificateSha256\n'
-                'SHA-1 hash: $_certificateSha1\n',
-            stderr: '',
-          );
-        }
-        return null;
-      },
-      onRun: (key) {
-        if (key.startsWith('dart compile exe')) {
-          File(
-              workspace.pathOf(
-                BinaryChain.binaryName('tool', 'macos-arm64', 'tool'),
-              ),
-            )
-            ..parent.createSync(recursive: true)
-            ..writeAsBytesSync(utf8.encode('BINARY 1.0.0'));
-        }
-      },
-    );
-    final ok = await chain(tools).buildStep(
-      step(StepKind.build),
-      project,
-      // Derivation must carry the unquoted team.
-      signing: const MacSigning(
-        publishedRequirement:
-            'designated => identifier "TOOL" and '
-            'certificate leaf[subject.OU] = Q6L2SF6YDW',
-        codeId: 'TOOL',
-      ),
-    );
-    expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
-    expect(
-      tools.calls.any(
-        (c) =>
-            c.contains('codesign --force') &&
-            c.contains('--sign $_certificateSha1'),
-      ),
-      isTrue,
-      reason:
-          'the exact certificate token for the derived team signs; its '
-          'display name is not a unique keychain selector',
-    );
-  });
-
   test('a produced requirement that merely extends the published one is '
       'still a mismatch', () async {
     // Equality, not prefix: a requirement with extra clauses appended is a
@@ -568,7 +406,8 @@ executables:
     final ok = await chain(tools).buildStep(
       step(StepKind.build),
       project,
-      signing: const MacSigning(
+      signing: MacSigning(
+        identity: _identity,
         publishedRequirement: published,
         codeId: 'com.example.tool',
       ),
@@ -591,7 +430,8 @@ executables:
     final ok = await chain(tools).buildStep(
       step(StepKind.build),
       project,
-      signing: const MacSigning(
+      signing: MacSigning(
+        identity: _identity,
         publishedRequirement: published,
         // Resolved by the caller before anything acts.
         codeId: 'io.github.example.tool',
