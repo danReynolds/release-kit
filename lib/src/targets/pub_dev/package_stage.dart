@@ -7,6 +7,7 @@ import '../../engine/resolve.dart';
 import '../../engine/stage.dart';
 import '../../engine/stage_contract.dart';
 import '../../engine/stage_receipt.dart';
+import '../../engine/stage_source.dart';
 import '../../engine/targets.dart';
 import '../../engine/tools.dart';
 import '../../output/progress.dart';
@@ -129,7 +130,7 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
   // override but the repository packages it takes from this source. Pub
   // leaves overrides files out of archives, so the one written here does
   // not change what is published.
-  final consumer = _mirrorSource(context);
+  final consumer = _mirrorSource(context, project);
   late final ToolResult packaged;
   late final String resolvedAs;
   late final Set<String> takenFromSource;
@@ -146,12 +147,33 @@ Future<({Diagnostic? diagnostic, List<Diagnostic> warnings})> _packageArchiveTo(
     // workspace that only its development needs.
     final members =
         resolutionPackages(sourceRoot, directory).packages ?? const {};
+    final development = {
+      for (final name in developmentMembers(members, project.name))
+        name: members[name]!,
+    };
     final fromSource = {
       for (final MapEntry(key: name, value: path) in context.fromSource.entries)
         name: inSource(path),
-      for (final name in developmentMembers(members, project.name))
-        name: members[name]!,
+      ...development,
     }..remove(project.name);
+    // The mirror holds the package and what the plan takes from this
+    // source; what only its development needs is known now, from the
+    // workspace's pubspecs.
+    final developing = [
+      for (final path in development.values)
+        if (path != directory)
+          path == sourceRoot ? '.' : path.substring(sourceRoot.length + 1),
+    ];
+    if (developing.isNotEmpty) {
+      context.source.export(
+        sourceRoot,
+        only: (path) => developing.any(
+          (member) =>
+              member == '.' || path == member || path.startsWith('$member/'),
+        ),
+      );
+      _removePubRecords(sourceRoot);
+    }
 
     // A Flutter package, or one that takes a Flutter package from this
     // source, needs a Flutter SDK's Dart, whose pub finds its own Flutter.
@@ -382,10 +404,11 @@ String _relativePath(String from, String to) {
 /// Release stages deliberately live under `.rk/`, which repositories normally
 /// ignore, and Pub walks ancestor Git ignore rules when it builds a package:
 /// beneath a repository, the whole package can look ignored and produce an
-/// empty archive. The mirror holds the tracked files with their modes and
-/// the workspace layout, under `source/`, and is deleted after the archive
+/// empty archive. The mirror holds, with their modes and under `source/`,
+/// the files a Dart build of the package reads (see
+/// [StageSourceSnapshot.dartBuildInputs]), and is deleted after the archive
 /// command finishes.
-Directory _mirrorSource(TargetStageContext context) {
+Directory _mirrorSource(TargetStageContext context, ResolvedProject project) {
   final mirror = Directory.systemTemp.createTempSync('rk-pub-source-');
   try {
     final gitControl = _gitControlAncestor(mirror.path);
@@ -396,7 +419,13 @@ Directory _mirrorSource(TargetStageContext context) {
       );
     }
     final source = _join(mirror.path, const ['source']);
-    context.source.export(source);
+    context.source.export(
+      source,
+      only: StageSourceSnapshot.dartBuildInputs(
+        project.pubspec.directory,
+        packages: context.fromSource.values,
+      ),
+    );
     // Records the source tracks are not Pub's answer for it, and a lockfile
     // holds versions its consumers do not get.
     _removePubRecords(source);

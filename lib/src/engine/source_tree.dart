@@ -216,15 +216,9 @@ class GitSourceTree implements SourceTree {
   ) async {
     final result = <String, Uint8List>{};
     final batched = <String>[];
-    final cacheable = _CommittedObjects.isObjectId(commit);
     for (final path in paths) {
       _resolve(path); // validates that [path] cannot escape the repository.
-      final cached = cacheable
-          ? _CommittedObjects.blobs[_CommittedObjects.key(root, commit, path)]
-          : null;
-      if (cached != null) {
-        result[path] = Uint8List.fromList(cached);
-      } else if (path.contains('\n')) {
+      if (path.contains('\n')) {
         result[path] = Uint8List.fromList(readBytesAt(commit, path));
       } else {
         batched.add(path);
@@ -272,13 +266,7 @@ class GitSourceTree implements SourceTree {
       if (start + size > stdoutBytes.length) {
         throw SourceUnreadable(path, 'git cat-file returned a short object');
       }
-      result[path] = stdoutBytes.sublist(start, start + size);
-      if (cacheable) {
-        _CommittedObjects.remember(
-          _CommittedObjects.key(root, commit, path),
-          result[path]!,
-        );
-      }
+      result[path] = Uint8List.sublistView(stdoutBytes, start, start + size);
       at = start + size + 1; // the newline that closes the object
     }
     return result;
@@ -286,15 +274,7 @@ class GitSourceTree implements SourceTree {
 
   List<int> readBytesAt(String commit, String path) {
     _resolve(path); // validates that [path] cannot escape the repository.
-    if (!_CommittedObjects.isObjectId(commit)) {
-      return _showBytesAt(commit, path);
-    }
-    final key = _CommittedObjects.key(root, commit, path);
-    final cached = _CommittedObjects.blobs[key];
-    if (cached != null) return Uint8List.fromList(cached);
-    final bytes = _showBytesAt(commit, path);
-    _CommittedObjects.remember(key, bytes);
-    return bytes;
+    return _showBytesAt(commit, path);
   }
 
   List<int> _showBytesAt(String commit, String path) {
@@ -741,12 +721,6 @@ class SourceUnreadable implements Exception {
 /// cached: they move.
 abstract final class _CommittedObjects {
   static final Map<String, List<GitTreeEntry>> trees = {};
-  static final Map<String, Uint8List> blobs = {};
-
-  /// Past this many cached bytes, reads go back to git rather than growing
-  /// the cache without bound in a very large repository.
-  static const int _budget = 256 * 1024 * 1024;
-  static int _bytes = 0;
 
   static final _objectId = RegExp(r'^(?:[0-9a-f]{40}|[0-9a-f]{64})$');
 
@@ -754,12 +728,5 @@ abstract final class _CommittedObjects {
 
   /// The key of [commit]'s tree in the repository at [root], or of the blob
   /// at [path] in it.
-  static String key(String root, String commit, [String? path]) =>
-      path == null ? '$root\u0000$commit' : '$root\u0000$commit\u0000$path';
-
-  static void remember(String key, List<int> bytes) {
-    if (blobs.containsKey(key) || _bytes + bytes.length > _budget) return;
-    blobs[key] = Uint8List.fromList(bytes);
-    _bytes += bytes.length;
-  }
+  static String key(String root, String commit) => '$root\u0000$commit';
 }

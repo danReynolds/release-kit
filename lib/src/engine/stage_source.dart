@@ -94,7 +94,8 @@ final class StageSourceSnapshot implements SourceTree {
       if (bytes == null) {
         throw StateError('tracked source disappeared while staging: $path');
       }
-      files[path] = Uint8List.fromList(bytes).asUnmodifiableView();
+      files[path] = (bytes is Uint8List ? bytes : Uint8List.fromList(bytes))
+          .asUnmodifiableView();
     }
     return StageSourceSnapshot._(
       source.description,
@@ -133,10 +134,53 @@ final class StageSourceSnapshot implements SourceTree {
         _files.keys.any((file) => file.startsWith('$normalized/'));
   }
 
-  /// Writes every file, with its mode, beneath the empty directory [root].
-  void export(String root) {
+  /// The directories that hold a `pubspec.yaml`: this source's Dart
+  /// packages.
+  Set<String> get packageDirectories => {
+    for (final path in _files.keys)
+      if (path == 'pubspec.yaml' || path.endsWith('/pubspec.yaml'))
+        path == 'pubspec.yaml'
+            ? '.'
+            : path.substring(0, path.length - '/pubspec.yaml'.length),
+  };
+
+  /// The files a Dart build of the package at [directory] reads from this
+  /// source: the package itself, the [packages] it takes from here (their
+  /// directories), every `pubspec.yaml`, which is how Pub and rk find a
+  /// workspace and its members, and the files directly inside each
+  /// directory above the package, such as analysis options and ignore
+  /// rules. Nothing else in the repository reaches the build.
+  static bool Function(String path) dartBuildInputs(
+    String directory, {
+    Iterable<String> packages = const [],
+  }) {
+    final trees = {directory, ...packages}.map(_path).toSet();
+    final above = <String>{''};
+    final parts = _path(directory).split('/');
+    for (var end = 1; end < parts.length; end++) {
+      above.add(parts.take(end).join('/'));
+    }
+    return (path) {
+      if (trees.any(
+        (tree) => tree.isEmpty || path == tree || path.startsWith('$tree/'),
+      )) {
+        return true;
+      }
+      if (path == 'pubspec.yaml' || path.endsWith('/pubspec.yaml')) {
+        return true;
+      }
+      final cut = path.lastIndexOf('/');
+      return above.contains(cut < 0 ? '' : path.substring(0, cut));
+    };
+  }
+
+  /// Writes the files [only] selects, every file when it is null, with
+  /// their modes, beneath [root]. Exporting into a directory that already
+  /// holds part of this source adds the rest.
+  void export(String root, {bool Function(String path)? only}) {
     final modes = <String, String>{};
     for (final MapEntry(key: path, value: bytes) in _files.entries) {
+      if (only != null && !only(path)) continue;
       final file = File(
         [root, ...StagePath.segments(path)].join(Platform.pathSeparator),
       );
@@ -146,9 +190,12 @@ final class StageSourceSnapshot implements SourceTree {
     }
     setFileModes(modes);
     for (final MapEntry(key: path, value: target) in _links.entries) {
-      Link(
+      if (only != null && !only(path)) continue;
+      final link = Link(
         [root, ...StagePath.segments(path)].join(Platform.pathSeparator),
-      ).createSync(target, recursive: true);
+      );
+      if (link.existsSync()) continue;
+      link.createSync(target, recursive: true);
     }
   }
 }

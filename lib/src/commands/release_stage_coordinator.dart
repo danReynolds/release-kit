@@ -346,7 +346,10 @@ final class ReleaseStageCoordinator {
       try {
         final laneSource = laneSources.putIfAbsent(
           laneName,
-          () => ProducerLaneSource.export(source),
+          () => ProducerLaneSource.export(
+            source,
+            project: unit.project(step.project!),
+          ),
         );
         final chain = laneChains.putIfAbsent(
           laneName,

@@ -1000,6 +1000,55 @@ publish = ["git-tag", "pub.dev"]
           );
         });
 
+        test('from a mirror of what Pub reads, and nothing else', () async {
+          // The mirror grew with the repository: every tracked file, for
+          // every package, on every stage.
+          late List<String> mirrored;
+          final run = await release(
+            sourceFiles: {
+              ...siblings,
+              'README.md': '# The repository\n',
+              'analysis_options.yaml': 'linter:\n  rules: []\n',
+              'docs/guide.md': '# A guide nothing builds\n',
+              'packages/keybay/lib/keybay.dart': 'library;\n',
+              'packages/testkit/lib/testkit.dart': 'library;\n',
+              'packages/base/lib/base.dart': 'library;\n',
+              'packages/host/lib/host.dart': 'library;\n',
+            },
+            inspect: (key, directory) {
+              if (key != 'dart pub publish --to-archive <archive>') return;
+              final source = Directory(directory).parent.parent;
+              mirrored = [
+                for (final entry in source.listSync(recursive: true))
+                  if (entry is File &&
+                      !entry.path.endsWith('pubspec_overrides.yaml'))
+                    entry.path.substring(source.path.length + 1),
+              ]..sort();
+            },
+          );
+
+          expect(run.code, ExitCodes.ok, reason: run.text);
+          expect(
+            mirrored,
+            [
+              'README.md',
+              'analysis_options.yaml',
+              'packages/base/pubspec.yaml',
+              'packages/host/pubspec.yaml',
+              'packages/keybay/CHANGELOG.md',
+              'packages/keybay/lib/keybay.dart',
+              'packages/keybay/pubspec.yaml',
+              'packages/testkit/lib/testkit.dart',
+              'packages/testkit/pubspec.yaml',
+              'pubspec.yaml',
+            ],
+            reason:
+                'keybay, testkit it develops with, every pubspec, and the '
+                'files beside the directories above keybay; base comes from '
+                'pub.dev, and docs and host are not read',
+          );
+        });
+
         test('without the lockfiles the snapshot tracks', () async {
           // A lockfile holds the versions an earlier resolution picked, and
           // its consumers resolve without it.
