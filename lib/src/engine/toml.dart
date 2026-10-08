@@ -313,8 +313,22 @@ class _Parser {
     final inner = text.substring(1, text.length - 1).trim();
     if (inner.isEmpty) return const [];
 
+    // The commas between items, never one inside a string: escapes are
+    // refused, so every quote opens or closes one.
+    final parts = <String>[];
+    var start = 0;
+    var quoted = false;
+    for (var i = 0; i < inner.length; i++) {
+      if (inner[i] == '"') quoted = !quoted;
+      if (inner[i] == ',' && !quoted) {
+        parts.add(inner.substring(start, i));
+        start = i + 1;
+      }
+    }
+    parts.add(inner.substring(start));
+
     final items = <String>[];
-    for (final part in inner.split(',')) {
+    for (final part in parts) {
       final item = part.trim();
       if (item.isEmpty) continue; // a trailing comma is fine
       if (!item.startsWith('"')) {
