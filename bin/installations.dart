@@ -13,7 +13,6 @@ import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/installations/discovery.dart';
 import 'package:rk/src/installations/local.dart';
 import 'package:rk/src/installations/provider.dart';
-import 'package:rk/src/installations/recovery.dart';
 import 'package:rk/src/installations/manager.dart';
 import 'package:rk/src/installations/model.dart';
 import 'package:rk/src/installations/shell_routing.dart';
@@ -24,7 +23,6 @@ import 'package:rk/src/targets/homebrew/installation.dart';
 import 'package:rk/src/targets/pub_dev/installation.dart';
 import 'package:rk/src/tui/installation_picker.dart';
 import 'package:rk/src/tui/use_picker.dart';
-import 'package:rk/src/version.dart';
 
 const installationUsage = '''
 rk use [source] [-p project]       install if needed, then select
@@ -294,38 +292,19 @@ Future<int> _run(
     return states;
   }
 
-  String? recoveryPath;
-  Future<void> preserveSelf(
-    ExecutableProject project,
-    void Function(String) progress,
-  ) async {
-    if (project.name == 'rk' && project.commands.contains('rk')) {
-      recoveryPath ??= await preserveManager(store, tools, progress);
-    }
-  }
-
-  String withRecovery(String message) => [
-    message,
-    if (recoveryPath != null)
-      'Reopen this manager from an rk project:\n${shellQuote(recoveryPath!)} use',
-  ].join('\n');
-
   Future<String> downloadLatest(
     ExecutableProject project,
     AvailableInstallation release,
     void Function(String) progress,
     InstallationCancellation cancellation,
   ) async {
-    await preserveSelf(project, progress);
     cancellation.check();
     output.report.acted = true;
-    final message = withRecovery(
-      await manager.download(
-        project,
-        release,
-        progress: progress,
-        cancellation: cancellation,
-      ),
+    final message = await manager.download(
+      project,
+      release,
+      progress: progress,
+      cancellation: cancellation,
     );
     outcomes.add(message);
     return message;
@@ -337,9 +316,6 @@ Future<int> _run(
     void Function(String) progress,
     InstallationCancellation cancellation,
   ) async {
-    if (action != InstallationAction.install) {
-      await preserveSelf(project, progress);
-    }
     cancellation.check();
     output.report.acted = true;
     final result = await manager.act(
@@ -352,12 +328,7 @@ Future<int> _run(
     final routing = action == InstallationAction.use
         ? await ShellRouting(store, tools, environment).ensure(project)
         : null;
-    final message = [
-      result,
-      if (routing != null) routing,
-      if (recoveryPath != null)
-        'Reopen this manager from an rk project:\n${shellQuote(recoveryPath!)} use',
-    ].join('\n');
+    final message = [result, if (routing != null) routing].join('\n');
     outcomes.add(message);
     return message;
   }
@@ -379,17 +350,14 @@ Future<int> _run(
     void Function(String) progress,
     InstallationCancellation cancellation,
   ) async {
-    await preserveSelf(project, progress);
     cancellation.check();
     output.report.acted = true;
-    final message = withRecovery(
-      await manager.act(
-        project,
-        source,
-        InstallationAction.uninstall,
-        progress: progress,
-        cancellation: cancellation,
-      ),
+    final message = await manager.act(
+      project,
+      source,
+      InstallationAction.uninstall,
+      progress: progress,
+      cancellation: cancellation,
     );
     outcomes.add(message);
     return message;
@@ -408,9 +376,6 @@ Future<int> _run(
             refresh: refresh,
             use: operate,
             uninstall: remove,
-            sessionNote: projects.any((p) => p.name == 'rk')
-                ? 'Running manager: rk $rkVersion'
-                : null,
             checkAvailable: (project, source, check) =>
                 manager.latest(project, source, check: check),
             downloadAvailable: downloadLatest,

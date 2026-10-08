@@ -59,7 +59,6 @@ class UsePicker extends Notifier {
     required this.use,
     required this.close,
     this.uninstall,
-    this.sessionNote,
   });
   List<ProjectInstallations> states;
   final Future<List<ProjectInstallations>> Function() refresh;
@@ -67,7 +66,6 @@ class UsePicker extends Notifier {
   final DownloadAvailable downloadAvailable;
   final InstallationOperation use;
   final InstallationOperation? uninstall;
-  final String? sessionNote;
   (ProjectInstallations, InstallationSource)? removal;
   final void Function() close;
   final available = <SourceKey, AvailableState>{};
@@ -373,7 +371,6 @@ Future<InstallationPickerResult> runUsePicker({
   required DownloadAvailable downloadAvailable,
   required InstallationOperation use,
   required InstallationOperation uninstall,
-  String? sessionNote,
 }) async {
   final model = UsePicker(
     states: states,
@@ -382,7 +379,6 @@ Future<InstallationPickerResult> runUsePicker({
     downloadAvailable: downloadAvailable,
     use: use,
     uninstall: uninstall,
-    sessionNote: sessionNote,
     close: exitApp,
   );
   try {
@@ -637,8 +633,6 @@ class _UseScreenState extends State<UseScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  if (model.sessionNote case final note?)
-                    Text(note, style: mutedText),
                   for (final state in model.states) ...[
                     if (model.states.length > 1)
                       Text(
