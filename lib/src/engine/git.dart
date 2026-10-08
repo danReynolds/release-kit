@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'diagnostic.dart';
 import 'timings.dart';
+import 'tools.dart';
 
 /// The repository facts a release depends on.
 ///
@@ -185,24 +186,6 @@ class GitState {
     return objects;
   }
 
-  /// Paths from `git status --porcelain`, which prefixes every line with two
-  /// status columns and a space.
-  ///
-  /// Read without trimming the whole output first: a worktree-only change is
-  /// reported as `" M path"`, so trimming the block ate the first line's
-  /// leading column and rk named a file that does not exist — `ackages/...`.
-  /// That is the commonest shape this list has, since it is what an
-  /// uncommitted edit looks like.
-  static List<String> _uncommittedIn(String porcelain) => porcelain
-      .split('\n')
-      .where((line) => line.trim().isNotEmpty)
-      // rk's own scratch and evidence directories are not the operator's
-      // uncommitted work. Counting them meant a failed release left debris
-      // that made the next run refuse itself, breaking the resume.
-      .map((line) => line.length > 3 ? line.substring(3) : line.trim())
-      .where((path) => path != '.rk/' && !path.startsWith('.rk/'))
-      .toList();
-
   /// The problem an uncommitted worktree is, with the paths named.
   ///
   /// Shared for the same reason [unpushedProblem] is, and because the drift
@@ -302,82 +285,105 @@ class GitState {
     return result.exitCode == 0 ? _originSlug(result.stdout as String) : null;
   }
 
-  /// Reads the repository's state.
+  /// Reads the repository's state at [root], with every question asked at
+  /// once.
   ///
-  /// The eleven questions git is asked are independent — only "which remote
-  /// branches contain HEAD" needs an answer first — so they are asked
-  /// together rather than one at a time. Sequential `runSync` calls also
-  /// blocked the isolate, which froze every progress row rk was animating.
-  static Future<GitState> read(String root) =>
-      Timings.span('read git state', () => _read(root));
+  /// `git status --porcelain=v2 --branch` answers HEAD, its branch, upstream
+  /// and ahead count beside the uncommitted paths; one config read answers
+  /// the signing key, `tag.gpgSign`, and the remotes. Tags are listed apart
+  /// from the peeled `show-ref`, which fails whole on one unreachable tag
+  /// object: a tag rk can see but not place is RK-GIT-007, never absent.
+  static Future<GitState> read(
+    String root, {
+    Tools tools = const SystemTools(),
+  }) => Timings.span('read git state', () => _read(root, tools));
 
-  static Future<GitState> _read(String root) async {
-    Future<ProcessResult> ask(List<String> args) => Process.run('git', [
+  static Future<GitState> _read(String root, Tools tools) async {
+    Future<ToolResult> ask(List<String> args) => tools.run('git', [
       '--no-optional-locks',
       ...args,
     ], workingDirectory: root);
-    String text(ProcessResult result) =>
-        result.exitCode != 0 ? '' : (result.stdout as String).trim();
+    String text(ToolResult result) => result.ok ? result.stdout.trim() : '';
 
-    final answers = await Future.wait([
-      ask(const ['status', '--porcelain']),
-      ask(const ['rev-parse', 'HEAD']),
-      ask(const ['rev-parse', 'HEAD^{tree}']),
-      ask(const ['rev-parse', '--abbrev-ref', 'HEAD']),
-      ask(const ['config', '--get', 'user.signingkey']),
+    final [
+      status,
+      tree,
+      showRef,
+      tagList,
+      config,
+      containing,
+    ] = await Future.wait([
+      ask(const ['status', '--porcelain=v2', '--branch', '-z']),
+      ask(const ['rev-parse', '--verify', '--quiet', 'HEAD^{tree}']),
       ask(const ['show-ref', '--tags', '-d']),
-      ask(const ['remote']),
-      ask(const ['rev-list', '--count', '@{upstream}..HEAD']),
       ask(const ['tag', '--list']),
-      ask(const ['remote', 'get-url', 'origin']),
-      // Appended, not inserted: the positional reads below are index-addressed.
-      ask(const ['config', '--bool', '--get', 'tag.gpgSign']),
+      ask(const [
+        'config',
+        '--get-regexp',
+        r'^(user\.signingkey|tag\.gpgsign|remote\..*\.url)$',
+      ]),
+      // A commit is fetchable when some remote branch contains it.
+      ask(const ['branch', '-r', '--contains', 'HEAD']),
     ]);
-    final status = answers[0];
-    final statusError = status.exitCode == 0
+    final branch = _StatusV2.parse(status.ok ? status.stdout : '');
+    final statusError = status.ok
         ? null
-        : _processFailure(
+        : _toolFailure(
             status,
             fallback: 'git status exited ${status.exitCode}',
           );
-    final uncommitted = status.exitCode == 0
-        ? _uncommittedIn(status.stdout as String)
-        : const <String>[];
-    final head = text(answers[1]);
-    final branch = text(answers[3]);
-    final showRef = text(answers[5]);
-
-    // A commit is fetchable when some remote branch contains it, so this one
-    // waits for HEAD.
-    final contains = text(await ask(['branch', '-r', '--contains', head]));
+    final settings = _settings(text(config));
+    final showRefText = text(showRef);
 
     return GitState(
       root: root,
-      head: head,
-      headTree: text(answers[2]),
-      branch: branch.isEmpty || branch == 'HEAD' ? null : branch,
-      isClean: statusError == null && uncommitted.isEmpty,
-      uncommitted: uncommitted,
+      head: branch.head,
+      headTree: text(tree),
+      branch: branch.name,
+      isClean: statusError == null && branch.uncommitted.isEmpty,
+      uncommitted: statusError == null ? branch.uncommitted : const [],
       worktreeStatusError: statusError,
-      headIsPushed: contains.trim().isNotEmpty,
-      hasRemote: text(answers[6]).trim().isNotEmpty,
-      aheadOfUpstream: int.tryParse(text(answers[7])),
+      headIsPushed: text(containing).isNotEmpty,
+      hasRemote: settings.keys.any(
+        (key) => key.startsWith('remote.') && key.endsWith('.url'),
+      ),
+      aheadOfUpstream: branch.ahead,
       tags: text(
-        answers[8],
-      ).split('\n').where((t) => t.trim().isNotEmpty).toList(),
-      tagObjects: _tagObjects(showRef),
-      tagTargets: _tagTargets(showRef),
+        tagList,
+      ).split('\n').where((tag) => tag.trim().isNotEmpty).toList(),
+      tagObjects: _tagObjects(showRefText),
+      tagTargets: _tagTargets(showRefText),
       // A configured signing key, whether SSH or GPG. Inferring one from a
       // commit-signing *preference* would answer a different question, and
       // still would not prove a key exists — so rk claims only what git
       // states. Whether a release tag is signed comes from tag.gpgSign and
       // the release history; this lets rk refuse (RK-TAG-005) when signing
       // is required and no key is set.
-      signingConfigured: text(answers[4]).isNotEmpty,
-      tagSigningRequested: text(answers[10]) == 'true',
-      originUrl: _originSlug(text(answers[9])),
+      signingConfigured: (settings['user.signingkey'] ?? '').isNotEmpty,
+      tagSigningRequested: _gitBoolean(settings['tag.gpgsign']),
+      originUrl: _originSlug(settings['remote.origin.url'] ?? ''),
     );
   }
+
+  /// `git config --get-regexp` lines into key → its last value. A key
+  /// written with no value prints alone, and reads as the empty string.
+  static Map<String, String> _settings(String lines) {
+    final settings = <String, String>{};
+    for (final line in lines.split('\n')) {
+      if (line.trim().isEmpty) continue;
+      final space = line.indexOf(' ');
+      settings[space < 0 ? line : line.substring(0, space)] = space < 0
+          ? ''
+          : line.substring(space + 1).trim();
+    }
+    return settings;
+  }
+
+  /// Git's own reading of a boolean setting: `[tag] gpgSign` with no value
+  /// is true, as are `true`, `yes`, `on`, and `1`.
+  static bool _gitBoolean(String? value) =>
+      value != null &&
+      const {'', 'true', 'yes', 'on', '1'}.contains(value.toLowerCase());
 
   /// `owner/name` from either remote form, or null when it is neither.
   static String? _originSlug(String url) {
@@ -389,14 +395,76 @@ class GitState {
     return '${match.group(1)}/${match.group(2)}';
   }
 
-  static String _processFailure(
-    ProcessResult result, {
-    required String fallback,
-  }) {
-    final stderr = '${result.stderr}'.trim();
+  static String _toolFailure(ToolResult result, {required String fallback}) {
+    final stderr = result.stderr.trim();
     if (stderr.isNotEmpty) return stderr.split('\n').last.trim();
-    final stdout = '${result.stdout}'.trim();
+    final stdout = result.stdout.trim();
     if (stdout.isNotEmpty) return stdout.split('\n').last.trim();
     return fallback;
+  }
+}
+
+/// What `git status --porcelain=v2 --branch -z` says: HEAD, its branch and
+/// how far it is ahead of its upstream, and every uncommitted path.
+final class _StatusV2 {
+  _StatusV2(this.head, this.name, this.ahead, this.uncommitted);
+
+  factory _StatusV2.parse(String output) {
+    var head = '';
+    String? name;
+    int? ahead;
+    final uncommitted = <String>[];
+    final records = output.split('\u0000');
+    for (var index = 0; index < records.length; index++) {
+      final record = records[index];
+      if (record.startsWith('# branch.oid ')) {
+        final oid = record.substring('# branch.oid '.length);
+        head = oid == '(initial)' ? '' : oid;
+      } else if (record.startsWith('# branch.head ')) {
+        final branch = record.substring('# branch.head '.length);
+        name = branch == '(detached)' ? null : branch;
+      } else if (record.startsWith('# branch.ab +')) {
+        ahead = int.tryParse(
+          record.substring('# branch.ab +'.length).split(' ').first,
+        );
+      } else if (record.startsWith('1 ')) {
+        uncommitted.add(_field(record, 8));
+      } else if (record.startsWith('2 ')) {
+        uncommitted.add(_field(record, 9));
+        index++; // the path it was renamed or copied from
+      } else if (record.startsWith('u ')) {
+        uncommitted.add(_field(record, 10));
+      } else if (record.startsWith('? ')) {
+        uncommitted.add(record.substring(2));
+      }
+    }
+    return _StatusV2(
+      head,
+      name,
+      ahead,
+      // rk's own scratch and evidence directories are not the operator's
+      // uncommitted work. Counting them meant a failed release left debris
+      // that made the next run refuse itself, breaking the resume.
+      [
+        for (final path in uncommitted)
+          if (path != '.rk' && path != '.rk/' && !path.startsWith('.rk/')) path,
+      ],
+    );
+  }
+
+  final String head;
+  final String? name;
+  final int? ahead;
+  final List<String> uncommitted;
+
+  /// Everything after the first [fields] space-separated fields: the path,
+  /// which may itself contain spaces.
+  static String _field(String record, int fields) {
+    var at = 0;
+    for (var count = 0; count < fields; count++) {
+      at = record.indexOf(' ', at) + 1;
+      if (at == 0) return record;
+    }
+    return record.substring(at);
   }
 }

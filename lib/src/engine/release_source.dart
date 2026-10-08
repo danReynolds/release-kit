@@ -3,6 +3,7 @@ import 'diagnostic.dart';
 import 'git.dart';
 import 'resolve.dart';
 import 'source_tree.dart';
+import 'tools.dart';
 
 /// Where a command reads release.toml and the pubspecs, and the Git facts it
 /// reads them with. Status, plan, stage and release all start here, and read
@@ -23,7 +24,10 @@ final class ReleaseSource {
   });
 
   /// The source containing [directory].
-  static Future<ReleaseSource> open(String directory) async {
+  static Future<ReleaseSource> open(
+    String directory, {
+    Tools tools = const SystemTools(),
+  }) async {
     final gitRoot = GitSourceTree.findRoot(directory);
     if (gitRoot == null) {
       return ReleaseSource._(
@@ -33,7 +37,7 @@ final class ReleaseSource {
         tree: FileSystemSourceTree(directory),
       );
     }
-    final git = await GitState.read(gitRoot);
+    final git = await GitState.read(gitRoot, tools: tools);
     return ReleaseSource._(
       root: gitRoot,
       git: git,

@@ -210,6 +210,99 @@ void main() {
     expect(state.uncommitted, ['a.txt']);
   });
 
+  test('one status read says the branch and how far it is ahead', () async {
+    void git(List<String> args, [String? directory]) => expect(
+      Process.runSync(
+        'git',
+        args,
+        workingDirectory: directory ?? root.path,
+      ).exitCode,
+      0,
+      reason: args.join(' '),
+    );
+    final origin = Directory.systemTemp.createTempSync('rk-git-origin-');
+    addTearDown(() => origin.deleteSync(recursive: true));
+    git(['init', '-q', '--bare'], origin.path);
+    write('a.txt', 'one\n');
+    commit();
+    git(['checkout', '-q', '-B', 'main']);
+    git(['remote', 'add', 'origin', origin.path]);
+    git(['push', '-q', '-u', 'origin', 'main']);
+
+    final pushed = await GitState.read(root.path);
+    expect(pushed.branch, 'main');
+    expect(pushed.aheadOfUpstream, 0);
+    expect(pushed.headIsPushed, isTrue);
+    expect(pushed.hasRemote, isTrue);
+
+    write('a.txt', 'two\n');
+    commit();
+    final ahead = await GitState.read(root.path);
+    expect(ahead.aheadOfUpstream, 1);
+    expect(ahead.headIsPushed, isFalse);
+    expect(ahead.headTree, isNot(pushed.headTree));
+    expect(ahead.head, isNot(pushed.head));
+
+    git(['checkout', '-q', '--detach']);
+    final detached = await GitState.read(root.path);
+    expect(detached.branch, isNull);
+    expect(detached.head, ahead.head);
+  });
+
+  test('a renamed path and a path with spaces are named whole', () async {
+    write('a.txt', 'one\n');
+    commit();
+    Process.runSync('git', [
+      'mv',
+      'a.txt',
+      'b c.txt',
+    ], workingDirectory: root.path);
+
+    expect((await GitState.read(root.path)).uncommitted, ['b c.txt']);
+  });
+
+  test('tag.gpgSign is read as git reads a boolean', () async {
+    write('a.txt', 'one\n');
+    commit();
+    expect((await GitState.read(root.path)).tagSigningRequested, isFalse);
+    for (final (value, expected) in [
+      ('true', true),
+      ('yes', true),
+      ('On', true),
+      ('1', true),
+      ('false', false),
+      ('0', false),
+    ]) {
+      Process.runSync('git', [
+        'config',
+        'tag.gpgSign',
+        value,
+      ], workingDirectory: root.path);
+      expect(
+        (await GitState.read(root.path)).tagSigningRequested,
+        expected,
+        reason: value,
+      );
+    }
+  });
+
+  test('a repository with no commit has no HEAD, and its branch', () async {
+    write('a.txt', 'one\n');
+    final state = await GitState.read(root.path);
+    expect(state.hasCommit, isFalse);
+    expect(state.headTree, isEmpty);
+    expect(state.stagingProblem()?.code, 'RK-GIT-001');
+  });
+
+  test('git is asked six things at once, through the given tools', () async {
+    write('a.txt', 'one\n');
+    commit();
+    final asked = <String>[];
+    await GitState.read(root.path, tools: _Asked(asked));
+    expect(asked, hasLength(6));
+    expect(asked, everyElement(startsWith('git ')));
+  });
+
   test('tags are read', () async {
     write('a.txt', 'one\n');
     commit();
@@ -689,4 +782,36 @@ void main() {
       expect(secondReadback.evidence, firstReadback.evidence);
     },
   );
+}
+
+/// Real tools that write down what they were asked.
+final class _Asked implements Tools {
+  _Asked(this.asked);
+
+  final List<String> asked;
+
+  @override
+  Future<ToolResult> run(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+    Map<String, String>? environment,
+    Duration? timeout,
+  }) {
+    asked.add('$executable ${arguments.join(' ')}');
+    return const SystemTools().run(
+      executable,
+      arguments,
+      workingDirectory: workingDirectory,
+      environment: environment,
+      timeout: timeout,
+    );
+  }
+
+  @override
+  Future<int> runInteractive(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+  }) => throw UnimplementedError();
 }
