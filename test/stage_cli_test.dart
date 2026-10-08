@@ -252,7 +252,10 @@ case "$*" in
 esac
 ''';
 
-    ({Rk repo, Map<String, String> environment}) crate(String build) {
+    ({Rk repo, Map<String, String> environment}) crate(
+      String build, {
+      bool linksAgents = false,
+    }) {
       final repo = Rk.repository(scratch, 'source', {
         '.gitignore': '.rk/\n',
         'release.toml': '''
@@ -274,6 +277,11 @@ assets = ["assets/parser-linux-x64.so", "parser-macos-arm64.dylib", "src.tar.gz"
         '+x',
         '${repo.root}/native/parser/tool/build.sh',
       ]);
+      if (linksAgents) {
+        // The usual way a repository shares one agent guide.
+        File('${repo.root}/AGENTS.md').writeAsStringSync('# Agents\n');
+        Link('${repo.root}/CLAUDE.md').createSync('AGENTS.md');
+      }
       _git(repo.root, ['config', 'commit.gpgSign', 'false']);
       _git(repo.root, ['config', 'tag.gpgSign', 'false']);
       _git(repo.root, ['config', 'user.signingkey', '']);
@@ -373,6 +381,29 @@ printf 'scratch' > "$1/unrelated.txt"
         stageEvidence(staged, 'parser')['stage id'],
         reason: 'a complete stage is reused, not built again',
       );
+    });
+
+    test('stages a repository that tracks a symbolic link', () {
+      final (:repo, :environment) = crate(r'''#!/bin/bash
+set -euo pipefail
+# The build sees the link as the repository has it.
+[ "$(readlink ../../CLAUDE.md)" = "AGENTS.md" ]
+mkdir -p "$1/assets"
+printf 'so' > "$1/assets/parser-linux-x64.so"
+printf 'dylib' > "$1/parser-macos-arm64.dylib"
+printf 'tarball' > "$1/src.tar.gz"
+''', linksAgents: true);
+      expect(
+        _git(repo.root, ['ls-files', '-s', 'CLAUDE.md']),
+        startsWith('120000 '),
+      );
+
+      final staged = repo([
+        'stage',
+        'parser',
+        '--json',
+      ], environment: environment);
+      expect(staged.code, 0, reason: staged.all);
     });
 
     test('finishes an interrupted release from the commit its tag names', () {

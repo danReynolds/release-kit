@@ -219,7 +219,7 @@ void main() {
   );
 
   test(
-    'refuses a tracked symbolic link instead of changing its type',
+    'exports a tracked symbolic link as a link, as git archive does',
     () async {
       final sourceRepository = _gitRepository(_source());
       addTearDown(() => sourceRepository.deleteSync(recursive: true));
@@ -228,20 +228,19 @@ void main() {
       _git(sourceRepository, ['commit', '-qm', 'add link']);
 
       final staged = _gitRelease(sourceRepository, repository);
-      await expectLater(
-        staged.captureSource(),
-        throwsA(
-          isA<StateError>().having(
-            (error) => '$error',
-            'message',
-            allOf(contains('README-link'), contains('symbolic link')),
-          ),
-        ),
-      );
+      final source = await staged.captureSource();
+      final exported = Directory.systemTemp.createTempSync('rk-link-export-');
+      addTearDown(() => exported.deleteSync(recursive: true));
+      source.export(exported.path);
+
+      final link = Link('${exported.path}/README-link');
+      expect(link.existsSync(), isTrue);
+      expect(link.targetSync(), 'README.md');
+      expect(File('${exported.path}/README.md').existsSync(), isTrue);
     },
   );
 
-  test('refuses a tracked gitlink instead of writing its object id', () async {
+  test('leaves a tracked gitlink out, as git archive does', () async {
     final sourceRepository = _gitRepository(_source());
     addTearDown(() => sourceRepository.deleteSync(recursive: true));
     final nested = Directory.systemTemp.createTempSync('rk-gitlink-source-');
@@ -262,16 +261,19 @@ void main() {
     _git(sourceRepository, ['commit', '-qm', 'add gitlink']);
 
     final staged = _gitRelease(sourceRepository, repository);
-    await expectLater(
-      staged.captureSource(),
-      throwsA(
-        isA<StateError>().having(
-          (error) => '$error',
-          'message',
-          allOf(contains('vendor/dependency'), contains('gitlink/submodule')),
-        ),
+    final source = await staged.captureSource();
+    final exported = Directory.systemTemp.createTempSync('rk-gitlink-export-');
+    addTearDown(() => exported.deleteSync(recursive: true));
+    source.export(exported.path);
+
+    expect(
+      FileSystemEntity.typeSync(
+        '${exported.path}/vendor/dependency',
+        followLinks: false,
       ),
+      FileSystemEntityType.notFound,
     );
+    expect(File('${exported.path}/README.md').existsSync(), isTrue);
   });
 
   test(

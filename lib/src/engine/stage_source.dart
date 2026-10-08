@@ -17,8 +17,9 @@ final class StageSourceSnapshot implements SourceTree {
     this.description,
     this._files,
     this._executable,
-    this.gitCommit,
-  );
+    this.gitCommit, [
+    this._links = const {},
+  ]);
 
   static Future<StageSourceSnapshot> capture(
     SourceTree source, {
@@ -68,20 +69,25 @@ final class StageSourceSnapshot implements SourceTree {
       for (final entry in git?.trackedEntries() ?? <GitTreeEntry>[])
         entry.path: entry,
     };
-    final paths = [...(git?.trackedFiles() ?? source.trackedFiles())]..sort();
-    for (final path in paths) {
+    final all = [...(git?.trackedFiles() ?? source.trackedFiles())]..sort();
+    // A symbolic link is exported as one, as `git archive` would; a gitlink
+    // has no bytes in this commit and is left out, as `git archive` does.
+    final links = [
+      for (final path in all)
+        if (entries[path] case final entry? when entry.mode == '120000') path,
+    ];
+    final paths = [
+      for (final path in all)
+        if (entries[path] == null || entries[path]!.isRegularFile) path,
+    ];
+    for (final path in [...paths, ...links]) {
       StagePath.require(path);
-      final entry = entries[path];
-      if (entry != null && !entry.isRegularFile) {
-        throw StateError(
-          'tracked source $path is a ${entry.unsupportedKind}; release '
-          'staging accepts only regular Git files (100644 or 100755)',
-        );
-      }
     }
     // A non-Git snapshot must own its complete inventory and bytes before the
     // first asynchronous boundary, just as ordinary source production does.
-    final batched = git == null ? null : await git.readBytesBatch(paths);
+    final batched = git == null
+        ? null
+        : await git.readBytesBatch([...paths, ...links]);
     final files = <String, Uint8List>{};
     for (final path in paths) {
       final bytes = git == null ? source.readBytes(path) : batched![path];
@@ -90,10 +96,16 @@ final class StageSourceSnapshot implements SourceTree {
       }
       files[path] = Uint8List.fromList(bytes).asUnmodifiableView();
     }
-    return StageSourceSnapshot._(source.description, Map.unmodifiable(files), {
-      for (final path in paths)
-        if (entries[path]?.executable == true) path,
-    }, git?.commit);
+    return StageSourceSnapshot._(
+      source.description,
+      Map.unmodifiable(files),
+      {
+        for (final path in paths)
+          if (entries[path]?.executable == true) path,
+      },
+      git?.commit,
+      {for (final path in links) path: utf8.decode(batched![path]!)},
+    );
   }
 
   @override
@@ -101,6 +113,7 @@ final class StageSourceSnapshot implements SourceTree {
   final String? gitCommit;
   final Map<String, Uint8List> _files;
   final Set<String> _executable;
+  final Map<String, String> _links;
 
   @override
   List<String> trackedFiles() => List.unmodifiable(_files.keys);
@@ -132,6 +145,11 @@ final class StageSourceSnapshot implements SourceTree {
       modes[file.path] = _executable.contains(path) ? '0755' : '0644';
     }
     setFileModes(modes);
+    for (final MapEntry(key: path, value: target) in _links.entries) {
+      Link(
+        [root, ...StagePath.segments(path)].join(Platform.pathSeparator),
+      ).createSync(target, recursive: true);
+    }
   }
 }
 
