@@ -101,96 +101,6 @@ final class ReleasePublicationCoordinator {
   /// The native sessions already acquired this run, by provider.
   final Set<String> _sessions = {};
 
-  /// Gives eventually-consistent providers a bounded chance to become usable
-  /// through their consumer-facing path after exact publication read-back.
-  ///
-  /// This cannot change release success: every check runs only after the
-  /// public coordinate is already proven exact, and a pending result warns the
-  /// operator not to repeat the irreversible act.
-  Future<void> verifyAvailability({
-    required ResolvedUnit unit,
-    required List<TargetPlan> targets,
-  }) async {
-    if (targets.isEmpty) return;
-    final progress = output.progressBoard(
-      '${unit.name} ${unit.version} · checking availability',
-    );
-    final rows = {
-      for (final target in targets)
-        target.step.id: progress.addRow(
-          id: '${target.step.id}/availability',
-          label: target.kindLabel,
-          coordinate: target.identity,
-        ),
-    };
-    final warnings = await Future.wait([
-      for (final target in targets)
-        _verifyTargetAvailability(
-          unit: unit,
-          target: target,
-          row: rows[target.step.id]!,
-        ),
-    ]);
-    progress.discard();
-    final pending = warnings.nonNulls.toList();
-    if (pending.isEmpty) return;
-    output.blank();
-    output.heading('Availability warnings');
-    for (final warning in pending) {
-      output.warning(
-        warning.diagnostic,
-        unit: unit.name,
-        target: warning.target.step.id,
-        depth: 1,
-      );
-    }
-  }
-
-  Future<_AvailabilityWarning?> _verifyTargetAvailability({
-    required ResolvedUnit unit,
-    required TargetPlan target,
-    required ProgressRowController row,
-  }) async {
-    final module = inspector.targets.moduleForTarget(target);
-    final context = TargetAvailabilityContext(tools: tools);
-    var waited = Duration.zero;
-    while (true) {
-      row.handle.begin(CommonProgressActivities.verifying);
-      final TargetAvailabilityOutcome? outcome;
-      try {
-        outcome = await module.checkAvailability(context, unit, target);
-      } on Object catch (error) {
-        final diagnostic = Diagnostic(
-          code: 'RK-REL-004',
-          message:
-              '${target.label}: consumer availability could not be '
-              'checked',
-          remedy:
-              'publication already reconciled exactly; restore the '
-              'consumer check and verify without repeating publication',
-          evidence: '$error',
-        );
-        row.fail(note: 'availability check failed');
-        return _AvailabilityWarning(target, diagnostic);
-      }
-      switch (outcome) {
-        case null:
-          row.notAttempted(note: 'no delayed availability check');
-          return null;
-        case TargetAvailable(:final note):
-          row.complete(note: note);
-          return null;
-        case TargetAvailabilityPending(:final diagnostic):
-          if (waited >= confirmDeadline) {
-            row.fail(note: 'still propagating');
-            return _AvailabilityWarning(target, diagnostic);
-          }
-      }
-      await wait(confirmInterval);
-      waited += confirmInterval;
-    }
-  }
-
   /// Proves every unfinished target can publish from this host, before any
   /// private work is spent on it.
   Future<bool> checkReadiness({
@@ -485,7 +395,6 @@ final class ReleasePublicationCoordinator {
     }
 
     releaseProgress.settle(released: true);
-    await verifyAvailability(unit: unit, targets: publishing);
     return ExitCodes.ok;
   }
 
@@ -1050,13 +959,6 @@ final class _PublicTargetCompletion {
 
   final Step step;
   final _PublicationFailure? failure;
-}
-
-final class _AvailabilityWarning {
-  const _AvailabilityWarning(this.target, this.diagnostic);
-
-  final TargetPlan target;
-  final Diagnostic diagnostic;
 }
 
 final class _PublicationFailure {

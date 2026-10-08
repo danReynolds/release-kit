@@ -117,18 +117,6 @@ abstract base class TargetModule {
     TargetPlan target,
   ) => inspectCandidate(context.reads, unit, target);
 
-  /// Checks whether an exact publication is usable through its consumer path.
-  ///
-  /// Publication read-back remains the release boundary. This optional check
-  /// is for providers whose accepted bytes can become usable later (for
-  /// example a registry solver index). A pending answer is a warning, never
-  /// permission to publish again.
-  Future<TargetAvailabilityOutcome?> checkAvailability(
-    TargetAvailabilityContext context,
-    ResolvedUnit unit,
-    TargetPlan target,
-  ) async => null;
-
   /// Classifies a provider operation that did not settle exact.
   ///
   /// Most append-only targets share this policy. A target overrides it only
@@ -507,29 +495,6 @@ final class TargetReleaseContext {
   final Future<void> Function(Duration duration) wait;
   final Duration confirmDeadline;
   final Duration confirmInterval;
-}
-
-/// Runtime dependencies for an informational post-release consumer check.
-final class TargetAvailabilityContext {
-  const TargetAvailabilityContext({required this.tools});
-
-  final Tools tools;
-}
-
-sealed class TargetAvailabilityOutcome {
-  const TargetAvailabilityOutcome();
-}
-
-final class TargetAvailable extends TargetAvailabilityOutcome {
-  const TargetAvailable({this.note = 'available'});
-
-  final String note;
-}
-
-final class TargetAvailabilityPending extends TargetAvailabilityOutcome {
-  const TargetAvailabilityPending(this.diagnostic);
-
-  final Diagnostic diagnostic;
 }
 
 /// Dependencies shared by safe readiness and later session acquisition.
