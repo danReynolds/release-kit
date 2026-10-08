@@ -233,7 +233,7 @@ def main():
             terminal.send(b'\x03')
             terminal.finish(130)
             assert calls.read_text() == before, 'Ctrl+C rescanned providers'
-            assert before.splitlines() == ['list --formula --full-name -1'], before
+            assert before.splitlines() == ['--prefix'], before
         print('PASS Ctrl+C returns without another provider inspection', flush=True)
 
         home = root / 'init'

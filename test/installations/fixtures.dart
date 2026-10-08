@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
@@ -123,3 +124,122 @@ class TestTools implements Tools {
 
 ToolResult ok([String output = '']) =>
     ToolResult(exitCode: 0, stdout: output, stderr: '');
+
+/// A Homebrew prefix on disk, answering the brew commands rk runs. Kegs live
+/// in `Cellar/<name>/<version>`, each with a receipt naming its tap, and
+/// `opt/<name>` points at the installed one, as Homebrew lays them out.
+class FakeHomebrew {
+  FakeHomebrew(this.prefix, {this.version = '1.2.0'});
+  final String prefix;
+  String version;
+  final calls = <List<String>>[];
+  final environments = <Map<String, String>?>[];
+
+  /// Runs brew for '/brew' and every other executable for real (chmod, the
+  /// launchers themselves).
+  Tools get tools => TestTools((exe, args, cwd, env) async {
+    if (exe != '/brew') {
+      return const SystemTools().run(
+        exe,
+        args,
+        workingDirectory: cwd,
+        environment: env,
+      );
+    }
+    calls.add(args);
+    environments.add(env);
+    return run(args);
+  });
+
+  String _name(String formula) => formula.split('/').last;
+  String _tap(String formula) => formula.substring(0, formula.lastIndexOf('/'));
+
+  /// Installs [formula] at [version] as Homebrew does: a new keg, opt moved
+  /// to it. Without [keepOld], the previous keg is cleaned up, as `brew
+  /// upgrade` does by default.
+  void pour(String formula, String version, {bool keepOld = true}) {
+    final name = _name(formula);
+    final opt = Link('$prefix/opt/$name');
+    final previous = opt.existsSync() ? opt.resolveSymbolicLinksSync() : null;
+    final keg = '$prefix/Cellar/$name/$version';
+    File('$keg/bin/$name')
+      ..createSync(recursive: true)
+      ..writeAsStringSync('#!/bin/sh\nprintf "brew $version\\n"\n');
+    Process.runSync('/bin/chmod', ['755', '$keg/bin/$name']);
+    File('$keg/INSTALL_RECEIPT.json').writeAsStringSync(
+      jsonEncode({
+        'source': {'tap': _tap(formula)},
+      }),
+    );
+    if (opt.existsSync()) opt.deleteSync();
+    opt.createSync(keg, recursive: true);
+    if (!keepOld && previous != null && previous != keg) {
+      Directory(previous).deleteSync(recursive: true);
+    }
+  }
+
+  List<String> _kegs(String name) {
+    final rack = Directory('$prefix/Cellar/$name');
+    if (!rack.existsSync()) return const [];
+    return [for (final keg in rack.listSync()) keg.path.split('/').last];
+  }
+
+  String? _installedTap(String name) {
+    final receipt = File('$prefix/opt/$name/INSTALL_RECEIPT.json');
+    if (!receipt.existsSync()) return null;
+    return ((jsonDecode(receipt.readAsStringSync()) as Map)['source']
+        as Map)['tap'];
+  }
+
+  ToolResult run(List<String> args) {
+    switch (args) {
+      case ['--prefix']:
+        return ok(prefix);
+      case ['--cellar']:
+        return ok('$prefix/Cellar');
+      case ['list', '--formula', '--full-name', '-1']:
+        final rack = Directory('$prefix/Cellar');
+        return ok(
+          [
+            if (rack.existsSync())
+              for (final entry in rack.listSync())
+                if (_installedTap(entry.path.split('/').last) case final tap?)
+                  '$tap/${entry.path.split('/').last}',
+          ].join('\n'),
+        );
+      case ['info', '--json=v2', '--formula', final formula]:
+        final name = _name(formula);
+        final ours = _installedTap(name) == _tap(formula);
+        final opt = Link('$prefix/opt/$name');
+        return ok(
+          jsonEncode({
+            'formulae': [
+              {
+                'full_name': formula,
+                'name': name,
+                'linked_keg': ours && opt.existsSync()
+                    ? opt.resolveSymbolicLinksSync().split('/').last
+                    : null,
+                'installed': [
+                  if (ours)
+                    for (final keg in _kegs(name)) {'version': keg},
+                ],
+              },
+            ],
+          }),
+        );
+      case ['install', '--formula', '--skip-link', final formula]:
+        pour(formula, version);
+        return ok();
+      case ['upgrade', '--formula', final formula]:
+        pour(formula, version);
+        return ok();
+      case ['uninstall', '--formula', final formula]:
+        final name = _name(formula);
+        Directory('$prefix/Cellar/$name').deleteSync(recursive: true);
+        Link('$prefix/opt/$name').deleteSync();
+        return ok();
+    }
+    throw StateError('unexpected brew $args');
+  }
+}

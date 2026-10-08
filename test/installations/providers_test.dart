@@ -6,6 +6,7 @@ import 'package:rk/src/builds/binary_artifact.dart';
 import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/engine/release_manifest.dart';
 import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/installations/manager.dart';
 import 'package:rk/src/installations/model.dart';
 import 'package:rk/src/installations/store.dart';
 import 'package:rk/src/targets/github_release/installation.dart';
@@ -267,73 +268,68 @@ void main() {
   );
 
   test(
-    'Homebrew uses exact formula identity and installs without linking or upgrading',
+    'Homebrew reads its installation from the opt link and the keg receipt, asking brew only for its prefix',
     () async {
       final project = fixture(scratch, commands: ['orbit'], binary: true);
-      final opt = '${scratch.path}/brew/opt/orbit';
-      File('$opt/bin/orbit')
-        ..createSync(recursive: true)
-        ..writeAsStringSync('binary');
-      var installed = false;
-      final calls = <List<String>>[];
-      final tools = TestTools((exe, args, cwd, env) async {
-        calls.add(args);
-        expect(env!['HOMEBREW_NO_INSTALL_UPGRADE'], '1');
-        if (args.first == 'list') {
-          expect(args, ['list', '--formula', '--full-name', '-1']);
-          return ok(
-            'someone/else/orbit\n${installed ? project.formula : ''}\n',
-          );
-        }
-        if (args.first == 'info') {
-          expect(args, ['info', '--json=v2', '--formula', project.formula]);
-          return ok(
-            jsonEncode({
-              'formulae': [
-                {
-                  'full_name': 'someone/else/orbit',
-                  'installed': [
-                    {'version': '3.0.0'},
-                  ],
-                },
-                if (installed)
-                  {
-                    'full_name': project.formula,
-                    'name': 'orbit',
-                    'linked_keg': '1.2.0',
-                    'installed': [
-                      {'version': '1.2.0'},
-                    ],
-                  },
-              ],
-            }),
-          );
-        }
-        if (args.first == '--prefix') return ok('${scratch.path}/brew');
-        if (args.first == 'install') {
-          installed = true;
-          return ok();
-        }
-        throw StateError('unexpected $args');
-      });
-      final provider = HomebrewInstallationProvider(tools, '/brew');
+      final brew = FakeHomebrew('${scratch.path}/brew');
+      final provider = HomebrewInstallationProvider(brew.tools, '/brew');
       expect((await provider.inspect(project)).installation, isNull);
+      brew.pour('someone/else/orbit', '3.0.0');
       expect(
-        calls,
-        [
-          ['list', '--formula', '--full-name', '-1'],
-        ],
-        reason:
-            'A different tap is not our installation or a reason to query it.',
+        (await provider.inspect(project)).installation,
+        isNull,
+        reason: 'A formula of the same name from another tap is not ours.',
       );
+      Directory('${brew.prefix}/Cellar').deleteSync(recursive: true);
+      Link('${brew.prefix}/opt/orbit').deleteSync();
       final result = await provider.install(project, (_) {});
-      expect(result.commands['orbit']!.executable, '$opt/bin/orbit');
-      expect(calls.where((c) => c.first == 'install').single, [
-        'install',
-        '--formula',
-        '--skip-link',
-        project.formula,
+      expect(result.version, '1.2.0');
+      expect(
+        result.commands['orbit']!.executable,
+        '${brew.prefix}/opt/orbit/bin/orbit',
+      );
+      expect(brew.calls, [
+        ['--prefix'],
+        ['install', '--formula', '--skip-link', project.formula],
       ]);
+      expect(
+        brew.environments.every(
+          (environment) => environment?['HOMEBREW_NO_INSTALL_UPGRADE'] == '1',
+        ),
+        isTrue,
+      );
+    },
+  );
+
+  test(
+    'a Homebrew selection keeps running after brew upgrades it and removes the old keg',
+    () async {
+      final project = fixture(scratch, commands: ['orbit'], binary: true);
+      final brew = FakeHomebrew('${scratch.path}/brew');
+      final store = InstallationStore('${scratch.path}/data', brew.tools);
+      final manager = InstallationManager(
+        store: store,
+        providers: {
+          InstallationSource.homebrew: HomebrewInstallationProvider(
+            brew.tools,
+            '/brew',
+          ),
+        },
+        environment: {'PATH': '${store.bin}:/usr/bin:/bin'},
+      );
+      await manager.act(
+        project,
+        InstallationSource.homebrew,
+        InstallationAction.use,
+        progress: (_) {},
+      );
+      Future<ProcessResult> orbit() => Process.run('${store.bin}/orbit', []);
+      expect((await orbit()).stdout, 'brew 1.2.0\n');
+      // `brew upgrade`, run outside rk: a new keg, and the old one cleaned up.
+      brew.pour(project.formula, '1.3.0', keepOld: false);
+      final upgraded = await orbit();
+      expect(upgraded.exitCode, 0, reason: '${upgraded.stderr}');
+      expect(upgraded.stdout, 'brew 1.3.0\n');
     },
   );
 }
