@@ -1,25 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
-import 'dart:typed_data';
 
 import '../transforms/digest.dart';
 import 'canonical_json.dart';
 import 'file_mode.dart';
 import 'stage.dart';
 import 'timings.dart';
-
-/// The largest receipt rk reads or writes. A receipt records producer
-/// outputs, so a real one is a few kilobytes.
-const maxStageReceiptBytes = 4 * 1024 * 1024;
-
-final class StageReceiptLimit implements Exception {
-  const StageReceiptLimit(this.limit);
-  final int limit;
-
-  @override
-  String toString() => 'stage receipt exceeds $limit bytes';
-}
 
 /// Exact bytes emitted by a completed release step.
 class StageArtifact {
@@ -171,14 +157,6 @@ class StageReceipt {
        steps = List<StageStep>.unmodifiable(steps) {
     _requireUnique(this.steps.map((step) => step.name), 'step name');
     _requireUnique(artifacts.map((artifact) => artifact.path), 'artifact path');
-    if (this.plan != null &&
-        Sha256.hex(utf8.encode(CanonicalJson.encode(this.plan))) !=
-            identity.planSha256) {
-      throw const FormatException('receipt plan does not match its identity');
-    }
-    if (this.steps.any((step) => step.evidence.containsKey('release_plan'))) {
-      throw const FormatException('release plan belongs in the receipt header');
-    }
   }
 
   factory StageReceipt.parse(String document) => Timings.enabled
@@ -188,8 +166,9 @@ class StageReceipt {
         )
       : StageReceipt._parse(document);
 
+  /// rk's own record, written by an atomic rename, read as plain JSON.
   factory StageReceipt._parse(String document) {
-    final decoded = CanonicalJson.decodeDocument(document);
+    final decoded = jsonDecode(document);
     // Version before shape: an older receipt differs in both, and the
     // schema message is the one a reader can act on.
     if (decoded is Map && decoded['schema'] != stageSchemaVersion) {
@@ -238,12 +217,6 @@ class StageReceipt {
   };
 
   String encode() => '${CanonicalJson.encode(toJson())}\n';
-
-  List<int> encodeForStorage({int maxBytes = maxStageReceiptBytes}) {
-    final bytes = utf8.encode(encode());
-    if (bytes.length > maxBytes) throw StageReceiptLimit(maxBytes);
-    return bytes;
-  }
 }
 
 Map<String, Object?> _plan(Object? value) {
@@ -255,14 +228,9 @@ Map<String, Object?> _plan(Object? value) {
 
 /// Atomic persistence for `stage.json`.
 class StageReceiptStore {
-  StageReceiptStore(this.stage, {this.maxBytes = maxStageReceiptBytes}) {
-    if (maxBytes < 1) {
-      throw ArgumentError('receipt byte limit must be positive');
-    }
-  }
+  StageReceiptStore(this.stage);
 
   final StageDirectory stage;
-  final int maxBytes;
 
   /// Writes the receipt by an atomic rename, so a crash leaves the previous
   /// one. Producers recorded each output when they wrote it.
@@ -270,48 +238,15 @@ class StageReceiptStore {
     if (receipt.identity.id != stage.identity.id) {
       throw StateError('receipt belongs to a different stage');
     }
-    stage.writeReceiptBytes(receipt.encodeForStorage(maxBytes: maxBytes));
+    stage.writeReceiptBytes(utf8.encode(receipt.encode()));
   }
 
   /// Reads without creating the stage or changing any bytes.
   StageReceipt? read() {
-    final document = readDocument(
-      stage.resolve('stage.json'),
-      maxBytes: maxBytes,
-    );
-    return document == null ? null : StageReceipt.parse(document);
-  }
-
-  /// A bounded, no-follow read: a growing file is never read past its
-  /// initial size, and a changed size refuses the result.
-  static String? readDocument(
-    String path, {
-    int maxBytes = maxStageReceiptBytes,
-  }) {
-    final type = FileSystemEntity.typeSync(path, followLinks: false);
-    if (type == FileSystemEntityType.notFound) return null;
-    if (type != FileSystemEntityType.file) {
-      throw const FormatException('stage.json is not a regular file');
-    }
-    final file = File(path).openSync();
-    try {
-      final size = file.lengthSync();
-      if (size > maxBytes) throw StageReceiptLimit(maxBytes);
-      final bytes = BytesBuilder(copy: false);
-      while (bytes.length < size) {
-        final chunk = file.readSync(min(64 * 1024, size - bytes.length));
-        if (chunk.isEmpty) {
-          throw const FormatException('receipt changed while reading');
-        }
-        bytes.add(chunk);
-      }
-      if (file.lengthSync() != size) {
-        throw const FormatException('receipt changed while reading');
-      }
-      return utf8.decode(bytes.takeBytes());
-    } finally {
-      file.closeSync();
-    }
+    final file = File(stage.resolve('stage.json'));
+    return file.existsSync()
+        ? StageReceipt.parse(file.readAsStringSync())
+        : null;
   }
 }
 

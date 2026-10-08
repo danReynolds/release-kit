@@ -327,8 +327,11 @@ class ReleaseStage {
   }
 
   /// Exact public-name to private-blob mapping frozen by complete-stage.
-  Map<String, StageArtifact> releaseAssets() {
-    final receipt = requireReceipt();
+  Map<String, StageArtifact> releaseAssets() =>
+      releaseAssetsIn(requireReceipt());
+
+  /// The same mapping in a completed [receipt] already in hand.
+  static Map<String, StageArtifact> releaseAssetsIn(StageReceipt receipt) {
     final complete = receipt.steps.last;
     final encoded = complete.evidence['release_assets'];
     final byPath = {

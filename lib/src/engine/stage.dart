@@ -73,15 +73,13 @@ class StageIdentity {
     if (map['run_id'] != null) {
       throw const FormatException('a stage of uncommitted source');
     }
-    final identity = StageIdentity.fromDigests(
+    // The id is derived again from what it names: a receipt that names
+    // another stage is that stage's (see StageIssueKind.wrongStage).
+    return StageIdentity.fromDigests(
       headCommit: _string(map, 'head_commit'),
       headTree: _string(map, 'head_tree'),
       planSha256: _string(map, 'plan_sha256'),
     );
-    if (_string(map, 'id') != identity.id) {
-      throw const FormatException('stage identity does not match its inputs');
-    }
-    return identity;
   }
 
   final String id;
