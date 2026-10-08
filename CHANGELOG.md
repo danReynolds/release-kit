@@ -21,6 +21,10 @@
   command does not take is refused in two lines, naming the flags it does
   take, instead of the whole usage. `rk target` without a name lists the
   targets, as `rk target list` does.
+- `--json` drops keys that never carried anything: a step's `took_ms`, which
+  rk never filled; the plan's constant `source_only` and
+  `destinations_inspected`; and each status target's `source_binding` and
+  `source_comparison`, which always repeated the repository's.
 
 - A release reads origin's tags once, for every tag target, and takes git's
   answer to a tag push as its read-back: git accepts a push only as the

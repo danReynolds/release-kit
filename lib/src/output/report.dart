@@ -117,7 +117,6 @@ class Report {
     List<String> needs = const [],
     String? detail,
     Map<String, String> evidence = const {},
-    Duration? took,
     String? action,
   }) {
     // Replace by id rather than append: a step is one fact, and recording it
@@ -137,7 +136,6 @@ class Report {
       if (needs.isNotEmpty) 'needs': needs,
       if (detail != null) 'detail': detail,
       if (evidence.isNotEmpty) 'evidence': evidence,
-      if (took != null) 'took_ms': took.inMilliseconds,
       if (action != null) 'action': action,
     });
   }
@@ -158,8 +156,6 @@ class Report {
     String? currentVersion,
     String? detail,
     String? uses,
-    String? sourceBinding,
-    String? sourceComparison,
     required List<Map<String, Object?>> artifacts,
   }) {
     final entry = _entry(unit);
@@ -176,8 +172,6 @@ class Report {
       'current_version': currentVersion,
       'target_version': targetVersion,
       'verdict': verdict,
-      if (sourceBinding != null) 'source_binding': sourceBinding,
-      if (sourceComparison != null) 'source_comparison': sourceComparison,
       if (detail != null) 'detail': detail,
       if (uses != null) 'uses': uses,
       'artifacts': artifacts,

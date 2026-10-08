@@ -449,7 +449,6 @@ class Output {
     Verdict verdict = Verdict.unknown,
     String? detail,
     Map<String, String> evidence = const {},
-    Duration? took,
     String? action,
     int depth = 1,
     bool show = true,
@@ -466,7 +465,6 @@ class Output {
       permanent: step.isPermanent,
       public: step.isPublic,
       needs: step.needs,
-      took: took,
       action: action,
     );
     if (!show) return;

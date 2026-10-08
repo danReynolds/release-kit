@@ -63,8 +63,6 @@ final class RepositoryReleasePlan {
   );
 
   Map<String, Object?> toJson() => {
-    'source_only': true,
-    'destinations_inspected': false,
     'units': [for (final unit in units) unit.toJson()],
   };
 

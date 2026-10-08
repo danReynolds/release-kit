@@ -96,7 +96,8 @@ directory and never through a link, which could point outside the
 repository. A row cut off when the run stopped is listed under the phase it
 started in.
 
-The `--json` report's optional `took_ms` stays unfilled. Progress rows do not
+The `--json` report has no step times: its `took_ms` was never filled, and is
+gone. Progress rows do not
 map onto report steps: staging rows are per artifact, not per build or
 completion step, so summing rows by step would have credited a public step
 with its readiness check and left the build that took minutes with nothing.
@@ -168,7 +169,7 @@ rk timings (wall clock; nested spans overlap their parent)
    more, and leaves out phases under a second and time at the prompt.
 3. `--timings` is a public flag of its own (see layer 2), speaking only in
    phases, boards and rows. `RK_TIMINGS` stays a maintainer variable.
-4. `took_ms` stays unfilled (see layer 2). It was first filled under
+4. `took_ms` is gone, never having been filled (see layer 2). It was first filled under
    `--timings` from the rows that showed each step, but rows are not steps;
    the trace file is the machine-readable timing until a step's own time is
    measured where its outcome is recorded.

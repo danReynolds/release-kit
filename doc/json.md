@@ -94,11 +94,12 @@ object is:
 
 ```text
 {
-  source_only: true,
-  destinations_inspected: false,
   units: [{name, version, tag, requires_units[], nodes[]}]
 }
 ```
+
+The plan's `source_only: true` and `destinations_inspected: false` are gone:
+every plan is source-only, so the two keys never said anything.
 
 Each node has `id`, `kind`, `phase`, `summary`, and its direct dependency ids
 in `needs[]`. Optional typed context is `producer`, `project`, `platform`,
@@ -159,14 +160,15 @@ target's verdict reads it where the settled observation lives.
 
 Keyed by frozen `id` (treat ids as opaque tokens). Fields: `id`, `kind`,
 optional concrete `target`, `summary`, `verdict`,
-`permanent?`, `public?`, `needs[]`, `detail?`, `evidence?`, `took_ms?`, and
-optional `action` during `stage` or `release`.
+`permanent?`, `public?`, `needs[]`, `detail?`, `evidence?`, and optional
+`action` during `stage` or `release`. The optional `took_ms` is gone: rk never
+filled it; `--timings` writes a run's times to `.rk/timings.json`.
 
 `kind` describes lifecycle mechanics; `target` is the stable destination id
 for public steps (for example `pubDev` or `githubRelease`). More than one
 registry can therefore share `publishRegistry` without becoming ambiguous.
 `action` records what this release invocation did with a public target:
-`not_attempted`, `attempted`, `already_published`, `completed`, or `failed`.
+`not_attempted`, `already_published`, `completed`, or `failed`.
 It is an execution result, not another target-state vocabulary; `verdict`
 remains the shared status/release observation. Native login is not a target
 action. A pub.dev action is `completed` only after publish and exact public
@@ -189,10 +191,12 @@ dependencies never order publication.
 
 Each `units[].targets[]` entry is the settled observation the human report
 renders as one target row: `id`, `kind`, `label`, `coordinate`, `current_known`,
-`current_version`, `target_version`, `verdict`, `source_binding`,
-`source_comparison`, optional `detail`, optional `uses`, and `artifacts[]`.
-The source fields stay independent of the target verdict: a non-Git target may
-be remotely exact while source comparison remains unavailable. `uses` refers
+`current_version`, `target_version`, `verdict`, optional `detail`, optional
+`uses`, and `artifacts[]`. Whether the source has a commit to compare is
+`repository.source_binding` and `repository.source_comparison`; each target
+no longer repeats them, as it always said the same. They stay independent of
+a target's verdict: a target may be exact while source comparison is
+unavailable. `uses` refers
 to an artifact inventoried under
 another target without duplicating it. An artifact is
 `{name, status, problem?}`, where `status` is

@@ -309,8 +309,7 @@ dependencies:
           node['kind']: node,
       };
 
-      expect(json['source_only'], isTrue);
-      expect(json['destinations_inspected'], isFalse);
+      expect(json.keys, ['units'], reason: 'every plan is source-only');
       expect(encoded, isNot(contains('"verdict"')));
       expect(encoded, isNot(contains('"action"')));
       expect(encoded, isNot(contains('"state"')));

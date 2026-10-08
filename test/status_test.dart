@@ -792,8 +792,9 @@ publish = ["pub.dev"]
       final unit = (run.report['units'] as List).single as Map;
       final target = (unit['targets'] as List).single as Map;
       expect(target['verdict'], 'exact');
-      expect(target['source_binding'], 'unbound');
-      expect(target['source_comparison'], 'unavailable');
+      // Said once, for the repository: every target's would be the same.
+      expect(target, isNot(contains('source_binding')));
+      expect(target, isNot(contains('source_comparison')));
       expect(run.text, contains('no commit yet · commit to stage or release'));
       expect(run.text, isNot(contains('unbound')));
     },

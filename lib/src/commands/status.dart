@@ -1075,8 +1075,6 @@ class StatusCommand {
       currentVersion: target.currentVersion,
       detail: state.detail,
       uses: target.expectation.uses,
-      sourceBinding: git.hasCommit ? 'gitCommit' : 'unbound',
-      sourceComparison: git.hasCommit ? 'exact' : 'unavailable',
       artifacts: [
         for (final artifact in target.artifacts)
           {

@@ -207,7 +207,6 @@ void main() {
           unit: 'cli',
           summary: 'notarize',
           verdict: 'rejected',
-          took: const Duration(minutes: 4),
         );
 
       final at = Diagnosis.write(
@@ -221,7 +220,6 @@ void main() {
       expect(at, contains('2026-07-29T12-00-00'));
       final run = File('$at/run.json').readAsStringSync();
       expect(run, contains('"verdict": "rejected"'));
-      expect(run, contains('"took_ms": 240000'), reason: 'durations');
       expect(run, contains('"exit": 1'));
       expect(
         File('$at/notarytool.stderr').readAsStringSync(),

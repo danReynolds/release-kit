@@ -369,8 +369,7 @@ executables:
         reason: 'runtime observations do not masquerade as plan steps',
       );
       final plan = run.json['plan']! as Map<String, Object?>;
-      expect(plan['source_only'], isTrue);
-      expect(plan['destinations_inspected'], isFalse);
+      expect(plan.keys, ['units'], reason: 'every plan is source-only');
       final units = (plan['units']! as List).cast<Map<String, Object?>>();
       expect(units.map((unit) => unit['name']), ['lib', 'cli']);
       final libNodes = (units.first['nodes']! as List)
