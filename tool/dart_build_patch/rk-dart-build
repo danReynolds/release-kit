@@ -1,0 +1,28 @@
+#!/bin/sh
+set -eu
+
+if [ "$#" -lt 1 ]; then
+  echo 'Usage: rk-dart-build <Dart 3.13.5 SDK directory> [dart build cli options]' >&2
+  exit 64
+fi
+sdk=$(CDPATH= cd -- "$1" && pwd -P)
+shift
+if [ "$(uname -s)-$(uname -m)" != Darwin-arm64 ] ||
+   [ "$(cat "$sdk/version")" != 3.13.5 ] ||
+   [ "$(cat "$sdk/revision")" != 04bcd1036cdc799ac6564988f159ee454d42c822 ]; then
+  echo 'This preview requires Dart SDK 3.13.5 (04bcd1036cdc) on macOS arm64.' >&2
+  exit 64
+fi
+case "$("$sdk/bin/dartaotruntime" --version 2>&1)" in
+  *'Dart SDK version: 3.13.5 '*'"macos_arm64"'*) ;;
+  *) echo 'The SDK runtime does not match this preview.' >&2; exit 64 ;;
+esac
+bundle=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+runtime_dir=$(mktemp -d "${TMPDIR:-/tmp}/rk-dart-build.XXXXXXXX")
+trap 'rm -rf "$runtime_dir"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+# The resolved runtime locates the stock SDK. The name "dart" makes the SDK's
+# build command select bin/dart for hook subprocesses, not bin/dartaotruntime.
+ln -s "$sdk/bin/dartaotruntime" "$runtime_dir/dart"
+"$runtime_dir/dart" "$bundle/build.aot" "$@"

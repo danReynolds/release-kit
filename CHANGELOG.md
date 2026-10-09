@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- An opt-in [Dart native-build preview](tool/dart_build_patch/README.md) carries
+  the SDK patch for compile-time declarations and separate AOT output while
+  upstream support is pending. It uses stock Dart 3.13.5 on macOS ARM64;
+  native bundle support in `rk stage` and `rk release` remains separate work.
+
 - `rk use local` compiles the checkout for fast command startup. Run it again
   after source edits to rebuild; a failed build keeps the previous commands
   usable. `--live` preserves direct source execution during development.
