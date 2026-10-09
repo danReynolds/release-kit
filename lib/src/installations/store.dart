@@ -205,15 +205,15 @@ class InstallationStore {
   ) {
     final launchers = this.launchers(project);
     final selected = launchers.values.firstOrNull;
-    if (selected == null) return const [];
     return [
       for (final command in project.commands)
         if (launcher(command)?.project case final owner?
             when owner != project.name)
           '$command is selected for $owner, not ${project.name}.'
-        else if (launchers[command]?.source != selected.source)
+        else if (selected != null &&
+            launchers[command]?.source != selected.source)
           '$command is not switched to ${selected.source.label}; run rk use ${selected.source.name} again.'
-        else if (!routes(command, environment))
+        else if (selected != null && !routes(command, environment))
           '$command resolves to ${findExecutable(command, environment) ?? 'nothing'}; put $bin first in PATH.',
     ];
   }

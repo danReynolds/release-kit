@@ -432,7 +432,9 @@ void main(List<String> args) {
         (await Process.run('${store.bin}/orbit_admin', [])).stdout,
         'local orbit_admin\n',
       );
-      expect((await manager.inspect(other)).selected, isNull);
+      final state = await manager.inspect(other);
+      expect(state.selected, isNull);
+      expect(state.routing.single, contains('selected for orbit_cli'));
     });
 
     test('is reported where it took a command over', () async {
