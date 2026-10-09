@@ -18,7 +18,7 @@ void main() {
               'sh',
               const [
                 '-c',
-                'echo ready; sleep 1; echo done; printf warned >&2; exit 4',
+                'echo ready; sleep 0.2; echo done; printf warned >&2; exit 4',
               ],
               onLine: (line) {
                 lines.add(line);
