@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'model.dart';
+import 'provider.dart';
 
 /// Reads one public resource; a [check] can cancel it. Providers take this as
 /// a parameter so tests can serve releases without a network.
@@ -9,30 +10,8 @@ typedef HttpsFetch =
     Future<Uint8List> Function(
       Uri uri,
       int maxBytes, {
-      InstallationCheck? check,
+      InstallationCancellation? check,
     });
-
-/// Cancels read-only checks without waiting for a network timeout on UI exit.
-class InstallationCheck {
-  final _close = <void Function()>{};
-  bool cancelled = false;
-  void add(void Function() close) {
-    if (cancelled) {
-      close();
-    } else {
-      _close.add(close);
-    }
-  }
-
-  void remove(void Function() close) => _close.remove(close);
-  void cancel() {
-    cancelled = true;
-    for (final close in _close.toList()) {
-      close();
-    }
-    _close.clear();
-  }
-}
 
 /// Reads a public pub.dev or GitHub resource over HTTPS, following redirects
 /// only between those hosts, bounded in size and time. A check gives up after
@@ -40,11 +19,11 @@ class InstallationCheck {
 Future<Uint8List> fetchHttps(
   Uri uri,
   int maxBytes, {
-  InstallationCheck? check,
+  InstallationCancellation? check,
 }) async {
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 20);
   void close() => client.close(force: true);
-  check?.add(close);
+  final unregister = check?.onCancel(close);
   final deadline = Timer(
     check == null ? const Duration(minutes: 3) : const Duration(seconds: 15),
     close,
@@ -101,7 +80,7 @@ Future<Uint8List> fetchHttps(
     }
     throw const InstallationFailure('A download was redirected too often.');
   } finally {
-    check?.remove(close);
+    unregister?.call();
     deadline.cancel();
     client.close(force: true);
   }

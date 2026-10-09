@@ -3,8 +3,6 @@ import 'dart:async';
 import 'package:fleury/fleury.dart';
 
 import '../engine/version.dart';
-import '../installations/manager.dart';
-import '../installations/metadata.dart';
 import '../installations/model.dart';
 import '../installations/provider.dart';
 import '../output/output.dart' show terminalSafeText;
@@ -24,7 +22,7 @@ typedef CheckAvailable =
     Future<AvailableInstallation> Function(
       ExecutableProject,
       InstallationSource,
-      InstallationCheck,
+      InstallationCancellation,
     );
 typedef DownloadAvailable =
     Future<String> Function(
@@ -39,7 +37,7 @@ class AvailableState {
   bool checking = false;
   AvailableInstallation? release;
   String? error;
-  InstallationCheck? request;
+  InstallationCancellation? request;
 }
 
 /// Mutation execution is serialized by the picker, matching the manager/store
@@ -131,7 +129,7 @@ class UsePicker extends Notifier {
     if (_disposed || closing) return;
     final result = availability(state, source);
     result.request?.cancel();
-    final request = result.request = InstallationCheck();
+    final request = result.request = InstallationCancellation();
     result.checking = true;
     result.error = null;
     notify();

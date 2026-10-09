@@ -105,7 +105,7 @@ class HomebrewInstallationProvider implements InstallationProvider {
   @override
   Future<AvailableInstallation> latest(
     ExecutableProject project, {
-    InstallationCheck? check,
+    InstallationCancellation? check,
   }) async {
     if (brew == null) {
       throw const InstallationFailure('Install Homebrew to use this source.');

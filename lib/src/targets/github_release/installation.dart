@@ -80,7 +80,7 @@ class GithubInstallationProvider implements InstallationProvider {
   @override
   Future<AvailableInstallation> latest(
     ExecutableProject project, {
-    InstallationCheck? check,
+    InstallationCancellation? check,
   }) async {
     if (project.repository == null ||
         project.unit.tagPattern == null ||

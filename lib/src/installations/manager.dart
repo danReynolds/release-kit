@@ -3,21 +3,21 @@ import 'dart:async';
 
 import 'model.dart';
 import '../engine/version.dart';
-import 'metadata.dart';
 import 'provider.dart';
 import 'store.dart';
 
-class InstallationCancellation {
-  bool requested = false;
-  void cancel() => requested = true;
-  void check() {
-    if (requested) {
-      throw const InstallationFailure(
-        'Selection cancelled.',
-        'Any completed installation was kept; the previous selection was not changed.',
-      );
-    }
-  }
+/// One change to a project's installations: what `rk use`, `rk install` and
+/// `rk uninstall` ask for, and what the picker queues.
+final class Operation {
+  Operation(this.project, this.source, this.action, {this.release})
+    : assert(release == null || action == InstallationAction.install);
+  final ExecutableProject project;
+  final InstallationSource source;
+  final InstallationAction action;
+
+  /// The checked version Install, Update and `--latest` install.
+  final AvailableInstallation? release;
+  final cancellation = InstallationCancellation();
 }
 
 class InstallationManager {
@@ -33,15 +33,10 @@ class InstallationManager {
   Future<ProjectInstallations> inspect(ExecutableProject project) async {
     final states = <InstallationSource, SourceInspection>{};
     for (final source in project.sources) {
-      final provider = providers[source];
-      if (provider == null) {
-        states[source] = const SourceInspection(
-          problem: 'Provider unavailable in this build.',
-        );
-        continue;
-      }
       try {
-        states[source] = await _providerCall(() => provider.inspect(project));
+        states[source] = await _providerCall(
+          () => _provider(project, source).inspect(project),
+        );
       } on InstallationFailure catch (error) {
         states[source] = SourceInspection(problem: error.message);
       }
@@ -82,113 +77,45 @@ class InstallationManager {
   Future<AvailableInstallation> latest(
     ExecutableProject project,
     InstallationSource source, {
-    InstallationCheck? check,
-  }) async {
-    final provider = providers[source];
-    if (!project.sources.contains(source) || provider == null) {
-      throw const InstallationFailure(
-        'This source does not provide remote updates.',
-      );
-    }
-    return _providerCall(() => provider.latest(project, check: check));
-  }
+    InstallationCancellation? check,
+  }) => _providerCall(
+    () => _provider(project, source).latest(project, check: check),
+  );
 
-  Future<String> download(
-    ExecutableProject project,
-    InstallationSource source,
-    AvailableInstallation release, {
+  /// Performs [operation]. Callers run one at a time: the CLI runs one, and
+  /// the picker queues them. install.lock keeps other processes out.
+  Future<String> apply(
+    Operation operation, {
     required void Function(String) progress,
-    InstallationCancellation? cancellation,
   }) async {
-    final provider = providers[source];
-    if (!project.sources.contains(source) || provider == null) {
-      throw const InstallationFailure(
-        'This source does not provide downloads.',
-      );
-    }
+    final Operation(:project, :source, :action, :release, :cancellation) =
+        operation;
+    final provider = _provider(project, source);
     final lock = store.lock();
     try {
-      cancellation?.check();
-      final current = store.selected(project)?.source;
-      final inspected = await _providerCall(() => provider.inspect(project));
-      if (inspected.problem != null) {
-        throw InstallationFailure(inspected.problem!);
-      }
-      final previousVersion = inspected.installation?.version;
-      final previous = previousVersion == null
-          ? null
-          : Version.tryParse(previousVersion);
-      final next = Version.tryParse(release.version);
-      if (previousVersion == release.version && current != source) {
-        return '${project.name} · ${source.label} ${release.version} is already installed. Source selection unchanged.';
-      }
-      if (previous != null && next != null && previous.compareTo(next) > 0) {
-        throw const InstallationFailure(
-          'A newer version is already installed.',
-          'Refresh the table before downloading.',
-        );
-      }
-      cancellation?.check();
-      if (current == source) store.checkOwnership(project);
-      // An update of the selected source that stopped after installing, before
-      // routing, finishes here: the launchers move to the version installed.
-      final installed = previousVersion == release.version
-          ? inspected.installation!
-          : await _providerCall(
-              () => provider.install(project, release, progress),
-            );
-      // A package manager may already have committed its update. Finish the
-      // routing even when cancellation arrived meanwhile. Updating the selected
-      // source advances that source, never selects another.
-      if (current == source) await store.activate(project, installed);
-      store.retire(project, installed);
-      return '${project.name} · ${source.label} ${installed.version} installed. '
-          '${current == source ? 'Using it on the next command.' : 'Source selection unchanged.'}';
-    } finally {
-      lock.unlockSync();
-      lock.closeSync();
-    }
-  }
-
-  Future<String> act(
-    ExecutableProject project,
-    InstallationSource source,
-    InstallationAction action, {
-    required void Function(String) progress,
-    InstallationCancellation? cancellation,
-  }) async {
-    if (!project.sources.contains(source)) {
-      throw InstallationFailure(
-        '${project.name} does not support ${source.label}.',
-        'Available sources: ${project.sources.map((s) => s.name).join(', ')}.',
-      );
-    }
-    final provider = providers[source];
-    if (provider == null) {
-      throw InstallationFailure(
-        '${source.label} is unavailable in this build.',
-      );
-    }
-    final lock = store.lock();
-    try {
-      cancellation?.check();
-      if (action == InstallationAction.use) store.checkOwnership(project);
+      cancellation.check();
+      final launchers = store.launchers(project).values;
+      // Use selects the source; updating the selected source advances it,
+      // and never selects another.
+      final routes =
+          action == InstallationAction.use ||
+          (release != null && launchers.firstOrNull?.source == source);
       // Any of the project's commands may run it, not only the first.
       if (action == InstallationAction.uninstall &&
-          store.launchers(project).values.any((l) => l.source == source)) {
+          launchers.any((l) => l.source == source)) {
         throw InstallationFailure(
           '${source.label} is selected for ${project.name}.',
           'Run rk use with another source first.',
         );
       }
+      if (routes) store.checkOwnership(project);
       final inspected = await _providerCall(() => provider.inspect(project));
+      var installation = inspected.installation;
       if (inspected.problem != null &&
-          !(action == InstallationAction.uninstall &&
-              inspected.installation != null)) {
+          !(action == InstallationAction.uninstall && installation != null)) {
         throw InstallationFailure(inspected.problem!);
       }
       if (action == InstallationAction.uninstall) {
-        final installation = inspected.installation;
         if (installation == null) {
           return '${project.name} is not installed from ${source.label}.';
         }
@@ -204,37 +131,78 @@ class InstallationManager {
             );
           }
         }
-        cancellation?.check();
+        cancellation.check();
         progress('Removing ${project.name} from ${source.label}…');
         await _providerCall(() => provider.uninstall(project));
         return '${project.name} removed from ${source.label}.${source == InstallationSource.local ? ' Checkout kept.' : ''}';
       }
+      if (release != null && installation != null) {
+        if (installation.version == release.version && !routes) {
+          return '${project.name} · ${source.label} ${release.version} is already installed. Source selection unchanged.';
+        }
+        final previous = Version.tryParse(installation.version);
+        final next = Version.tryParse(release.version);
+        if (previous != null && next != null && previous.compareTo(next) > 0) {
+          throw const InstallationFailure(
+            'A newer version is already installed.',
+            'Refresh the table before downloading.',
+          );
+        }
+      }
       // Local preparation rebinds this exact checkout and refreshes its native
-      // dependency graph. Other installed providers are reused, never upgraded.
-      final installation =
-          source == InstallationSource.local || inspected.installation == null
-          ? await _providerCall(() => provider.install(project, null, progress))
-          : inspected.installation!;
-      cancellation?.check();
-      if (action == InstallationAction.install) {
+      // dependency graph. Other installed providers are reused, never
+      // upgraded. A checked release installs unless that version is there: an
+      // update of the selected source that stopped before routing finishes.
+      if (installation == null ||
+          source == InstallationSource.local ||
+          (release != null && installation.version != release.version)) {
+        cancellation.check();
+        installation = await _providerCall<Installation>(
+          () => provider.install(project, release, progress),
+        );
+      }
+      if (action == InstallationAction.install && release == null) {
         store.retire(project, installation);
         // Local is the checkout itself: it counts as installed once selected.
         return source == InstallationSource.local
             ? '${project.name} prepared in this checkout. Selection unchanged.'
             : '${project.name} installed from ${source.label}. Selection unchanged.';
       }
-      await store.activate(
-        project,
-        installation,
-        beforeCommit: cancellation?.check,
-      );
+      // A switch can be cancelled until its launchers are written. A package
+      // manager may already have committed an update: its routing finishes
+      // even when cancellation arrived meanwhile.
+      if (routes) {
+        await store.activate(
+          project,
+          installation,
+          beforeCommit: release == null ? cancellation.check : null,
+        );
+      }
       store.retire(project, installation);
-      return '${project.name} → ${source.label} · ${installation.version}';
+      if (release != null) {
+        return '${project.name} · ${source.label} ${installation.version} installed. '
+            '${routes ? 'Using it on the next command.' : 'Source selection unchanged.'}';
+      }
+      final path = await store.putFirstOnPath(project, environment);
+      return [
+        '${project.name} → ${source.label} · ${installation.version}',
+        ?path,
+      ].join('\n');
     } finally {
       lock.unlockSync();
       lock.closeSync();
     }
   }
+
+  InstallationProvider _provider(
+    ExecutableProject project,
+    InstallationSource source,
+  ) =>
+      (project.sources.contains(source) ? providers[source] : null) ??
+      (throw InstallationFailure(
+        '${project.name} does not support ${source.label}.',
+        'Available sources: ${project.sources.map((s) => s.name).join(', ')}.',
+      ));
 }
 
 Future<T> _providerCall<T>(Future<T> Function() operation) async {

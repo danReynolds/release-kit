@@ -155,7 +155,7 @@ class PubInstallationProvider implements InstallationProvider {
   @override
   Future<AvailableInstallation> latest(
     ExecutableProject project, {
-    InstallationCheck? check,
+    InstallationCancellation? check,
   }) async {
     if (dart == null || !project.project.pubspec.declaresPubDev) {
       throw const InstallationFailure(

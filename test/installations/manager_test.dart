@@ -4,7 +4,7 @@ import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/installations/local.dart';
 import 'package:rk/src/installations/manager.dart';
 import 'package:rk/src/installations/model.dart';
-import 'package:rk/src/installations/shell_routing.dart';
+import 'package:rk/src/installations/provider.dart';
 import 'package:rk/src/installations/store.dart';
 import 'package:test/test.dart';
 import 'fixtures.dart';
@@ -28,16 +28,13 @@ void main() {
     );
   });
   tearDown(() => scratch.deleteSync(recursive: true));
-  Future<String> act(
+  Future<String> apply(
     InstallationSource source,
     InstallationAction action, {
-    InstallationCancellation? cancel,
-  }) => manager.act(
-    project,
-    source,
-    action,
+    AvailableInstallation? release,
+  }) => manager.apply(
+    Operation(project, source, action, release: release),
     progress: (_) {},
-    cancellation: cancel,
   );
 
   test(
@@ -68,14 +65,14 @@ void main(List<String> args) {
         'locked',
       );
       await expectLater(
-        act(local.source, InstallationAction.use),
+        apply(local.source, InstallationAction.use),
         throwsA(isA<InstallationFailure>()),
       );
       expect(local.installs, 0);
       child.stdin.writeln();
       await child.stdin.close();
       expect(await child.exitCode, 0);
-      await act(local.source, InstallationAction.use);
+      await apply(local.source, InstallationAction.use);
       expect(store.selected(project)!.source, local.source);
     },
   );
@@ -104,10 +101,8 @@ void main(List<String> args) {
       final state = await external.inspect(project);
       expect(state.currentSources['orbit'], pub.source);
       await expectLater(
-        external.act(
-          project,
-          pub.source,
-          InstallationAction.uninstall,
+        external.apply(
+          Operation(project, pub.source, InstallationAction.uninstall),
           progress: (_) {},
         ),
         throwsA(isA<InstallationFailure>()),
@@ -119,10 +114,10 @@ void main(List<String> args) {
   test(
     'install does not select; use switches every exported command',
     () async {
-      await act(local.source, InstallationAction.install);
+      await apply(local.source, InstallationAction.install);
       expect(store.selected(project), isNull);
       expect(Directory(store.bin).existsSync(), isFalse);
-      await act(local.source, InstallationAction.use);
+      await apply(local.source, InstallationAction.use);
       for (final command in project.commands) {
         expect(
           (await Process.run('${store.bin}/$command', [
@@ -132,9 +127,9 @@ void main(List<String> args) {
           'local $command hello world \$HOME\n',
         );
       }
-      await act(pub.source, InstallationAction.install);
+      await apply(pub.source, InstallationAction.install);
       expect(store.selected(project)!.source, local.source);
-      await act(pub.source, InstallationAction.use);
+      await apply(pub.source, InstallationAction.use);
       expect(
         pub.installs,
         1,
@@ -163,10 +158,8 @@ void main(List<String> args) {
         providers: {provider.source: provider},
         environment: manager.environment,
       );
-      final message = await live.act(
-        project,
-        provider.source,
-        InstallationAction.install,
+      final message = await live.apply(
+        Operation(project, provider.source, InstallationAction.install),
         progress: (_) {},
       );
       final state = await live.inspect(project);
@@ -184,10 +177,8 @@ void main(List<String> args) {
         providers: manager.providers,
         environment: {'PATH': '${store.bin}/:/usr/bin:/bin'},
       );
-      await slashed.act(
-        project,
-        local.source,
-        InstallationAction.use,
+      await slashed.apply(
+        Operation(project, local.source, InstallationAction.use),
         progress: (_) {},
       );
       final state = await slashed.inspect(project);
@@ -199,18 +190,18 @@ void main(List<String> args) {
   test(
     'failed or cancelled preparation leaves old selection runnable',
     () async {
-      await act(local.source, InstallationAction.use);
+      await apply(local.source, InstallationAction.use);
       pub.fail = true;
       await expectLater(
-        act(pub.source, InstallationAction.use),
+        apply(pub.source, InstallationAction.use),
         throwsA(isA<InstallationFailure>()),
       );
       expect(store.selected(project)!.source, local.source);
       pub.fail = false;
-      final cancel = InstallationCancellation();
-      pub.preparing = () async => cancel.cancel();
+      final cancelled = Operation(project, pub.source, InstallationAction.use);
+      pub.preparing = () async => cancelled.cancellation.cancel();
       await expectLater(
-        act(pub.source, InstallationAction.use, cancel: cancel),
+        manager.apply(cancelled, progress: (_) {}),
         throwsA(isA<InstallationFailure>()),
       );
       expect(store.selected(project)!.source, local.source);
@@ -226,25 +217,25 @@ void main(List<String> args) {
     'refuses unsupported sources, active removal, and command collisions before installing',
     () async {
       await expectLater(
-        act(InstallationSource.github, InstallationAction.use),
+        apply(InstallationSource.github, InstallationAction.use),
         throwsA(isA<InstallationFailure>()),
       );
       Directory(store.bin).createSync(recursive: true);
       File('${store.bin}/orbit').writeAsStringSync('somebody else');
       await expectLater(
-        act(local.source, InstallationAction.use),
+        apply(local.source, InstallationAction.use),
         throwsA(isA<InstallationFailure>()),
       );
       expect(local.installs, 0);
       File('${store.bin}/orbit').deleteSync();
-      await act(local.source, InstallationAction.use);
+      await apply(local.source, InstallationAction.use);
       await expectLater(
-        act(local.source, InstallationAction.uninstall),
+        apply(local.source, InstallationAction.uninstall),
         throwsA(isA<InstallationFailure>()),
       );
       expect(local.removals, 0);
-      await act(pub.source, InstallationAction.use);
-      await act(local.source, InstallationAction.uninstall);
+      await apply(pub.source, InstallationAction.use);
+      await apply(local.source, InstallationAction.uninstall);
       expect(store.selected(project)!.source, pub.source);
       expect(Directory(project.directory).existsSync(), isTrue);
       expect(
@@ -257,11 +248,11 @@ void main(List<String> args) {
   test(
     'switching back and forth leaves nothing behind but the launchers',
     () async {
-      await act(local.source, InstallationAction.use);
-      await act(pub.source, InstallationAction.install);
-      await act(pub.source, InstallationAction.use);
-      await act(local.source, InstallationAction.use);
-      await act(pub.source, InstallationAction.install);
+      await apply(local.source, InstallationAction.use);
+      await apply(pub.source, InstallationAction.install);
+      await apply(pub.source, InstallationAction.use);
+      await apply(local.source, InstallationAction.use);
+      await apply(pub.source, InstallationAction.install);
       final state =
           Directory(store.root)
               .listSync(recursive: true)
@@ -277,7 +268,7 @@ void main(List<String> args) {
   test(
     'a project whose origin changed keeps its selection and takes its own launchers back',
     () async {
-      await act(pub.source, InstallationAction.use);
+      await apply(pub.source, InstallationAction.use);
       final renamed = ExecutableProject(
         root: project.root,
         unit: project.unit,
@@ -288,7 +279,7 @@ void main(List<String> args) {
       Future<String> actRenamed(
         InstallationSource source,
         InstallationAction action,
-      ) => manager.act(renamed, source, action, progress: (_) {});
+      ) => manager.apply(Operation(renamed, source, action), progress: (_) {});
       expect((await manager.inspect(renamed)).selected, pub.source);
       await expectLater(
         actRenamed(pub.source, InstallationAction.uninstall),
@@ -352,7 +343,7 @@ void main(List<String> args) {
       );
       expect((await manager.inspect(project)).selected, pub.source);
       await expectLater(
-        act(pub.source, InstallationAction.uninstall),
+        apply(pub.source, InstallationAction.uninstall),
         throwsA(isA<InstallationFailure>()),
       );
       expect(pub.removals, 0);
@@ -360,7 +351,7 @@ void main(List<String> args) {
         (await Process.run('${store.bin}/orbit', [])).stdout,
         'legacy orbit\n',
       );
-      await act(local.source, InstallationAction.use);
+      await apply(local.source, InstallationAction.use);
       expect(
         (await Process.run('${store.bin}/orbit', [])).stdout,
         'local orbit\n',
@@ -371,7 +362,7 @@ void main(List<String> args) {
   test(
     'a switch interrupted between commands keeps both sources it runs',
     () async {
-      await act(pub.source, InstallationAction.use);
+      await apply(pub.source, InstallationAction.use);
       // The switch to Local wrote orbit's launcher, then stopped.
       final first = ExecutableProject(
         root: project.root,
@@ -380,10 +371,8 @@ void main(List<String> args) {
         entrypoints: {'orbit': project.entrypoints['orbit']!},
         repository: project.repository,
       );
-      await manager.act(
-        first,
-        local.source,
-        InstallationAction.use,
+      await manager.apply(
+        Operation(first, local.source, InstallationAction.use),
         progress: (_) {},
       );
       final state = await manager.inspect(project);
@@ -393,7 +382,7 @@ void main(List<String> args) {
       });
       expect(state.routing.single, contains('run rk use local again'));
       await expectLater(
-        act(pub.source, InstallationAction.uninstall),
+        apply(pub.source, InstallationAction.uninstall),
         throwsA(isA<InstallationFailure>()),
       );
       expect(pub.removals, 0);
@@ -413,11 +402,13 @@ void main(List<String> args) {
     setUp(
       () => other = fixture(scratch, name: 'other', commands: ['orbit_admin']),
     );
-    Future<String> actOther(InstallationSource source) =>
-        manager.act(other, source, InstallationAction.use, progress: (_) {});
+    Future<String> actOther(InstallationSource source) => manager.apply(
+      Operation(other, source, InstallationAction.use),
+      progress: (_) {},
+    );
 
     test('cannot take over a command this project selected', () async {
-      await act(local.source, InstallationAction.use);
+      await apply(local.source, InstallationAction.use);
       await expectLater(
         actOther(pub.source),
         throwsA(
@@ -438,7 +429,7 @@ void main(List<String> args) {
     });
 
     test('is reported where it took a command over', () async {
-      await act(local.source, InstallationAction.use);
+      await apply(local.source, InstallationAction.use);
       File('${store.bin}/orbit_admin').deleteSync();
       var state = await manager.inspect(project);
       expect(state.selected, local.source);
@@ -462,6 +453,9 @@ void main(List<String> args) {
         ...Platform.environment,
         'HOME': scratch.path,
         'PUB_CACHE': '${scratch.path}/pub-cache',
+        // Selecting puts the launchers first on PATH; never in the
+        // developer's own fish.
+        'SHELL': '/bin/sh',
       };
       final tools = TestTools(
         (exe, args, cwd, env) => const SystemTools().run(
@@ -481,10 +475,8 @@ void main(List<String> args) {
         providers: {provider.source: provider},
         environment: environment,
       );
-      await live.act(
-        project,
-        provider.source,
-        InstallationAction.use,
+      await live.apply(
+        Operation(project, provider.source, InstallationAction.use),
         progress: (_) {},
       );
       final caller = Directory('${scratch.path}/caller with space')
@@ -522,7 +514,7 @@ void main(List<String> args) {
     () async {
       final fish = findExecutable('fish', Platform.environment);
       if (fish == null) return;
-      await act(local.source, InstallationAction.use);
+      await apply(local.source, InstallationAction.use);
       final env = {
         ...Platform.environment,
         'HOME': scratch.path,
@@ -530,11 +522,7 @@ void main(List<String> args) {
         'SHELL': fish,
         'PATH': '/usr/bin:/bin',
       };
-      final message = await ShellRouting(
-        store,
-        const SystemTools(),
-        env,
-      ).ensure(project);
+      final message = await store.putFirstOnPath(project, env);
       expect(message, equals('Ready at the next prompt.'));
       final resolved = await Process.run(fish, [
         '-c',

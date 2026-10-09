@@ -16,7 +16,6 @@ import 'package:rk/src/installations/local.dart';
 import 'package:rk/src/installations/provider.dart';
 import 'package:rk/src/installations/manager.dart';
 import 'package:rk/src/installations/model.dart';
-import 'package:rk/src/installations/shell_routing.dart';
 import 'package:rk/src/installations/store.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/targets/github_release/installation.dart';
@@ -290,79 +289,24 @@ Future<int> _run(
     return states;
   }
 
-  Future<String> downloadLatest(
-    ExecutableProject project,
-    InstallationSource source,
-    AvailableInstallation release,
+  Future<String> perform(
+    Operation operation,
     void Function(String) progress,
-    InstallationCancellation cancellation,
   ) async {
-    cancellation.check();
     output.report.acted = true;
-    final message = await manager.download(
-      project,
-      source,
-      release,
-      progress: progress,
-      cancellation: cancellation,
-    );
+    final message = await manager.apply(operation, progress: progress);
     outcomes.add(message);
     return message;
   }
 
-  Future<String> operate(
-    ExecutableProject project,
-    InstallationSource source,
-    void Function(String) progress,
-    InstallationCancellation cancellation, [
-    InstallationAction? override,
-  ]) async {
-    final action = override ?? commandAction;
-    cancellation.check();
-    output.report.acted = true;
-    final result = await manager.act(
-      project,
-      source,
-      action,
-      progress: progress,
-      cancellation: cancellation,
-    );
-    final routing = action == InstallationAction.use
-        ? await ShellRouting(store, tools, environment).ensure(project)
-        : null;
-    final message = [result, if (routing != null) routing].join('\n');
-    outcomes.add(message);
-    return message;
-  }
-
-  Future<String> installLatest(
-    ExecutableProject project,
-    InstallationSource source,
+  // The picker cancels its own token; the operation follows it.
+  Future<String> picked(
+    Operation operation,
     void Function(String) progress,
     InstallationCancellation cancellation,
-  ) async {
-    final release = await manager.latest(project, source);
-    cancellation.check();
-    return downloadLatest(project, source, release, progress, cancellation);
-  }
-
-  Future<String> remove(
-    ExecutableProject project,
-    InstallationSource source,
-    void Function(String) progress,
-    InstallationCancellation cancellation,
-  ) async {
-    cancellation.check();
-    output.report.acted = true;
-    final message = await manager.act(
-      project,
-      source,
-      InstallationAction.uninstall,
-      progress: progress,
-      cancellation: cancellation,
-    );
-    outcomes.add(message);
-    return message;
+  ) {
+    cancellation.onCancel(operation.cancellation.cancel);
+    return perform(operation, progress);
   }
 
   final interactive =
@@ -375,18 +319,30 @@ Future<int> _run(
     final result = await runUsePicker(
       states: states,
       refresh: refresh,
-      use: (project, source, progress, cancellation) => operate(
-        project,
-        source,
+      use: (project, source, progress, cancellation) => picked(
+        Operation(project, source, InstallationAction.use),
         progress,
         cancellation,
-        InstallationAction.use,
       ),
-      uninstall: remove,
+      uninstall: (project, source, progress, cancellation) => picked(
+        Operation(project, source, InstallationAction.uninstall),
+        progress,
+        cancellation,
+      ),
       command: 'rk $command',
       checkAvailable: (project, source, check) =>
           manager.latest(project, source, check: check),
-      downloadAvailable: downloadLatest,
+      downloadAvailable: (project, source, release, progress, cancellation) =>
+          picked(
+            Operation(
+              project,
+              source,
+              InstallationAction.install,
+              release: release,
+            ),
+            progress,
+            cancellation,
+          ),
     );
     // The picker refreshes after operations. Dismissing it is not another
     // inspection: a Homebrew subprocess here delayed even an idle Ctrl+C.
@@ -451,11 +407,12 @@ Future<int> _run(
       }
     }
     try {
-      final result = await (latest ? installLatest : operate)(
-        projects.single,
-        source,
+      final release = latest
+          ? await manager.latest(projects.single, source)
+          : null;
+      final result = await perform(
+        Operation(projects.single, source, commandAction, release: release),
         (message) => output.say(message),
-        InstallationCancellation(),
       );
       _result(output, result);
     } finally {

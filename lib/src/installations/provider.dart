@@ -1,6 +1,5 @@
 import '../engine/tools.dart';
 import 'model.dart';
-import 'metadata.dart';
 
 /// Installation capability lives beside a provider, not in UI/release lifecycle.
 abstract interface class InstallationProvider {
@@ -13,7 +12,7 @@ abstract interface class InstallationProvider {
   /// checkout.
   Future<AvailableInstallation> latest(
     ExecutableProject project, {
-    InstallationCheck? check,
+    InstallationCancellation? check,
   });
 
   /// Installs exactly [release], or what the package manager picks without
@@ -25,6 +24,41 @@ abstract interface class InstallationProvider {
     void Function(String) progress,
   );
   Future<void> uninstall(ExecutableProject project);
+}
+
+/// Cancels an operation before its next step, and a check's network requests
+/// at once, so closing the picker never waits for a timeout.
+class InstallationCancellation {
+  final _onCancel = <void Function()>{};
+  bool cancelled = false;
+
+  void cancel() {
+    cancelled = true;
+    for (final close in _onCancel.toList()) {
+      close();
+    }
+    _onCancel.clear();
+  }
+
+  void check() {
+    if (cancelled) {
+      throw const InstallationFailure(
+        'Selection cancelled.',
+        'Any completed installation was kept; the previous selection was not changed.',
+      );
+    }
+  }
+
+  /// Calls [close] on cancellation, at once if cancelled already, and
+  /// returns what unregisters it.
+  void Function() onCancel(void Function() close) {
+    if (cancelled) {
+      close();
+    } else {
+      _onCancel.add(close);
+    }
+    return () => _onCancel.remove(close);
+  }
 }
 
 Future<ToolResult> checked(

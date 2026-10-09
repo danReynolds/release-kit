@@ -162,7 +162,7 @@ void main() {
             calls++;
             await gate.future;
             if (failure) throw const InstallationFailure('Download failed.');
-            expect(cancel.requested, isTrue);
+            expect(cancel.cancelled, isTrue);
             return 'Completed installation';
           },
           use: (_, _, _, _) async => throw StateError('No switch'),

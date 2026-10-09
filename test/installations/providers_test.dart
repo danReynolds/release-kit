@@ -8,6 +8,7 @@ import 'package:rk/src/engine/release_manifest.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/installations/manager.dart';
 import 'package:rk/src/installations/model.dart';
+import 'package:rk/src/installations/provider.dart';
 import 'package:rk/src/installations/store.dart';
 import 'package:rk/src/targets/github_release/installation.dart';
 import 'package:rk/src/targets/homebrew/installation.dart';
@@ -317,10 +318,8 @@ void main() {
         },
         environment: {'PATH': '${store.bin}:/usr/bin:/bin'},
       );
-      await manager.act(
-        project,
-        InstallationSource.homebrew,
-        InstallationAction.use,
+      await manager.apply(
+        Operation(project, InstallationSource.homebrew, InstallationAction.use),
         progress: (_) {},
       );
       Future<ProcessResult> orbit() => Process.run('${store.bin}/orbit', []);
@@ -359,27 +358,32 @@ void main() {
       );
       downloads = Directory(store.downloads(project));
     });
-    Future<String> act(InstallationSource source, InstallationAction action) =>
-        manager.act(project, source, action, progress: (_) {});
+    Future<String> apply(
+      InstallationSource source,
+      InstallationAction action, {
+      AvailableInstallation? release,
+    }) => manager.apply(
+      Operation(project, source, action, release: release),
+      progress: (_) {},
+    );
     Future<String> orbit() async =>
         (await Process.run('${store.bin}/orbit', [])).stdout as String;
 
     test(
       'an update replaces the previous download; uninstall removes every one',
       () async {
-        await act(github.source, InstallationAction.use);
+        await apply(github.source, InstallationAction.use);
         expect(await orbit(), 'release 1.1.0\n');
         releases.publish('1.2.0');
-        await manager.download(
-          project,
+        await apply(
           github.source,
-          await manager.latest(project, github.source),
-          progress: (_) {},
+          InstallationAction.install,
+          release: await manager.latest(project, github.source),
         );
         expect(await orbit(), 'release 1.2.0\n');
         expect(downloads.listSync(), hasLength(1));
-        await act(local.source, InstallationAction.use);
-        await act(github.source, InstallationAction.uninstall);
+        await apply(local.source, InstallationAction.use);
+        await apply(github.source, InstallationAction.uninstall);
         expect(downloads.existsSync(), isFalse);
       },
     );
@@ -387,18 +391,17 @@ void main() {
     test(
       'an update interrupted before routing finishes when it runs again',
       () async {
-        await act(github.source, InstallationAction.use);
+        await apply(github.source, InstallationAction.use);
         releases.publish('1.2.0');
         final release = await manager.latest(project, github.source);
         // The update unpacked and renamed its download, then stopped.
         await github.install(project, release, (_) {});
         expect(await orbit(), 'release 1.1.0\n');
         final fetched = releases.archiveFetches;
-        await manager.download(
-          project,
+        await apply(
           github.source,
-          release,
-          progress: (_) {},
+          InstallationAction.install,
+          release: release,
         );
         expect(await orbit(), 'release 1.2.0\n');
         expect(downloads.listSync(), hasLength(1));
@@ -409,7 +412,7 @@ void main() {
     test(
       'a renamed origin keeps its download, and uninstall still removes it',
       () async {
-        await act(github.source, InstallationAction.use);
+        await apply(github.source, InstallationAction.use);
         final renamed = ExecutableProject(
           root: project.root,
           unit: project.unit,
@@ -420,7 +423,8 @@ void main() {
         Future<String> actRenamed(
           InstallationSource source,
           InstallationAction action,
-        ) => manager.act(renamed, source, action, progress: (_) {});
+        ) =>
+            manager.apply(Operation(renamed, source, action), progress: (_) {});
         final state = await manager.inspect(renamed);
         expect(state.sources[github.source]!.installation!.version, '1.1.0');
         await actRenamed(local.source, InstallationAction.use);
@@ -437,7 +441,7 @@ void main() {
         await github.install(project, null, (_) {});
         Directory('${downloads.path}/preparing-interrupted').createSync();
         final fetched = releases.archiveFetches;
-        await act(github.source, InstallationAction.use);
+        await apply(github.source, InstallationAction.use);
         expect(releases.archiveFetches, fetched);
         expect(await orbit(), 'release 1.1.0\n');
         expect(downloads.listSync(), hasLength(1));

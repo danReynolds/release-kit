@@ -3,7 +3,6 @@ import 'dart:io';
 import '../engine/tools.dart';
 import 'model.dart';
 import 'local_bootstrap.dart';
-import 'metadata.dart';
 import 'provider.dart';
 import 'store.dart';
 
@@ -74,7 +73,7 @@ class LocalInstallationProvider implements InstallationProvider {
   @override
   Future<AvailableInstallation> latest(
     ExecutableProject project, {
-    InstallationCheck? check,
+    InstallationCancellation? check,
   }) async => throw const InstallationFailure(followsCheckout);
 
   @override

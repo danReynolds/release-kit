@@ -160,6 +160,8 @@ published finishes with 0.1.14.
   deleted.
 - Local is the checkout itself: `rk install local` prepares it, and Local
   shows as installed only while it is selected.
+- Cancelling a switch before its package manager starts installs nothing;
+  it used to install, then refuse to switch.
 - rk's bin directory on PATH written with a trailing slash, or through a
   link, counts as first: `rk use` no longer says to put it there.
 - Bare `rk install` and `rk uninstall` open the `rk use` table.

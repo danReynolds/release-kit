@@ -7,7 +7,6 @@ import 'package:fleury/fleury.dart';
 import 'package:fleury/fleury_test_support.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/installations/manager.dart';
-import 'package:rk/src/installations/metadata.dart';
 import 'package:rk/src/installations/model.dart';
 import 'package:rk/src/installations/provider.dart';
 import 'package:rk/src/installations/store.dart';
@@ -53,37 +52,33 @@ void main() {
         providers: {local.source: local, pub.source: pub},
         environment: {},
       );
-      await manager.act(
-        project,
-        local.source,
-        InstallationAction.use,
+      Future<String> apply(
+        InstallationSource source,
+        InstallationAction action, {
+        AvailableInstallation? release,
+      }) => manager.apply(
+        Operation(project, source, action, release: release),
         progress: (_) {},
       );
-      await manager.download(
-        project,
+      await apply(local.source, InstallationAction.use);
+      await apply(
         pub.source,
-        await pub.latest(project),
-        progress: (_) {},
+        InstallationAction.install,
+        release: await pub.latest(project),
       );
       expect(store.selected(project)!.source, local.source);
       expect((await pub.inspect(project)).installation!.version, '1.3.0');
-      await manager.act(
+      await apply(pub.source, InstallationAction.use);
+      final update = Operation(
         project,
         pub.source,
-        InstallationAction.use,
-        progress: (_) {},
+        InstallationAction.install,
+        release: const AvailableInstallation('1.4.0'),
       );
-      final cancel = InstallationCancellation();
       pub.preparing = () async {
-        cancel.cancel();
+        update.cancellation.cancel();
       };
-      await manager.download(
-        project,
-        pub.source,
-        const AvailableInstallation('1.4.0'),
-        progress: (_) {},
-        cancellation: cancel,
-      );
+      await manager.apply(update, progress: (_) {});
       expect(store.selected(project)!.source, pub.source);
       for (final command in project.commands) {
         expect(
@@ -92,11 +87,10 @@ void main() {
         );
       }
       await expectLater(
-        manager.download(
-          project,
+        apply(
           pub.source,
-          const AvailableInstallation('1.3.0'),
-          progress: (_) {},
+          InstallationAction.install,
+          release: const AvailableInstallation('1.3.0'),
         ),
         throwsA(
           isA<InstallationFailure>().having(
@@ -121,7 +115,7 @@ void main() {
         }),
       ];
       final replies = <Completer<AvailableInstallation>>[];
-      final requests = <InstallationCheck>[];
+      final requests = <InstallationCancellation>[];
       final model = UsePicker(
         states: states,
         refresh: () async => states,

@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:rk/src/transforms/digest.dart';
 import 'package:rk/src/transforms/archive.dart';
-import 'package:rk/src/installations/metadata.dart';
 import 'package:rk/src/engine/release_manifest.dart';
 import 'package:rk/src/engine/assets.dart';
 import 'dart:typed_data';
@@ -77,7 +76,7 @@ class StubProvider implements InstallationProvider {
   @override
   Future<AvailableInstallation> latest(
     ExecutableProject project, {
-    InstallationCheck? check,
+    InstallationCancellation? check,
   }) async => const AvailableInstallation('1.3.0');
   @override
   Future<Installation> install(
@@ -288,7 +287,7 @@ class FakeReleases {
   Future<Uint8List> fetch(
     Uri uri,
     int limit, {
-    InstallationCheck? check,
+    InstallationCancellation? check,
   }) async {
     if (uri.host == 'api.github.com') {
       return Uint8List.fromList(

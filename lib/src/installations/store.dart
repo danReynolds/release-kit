@@ -217,6 +217,31 @@ class InstallationStore {
     ];
   }
 
+  /// A child cannot edit its parent's environment. Fish can persist a
+  /// universal path which other fish sessions pick up at their next prompt.
+  /// Other shells get an explicit command; rk never rewrites a startup file
+  /// behind their back.
+  Future<String?> putFirstOnPath(
+    ExecutableProject project,
+    Map<String, String> environment,
+  ) async {
+    if (routingProblems(project, environment).isEmpty) return null;
+    final shell = environment['SHELL'] ?? '';
+    if (shell.split('/').last == 'fish' && shell.startsWith('/')) {
+      try {
+        await checked(tools, shell, [
+          '-c',
+          r'fish_add_path --universal --move --prepend -- $argv[1]',
+          bin,
+        ], environment: environment);
+        return 'Ready at the next prompt.';
+      } on InstallationFailure catch (error) {
+        return 'Selected, but fish PATH setup failed: ${error.message}. Run: fish_add_path --move --prepend ${shellQuote(bin)}';
+      }
+    }
+    return 'Selection saved. Put the managed commands first in this shell: export PATH=${shellQuote(bin)}:"\$PATH"';
+  }
+
   /// Whether [command] on [environment]'s PATH is its launcher, however PATH
   /// spells the directory: with a trailing slash, or through a link.
   bool routes(String command, Map<String, String> environment) {
