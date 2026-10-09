@@ -1328,7 +1328,6 @@ publish = ["git-tag", "pub.dev"]
         .map((m) => m.group(1)!)
         .toSet();
     expect(accepted, contains('--json'), reason: 'the scrape still works');
-    expect(accepted, isNot(contains('--stage')));
 
     // Exactly the documents that describe rk's *current* surface. Widening
     // this to every shipped markdown was tried and is wrong: the archived

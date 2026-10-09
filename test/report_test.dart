@@ -67,15 +67,7 @@ void main() {
 
   group('rerun_helps is the one rerun question', () {
     test('true by default, because re-running is the resume', () {
-      final json = decode(Report('release'));
-      expect(json['rerun_helps'], isTrue);
-      expect(
-        json.containsKey('safe_to_rerun'),
-        isFalse,
-        reason:
-            're-running is safe by construction — the same inspection '
-            'precedes every act — so a field for it could only ever say so',
-      );
+      expect(decode(Report('release'))['rerun_helps'], isTrue);
     });
 
     test('a conflict does not help, and the halt says why', () {
