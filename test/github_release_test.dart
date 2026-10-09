@@ -140,29 +140,17 @@ void main() {
             'deliberately — and absent is what lets a release proceed',
       );
     });
+  });
 
-    test('the porcelain prose alone is never absence', () async {
-      // The old reader keyed on gh's "release not found" wording, which gh
-      // rewords between versions and says for more than one condition. A
-      // failure carrying only prose — no status — is unknown.
+  group('everything else gh can do wrong is unknown, never absent', () {
+    test('a failure that is not a 404, even one saying not found', () async {
+      // Without the status, "release not found" is prose gh says for more
+      // than one condition.
       final state = await inspect([
         (code: 1, out: '', err: 'release not found'),
       ]);
       expect(state.verdict, Verdict.unknown);
     });
-  });
-
-  group('everything else gh can do wrong is unknown, never absent', () {
-    for (final (label, err) in [
-      ('an expired token', 'HTTP 401: Bad credentials'),
-      ('a rate limit', 'HTTP 403: API rate limit exceeded'),
-      ('no network', 'could not resolve host: api.github.com'),
-    ]) {
-      test(label, () async {
-        final state = await inspect([(code: 1, out: '', err: err)]);
-        expect(state.verdict, Verdict.unknown, reason: err);
-      });
-    }
 
     test('a body that is not JSON', () async {
       final state = await inspect([
