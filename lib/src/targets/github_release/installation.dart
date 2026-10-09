@@ -158,7 +158,12 @@ class GithubInstallationProvider
             .where((a) => a.name == archiveName)
             .firstOrNull;
         if (metadata == null || metadata.size > 128 * 1024 * 1024) continue;
-        return _GithubRelease(project, version, asset(archiveName), metadata);
+        return AvailableInstallation(
+          version,
+          url: asset(archiveName),
+          size: metadata.size,
+          sha256: metadata.sha256,
+        );
       }
       if (list.length < 100) break;
     }
@@ -182,14 +187,10 @@ class GithubInstallationProvider
     AvailableInstallation release,
     void Function(String) progress,
   ) async {
-    if (release is! _GithubRelease) {
-      throw const InstallationFailure('Invalid GitHub release.');
-    }
     final version = release.version;
-    final metadata = release.metadata;
     progress('Downloading ${project.name} $version…');
-    final bytes = await fetch(release.archive, metadata.size);
-    if (bytes.length != metadata.size || Sha256.hex(bytes) != metadata.sha256) {
+    final bytes = await fetch(release.url!, release.size!);
+    if (bytes.length != release.size || Sha256.hex(bytes) != release.sha256) {
       throw const InstallationFailure(
         'The downloaded archive failed its release checksum.',
       );
@@ -292,15 +293,4 @@ Future<InstallationArchive> decodeInstallationArchive(
       error.message,
     );
   }
-}
-
-class _GithubRelease extends AvailableInstallation {
-  _GithubRelease(
-    ExecutableProject project,
-    String version,
-    this.archive,
-    this.metadata,
-  ) : super(project, InstallationSource.github, version);
-  final Uri archive;
-  final ReleaseManifestArtifact metadata;
 }

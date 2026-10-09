@@ -63,10 +63,14 @@ abstract interface class InstallationUpdates {
   );
 }
 
-abstract class AvailableInstallation {
-  AvailableInstallation(ExecutableProject project, this.source, this.version)
-    : projectRoot = project.root,
-      projectName = project.name;
-  final String projectRoot, projectName, version;
-  final InstallationSource source;
+/// A version a check found; installing it installs exactly this version.
+/// [sha256] pins the bytes: GitHub's archive or Homebrew's formula.
+final class AvailableInstallation {
+  const AvailableInstallation(this.version, {this.url, this.size, this.sha256});
+  final String version;
+
+  /// GitHub's archive, and its size as the release manifest records it.
+  final Uri? url;
+  final int? size;
+  final String? sha256;
 }

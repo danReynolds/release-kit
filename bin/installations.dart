@@ -295,6 +295,7 @@ Future<int> _run(
 
   Future<String> downloadLatest(
     ExecutableProject project,
+    InstallationSource source,
     AvailableInstallation release,
     void Function(String) progress,
     InstallationCancellation cancellation,
@@ -303,6 +304,7 @@ Future<int> _run(
     output.report.acted = true;
     final message = await manager.download(
       project,
+      source,
       release,
       progress: progress,
       cancellation: cancellation,
@@ -344,7 +346,7 @@ Future<int> _run(
   ) async {
     final release = await manager.latest(project, source);
     cancellation.check();
-    return downloadLatest(project, release, progress, cancellation);
+    return downloadLatest(project, source, release, progress, cancellation);
   }
 
   Future<String> remove(

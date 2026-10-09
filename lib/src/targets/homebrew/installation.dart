@@ -152,7 +152,7 @@ class HomebrewInstallationProvider
         !formula.contains('-${version.canonical}-$platform.tar.gz')) {
       throw InstallationFailure('The tap does not offer a $platform archive.');
     }
-    return _BrewRelease(project, version.canonical, Sha256.hex(bytes), tap);
+    return AvailableInstallation(version.canonical, sha256: Sha256.hex(bytes));
   }
 
   @override
@@ -161,14 +161,9 @@ class HomebrewInstallationProvider
     AvailableInstallation release,
     void Function(String) progress,
   ) async {
-    if (release is! _BrewRelease || brew == null) {
-      throw const InstallationFailure('Invalid Homebrew release.');
-    }
+    final tap = project.unit.tapFor(project.repository!);
     progress('Refreshing Homebrew…');
-    await checked(tools, brew!, [
-      'tap',
-      release.tap,
-    ], environment: _environment);
+    await checked(tools, brew!, ['tap', tap], environment: _environment);
     await checked(tools, brew!, ['update'], environment: _environment);
     // Refresh may discover a release newer than the one the user clicked.
     // Compare the complete formula before allowing Homebrew to execute it.
@@ -176,7 +171,7 @@ class HomebrewInstallationProvider
     // even install bat, which is outside this operation's scope.
     final repository = (await checked(tools, brew!, [
       '--repository',
-      release.tap,
+      tap,
     ], environment: _environment)).stdout.trim();
     if (!repository.startsWith('/')) {
       throw const InstallationFailure(
@@ -186,7 +181,7 @@ class HomebrewInstallationProvider
     final formula = File(
       '$repository/Formula/${project.formula.split('/').last}.rb',
     ).readAsBytesSync();
-    if (Sha256.hex(formula) != release.digest) {
+    if (Sha256.hex(formula) != release.sha256) {
       throw const InstallationFailure(
         'The Homebrew release changed since the check.',
         'Refresh Available and download again.',
@@ -232,10 +227,4 @@ class HomebrewInstallationProvider
       project.formula,
     ], environment: _environment);
   }
-}
-
-class _BrewRelease extends AvailableInstallation {
-  _BrewRelease(ExecutableProject project, String version, this.digest, this.tap)
-    : super(project, InstallationSource.homebrew, version);
-  final String digest, tap;
 }

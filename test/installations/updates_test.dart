@@ -23,7 +23,7 @@ class UpdatingProvider extends StubProvider implements InstallationUpdates {
   Future<AvailableInstallation> latest(
     ExecutableProject project, {
     InstallationCheck? check,
-  }) async => Release(project);
+  }) async => const AvailableInstallation('1.3.0');
   @override
   Future<Installation> download(
     ExecutableProject project,
@@ -87,6 +87,7 @@ void main() {
       );
       await manager.download(
         project,
+        pub.source,
         await pub.latest(project),
         progress: (_) {},
       );
@@ -104,7 +105,8 @@ void main() {
       };
       await manager.download(
         project,
-        Release(project, pub.source, '1.4.0'),
+        pub.source,
+        const AvailableInstallation('1.4.0'),
         progress: (_) {},
         cancellation: cancel,
       );
@@ -116,7 +118,12 @@ void main() {
         );
       }
       await expectLater(
-        manager.download(project, Release(project), progress: (_) {}),
+        manager.download(
+          project,
+          pub.source,
+          const AvailableInstallation('1.3.0'),
+          progress: (_) {},
+        ),
         throwsA(
           isA<InstallationFailure>().having(
             (e) => e.message,
@@ -150,7 +157,7 @@ void main() {
           replies.add(reply);
           return reply.future;
         },
-        downloadAvailable: (_, _, _, _) async => 'Downloaded',
+        downloadAvailable: (_, _, _, _, _) async => 'Downloaded',
         use: (_, _, _, _) async => 'Used',
         close: () {},
       );
@@ -158,7 +165,7 @@ void main() {
       expect(model.availability(states.single, pub.source).checking, isTrue);
       model.checkAll();
       expect(requests.first.cancelled, isTrue);
-      replies.first.complete(Release(project));
+      replies.first.complete(const AvailableInstallation('1.3.0'));
       replies.last.completeError(const InstallationFailure('Offline'));
       await Future<void>.delayed(Duration.zero);
       expect(model.availability(states.single, pub.source).release, isNull);
@@ -173,7 +180,7 @@ void main() {
       model.checkAll();
       model.dispose();
       expect(requests.last.cancelled, isTrue);
-      replies.last.complete(Release(project));
+      replies.last.complete(const AvailableInstallation('1.3.0'));
       await Future<void>.delayed(Duration.zero);
     },
   );
@@ -192,8 +199,8 @@ void main() {
       final model = UsePicker(
         states: states,
         refresh: () async => states,
-        checkAvailable: (_, _, _) async => Release(project),
-        downloadAvailable: (_, _, _, _) async {
+        checkAvailable: (_, _, _) async => const AvailableInstallation('1.3.0'),
+        downloadAvailable: (_, _, _, _, _) async {
           downloads++;
           await gate.future;
           return 'Downloaded';
@@ -256,7 +263,7 @@ void main() {
         states: states,
         refresh: () async => states,
         checkAvailable: (_, _, _) => gate.future,
-        downloadAvailable: (_, _, _, _) async => 'Downloaded',
+        downloadAvailable: (_, _, _, _, _) async => 'Downloaded',
         use: (_, s, _, _) async {
           source = s;
           uses++;
@@ -284,7 +291,7 @@ void main() {
       tester.pump();
       expect(uses, 1);
       expect(source, pub.source);
-      gate.complete(Release(project));
+      gate.complete(const AvailableInstallation('1.3.0'));
       await Future<void>.delayed(Duration.zero);
     },
   );
@@ -311,8 +318,9 @@ void main() {
         final model = UsePicker(
           states: inspect(),
           refresh: () async => inspect(),
-          checkAvailable: (_, _, _) async => Release(project),
-          downloadAvailable: (_, _, _, _) async =>
+          checkAvailable: (_, _, _) async =>
+              const AvailableInstallation('1.3.0'),
+          downloadAvailable: (_, _, _, _, _) async =>
               throw StateError('No download'),
           use: (_, _, _, _) async => throw StateError('No switch'),
           uninstall: (_, source, _, _) {
@@ -384,8 +392,8 @@ void main() {
     final model = UsePicker(
       states: inspect(),
       refresh: () async => inspect(),
-      checkAvailable: (_, source, _) async => Release(project, source),
-      downloadAvailable: (_, release, _, _) {
+      checkAvailable: (_, _, _) async => const AvailableInstallation('1.3.0'),
+      downloadAvailable: (_, _, _, _, _) {
         downloads++;
         return gate.future;
       },
@@ -471,8 +479,8 @@ void main() {
       final model = UsePicker(
         states: states,
         refresh: () async => throw StateError('No rescan'),
-        checkAvailable: (_, _, _) async => Release(project),
-        downloadAvailable: (_, _, _, _) async =>
+        checkAvailable: (_, _, _) async => const AvailableInstallation('1.3.0'),
+        downloadAvailable: (_, _, _, _, _) async =>
             throw StateError('No download'),
         use: (_, _, _, _) async => throw StateError('No reinstall'),
         close: () => closed = true,

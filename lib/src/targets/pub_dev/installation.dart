@@ -215,7 +215,7 @@ class PubInstallationProvider
       );
     }
     compatible.sort();
-    return _PubRelease(project, compatible.last.toString());
+    return AvailableInstallation(compatible.last.toString());
   }
 
   @override
@@ -223,12 +223,7 @@ class PubInstallationProvider
     ExecutableProject project,
     AvailableInstallation release,
     void Function(String) progress,
-  ) {
-    if (release is! _PubRelease) {
-      throw const InstallationFailure('Invalid Pub release.');
-    }
-    return _activate(project, release.version, progress);
-  }
+  ) => _activate(project, release.version, progress);
 
   @override
   Future<Installation> install(
@@ -271,9 +266,4 @@ class PubInstallationProvider
       project.name,
     ], environment: _environment);
   }
-}
-
-class _PubRelease extends AvailableInstallation {
-  _PubRelease(ExecutableProject project, String version)
-    : super(project, InstallationSource.pub, version);
 }

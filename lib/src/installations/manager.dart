@@ -97,13 +97,13 @@ class InstallationManager {
 
   Future<String> download(
     ExecutableProject project,
+    InstallationSource source,
     AvailableInstallation release, {
     required void Function(String) progress,
     InstallationCancellation? cancellation,
   }) async {
-    final provider = providers[release.source];
-    if (!project.sources.contains(release.source) ||
-        provider is! InstallationUpdates) {
+    final provider = providers[source];
+    if (!project.sources.contains(source) || provider is! InstallationUpdates) {
       throw const InstallationFailure(
         'This source does not provide downloads.',
       );
@@ -121,8 +121,8 @@ class InstallationManager {
           ? null
           : Version.tryParse(previousVersion);
       final next = Version.tryParse(release.version);
-      if (previousVersion == release.version && current != release.source) {
-        return '${project.name} · ${release.source.label} ${release.version} is already installed. Source selection unchanged.';
+      if (previousVersion == release.version && current != source) {
+        return '${project.name} · ${source.label} ${release.version} is already installed. Source selection unchanged.';
       }
       if (previous != null && next != null && previous.compareTo(next) > 0) {
         throw const InstallationFailure(
@@ -131,7 +131,7 @@ class InstallationManager {
         );
       }
       cancellation?.check();
-      if (current == release.source) store.checkOwnership(project);
+      if (current == source) store.checkOwnership(project);
       // An update of the selected source that stopped after installing, before
       // routing, finishes here: the launchers move to the version installed.
       final installed = previousVersion == release.version
@@ -146,10 +146,10 @@ class InstallationManager {
       // A package manager may already have committed its update. Finish the
       // routing even when cancellation arrived meanwhile. Updating the selected
       // source advances that source, never selects another.
-      if (current == release.source) await store.activate(project, installed);
+      if (current == source) await store.activate(project, installed);
       store.retire(project, installed);
-      return '${project.name} · ${release.source.label} ${installed.version} installed. '
-          '${current == release.source ? 'Using it on the next command.' : 'Source selection unchanged.'}';
+      return '${project.name} · ${source.label} ${installed.version} installed. '
+          '${current == source ? 'Using it on the next command.' : 'Source selection unchanged.'}';
     } finally {
       lock.unlockSync();
       lock.closeSync();

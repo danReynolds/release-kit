@@ -29,6 +29,7 @@ typedef CheckAvailable =
 typedef DownloadAvailable =
     Future<String> Function(
       ExecutableProject,
+      InstallationSource,
       AvailableInstallation,
       void Function(String),
       InstallationCancellation,
@@ -278,6 +279,7 @@ class UsePicker extends Notifier {
           ? await use(state.project, source, progress, operation.cancellation)
           : await downloadAvailable(
               state.project,
+              source,
               release,
               progress,
               operation.cancellation,

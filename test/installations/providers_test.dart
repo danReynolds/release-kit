@@ -372,6 +372,7 @@ void main() {
         releases.publish('1.2.0');
         await manager.download(
           project,
+          github.source,
           await manager.latest(project, github.source),
           progress: (_) {},
         );
@@ -393,7 +394,12 @@ void main() {
         await github.download(project, release, (_) {});
         expect(await orbit(), 'release 1.1.0\n');
         final fetched = releases.archiveFetches;
-        await manager.download(project, release, progress: (_) {});
+        await manager.download(
+          project,
+          github.source,
+          release,
+          progress: (_) {},
+        );
         expect(await orbit(), 'release 1.2.0\n');
         expect(downloads.listSync(), hasLength(1));
         expect(releases.archiveFetches, fetched);

@@ -123,7 +123,8 @@ void main() {
       states: states,
       refresh: () async => states,
       checkAvailable: (_, _, _) => Completer<AvailableInstallation>().future,
-      downloadAvailable: (_, _, _, _) async => throw StateError('No downloads'),
+      downloadAvailable: (_, _, _, _, _) async =>
+          throw StateError('No downloads'),
       use: (_, _, _, _) async => throw StateError('No switches'),
       close: () {},
     );
