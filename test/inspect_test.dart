@@ -415,14 +415,12 @@ void targetReads() {
         checklist,
         repository: 'example/tool',
       );
-      final problems = Diagnostics();
       // The unit is 1.0.0, so a v2.0.0 tag is a namespace already ahead.
-      await inspector.releaseMonotonicity(
+      return _history(
+        inspector,
         unit,
         targets.where((target) => target.target == PublishTarget.gitTag),
-        problems,
       );
-      return problems.found;
     }
 
     test(
@@ -458,31 +456,6 @@ void targetReads() {
       );
     }
 
-    test('starts independent lane reads together and omits Homebrew', () async {
-      final fixture = await releaseTargets();
-      final inspector = _LatestInspector(expectedConcurrent: 3);
-      final problems = Diagnostics();
-
-      final checking = inspector.releaseMonotonicity(
-        fixture.unit,
-        fixture.targets,
-        problems,
-      );
-      await inspector.allStarted.future;
-
-      expect(inspector.maximumActive, 3);
-      expect(
-        inspector.started,
-        {'gitTag', 'pubDev', 'githubRelease'},
-        reason:
-            'the authenticated formula inspection already owns the '
-            'Homebrew forward-only decision',
-      );
-      inspector.finish();
-      await checking;
-      expect(problems, isEmpty);
-    });
-
     test(
       'an unreadable lane is a refusal and newer remote lanes are named',
       () async {
@@ -494,28 +467,18 @@ void targetReads() {
             'githubRelease': const Inspection.unknown('GitHub timed out'),
           },
         );
-        final problems = Diagnostics();
-
-        await inspector.releaseMonotonicity(
-          fixture.unit,
-          fixture.targets,
-          problems,
-        );
+        final found = await _history(inspector, fixture.unit, fixture.targets);
 
         expect(
-          problems.found.map((problem) => problem.code),
+          found.map((problem) => problem.code),
           containsAll(['RK-MONO-002', 'RK-MONO-003', 'RK-REL-001']),
         );
         expect(
-          problems.found
-              .singleWhere((problem) => problem.code == 'RK-MONO-003')
-              .message,
+          found.singleWhere((problem) => problem.code == 'RK-MONO-003').message,
           allOf(contains('Git tag'), contains('2.0.0'), contains('1.0.0')),
         );
         expect(
-          problems.found
-              .singleWhere((problem) => problem.code == 'RK-REL-001')
-              .message,
+          found.singleWhere((problem) => problem.code == 'RK-REL-001').message,
           allOf(contains('GitHub Release'), contains('timed out')),
         );
       },
@@ -531,16 +494,10 @@ void targetReads() {
             'gitTag': const Inspection.exact(evidence: {'version': '2.0.0'}),
           },
         );
-        final problems = Diagnostics();
-
-        await inspector.releaseMonotonicity(
-          fixture.unit,
-          fixture.targets,
-          problems,
-        );
+        final found = await _history(inspector, fixture.unit, fixture.targets);
 
         expect(
-          problems.found
+          found
               .where(
                 (problem) =>
                     problem.code == 'RK-MONO-001' ||
@@ -675,33 +632,42 @@ void targetReads() {
 Future<ResolvedUnit> _binaryUnit() async =>
     (await _binaryResolution()).unit('cli')!;
 
+/// What a release learns from [targets]' histories, read as a unit
+/// snapshot reads them.
+Future<List<Diagnostic>> _history(
+  Inspector inspector,
+  ResolvedUnit unit,
+  Iterable<TargetPlan> targets,
+) async {
+  final listed = targets.toList();
+  final read = await Future.wait([
+    for (final target in listed) inspector.readHistory(target, unit),
+  ]);
+  final problems = Diagnostics();
+  Inspector.historyFindings([
+    for (final (index, target) in listed.indexed) (target, read[index]),
+  ], problems);
+  return problems.found;
+}
+
 class _LatestInspector extends Inspector {
-  _LatestInspector({
-    this.answers = const {},
-    this.expectedConcurrent = 0,
-    List<String> tags = const [],
-  }) : super(
-         registry: FakeRegistry({}),
-         git: GitState(
-           root: '/repo',
-           head: '1111111111111111111111111111111111111111',
-           branch: 'main',
-           isClean: true,
-           uncommitted: const [],
-           headIsPushed: true,
-           tags: tags,
-           signingConfigured: true,
-           originUrl: 'example/tool',
-         ),
-       );
+  _LatestInspector({this.answers = const {}, List<String> tags = const []})
+    : super(
+        registry: FakeRegistry({}),
+        git: GitState(
+          root: '/repo',
+          head: '1111111111111111111111111111111111111111',
+          branch: 'main',
+          isClean: true,
+          uncommitted: const [],
+          headIsPushed: true,
+          tags: tags,
+          signingConfigured: true,
+          originUrl: 'example/tool',
+        ),
+      );
 
   final Map<String, Inspection> answers;
-  final int expectedConcurrent;
-  final Completer<void> allStarted = Completer<void>();
-  final Completer<void> _finish = Completer<void>();
-  final Set<String> started = {};
-  var active = 0;
-  var maximumActive = 0;
 
   @override
   Future<TargetHistory?> inspectHistory(
@@ -709,16 +675,6 @@ class _LatestInspector extends Inspector {
     ResolvedUnit unit,
   ) async {
     if (target.kind == 'homebrew') return null;
-    started.add(target.kind);
-    if (expectedConcurrent > 0) {
-      active++;
-      if (active > maximumActive) maximumActive = active;
-      if (started.length == expectedConcurrent && !allStarted.isCompleted) {
-        allStarted.complete();
-      }
-      await _finish.future;
-      active--;
-    }
     final inspection = answers[target.kind] ?? const Inspection.absent();
     return TargetHistory.versioned(
       inspection: inspection,
@@ -733,10 +689,6 @@ class _LatestInspector extends Inspector {
             )
           : null,
     );
-  }
-
-  void finish() {
-    if (!_finish.isCompleted) _finish.complete();
   }
 }
 

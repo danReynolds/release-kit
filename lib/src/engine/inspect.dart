@@ -196,40 +196,13 @@ class Inspector {
         : Inspection.absent(detail: '$name $version is not published yet');
   }
 
-  /// The release-only monotonicity gate against every configured public lane.
-  ///
-  /// Exact-coordinate inspection answers whether this version exists. It
-  /// cannot answer whether a newer version exists elsewhere in the same lane:
-  /// a shallow checkout can truthfully find `v1.0.0` absent while origin is
-  /// already at `v2.0.0`. Release calls this once, in the snapshot it takes
-  /// before staging.
-  ///
-  /// Targets decide whether their latest-version read is a meaningful guard.
-  /// Homebrew, for example, authenticates its public formula bytes during its
-  /// exact inspection and therefore declines a second, weaker version read.
-  Future<ReleaseHistoryCheck> releaseMonotonicity(
-    ResolvedUnit unit,
-    Iterable<TargetPlan> targets,
-    Diagnostics problems,
-  ) async {
-    final candidates = <TargetPlan>[];
-    final seen = <String>{};
-    for (final target in targets) {
-      final key = '${target.kind}\u0000${target.coordinate}';
-      if (seen.add(key)) candidates.add(target);
-    }
-
-    // Start every independent provider read before awaiting one. A slow
-    // forge must not postpone asking origin or pub.dev.
-    final latest = await Future.wait([
-      for (final target in candidates) readHistory(target, unit),
-    ]);
-    return historyFindings([
-      for (final (index, target) in candidates.indexed) (target, latest[index]),
-    ], problems);
-  }
-
   /// [target]'s public history; a read that throws is unknown, never absent.
+  ///
+  /// Exact-coordinate inspection answers whether this version exists, not
+  /// whether a newer one exists in the same lane: a shallow checkout can
+  /// find `v1.0.0` absent while origin is at `v2.0.0`. Targets decide whether
+  /// their latest-version read is a meaningful guard; Homebrew, whose exact
+  /// inspection reads the formula's version, declines this one.
   Future<TargetHistory?> readHistory(
     TargetPlan target,
     ResolvedUnit unit,
