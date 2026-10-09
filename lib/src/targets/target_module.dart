@@ -1,15 +1,13 @@
-import '../engine/checklist.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
 import '../engine/publish_target.dart';
 import '../engine/registry.dart';
 import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
-import '../engine/stage_contract.dart';
 import '../engine/stage_receipt.dart';
 import '../engine/stage_source.dart';
-import '../engine/targets.dart';
 import '../engine/tools.dart';
+import '../engine/unit_release.dart';
 import '../engine/verdict.dart';
 import '../engine/version.dart';
 import '../engine/workspace.dart';
@@ -43,26 +41,20 @@ bool _selects(ResolvedUnit unit, PublishTarget target) =>
     ? unit.publish.contains(target)
     : unit.projects.any((project) => project.publish.contains(target));
 
-/// One built-in public target and the manifest-derived identity it reports.
+/// One built-in public target's provider behaviour.
 ///
 /// This is intentionally a closed application seam, not a runtime plugin API.
-/// Provider behavior grows behind these modules while checklist ordering stays
-/// explicit in the release coordinator.
+/// What a target is — its identity, its stage work, its files — is release
+/// model data; a module reads, prepares and publishes it.
 abstract base class TargetModule {
   const TargetModule();
 
   PublishTarget get target;
 
-  TargetPlan plan({
-    required ResolvedUnit unit,
-    required Step step,
-    String? repository,
-  });
-
   Future<Inspection> inspectCandidate(
     TargetReadContext context,
     ResolvedUnit unit,
-    TargetPlan target,
+    Target target,
   );
 
   /// Reads the lane's public version history, when it has one.
@@ -74,7 +66,7 @@ abstract base class TargetModule {
   Future<TargetHistory?> inspectHistory(
     TargetReadContext context,
     ResolvedUnit unit,
-    TargetPlan target,
+    Target target,
   ) async => null;
 
   /// Explains one conflicting public observation in this target's terms.
@@ -84,7 +76,7 @@ abstract base class TargetModule {
   /// semantics out of generic status prose without adding lifecycle hooks.
   Diagnostic diagnoseConflict(
     ResolvedUnit unit,
-    TargetPlan target,
+    Target target,
     Inspection conflict,
   );
 
@@ -107,7 +99,7 @@ abstract base class TargetModule {
   Future<TargetActOutcome> publish(
     TargetReleaseContext context,
     ResolvedUnit unit,
-    TargetPlan target,
+    Target target,
     Inspection inspected,
   );
 
@@ -115,7 +107,7 @@ abstract base class TargetModule {
   Future<Inspection> confirmPublication(
     TargetReleaseContext context,
     ResolvedUnit unit,
-    TargetPlan target,
+    Target target,
     TargetActOutcome act,
   ) => inspectCandidate(context.reads, unit, target);
 
@@ -124,13 +116,13 @@ abstract base class TargetModule {
   /// target's terms; and the command to run next, if one helps.
   ({String code, String message, String? next}) nameUnconfirmed(
     ResolvedUnit unit,
-    TargetPlan target,
+    Target target,
     Inspection state,
     TargetActOutcome act,
   ) => (
     code: 'RK-REL-003',
     message:
-        '${target.step.summary}: '
+        '${target.summary}: '
         '${act.problem ?? state.detail ?? 'the public result could not be confirmed'}',
     next: null,
   );
@@ -143,7 +135,7 @@ abstract base class TargetModule {
   Future<TargetFailure> classifyUnconfirmedPublication(
     TargetReleaseContext context,
     ResolvedUnit unit,
-    TargetPlan target,
+    Target target,
     Inspection state,
     TargetActOutcome act, {
     required bool actedBefore,
@@ -211,10 +203,10 @@ abstract base class TargetModule {
     );
   }
 
-  TargetStage? stageInput({
-    required ResolvedUnit unit,
-    required TargetPlan target,
-  }) => null;
+  /// Prepares [work], this target's input to the stage: what its release
+  /// model says this target contributes.
+  Future<TargetStageOutcome> prepare(TargetStageContext context, Work work) =>
+      throw StateError('${target.configName} contributes no stage work');
 
   /// Whether [inspected] carries what this target needs to publish without
   /// its stage: authenticated public inputs a moving channel can finish
@@ -238,7 +230,7 @@ final class TargetHistory {
 
   factory TargetHistory.versioned({
     required Inspection inspection,
-    required TargetPlan target,
+    required Target target,
     Diagnostic Function(Version publicVersion)? regressionDiagnostic,
     Iterable<Diagnostic> problems = const [],
     Iterable<TargetClaim> claims = const [],
@@ -317,21 +309,18 @@ final class TargetReadContext {
 
 final class TargetStageContext {
   TargetStageContext({
-    required this.contract,
     required this.tools,
     required this.git,
     required void Function(String name, String contents) attach,
     required this.stage,
     required this.source,
     required Iterable<StageStep> priorSteps,
-    required Map<String, ProgressHandle> progress,
+    this.progress,
     Map<String, String> fromSource = const {},
   }) : priorSteps = List<StageStep>.unmodifiable(priorSteps),
        fromSource = Map.unmodifiable(fromSource),
-       _attach = attach,
-       _progress = Map.unmodifiable(progress);
+       _attach = attach;
 
-  final StageStepContract contract;
   final Tools tools;
   final GitState git;
   String? get repository => git.originUrl;
@@ -350,14 +339,10 @@ final class TargetStageContext {
   /// repository root: those it needs whose versions are not published yet,
   /// and those only its development needs.
   final Map<String, String> fromSource;
-  final Map<String, ProgressHandle> _progress;
 
-  ProgressHandle progress(String id) =>
-      _progress[id] ?? (throw StateError('undeclared progress row "$id"'));
+  /// The stage rows this work fills, when it fills any.
+  final ProgressHandle? progress;
 }
-
-typedef TargetStageProducer =
-    Future<TargetStageOutcome> Function(TargetStageContext context);
 
 sealed class TargetStageOutcome {
   const TargetStageOutcome();
@@ -426,82 +411,6 @@ List<Diagnostic> recordedTargetStageWarnings(StageStep step) {
           remedy: value['remedy'] is String ? value['remedy'] as String : null,
         ),
   ];
-}
-
-/// One optional, target-owned contribution to the reusable local stage.
-///
-/// Declaration, validation contract, and producer stay together so they
-/// cannot drift across two lifecycle hooks.
-final class TargetStage {
-  TargetStage({
-    required this.target,
-    required this.contract,
-    required String planLabel,
-    Iterable<TargetStageProgress> progress = const [],
-    required this.prepare,
-  }) : planLabel = _planLabel(planLabel),
-       progress = List.unmodifiable(progress) {
-    final ids = <String>{};
-    final outputs = <String>{};
-    for (final view in this.progress) {
-      if (!ids.add(view.id)) {
-        throw ArgumentError('duplicate target stage progress id ${view.id}');
-      }
-      final output = view.output;
-      if (output != null && !contract.outputs.containsKey(output)) {
-        throw ArgumentError(
-          '${contract.name} progress binds undeclared output $output',
-        );
-      }
-      if (output != null && !outputs.add(output)) {
-        throw ArgumentError(
-          '${contract.name} progress binds output $output twice',
-        );
-      }
-    }
-  }
-
-  final TargetPlan target;
-  final StageStepContract contract;
-  final String planLabel;
-  final List<TargetStageProgress> progress;
-  final TargetStageProducer prepare;
-
-  static String _planLabel(String value) {
-    final label = value.trim();
-    if (label.isEmpty || label.contains('\n')) {
-      throw ArgumentError('a target stage plan label must be one line');
-    }
-    return label;
-  }
-}
-
-/// How one target-owned stage contribution appears in the shared board.
-///
-/// [artifact] binds a declared producer output to a public artifact row already
-/// declared by the target expectation. A validation-only contribution supplies
-/// [label] instead. Unbound outputs remain receipt-validated but do not invent
-/// rows for private intermediates.
-final class TargetStageProgress {
-  const TargetStageProgress.row({required this.id, required this.label})
-    : artifact = null,
-      output = null,
-      assert(id != ''),
-      assert(label != '');
-
-  const TargetStageProgress.output({
-    required this.id,
-    required this.output,
-    required this.artifact,
-  }) : label = null,
-       assert(id != ''),
-       assert(output != ''),
-       assert(artifact != '');
-
-  final String id;
-  final String? label;
-  final String? artifact;
-  final String? output;
 }
 
 final class TargetClaim {
@@ -597,7 +506,7 @@ abstract base class TargetSessionProvider {
   Future<TargetReadinessOutcome> acquire(
     TargetReadinessContext context,
     ResolvedUnit unit,
-    List<TargetPlan> targets,
+    List<Target> targets,
   );
 }
 

@@ -4,13 +4,11 @@ import '../asset_build.dart';
 import '../binary_chain.dart';
 import '../builds/capability.dart';
 import '../engine/assets.dart';
-import '../engine/checklist.dart';
 import '../engine/diagnostic.dart';
 import '../engine/dependency_graph.dart';
 import '../engine/git.dart';
 import '../engine/identity.dart';
 import '../engine/producer_lane.dart';
-import '../engine/producers.dart';
 import '../engine/publish_target.dart';
 import '../engine/release_stage.dart';
 import '../engine/resolve.dart';
@@ -18,11 +16,12 @@ import '../engine/stage_board.dart';
 import '../engine/stage_inspection.dart';
 import '../engine/stage_receipt.dart';
 import '../engine/stage_source.dart';
-import '../engine/targets.dart';
 import '../engine/tools.dart';
+import '../engine/unit_release.dart';
 import '../engine/verdict.dart';
 import '../output/output.dart';
 import '../output/progress.dart';
+import '../targets/catalog.dart';
 import '../targets/target_module.dart';
 import '../transforms/macos.dart';
 import 'release_preparation.dart';
@@ -37,6 +36,7 @@ final class ReleaseStageCoordinator {
     required this.tools,
     required this.capabilities,
     required this.stageFor,
+    required this.targets,
   });
 
   final GitState initialGit;
@@ -44,6 +44,9 @@ final class ReleaseStageCoordinator {
   final Tools tools;
   final HostCapabilities capabilities;
   final ReleaseStage Function(ResolvedUnit unit) stageFor;
+
+  /// The modules that prepare each target's work.
+  final TargetCatalog targets;
 
   Diagnostic? preparationProblem(
     ResolvedUnit unit,
@@ -90,20 +93,15 @@ final class ReleaseStageCoordinator {
   /// operator. [fromSource] names, for each Pub package, the repository
   /// packages it takes from this source: see [TargetStageContext.fromSource].
   Future<UnitStaging?> begin({
-    required ResolvedUnit unit,
-    required Checklist checklist,
-    required List<TargetPlan> targets,
-    required List<TargetStage> targetStages,
+    required UnitRelease release,
     required ReleaseStage stage,
     required StageInspection inspected,
     required List<TargetClaim> claims,
     Map<String, Map<String, String>> fromSource = const {},
   }) async {
+    final unit = release.unit;
     final staging = UnitStaging._(
-      unit: unit,
-      checklist: checklist,
-      targets: targets,
-      targetStages: targetStages,
+      release: release,
       stage: stage,
       inspected: inspected,
       claims: claims,
@@ -127,17 +125,15 @@ final class ReleaseStageCoordinator {
     StageReleaseProgress? shared,
   }) async {
     final UnitStaging(
+      :release,
       :unit,
-      :checklist,
-      :targets,
-      :targetStages,
       :stage,
       :inspected,
       :claims,
       :fromSource,
       :signing,
       :producerSteps,
-      :targetStagesByName,
+      :targetWorkByName,
       :outputsByProducer,
     ) = staging;
     final stageProgress =
@@ -154,11 +150,17 @@ final class ReleaseStageCoordinator {
         ..settle(title: '${unit.name} ${unit.version} · already staged');
       _showStageWarnings(
         unit,
-        _recordedStageWarnings(inspected.receipt!.steps, targetStagesByName),
+        _recordedStageWarnings(inspected.receipt!.steps, release),
       );
+      final macosBuilds = {
+        for (final work in producerSteps)
+          if (work.kind == StepKind.build &&
+              work.platform!.startsWith('macos-'))
+            work.name,
+      };
       ReleaseSigningContext? recoveredSigning;
       for (final step in inspected.receipt!.steps.where(
-        (step) => isMacosBuildReceipt(step.name),
+        (step) => macosBuilds.contains(step.name),
       )) {
         final signature = step.evidence['signature']! as Map;
         final recovered = ReleaseSigningContext(
@@ -224,10 +226,8 @@ final class ReleaseStageCoordinator {
     }
 
     stageProgress.restore(progress);
-    final producersByName = {
-      for (final step in producerSteps) receiptNameFor(step): step,
-    };
-    final runnable = {...producersByName.keys, ...targetStagesByName.keys};
+    final producersByName = {for (final work in producerSteps) work.name: work};
+    final runnable = {...producersByName.keys, ...targetWorkByName.keys};
     final graph = DependencyGraph<String>(
       stage.producerNames,
       idOf: (producer) => producer,
@@ -275,26 +275,28 @@ final class ReleaseStageCoordinator {
 
     Future<_StageWorkCompletion> runTargetStage(
       String receiptName,
-      TargetStage targetStage,
+      Work work,
     ) async {
-      final target = targetStage.target;
+      final target = release.preparing(work)!;
       try {
-        final result = await targetStage.prepare(
-          TargetStageContext(
-            contract: stage.producerContract(receiptName),
-            tools: tools,
-            git: initialGit,
-            attach: output.report.attach,
-            stage: stage,
-            source: source,
-            priorSteps: List<StageStep>.unmodifiable(progress),
-            progress: stageProgress.handlesFor(targetStage),
-            fromSource: fromSource[target.project?.name] ?? const {},
-          ),
-        );
+        final result = await targets
+            .moduleFor(target.target)
+            .prepare(
+              TargetStageContext(
+                tools: tools,
+                git: initialGit,
+                attach: output.report.attach,
+                stage: stage,
+                source: source,
+                priorSteps: List<StageStep>.unmodifiable(progress),
+                progress: stageProgress.handleFor(receiptName),
+                fromSource: fromSource[work.project?.name] ?? const {},
+              ),
+              work,
+            );
         warnings.addAll([
           for (final warning in result.warnings)
-            _StageWarning(warning, target: target.step.id),
+            _StageWarning(warning, target: target.id),
         ]);
         if (result case TargetStageFailure(:final diagnostic, :final unit)) {
           _discardInterruptedOutputs(stage, outputsByProducer[receiptName]!);
@@ -328,19 +330,16 @@ final class ReleaseStageCoordinator {
 
     Future<_StageWorkCompletion> runProducer(
       String receiptName,
-      Step step,
+      Work step,
     ) async {
       // A project's own build has no platform; it is one lane of its own.
       final laneName = step.platform == null
-          ? '${step.project}/build'
-          : '${step.project}/${step.platform!}';
+          ? '${step.project!.name}/build'
+          : '${step.project!.name}/${step.platform!}';
       try {
         final laneSource = laneSources.putIfAbsent(
           laneName,
-          () => ProducerLaneSource.export(
-            source,
-            project: unit.project(step.project!),
-          ),
+          () => ProducerLaneSource.export(source, project: step.project!),
         );
         final chain = laneChains.putIfAbsent(
           laneName,
@@ -396,8 +395,8 @@ final class ReleaseStageCoordinator {
     }
 
     Future<_StageWorkCompletion> runWork(String name) {
-      final targetStage = targetStagesByName[name];
-      if (targetStage != null) return runTargetStage(name, targetStage);
+      final targetWork = targetWorkByName[name];
+      if (targetWork != null) return runTargetStage(name, targetWork);
       final producer = producersByName[name];
       if (producer != null) return runProducer(name, producer);
       throw StateError('the stage graph has no executor for "$name"');
@@ -476,9 +475,7 @@ final class ReleaseStageCoordinator {
     }
 
     output.step(
-      checklist.steps.singleWhere(
-        (step) => step.kind == StepKind.completeStage,
-      ),
+      release.barrier,
       verdict: Verdict.exact,
       detail: 'staged and validated',
       show: false,
@@ -524,17 +521,16 @@ final class ReleaseStageCoordinator {
 
   List<_StageWarning> _recordedStageWarnings(
     Iterable<StageStep> steps,
-    Map<String, TargetStage> targetStages,
+    UnitRelease release,
   ) {
+    final preparing = {
+      for (final target in release.targets)
+        if (target.preparedBy case final work?) work.name: target.id,
+    };
     final warnings = <_StageWarning>[];
     for (final step in steps) {
       for (final warning in recordedTargetStageWarnings(step)) {
-        warnings.add(
-          _StageWarning(
-            warning,
-            target: targetStages[step.name]?.target.step.id,
-          ),
-        );
+        warnings.add(_StageWarning(warning, target: preparing[step.name]));
       }
     }
     return warnings;
@@ -594,12 +590,11 @@ final class ReleaseStageCoordinator {
 
   StageStep _captureProducerStep(
     ReleaseStage stage,
-    Step step,
+    Work step,
     LocalProducerOutcome outcome,
   ) {
-    final contract = stage.producerContract(receiptNameFor(step));
     return StageStep(
-      name: contract.name,
+      name: step.name,
       outputs: [
         for (final artifact in outcome.outputs)
           StageArtifact.capture(
@@ -908,13 +903,13 @@ final class ReleaseStageCoordinator {
   }
 
   Future<LocalProducerOutcome> _actProducer(
-    Step step,
+    Work step,
     ResolvedUnit unit,
     ReleaseSigningContext? signing, {
     required BinaryChain chain,
     ProgressHandle? progress,
   }) async {
-    final project = unit.project(step.project!);
+    final project = step.project!;
     switch (step.kind) {
       case StepKind.build:
         return chain.buildStep(
@@ -980,7 +975,7 @@ final class ReleaseStageCoordinator {
     );
   }
 
-  ProgressActivity _producerActivity(Step step) => switch (step.kind) {
+  ProgressActivity _producerActivity(Work step) => switch (step.kind) {
     StepKind.build => ProgressActivity(
       running: 'building',
       failed: 'build failed',
@@ -1012,20 +1007,15 @@ final class _StageWarning {
 /// [ReleaseStageCoordinator.begin].
 final class UnitStaging {
   UnitStaging._({
-    required this.unit,
-    required this.checklist,
-    required this.targets,
-    required this.targetStages,
+    required this.release,
     required this.stage,
     required this.inspected,
     required this.claims,
     required this.fromSource,
   });
 
-  final ResolvedUnit unit;
-  final Checklist checklist;
-  final List<TargetPlan> targets;
-  final List<TargetStage> targetStages;
+  final UnitRelease release;
+  ResolvedUnit get unit => release.unit;
   final ReleaseStage stage;
   final StageInspection inspected;
   final List<TargetClaim> claims;
@@ -1036,27 +1026,25 @@ final class UnitStaging {
   ReleaseSigningContext? _signing;
 
   /// The rows this unit's stage fills.
-  StageBoard get board => StageBoard.forUnit(unit, targets, targetStages);
+  StageBoard get board => StageBoard.forUnit(release);
 
-  late final List<Step> producerSteps = checklist.steps
-      .where(
-        (step) =>
-            !step.isPublic &&
-            step.kind != StepKind.prerequisite &&
-            step.kind != StepKind.completeStage,
-      )
-      .toList();
+  /// The local work: builds, notarizations, archives, a project's own build.
+  late final List<Work> producerSteps = [
+    for (final work in release.work)
+      if (work.kind != StepKind.targetStage &&
+          work.kind != StepKind.completeStage)
+        work,
+  ];
 
-  late final Map<String, TargetStage> targetStagesByName = {
-    for (final targetStage in targetStages)
-      targetStage.contract.name: targetStage,
+  late final Map<String, Work> targetWorkByName = {
+    for (final work in release.work)
+      if (work.kind == StepKind.targetStage) work.name: work,
   };
 
   late final Map<String, Set<String>> outputsByProducer = {
-    for (final step in producerSteps)
-      receiptNameFor(step): contractFor(unit, step).outputs.keys.toSet(),
-    for (final entry in targetStagesByName.entries)
-      entry.key: entry.value.contract.outputs.keys.toSet(),
+    for (final work in release.work)
+      if (work.kind != StepKind.completeStage)
+        work.name: work.outputs.keys.toSet(),
   };
 }
 

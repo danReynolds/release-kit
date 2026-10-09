@@ -4,38 +4,20 @@ import '../../engine/changelog.dart';
 import '../../engine/diagnostic.dart';
 import '../../engine/resolve.dart';
 import '../../engine/source_tree.dart';
-import '../../engine/stage_contract.dart';
 import '../../engine/stage_receipt.dart';
-import '../../engine/targets.dart';
+import '../../engine/unit_release.dart';
 import '../target_module.dart';
 
-/// GitHub's private release-body contribution to the reusable stage.
+/// Stages GitHub's private release body: the changelog entries for the
+/// release, extracted from the commit the stage names, and recorded and
+/// verified like any other output.
 ///
-/// The target module chooses this contribution. Its extraction and receipt
-/// validation live here so the module itself remains a readable account of
-/// the public target lifecycle.
-TargetStage githubReleaseNotesStage({
-  required ResolvedUnit unit,
-  required TargetPlan target,
-}) {
-  // The notes are extracted from the commit the stage names; their bytes are
-  // recorded and verified like any other output.
-  const contract = StageStepContract(
-    'release-notes',
-    outputs: {'release-notes.md': 'notes'},
-  );
-  return TargetStage(
-    target: target,
-    contract: contract,
-    planLabel: 'release notes',
-    prepare: (context) => _prepareReleaseNotes(context),
-  );
-}
-
-Future<TargetStageOutcome> _prepareReleaseNotes(
+/// It lives here so the module itself remains a readable account of the
+/// public target lifecycle.
+Future<TargetStageOutcome> prepareReleaseNotes(
   TargetStageContext context,
+  Work work,
 ) async {
-  final receiptName = context.contract.name;
   final notes = _releaseNotes(context.stage.unit, context.source);
   if (notes == null) {
     return TargetStageFailure(
@@ -69,7 +51,7 @@ Future<TargetStageOutcome> _prepareReleaseNotes(
   context.workspace.write('release-notes.md', utf8.encode(notes));
   return TargetStageSuccess(
     StageStep(
-      name: receiptName,
+      name: work.name,
       outputs: [
         StageArtifact.capture(
           stage: context.stage.directory,

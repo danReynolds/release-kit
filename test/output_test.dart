@@ -1,9 +1,11 @@
 import 'dart:convert';
 
+import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/verdict.dart';
-import 'package:rk/src/engine/checklist.dart';
-import 'package:rk/src/engine/publish_target.dart';
+import 'package:rk/src/engine/resolve.dart';
+import 'package:rk/src/engine/source_tree.dart';
+import 'package:rk/src/engine/unit_release.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/output/progress.dart';
 import 'package:test/test.dart';
@@ -68,16 +70,23 @@ void main() {
 
   test('public steps preserve concrete target identity in JSON', () {
     final (out, _) = make();
+    final diagnostics = Diagnostics();
+    final resolution = Resolution.resolve(
+      ReleaseConfig.parse(
+        'schema = 2\n\n[release.core]\npublish = ["pub.dev"]\n',
+        'release.toml',
+        diagnostics,
+      )!,
+      MemorySourceTree({'pubspec.yaml': 'name: core\nversion: 1.2.3\n'}),
+      diagnostics,
+    )!;
     out.step(
-      Step(
-        id: 'core/pub.dev/core@1.2.3',
-        kind: StepKind.publishRegistry,
-        target: PublishTarget.pubDev,
-        unit: 'core',
-        project: 'core',
-        summary: 'publish core 1.2.3 to pub.dev',
-        needs: const [],
-      ),
+      UnitRelease.derive(
+        resolution.unit('core')!,
+        resolution,
+        repository: null,
+        problems: diagnostics,
+      ).packages.single,
       show: false,
     );
 

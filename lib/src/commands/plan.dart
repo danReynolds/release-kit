@@ -4,7 +4,6 @@ import '../engine/release_plan.dart';
 import '../engine/resolve.dart';
 import '../output/output.dart';
 import '../output/release_plan.dart';
-import '../targets/catalog.dart';
 
 /// Reports the complete configured release topology without inspecting state.
 final class PlanCommand {
@@ -12,13 +11,11 @@ final class PlanCommand {
     required this.resolution,
     required this.git,
     required this.output,
-    required this.targets,
   });
 
   final Resolution resolution;
   final GitState git;
   final Output output;
-  final TargetCatalog targets;
 
   int run({String? only}) {
     final repositoryName = git.root.split('/').last;
@@ -44,7 +41,6 @@ final class PlanCommand {
     final derived = RepositoryReleasePlan.derive(
       resolution: resolution,
       repository: git.originUrl,
-      targets: targets,
       diagnostics: diagnostics,
     );
     if (derived == null || diagnostics.isNotEmpty) {

@@ -5,37 +5,13 @@ import '../../engine/diagnostic.dart';
 import '../../engine/release_stage.dart';
 import '../../engine/resolve.dart';
 import '../../engine/stage.dart';
-import '../../engine/stage_contract.dart';
 import '../../engine/stage_receipt.dart';
 import '../../engine/stage_source.dart';
-import '../../engine/targets.dart';
 import '../../engine/tools.dart';
+import '../../engine/unit_release.dart';
 import '../../output/progress.dart';
 import '../target_module.dart';
 import 'resolution.dart';
-
-/// Pub's native package archive contribution to the reusable release stage.
-///
-/// Packaging, how Pub resolves the package, diagnostics, and the receipt
-/// contract stay together because they describe one private input to the
-/// pub.dev lifecycle.
-TargetStage pubDevPackageStage({
-  required TargetPlan target,
-  required ResolvedUnit unit,
-}) {
-  final archivePath = ReleaseAssets.pubArchivePath(target.project!);
-  final contract = StageStepContract(
-    'pub-archive:${target.project!.name}',
-    outputs: {archivePath: 'pub-archive'},
-  );
-  return TargetStage(
-    target: target,
-    contract: contract,
-    planLabel: 'package archive',
-    progress: [TargetStageProgress.row(id: 'source', label: 'package archive')],
-    prepare: (context) => _prepareStage(context, target.project!),
-  );
-}
 
 /// The one native Pub archive frozen in a completed stage.
 StageArtifact requirePubArchive(ReleaseStage stage, ResolvedProject project) {
@@ -51,19 +27,22 @@ StageArtifact requirePubArchive(ReleaseStage stage, ResolvedProject project) {
   return matches.single;
 }
 
-Future<TargetStageOutcome> _prepareStage(
+/// Stages [work]'s package: Pub's native archive, the one private input to
+/// the pub.dev lifecycle. Packaging, how Pub resolves the package, and its
+/// diagnostics stay together here.
+Future<TargetStageOutcome> preparePubArchive(
   TargetStageContext context,
-  ResolvedProject project,
+  Work work,
 ) async {
-  final receiptName = context.contract.name;
-  context.progress('source').begin(CommonProgressActivities.validating);
+  final project = work.project!;
+  context.progress?.begin(CommonProgressActivities.validating);
   final validation = await _packageArchive(context, project);
   if (validation.diagnostic case final diagnostic?) {
     return TargetStageFailure(diagnostic, unit: project.unitName);
   }
   return TargetStageSuccess(
     StageStep(
-      name: receiptName,
+      name: work.name,
       outputs: [
         StageArtifact.capture(
           stage: context.stage.directory,

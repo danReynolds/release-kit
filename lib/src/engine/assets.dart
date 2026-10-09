@@ -9,7 +9,7 @@ import 'resolve.dart';
 /// before rk existed.
 ///
 /// They were spelled in four places: the chain that produces them, the
-/// inspector that expects them, the checklist that counts them, and literals
+/// inspector that expects them, the release that counts them, and literals
 /// for generated bundle files. That is not untidiness, it is a latent and
 /// permanently unfixable failure. `GithubRelease.inspect` returns
 /// `Verdict.conflict` for *any* difference between expected and published —
@@ -20,12 +20,8 @@ import 'resolve.dart';
 /// a release and then read it back, on the next run, as an unfixable conflict
 /// against a release it made itself.
 ///
-/// A leaf over `resolve.dart` alone, so the chain, the inspector and the
-/// checklist can all import it. The comment that used to sit on the
-/// checklist's copy claimed the two "cannot share code (checklist and
-/// inspector would import each other)" — that cycle does not exist:
-/// `checklist.dart` imports `diagnostic`, `resolve` and `version`, and
-/// `inspect.dart` imports `checklist.dart` one way.
+/// A leaf over `resolve.dart` alone, so the release model, the chain and the
+/// inspector can all import it.
 abstract final class ReleaseAssets {
   /// Public binding from release bytes back to their source and stage plan.
   static const manifest = 'release-manifest.json';

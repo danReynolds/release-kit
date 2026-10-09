@@ -2,56 +2,21 @@ import 'dart:convert';
 
 import '../../engine/assets.dart';
 import '../../engine/diagnostic.dart';
-import '../../engine/producers.dart';
 import '../../engine/publish_target.dart';
-import '../../engine/resolve.dart';
-import '../../engine/stage_contract.dart';
 import '../../engine/stage_receipt.dart';
-import '../../engine/targets.dart';
+import '../../engine/unit_release.dart';
 import '../../output/progress.dart';
 import '../target_module.dart';
 import 'client.dart';
 
-/// Homebrew's formula-rendering contribution to the reusable release stage.
-///
-/// It runs after the archives it names and renders the formula from the
+/// Stages Homebrew's formula: rendered after the archives it names, from the
 /// digests their receipts record, with the renderer lost-stage recovery uses.
-TargetStage homebrewFormulaStage({
-  required ResolvedUnit unit,
-  required TargetPlan target,
-}) {
-  final project = target.project!;
-  final archives = {
-    for (final platform in project.binaryPlatforms)
-      ReleaseAssets.archivePath(project, platform),
-  };
-  final contract = StageStepContract(
-    'homebrew-formula:${project.name}',
-    inputs: archives,
-    outputs: {ReleaseAssets.formulaPath(project): 'formula'},
-  );
-  return TargetStage(
-    target: target,
-    contract: contract,
-    planLabel: 'Homebrew formula',
-    progress: [
-      TargetStageProgress.output(
-        id: 'formula',
-        output: ReleaseAssets.formulaPath(target.project!),
-        artifact: ReleaseAssets.formulaName(target.project!.executable!),
-      ),
-    ],
-    prepare: (context) => _prepareStage(context, unit, target),
-  );
-}
-
-Future<TargetStageOutcome> _prepareStage(
+Future<TargetStageOutcome> prepareFormula(
   TargetStageContext context,
-  ResolvedUnit unit,
-  TargetPlan target,
+  Work work,
 ) async {
+  final unit = context.stage.unit;
   final tag = requiredTargetTag(unit, PublishTarget.homebrew);
-  final receiptName = context.contract.name;
   final repository = context.repository;
   if (repository == null) {
     return TargetStageFailure(
@@ -68,13 +33,12 @@ Future<TargetStageOutcome> _prepareStage(
     );
   }
 
-  final project = target.project!;
+  final project = work.project!;
   final archives = <String, StageArtifact>{};
-  for (final platform in project.binaryPlatforms) {
+  for (final input in work.inputs) {
+    final platform = input.platform!;
     final record = context.priorSteps
-        .where(
-          (step) => step.name == archiveReceiptName(project.name, platform),
-        )
+        .where((step) => step.name == input.name)
         .firstOrNull;
     final artifact = record?.outputs
         .where((output) => output.type == 'archive')
@@ -93,11 +57,9 @@ Future<TargetStageOutcome> _prepareStage(
   }
 
   final executable = project.executable!;
-  context
-      .progress('formula')
-      .begin(
-        ProgressActivity(running: 'rendering', failed: 'rendering failed'),
-      );
+  context.progress?.begin(
+    ProgressActivity(running: 'rendering', failed: 'rendering failed'),
+  );
   final contents = HomebrewFormula.renderRelease(
     className: ReleaseAssets.formulaClass(executable),
     version: project.version.canonical,
@@ -122,7 +84,7 @@ Future<TargetStageOutcome> _prepareStage(
   );
   return TargetStageSuccess(
     StageStep(
-      name: receiptName,
+      name: work.name,
       outputs: [
         StageArtifact.capture(
           stage: context.stage.directory,

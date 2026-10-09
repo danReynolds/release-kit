@@ -1,9 +1,6 @@
 import 'assets.dart';
-import 'checklist.dart';
-import 'producers.dart';
-import 'resolve.dart';
-import 'targets.dart';
-import '../targets/target_module.dart';
+import 'publish_target.dart';
+import 'unit_release.dart';
 
 /// What a stage is making, grouped by its destination or local output.
 ///
@@ -14,12 +11,7 @@ import '../targets/target_module.dart';
 /// own production: it says which producer is working on it now, and when the
 /// stage settles it says what that producer proved.
 class StageBoard {
-  StageBoard._(
-    this.groups,
-    this._rowsOf,
-    this._progressRows,
-    this._producersOf,
-  );
+  StageBoard._(this.groups, this._rowsOf, this._producersOf);
 
   /// The rows one unit's stage will fill, in release order.
   ///
@@ -28,15 +20,12 @@ class StageBoard {
   /// input to that destination, not a GitHub Release asset.
   /// pub.dev contributes one row per package: it uploads no file rk makes,
   /// but it does validate the staged source, and that check is the most
-  /// common reason a release stops later than it should have.
-  factory StageBoard.forUnit(
-    ResolvedUnit unit,
-    List<TargetPlan> targets,
-    List<TargetStage> targetStages,
-  ) {
+  /// common reason a release stops later than it should have. A formula
+  /// fills its own artifact's row; release notes reach no row.
+  factory StageBoard.forUnit(UnitRelease release) {
+    final unit = release.unit;
     final groups = <StageBoardGroup>[];
     final rowsOf = <String, List<StageBoardRow>>{};
-    final progressRows = <String, StageBoardRow>{};
     final producersOf = <StageBoardRow, Set<String>>{};
 
     void bind(String producer, StageBoardRow row) {
@@ -44,34 +33,35 @@ class StageBoard {
       producersOf.putIfAbsent(row, () => <String>{}).add(producer);
     }
 
-    for (final target in targets) {
+    for (final target in release.targets) {
       final rows = <StageBoardRow>[];
       for (final artifact in target.artifacts) {
-        final row = StageBoardRow('${target.step.id}/$artifact', artifact);
+        final row = StageBoardRow('${target.id}/$artifact', artifact);
         rows.add(row);
         if (artifact == ReleaseAssets.manifest) {
           bind('complete-stage', row);
         }
       }
-      for (final stage in targetStages.where(
-        (stage) => stage.target.step.id == target.step.id,
-      )) {
-        for (final view in stage.progress) {
-          final row = view.artifact == null
-              ? StageBoardRow(
-                  '${target.step.id}/${stage.contract.name}/${view.id}',
-                  view.label!,
-                )
-              : rows.singleWhere(
-                  (row) => row.name == view.artifact,
-                  orElse: () => throw StateError(
-                    '${stage.contract.name} binds undeclared artifact '
-                    '${view.artifact}',
-                  ),
-                );
-          if (!rows.contains(row)) rows.add(row);
-          bind(stage.contract.name, row);
-          progressRows['${stage.contract.name}/${view.id}'] = row;
+      if (target.preparedBy case final work?) {
+        switch (work.target) {
+          case PublishTarget.pubDev:
+            final row = StageBoardRow(
+              '${target.id}/${work.name}/source',
+              'package archive',
+            );
+            rows.add(row);
+            bind(work.name, row);
+          case PublishTarget.homebrew:
+            bind(
+              work.name,
+              rows.singleWhere(
+                (row) =>
+                    row.name ==
+                    ReleaseAssets.formulaName(work.project!.executable!),
+              ),
+            );
+          case _:
+            break;
         }
       }
       if (rows.isNotEmpty) {
@@ -87,7 +77,7 @@ class StageBoard {
 
     final binaryProject = unit.binaryProject;
     final publishedArtifacts = {
-      for (final target in targets) ...target.artifacts,
+      for (final target in release.targets) ...target.artifacts,
     };
     if (binaryProject != null) {
       final localRows = <StageBoardRow>[];
@@ -112,12 +102,11 @@ class StageBoard {
 
     // Every producer of one platform's binary reports against that
     // platform's archive: the binary itself never leaves the stage.
-    for (final step in Checklist.localProducerSteps(unit)) {
-      final platform = step.platform;
-      final projectName = step.project;
-      if (projectName == null) continue;
-      final project = unit.project(projectName);
-      if (step.kind == StepKind.buildAssets) {
+    for (final work in release.work) {
+      final platform = work.platform;
+      final project = work.project;
+      if (project == null || work.kind == StepKind.targetStage) continue;
+      if (work.kind == StepKind.buildAssets) {
         // A project's own build writes every asset it declares at once.
         final built = {
           for (final declared in project.assets)
@@ -125,7 +114,7 @@ class StageBoard {
         };
         for (final group in groups) {
           for (final row in group.rows) {
-            if (built.contains(row.name)) bind(receiptNameFor(step), row);
+            if (built.contains(row.name)) bind(work.name, row);
           }
         }
         continue;
@@ -140,7 +129,7 @@ class StageBoard {
       for (final group in groups) {
         for (final row in group.rows) {
           if (row.name == publicArchive || row.name == localArchive) {
-            bind(receiptNameFor(step), row);
+            bind(work.name, row);
           }
         }
       }
@@ -152,7 +141,6 @@ class StageBoard {
         for (final entry in rowsOf.entries)
           entry.key: List<StageBoardRow>.unmodifiable(entry.value),
       }),
-      Map.unmodifiable(progressRows),
       Map.unmodifiable({
         for (final entry in producersOf.entries)
           entry.key: Set<String>.unmodifiable(entry.value),
@@ -167,7 +155,6 @@ class StageBoard {
 
   final List<StageBoardGroup> groups;
   final Map<String, List<StageBoardRow>> _rowsOf;
-  final Map<String, StageBoardRow> _progressRows;
   final Map<StageBoardRow, Set<String>> _producersOf;
 
   /// The row a receipt producer reports against, when it has one. A
@@ -175,9 +162,6 @@ class StageBoard {
   /// none, and says nothing.
   List<StageBoardRow> rowsFor(String producer) =>
       _rowsOf[producer] ?? const <StageBoardRow>[];
-
-  StageBoardRow? progressRow(String producer, String id) =>
-      _progressRows['$producer/$id'];
 
   Set<String> producersFor(StageBoardRow row) =>
       _producersOf[row] ?? const <String>{};

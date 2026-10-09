@@ -7,11 +7,11 @@ import 'package:rk/src/commands/status.dart';
 import 'package:rk/src/targets/pub_dev/client.dart';
 import 'package:rk/src/engine/assets.dart';
 import 'package:rk/src/engine/canonical_json.dart';
-import 'package:rk/src/engine/checklist.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/git.dart';
 import 'package:rk/src/engine/inspect.dart';
+import 'package:rk/src/engine/publish_target.dart';
 import 'package:rk/src/engine/registry.dart';
 import 'package:rk/src/engine/release_stage.dart';
 import 'package:rk/src/engine/resolve.dart';
@@ -19,12 +19,11 @@ import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage.dart';
 import 'package:rk/src/transforms/digest.dart';
 import 'package:rk/src/engine/stage_receipt.dart';
-import 'package:rk/src/engine/targets.dart';
 import 'package:rk/src/engine/tools.dart';
+import 'package:rk/src/engine/unit_release.dart';
 import 'package:rk/src/engine/verdict.dart';
 import 'package:rk/src/engine/version.dart';
 import 'package:rk/src/output/output.dart';
-import 'package:rk/src/targets/catalog.dart';
 import 'package:rk/src/targets/target_module.dart';
 import 'package:rk/src/transforms/archive.dart';
 import 'package:test/test.dart';
@@ -284,14 +283,14 @@ class FixedInspector extends Inspector {
 
   @override
   Future<TargetHistory?> inspectHistory(
-    TargetPlan target,
+    Target target,
     ResolvedUnit unit,
   ) async {
     final configured = latest;
     if (configured != null) {
       return TargetHistory.versioned(inspection: configured, target: target);
     }
-    final targetAnswer = answers[target.step.kind] ?? answer;
+    final targetAnswer = answers[target.kind] ?? answer;
     if (targetAnswer.isExact) {
       return TargetHistory.versioned(
         inspection: Inspection.exact(
@@ -301,7 +300,7 @@ class FixedInspector extends Inspector {
         target: target,
       );
     }
-    if (targetAnswer.isAbsent && target.kind == 'pubDev') {
+    if (targetAnswer.isAbsent && target.target == PublishTarget.pubDev) {
       return super.inspectHistory(target, unit);
     }
     return TargetHistory.versioned(inspection: targetAnswer, target: target);
@@ -310,7 +309,7 @@ class FixedInspector extends Inspector {
   @override
   List<Diagnostic> tagGuards(
     ResolvedUnit unit,
-    Checklist checklist,
+    UnitRelease release,
     Map<String, Inspection> states,
   ) => const [];
 }
@@ -327,7 +326,7 @@ class GuardInspector extends FixedInspector {
   @override
   List<Diagnostic> tagGuards(
     ResolvedUnit unit,
-    Checklist checklist,
+    UnitRelease release,
     Map<String, Inspection> states,
   ) => [
     Diagnostic(
@@ -372,7 +371,7 @@ class CoordinatedInspector extends Inspector {
   @override
   List<Diagnostic> tagGuards(
     ResolvedUnit unit,
-    Checklist checklist,
+    UnitRelease release,
     Map<String, Inspection> states,
   ) => const [];
 }
@@ -580,7 +579,7 @@ publish = ["pub.dev"]
     final stages = ReleaseStages(
       source: source,
       git: state,
-      stageContracts: TargetCatalog.builtIn().stageContractResolver(resolution),
+      resolution: resolution,
     );
     // A stage as `rk stage` leaves it after Pub warned.
     final unit = resolution.units.single;

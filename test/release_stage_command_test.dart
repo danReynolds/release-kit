@@ -21,7 +21,6 @@ import 'package:rk/src/engine/stage_receipt.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/version.dart';
 import 'package:rk/src/output/output.dart';
-import 'package:rk/src/targets/catalog.dart';
 import 'package:rk/src/transforms/archive.dart';
 import 'package:rk/src/transforms/digest.dart';
 import 'package:test/test.dart';
@@ -2293,7 +2292,7 @@ class _Harness {
     stages = ReleaseStages(
       source: source,
       git: git,
-      stageContracts: TargetCatalog.builtIn().stageContractResolver(resolution),
+      resolution: resolution,
       repositoryRoot: root.path,
     );
     registry = _ReleaseRegistry({

@@ -19,8 +19,8 @@ import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/version.dart';
 import 'package:rk/src/engine/stage.dart';
+import 'package:rk/src/engine/unit_release.dart';
 import 'package:rk/src/transforms/digest.dart';
-import 'package:rk/src/targets/catalog.dart';
 import 'package:test/test.dart';
 
 import 'status_test.dart' show FakeRegistry;
@@ -324,11 +324,13 @@ Future<Ran> release({
           source: tree,
           directory: directory,
           repository: effectiveGit.originUrl,
-          enforceUnitContract: true,
-          resolvedPlan: plan,
-          targetContributions: TargetCatalog.builtIn().stageContractResolver(
+          release: UnitRelease.derive(
+            unit,
             resolution,
-          )(unit: unit, repository: effectiveGit.originUrl),
+            repository: effectiveGit.originUrl,
+            problems: Diagnostics(),
+          ),
+          resolvedPlan: plan,
         );
       });
 

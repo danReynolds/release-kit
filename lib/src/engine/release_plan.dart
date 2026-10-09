@@ -1,19 +1,14 @@
-import '../targets/catalog.dart';
-import '../targets/target_module.dart';
-import 'checklist.dart';
 import 'dependency_graph.dart';
 import 'diagnostic.dart';
-import 'producers.dart';
 import 'publish_target.dart';
-import 'release_dependencies.dart';
 import 'resolve.dart';
 import 'stage_contract.dart';
-import 'targets.dart';
+import 'unit_release.dart';
 
 /// The complete configured release topology, derived without observing state.
 ///
 /// This composes the two graphs release actually follows: the private stage
-/// producer contract and the prerequisite/public checklist. It never creates
+/// producer contract and the prerequisite/public steps. It never creates
 /// a stage, identifies a compiler, reads a provider, or decides what work is
 /// already complete.
 final class RepositoryReleasePlan {
@@ -24,38 +19,17 @@ final class RepositoryReleasePlan {
   static RepositoryReleasePlan? derive({
     required Resolution resolution,
     required String? repository,
-    required TargetCatalog targets,
     required Diagnostics diagnostics,
   }) {
-    final ordered = resolution.dependencyPlan.units(diagnostics);
-    if (diagnostics.isNotEmpty) return null;
-
-    final plans = <ReleaseUnitPlan>[];
-    for (final unit in ordered) {
-      final prerequisites = resolution.dependencyPlan.prerequisites(
-        unit,
-        diagnostics,
-      );
-      final checklist = Checklist.derive(unit, resolution, diagnostics);
-      if (diagnostics.isNotEmpty) return null;
-
-      final publicTargets = targets.derive(
-        unit,
-        checklist,
-        repository: repository,
-      );
-      final targetStages = targets.stages(unit: unit, targets: publicTargets);
-      plans.add(
-        _deriveUnit(
-          unit,
-          checklist,
-          prerequisites,
-          publicTargets,
-          targetStages,
-        ),
-      );
-    }
-    return RepositoryReleasePlan._(List.unmodifiable(plans));
+    final releases = UnitRelease.all(
+      resolution,
+      repository: repository,
+      problems: diagnostics,
+    );
+    if (releases == null) return null;
+    return RepositoryReleasePlan._(
+      List.unmodifiable([for (final release in releases) _deriveUnit(release)]),
+    );
   }
 
   RepositoryReleasePlan select(String unit) => RepositoryReleasePlan._(
@@ -66,62 +40,25 @@ final class RepositoryReleasePlan {
     'units': [for (final unit in units) unit.toJson()],
   };
 
-  static ReleaseUnitPlan _deriveUnit(
-    ResolvedUnit unit,
-    Checklist checklist,
-    List<ExternalPrerequisite> prerequisites,
-    List<TargetPlan> publicTargets,
-    List<TargetStage> targetStages,
-  ) {
-    final localSteps = {
-      for (final step in checklist.steps.where(
-        (step) =>
-            step.kind == StepKind.build ||
-            step.kind == StepKind.notarize ||
-            step.kind == StepKind.archive ||
-            step.kind == StepKind.buildAssets,
-      ))
-        receiptNameFor(step): step,
-    };
-    final targetStagesByProducer = {
-      for (final stage in targetStages) stage.contract.name: stage,
-    };
-    final publicTargetByStep = {
-      for (final target in publicTargets) target.step.id: target,
-    };
-    final producerGraph = StageProducerGraph.forUnit(
-      targetContributions: targetStages.map((stage) => stage.contract),
-      localProducers: localProducerContracts(unit),
-    );
+  static ReleaseUnitPlan _deriveUnit(UnitRelease release) {
+    final unit = release.unit;
+    final producerGraph = StageProducerGraph.forWork(release.work);
+    final byName = {for (final work in release.work) work.name: work};
 
     final sourceId = '${unit.name}/stage/source';
-    String producerId(String producer) {
-      if (producer == 'complete-stage') return '${unit.name}/stage/complete';
-      final local = localSteps[producer];
-      if (local != null) return local.id;
-      return '${unit.name}/stage/$producer';
-    }
-
-    final prerequisiteByCoordinate = {
-      for (final prerequisite in prerequisites)
-        prerequisite.coordinate: prerequisite,
-    };
     final nodes = <ReleasePlanNode>[];
 
-    for (final step in checklist.steps.where(
-      (step) => step.kind == StepKind.prerequisite,
-    )) {
-      final prerequisite = prerequisiteByCoordinate[step.coordinate];
+    for (final requirement in release.requirements) {
       nodes.add(
         ReleasePlanNode(
-          id: step.id,
+          id: requirement.id,
           kind: ReleasePlanNodeKind.prerequisite,
           phase: StepPhase.inspect,
-          summary: step.summary,
-          needs: step.needs,
-          coordinate: step.coordinate,
+          summary: requirement.summary,
+          needs: [for (final need in requirement.needs) need.id],
+          coordinate: requirement.coordinate,
           target: PublishTarget.pubDev,
-          requiresUnit: prerequisite?.declaredBy,
+          requiresUnit: requirement.provider.unitName,
         ),
       );
     }
@@ -137,74 +74,48 @@ final class RepositoryReleasePlan {
         needs: const [],
       ),
     );
-    for (final contract in producerGraph.steps) {
-      final producer = contract.name;
-      final local = localSteps[producer];
-      final targetStage = targetStagesByProducer[producer];
-      final kind = switch (producer) {
-        'complete-stage' => ReleasePlanNodeKind.completeStage,
-        _ when local != null => switch (local.kind) {
-          StepKind.build => ReleasePlanNodeKind.build,
-          StepKind.notarize => ReleasePlanNodeKind.notarize,
-          StepKind.archive => ReleasePlanNodeKind.archive,
-          StepKind.buildAssets => ReleasePlanNodeKind.buildAssets,
-          _ => throw StateError('unexpected local producer ${local.kind}'),
-        },
-        _ when targetStage != null => ReleasePlanNodeKind.targetStage,
-        _ => throw StateError(
-          'the stage graph has no plan metadata for '
-          '"$producer"',
-        ),
-      };
+    for (final work in producerGraph.steps) {
+      final producer = work.name;
+      final prepared = release.preparing(work);
       nodes.add(
         ReleasePlanNode(
-          id: producerId(producer),
-          kind: kind,
+          id: work.id,
+          kind: ReleasePlanNodeKind.values.byName(work.kind.name),
           phase: StepPhase.stage,
-          summary: switch (producer) {
-            'complete-stage' => 'complete and validate stage',
-            _ when local != null => local.summary,
-            _ => targetStage!.planLabel,
-          },
+          summary: work.kind == StepKind.completeStage
+              ? 'complete and validate stage'
+              : work.summary,
           needs: [
             if (producer == 'complete-stage' ||
                 producerGraph.dependenciesOf(producer).isEmpty)
               sourceId,
             for (final dependency in producerGraph.dependenciesOf(producer))
-              producerId(dependency),
+              byName[dependency]!.id,
           ],
           producer: producer,
-          project: local?.project ?? targetStage?.target.project?.name,
-          platform: local?.platform,
-          target: targetStage?.target.target,
-          coordinate: targetStage?.target.coordinate,
-          lane: targetStage?.target.target.wireName,
+          project: work.project?.name,
+          platform: work.platform,
+          target: work.target,
+          coordinate: prepared?.coordinate,
+          lane: work.target?.wireName,
         ),
       );
     }
 
-    for (final step in checklist.steps.where((step) => step.isPublic)) {
-      final plannedTarget = publicTargetByStep[step.id]!;
+    for (final target in release.targets) {
       nodes.add(
         ReleasePlanNode(
-          id: step.id,
-          kind: switch (step.kind) {
-            StepKind.tag => ReleasePlanNodeKind.tag,
-            StepKind.publishRegistry => ReleasePlanNodeKind.publishRegistry,
-            StepKind.publishRelease => ReleasePlanNodeKind.publishRelease,
-            StepKind.publishHomebrew => ReleasePlanNodeKind.publishHomebrew,
-            _ => throw StateError('unexpected public step ${step.kind}'),
-          },
+          id: target.id,
+          kind: ReleasePlanNodeKind.values.byName(target.kind.name),
           phase: StepPhase.publish,
-          summary: step.summary,
-          needs: step.needs,
-          project: plannedTarget.project?.name ?? step.project,
-          platform: step.platform,
-          target: step.target,
-          coordinate: step.target == PublishTarget.pubDev
-              ? step.coordinate
-              : plannedTarget.coordinate,
-          lane: step.target?.wireName,
+          summary: target.summary,
+          needs: [for (final need in target.needs) need.id],
+          project: target.project?.name,
+          target: target.target,
+          coordinate: target.target == PublishTarget.pubDev
+              ? '${target.project!.name}@${target.project!.version}'
+              : target.coordinate,
+          lane: target.target.wireName,
         ),
       );
     }
@@ -216,7 +127,8 @@ final class RepositoryReleasePlan {
     );
     final canonical = graph.ordered();
     final directUnits = <String>{
-      for (final prerequisite in prerequisites) prerequisite.declaredBy,
+      for (final requirement in release.requirements)
+        requirement.provider.unitName,
     };
     return ReleaseUnitPlan(
       name: unit.name,

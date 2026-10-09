@@ -11,7 +11,7 @@ import 'support/compiled_rk.dart';
 /// copies a repository out of `examples/` (or builds a minimal one), makes it
 /// a repository, and runs the real executable against it.
 ///
-/// Checklist derivation itself is proved in `checklist_test.dart` and
+/// Release derivation itself is proved in `unit_release_test.dart` and
 /// `resolve_test.dart`; nothing here needs a network to answer.
 ///
 /// The examples are named for the shape they are, never for a real project —

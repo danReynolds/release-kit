@@ -1,16 +1,14 @@
 import 'dart:convert';
 
-import 'package:rk/src/engine/checklist.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
-import 'package:rk/src/engine/producers.dart';
 import 'package:rk/src/engine/release_plan.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/stage_contract.dart';
+import 'package:rk/src/engine/unit_release.dart';
 import 'package:rk/src/output/output.dart';
 import 'package:rk/src/output/release_plan.dart';
-import 'package:rk/src/targets/catalog.dart';
 import 'package:test/test.dart';
 
 const _config = '''
@@ -76,7 +74,6 @@ RepositoryReleasePlan _plan({String config = _config, MemorySourceTree? tree}) {
   final plan = RepositoryReleasePlan.derive(
     resolution: _resolve(config, tree ?? _tree),
     repository: 'example/repository',
-    targets: TargetCatalog.builtIn(),
     diagnostics: diagnostics,
   );
   expect(plan, isNotNull, reason: diagnostics.found.join('\n'));
@@ -169,7 +166,6 @@ dependencies:
       final plan = RepositoryReleasePlan.derive(
         resolution: _resolve(config, tree),
         repository: null,
-        targets: TargetCatalog.builtIn(),
         diagnostics: diagnostics,
       );
       expect(plan, isNotNull, reason: diagnostics.found.join('\n'));
@@ -205,24 +201,18 @@ dependencies:
     test('is an exact projection of the receipt producer graph', () {
       final resolution = _resolve(_config, _tree);
       final plan = _plan();
-      final catalog = TargetCatalog.builtIn();
 
       for (final unitPlan in plan.units) {
         final unit = resolution.unit(unitPlan.name)!;
         final diagnostics = Diagnostics();
-        final checklist = Checklist.derive(unit, resolution, diagnostics);
-        expect(diagnostics.found, isEmpty);
-        final targets = catalog.derive(
+        final release = UnitRelease.derive(
           unit,
-          checklist,
+          resolution,
           repository: 'example/repository',
+          problems: diagnostics,
         );
-        final graph = StageProducerGraph.forUnit(
-          targetContributions: catalog
-              .stages(unit: unit, targets: targets)
-              .map((stage) => stage.contract),
-          localProducers: localProducerContracts(unit),
-        );
+        expect(diagnostics.found, isEmpty);
+        final graph = StageProducerGraph.forWork(release.work);
         // The plan starts from the source every producer builds from, which
         // the receipt names by its identity rather than as a step.
         final source = unitPlan.stage.singleWhere(
@@ -245,19 +235,20 @@ dependencies:
       }
     });
 
-    test('preserves every direct public dependency from the checklist', () {
+    test('preserves every direct public dependency from the release', () {
       final resolution = _resolve(_config, _tree);
       final plan = _plan();
 
       for (final unitPlan in plan.units) {
-        final checklist = Checklist.derive(
+        final release = UnitRelease.derive(
           resolution.unit(unitPlan.name)!,
           resolution,
-          Diagnostics(),
+          repository: 'example/repository',
+          problems: Diagnostics(),
         );
         final expected = {
-          for (final step in checklist.steps.where((step) => step.isPublic))
-            step.id: step.needs,
+          for (final target in release.targets)
+            target.id: [for (final need in target.needs) need.id],
         };
         final actual = {
           for (final node in unitPlan.public) node.id: node.needs,
@@ -431,7 +422,6 @@ executables:
         final plan = RepositoryReleasePlan.derive(
           resolution: _resolve(config, tree),
           repository: null,
-          targets: TargetCatalog.builtIn(),
           diagnostics: diagnostics,
         );
         expect(plan, isNotNull, reason: diagnostics.found.join('\n'));
@@ -478,7 +468,6 @@ dependencies:
       final plan = RepositoryReleasePlan.derive(
         resolution: resolution,
         repository: 'example/repository',
-        targets: TargetCatalog.builtIn(),
         diagnostics: diagnostics,
       );
 

@@ -4,7 +4,6 @@ import 'dart:io';
 import '../builds/capability.dart';
 import '../engine/assets.dart';
 import '../engine/changelog.dart';
-import '../engine/checklist.dart';
 import '../engine/diagnostic.dart';
 import '../engine/git.dart';
 import '../output/output.dart';
@@ -17,6 +16,7 @@ import '../engine/resolve.dart';
 import '../engine/release_stage.dart';
 import '../engine/source_tree.dart';
 import '../engine/tools.dart';
+import '../engine/unit_release.dart';
 import '../engine/unit_snapshot.dart';
 import '../engine/verdict.dart';
 import '../targets/target_module.dart';
@@ -56,13 +56,7 @@ class ReleaseCommand {
   }) : _wait = wait ?? _sleep,
        _stageFor =
            stageFor ??
-           ReleaseStages(
-             source: tree,
-             git: git,
-             stageContracts: inspector.targets.stageContractResolver(
-               resolution,
-             ),
-           ).call,
+           ReleaseStages(source: tree, git: git, resolution: resolution).call,
        _refreshEnvironment =
            refreshEnvironment ??
            (() => Map<String, String>.of(Platform.environment));
@@ -159,6 +153,7 @@ class ReleaseCommand {
     tools: tools,
     capabilities: capabilities,
     stageFor: _stageFor,
+    targets: inspector.targets,
   );
 
   late final ReleasePublicationCoordinator _publication =
@@ -230,9 +225,7 @@ class ReleaseCommand {
     final publications = prepared.publications;
     if (publications.isEmpty) return ExitCodes.ok;
     output.timeline.phase('publishing');
-    final publicUnits = publications.where(
-      (plan) => plan.publicSteps.isNotEmpty,
-    );
+    final publicUnits = publications.where((plan) => plan.targets.isNotEmpty);
     if (publicUnits.isNotEmpty) {
       output.heading(
         'Release order: '
@@ -380,17 +373,17 @@ class ReleaseCommand {
       return false;
     }
     final partialStageLoss = read.partialStageLoss;
-    final blocked = read.checklist.steps.where((step) {
+    final blocked = read.release.steps.where((step) {
       if (step.kind == StepKind.completeStage) return false;
       // A sibling the stage can take from this source waits for nothing
       // while staging, which is private. A sibling released in this run
       // publishes first, in dependency order, and is public before this
       // unit uploads. Only a release that needs a package some other run
       // must publish waits for it here.
-      if (step.kind == StepKind.prerequisite &&
+      if (step is Requirement &&
           (read.released ||
               stageOnly ||
-              _releasing.contains(step.requires?.package))) {
+              _releasing.contains(step.provider.name))) {
         return false;
       }
       final state = read.states[step.id]!;
@@ -418,24 +411,24 @@ class ReleaseCommand {
       output.next('rk release');
       return false;
     }
-    _publication.haltForState(
-      read.unit,
-      blocked,
-      read.states[blocked.id]!,
-      target: read.targetOf(blocked),
-    );
+    _publication.haltForState(read.unit, blocked, read.states[blocked.id]!);
     return false;
   }
 
   /// Cheap, source-owned refusals for every selected unit before preparation.
-  /// Native contexts own package order; structural checklists must not reject
-  /// a guessed publication cycle before discovery can select hosted fallback.
+  /// Native contexts own package order; the release model must not reject a
+  /// guessed publication cycle before discovery can select hosted fallback.
   bool _validateRepositoryScope(List<ResolvedUnit> units) {
     final unique = <String, Diagnostic>{};
     for (final unit in units) {
       final problems = Diagnostics();
       _validate(unit, problems);
-      Checklist.derive(unit, resolution, problems);
+      UnitRelease.derive(
+        unit,
+        resolution,
+        repository: inspector.repository,
+        problems: problems,
+      );
       for (final problem in problems.found) {
         final key =
             '${problem.code}\u0000${problem.message}\u0000'
@@ -475,19 +468,17 @@ class ReleaseCommand {
 
     // Destinations are independent, so they are read together: every row
     // says what it is doing at once, and the wait is the slowest read
-    // rather than their sum. The report is written afterwards in checklist
+    // rather than their sum. The report is written afterwards in release
     // order, so the document never depends on which answer arrived first.
     for (final target in read.targets) {
       progress.begin(target, CommonProgressActivities.checking);
     }
     await Future.wait([
       for (final target in read.targets)
-        read.reads[target.step.id]!.then(
-          (state) => progress.observe(target, state),
-        ),
+        read.reads[target.id]!.then((state) => progress.observe(target, state)),
     ]);
     await read.settle();
-    for (final step in read.checklist.steps) {
+    for (final step in read.release.steps) {
       final state = read.states[step.id]!;
       output.step(
         step,
@@ -550,10 +541,7 @@ class ReleaseCommand {
     }
 
     final staging = await _stages.begin(
-      unit: unit,
-      checklist: read.checklist,
-      targets: read.targets,
-      targetStages: inspector.targets.stages(unit: unit, targets: read.targets),
+      release: read.release,
       stage: stage,
       inspected: stageInspection,
       claims: read.claims,
@@ -635,13 +623,10 @@ class ReleaseCommand {
   })
   _finishRelease(_Unit finished, PreparedRelease? prepared) {
     final read = finished.read;
-    final UnitSnapshot(:unit, :checklist, :targets) = read;
+    final UnitSnapshot(:unit, :release, :targets) = read;
     final stage = read.stage!;
     PublicationPlan publication(PreparedRelease prepared) => PublicationPlan(
-      unit: unit,
-      steps: checklist.steps,
-      publicSteps: read.publicSteps,
-      targets: targets,
+      release: release,
       states: read.states,
       actions: finished.actions,
       prepared: prepared,
@@ -683,12 +668,10 @@ class ReleaseCommand {
       );
     }
 
-    final localOnly = read.publicSteps.isEmpty;
+    final localOnly = targets.isEmpty;
     if (stageOnly || localOnly) {
       output.step(
-        checklist.steps.singleWhere(
-          (step) => step.kind == StepKind.completeStage,
-        ),
+        release.barrier,
         verdict: Verdict.exact,
         detail: 'staged and validated',
         evidence: {
@@ -944,8 +927,8 @@ final class _Unit {
   UnitStaging? staging;
 
   late final actions = {
-    for (final step in read.publicSteps)
-      step.id: read.states[step.id]!.isExact
+    for (final target in read.targets)
+      target.id: read.states[target.id]!.isExact
           ? ReleaseAction.alreadyPublished
           : ReleaseAction.notAttempted,
   };

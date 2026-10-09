@@ -154,7 +154,7 @@ class Report {
 
   /// Records one target-oriented status observation without introducing a
   /// second readiness state machine. The target carries the same four-way
-  /// verdict as its checklist step; artifact status describes only the local
+  /// verdict as its step; artifact status describes only the local
   /// stage evidence for each filename.
   void target({
     required String unit,

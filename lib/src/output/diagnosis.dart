@@ -38,7 +38,7 @@ class Diagnosis {
     Map<String, String> attachments = const {},
   }) {
     final at = '$root/.rk/diagnosis/$stamp';
-    // The report already carries the resolved checklist, each step's verdict
+    // The report already carries the resolved steps, each step's verdict
     // and duration, and every problem, so it is the diagnosis rather than a
     // summary of one.
     _put('$at/run.json', report.encode(exit: exit));
