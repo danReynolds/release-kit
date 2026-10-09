@@ -17,7 +17,6 @@ import 'rk_process.dart';
 void main() {
   dogfoodRegressions();
   closeoutRegressions();
-  realRepositoryRegressions();
   test('proposes one unit per releasable package', () async {
     final buffer = StringBuffer();
     final written = <String, String>{};
@@ -175,10 +174,112 @@ void main() {
     },
   );
 
-  group('rk init --write in a Git repository', () {
+  group('in a Git repository', () {
+    // What git tracks against what the disk holds: exactly the distinction
+    // MemorySourceTree cannot model.
     late Directory scratch;
     setUpAll(() => scratch = Directory.systemTemp.createTempSync('rk-init-'));
     tearDownAll(() => scratch.deleteSync(recursive: true));
+
+    Future<(int, Report, String)> init(String root) async {
+      final buffer = StringBuffer();
+      final output = Output(
+        sink: buffer.write,
+        isTerminal: false,
+        useColor: false,
+      );
+      final code = await InitCommand(
+        tree: GitSourceTree(root),
+        output: output,
+        write: (_, __) {},
+      ).run();
+      return (code, output.report, buffer.toString());
+    }
+
+    test(
+      'an untracked manifest is named with its command, never proposed from',
+      () async {
+        final repo = Rk.repository(scratch, 'untracked', {
+          'pubspec.yaml': 'name: tracked\nversion: 1.0.0\n',
+        })..commit();
+        // Deliberately not committed: this is the forgot-to-add case.
+        File('${repo.root}/packages/extra/pubspec.yaml')
+          ..createSync(recursive: true)
+          ..writeAsStringSync('name: extra\nversion: 2.0.0\n');
+
+        final (code, report, text) = await init(repo.root);
+        expect(code, ExitCodes.ok);
+        expect(
+          report.attachments['release.toml'],
+          contains('[release.tracked]'),
+        );
+        expect(
+          report.attachments['release.toml'],
+          isNot(contains('extra')),
+          reason:
+              'tracked-only is the rule; a proposal from an untracked file '
+              'would release what git cannot reproduce',
+        );
+        expect(text, contains('not tracked by git'));
+        expect(text, contains('git add packages/extra/pubspec.yaml'));
+      },
+    );
+
+    test(
+      'a tracked manifest missing from disk is named, not skipped silently',
+      () async {
+        final repo = Rk.repository(scratch, 'missing', {
+          'pubspec.yaml': 'name: root\nversion: 1.0.0\n',
+          'packages/gone/pubspec.yaml': 'name: gone\nversion: 1.0.0\n',
+        })..commit();
+        File('${repo.root}/packages/gone/pubspec.yaml').deleteSync();
+
+        final (_, _, text) = await init(repo.root);
+        expect(
+          text,
+          contains('packages/gone/pubspec.yaml is tracked but not on disk'),
+        );
+      },
+    );
+
+    test('real init JSON reports its origin and proposal next action', () {
+      final repo = Rk.repository(scratch, 'origin', {
+        'pubspec.yaml': 'name: origin_fixture\nversion: 1.0.0\n',
+      })..commit();
+      Process.runSync('git', [
+        'remote',
+        'add',
+        'origin',
+        'git@github.com:example/origin-fixture.git',
+      ], workingDirectory: repo.root);
+
+      final run = repo(['init', '--json']);
+      expect(run.code, ExitCodes.ok, reason: run.all);
+      expect(
+        (run.json['repository'] as Map)['remote'],
+        'example/origin-fixture',
+      );
+      expect(run.json['next'], ['rk init --write']);
+      expect(run.json['attachments'], contains('release.toml'));
+    });
+
+    test(
+      'a directory git cannot list is a named refusal, not a bug in rk',
+      () async {
+        final bare = Directory('${scratch.path}/not-a-repository')
+          ..createSync();
+
+        final (code, report, _) = await init(bare.path);
+        expect(code, ExitCodes.refused);
+        expect(
+          problemCodes(report, exit: code),
+          contains('RK-GIT-006'),
+          reason:
+              'ls-files failing used to read as "this repository tracks '
+              'nothing", which proposed nothing and called that an answer',
+        );
+      },
+    );
 
     /// The .gitignore `rk init --write` leaves, given the one it found.
     String? ignoredAfterInit(String name, {String? gitignore}) {
@@ -193,7 +294,7 @@ void main() {
       return file.existsSync() ? file.readAsStringSync() : null;
     }
 
-    test('adds .rk/ on a line of its own, after what was there', () {
+    test('--write adds .rk/ on a line of its own, after what was there', () {
       expect(
         ignoredAfterInit('unterminated', gitignore: 'build/'),
         'build/\n.rk/\n',
@@ -201,7 +302,7 @@ void main() {
       expect(ignoredAfterInit('absent'), '.rk/\n');
     });
 
-    test('leaves a .gitignore that already ignores .rk/ as it was', () {
+    test('--write leaves a .gitignore that already ignores .rk/ as it was', () {
       expect(
         ignoredAfterInit('ignored', gitignore: 'build/\n.rk/\n'),
         'build/\n.rk/\n',
@@ -402,136 +503,4 @@ void closeoutRegressions() {
       contains('[release.mycool-package_2]'),
     );
   });
-}
-
-/// Against real repositories: what git tracks versus what the disk holds is
-/// exactly the distinction MemorySourceTree cannot model.
-void realRepositoryRegressions() {
-  late Directory root;
-
-  setUp(() {
-    root = Directory.systemTemp.createTempSync('rk-init-');
-    Process.runSync('git', ['init', '-q'], workingDirectory: root.path);
-    Process.runSync('git', [
-      'config',
-      'user.email',
-      'a@b.c',
-    ], workingDirectory: root.path);
-    Process.runSync('git', [
-      'config',
-      'user.name',
-      'T',
-    ], workingDirectory: root.path);
-  });
-
-  tearDown(() => root.deleteSync(recursive: true));
-
-  void write(String path, String contents) {
-    File('${root.path}/$path')
-      ..createSync(recursive: true)
-      ..writeAsStringSync(contents);
-  }
-
-  void commit() {
-    Process.runSync('git', ['add', '-A'], workingDirectory: root.path);
-    Process.runSync('git', ['commit', '-qm', 'x'], workingDirectory: root.path);
-  }
-
-  Future<(int, Report, String)> init() async {
-    final buffer = StringBuffer();
-    final output = Output(
-      sink: buffer.write,
-      isTerminal: false,
-      useColor: false,
-    );
-    final code = await InitCommand(
-      tree: GitSourceTree(root.path),
-      output: output,
-      write: (_, __) {},
-    ).run();
-    return (code, output.report, buffer.toString());
-  }
-
-  test(
-    'an untracked manifest is named with its command, never proposed from',
-    () async {
-      write('pubspec.yaml', 'name: tracked\nversion: 1.0.0\n');
-      commit();
-      write('packages/extra/pubspec.yaml', 'name: extra\nversion: 2.0.0\n');
-      // Deliberately not committed: this is the forgot-to-add case.
-
-      final (code, report, text) = await init();
-      expect(code, ExitCodes.ok);
-      expect(report.attachments['release.toml'], contains('[release.tracked]'));
-      expect(
-        report.attachments['release.toml'],
-        isNot(contains('extra')),
-        reason:
-            'tracked-only is the rule; a proposal from an untracked file '
-            'would release what git cannot reproduce',
-      );
-      expect(text, contains('not tracked by git'));
-      expect(text, contains('git add packages/extra/pubspec.yaml'));
-    },
-  );
-
-  test(
-    'a tracked manifest missing from disk is named, not skipped silently',
-    () async {
-      write('pubspec.yaml', 'name: root\nversion: 1.0.0\n');
-      write('packages/gone/pubspec.yaml', 'name: gone\nversion: 1.0.0\n');
-      commit();
-      File('${root.path}/packages/gone/pubspec.yaml').deleteSync();
-
-      final (_, _, text) = await init();
-      expect(
-        text,
-        contains(
-          'packages/gone/pubspec.yaml is tracked but not on '
-          'disk',
-        ),
-      );
-    },
-  );
-
-  test('real init JSON reports its origin and proposal next action', () {
-    write('pubspec.yaml', 'name: origin_fixture\nversion: 1.0.0\n');
-    commit();
-    Process.runSync('git', [
-      'remote',
-      'add',
-      'origin',
-      'git@github.com:example/origin-fixture.git',
-    ], workingDirectory: root.path);
-
-    final run = Rk(root.path)(['init', '--json']);
-    expect(run.code, ExitCodes.ok, reason: run.all);
-    expect((run.json['repository'] as Map)['remote'], 'example/origin-fixture');
-    expect(run.json['next'], ['rk init --write']);
-    expect(run.json['attachments'], contains('release.toml'));
-  });
-
-  test(
-    'a directory git cannot list is a named refusal, not a bug in rk',
-    () async {
-      final bare = Directory.systemTemp.createTempSync('rk-notrepo-');
-      addTearDown(() => bare.deleteSync(recursive: true));
-
-      final output = Output(sink: (_) {}, isTerminal: false, useColor: false);
-      final code = await InitCommand(
-        tree: GitSourceTree(bare.path),
-        output: output,
-        write: (_, __) {},
-      ).run();
-
-      expect(code, ExitCodes.refused);
-      expect(
-        problemCodes(output.report, exit: code),
-        contains('RK-GIT-006'),
-        reason:
-            'ls-files failing used to read as "this repository tracks '
-            'nothing", which proposed nothing and called that an answer',
-      );
-    },
-  );
 }
