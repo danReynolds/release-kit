@@ -67,6 +67,35 @@ void main() {
     );
   });
 
+  test('units staged side by side say their warnings in one section, past '
+      'one that stops', () async {
+    // core found a warning; other stopped; third found one after that.
+    // However their staging interleaved, the run says both together.
+    final (out, captured) = make();
+    await out.holdingHalts(() async {
+      out.deferWarning(
+        const Diagnostic(code: 'RK-PUB-012', message: 'for core', remedy: 'r'),
+        unit: 'core',
+      );
+      out.problem(
+        const Diagnostic(code: 'RK-STAGE-003', message: 'other stopped'),
+        unit: 'other',
+      );
+      out.halt(Stop.partway);
+      out.deferWarning(
+        const Diagnostic(code: 'RK-PUB-012', message: 'for third', remedy: 'r'),
+        unit: 'third',
+      );
+      out.flushWarnings(order: const ['core', 'other', 'third']);
+    });
+
+    final text = captured.text;
+    expect('\nWarnings\n'.allMatches(text), hasLength(1), reason: text);
+    expect(text.indexOf('other stopped'), lessThan(text.indexOf('for core')));
+    expect(text.indexOf('for core'), lessThan(text.indexOf('for third')));
+    expect(text.indexOf('for third'), lessThan(text.indexOf('rk stopped')));
+  });
+
   test('public steps preserve concrete target identity in JSON', () {
     final (out, _) = make();
     final diagnostics = Diagnostics();

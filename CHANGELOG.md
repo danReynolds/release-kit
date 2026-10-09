@@ -129,10 +129,10 @@ release an earlier rk left partly published finishes with that rk.
   Fleury.
 - `rk stage` and `rk release` of several units say what they stage once: one
   heading, one Warnings section, one summary and one next step, with
-  warnings in release order whichever unit finishes first. Piped output
-  carries no times or counts. A long unit name is shortened rather
-  than stopping the run, and a release says it acted only once something
-  public changed.
+  warnings in release order whichever unit finishes first, or stops.
+  Piped output carries no times or counts. A long unit name is shortened
+  rather than stopping the run, and a release says it acted only once
+  something public changed.
 - `rk help [command]` prints a command's help. A flag a command does not take
   is refused in two lines, and `rk target` without a name lists the targets.
   `rk --version --json` prints `{"version": ...}`. A closed stdout or

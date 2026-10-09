@@ -736,7 +736,9 @@ class Output {
 
   /// Runs [body] holding back its halts, then says the most serious once.
   /// Work running side by side stops together, rather than one halt landing
-  /// among the others' progress.
+  /// among the others' progress. Deferred warnings wait as well: a problem
+  /// in one unit does not say the others' early, so they are said in one
+  /// section, by [body] or with the halt.
   Future<T> holdingHalts<T>(Future<T> Function() body) async {
     _holdingHalts++;
     try {
@@ -782,7 +784,7 @@ class Output {
     String? target,
     int depth = 0,
   }) {
-    flushWarnings();
+    if (_holdingHalts == 0) flushWarnings();
     report.problem(diagnostic, unit: unit, target: target);
     final where = diagnostic.source == null ? '' : '${diagnostic.source}  ';
     line(
@@ -807,9 +809,10 @@ class Output {
 
   /// Records a nonblocking diagnostic now, and shows it later with the run's
   /// other warnings, in one section: before the run's next problem, halt or
-  /// next move, or at [flushWarnings]. Units staged side by side each find
-  /// their own; said as they arrive, they made a section per unit and
-  /// repeated the remedy they share under every one.
+  /// next move, or at [flushWarnings]; while [holdingHalts] holds the halts,
+  /// not before a problem. Units staged side by side each find their own;
+  /// said as they arrive, they made a section per unit and repeated the
+  /// remedy they share under every one.
   void deferWarning(Diagnostic diagnostic, {String? unit, String? target}) {
     _deferredWarnings.add((diagnostic: diagnostic, unit: unit, target: target));
   }
