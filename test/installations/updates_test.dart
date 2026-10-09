@@ -119,14 +119,16 @@ void main() {
       final model = UsePicker(
         states: states,
         refresh: () async => states,
-        checkAvailable: (_, _, check) {
+        check: (_, _, check) {
           requests.add(check);
           final reply = Completer<AvailableInstallation>();
           replies.add(reply);
           return reply.future;
         },
-        downloadAvailable: (_, _, _, _, _) async => 'Downloaded',
-        use: (_, _, _, _) async => 'Used',
+        perform: perform(
+          install: (_, _, _, _, _) async => 'Downloaded',
+          use: (_, _, _, _) async => 'Used',
+        ),
         close: () {},
       );
       model.checkAll();
@@ -167,16 +169,18 @@ void main() {
       final model = UsePicker(
         states: states,
         refresh: () async => states,
-        checkAvailable: (_, _, _) async => const AvailableInstallation('1.3.0'),
-        downloadAvailable: (_, _, _, _, _) async {
-          downloads++;
-          await gate.future;
-          return 'Downloaded';
-        },
-        use: (_, _, _, _) async {
-          uses++;
-          return 'Used';
-        },
+        check: (_, _, _) async => const AvailableInstallation('1.3.0'),
+        perform: perform(
+          install: (_, _, _, _, _) async {
+            downloads++;
+            await gate.future;
+            return 'Downloaded';
+          },
+          use: (_, _, _, _) async {
+            uses++;
+            return 'Used';
+          },
+        ),
         close: () => closes++,
       );
       addTearDown(model.dispose);
@@ -230,13 +234,15 @@ void main() {
       final model = UsePicker(
         states: states,
         refresh: () async => states,
-        checkAvailable: (_, _, _) => gate.future,
-        downloadAvailable: (_, _, _, _, _) async => 'Downloaded',
-        use: (_, s, _, _) async {
-          source = s;
-          uses++;
-          return 'Used';
-        },
+        check: (_, _, _) => gate.future,
+        perform: perform(
+          install: (_, _, _, _, _) async => 'Downloaded',
+          use: (_, s, _, _) async {
+            source = s;
+            uses++;
+            return 'Used';
+          },
+        ),
         close: () {},
       );
       addTearDown(model.dispose);
@@ -286,16 +292,16 @@ void main() {
         final model = UsePicker(
           states: inspect(),
           refresh: () async => inspect(),
-          checkAvailable: (_, _, _) async =>
-              const AvailableInstallation('1.3.0'),
-          downloadAvailable: (_, _, _, _, _) async =>
-              throw StateError('No download'),
-          use: (_, _, _, _) async => throw StateError('No switch'),
-          uninstall: (_, source, _, _) {
-            expect(source, pub.source);
-            calls++;
-            return gate.future;
-          },
+          check: (_, _, _) async => const AvailableInstallation('1.3.0'),
+          perform: perform(
+            install: (_, _, _, _, _) async => throw StateError('No download'),
+            use: (_, _, _, _) async => throw StateError('No switch'),
+            uninstall: (_, source, _, _) {
+              expect(source, pub.source);
+              calls++;
+              return gate.future;
+            },
+          ),
           close: () => closes++,
         );
         addTearDown(model.dispose);
@@ -360,16 +366,18 @@ void main() {
     final model = UsePicker(
       states: inspect(),
       refresh: () async => inspect(),
-      checkAvailable: (_, _, _) async => const AvailableInstallation('1.3.0'),
-      downloadAvailable: (_, _, _, _, _) {
-        downloads++;
-        return gate.future;
-      },
-      use: (_, source, _, _) async {
-        expect(source, InstallationSource.github);
-        uses++;
-        return 'Used';
-      },
+      check: (_, _, _) async => const AvailableInstallation('1.3.0'),
+      perform: perform(
+        install: (_, _, _, _, _) {
+          downloads++;
+          return gate.future;
+        },
+        use: (_, source, _, _) async {
+          expect(source, InstallationSource.github);
+          uses++;
+          return 'Used';
+        },
+      ),
       close: () => closes++,
     );
     addTearDown(model.dispose);
@@ -447,10 +455,11 @@ void main() {
       final model = UsePicker(
         states: states,
         refresh: () async => throw StateError('No rescan'),
-        checkAvailable: (_, _, _) async => const AvailableInstallation('1.3.0'),
-        downloadAvailable: (_, _, _, _, _) async =>
-            throw StateError('No download'),
-        use: (_, _, _, _) async => throw StateError('No reinstall'),
+        check: (_, _, _) async => const AvailableInstallation('1.3.0'),
+        perform: perform(
+          install: (_, _, _, _, _) async => throw StateError('No download'),
+          use: (_, _, _, _) async => throw StateError('No reinstall'),
+        ),
         close: () => closed = true,
       );
       addTearDown(model.dispose);

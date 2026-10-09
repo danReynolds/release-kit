@@ -11,6 +11,7 @@ import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/installations/discovery.dart';
+import 'package:rk/src/installations/manager.dart';
 import 'package:rk/src/installations/model.dart';
 import 'package:rk/src/installations/provider.dart';
 import 'package:test/test.dart';
@@ -109,6 +110,51 @@ class StubProvider implements InstallationProvider {
     installed = null;
   }
 }
+
+/// The picker's one callback, dispatching each operation to a closure shaped
+/// as the picker's callbacks were. An action without one fails.
+Future<String> Function(Operation, void Function(String)) perform({
+  Future<String> Function(
+    ExecutableProject,
+    InstallationSource,
+    void Function(String),
+    InstallationCancellation,
+  )?
+  use,
+  Future<String> Function(
+    ExecutableProject,
+    InstallationSource,
+    AvailableInstallation,
+    void Function(String),
+    InstallationCancellation,
+  )?
+  install,
+  Future<String> Function(
+    ExecutableProject,
+    InstallationSource,
+    void Function(String),
+    InstallationCancellation,
+  )?
+  uninstall,
+}) => (operation, progress) {
+  final Operation(:project, :source, :release, :cancellation) = operation;
+  return switch (operation.action) {
+    InstallationAction.use => use!(project, source, progress, cancellation),
+    InstallationAction.install => install!(
+      project,
+      source,
+      release!,
+      progress,
+      cancellation,
+    ),
+    InstallationAction.uninstall => uninstall!(
+      project,
+      source,
+      progress,
+      cancellation,
+    ),
+  };
+};
 
 class TestTools implements Tools {
   TestTools(this.runTool);

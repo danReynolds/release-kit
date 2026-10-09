@@ -122,10 +122,11 @@ void main() {
     final model = UsePicker(
       states: states,
       refresh: () async => states,
-      checkAvailable: (_, _, _) => Completer<AvailableInstallation>().future,
-      downloadAvailable: (_, _, _, _, _) async =>
-          throw StateError('No downloads'),
-      use: (_, _, _, _) async => throw StateError('No switches'),
+      check: (_, _, _) => Completer<AvailableInstallation>().future,
+      perform: perform(
+        install: (_, _, _, _, _) async => throw StateError('No downloads'),
+        use: (_, _, _, _) async => throw StateError('No switches'),
+      ),
       close: () {},
     );
     addTearDown(model.dispose);

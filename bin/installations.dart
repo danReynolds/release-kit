@@ -13,7 +13,6 @@ import 'package:rk/src/engine/timings.dart';
 import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/installations/discovery.dart';
 import 'package:rk/src/installations/local.dart';
-import 'package:rk/src/installations/provider.dart';
 import 'package:rk/src/installations/manager.dart';
 import 'package:rk/src/installations/model.dart';
 import 'package:rk/src/installations/store.dart';
@@ -282,16 +281,6 @@ Future<int> _run(
     return message;
   }
 
-  // The picker cancels its own token; the operation follows it.
-  Future<String> picked(
-    Operation operation,
-    void Function(String) progress,
-    InstallationCancellation cancellation,
-  ) {
-    cancellation.onCancel(operation.cancellation.cancel);
-    return perform(operation, progress);
-  }
-
   final interactive =
       !json &&
       stdin.hasTerminal &&
@@ -302,30 +291,10 @@ Future<int> _run(
     final result = await runUsePicker(
       states: states,
       refresh: refresh,
-      use: (project, source, progress, cancellation) => picked(
-        Operation(project, source, InstallationAction.use),
-        progress,
-        cancellation,
-      ),
-      uninstall: (project, source, progress, cancellation) => picked(
-        Operation(project, source, InstallationAction.uninstall),
-        progress,
-        cancellation,
-      ),
-      command: 'rk $command',
-      checkAvailable: (project, source, check) =>
+      check: (project, source, check) =>
           manager.latest(project, source, check: check),
-      downloadAvailable: (project, source, release, progress, cancellation) =>
-          picked(
-            Operation(
-              project,
-              source,
-              InstallationAction.install,
-              release: release,
-            ),
-            progress,
-            cancellation,
-          ),
+      perform: perform,
+      command: 'rk $command',
     );
     // The picker refreshes after operations. Dismissing it is not another
     // inspection: a Homebrew subprocess here delayed even an idle Ctrl+C.
@@ -333,7 +302,7 @@ Future<int> _run(
       _result(output, message);
     }
     if (result.exitCode != 0) return result.exitCode;
-    if (result.failed) throw InstallationFailure(result.message);
+    if (result.failure case final failure?) throw InstallationFailure(failure);
     if (outcomes.isEmpty) output.say('No installations changed.');
   } else if (source == null) {
     for (final state in states) {
