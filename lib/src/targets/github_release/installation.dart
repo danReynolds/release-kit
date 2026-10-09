@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
 
-import '../../builds/binary_artifact.dart';
 import '../../engine/assets.dart';
 import '../../engine/git.dart';
 import '../../engine/release_manifest.dart';
@@ -238,25 +237,19 @@ class GithubInstallationProvider implements InstallationProvider {
   }
 }
 
-class InstallationArchive {
-  InstallationArchive(this.artifact, this.files);
-  final BinaryArtifact artifact;
-  final Map<String, List<int>> files;
-}
-
-/// Validate the whole inventory before writing any path. Never extract links,
-/// device nodes, arbitrary paths, or unknown bundle layouts.
-Future<InstallationArchive> decodeInstallationArchive(
+/// [compressed] as [command]'s release archive, every entry checked before
+/// any is written: no links, device nodes, arbitrary paths or unknown bundle
+/// layouts, and the program it ships the one asked for.
+Future<ArchiveReader> decodeInstallationArchive(
   List<int> compressed,
   String command,
 ) async {
-  final tar = gzip.decode(compressed);
   try {
-    final decoded = ArchiveReader.decodeTar(tar);
-    if (decoded.artifact.entryPoint != command) {
+    final archive = ArchiveReader.decode(compressed);
+    if (archive.artifact.entryPoint != command) {
       throw const FormatException('The archive exports a different command.');
     }
-    return InstallationArchive(decoded.artifact, decoded.files);
+    return archive;
   } on FormatException catch (error) {
     throw InstallationFailure(
       'The release archive does not match its executable layout.',

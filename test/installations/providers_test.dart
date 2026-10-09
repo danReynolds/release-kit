@@ -78,6 +78,10 @@ void main() {
           ArchiveEntry(name: 'orbit', bytes: [1]),
           ArchiveEntry(name: 'surprise', bytes: [2]),
         ],
+        // Another program's archive.
+        [
+          ArchiveEntry(name: 'comet', bytes: [1], executable: true),
+        ],
         [
           ArchiveEntry(
             name: BinaryArtifact.manifestName,
@@ -113,16 +117,22 @@ void main() {
         '${scratch.path}/store',
         const SystemTools(),
       );
-      final archive = Uint8List.fromList(
+      Uint8List orbit(String script) => Uint8List.fromList(
         ArchiveBuilder.gzip(
           ArchiveBuilder.tar([
             ArchiveEntry(
               name: 'orbit',
-              bytes: utf8.encode('#!/bin/sh\nprintf "release 1.1.0\\n"\n'),
+              bytes: utf8.encode(script),
               executable: true,
             ),
           ]),
         ),
+      );
+      final archive = orbit('#!/bin/sh\nprintf "release 1.1.0\\n"\n');
+      // What a tampered download could be: a well-formed archive of the same
+      // program, which only the release checksum refuses.
+      final tampered = orbit(
+        '#!/bin/sh\nprintf "release 1.1.0\\n"\n# not what was released\n',
       );
       final name = ReleaseAssets.archiveName('orbit', '1.1.0', 'linux-x64');
       var corrupt = false;
@@ -174,7 +184,7 @@ void main() {
           }
           expect(uri.pathSegments.last, name);
           expect(limit, archive.length);
-          return corrupt ? Uint8List(archive.length) : archive;
+          return corrupt ? tampered : archive;
         },
       );
       corrupt = true;
