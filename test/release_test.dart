@@ -84,6 +84,14 @@ String _normalizedPubKey(String key) {
   return key;
 }
 
+/// The project whose staged Pub archive is at [path].
+ResolvedProject _projectArchivedAt(String path, Resolution resolution) =>
+    resolution.units
+        .expand((unit) => unit.projects)
+        .firstWhere(
+          (project) => path.endsWith(ReleaseAssets.pubArchivePath(project)),
+        );
+
 void _materializeNativePubArchive(
   String key,
   Resolution resolution,
@@ -93,11 +101,7 @@ void _materializeNativePubArchive(
   final offset = key.indexOf(marker);
   if (offset < 0) return;
   final path = key.substring(offset + marker.length);
-  final project = resolution.units
-      .expand((unit) => unit.projects)
-      .firstWhere(
-        (project) => path.endsWith(ReleaseAssets.pubArchivePath(project)),
-      );
+  final project = _projectArchivedAt(path, resolution);
   final root = project.pubspec.directory == '.'
       ? ''
       : '${project.pubspec.directory}/';
@@ -113,6 +117,21 @@ void _materializeNativePubArchive(
   File(path)
     ..parent.createSync(recursive: true)
     ..writeAsBytesSync(ArchiveBuilder.gzip(ArchiveBuilder.tar(entries)));
+}
+
+/// What pub.dev does with an upload it accepts: lists the version, serving
+/// the archive it was given.
+void _acceptUpload(String key, Resolution resolution, FakeRegistry pubDev) {
+  const marker = 'pub publish --from-archive ';
+  final offset = key.indexOf(marker);
+  if (offset < 0) return;
+  final path = key
+      .substring(offset + marker.length)
+      .replaceFirst(RegExp(r' --force$'), '');
+  final project = _projectArchivedAt(path, resolution);
+  final version = project.version.canonical;
+  (pubDev.published[project.name] ??= <String>[]).add(version);
+  pubDev.archives['${project.name}@$version'] = File(path).readAsBytesSync();
 }
 
 /// The trailer `git tag -s` leaves on the tag object, abbreviated. rk looks for
@@ -239,17 +258,26 @@ final class _InteractiveTrackingTools implements Tools {
   }
 }
 
+/// Runs `rk release` (or `rk stage`, with [dryRun]) against [source] and
+/// [state], with every tool scripted.
+///
+/// pub.dev lists [pubDev] when the run starts and, as pub.dev does, lists each
+/// version the release uploads, serving the archive it was given. A test
+/// that needs pub.dev to answer otherwise passes its own [registry], which
+/// changes only as the test changes it.
 Future<Ran> release({
   MemorySourceTree? source,
   GitState? state,
   Map<String, String> Function()? refreshEnvironment,
   RegistryReader? registry,
+  Map<String, List<String>> pubDev = const {
+    'keybay': ['0.1.0'],
+  },
   String? typed = 'yes',
   String? Function(String prompt)? answerPrompt,
   bool dryRun = false,
   Map<String, ToolResult> results = const {},
   void Function(String key)? onRun,
-  void Function(String key)? onRawRun,
   void Function(String key)? onInteractive,
   void Function()? onConfirm,
   ToolResult? Function(String key)? answers,
@@ -303,6 +331,14 @@ Future<Ran> release({
           )(unit: unit, repository: effectiveGit.originUrl),
         );
       });
+
+  // The answers go through FakeRegistry's memo, as the real client's do, so
+  // a release sees its own upload only once it forgets what it read before.
+  final live = registry == null
+      ? FakeRegistry({
+          for (final MapEntry(:key, :value) in pubDev.entries) key: [...value],
+        })
+      : null;
 
   // Origin lists what has been pushed — before this run ([onRemote]) or
   // during it. A static script cannot say that, and the remote-verify leg
@@ -402,6 +438,10 @@ Future<Ran> release({
     },
     onRun: (key) {
       _materializeNativePubArchive(key, resolution, tree);
+      final answer = results[_normalizedPubKey(key)];
+      if (live != null && (answer == null || answer.exitCode == 0)) {
+        _acceptUpload(key, resolution, live);
+      }
       if (key.startsWith('git tag -s ') || key.startsWith('git tag -a ')) {
         final scripted = results[key];
         if (scripted == null || scripted.exitCode == 0) {
@@ -437,17 +477,12 @@ Future<Ran> release({
           }
         }
       }
-      onRawRun?.call(key);
       onRun?.call(_normalizedPubKey(key));
     },
   );
   final recorder = _InteractiveTrackingTools(recording, onInteractive, gate);
 
-  final effectiveRegistry =
-      registry ??
-      FakeRegistry({
-        'keybay': ['0.1.0'],
-      });
+  final effectiveRegistry = registry ?? live!;
   final command = ReleaseCommand(
     resolution: resolution,
     tree: tree,
@@ -509,17 +544,7 @@ void releaseCommandContract() {
     // A unit is what ships together, so one unit is the whole release and
     // there is nothing to disambiguate — the same resolution `rk status`
     // performs when it is given no unit either.
-    final registry = _MutableRegistry(<String>['0.1.0']);
-    final ran = await release(
-      only: null,
-      registry: registry,
-      onRun: (key) {
-        if (key == 'dart pub publish --from-archive <archive> --force') {
-          registry.goLive('0.2.0');
-          registry.archives['keybay@0.2.0'] = publishedBytes();
-        }
-      },
-    );
+    final ran = await release(only: null);
 
     expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
     expect(
@@ -529,7 +554,6 @@ void releaseCommandContract() {
   });
 
   test('pub-only release neither requires nor creates a Git tag', () async {
-    final registry = _MutableRegistry(<String>['0.1.0']);
     final ran = await release(
       config: '''
 schema = 2
@@ -539,13 +563,6 @@ path = "packages/keybay"
 publish = ["pub.dev"]
 ''',
       state: _git(pushed: false),
-      registry: registry,
-      onRun: (key) {
-        if (key == 'dart pub publish --from-archive <archive> --force') {
-          registry.goLive('0.2.0');
-          registry.archives['keybay@0.2.0'] = publishedBytes();
-        }
-      },
     );
 
     expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
@@ -1629,17 +1646,7 @@ void main() {
       // Captured, `dart pub login` without a session opens a browser login
       // and waits on it: twenty silent seconds before the operator saw it.
       final interactive = <String>[];
-      final registry = _MutableRegistry(<String>['0.1.0']);
-      final ran = await release(
-        registry: registry,
-        onInteractive: interactive.add,
-        onRun: (key) {
-          if (key == 'dart pub publish --from-archive <archive> --force') {
-            registry.goLive('0.2.0');
-            registry.archives['keybay@0.2.0'] = publishedBytes();
-          }
-        },
-      );
+      final ran = await release(onInteractive: interactive.add);
 
       expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
       expect(interactive, ['dart pub login']);
@@ -1702,6 +1709,7 @@ void main() {
             : null,
       );
 
+      expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
       expect(interactive, ['dart pub login']);
       expect(
         ran.calls.where((call) => call == 'dart pub login'),
@@ -1770,24 +1778,10 @@ void main() {
   });
 
   test('answering yes tags and publishes, in that order', () async {
-    // The registry reports the version live once publish has run, which is
-    // what the post-publish verification reads.
-    final registry = _MutableRegistry(<String>['0.1.0']);
-    // Publishing changes the registry, the way the real command does: the
-    // version goes live and the registry starts serving its archive. The
-    // confirming read sees both only through the invalidated cache — if
-    // release stops forgetting first, this test fails with "does not report
-    // it yet" — and then proves the served bytes against this very tree.
-    final ran = await release(
-      registry: registry,
-      onRun: (key) {
-        if (key == 'dart pub publish --from-archive <archive> --force') {
-          registry.goLive('0.2.0');
-          registry.archives['keybay@0.2.0'] = publishedBytes();
-        }
-      },
-      typed: 'yes',
-    );
+    // The confirming read sees the upload only through the invalidated
+    // cache: if release stopped forgetting first, this would end with
+    // "does not report it after".
+    final ran = await release(typed: 'yes');
 
     expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
     expect(
@@ -1975,9 +1969,7 @@ publish = ["pub.dev"]
       // --force — the actual act — publishes past warnings. Gating on the exit
       // code alone made rk stricter than the registry it publishes to, and the
       // refusal landed after the signed tag was public.
-      final registry = _MutableRegistry(<String>['0.1.0']);
       final ran = await release(
-        registry: registry,
         results: {
           'dart pub publish --to-archive <archive>': ToolResult(
             exitCode: 65,
@@ -1988,12 +1980,6 @@ publish = ["pub.dev"]
                 'Package has 2 warnings.',
             stderr: '',
           ),
-        },
-        onRun: (key) {
-          if (key == 'dart pub publish --from-archive <archive> --force') {
-            registry.goLive('0.2.0');
-            registry.archives['keybay@0.2.0'] = publishedBytes();
-          }
         },
       );
 
@@ -2051,9 +2037,7 @@ publish = ["pub.dev"]
       'publishing', () async {
     // Dart 3.12's Pub, verbatim in form: with warnings alone it writes the
     // archive, exits 0 and prints no summary. Its hints are not warnings.
-    final registry = _MutableRegistry(<String>['0.1.0']);
     final ran = await release(
-      registry: registry,
       results: {
         'dart pub publish --to-archive <archive>': ToolResult(
           exitCode: 0,
@@ -2091,12 +2075,6 @@ publish = ["pub.dev"]
               'Wrote package archive at /tmp/keybay.tar.gz\n',
           stderr: '',
         ),
-      },
-      onRun: (key) {
-        if (key == 'dart pub publish --from-archive <archive> --force') {
-          registry.goLive('0.2.0');
-          registry.archives['keybay@0.2.0'] = publishedBytes();
-        }
       },
     );
 
@@ -2197,7 +2175,6 @@ publish = ["pub.dev"]
     'a failed push removes the local tag, so re-running starts clean',
     () async {
       final ran = await release(
-        registry: _MutableRegistry(<String>['0.1.0']),
         results: {
           _tagPush: ToolResult(
             exitCode: 1,
@@ -2241,7 +2218,6 @@ publish = ["pub.dev"]
     'a failed tag cleanup leaves a local tag, and no public target changed',
     () async {
       final ran = await release(
-        registry: _MutableRegistry(<String>['0.1.0']),
         results: {
           _tagPush: ToolResult(
             exitCode: 1,
@@ -2269,16 +2245,7 @@ publish = ["pub.dev"]
   );
 
   test('a published package says when it was published, once', () async {
-    final registry = _MutableRegistry(<String>['0.1.0']);
-    final ran = await release(
-      registry: registry,
-      onRun: (key) {
-        if (key == 'dart pub publish --from-archive <archive> --force') {
-          registry.goLive('0.2.0');
-          registry.archives['keybay@0.2.0'] = publishedBytes();
-        }
-      },
-    );
+    final ran = await release();
 
     expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
     final row = ran.text
@@ -2322,8 +2289,10 @@ publish = ["pub.dev"]
       // answering absent. The confirming read must give up at the deadline and
       // say an effect may exist, not spin forever and not report success.
       final ran = await release(
-        registry: _MutableRegistry(<String>['0.1.0']),
-        // publish "succeeds", nothing goes live
+        // A pub.dev of the test's own, which lists nothing it is sent.
+        registry: FakeRegistry({
+          'keybay': ['0.1.0'],
+        }),
       );
 
       expect(ran.exitCode, ExitCodes.refused);
@@ -2343,7 +2312,6 @@ publish = ["pub.dev"]
       // private and needs nothing from origin.
       final released = await release(
         state: _git(pushed: false),
-        registry: _MutableRegistry(<String>['0.1.0']),
         onConfirm: () =>
             fail('an unpushed HEAD must refuse before the question'),
       );
@@ -2353,11 +2321,7 @@ publish = ["pub.dev"]
         contains('RK-GIT-003'),
       );
 
-      final staged = await release(
-        state: _git(pushed: false),
-        registry: _MutableRegistry(<String>['0.1.0']),
-        dryRun: true,
-      );
+      final staged = await release(state: _git(pushed: false), dryRun: true);
       expect(staged.exitCode, ExitCodes.ok, reason: staged.text);
       expect(
         staged.problems.map((problem) => problem['code']),
@@ -2369,10 +2333,8 @@ publish = ["pub.dev"]
   test('a signing key alone does not sign release tags', () async {
     // As with git tag -a: a key that is there for commits does not make a
     // release tag signed. tag.gpgSign, or a signed release history, does.
-    final ran = await release(
-      state: _git(signing: true),
-      registry: _MutableRegistry(<String>['0.1.0']),
-    );
+    final ran = await release(state: _git(signing: true));
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
     expect(
       ran.calls.firstWhere((c) => c.startsWith('git tag')),
       startsWith('git tag -a'),
@@ -2381,10 +2343,8 @@ publish = ["pub.dev"]
   });
 
   test('an unsigned repository still tags, and says so', () async {
-    final ran = await release(
-      state: _git(signing: false),
-      registry: _MutableRegistry(<String>['0.1.0']),
-    );
+    final ran = await release(state: _git(signing: false));
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
     expect(
       ran.calls.firstWhere((c) => c.startsWith('git tag')),
       contains('git tag -a'),
@@ -2396,7 +2356,6 @@ publish = ["pub.dev"]
     // Each release runs with a HOME that holds no pub session.
     test('is left alone when a token supplies the credential', () async {
       final ran = await release(
-        registry: _MutableRegistry(<String>['0.1.0']),
         results: {
           'dart pub token list': ToolResult(
             exitCode: 0,
@@ -2407,6 +2366,7 @@ publish = ["pub.dev"]
           ),
         },
       );
+      expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
       expect(
         ran.calls,
         isNot(contains('dart pub login')),
@@ -2418,7 +2378,6 @@ publish = ["pub.dev"]
 
     test('a token for a lookalike host does not answer for pub.dev', () async {
       final ran = await release(
-        registry: _MutableRegistry(<String>['0.1.0']),
         results: {
           'dart pub token list': ToolResult(
             exitCode: 0,
@@ -2429,6 +2388,7 @@ publish = ["pub.dev"]
           ),
         },
       );
+      expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
       expect(
         ran.calls,
         contains('dart pub login'),
@@ -2436,9 +2396,8 @@ publish = ["pub.dev"]
       );
     });
 
-    test('a missing dart executable refuses instead of crashing', () async {
+    test('a token list that cannot run is no token, not a crash', () async {
       final ran = await release(
-        registry: _MutableRegistry(<String>['0.1.0']),
         answers: (key) {
           if (key == 'dart pub token list') {
             throw ProcessException('dart', const ['pub', 'token', 'list']);
@@ -2446,22 +2405,15 @@ publish = ["pub.dev"]
           return null;
         },
       );
-      expect(
-        ran.exitCode,
-        isNot(ExitCodes.crashed),
-        reason: 'an unanswerable question is not a crash',
-      );
+      expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+      expect(ran.calls, contains('dart pub login'));
     });
   });
 
   group('a project that signs its releases', () {
     test('says so through tag.gpgSign, and git signs the tag', () async {
-      // The pub.dev leg has to settle for the run to finish, or the test
-      // would assert a signed tag on a release that never landed.
-      final registry = _MutableRegistry(<String>['0.1.0']);
       final ran = await release(
         state: _git(tagSigningRequested: true),
-        registry: registry,
         // A machine that cannot check its own signature, as one without
         // gpg.ssh.allowedSignersFile cannot, still releases: git signed it.
         results: {
@@ -2470,12 +2422,6 @@ publish = ["pub.dev"]
             stdout: '',
             stderr: 'error: gpg.ssh.allowedSignersFile needs to be configured',
           ),
-        },
-        onRun: (key) {
-          if (key == 'dart pub publish --from-archive <archive> --force') {
-            registry.goLive('0.2.0');
-            registry.archives['keybay@0.2.0'] = publishedBytes();
-          }
         },
       );
       expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
@@ -2490,7 +2436,6 @@ publish = ["pub.dev"]
     test('refuses before acting when no signing key is configured', () async {
       final ran = await release(
         state: _git(signing: false, tagSigningRequested: true),
-        registry: _MutableRegistry(<String>['0.1.0']),
       );
       expect(ran.exitCode, ExitCodes.refused);
       // The code is the published interface a caller keys on; the words are
@@ -2523,8 +2468,8 @@ publish = ["pub.dev"]
           ),
           onRemote: const ['v0.1.0'],
           signedExistingTags: const ['v0.1.0'],
-          registry: _MutableRegistry(<String>['0.1.0']),
         );
+        expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
         expect(
           ran.problems.map((p) => p['code']),
           isNot(contains('RK-TAG-005')),
@@ -2556,8 +2501,8 @@ publish = ["pub.dev"]
             },
           ),
           onRemote: const ['v0.1.0'],
-          registry: _MutableRegistry(<String>['0.1.0']),
         );
+        expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
         expect(
           ran.calls.firstWhere((c) => c.startsWith('git tag')),
           contains('git tag -a'),
@@ -2649,17 +2594,6 @@ publish = ["pub.dev"]
   });
 }
 
-/// A registry that starts with what is published and gains the released
-/// version once `dart pub publish` has been recorded — so the post-publish
-/// verification has something true to read.
-/// A registry whose *world* changes when publish runs.
-///
-/// The answers still go through FakeRegistry's memoization — the same cache
-/// the real client has — so the new version is visible only after the caller
-/// forgets what it knew. The fake this replaced flipped to exact on its
-/// second inspection, a behavior the real client cannot exhibit, and it hid
-/// the bug where the confirming read answered from the pre-act memo and
-/// every successful publish reported failure.
 /// A registry whose version reads wait until [together] packages are being
 /// read, so reads made one after another never finish.
 final class _HeldRegistry implements RegistryReader {
@@ -2686,8 +2620,11 @@ final class _HeldRegistry implements RegistryReader {
 }
 
 /// Counts version reads once `dart pub publish` has run.
-class _ReadCountingRegistry extends _MutableRegistry {
-  _ReadCountingRegistry() : super(<String>['0.1.0']);
+class _ReadCountingRegistry extends FakeRegistry {
+  _ReadCountingRegistry()
+    : super({
+        'keybay': ['0.1.0'],
+      });
 
   bool uploaded = false;
   int readsAfterUpload = 0;
@@ -2697,19 +2634,6 @@ class _ReadCountingRegistry extends _MutableRegistry {
     if (uploaded) readsAfterUpload++;
     return super.lookupVersion(name, version);
   }
-}
-
-class _MutableRegistry extends FakeRegistry {
-  _MutableRegistry(List<String> live) : super({'keybay': live});
-
-  /// The registry before the package exists at all, so `lookup` answers
-  /// null — "has never been published", and nothing else.
-  _MutableRegistry.unpublished() : super({});
-
-  /// What `dart pub publish` does at the registry. A first publish creates
-  /// the package, so the key may not be there yet.
-  void goLive(String version) =>
-      (published['keybay'] ??= <String>[]).add(version);
 }
 
 /// Regressions for the phase 3 independent reviews: every halting rule was
@@ -2851,16 +2775,7 @@ publish = ["pub.dev"]
     // the prompt text is identical for a new name, and there is no terms
     // acceptance in the flow. The refusal was justified by a ceremony that
     // does not exist.
-    final registry = _MutableRegistry.unpublished();
-    final ran = await release(
-      registry: registry,
-      onRun: (key) {
-        if (key == 'dart pub publish --from-archive <archive> --force') {
-          registry.goLive('0.2.0');
-          registry.archives['keybay@0.2.0'] = publishedBytes();
-        }
-      },
-    );
+    final ran = await release(pubDev: const {});
 
     expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
     expect(
@@ -2956,21 +2871,13 @@ publish = ["pub.dev"]
   });
 
   test('an old tag that names no version does not stop a release', () async {
-    final registry = _MutableRegistry(<String>['0.1.0']);
     final ran = await release(
-      registry: registry,
       results: {
         'git ls-remote --tags origin': ToolResult(
           exitCode: 0,
           stdout: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb refs/tags/v1.0\n',
           stderr: '',
         ),
-      },
-      onRun: (key) {
-        if (key == 'dart pub publish --from-archive <archive> --force') {
-          registry.goLive('0.2.0');
-          registry.archives['keybay@0.2.0'] = publishedBytes();
-        }
       },
     );
 
@@ -3178,16 +3085,8 @@ void mutationCloseout() {
     // completed the release with the authorizing tag absent from origin,
     // silently. The inspection now asks origin, and the act pushes what
     // exists.
-    final registry = _MutableRegistry(<String>['0.1.0']);
     final ran = await release(
       state: _git(tags: const ['v0.2.0']), // local tag, no onRemote
-      registry: registry,
-      onRun: (key) {
-        if (key == 'dart pub publish --from-archive <archive> --force') {
-          registry.goLive('0.2.0');
-          registry.archives['keybay@0.2.0'] = publishedBytes();
-        }
-      },
     );
 
     expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
@@ -3212,16 +3111,7 @@ void mutationCloseout() {
       // Git accepts a tag push only as the exact object it was given, and
       // refuses to replace a tag origin has, so its answer is the read-back:
       // origin is read once, before staging, and not again around the push.
-      final registry = _MutableRegistry(<String>['0.1.0']);
-      final ran = await release(
-        registry: registry,
-        onRun: (key) {
-          if (key == 'dart pub publish --from-archive <archive> --force') {
-            registry.goLive('0.2.0');
-            registry.archives['keybay@0.2.0'] = publishedBytes();
-          }
-        },
-      );
+      final ran = await release();
 
       expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
       expect(
@@ -3240,14 +3130,16 @@ void mutationCloseout() {
   test(
     'a published coordinate with no digest is skipped without provenance',
     () async {
-      final registry = _MutableRegistry(<String>['0.1.0']);
+      final registry = FakeRegistry({
+        'keybay': ['0.1.0'],
+      });
       final ran = await release(
         registry: registry,
         onRun: (key) {
           if (key == 'dart pub publish --from-archive <archive> --force') {
-            registry.goLive('0.2.0');
             // No archive is ever served: the confirming read finds the
             // version listed and the bytes unreadable.
+            registry.published['keybay']!.add('0.2.0');
           }
         },
       );
@@ -3259,12 +3151,14 @@ void mutationCloseout() {
   );
 
   test('tampered bytes after a real publish are acted-and-unfixable', () async {
-    final registry = _MutableRegistry(<String>['0.1.0']);
+    final registry = FakeRegistry({
+      'keybay': ['0.1.0'],
+    });
     final ran = await release(
       registry: registry,
       onRun: (key) {
         if (key == 'dart pub publish --from-archive <archive> --force') {
-          registry.goLive('0.2.0');
+          registry.published['keybay']!.add('0.2.0');
           registry.archives['keybay@0.2.0'] = [9, 9, 9];
         }
       },
@@ -3288,18 +3182,17 @@ void mutationCloseout() {
 void originRoundTrips() {
   test('a repository release reads origin\'s tags once and pushes each tag '
       'once', () async {
-    final registry = FakeRegistry({
-      for (final name in const [
-        'fleury',
-        'fleury_mcp',
-        'fleury_test',
-        'fleury_web',
-      ])
-        name: ['0.1.1'],
-    });
     final ran = await release(
       only: null,
-      registry: registry,
+      pubDev: {
+        for (final name in const [
+          'fleury',
+          'fleury_mcp',
+          'fleury_test',
+          'fleury_web',
+        ])
+          name: ['0.1.1'],
+      },
       config: '''
 schema = 2
 
@@ -3335,13 +3228,6 @@ publish = ["pub.dev", "git-tag"]
           'packages/$name/CHANGELOG.md': '## 0.1.2\n',
         },
       }, description: '/repo/fleury'),
-      // pub.dev lists what `dart pub publish` uploads.
-      onRawRun: (key) {
-        final upload = RegExp(
-          r'pub publish --from-archive \S*/pub/(\w+)-([0-9.]+)\.tar\.gz',
-        ).firstMatch(key);
-        if (upload != null) registry.published[upload[1]!]!.add(upload[2]!);
-      },
     );
 
     expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
