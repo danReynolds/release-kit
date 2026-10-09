@@ -513,9 +513,7 @@ final class Publication {
       );
     }
 
-    output.report
-      ..acted = true
-      ..actedPublicly = true;
+    output.report.acted = true;
     final mutationActivity = _acting(target.target);
     row.begin(mutationActivity);
     late final TargetActOutcome act;

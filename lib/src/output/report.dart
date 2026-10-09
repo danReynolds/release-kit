@@ -55,20 +55,17 @@ class Report {
   /// because a read-only path that printed steps always succeeded.
   var acted = false;
 
-  /// Whether this run began acting on a public target: what a crash says
-  /// may have had an effect. The stage a release builds first is private.
-  var actedPublicly = false;
-
   /// Whether this run changed a public target, as the read after each act
-  /// found it: what a halt says changed. Set in one place, the release
-  /// loop, so lanes publishing side by side agree whichever ends first.
+  /// found it: what a halt, or a crash, says changed. The stage a release
+  /// builds first is private. Set in one place, the release loop, so lanes
+  /// publishing side by side agree whichever ends first.
   var publicChanged = false;
 
   /// Whether this run changed what its halt speaks of: for stage and
   /// release, a public target; for init, clean and use, the files they
   /// write.
   bool get changedWhatHaltsSpeakOf => switch (command) {
-    'stage' || 'release' => actedPublicly,
+    'stage' || 'release' => publicChanged,
     _ => acted,
   };
 

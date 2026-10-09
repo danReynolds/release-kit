@@ -43,7 +43,7 @@ void main() {
     // of public targets, and none changed until one is published.
     final release = Report('release')..acted = true;
     expect(release.changedWhatHaltsSpeakOf, isFalse);
-    release.actedPublicly = true;
+    release.publicChanged = true;
     expect(release.changedWhatHaltsSpeakOf, isTrue);
     // init, clean and use write files, and those are what a halt speaks of.
     expect((Report('init')..acted = true).changedWhatHaltsSpeakOf, isTrue);
