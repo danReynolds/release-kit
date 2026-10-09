@@ -38,9 +38,8 @@ void main() {
       );
 
   group('example repositories', () {
-    test('every example plans a release for each of its units', () {
+    test('every example plans its units, but the one rk must refuse', () {
       // Planning reads no destination, so this is the same on any machine.
-      // escapes-repository is refused at resolve, which cli_test checks.
       final scratch = Directory.systemTemp.createTempSync('rk-examples-');
       addTearDown(() => scratch.deleteSync(recursive: true));
       final shapes = [
@@ -58,6 +57,10 @@ void main() {
           expect(unit['nodes'], isNotEmpty, reason: '$shape: ${unit['name']}');
         }
       }
+
+      final refused = Rk.example(scratch, 'escapes-repository')(['plan']);
+      expect(refused.code, 1, reason: refused.all);
+      expect(refused.all, contains('does not contain'));
     });
   });
 
