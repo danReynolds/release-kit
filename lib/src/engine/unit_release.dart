@@ -527,29 +527,18 @@ final class UnitRelease {
   /// release stops later than it should have. A formula fills its own row,
   /// under Homebrew; the release notes fill none.
   List<BoardGroup> get board {
-    // Every piece of one platform's work reports against that platform's
-    // archive: the binary itself never leaves the stage.
-    bool fills(Work work, String name) => switch (work.kind) {
-      StepKind.completeStage => name == ReleaseAssets.manifest,
-      StepKind.targetStage =>
-        work.target == PublishTarget.homebrew &&
-            ReleaseAssets.formulaName(work.project!.executable!) == name,
-      StepKind.buildAssets => work.project!.assets.any(
-        (declared) => ReleaseAssets.assetName(declared) == name,
-      ),
-      _ =>
-        work.platform != null &&
-            ReleaseAssets.archiveName(
-                  work.project!.executable!,
-                  work.project!.version.canonical,
-                  work.platform!,
-                ) ==
-                name,
+    // A file's row is filled by the work that makes it. A platform's archive
+    // is also filled by the build, signing and notarization it is made
+    // from: the binary itself never leaves the stage.
+    final makers = {
+      for (final file in artifacts)
+        if (file.name case final name?) name: file.madeBy,
     };
-    List<Work> filling(String name) => [
-      for (final work in work)
-        if (fills(work, name)) work,
-    ];
+    List<Work> filling(String name) {
+      final made = makers[name]!;
+      return [if (made.kind == StepKind.archive) ...made.inputs, made];
+    }
+
     final groups = <BoardGroup>[];
     for (final target in targets) {
       final rows = [
@@ -575,19 +564,16 @@ final class UnitRelease {
     // file is: the path inside the stage means nothing to a reader, and the
     // stage says where its archives are.
     final published = {for (final target in targets) ...target.artifacts};
-    if (unit.binaryProject case final project?) {
-      final local = [
-        for (final platform in [...project.binaryPlatforms]..sort())
-          if (ReleaseAssets.archiveName(
-                project.executable!,
-                project.version.canonical,
-                platform,
-              )
-              case final name when !published.contains(name))
-            BoardRow('local/${project.name}/$platform', name, filling(name)),
-      ];
-      if (local.isNotEmpty) groups.add(BoardGroup('Local binaries', local));
-    }
+    final local = [
+      for (final Artifact(:name, :madeBy) in assets)
+        if (madeBy.kind == StepKind.archive && !published.contains(name))
+          BoardRow(
+            'local/${madeBy.project!.name}/${madeBy.platform}',
+            name!,
+            filling(name),
+          ),
+    ];
+    if (local.isNotEmpty) groups.add(BoardGroup('Local binaries', local));
     return groups;
   }
 }
