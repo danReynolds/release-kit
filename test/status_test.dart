@@ -420,6 +420,30 @@ path = "packages/keybay"
 publish = ["git-tag", "pub.dev"]
 ''';
 
+/// A command-line tool released as a binary, on pub.dev and as a GitHub
+/// Release.
+const binaryConfig = '''
+schema = 2
+
+[release.cli]
+path = "packages/keybay"
+publish = ["git-tag", "pub.dev", "github-release"]
+binary_platforms = ["macos-arm64"]
+''';
+
+final binaryTree = MemorySourceTree({
+  'packages/keybay/pubspec.yaml': '''
+name: keybay
+version: 0.2.0
+executables:
+  keybay: keybay
+''',
+  'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
+}, description: '/repo/keybay');
+
+HostCapabilities linuxHost() =>
+    HostCapabilities(hostPlatform: 'linux-x64', containerRuntime: null);
+
 Future<String> statusOf({
   required MemorySourceTree source,
   required GitState state,
@@ -513,6 +537,14 @@ String _targetLine(String text, String label) {
   final body = issues < 0 ? text : text.substring(0, issues);
   return body.split('\n').firstWhere((line) => line.contains(label));
 }
+
+/// The targets of the report's one unit.
+List<Map> _targets(Map<String, Object?> report) =>
+    (((report['units'] as List).single as Map)['targets'] as List).cast<Map>();
+
+/// The report's one target of [kind].
+Map _target(Map<String, Object?> report, String kind) =>
+    _targets(report).singleWhere((target) => target['kind'] == kind);
 
 void main() {
   statusTargetContract();
@@ -663,11 +695,7 @@ publish = ["pub.dev"]
       final problems = (run.report['problems'] as List).cast<Map>();
       expect(problems.map((problem) => problem['code']), ['RK-MONO-004']);
       expect(problems.single.containsKey('target'), isFalse);
-      final targets =
-          ((run.report['units'] as List).single as Map)['targets'] as List;
-      final tag =
-          targets.singleWhere((target) => (target as Map)['kind'] == 'gitTag')
-              as Map;
+      final tag = _target(run.report, 'gitTag');
       expect(tag['verdict'], 'exact');
     },
   );
@@ -678,9 +706,7 @@ publish = ["pub.dev"]
       state: git(),
       registry: FakeRegistry(const {}),
     );
-    final unit = (run.report['units'] as List).single as Map;
-    final targets = (unit['targets'] as List).cast<Map>();
-    final tag = targets.singleWhere((target) => target['kind'] == 'gitTag');
+    final tag = _target(run.report, 'gitTag');
 
     expect(tag['artifacts'], isEmpty);
     expect(run.text, isNot(contains(ReleaseAssets.manifest)));
@@ -708,8 +734,7 @@ publish = ["pub.dev"]
       expect(repository['source_binding'], 'unbound');
       expect(repository['source_comparison'], 'unavailable');
       expect(repository.containsKey('head'), isFalse);
-      final unit = (run.report['units'] as List).single as Map;
-      final target = (unit['targets'] as List).single as Map;
+      final target = _targets(run.report).single;
       expect(target['verdict'], 'exact');
       // Said once, for the repository: every target's would be the same.
       expect(target, isNot(contains('source_binding')));
@@ -736,10 +761,8 @@ publish = ["pub.dev"]
           'every lane agrees the current release is 0.1.0, so the movement '
           'is stated once, on the unit, and not per row',
     );
-    final targets =
-        ((run.report['units'] as List).single as Map)['targets'] as List;
     expect(
-      [for (final target in targets) (target as Map)['current_version']],
+      _targets(run.report).map((target) => target['current_version']),
       ['0.1.0', '0.1.0'],
       reason: 'the Git lane reads its latest older tag, not an absence',
     );
@@ -763,25 +786,12 @@ schema = 2
 path = "packages/keybay"
 binary_platforms = ["linux-x64"]
 ''';
-      final binaryTree = MemorySourceTree({
-        'packages/keybay/pubspec.yaml': '''
-name: keybay
-version: 0.2.0
-executables:
-  keybay: keybay
-''',
-        'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
-      }, description: '/repo/keybay');
-
       final run = await statusRun(
         withConfig: localBinaryConfig,
         source: binaryTree,
         state: git(),
         registry: FakeRegistry(const {}),
-        capabilities: HostCapabilities(
-          hostPlatform: 'linux-x64',
-          containerRuntime: null,
-        ),
+        capabilities: linuxHost(),
       );
 
       expect(run.text, contains('Not staged'));
@@ -801,16 +811,6 @@ path = "packages/keybay"
 publish = ["pub.dev"]
 binary_platforms = ["linux-x64"]
 ''';
-    final binaryTree = MemorySourceTree({
-      'packages/keybay/pubspec.yaml': '''
-name: keybay
-version: 0.2.0
-executables:
-  keybay: keybay
-''',
-      'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
-    }, description: '/repo/keybay');
-
     final run = await statusRun(
       withConfig: config,
       source: binaryTree,
@@ -818,10 +818,7 @@ executables:
       registry: FakeRegistry({
         'keybay': ['0.2.0'],
       }),
-      capabilities: HostCapabilities(
-        hostPlatform: 'linux-x64',
-        containerRuntime: null,
-      ),
+      capabilities: linuxHost(),
     );
 
     expect(run.text, contains('Published'));
@@ -918,11 +915,7 @@ executables:
         state: git(),
         registry: FakeRegistry(const {}, unreachable: true),
       );
-      final targets =
-          ((run.report['units'] as List).single as Map)['targets'] as List;
-      final pub =
-          targets.singleWhere((target) => (target as Map)['kind'] == 'pubDev')
-              as Map;
+      final pub = _target(run.report, 'pubDev');
       expect(pub['verdict'], 'unknown');
       expect(
         run.text,
@@ -949,24 +942,6 @@ executables:
 }
 
 void statusTargetContract() {
-  const binaryConfig = '''
-schema = 2
-
-[release.cli]
-path = "packages/keybay"
-publish = ["git-tag", "pub.dev", "github-release"]
-binary_platforms = ["macos-arm64"]
-''';
-  final binaryTree = MemorySourceTree({
-    'packages/keybay/pubspec.yaml': '''
-name: keybay
-version: 0.2.0
-executables:
-  keybay: keybay
-''',
-    'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
-  }, description: '/repo/keybay');
-
   test('all target completion orders render in configured order', () async {
     const tag = StepKind.tag;
     const pub = StepKind.publishRegistry;
@@ -1150,10 +1125,7 @@ executables:
         inspector.finish(StepKind.publishRegistry);
       }
       final result = await running;
-      final unit = (result.report['units'] as List).single as Map;
-      final targets = (unit['targets'] as List).cast<Map>();
-      final tag = targets.singleWhere((target) => target['kind'] == 'gitTag');
-      expect(tag['verdict'], verdict);
+      expect(_target(result.report, 'gitTag')['verdict'], verdict);
       expect(
         (result.report['problems'] as List).cast<Map>().any(
           (problem) => problem['code'] == 'RK-MONO-004',
@@ -1266,11 +1238,10 @@ repository: https://github.com/danReynolds/keybay
         matches(RegExp('^    $heading\$', multiLine: true)),
         reason: run.text,
       );
-      final unit = (run.report['units'] as List).single as Map;
-      expect(
-        (unit['targets'] as List).map((target) => (target as Map)['verdict']),
-        [tag.verdict.name, pub.verdict.name],
-      );
+      expect(_targets(run.report).map((target) => target['verdict']), [
+        tag.verdict.name,
+        pub.verdict.name,
+      ]);
       for (final (label, answer) in [('Git tag', tag), ('pub.dev ', pub)]) {
         expect(
           _targetLine(run.text, label).trimLeft().startsWith('✗'),
@@ -1300,19 +1271,9 @@ repository: https://github.com/danReynolds/keybay
         ),
       );
 
-      final targets =
-          ((run.report['units'] as List).single as Map)['targets'] as List;
-      final github =
-          targets.singleWhere(
-                (target) => (target as Map)['kind'] == 'githubRelease',
-              )
-              as Map;
-      final homebrew =
-          targets.singleWhere((target) => (target as Map)['kind'] == 'homebrew')
-              as Map;
-      final tag =
-          targets.singleWhere((target) => (target as Map)['kind'] == 'gitTag')
-              as Map;
+      final github = _target(run.report, 'githubRelease');
+      final homebrew = _target(run.report, 'homebrew');
+      final tag = _target(run.report, 'gitTag');
       expect(
         (github['artifacts'] as List).map(
           (artifact) => (artifact as Map)['name'],
@@ -1343,10 +1304,7 @@ repository: https://github.com/danReynolds/keybay
         source: binaryTree,
         state: git(),
         registry: FakeRegistry(const {}),
-        capabilities: HostCapabilities(
-          hostPlatform: 'linux-x64',
-          containerRuntime: null,
-        ),
+        capabilities: linuxHost(),
         inspectorBuilder: (git, _) => FixedInspector(
           registry: FakeRegistry(const {}),
           git: git,
@@ -1369,13 +1327,7 @@ repository: https://github.com/danReynolds/keybay
           ),
         ),
       );
-      final targets =
-          ((run.report['units'] as List).single as Map)['targets'] as List;
-      final github =
-          targets.singleWhere(
-                (target) => (target as Map)['kind'] == 'githubRelease',
-              )
-              as Map;
+      final github = _target(run.report, 'githubRelease');
       final archive =
           (github['artifacts'] as List).singleWhere(
                 (artifact) =>
@@ -1414,13 +1366,7 @@ repository: https://github.com/danReynolds/keybay
       expect(run.text, contains('provider history was unreadable'));
       expect(run.text, contains('prevent'));
 
-      final targets =
-          ((run.report['units'] as List).single as Map)['targets'] as List;
-      final github =
-          targets.singleWhere(
-                (target) => (target as Map)['kind'] == 'githubRelease',
-              )
-              as Map;
+      final github = _target(run.report, 'githubRelease');
       expect(
         _targetLine(run.text, 'GitHub Release ').trimLeft(),
         startsWith('✗'),
@@ -1492,11 +1438,7 @@ repository: https://github.com/danReynolds/keybay
     );
     expect(run.text, isNot(contains('rk stage core')));
 
-    final targets =
-        ((run.report['units'] as List).single as Map)['targets'] as List;
-    final pub =
-        targets.singleWhere((target) => (target as Map)['kind'] == 'pubDev')
-            as Map;
+    final pub = _target(run.report, 'pubDev');
     expect(_targetLine(run.text, 'pub.dev ').trimLeft(), startsWith('✗'));
     expect(pub['verdict'], 'absent');
     expect(
@@ -1550,11 +1492,7 @@ publish = ["pub.dev"]
             GuardInspector(registry: registry, git: git, code: code),
       );
 
-      final targets =
-          ((run.report['units'] as List).single as Map)['targets'] as List;
-      final tag =
-          targets.singleWhere((target) => (target as Map)['kind'] == 'gitTag')
-              as Map;
+      final tag = _target(run.report, 'gitTag');
       final problem = (run.report['problems'] as List).cast<Map>().singleWhere(
         (problem) => problem['code'] == code,
       );
@@ -1587,10 +1525,7 @@ publish = ["pub.dev"]
         state: git(),
         registry: FakeRegistry(const {}),
         stageFor: (_) => stage,
-        capabilities: HostCapabilities(
-          hostPlatform: 'linux-x64',
-          containerRuntime: null,
-        ),
+        capabilities: linuxHost(),
       );
       expect(run.text, contains('Staged'));
       expect(run.text, contains('keybay-0.2.0-macos-arm64.tar.gz'));
@@ -1653,13 +1588,7 @@ publish = ["pub.dev"]
     // them anyway.
     final expected = ReleaseAssets.expectedForUnit(made.unit);
     expect(run.text, matches(RegExp('${expected.length} artifacts')));
-    final targets =
-        ((run.report['units'] as List).single as Map)['targets'] as List;
-    final github =
-        targets.singleWhere(
-              (target) => (target as Map)['kind'] == 'githubRelease',
-            )
-            as Map;
+    final github = _target(run.report, 'githubRelease');
     expect(github['current_known'], isTrue);
     expect(github['target_version'], '0.2.0');
     expect(github['verdict'], 'absent');
@@ -1714,20 +1643,14 @@ publish = ["pub.dev"]
         reason: 'the same safe resume command is visible to the operator',
       );
       expect(run.report['problems'], isEmpty);
-      final targets =
-          ((run.report['units'] as List).single as Map)['targets'] as List;
       expect(
         [
-          for (final target in targets)
-            ((target as Map)['kind'], target['verdict']),
+          for (final target in _targets(run.report))
+            (target['kind'], target['verdict']),
         ],
         [('gitTag', 'exact'), ('pubDev', 'exact'), ('githubRelease', 'absent')],
       );
-      final github =
-          targets.singleWhere(
-                (target) => (target as Map)['kind'] == 'githubRelease',
-              )
-              as Map;
+      final github = _target(run.report, 'githubRelease');
       expect(
         (github['artifacts'] as List)
             .map((artifact) => (artifact as Map)['status'])
@@ -1755,10 +1678,7 @@ publish = ["pub.dev"]
         state: git(),
         registry: FakeRegistry(const {}),
         stageFor: stageFor,
-        capabilities: HostCapabilities(
-          hostPlatform: 'linux-x64',
-          containerRuntime: null,
-        ),
+        capabilities: linuxHost(),
         inspectorBuilder: (git, _) => FixedInspector(
           registry: FakeRegistry(const {}),
           git: git,
@@ -1902,11 +1822,9 @@ publish = ["pub.dev"]
         ),
       );
 
-      final targets =
-          ((run.report['units'] as List).single as Map)['targets'] as List;
       final artifacts = [
-        for (final target in targets)
-          ...((target as Map)['artifacts'] as List).cast<Map>(),
+        for (final target in _targets(run.report))
+          ...(target['artifacts'] as List).cast<Map>(),
       ];
       expect(artifacts, isNotEmpty);
       expect(artifacts.map((artifact) => artifact['status']).toSet(), {
@@ -2011,10 +1929,8 @@ publish = ["pub.dev"]
         } else {
           expect(run.text, contains('rk stage bundle'));
         }
-        final unit = (run.report['units'] as List).single as Map;
-        final targets = (unit['targets'] as List).cast<Map>();
         expect(
-          targets.map((target) => target['verdict']),
+          _targets(run.report).map((target) => target['verdict']),
           containsAll(['exact', unreadPrivate ? 'unknown' : 'absent']),
         );
       },
@@ -2103,11 +2019,9 @@ publish = ["pub.dev"]
         ),
         ['RK-STAGE-005'],
       );
-      final targets =
-          ((run.report['units'] as List).single as Map)['targets'] as List;
       final artifacts = [
-        for (final target in targets)
-          ...((target as Map)['artifacts'] as List).cast<Map>(),
+        for (final target in _targets(run.report))
+          ...(target['artifacts'] as List).cast<Map>(),
       ];
       expect(artifacts, isNotEmpty);
       expect(artifacts.map((artifact) => artifact['status']).toSet(), {
@@ -2287,11 +2201,7 @@ void releaseReadiness() {
     expect(run.text, contains('0.2.0 is behind published version 0.5.0'));
     expect(run.text, isNot(contains('rk release')));
 
-    final targets =
-        ((run.report['units'] as List).single as Map)['targets'] as List;
-    final pub =
-        targets.singleWhere((target) => (target as Map)['kind'] == 'pubDev')
-            as Map;
+    final pub = _target(run.report, 'pubDev');
     final monotonicity = (run.report['problems'] as List)
         .cast<Map>()
         .singleWhere((problem) => problem['code'] == 'RK-MONO-002');
@@ -2420,10 +2330,15 @@ publish = ["pub.dev"]
     },
   );
 
-  test('a prerequisite this repository releases orders the release '
-      'rather than blocking it', () async {
-    final run = await statusRun(
-      withConfig: '''
+  // keybay_cli needs keybay 0.2.0, which this repository also releases.
+  MemorySourceTree siblings() => MemorySourceTree({
+    'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
+    'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
+    'packages/cli/pubspec.yaml':
+        'name: keybay_cli\nversion: 0.2.0\ndependencies:\n  keybay: 0.2.0\n',
+    'packages/cli/CHANGELOG.md': '## 0.2.0\n',
+  }, description: '/repo/keybay');
+  const taggedSiblings = '''
 schema = 2
 
 [release.core]
@@ -2435,18 +2350,13 @@ publish = ["git-tag", "pub.dev"]
 tag = "keybay_cli-v{version}"
 path = "packages/cli"
 publish = ["git-tag", "pub.dev"]
-''',
-      source: MemorySourceTree({
-        'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
-        'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
-        'packages/cli/pubspec.yaml': '''
-name: keybay_cli
-version: 0.2.0
-dependencies:
-  keybay: 0.2.0
-''',
-        'packages/cli/CHANGELOG.md': '## 0.2.0\n',
-      }, description: '/repo/keybay'),
+''';
+
+  test('a prerequisite this repository releases orders the release '
+      'rather than blocking it', () async {
+    final run = await statusRun(
+      withConfig: taggedSiblings,
+      source: siblings(),
       state: git(),
       registry: FakeRegistry({}),
     );
@@ -2462,7 +2372,7 @@ dependencies:
   });
 
   group('a unit that releases after a sibling not on pub.dev yet', () {
-    const siblings = '''
+    const cliFirst = '''
 schema = 2
 
 [release.cli]
@@ -2473,18 +2383,10 @@ publish = ["pub.dev"]
 path = "packages/keybay"
 publish = ["pub.dev"]
 ''';
-    MemorySourceTree source() => MemorySourceTree({
-      'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
-      'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
-      'packages/cli/pubspec.yaml':
-          'name: keybay_cli\nversion: 0.2.0\ndependencies:\n  keybay: 0.2.0\n',
-      'packages/cli/CHANGELOG.md': '## 0.2.0\n',
-    }, description: '/repo/keybay');
-
     test('is shown after it, in the order they release', () async {
       final run = await statusRun(
-        withConfig: siblings,
-        source: source(),
+        withConfig: cliFirst,
+        source: siblings(),
         state: git(),
         registry: FakeRegistry({
           'keybay': ['0.1.0'],
@@ -2504,8 +2406,8 @@ publish = ["pub.dev"]
 
     test('is released with it, by the repository command', () async {
       final run = await statusRun(
-        withConfig: siblings,
-        source: source(),
+        withConfig: cliFirst,
+        source: siblings(),
         state: git(),
         registry: FakeRegistry({
           'keybay': ['0.1.0'],
@@ -2526,30 +2428,8 @@ publish = ["pub.dev"]
 
   test('a prerequisite rk cannot read still blocks', () async {
     final run = await statusRun(
-      withConfig: '''
-schema = 2
-
-[release.core]
-tag = "keybay-v{version}"
-path = "packages/keybay"
-publish = ["git-tag", "pub.dev"]
-
-[release.cli]
-tag = "keybay_cli-v{version}"
-path = "packages/cli"
-publish = ["git-tag", "pub.dev"]
-''',
-      source: MemorySourceTree({
-        'packages/keybay/pubspec.yaml': 'name: keybay\nversion: 0.2.0\n',
-        'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
-        'packages/cli/pubspec.yaml': '''
-name: keybay_cli
-version: 0.2.0
-dependencies:
-  keybay: 0.2.0
-''',
-        'packages/cli/CHANGELOG.md': '## 0.2.0\n',
-      }, description: '/repo/keybay'),
+      withConfig: taggedSiblings,
+      source: siblings(),
       state: git(),
       registry: FakeRegistry({}, unreachable: true),
     );
@@ -2561,23 +2441,8 @@ dependencies:
     'a published binary target stays visible and keeps all JSON steps',
     () async {
       final run = await statusRun(
-        withConfig: '''
-schema = 2
-
-[release.cli]
-path = "packages/keybay"
-publish = ["git-tag", "pub.dev", "github-release"]
-binary_platforms = ["macos-arm64"]
-''',
-        source: MemorySourceTree({
-          'packages/keybay/pubspec.yaml': '''
-name: keybay
-version: 0.2.0
-executables:
-  keybay: keybay
-''',
-          'packages/keybay/CHANGELOG.md': '## 0.2.0\n',
-        }, description: '/repo/keybay'),
+        withConfig: binaryConfig,
+        source: binaryTree,
         state: git(tags: const ['v0.2.0']),
         registry: FakeRegistry({
           'keybay': ['0.2.0'],
