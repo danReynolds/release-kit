@@ -57,7 +57,10 @@ Observed with the patched SDK:
 The SDK proposal and experimental patch were submitted as
 [Dart SDK #64556](https://github.com/dart-lang/sdk/issues/64556); the
 [submitted proposal](native-assets-sdk-issue.md) is retained here. SDK maintainer
-agreement and an available supported interface remain the next dependency. RK integration, native Linux target
+agreement remains pending. A [temporary build helper](../../tool/dart_build_patch/README.md)
+now carries the proposed interface as an opt-in macOS ARM64 preview against
+stock Dart 3.13.5. It does not modify the installed SDK and can be removed when
+the upstream command supports both options. RK integration, native Linux target
 qualification, actual Keybay identity-upgrade qualification, notarization and
 real Homebrew installation remain outstanding. The user's installed Dart and
 compiled Local RK were not changed.

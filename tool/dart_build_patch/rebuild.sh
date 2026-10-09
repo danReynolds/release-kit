@@ -1,0 +1,18 @@
+#!/bin/sh
+# Run inside the extracted source archive; no pub get or network is needed.
+set -eu
+if [ "$#" != 1 ]; then
+  echo 'Usage: rebuild.sh <Dart 3.13.5 SDK directory>' >&2
+  exit 64
+fi
+sdk=$(CDPATH= cd -- "$1" && pwd -P)
+if [ "$(uname -s)-$(uname -m)" != Darwin-arm64 ] ||
+   [ "$(cat "$sdk/version")" != 3.13.5 ] ||
+   [ "$(cat "$sdk/revision")" != 04bcd1036cdc799ac6564988f159ee454d42c822 ]; then
+  echo 'This preview requires Dart SDK 3.13.5 (04bcd1036cdc) on macOS arm64.' >&2
+  exit 64
+fi
+cd -- "$(dirname -- "$0")"
+"$sdk/bin/dart" --suppress-analytics compile aot-snapshot \
+  --packages=package_config.json main.dart -o build.aot
+./rk-dart-build "$sdk" --help
