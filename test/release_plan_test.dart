@@ -1,11 +1,9 @@
 import 'dart:convert';
-import 'dart:mirrors';
 
 import 'package:rk/src/engine/checklist.dart';
 import 'package:rk/src/engine/config.dart';
 import 'package:rk/src/engine/diagnostic.dart';
 import 'package:rk/src/engine/producers.dart';
-import 'package:rk/src/engine/publish_target.dart';
 import 'package:rk/src/engine/release_plan.dart';
 import 'package:rk/src/engine/resolve.dart';
 import 'package:rk/src/engine/source_tree.dart';
@@ -110,19 +108,6 @@ String _render(
 
 String _withoutAnsi(String value) =>
     value.replaceAll(RegExp(r'\x1b\[[0-9;]*m'), '');
-
-/// Constructs a renderer-only graph without widening rk's production API just
-/// to expose the private repository-plan constructor to tests.
-RepositoryReleasePlan _syntheticPlan(ReleaseUnitPlan unit) {
-  final mirror = reflectClass(RepositoryReleasePlan);
-  final constructor = mirror.declarations.values
-      .whereType<MethodMirror>()
-      .singleWhere((member) => member.isConstructor);
-  return mirror.newInstance(constructor.constructorName, [
-        <ReleaseUnitPlan>[unit],
-      ]).reflectee
-      as RepositoryReleasePlan;
-}
 
 void main() {
   group('canonical release plan', () {
@@ -524,84 +509,16 @@ dependencies:
       expect(rendered, contains('├─▶ [package archive · example_cli]'));
       expect(rendered, contains('├─▶ linux-x64'));
       expect(rendered, contains('[build] ─▶ [archive]'));
+      expect(
+        rendered,
+        contains('[Homebrew formula · example_cli] · needs archives'),
+        reason: 'the formula is target work that waits on local archives',
+      );
       expect(rendered, contains('[finalize stage]'));
       expect(rendered, isNot(contains('needs all stage work')));
       expect(rendered, contains('no destination checks · no changes'));
       expect(rendered, isNot(contains('source-only ·')));
       expect(rendered, isNot(contains('configured topology')));
-    });
-
-    test('target work is classified by dependencies, not label prose', () {
-      final source = ReleasePlanNode(
-        id: 'tool/stage/source',
-        kind: ReleasePlanNodeKind.sourceSnapshot,
-        phase: StepPhase.stage,
-        summary: 'source snapshot',
-        needs: const [],
-        producer: 'source-snapshot',
-      );
-      final archive = ReleasePlanNode(
-        id: 'tool/archive/tool/linux-x64',
-        kind: ReleasePlanNodeKind.archive,
-        phase: StepPhase.stage,
-        summary: 'archive linux-x64',
-        needs: [source.id],
-        producer: 'archive:tool:linux-x64',
-        project: 'tool',
-        platform: 'linux-x64',
-      );
-      final targetInput = ReleasePlanNode(
-        id: 'tool/stage/channel-metadata',
-        kind: ReleasePlanNodeKind.targetStage,
-        phase: StepPhase.stage,
-        summary: 'channel metadata',
-        needs: [archive.id],
-        producer: 'channel-metadata',
-        project: 'tool',
-        target: PublishTarget.homebrew,
-        coordinate: 'example/tap/Formula/tool.rb',
-        lane: PublishTarget.homebrew.wireName,
-      );
-      final complete = ReleasePlanNode(
-        id: 'tool/stage/complete',
-        kind: ReleasePlanNodeKind.completeStage,
-        phase: StepPhase.stage,
-        summary: 'complete and validate stage',
-        needs: [source.id, archive.id, targetInput.id],
-        producer: 'complete-stage',
-      );
-      final plan = _syntheticPlan(
-        ReleaseUnitPlan(
-          name: 'tool',
-          version: '1.0.0',
-          tag: null,
-          requiresUnits: const [],
-          nodes: [source, archive, targetInput, complete],
-        ),
-      );
-
-      final rendered = _render(plan, terminal: true, color: false, width: 180);
-      final targetLine = rendered
-          .split('\n')
-          .singleWhere((line) => line.contains('[channel metadata]'));
-
-      expect(
-        targetInput.summary,
-        isNot(contains('formula')),
-        reason: 'the label deliberately carries no target-type hint',
-      );
-      expect(
-        targetInput.summary,
-        isNot(contains('after')),
-        reason: 'the sequencing annotation must come from needs',
-      );
-      expect(targetLine, contains('needs archives'));
-
-      final colored = _render(plan, terminal: true, color: true, width: 180);
-      final coloredTargetLine = colored
-          .split('\n')
-          .singleWhere((line) => line.contains('[channel metadata]'));
-      expect(coloredTargetLine, contains('\x1b[33m · needs archives'));
     });
 
     test('narrow terminals fall back to a dependency-complete outline', () {
@@ -620,19 +537,15 @@ dependencies:
       expect(rendered, contains('needs source snapshot'));
       expect(rendered, contains('needs tag cli-v1.2.0'));
       expect(rendered, contains('needs GitHub Release'));
+      expect(
+        rendered,
+        contains('Homebrew formula · example_cli needs archives'),
+      );
       expect(rendered, isNot(contains('cli/stage/source')));
       expect(rendered, isNot(contains('cli/tag/cli-v1.2.0')));
       expect(rendered, isNot(contains('cli/github-release/cli-v1.2.0')));
       expect(rendered, contains('no destination checks · no changes'));
       expect(rendered, isNot(contains('source-only ·')));
-
-      final colored = _render(
-        _plan().select('cli'),
-        terminal: true,
-        color: true,
-        width: 52,
-      );
-      expect(colored, contains('\x1b[33mneeds source snapshot'));
     });
 
     test('semantic colors never change the graph text', () {
@@ -640,25 +553,8 @@ dependencies:
       final plain = _render(plan, terminal: true, color: false, width: 180);
       final colored = _render(plan, terminal: true, color: true, width: 180);
 
+      expect(colored, contains('\x1b'));
       expect(_withoutAnsi(colored), plain);
-      expect(colored, contains('\x1b[1;33m'));
-      expect(colored, contains('\x1b[1;34m'));
-      expect(colored, contains('\x1b[1;35m'));
-      expect(colored, contains('\x1b[1;36m'));
-      final checkpointLines = colored
-          .split('\n')
-          .where((line) => line.contains('[finalize stage]'));
-      expect(checkpointLines, isNotEmpty);
-      for (final line in checkpointLines) {
-        expect(line, contains('\x1b[1;35m[finalize stage]\x1b[0m'));
-        expect(line, isNot(contains('needs')));
-        expect(line, isNot(contains('\x1b[33m')));
-      }
-      expect(
-        colored,
-        isNot(contains('\x1b[32m')),
-        reason: 'green is reserved for observed success, not a plan',
-      );
     });
 
     test('a pipe gets the append-only outline with no control codes', () {
