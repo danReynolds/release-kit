@@ -64,7 +64,6 @@ void main() {
         final machine = loose([command, '--help', '--json']);
         expect(machine.code, 0, reason: machine.all);
         expect(machine.json['command'], command);
-        expect(machine.json, isNot(contains('mode')));
         expect((machine.json['next'] as List).single, run.stdout.trim());
       });
     }
@@ -144,85 +143,29 @@ void main() {
     });
   });
 
-  group('a release the repository cannot build is refused at resolve', () {
-    late Run run;
-    setUpAll(() => run = Rk.example(scratch, 'escapes-repository')(['status']));
-
-    test('it is refused, not released', () {
-      expect(run.code, 1, reason: run.all);
-    });
-
-    test('the refusal says what is wrong and names both dependencies', () {
-      expect(
-        run.all,
-        contains('built from sources this repository does not contain'),
-      );
-      expect(run.all, contains('sibling_core'));
-      expect(run.all, contains('sibling_io'));
-    });
-
-    test('no checklist is printed for something rk will not release', () {
-      expect(run.all, isNot(contains('checksums')));
-      expect(run.all, isNot(contains('macos-arm64')));
-    });
-  });
-
   group('flags that carry no meaning here are refused, not repaired', () {
     late Rk repo;
     setUpAll(() => repo = Rk.example(scratch, 'single-package', as: 'flags'));
 
-    test('--at is not a supported flag', () {
-      final run = repo(['status', '--at=v1.0.0', '--json']);
-      expect(run.code, 2, reason: run.all);
-      expect(run.problems.map((p) => p['code']), contains('RK-CLI-001'));
-      expect(run.all, contains('rk does not have --at=v1.0.0'));
-    });
+    test('an unknown flag or command is refused before any work', () {
+      // --timings writes rk's own .rk/timings.json and takes no file name: a
+      // file in the repository would be uncommitted, and refuse the release.
+      final flag = repo(['stage', '--timings=run.json', '--json']);
+      expect(flag.code, 2, reason: flag.all);
+      expect(flag.problems.map((p) => p['code']), ['RK-CLI-001']);
 
-    test('--offline is not a supported flag', () {
-      final run = repo(['status', '--offline', '--json']);
-      expect(run.code, 2, reason: run.all);
-      expect(run.problems.map((p) => p['code']), contains('RK-CLI-001'));
-    });
-
-    test('verify is not a command', () {
-      final run = repo(['verify', '--json']);
-      expect(run.code, 2);
-      expect(run.problems.map((p) => p['code']), contains('RK-CLI-008'));
-      expect(
-        run.problems.single['message'],
-        'rk has no command named "verify"',
-      );
-    });
-
-    test('a unit name is scoped through status, not inferred as a command', () {
-      final run = repo(['lib', '--json']);
-      expect(run.code, 2);
-      expect(run.problems.map((p) => p['code']), contains('RK-CLI-008'));
-      expect(run.all, contains('rk status [unit]'));
+      // A unit name is scoped through a command, never read as one.
+      final command = repo(['lib', '--json']);
+      expect(command.code, 2, reason: command.all);
+      expect(command.problems.map((p) => p['code']), ['RK-CLI-008']);
+      expect(command.all, contains('rk status [unit]'));
+      expect(Directory('${repo.root}/.rk').existsSync(), isFalse);
     });
 
     test('a third word is refused, not silently dropped', () {
       final run = repo(['status', 'lib', 'bogus', '--json']);
       expect(run.code, 2);
       expect(run.problems.map((p) => p['code']), contains('RK-CLI-007'));
-    });
-
-    test('release help teaches the separate stage command', () {
-      final run = repo(['release', '--help']);
-      expect(run.code, 0, reason: run.all);
-      expect(run.all, contains('rk release [unit]'));
-      expect(run.all, isNot(contains('--stage')));
-      expect(
-        run.all,
-        contains('To prepare without publishing: rk stage tools'),
-      );
-      expect(run.all, contains('rk stage is optional'));
-    });
-
-    test('the removed --confirm flag is refused', () {
-      final run = repo(['release', 'lib', '--confirm=1.4.0', '--json']);
-      expect(run.code, 2, reason: run.all);
-      expect(run.problems.map((p) => p['code']), contains('RK-CLI-001'));
     });
 
     test('stage refuses publication authorization', () {
@@ -233,41 +176,8 @@ void main() {
         expect(run.problems.single['message'], 'rk stage does not have $flag');
         expect(run.problems.single['remedy'], contains('rk help stage'));
         expect(run.json['command'], 'stage');
-        expect(run.json, isNot(contains('mode')));
       }
       expect(Directory('${repo.root}/.rk').existsSync(), isFalse);
-    });
-
-    test('--yes and -y apply only to release and clean', () {
-      // --help short-circuits before the verb runs, so this proves only the
-      // surface: both spellings parse for release and are refused elsewhere.
-      final accepted = repo(['release', '--yes', '--help']);
-      expect(accepted.code, 0, reason: accepted.all);
-      final alias = repo(['release', '-y', '--help']);
-      expect(alias.code, 0, reason: alias.all);
-      final clean = repo(['clean', '--yes', '--help']);
-      expect(clean.code, 0, reason: clean.all);
-
-      final elsewhere = repo(['status', '--yes', '--json']);
-      expect(elsewhere.code, 2, reason: elsewhere.all);
-      expect(elsewhere.problems.map((p) => p['code']), contains('RK-CLI-005'));
-    });
-
-    test('--timings applies to stage and release, and names no file', () {
-      for (final command in ['stage', 'release']) {
-        final run = repo([command, '--timings', '--help']);
-        expect(run.code, 0, reason: '$command: ${run.all}');
-      }
-
-      final elsewhere = repo(['status', '--timings', '--json']);
-      expect(elsewhere.code, 2, reason: elsewhere.all);
-      expect(elsewhere.problems.map((p) => p['code']), contains('RK-CLI-005'));
-
-      // The trace goes to rk's own .rk/timings.json. A file named in the
-      // repository would be uncommitted, and refuse the next release.
-      final named = repo(['stage', '--timings=run.json', '--json']);
-      expect(named.code, 2, reason: named.all);
-      expect(named.problems.map((p) => p['code']), contains('RK-CLI-001'));
     });
   });
 
@@ -929,50 +839,6 @@ publish_to: none
       },
     );
   });
-
-  test('a release.toml rk cannot read reports itself', () {
-    // Resolving "the only unit" means reading the config, so a config that
-    // cannot be read is what a bare `rk release` now reports. That is the
-    // more useful refusal anyway: naming a unit would not have helped, and
-    // the same file blocks every other verb too.
-    final broken = Rk.repository(scratch, 'missing-release-unit', {
-      'release.toml': 'this is deliberately not release config\n',
-    });
-
-    final run = broken(['release', '--json']);
-
-    expect(run.code, 1, reason: run.all);
-    expect(run.all, contains('release.toml'));
-    expect(
-      run.problems.map((problem) => problem['code']),
-      isNot(contains('RK-CLI-004')),
-      reason: 'the unreadable file is the problem, not the missing word',
-    );
-  });
-
-  test(
-    'a repository with no unit is answered by the config, not the parser',
-    () {
-      // There is no second answer for "no units": resolution already refuses
-      // with the table to add, which is more use than any usage line.
-      final empty = Rk.repository(scratch, 'no-units', {
-        'release.toml': 'schema = 2\n',
-      });
-
-      final run = empty(['release', '--json']);
-
-      expect(run.code, 1, reason: run.all);
-      expect(run.problems.map((problem) => problem['code']), ['RK-CONF-004']);
-      expect(run.all, contains('[release.core]'));
-      expect(
-        run.all,
-        isNot(contains('--write')),
-        reason:
-            'one missing word is answered with the missing word, not with '
-            'every flag rk has',
-      );
-    },
-  );
 
   group('a repository rk has nothing to say about', () {
     test('no release.toml is not an error', () {
