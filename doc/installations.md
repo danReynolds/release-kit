@@ -166,13 +166,17 @@ Other shells receive the exact PATH command to run and persist in their own
 configuration. RK never rewrites shell startup files. The next `rk use --list`
 checks the environment actually inherited from the shell.
 
-RK refuses to overwrite a command in its bin directory that it did not write.
-Any launcher rk wrote may be replaced, so changing a project's origin or
+A launcher names its project by package name and its source by name, as in
+`# rk-managed:orbit_cli:homebrew`, and each command's launcher is read on its
+own. RK refuses to overwrite a command in its bin directory that it did not
+write, or that it selected for another project; `rk use --list` reports a
+command another project's launcher holds. Changing a project's origin or
 moving its checkout does not lock rk out of its own commands.
 
-Removing the active source is refused: select another first. Local is the
-checkout itself, so there is nothing to uninstall. Uninstalling Pub or Homebrew
-removes that package manager's installation, including one installed outside RK.
+Removing a source any of the project's commands runs is refused: select
+another first. Local is the checkout itself, so there is nothing to uninstall.
+Uninstalling Pub or Homebrew removes that package manager's installation,
+including one installed outside RK.
 GitHub uninstall removes RK's downloads for that project. An update replaces
 the previous download once the new one is installed and routed. A download is
 recorded by its directory, so a run interrupted after unpacking finishes on

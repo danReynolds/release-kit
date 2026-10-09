@@ -47,7 +47,9 @@ class InstallationManager {
         states[source] = SourceInspection(problem: error.message);
       }
     }
-    final selected = store.selected(project)?.source;
+    // Each command runs what its own launcher names: another project's
+    // launcher, or one left from an earlier selection, is not this selection.
+    final launchers = store.launchers(project);
     final paths = {
       for (final command in project.commands)
         command: findExecutable(command, environment),
@@ -55,7 +57,7 @@ class InstallationManager {
     final current = <String, InstallationSource?>{};
     for (final entry in paths.entries) {
       current[entry.key] = entry.value == '${store.bin}/${entry.key}'
-          ? selected
+          ? launchers[entry.key]?.source
           : states.entries
                 .where(
                   (s) =>
@@ -71,7 +73,7 @@ class InstallationManager {
     return ProjectInstallations(
       project,
       states,
-      selected: selected,
+      selected: launchers.values.firstOrNull?.source,
       resolvedCommands: paths,
       currentSources: current,
       routing: store.routingProblems(project, environment),
@@ -195,8 +197,9 @@ class InstallationManager {
     try {
       cancellation?.check();
       if (action == InstallationAction.use) store.checkOwnership(project);
+      // Any of the project's commands may run it, not only the first.
       if (action == InstallationAction.uninstall &&
-          store.selected(project)?.source == source) {
+          store.launchers(project).values.any((l) => l.source == source)) {
         throw InstallationFailure(
           '${source.label} is selected for ${project.name}.',
           'Run rk use with another source first.',

@@ -228,22 +228,118 @@ void main(List<String> args) {
     },
   );
 
-  test('a project whose origin changed takes its own launchers back', () async {
-    await act(local.source, InstallationAction.use);
-    final renamed = ExecutableProject(
-      root: project.root,
-      unit: project.unit,
-      project: project.project,
-      entrypoints: project.entrypoints,
-      repository: 'owner/renamed',
+  test(
+    'a project whose origin changed keeps its selection and takes its own launchers back',
+    () async {
+      await act(pub.source, InstallationAction.use);
+      final renamed = ExecutableProject(
+        root: project.root,
+        unit: project.unit,
+        project: project.project,
+        entrypoints: project.entrypoints,
+        repository: 'owner/renamed',
+      );
+      Future<String> actRenamed(
+        InstallationSource source,
+        InstallationAction action,
+      ) => manager.act(renamed, source, action, progress: (_) {});
+      expect((await manager.inspect(renamed)).selected, pub.source);
+      await expectLater(
+        actRenamed(pub.source, InstallationAction.uninstall),
+        throwsA(isA<InstallationFailure>()),
+      );
+      expect(pub.removals, 0);
+      await actRenamed(local.source, InstallationAction.use);
+      expect(
+        (await Process.run('${store.bin}/orbit', [])).stdout,
+        'local orbit\n',
+      );
+    },
+  );
+
+  test(
+    'a switch interrupted between commands keeps both sources it runs',
+    () async {
+      await act(pub.source, InstallationAction.use);
+      // The switch to Local wrote orbit's launcher, then stopped.
+      final first = ExecutableProject(
+        root: project.root,
+        unit: project.unit,
+        project: project.project,
+        entrypoints: {'orbit': project.entrypoints['orbit']!},
+        repository: project.repository,
+      );
+      await manager.act(
+        first,
+        local.source,
+        InstallationAction.use,
+        progress: (_) {},
+      );
+      final state = await manager.inspect(project);
+      expect(state.currentSources, {
+        'orbit': local.source,
+        'orbit_admin': pub.source,
+      });
+      expect(state.routing.single, contains('run rk use local again'));
+      await expectLater(
+        act(pub.source, InstallationAction.uninstall),
+        throwsA(isA<InstallationFailure>()),
+      );
+      expect(pub.removals, 0);
+    },
+  );
+
+  test('a package name that is not a Dart identifier is refused', () {
+    // A line break in the name would add a line to the launcher's script.
+    expect(
+      () => fixture(scratch, name: '"orbit\\ntouch pwned"'),
+      throwsA(isA<InstallationFailure>()),
     );
-    await manager.act(
-      renamed,
-      pub.source,
-      InstallationAction.use,
-      progress: (_) {},
+  });
+
+  group('another project exporting the same command', () {
+    late ExecutableProject other;
+    setUp(
+      () => other = fixture(scratch, name: 'other', commands: ['orbit_admin']),
     );
-    expect((await Process.run('${store.bin}/orbit', [])).stdout, 'pub orbit\n');
+    Future<String> actOther(InstallationSource source) =>
+        manager.act(other, source, InstallationAction.use, progress: (_) {});
+
+    test('cannot take over a command this project selected', () async {
+      await act(local.source, InstallationAction.use);
+      await expectLater(
+        actOther(pub.source),
+        throwsA(
+          isA<InstallationFailure>().having(
+            (e) => e.message,
+            'message',
+            contains(project.name),
+          ),
+        ),
+      );
+      expect(
+        (await Process.run('${store.bin}/orbit_admin', [])).stdout,
+        'local orbit_admin\n',
+      );
+      expect((await manager.inspect(other)).selected, isNull);
+    });
+
+    test('is reported where it took a command over', () async {
+      await act(local.source, InstallationAction.use);
+      File('${store.bin}/orbit_admin').deleteSync();
+      var state = await manager.inspect(project);
+      expect(state.selected, local.source);
+      expect(state.currentSources['orbit_admin'], isNull);
+      expect(state.routing.single, contains('run rk use local again'));
+      await actOther(pub.source);
+      state = await manager.inspect(project);
+      expect(state.currentSources, {
+        'orbit': local.source,
+        'orbit_admin': null,
+      });
+      expect(state.routing.single, contains('selected for other'));
+      expect(state.currentSource, isNull);
+    });
   });
 
   test(
