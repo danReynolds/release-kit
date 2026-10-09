@@ -314,8 +314,10 @@ final class ProgressRow {
     if (_unsafe.hasMatch(text)) {
       throw ArgumentError('$field must be one printable line');
     }
+    // How much of a long name fits is a matter of display, never a reason
+    // to stop a release.
     if (text.runes.length > max) {
-      throw ArgumentError('$field is longer than $max characters');
+      return '${String.fromCharCodes(text.runes.take(max - 1))}…';
     }
     return text;
   }
