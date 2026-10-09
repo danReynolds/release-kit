@@ -54,9 +54,10 @@ Observed with the patched SDK:
 - All seven signed files verify. Replacing a library with a validly signed
   same-team library is still rejected by the process library constraint.
 
-The SDK proposal and [upstream issue draft](native-assets-sdk-issue.md) are
-local and unsubmitted. SDK maintainer agreement and an available supported
-interface remain the next dependency. RK integration, native Linux target
+The SDK proposal and experimental patch were submitted as
+[Dart SDK #64556](https://github.com/dart-lang/sdk/issues/64556); the
+[submitted proposal](native-assets-sdk-issue.md) is retained here. SDK maintainer
+agreement and an available supported interface remain the next dependency. RK integration, native Linux target
 qualification, actual Keybay identity-upgrade qualification, notarization and
 real Homebrew installation remain outstanding. The user's installed Dart and
 compiled Local RK were not changed.

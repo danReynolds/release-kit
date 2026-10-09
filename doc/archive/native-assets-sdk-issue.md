@@ -1,6 +1,8 @@
-# Draft: Support environment declarations and separate AOT output in `dart build cli`
+# Upstream request: Support environment declarations and separate AOT output in `dart build cli`
 
-Unsubmitted draft. The patch below targets SDK 3.13.5 for a reproducible proof;
+Filed as [Dart SDK #64556](https://github.com/dart-lang/sdk/issues/64556).
+
+The experimental patch below targets SDK 3.13.5 for a reproducible proof;
 it needs review and adaptation to the development branch before an SDK change.
 
 `dart build cli` is the supported route for applications whose dependencies
