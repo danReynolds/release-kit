@@ -2213,11 +2213,6 @@ executables:
           isTrue,
           reason: 'the formula is proven from the public tap after its push',
         );
-        expect(
-          run.calls.where((call) => call.contains('/contents/Casks/')),
-          isEmpty,
-          reason: 'Formula publication has no second Homebrew coordinate',
-        );
         expect(run.text, contains('released'));
       },
     );

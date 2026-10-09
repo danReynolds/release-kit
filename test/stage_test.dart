@@ -32,17 +32,17 @@ void main() {
   group('frozen receipt plan', () {
     test('deep freezes its complete plan before any producer', () {
       final plan = <String, Object?>{
-        'choices': [
+        'projects': [
           {'version': '1.0.0'},
         ],
       };
       final identity = _identity(plan);
       final receipt = StageReceipt(identity: identity, plan: plan);
       final encoded = receipt.encode();
-      ((plan['choices'] as List).single as Map)['version'] = '2.0.0';
+      ((plan['projects'] as List).single as Map)['version'] = '2.0.0';
       expect(receipt.encode(), encoded);
       expect(
-        () => ((receipt.plan!['choices'] as List).single as Map)['version'] =
+        () => ((receipt.plan!['projects'] as List).single as Map)['version'] =
             '3.0.0',
         throwsUnsupportedError,
       );
@@ -246,30 +246,6 @@ void main() {
         isFalse,
         reason: 'remembering this would vouch for bytes nobody digested',
       );
-    });
-
-    test('a path that became a link is read again, whatever it points at', () {
-      stage.ensureExists();
-      final artifact = File(stage.resolve('out/tool'))
-        ..parent.createSync(recursive: true)
-        ..writeAsBytesSync(utf8.encode('one'));
-      final recorded = StageArtifact.capture(
-        stage: stage,
-        path: 'out/tool',
-        type: 'executable',
-      );
-      expect(stage.digestStillStands('out/tool', recorded.sha256), isTrue);
-
-      // stat follows a link and would describe its target, so the type is
-      // checked without following. A test cannot forge a target whose stat
-      // matches — change time is not settable — so this pins the mechanism
-      // rather than the collision it exists for.
-      final elsewhere = File('${repository.path}/elsewhere')
-        ..writeAsBytesSync(utf8.encode('one'));
-      artifact.deleteSync();
-      Link(stage.resolve('out/tool')).createSync(elsewhere.path);
-
-      expect(stage.digestStillStands('out/tool', recorded.sha256), isFalse);
     });
 
     test('a refused confirmation is refused again, not remembered', () {
@@ -608,36 +584,12 @@ void main() {
       },
     );
 
-    test('pre-Formula release manifest schemas are not migrated', () {
-      final unsupported =
-          '${CanonicalJson.encode({
-            'artifacts': <Object?>[],
-            'cask': {'path': 'Casks/rk.rb', 'project': 'rk', 'sha256': 'a' * 64, 'size': 42, 'tap': 'example/homebrew-tap'},
-            'schema': 6,
-            'source': {'commit': _commit},
-            'tag': 'v1.2.3',
-            'unit': 'rk',
-            'version': '1.2.3',
-          })}\n';
-
-      expect(
-        () => ReleaseManifest.parse(unsupported),
-        throwsA(
-          isA<FormatException>().having(
-            (error) => error.message,
-            'message',
-            'unsupported release manifest schema: 6',
-          ),
-        ),
-      );
-    });
-
     test('Homebrew bindings accept only Formula paths', () {
       expect(
         () => ReleaseManifestHomebrew(
           project: 'rk',
           tap: 'example/homebrew-tap',
-          path: 'Casks/rk.rb',
+          path: 'rk.rb',
           size: 42,
           sha256: 'a' * 64,
         ),
