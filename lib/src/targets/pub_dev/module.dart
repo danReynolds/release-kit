@@ -354,7 +354,11 @@ final class PubDevTargetModule extends TargetModule {
         target,
         againstStage: true,
       );
-      if (!state.isAbsent || waited >= deadline) {
+      // An answer settles it; a read that failed is asked again, as an
+      // absence is, until the deadline.
+      final settled =
+          state.verdict == Verdict.exact || state.verdict == Verdict.conflict;
+      if (settled || waited >= deadline) {
         if (state.isAbsent && waited >= deadline) {
           final project = target.project!;
           return Inspection.absent(

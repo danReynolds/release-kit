@@ -2256,6 +2256,25 @@ publish = ["pub.dev"]
     expect(row, isNot(contains('published · published')));
   });
 
+  test('an accepted upload is read back past a failed read', () async {
+    // pub.dev took the upload; one read of it then fails. The read-back
+    // asks again rather than stopping the release as lost.
+    final registry = _FlakyAfterUploadRegistry();
+    final ran = await release(
+      registry: registry,
+      onRun: (key) {
+        if (key == 'dart pub publish --from-archive <archive> --force') {
+          registry.published['keybay']!.add('0.2.0');
+          registry.archives['keybay@0.2.0'] = publishedBytes();
+          registry.failures = 1;
+        }
+      },
+    );
+
+    expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    expect(registry.failures, 0, reason: 'the failed read was asked again');
+  });
+
   test('a refused upload is read back briefly, not for ten minutes', () async {
     // pub.dev may take minutes to list an upload it accepted, so a publish
     // that succeeded is read back for up to ten. One pub refused, or whose
@@ -2621,6 +2640,25 @@ final class _HeldRegistry implements RegistryReader {
 }
 
 /// Counts version reads once `dart pub publish` has run.
+/// A registry that fails [failures] reads after the upload, then answers.
+class _FlakyAfterUploadRegistry extends FakeRegistry {
+  _FlakyAfterUploadRegistry()
+    : super({
+        'keybay': ['0.1.0'],
+      });
+
+  int failures = 0;
+
+  @override
+  Future<PublishedVersion?> lookupVersion(String name, Version version) {
+    if (failures > 0) {
+      failures--;
+      throw RegistryUnavailable('pub.dev answered 503');
+    }
+    return super.lookupVersion(name, version);
+  }
+}
+
 class _ReadCountingRegistry extends FakeRegistry {
   _ReadCountingRegistry()
     : super({
