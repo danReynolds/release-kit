@@ -10,10 +10,6 @@ import 'package:test/test.dart';
 
 import 'fixtures.dart';
 
-class Release extends AvailableInstallation {
-  Release(super.project, super.source, super.version);
-}
-
 Future<void> settle() => Future<void>.delayed(Duration.zero);
 
 void main() {

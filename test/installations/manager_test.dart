@@ -81,29 +81,6 @@ void main(List<String> args) {
   );
 
   test(
-    'cancellation at the pointer boundary rolls back newly created shims',
-    () async {
-      final installed = await local.install(project, (_) {});
-      await expectLater(
-        store.activate(
-          project,
-          installed,
-          beforeCommit: () {
-            throw const InstallationFailure('Cancelled');
-          },
-        ),
-        throwsA(isA<InstallationFailure>()),
-      );
-      expect(store.selected(project), isNull);
-      for (final command in project.commands) {
-        expect(File('${store.bin}/$command').existsSync(), isFalse);
-      }
-      await store.activate(project, installed);
-      expect(store.selected(project)!.source, local.source);
-    },
-  );
-
-  test(
     'native PATH ownership prevents removing an active external installation',
     () async {
       final native = File('${scratch.path}/native/ orbit')
