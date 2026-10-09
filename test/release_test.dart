@@ -260,6 +260,7 @@ Future<Ran> release({
   String? only = 'core',
   HostCapabilities? capabilities,
   bool allowInteractiveTools = true,
+  Directory? stages,
 }) async {
   final buffer = StringBuffer();
   final diagnostics = Diagnostics();
@@ -267,7 +268,9 @@ Future<Ran> release({
   final parsed = ReleaseConfig.parse(config, 'release.toml', diagnostics)!;
   final resolution = Resolution.resolve(parsed, tree, diagnostics)!;
   final effectiveGit = state ?? _git();
-  final stageRoot = Directory.systemTemp.createTempSync('rk-release-test-');
+  // [stages] lets a second run find the first run's stages.
+  final stageRoot =
+      stages ?? Directory.systemTemp.createTempSync('rk-release-test-');
   addTearDown(() {
     if (stageRoot.existsSync()) stageRoot.deleteSync(recursive: true);
   });
@@ -600,7 +603,7 @@ publish = ["git-tag", "pub.dev"]
       );
 
       expect(ran.exitCode, ExitCodes.refused);
-      expect(ran.text, contains('Release order: core 0.2.0 -> other 0.2.0'));
+      expect(ran.text, contains('Release order: core 0.2.0 › other 0.2.0'));
       expect(
         (ran.report['units'] as List).cast<Map>().map((unit) => unit['name']),
         ['core', 'other'],
@@ -659,7 +662,7 @@ dependencies:
     );
 
     expect(ran.exitCode, ExitCodes.refused);
-    expect(ran.text, contains('Release order: core 2.0.0 -> cli 3.0.0'));
+    expect(ran.text, contains('Release order: core 2.0.0 › cli 3.0.0'));
     expect(prompts, ['Release core 2.0.0 and cli 3.0.0? [y/N] ']);
     expect(ran.problems.map((problem) => problem['code']), ['RK-AUTH-002']);
     expect(
@@ -928,6 +931,44 @@ publish = ["pub.dev"]
       expect(registry.reading, {'keybay', 'other'});
     });
 
+    test('units with long names stage side by side', () async {
+      // Side by side, each row group is prefixed with "<unit> <version> · ",
+      // which takes these past the width a row shows. A long name is a
+      // display matter: it is shortened, never a reason to stop.
+      const first = 'platform-engineering-internal-sdk';
+      const second = 'platform-engineering-internal-developer-sdk-tools';
+      const firstPackage = 'platform_engineering_internal_sdk_core_bindings';
+      const secondPackage =
+          'platform_engineering_internal_developer_sdk_tools_bindings';
+      final ran = await release(
+        only: null,
+        config:
+            '''
+schema = 2
+
+[release.$first]
+path = "packages/a"
+publish = ["pub.dev"]
+
+[release.$second]
+path = "packages/b"
+publish = ["pub.dev"]
+''',
+        source: MemorySourceTree({
+          'packages/a/pubspec.yaml': 'name: $firstPackage\nversion: 0.2.0\n',
+          'packages/a/CHANGELOG.md': '## 0.2.0\n',
+          'packages/b/pubspec.yaml': 'name: $secondPackage\nversion: 0.2.0\n',
+          'packages/b/CHANGELOG.md': '## 0.2.0\n',
+        }, description: '/repo/keybay'),
+        registry: FakeRegistry({
+          firstPackage: ['0.1.0'],
+          secondPackage: ['0.1.0'],
+        }),
+        dryRun: true,
+      );
+      expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
+    });
+
     test('stages its units side by side', () async {
       // Each unit's package archive is held until both have started: one
       // after the other, the first would wait forever.
@@ -979,6 +1020,127 @@ publish = ["pub.dev"]
       },
     );
 
+    test('several units stage under one heading, and are said once', () async {
+      final staged = await release(
+        only: null,
+        config: config,
+        source: source(),
+        registry: world().registry,
+        dryRun: true,
+      );
+
+      expect(staged.exitCode, ExitCodes.ok, reason: staged.text);
+      expect(
+        staged.text,
+        startsWith('Staging core 0.2.0 and other 0.2.0\n  keybay · main@'),
+      );
+      expect('Staging'.allMatches(staged.text), hasLength(1));
+      expect('keybay · main@'.allMatches(staged.text), hasLength(1));
+      expect(staged.text, contains('\n2 units staged\n'));
+      expect(
+        staged.text,
+        contains('✓ core 0.2.0 and other 0.2.0 staged successfully.'),
+      );
+      expect('staged successfully'.allMatches(staged.text), hasLength(1));
+      expect(staged.report['next'], ['rk release']);
+    });
+
+    test('stages already there are said to be there, not staged', () async {
+      final stages = Directory.systemTemp.createTempSync('rk-release-test-');
+      Future<Ran> stage() => release(
+        only: null,
+        config: config,
+        source: source(),
+        registry: world().registry,
+        dryRun: true,
+        stages: stages,
+      );
+      expect((await stage()).exitCode, ExitCodes.ok);
+
+      final again = await stage();
+
+      expect(again.exitCode, ExitCodes.ok, reason: again.text);
+      expect(again.text, contains('\n2 units · already staged\n'));
+      expect(again.text, isNot(contains('units staged')));
+      expect(
+        again.text,
+        contains(
+          '✓ core 0.2.0 and other 0.2.0 are already staged and verified.',
+        ),
+      );
+      expect(
+        'already staged and verified'.allMatches(again.text),
+        hasLength(1),
+      );
+    });
+
+    test(
+      'every unit\'s warnings share one section, and their remedy is said once',
+      () async {
+        final staged = await release(
+          only: null,
+          config: config,
+          source: source(),
+          registry: world().registry,
+          dryRun: true,
+          results: {
+            'dart pub publish --to-archive <archive>': ToolResult(
+              exitCode: 65,
+              stdout:
+                  'Package validation found the following potential issue:\n'
+                  '* Your dependency on ffi is pinned to an exact version.\n'
+                  'Package has 1 warning.',
+              stderr: '',
+            ),
+          },
+        );
+
+        expect(staged.exitCode, ExitCodes.ok, reason: staged.text);
+        expect('\nWarnings\n'.allMatches(staged.text), hasLength(1));
+        expect(
+          staged.text,
+          contains(
+            'pub validation for keybay: Your dependency on ffi is pinned',
+          ),
+        );
+        expect(
+          staged.text,
+          contains(
+            'pub validation for other: Your dependency on ffi is pinned',
+          ),
+        );
+        final remedy = (staged.report['warnings'] as List)
+            .map((warning) => (warning as Map)['remedy'] as String)
+            .toSet()
+            .single;
+        expect(remedy.allMatches(staged.text), hasLength(1));
+        expect(
+          staged.text.indexOf('Warnings'),
+          lessThan(staged.text.indexOf('staged successfully')),
+          reason: 'the warnings come before the outcome',
+        );
+        expect(staged.report['warnings'], hasLength(2));
+      },
+    );
+
+    test('first claims of several units share one section', () async {
+      final staged = await release(
+        only: null,
+        config: config,
+        source: source(),
+        registry: FakeRegistry({}),
+        dryRun: true,
+      );
+
+      expect(staged.exitCode, ExitCodes.ok, reason: staged.text);
+      expect(
+        'First release · permanent once published'.allMatches(staged.text),
+        hasLength(1),
+      );
+      expect(staged.text, contains(RegExp(r'pub\.dev package +keybay\n')));
+      expect(staged.text, contains(RegExp(r'pub\.dev package +other\n')));
+    });
+
     test('shows the whole run, and asks once for all of it', () async {
       final (:registry, :onRun) = world();
       final prompts = <String>[];
@@ -1014,11 +1176,13 @@ publish = ["pub.dev"]
         greaterThan(validation),
         reason: 'all private packages finish before publication',
       );
-      expect(
-        'Authorized in the reviewed repository plan.'.allMatches(ran.text),
-        hasLength(2),
-        reason: 'each unit still shows what it is about to do',
-      );
+      for (final unit in ['core', 'other']) {
+        expect(
+          ran.text,
+          contains('$unit 0.2.0 · released'),
+          reason: 'each unit still shows what it did',
+        );
+      }
       expect(registry.published['keybay'], contains('0.2.0'));
       expect(registry.published['other'], contains('0.2.0'));
       expect(
@@ -1055,10 +1219,6 @@ publish = ["pub.dev"]
 
         expect(ran.exitCode, ExitCodes.ok, reason: ran.text);
         expect(prompts, ['Release core 0.2.0 and other 0.2.0? [y/N] ']);
-        expect(
-          ran.text,
-          contains('Authorized in the reviewed repository plan'),
-        );
       },
     );
 
@@ -2936,7 +3096,7 @@ publish = ["pub.dev"]
       ran.text.indexOf(warning),
       allOf(
         greaterThanOrEqualTo(0),
-        lessThan(ran.text.indexOf('Authorized in the reviewed')),
+        lessThan(ran.text.indexOf('Release core 0.2.0')),
       ),
       reason: 'the operator sees it before the one question',
     );

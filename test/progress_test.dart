@@ -327,7 +327,11 @@ void main() {
         board.settle();
         final settled = harness.text.substring(beforeSettle);
         expect(settled, contains('\x1b[32m✓\x1b[0m'));
-        expect(settled, matches(RegExp(r'\x1b\[32m +package archive')));
+        expect(
+          settled,
+          contains('    \x1b[32m✓\x1b[0m \x1b[32mpackage archive'),
+          reason: 'the mark sits beside its row, not in the margin',
+        );
         expect(
           settled,
           isNot(contains('\x1b[34m')),
@@ -343,6 +347,7 @@ void main() {
         final board = harness.output.progressBoard(
           'Preparing release',
           delay: const Duration(milliseconds: 5),
+          pipeDelay: const Duration(milliseconds: 5),
           emitSlowToNonTerminal: true,
         );
         final row = board.addRow(
@@ -367,11 +372,57 @@ void main() {
       },
     );
 
+    test(
+      'a pipe hears only of a long wait: untimed, and naming its unit',
+      () async {
+        final harness = _Harness(terminal: false);
+        // The default: a read that answers in a fraction of a second, as
+        // destinations do, leaves no line of its own in a pipe.
+        final quick = harness.output.progressBoard(
+          'core 1.0.0 · preparing release',
+          emitSlowToNonTerminal: true,
+        );
+        final read = quick.addRow(
+          id: 'pub',
+          label: 'pub.dev',
+          coordinate: 'core',
+        );
+        read.handle.begin(CommonProgressActivities.checking);
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        read.complete(note: 'not published', mark: ProgressRowMark.none);
+        quick.discard();
+        expect(harness.text, isEmpty, reason: harness.text);
+
+        // A long one is said once, with what it belongs to and no time.
+        final slow = harness.output.progressBoard(
+          'staging 2 units',
+          pipeDelay: const Duration(milliseconds: 5),
+          emitSlowToNonTerminal: true,
+        );
+        final build = slow.addRow(
+          id: 'archive',
+          label: 'package archive',
+          group: 'core 1.0.0 · pub.dev · core',
+        );
+        build.handle.begin(CommonProgressActivities.validating);
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+        expect(
+          harness.text,
+          contains('core 1.0.0 · pub.dev · core · package archive'),
+        );
+        expect(harness.text, contains('validating'));
+        expect(harness.text, isNot(contains('0s')));
+        build.complete(note: 'staged');
+        slow.settle();
+      },
+    );
+
     test('a fast non-terminal operation collapses to its result', () async {
       final harness = _Harness(terminal: false);
       final board = harness.output.progressBoard(
         'Preparing release',
         delay: const Duration(milliseconds: 20),
+        pipeDelay: const Duration(milliseconds: 20),
         emitSlowToNonTerminal: true,
       );
       final row = board.addRow(id: 'tag', label: 'Git tag');
@@ -391,6 +442,7 @@ void main() {
         final board = harness.output.progressBoard(
           'Preparing release',
           delay: const Duration(milliseconds: 2),
+          pipeDelay: const Duration(milliseconds: 2),
           emitSlowToNonTerminal: true,
         );
         final row = board.addRow(id: 'pub', label: 'pub.dev');
@@ -411,6 +463,7 @@ void main() {
         final board = harness.output.progressBoard(
           'Releasing',
           delay: const Duration(milliseconds: 20),
+          pipeDelay: const Duration(milliseconds: 20),
           emitSlowToNonTerminal: true,
         );
         final row = board.addRow(id: 'github', label: 'GitHub Release');

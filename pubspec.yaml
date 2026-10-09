@@ -1,5 +1,8 @@
 name: rk
-description: A release tool.
+description: >-
+  rk makes releasing code simple: Dart packages to pub.dev, Git tags,
+  GitHub Releases, Homebrew formulas and binaries, in dependency order,
+  with one command.
 version: 0.1.14
 repository: https://github.com/danReynolds/release-kit
 

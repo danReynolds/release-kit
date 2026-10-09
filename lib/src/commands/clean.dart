@@ -20,9 +20,16 @@ final class CleanCommand {
   });
 
   static const usage = '''
-Usage
-  rk clean                         preview and confirm local stage cleanup
-  rk clean --yes                  remove local stages without prompting
+rk clean [--yes] [--json]
+
+Remove this repository's staged release work, after listing it and asking.
+Diagnoses in .rk/diagnosis are kept. A partly published release may need
+its exact stage to finish, so remove one only when it is no longer needed.
+
+-y, --yes remove the listed stages without the prompt
+--json    report what is there; removes only with --yes
+
+Example: rk clean
 ''';
 
   final StageStore store;

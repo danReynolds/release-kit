@@ -42,33 +42,31 @@ import 'package:rk/src/version.dart';
 import 'package:rk/src/engine/timings.dart';
 
 const _usage = '''
-rk — an austere release tool
+rk makes releasing code simple
 
 Release this project
-  rk                              status all units
-  rk --version                    print this binary's version
-  rk status [unit]                report release status and return to the prompt
-  rk plan [unit]                  show the configured release graph; read-only
-  rk init                         choose outputs and review release.toml
+  rk init                         choose what to release; writes release.toml
+  rk status [unit]                what is released, staged and left to do; bare rk too
+  rk stage [unit]                 build and check what a release publishes; publishes nothing
+  rk release [unit]               release what is not released yet, in dependency order
+  rk plan [unit]                  the release graph: each unit's steps and what they wait on
+  rk target [name]                the targets this rk supports, or one in detail
   rk clean                        remove this repository's staged release work
-  rk target list                  list every release choice this rk supports
-  rk target <name>                explain one choice and its configuration
-  rk stage [unit]                 prepare all units, or one named unit; publish nothing
-  rk release [unit]               release all unfinished units, or one named unit
+  rk help [command]               this, or one command's flags and examples
 
 Run locally
-  rk use [source] [-p project]     choose the source of your commands
-  rk install [source] [-p project] prepare an installation without switching
-  rk uninstall [source] [-p project] remove an inactive installation
+  rk use [source] [-p project]        choose the source of your commands
+  rk install [source] [-p project]    prepare an installation without switching
+  rk uninstall [source] [-p project]  remove an inactive installation
 
 Flags
-  --version   print this binary's version and exit
   --json      the machine surface (doc/json.md)
   -y, --yes   release, clean or uninstall: confirm without an interactive prompt
-  --latest    install: get the latest compatible version without changing source
-  --write     init: write the default configuration without a prompt
   --timings   stage or release: how long each step took, after the run
               (and .rk/timings.json, a trace Perfetto opens)
+  --write     init: write the default configuration without a prompt
+  --latest    install: get the latest compatible version without changing source
+  --version   print this binary's version and exit
 
 Marks: ✓ done,  · already satisfied,  ✗ problem or conflict,  ! warning,
        → your next move,  unmarked pending
@@ -107,7 +105,6 @@ May read the network; does not build or publish. Bare rk also runs status.
 
 $_unitHelp
 Omit the unit to check every release unit.
-Prints the report and exits; no interaction is required.
 --json    emit one structured report
 
 Example: rk status tools
@@ -172,6 +169,52 @@ To prepare without publishing: rk stage tools
 Use rk plan tools to see the configured work before running it.
 ''';
 
+const _verbs = {
+  'status',
+  'plan',
+  'stage',
+  'release',
+  'init',
+  'clean',
+  'target',
+};
+
+/// The flags each verb takes. A flag that exists but does not apply to a
+/// verb is refused the same way as one that does not exist: accepting
+/// `rk status --yes` would imply that a read-only report needs
+/// authorization.
+const _perVerb = {
+  'status': {'-h', '--help', '--json'},
+  'plan': {'-h', '--help', '--json'},
+  'stage': {'-h', '--help', '--json', '--timings'},
+  'release': {'-h', '--help', '--json', '-y', '--yes', '--timings'},
+  'init': {'-h', '--help', '--json', '--write'},
+  'clean': {'-h', '--help', '--json', '-y', '--yes'},
+  'target': {'-h', '--help', '--json'},
+  'help': {'-h', '--help', '--json'},
+};
+
+/// What a misused verb takes instead, in one line: the usage itself is a
+/// command away, rather than poured under the refusal.
+String _takes(String command) {
+  final flags = [
+    for (final flag in _perVerb[command]!)
+      if (flag == '--yes')
+        '-y/--yes'
+      else if (flag != '-h' && flag != '--help' && flag != '-y')
+        flag,
+  ];
+  final series = flags.length <= 2
+      ? flags.join(' and ')
+      : '${flags.sublist(0, flags.length - 1).join(', ')} and ${flags.last}';
+  return 'rk $command takes $series · rk help $command';
+}
+
+const _commands =
+    'the commands are init, status, stage, release, plan, target, clean, '
+    'use, install, uninstall and help; a unit follows one, as in '
+    'rk status [unit]';
+
 String _usageFor(String? command) => switch (command) {
   'init' => _initUsage,
   'status' => _statusUsage,
@@ -183,7 +226,21 @@ String _usageFor(String? command) => switch (command) {
   _ => _usage,
 };
 
-Future<void> main(List<String> args) => runRk(args);
+Future<void> main(List<String> args) {
+  // A reader that stops reading, as `rk --help | head -1` does, closes the
+  // pipe under rk's later writes. Output nobody reads is not an error: rk
+  // finishes what it was doing, writes nothing more, and exits as it would
+  // have, rather than dying with a stack trace mid-run.
+  stdout.done.catchError((_) {}, test: _closedPipe);
+  return runRk(args);
+}
+
+/// EPIPE: the reading end of stdout is gone.
+bool _closedPipe(Object error) => switch (error) {
+  FileSystemException(:final osError?) => osError.errorCode == 32,
+  SocketException(:final osError?) => osError.errorCode == 32,
+  _ => false,
+};
 
 /// Shared command composition. The shipped entry point always uses pub.dev;
 /// native publication qualification supplies an explicit loopback endpoint.
@@ -212,16 +269,11 @@ Future<void> runRk(
   final positional = args.where((a) => !a.startsWith('-')).toList();
   final json = flags.contains('--json');
 
-  const verbs = {
-    'status',
-    'plan',
-    'stage',
-    'release',
-    'init',
-    'clean',
-    'target',
-  };
   final first = positional.isEmpty ? null : positional.first;
+  if (first == 'help') {
+    await _help(positional.skip(1).toList(), flags, json: json);
+    return;
+  }
   if (const {'use', 'install', 'uninstall'}.contains(first)) {
     await installations.loadLibrary();
     await installations.installationMain(args, first!);
@@ -232,12 +284,12 @@ Future<void> runRk(
 
   final output = Output.stdio(json: json, command: command);
 
-  if (!verbs.contains(command)) {
+  if (!_verbs.contains(command)) {
     output.problem(
       Diagnostic(
         code: 'RK-CLI-008',
         message: 'rk has no command named "$command"',
-        remedy: _usageFor(first).trim(),
+        remedy: _commands,
       ),
     );
     exitCode = ExitCodes.usage;
@@ -245,19 +297,7 @@ Future<void> runRk(
     return;
   }
 
-  // A flag that exists but does not apply to this verb is refused the same
-  // way as one that does not exist: accepting `rk status --yes` would imply
-  // that a read-only report needs authorization.
-  const perVerb = {
-    'status': {'-h', '--help', '--json'},
-    'plan': {'-h', '--help', '--json'},
-    'stage': {'-h', '--help', '--json', '--timings'},
-    'release': {'-h', '--help', '--json', '-y', '--yes', '--timings'},
-    'init': {'-h', '--help', '--json', '--write'},
-    'clean': {'-h', '--help', '--json', '-y', '--yes'},
-    'target': {'-h', '--help', '--json'},
-  };
-  final inapplicable = flags.difference(perVerb[command] ?? known);
+  final inapplicable = flags.difference(_perVerb[command] ?? known);
   final unknown = flags.difference(known);
   if (unknown.isNotEmpty) {
     // Silently ignoring a flag is worse than refusing it: a caller asking for
@@ -268,7 +308,7 @@ Future<void> runRk(
       Diagnostic(
         code: 'RK-CLI-001',
         message: 'rk does not have ${unknown.join(', ')}',
-        remedy: _usageFor(first).trim(),
+        remedy: _takes(command),
       ),
     );
     exitCode = ExitCodes.usage;
@@ -283,7 +323,7 @@ Future<void> runRk(
       Diagnostic(
         code: 'RK-CLI-005',
         message: 'rk $command does not have ${inapplicable.join(', ')}',
-        remedy: _usageFor(first).trim(),
+        remedy: _takes(command),
       ),
     );
     exitCode = ExitCodes.usage;
@@ -308,7 +348,7 @@ Future<void> runRk(
                   'got "${positional.skip(1).join(' ')}"'
             : 'rk takes a verb and a unit, and got '
                   '"${positional.join(' ')}"',
-        remedy: _usageFor(first).trim(),
+        remedy: 'rk help $command',
       ),
     );
     exitCode = ExitCodes.usage;
@@ -408,6 +448,67 @@ Future<void> runRk(
   // it is written here, after the code is known, rather than by whichever path
   // decided to stop.
   if (json) stdout.write(output.report.encode(exit: code));
+}
+
+/// `rk help [command]`: what `rk [command] --help` prints.
+Future<void> _help(
+  List<String> words,
+  Set<String> flags, {
+  required bool json,
+}) async {
+  final output = Output.stdio(json: json, command: 'help');
+  void refuse(Diagnostic problem) {
+    output.problem(problem);
+    exitCode = ExitCodes.usage;
+    if (json) stdout.write(output.report.encode(exit: ExitCodes.usage));
+  }
+
+  final inapplicable = flags.difference(_perVerb['help']!);
+  if (inapplicable.isNotEmpty) {
+    return refuse(
+      Diagnostic(
+        code: 'RK-CLI-005',
+        message: 'rk help does not have ${inapplicable.join(', ')}',
+        remedy: _takes('help'),
+      ),
+    );
+  }
+  if (words.length > 1) {
+    return refuse(
+      Diagnostic(
+        code: 'RK-CLI-007',
+        message: 'rk help takes one command, and got "${words.join(' ')}"',
+        remedy: _commands,
+      ),
+    );
+  }
+  final named = words.firstOrNull;
+  String? usage;
+  if (named == null || named == 'help') {
+    usage = _usage;
+  } else if (_verbs.contains(named)) {
+    usage = _usageFor(named);
+  } else if (const {'use', 'install', 'uninstall'}.contains(named)) {
+    await installations.loadLibrary();
+    usage = installations.installationUsage;
+  }
+  if (usage == null) {
+    return refuse(
+      Diagnostic(
+        code: 'RK-CLI-008',
+        message: 'rk has no command named "$named"',
+        remedy: _commands,
+      ),
+    );
+  }
+  // Under --json stdout carries the document and nothing else, so the usage
+  // travels inside it rather than beside it.
+  if (json) {
+    output.report.next(usage.trim());
+    stdout.write(output.report.encode(exit: ExitCodes.ok));
+  } else {
+    output.help(usage);
+  }
 }
 
 /// Says where a staging or release run's time went.

@@ -525,7 +525,11 @@ void main() {
         captured.text,
       ).split('\n').where((line) => line.isNotEmpty).toList();
       expect(visible.every((line) => line.runes.length <= 36), isTrue);
-      expect(visible.first, startsWith('✗     GitHub Release'));
+      expect(
+        visible.first,
+        startsWith('    ✗ GitHub Release'),
+        reason: 'a nested row\'s mark sits beside it, not in the margin',
+      );
       expect(
         visible.skip(1).every((line) => line.startsWith('        ')),
         isTrue,

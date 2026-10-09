@@ -153,7 +153,7 @@ final class ReleaseStageCoordinator {
     if (inspected.reusable) {
       stageProgress
         ..restore(inspected.receipt!.steps)
-        ..settle(title: '${unit.name} ${unit.version} · staged');
+        ..settle(title: '${unit.name} ${unit.version} · already staged');
       _showStageWarnings(
         unit,
         _recordedStageWarnings(inspected.receipt!.steps, targetStagesByName),
@@ -549,25 +549,20 @@ final class ReleaseStageCoordinator {
     return warnings;
   }
 
+  /// Says [found] with the run's other warnings, once every unit is staged.
   void _showStageWarnings(ResolvedUnit unit, Iterable<_StageWarning> found) {
     final seen = <String>{};
-    final warnings = [
-      for (final warning in found)
-        if (seen.add(
-          '${warning.diagnostic.code}\u0000'
-          '${warning.diagnostic.message}',
-        ))
-          warning,
-    ];
-    if (warnings.isEmpty) return;
-    output.blank();
-    output.heading('Warnings');
-    for (final warning in warnings) {
-      output.warning(
+    for (final warning in found) {
+      if (!seen.add(
+        '${warning.diagnostic.code}\u0000'
+        '${warning.diagnostic.message}',
+      )) {
+        continue;
+      }
+      output.deferWarning(
         warning.diagnostic,
         unit: unit.name,
         target: warning.target,
-        depth: 1,
       );
     }
   }

@@ -26,6 +26,7 @@ import 'package:rk/src/engine/tools.dart';
 import 'package:rk/src/engine/verdict.dart';
 import 'package:rk/src/engine/version.dart';
 import 'package:rk/src/output/output.dart';
+import 'package:rk/src/targets/catalog.dart';
 import 'package:rk/src/targets/target_module.dart';
 import 'package:rk/src/transforms/archive.dart';
 import 'package:test/test.dart';
@@ -584,6 +585,112 @@ void main() {
   statusTargetContract();
   statusReviewRegressions();
 
+  test('says what its stage holds, and the warnings it recorded', () async {
+    final root = Directory.systemTemp.createTempSync('rk-status-warnings-');
+    addTearDown(() => root.deleteSync(recursive: true));
+    const pubOnly = '''
+schema = 2
+
+[release.core]
+path = "packages/keybay"
+publish = ["pub.dev"]
+''';
+    final source = tree();
+    final diagnostics = Diagnostics();
+    final resolution = Resolution.resolve(
+      ReleaseConfig.parse(pubOnly, 'release.toml', diagnostics)!,
+      source,
+      diagnostics,
+    )!;
+    final state = GitState(
+      root: root.path,
+      head: testHead,
+      headTree: testTree,
+      branch: 'main',
+      isClean: true,
+      uncommitted: const [],
+      headIsPushed: true,
+      tags: const [],
+      signingConfigured: true,
+      originUrl: 'danReynolds/keybay',
+    );
+    final stages = ReleaseStages(
+      source: source,
+      git: state,
+      stageContracts: TargetCatalog.builtIn().stageContractResolver(resolution),
+    );
+    // A stage as `rk stage` leaves it after Pub warned.
+    final unit = resolution.units.single;
+    final stage = stages(unit);
+    final path = ReleaseAssets.pubArchivePath(unit.projects.single);
+    stage.writeProgress(const []);
+    stage.directory.writeBytesAtomically(
+      path,
+      ArchiveBuilder.gzip(
+        ArchiveBuilder.tar([
+          ArchiveEntry(
+            name: 'pubspec.yaml',
+            bytes: utf8.encode(source.read('packages/keybay/pubspec.yaml')!),
+          ),
+        ]),
+      ),
+    );
+    stage.writeProgress([
+      StageStep(
+        name: 'pub-archive:keybay',
+        outputs: [
+          StageArtifact.capture(
+            stage: stage.directory,
+            path: path,
+            type: 'pub-archive',
+          ),
+        ],
+        evidence: const {
+          'package_archive': 'staged',
+          'rk_warnings': [
+            {
+              'code': 'RK-PUB-012',
+              'message':
+                  'pub validation for keybay: Your dependency on ffi is '
+                  'pinned to an exact version.',
+              'remedy': 'rk release lists pub warnings again before it asks',
+            },
+          ],
+        },
+      ),
+    ]);
+    stage.finalize(releaseAssets: const []);
+    expect(stage.inspect().reusable, isTrue);
+
+    final run = await statusRun(
+      withConfig: pubOnly,
+      source: source,
+      state: state,
+      registry: FakeRegistry({
+        'keybay': ['0.1.0'],
+      }),
+      stageFor: stages.call,
+    );
+
+    expect(run.text, matches(RegExp(r'^\s+Staged$', multiLine: true)));
+    expect(run.text, matches(RegExp(r'pub\.dev +keybay package archive\n')));
+    expect(run.text, contains('\nWarnings\n'));
+    expect(
+      run.text,
+      contains('pub validation for keybay: Your dependency on ffi is pinned'),
+    );
+    expect(
+      run.text.indexOf('Warnings'),
+      lessThan(run.text.indexOf('rk release')),
+      reason: 'said before the next move',
+    );
+    final warning = (run.report['warnings'] as List).single as Map;
+    expect(warning['code'], 'RK-PUB-012');
+    expect(warning['unit'], 'core');
+    expect(warning['target'], 'core/pub.dev/keybay@0.2.0');
+    expect(run.report['next'], ['rk release core']);
+  });
+
   test('always shows targets when local matches live', () async {
     final text = await statusOf(
       source: tree(),
@@ -685,9 +792,11 @@ publish = ["pub.dev"]
       final unit = (run.report['units'] as List).single as Map;
       final target = (unit['targets'] as List).single as Map;
       expect(target['verdict'], 'exact');
-      expect(target['source_binding'], 'unbound');
-      expect(target['source_comparison'], 'unavailable');
-      expect(run.text, contains('unbound · comparison unavailable'));
+      // Said once, for the repository: every target's would be the same.
+      expect(target, isNot(contains('source_binding')));
+      expect(target, isNot(contains('source_comparison')));
+      expect(run.text, contains('no commit yet · commit to stage or release'));
+      expect(run.text, isNot(contains('unbound')));
     },
   );
 
@@ -746,10 +855,8 @@ executables:
 
       expect(run.text, contains('Not staged'));
       expect(run.text, contains('Local binaries'));
-      expect(
-        run.text,
-        contains('producers/keybay/archives/keybay-0.2.0-linux-x64.tar.gz'),
-      );
+      expect(run.text, contains('keybay-0.2.0-linux-x64.tar.gz'));
+      expect(run.text, isNot(contains('producers/')));
       expect(run.report['next'], ['rk release cli']);
     },
   );
@@ -789,10 +896,8 @@ executables:
     expect(run.text, contains('Published'));
     expect(run.text, contains('Not staged'));
     expect(run.text, contains('Local binaries'));
-    expect(
-      run.text,
-      contains('producers/keybay/archives/keybay-0.2.0-linux-x64.tar.gz'),
-    );
+    expect(run.text, contains('keybay-0.2.0-linux-x64.tar.gz'));
+    expect(run.text, isNot(contains('producers/')));
     expect(run.report['next'], ['rk stage cli']);
   });
 
@@ -1918,7 +2023,7 @@ publish = ["pub.dev"]
       }
       _expectStyledSubject(
         notStaged.text,
-        'producers/keybay/archives/keybay-0.2.0-macos-arm64.tar.gz',
+        'keybay-0.2.0-macos-arm64.tar.gz',
         code: '90',
         after: 'Not staged',
       );

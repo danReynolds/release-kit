@@ -132,7 +132,7 @@ void main() {
   });
 
   test(
-    'unknown and missing names are usage errors with discovery remedies',
+    'an unknown name is a usage error with a discovery remedy; no name lists',
     () {
       final unknown = rk(['target', 'npm', '--json']);
       expect(unknown.code, 2, reason: unknown.all);
@@ -140,10 +140,15 @@ void main() {
       expect(unknown.problems.single['message'], contains('"npm"'));
       expect(unknown.problems.single['remedy'], contains('rk target list'));
 
+      // No name lists them, as `rk target list` does.
       final missing = rk(['target', '--json']);
-      expect(missing.code, 2, reason: missing.all);
-      expect(missing.problems.single['code'], 'RK-CLI-009');
-      expect(missing.problems.single['remedy'], contains('rk target <name>'));
+      expect(missing.code, 0, reason: missing.all);
+      expect(missing.problems, isEmpty);
+      expect(
+        missing.json['release_choices'],
+        rk(['target', 'list', '--json']).json['release_choices'],
+      );
+      expect(rk(['target']).stdout, rk(['target', 'list']).stdout);
     },
   );
 }
