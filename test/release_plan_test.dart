@@ -226,12 +226,11 @@ String _render(
     useColor: color,
     terminalWidth: width,
   );
-  ReleasePlanRenderer(output).render(
+  renderPlan(
+    output,
     plan,
     repository: 'example',
-    branch: 'main',
-    commit: '1234567',
-    uncommitted: 0,
+    source: sourceIdentity('main', '1234567', 0),
   );
   return buffer.toString();
 }

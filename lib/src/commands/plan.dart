@@ -60,12 +60,15 @@ final class PlanCommand {
       show: false,
     );
     output.report.section('plan', planJson(plan));
-    ReleasePlanRenderer(output).render(
+    renderPlan(
+      output,
       plan,
       repository: repositoryName,
-      branch: git.branch,
-      commit: git.hasCommit ? git.shortHead : null,
-      uncommitted: uncommitted,
+      source: sourceIdentity(
+        git.branch,
+        git.hasCommit ? git.shortHead : null,
+        uncommitted,
+      ),
     );
     return ExitCodes.ok;
   }
