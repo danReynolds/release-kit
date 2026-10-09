@@ -108,13 +108,17 @@ publish = ["git-tag", "pub.dev"]
 ''',
       'release.toml',
       diagnostics,
-    )!;
-    final resolution = Resolution.resolve(config, keybayTree(), diagnostics);
+    );
 
-    expect(resolution, isNull);
+    // A rule of release.toml, refused before any manifest is read.
+    expect(config, isNull);
     expect(
-      diagnostics.found.where((item) => item.code == 'RK-RES-012'),
-      hasLength(2),
+      diagnostics.found.map((item) => '${item.code} ${item.source?.line}'),
+      ['RK-CONF-009 3', 'RK-CONF-009 7'],
+    );
+    expect(
+      diagnostics.found.first.message,
+      'unit "core" needs an explicit tag pattern',
     );
   });
 
@@ -213,7 +217,7 @@ publish = ["pub.dev"]
                 'publish_to: https://packages.example.invalid\n',
           }),
         ),
-        'RK-RES-014',
+        'RK-RES-003',
       );
     });
 
@@ -251,7 +255,7 @@ executables:
 ''',
           }),
         ),
-        'RK-RES-005',
+        'RK-RES-004',
       );
     });
 
@@ -488,7 +492,7 @@ assets = ["b.so"]
             },
           ),
         ),
-        'RK-RES-017',
+        'RK-RES-009',
       );
     });
   });

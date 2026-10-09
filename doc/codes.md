@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `test/codes_index_test.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-114 codes across 28 families.
+108 codes across 28 families.
 
 
 ## RK-AUTH — Authorization
@@ -200,19 +200,13 @@ RK-STAGE-004, the checks a release once repeated between staging and each act.
 |---|---|---|
 | `RK-RES-001` | no package at "${declared.path}" | `lib/src/engine/resolve.dart` |
 | `RK-RES-002` | "${pubspec.name}" declares no version, so there is nothing to release | `lib/src/engine/resolve.dart` |
-| `RK-RES-003` | "${pubspec.name}" sets publish_to: none but is asked to publish to  pub.dev | `lib/src/engine/resolve.dart` |
-| `RK-RES-004` | "${pubspec.name}" ships binaries but declares no executable | `lib/src/engine/resolve.dart` |
-| `RK-RES-005` | "${pubspec.name}" declares ${pubspec.executables.length} executables,  so rk cannot tell… | `lib/src/engine/resolve.dart` |
-| `RK-RES-006` | — | `lib/src/engine/resolve.dart` |
-| `RK-RES-007` | the package "$name" is declared by two projects | `lib/src/engine/resolve.dart` |
+| `RK-RES-003` | a package that sets publish_to: none, or names a custom registry, is asked to publish to pub.dev | `lib/src/engine/resolve.dart` |
+| `RK-RES-004` | a binary project's pubspec lacks what its build reads: exactly one executable, and each dart_defines field | `lib/src/engine/resolve.dart` |
+| `RK-RES-006` | a package is declared twice, by path or by name, or projects nest | `lib/src/engine/resolve.dart` |
 | `RK-RES-008` | the projects in "${unit.name}" are at different versions:  ${versions.join( | `lib/src/engine/resolve.dart` |
-| `RK-RES-009` | a release unit ships binaries from several projects | `lib/src/engine/resolve.dart` |
+| `RK-RES-009` | a unit's GitHub release assets come from more than one project | `lib/src/engine/resolve.dart` |
 | `RK-RES-010` | the units "${first.name}" and "${unit.name}" would share the tag  "${unit.tagPattern}" | `lib/src/engine/resolve.dart` |
-| `RK-RES-012` | a tagged unit needs an explicit tag pattern when several units tag | `lib/src/engine/resolve.dart` |
-| `RK-RES-014` | a package names a custom package registry but is asked to publish to pub.dev | `lib/src/engine/resolve.dart` |
-| `RK-RES-015` | a selected compile-time pubspec field is missing, empty or structured | `lib/src/engine/resolve.dart` |
 | `RK-RES-016` | a Cargo crate is released only through its declared build | `lib/src/engine/resolve.dart` |
-| `RK-RES-017` | a unit builds its GitHub release from more than one project | `lib/src/engine/resolve.dart` |
 
 ## RK-SIGN — Signing identity
 

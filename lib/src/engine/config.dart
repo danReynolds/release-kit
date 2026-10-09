@@ -279,6 +279,7 @@ class _Reader {
       for (final name in table.keys)
         ?_unit(name, table[name], table.locationOf(name)),
     ];
+    if (_diagnostics.isEmpty) _checkTags(units);
     return _diagnostics.isEmpty ? ReleaseConfig._(units) : null;
   }
 
@@ -578,6 +579,25 @@ class _Reader {
         table.locationOf('homebrew_tap'),
         'unit "$name" declares homebrew_tap but does not publish to homebrew',
         'add "homebrew" to its publish list, or remove homebrew_tap',
+      );
+    }
+  }
+
+  /// RK-CONF-009, for several tagged units: each names its tag, or a unit
+  /// added later would change the tags the others already have.
+  void _checkTags(List<UnitConfig> units) {
+    final tagged = [
+      for (final unit in units)
+        if (unit.publish.contains(PublishTarget.gitTag)) unit,
+    ];
+    if (tagged.length < 2) return;
+    for (final unit in tagged.where((unit) => unit.tagPattern == null)) {
+      _rule(
+        unit.location,
+        'unit "${unit.name}" needs an explicit tag pattern',
+        'this repository tags several units; declaring '
+            'tag = "${unit.name}-v{version}" keeps this unit\'s public tag '
+            'namespace stable if the repository changes again',
       );
     }
   }

@@ -190,7 +190,7 @@ $metadata
         );
         expect(
           diagnostics.found.map((item) => item.code),
-          contains('RK-RES-015'),
+          contains('RK-RES-004'),
         );
       });
     }

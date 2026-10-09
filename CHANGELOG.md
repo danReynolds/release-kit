@@ -157,6 +157,11 @@ published finishes with 0.1.14.
   | `RK-CONF-012`, `019`, `024`, `025`, `036`, `039`, `044`, `045`; `RK-CONF-041` without binary_platforms | `RK-CONF-009` |
   | `RK-CONF-011` | removed: it only followed another refusal |
   | `RK-CONF-034` | `RK-SRC-003` |
+  | `RK-RES-012` | `RK-CONF-009`, refused before any manifest is read |
+  | `RK-RES-014` | `RK-RES-003` |
+  | `RK-RES-005`, `RK-RES-015` | `RK-RES-004` |
+  | `RK-RES-007` | `RK-RES-006` |
+  | `RK-RES-017` | `RK-RES-009`, once for a unit whose release several projects build |
 
 ### rk use
 
