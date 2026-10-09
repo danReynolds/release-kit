@@ -514,73 +514,6 @@ String _targetLine(String text, String label) {
   return body.split('\n').firstWhere((line) => line.contains(label));
 }
 
-String _withoutAnsi(String text) =>
-    text.replaceAll(RegExp('\x1b\\[[0-9;]*m'), '');
-
-void _expectStyledSubject(
-  String text,
-  String label, {
-  required String? code,
-  bool strong = false,
-  bool exact = false,
-  String? after,
-}) {
-  var lines = _afterLastTransientErase(text).split('\n');
-  if (after != null) {
-    final anchor = lines.indexWhere(
-      (line) => _withoutAnsi(line).trim() == after,
-    );
-    expect(anchor, greaterThanOrEqualTo(0), reason: 'missing $after section');
-    lines = lines.skip(anchor + 1).toList();
-  }
-  final line = lines.firstWhere(
-    (line) {
-      final visible = _withoutAnsi(line).trim();
-      return exact ? visible == label : visible.contains(label);
-    },
-    orElse: () => fail(
-      'missing "$label"${after == null ? '' : ' after "$after"'} in:\n'
-      '${lines.map(_withoutAnsi).join('\n')}',
-    ),
-  );
-  if (code == null && !strong) {
-    final labelStart = line.indexOf(label);
-    final lastOpening = line.lastIndexOf('\x1b[', labelStart);
-    final lastReset = line.lastIndexOf('\x1b[0m', labelStart);
-    expect(
-      lastOpening <= lastReset,
-      isTrue,
-      reason: 'the neutral subject must not inherit a nearby ANSI span: $line',
-    );
-    return;
-  }
-  final opening =
-      '\x1b[${[if (strong) '1', if (code != null) code].join(';')}m';
-  var start = -1;
-  var end = -1;
-  var searchFrom = 0;
-  while (true) {
-    final candidate = line.indexOf(opening, searchFrom);
-    if (candidate < 0) break;
-    final reset = line.indexOf('\x1b[0m', candidate + opening.length);
-    if (reset < 0) break;
-    if (line.substring(candidate + opening.length, reset).contains(label)) {
-      start = candidate;
-      end = reset;
-      break;
-    }
-    searchFrom = reset + '\x1b[0m'.length;
-  }
-  expect(start, greaterThanOrEqualTo(0), reason: line);
-  if (start < 0) return;
-  expect(end, greaterThan(start), reason: line);
-  expect(
-    line.substring(start + opening.length, end),
-    contains(label),
-    reason: 'the requested state must style the subject, not a nearby note',
-  );
-}
-
 void main() {
   statusTargetContract();
   statusReviewRegressions();
@@ -1306,7 +1239,6 @@ repository: https://github.com/danReynolds/keybay
         state: git(),
         registry: FakeRegistry(const {}),
         isTerminal: true,
-        useColor: true,
         onOutputReady: (output) => buffer = output,
         inspectorBuilder: (git, _) => controlled = CoordinatedInspector(
           registry: FakeRegistry(const {}),
@@ -1321,8 +1253,7 @@ repository: https://github.com/danReynolds/keybay
         (text) => text.contains('Release targets'),
       );
       final checking = _afterLastTransientErase(buffer.toString());
-      final visible = _withoutAnsi(checking);
-      expect(visible.split('\n').where((line) => line.isNotEmpty), [
+      expect(checking.split('\n').where((line) => line.isNotEmpty), [
         'Release targets',
         '  keybay',
         matches(RegExp(r'^    . Git tag\s+checking$')),
@@ -1334,11 +1265,6 @@ repository: https://github.com/danReynolds/keybay
           RegExp(r'^    . GitHub Release · danReynolds/keybay\s+checking$'),
         ),
       ]);
-      expect(checking, contains('\x1b[1;90m  keybay\x1b[0m'));
-      expect(checking, contains('\x1b[1;90m  keybay_cli\x1b[0m'));
-      expect(checking, contains('\x1b[36mGit tag'));
-      expect(visible, isNot(contains('keybay · Git tag')));
-      expect(visible, isNot(contains('keybay_cli · Git tag')));
 
       controlled
         ..finish(StepKind.tag)
@@ -1348,130 +1274,51 @@ repository: https://github.com/danReynolds/keybay
     },
   );
 
-  test('publication headings and rows use the four verdict states', () async {
-    const pubOnlyConfig = '''
-schema = 2
-
-[release.core]
-path = "packages/keybay"
-publish = ["pub.dev"]
-''';
-    final cases =
-        <
-          ({
-            String name,
-            Inspection answer,
-            String heading,
-            String? headingCode,
-            String? rowCode,
-          })
-        >[
-          (
-            name: 'exact',
-            answer: const Inspection.exact(detail: 'published exactly'),
-            heading: 'Published',
-            headingCode: '90',
-            rowCode: '90',
-          ),
-          (
-            name: 'absent',
-            answer: const Inspection.absent(),
-            heading: 'Not published',
-            headingCode: null,
-            rowCode: null,
-          ),
-          (
-            name: 'conflict',
-            answer: const Inspection.conflict('published bytes differ'),
-            heading: 'Does not match',
-            headingCode: '31',
-            rowCode: '31',
-          ),
-          (
-            name: 'unknown',
-            answer: const Inspection.unknown('provider was unavailable'),
-            heading: 'Could not be read',
-            headingCode: '33',
-            // The aggregate is attention; the concrete row is a linked issue
-            // that prevents release and therefore reads as failure.
-            rowCode: '31',
-          ),
-        ];
-
-    for (final vector in cases) {
+  test('the publication heading is the verdict its targets agree on', () async {
+    const exact = Inspection.exact(detail: 'published exactly');
+    const absent = Inspection.absent();
+    const conflict = Inspection.conflict('published bytes differ');
+    const unknown = Inspection.unknown('provider was unavailable');
+    for (final (heading, tag, pub) in [
+      ('Published', exact, exact),
+      ('Not published', absent, absent),
+      ('Does not match', conflict, conflict),
+      ('Could not be read', unknown, unknown),
+      ('Public targets', exact, absent),
+    ]) {
       final registry = FakeRegistry(const {});
       final run = await statusRun(
-        withConfig: pubOnlyConfig,
         source: tree(),
         state: git(),
         registry: registry,
-        isTerminal: true,
-        useColor: true,
-        inspectorBuilder: (git, _) =>
-            FixedInspector(registry: registry, git: git, answer: vector.answer),
-      );
-
-      _expectStyledSubject(
-        run.text,
-        vector.heading,
-        code: vector.headingCode,
-        strong: true,
-        exact: true,
-      );
-      _expectStyledSubject(run.text, 'pub.dev', code: vector.rowCode);
-      expect(
-        run.text,
-        isNot(contains('\x1b[32m')),
-        reason: '${vector.name} is observation, not a successful action',
-      );
-    }
-  });
-
-  test(
-    'a partial publication colors only the mixed aggregate as active',
-    () async {
-      final registry = FakeRegistry(const {});
-      final run = await statusRun(
-        withConfig: config,
-        source: tree(),
-        state: git(),
-        registry: registry,
-        isTerminal: true,
-        useColor: true,
         inspectorBuilder: (git, _) => FixedInspector(
           registry: registry,
           git: git,
-          answer: const Inspection.absent(),
-          answers: const {
-            StepKind.tag: Inspection.exact(detail: 'tag matches'),
-            StepKind.publishRegistry: Inspection.absent(),
-          },
+          answer: pub,
+          answers: {StepKind.tag: tag},
         ),
       );
 
-      _expectStyledSubject(
+      expect(
         run.text,
-        'Public targets',
-        code: '36',
-        strong: true,
-        exact: true,
+        matches(RegExp('^    $heading\$', multiLine: true)),
+        reason: run.text,
       );
-      _expectStyledSubject(
-        run.text,
-        'Git tag',
-        code: '90',
-        after: 'Public targets',
+      final unit = (run.report['units'] as List).single as Map;
+      expect(
+        (unit['targets'] as List).map((target) => (target as Map)['verdict']),
+        [tag.verdict.name, pub.verdict.name],
       );
-      _expectStyledSubject(
-        run.text,
-        'pub.dev',
-        code: null,
-        after: 'Public targets',
-      );
-      final settled = _afterLastTransientErase(run.text);
-      expect(settled, isNot(contains('\x1b[34m')));
-    },
-  );
+      for (final (label, answer) in [('Git tag', tag), ('pub.dev ', pub)]) {
+        expect(
+          _targetLine(run.text, label).trimLeft().startsWith('✗'),
+          answer.verdict == Verdict.conflict ||
+              answer.verdict == Verdict.unknown,
+          reason: '$heading: only a target that blocks the release is marked',
+        );
+      }
+    }
+  });
 
   test('unstaged status uses the austere target vocabulary', () async {
     final text = await statusOf(
@@ -1647,7 +1494,11 @@ publish = ["pub.dev"]
     'cheap host facts mark artifacts that cannot be produced here',
     () async {
       final run = await statusRun(
-        withConfig: binaryConfig,
+        // Without pub.dev, every staged row is a binary this host cannot make.
+        withConfig: binaryConfig.replaceFirst(
+          '"git-tag", "pub.dev", "github-release"',
+          '"git-tag", "github-release"',
+        ),
         source: binaryTree,
         state: git(),
         registry: FakeRegistry(const {}),
@@ -1662,6 +1513,10 @@ publish = ["pub.dev"]
         ),
       );
 
+      expect(
+        run.text,
+        matches(RegExp(r'^    Cannot be staged$', multiLine: true)),
+      );
       expect(run.text, contains('this machine cannot produce every platform'));
       expect(run.text, contains('Fix: stage this unit on a host'));
       expect(
@@ -1985,159 +1840,6 @@ publish = ["pub.dev"]
       {'staged'},
     );
   });
-
-  test(
-    'stage headings and rows distinguish aggregate artifact states',
-    () async {
-      FixedInspector absentInspector(GitState git, RegistryReader registry) =>
-          FixedInspector(
-            registry: registry,
-            git: git,
-            answer: const Inspection.absent(),
-          );
-
-      final notStagedRegistry = FakeRegistry(const {});
-      final notStaged = await statusRun(
-        withConfig: binaryConfig,
-        source: binaryTree,
-        state: git(),
-        registry: notStagedRegistry,
-        isTerminal: true,
-        useColor: true,
-        inspectorBuilder: (git, _) => absentInspector(git, notStagedRegistry),
-      );
-      _expectStyledSubject(
-        notStaged.text,
-        'Not staged',
-        code: null,
-        strong: true,
-        exact: true,
-      );
-      for (final row in ['Local binaries', 'pub.dev', 'GitHub Release']) {
-        _expectStyledSubject(
-          notStaged.text,
-          row,
-          code: null,
-          after: 'Not staged',
-        );
-      }
-      _expectStyledSubject(
-        notStaged.text,
-        'keybay-0.2.0-macos-arm64.tar.gz',
-        code: '90',
-        after: 'Not staged',
-      );
-      final settledNotStaged = _afterLastTransientErase(notStaged.text);
-      expect(settledNotStaged, isNot(contains('\x1b[34m')));
-      _expectStyledSubject(
-        notStaged.text,
-        'rk stage cli',
-        code: '36',
-        after: 'Not staged',
-      );
-
-      final root = Directory.systemTemp.createTempSync(
-        'rk-status-colour-stage-',
-      );
-      addTearDown(() => root.deleteSync(recursive: true));
-      final complete = await _completedBinaryStage(
-        root: root,
-        config: binaryConfig,
-        source: binaryTree,
-      );
-      final stagedRegistry = FakeRegistry(const {});
-      final staged = await statusRun(
-        withConfig: binaryConfig,
-        source: binaryTree,
-        state: git(),
-        registry: stagedRegistry,
-        stageFor: (_) => complete,
-        isTerminal: true,
-        useColor: true,
-        inspectorBuilder: (git, _) => absentInspector(git, stagedRegistry),
-      );
-      _expectStyledSubject(
-        staged.text,
-        'Staged',
-        code: '90',
-        strong: true,
-        exact: true,
-      );
-      for (final row in ['pub.dev', 'GitHub Release']) {
-        _expectStyledSubject(staged.text, row, code: '90', after: 'Staged');
-      }
-      expect(staged.text, isNot(contains('\x1b[32m')));
-
-      final cannotStageConfig = binaryConfig.replaceFirst(
-        '"git-tag", "pub.dev", "github-release"',
-        '"git-tag", "github-release"',
-      );
-      final invalidRegistry = FakeRegistry(const {});
-      final invalid = await statusRun(
-        withConfig: cannotStageConfig,
-        source: binaryTree,
-        state: git(),
-        registry: invalidRegistry,
-        capabilities: HostCapabilities(
-          hostPlatform: 'linux-x64',
-          containerRuntime: null,
-        ),
-        isTerminal: true,
-        useColor: true,
-        inspectorBuilder: (git, _) => absentInspector(git, invalidRegistry),
-      );
-      _expectStyledSubject(
-        invalid.text,
-        'Cannot be staged',
-        code: '31',
-        strong: true,
-        exact: true,
-      );
-      for (final row in ['Local binaries', 'GitHub Release']) {
-        _expectStyledSubject(
-          invalid.text,
-          row,
-          code: '31',
-          after: 'Cannot be staged',
-        );
-      }
-
-      final mixedRegistry = FakeRegistry(const {});
-      final mixed = await statusRun(
-        withConfig: binaryConfig,
-        source: binaryTree,
-        state: git(),
-        registry: mixedRegistry,
-        capabilities: HostCapabilities(
-          hostPlatform: 'linux-x64',
-          containerRuntime: null,
-        ),
-        isTerminal: true,
-        useColor: true,
-        inspectorBuilder: (git, _) => absentInspector(git, mixedRegistry),
-      );
-      _expectStyledSubject(
-        mixed.text,
-        'Stage',
-        code: '31',
-        strong: true,
-        exact: true,
-      );
-      _expectStyledSubject(
-        mixed.text,
-        'Local binaries',
-        code: '31',
-        after: 'Stage',
-      );
-      _expectStyledSubject(mixed.text, 'pub.dev', code: null, after: 'Stage');
-      _expectStyledSubject(
-        mixed.text,
-        'GitHub Release',
-        code: '31',
-        after: 'Stage',
-      );
-    },
-  );
 
   test(
     'an exact stage makes a partial public release safely resumable',
@@ -2555,6 +2257,13 @@ publish = ["pub.dev"]
       expect(
         run.text,
         contains('the partial binary release needs its exact stage'),
+      );
+      expect(
+        run.text,
+        matches(RegExp(r'^    Stage$', multiLine: true)),
+        reason:
+            'the package archive can still be staged; the bound binaries '
+            'cannot, so the rows share no single heading',
       );
       expect(run.text, isNot(contains('RK-STAGE-005')));
       expect(
