@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:io';
+
 import '../engine/assets.dart';
 import '../engine/resolve.dart';
 import '../engine/publish_target.dart';
@@ -167,6 +170,38 @@ class InstallationFailure implements Exception {
   @override
   String toString() => message;
 }
+
+/// What [error], from a source, the network or the file system, means for
+/// an installation: one table for the source problems inspection records,
+/// the CLI's RK-USE-001 and the picker's failures.
+InstallationFailure installationFailure(Exception error) => switch (error) {
+  InstallationFailure() => error,
+  FileSystemException() => InstallationFailure(
+    'Installation files could not be accessed.',
+    '$error',
+  ),
+  SocketException() => InstallationFailure(
+    'The installation service could not be reached.',
+    '$error',
+  ),
+  HttpException() => InstallationFailure(
+    'The installation download failed.',
+    '$error',
+  ),
+  TimeoutException() => const InstallationFailure(
+    'The installation operation timed out.',
+    'Check the provider and retry; selection has not changed.',
+  ),
+  FormatException() => InstallationFailure(
+    'The installation metadata is invalid.',
+    '$error',
+  ),
+  ProcessException(:final executable) => InstallationFailure(
+    '$executable could not start.',
+    '$error',
+  ),
+  _ => InstallationFailure('$error'),
+};
 
 bool safeCommandName(String value) =>
     RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]*$').hasMatch(value);

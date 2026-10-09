@@ -162,6 +162,10 @@ published finishes with 0.1.14.
   shows as installed only while it is selected.
 - Cancelling a switch before its package manager starts installs nothing;
   it used to install, then refuse to switch.
+- Installation files or metadata rk cannot read are reported as
+  `RK-USE-001`, like every other refused installation; `RK-USE-002` is
+  gone. Bad metadata reads "The installation metadata is invalid.", and a
+  command that cannot start is named instead of "the package manager".
 - rk's bin directory on PATH written with a trailing slash, or through a
   link, counts as first: `rk use` no longer says to put it there.
 - Bare `rk install` and `rk uninstall` open the `rk use` table.

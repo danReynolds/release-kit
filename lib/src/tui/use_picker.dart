@@ -370,9 +370,11 @@ class UsePicker extends Notifier {
   }
 }
 
-String _describe(Object error) => error is InstallationFailure
-    ? '${error.message} ${error.remedy}'.trim()
-    : '$error';
+String _describe(Object error) {
+  if (error is! Exception) return '$error';
+  final failure = installationFailure(error);
+  return '${failure.message} ${failure.remedy}'.trim();
+}
 
 Future<InstallationPickerResult> runUsePicker({
   required List<ProjectInstallations> states,

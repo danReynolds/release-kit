@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `test/codes_index_test.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-150 codes across 28 families.
+149 codes across 28 families.
 
 
 ## RK-AUTH — Authorization
@@ -319,4 +319,3 @@ that read back signatures rk had just written, are retired and not reused.
 | Code | Meaning | Source |
 | --- | --- | --- |
 | `RK-USE-001` | an installation operation was refused or failed | `bin/installations.dart` |
-| `RK-USE-002` | installation files or metadata could not be read | `bin/installations.dart` |

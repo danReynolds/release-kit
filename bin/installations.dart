@@ -46,30 +46,13 @@ Future<void> installationMain(List<String> args, String command) async {
   var code = ExitCodes.ok;
   try {
     code = await _run(args, command, output, json);
-  } on InstallationFailure catch (error) {
+  } on Exception catch (error) {
+    final failure = installationFailure(error);
     output.problem(
       Diagnostic(
         code: 'RK-USE-001',
-        message: error.message,
-        remedy: error.remedy,
-      ),
-    );
-    code = ExitCodes.refused;
-  } on FileSystemException catch (error) {
-    output.problem(
-      Diagnostic(
-        code: 'RK-USE-002',
-        message: 'Installation files could not be accessed.',
-        remedy: error.toString(),
-      ),
-    );
-    code = ExitCodes.refused;
-  } on FormatException catch (error) {
-    output.problem(
-      Diagnostic(
-        code: 'RK-USE-002',
-        message: 'Installation metadata could not be read.',
-        remedy: '$error',
+        message: failure.message,
+        remedy: failure.remedy,
       ),
     );
     code = ExitCodes.refused;

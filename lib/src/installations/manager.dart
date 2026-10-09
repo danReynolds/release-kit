@@ -1,6 +1,3 @@
-import 'dart:io';
-import 'dart:async';
-
 import 'model.dart';
 import '../engine/version.dart';
 import 'provider.dart';
@@ -34,11 +31,11 @@ class InstallationManager {
     final states = <InstallationSource, SourceInspection>{};
     for (final source in project.sources) {
       try {
-        states[source] = await _providerCall(
-          () => _provider(project, source).inspect(project),
+        states[source] = await _provider(project, source).inspect(project);
+      } on Exception catch (error) {
+        states[source] = SourceInspection(
+          problem: installationFailure(error).message,
         );
-      } on InstallationFailure catch (error) {
-        states[source] = SourceInspection(problem: error.message);
       }
     }
     // Each command runs what its own launcher names: another project's
@@ -78,9 +75,7 @@ class InstallationManager {
     ExecutableProject project,
     InstallationSource source, {
     InstallationCancellation? check,
-  }) => _providerCall(
-    () => _provider(project, source).latest(project, check: check),
-  );
+  }) async => _provider(project, source).latest(project, check: check);
 
   /// Performs [operation]. Callers run one at a time: the CLI runs one, and
   /// the picker queues them. install.lock keeps other processes out.
@@ -109,7 +104,7 @@ class InstallationManager {
         );
       }
       if (routes) store.checkOwnership(project);
-      final inspected = await _providerCall(() => provider.inspect(project));
+      final inspected = await provider.inspect(project);
       var installation = inspected.installation;
       if (inspected.problem != null &&
           !(action == InstallationAction.uninstall && installation != null)) {
@@ -133,7 +128,7 @@ class InstallationManager {
         }
         cancellation.check();
         progress('Removing ${project.name} from ${source.label}…');
-        await _providerCall(() => provider.uninstall(project));
+        await provider.uninstall(project);
         return '${project.name} removed from ${source.label}.${source == InstallationSource.local ? ' Checkout kept.' : ''}';
       }
       if (release != null && installation != null) {
@@ -157,9 +152,7 @@ class InstallationManager {
           source == InstallationSource.local ||
           (release != null && installation.version != release.version)) {
         cancellation.check();
-        installation = await _providerCall<Installation>(
-          () => provider.install(project, release, progress),
-        );
+        installation = await provider.install(project, release, progress);
       }
       if (action == InstallationAction.install && release == null) {
         store.retire(project, installation);
@@ -203,31 +196,4 @@ class InstallationManager {
         '${project.name} does not support ${source.label}.',
         'Available sources: ${project.sources.map((s) => s.name).join(', ')}.',
       ));
-}
-
-Future<T> _providerCall<T>(Future<T> Function() operation) async {
-  try {
-    return await operation();
-  } on FileSystemException catch (e) {
-    throw InstallationFailure(
-      'Installation files could not be accessed.',
-      '$e',
-    );
-  } on SocketException catch (e) {
-    throw InstallationFailure(
-      'The installation service could not be reached.',
-      '$e',
-    );
-  } on HttpException catch (e) {
-    throw InstallationFailure('The installation download failed.', '$e');
-  } on TimeoutException {
-    throw const InstallationFailure(
-      'The installation operation timed out.',
-      'Check the provider and retry; selection has not changed.',
-    );
-  } on FormatException catch (e) {
-    throw InstallationFailure('The installation metadata is invalid.', '$e');
-  } on ProcessException catch (e) {
-    throw InstallationFailure('The package manager could not start.', '$e');
-  }
 }
