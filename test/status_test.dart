@@ -52,6 +52,7 @@ class OriginAgreeing implements Tools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) async {
     if (executable == 'git' && arguments.first == 'ls-remote') {
       if (arguments.length == 3 && arguments[1] == '--tags') {
@@ -120,6 +121,7 @@ class ReleasedTagOrigin implements Tools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) async {
     if (executable == 'git' && arguments.first == 'ls-remote') {
       return ToolResult(

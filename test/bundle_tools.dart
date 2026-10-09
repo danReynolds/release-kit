@@ -29,6 +29,7 @@ class BundleRecordingTools extends RecordingTools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) async {
     final key =
         '${executable.endsWith(_fixtureDart) ? 'dart' : executable} '

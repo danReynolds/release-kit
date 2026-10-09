@@ -228,6 +228,7 @@ final class _InteractiveTrackingTools implements Tools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) async {
     final result = await delegate.run(
       executable,
@@ -235,6 +236,7 @@ final class _InteractiveTrackingTools implements Tools {
       workingDirectory: workingDirectory,
       environment: environment,
       timeout: timeout,
+      stdin: stdin,
     );
     await gate?.call(
       _normalizedPubKey('$executable ${arguments.join(' ')}'),

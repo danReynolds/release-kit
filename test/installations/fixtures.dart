@@ -119,6 +119,7 @@ class TestTools implements Tools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) => runTool(executable, arguments, workingDirectory, environment);
   @override
   Future<int> runInteractive(

@@ -742,6 +742,7 @@ final class _Asked implements Tools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) {
     asked.add('$executable ${arguments.join(' ')}');
     return const SystemTools().run(
@@ -750,6 +751,7 @@ final class _Asked implements Tools {
       workingDirectory: workingDirectory,
       environment: environment,
       timeout: timeout,
+      stdin: stdin,
     );
   }
 

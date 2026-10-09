@@ -459,6 +459,7 @@ class _TimeoutRecordingTools extends RecordingTools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) {
     timeouts.add(timeout);
     return super.run(
@@ -467,6 +468,7 @@ class _TimeoutRecordingTools extends RecordingTools {
       workingDirectory: workingDirectory,
       environment: environment,
       timeout: timeout,
+      stdin: stdin,
     );
   }
 }

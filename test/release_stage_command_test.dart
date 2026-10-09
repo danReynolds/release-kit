@@ -2546,6 +2546,7 @@ class _ForwardingReadTools implements Tools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) {
     invocations.add(
       _Invocation(
@@ -2560,6 +2561,7 @@ class _ForwardingReadTools implements Tools {
       arguments,
       workingDirectory: workingDirectory,
       environment: environment,
+      stdin: stdin,
     );
   }
 
@@ -2674,6 +2676,7 @@ class _WorldTools implements Tools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) async {
     final invocation = _Invocation(
       executable: executable,

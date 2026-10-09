@@ -270,6 +270,7 @@ final class _Tools implements Tools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) async {
     if (executable == 'git' && arguments.firstOrNull == 'ls-remote') {
       return ToolResult(exitCode: 0, stdout: '', stderr: '');

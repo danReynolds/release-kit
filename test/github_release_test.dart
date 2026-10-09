@@ -1051,6 +1051,7 @@ class _DownloadTools implements Tools {
     String? workingDirectory,
     Map<String, String>? environment,
     Duration? timeout,
+    List<int>? stdin,
   }) async {
     if (executable == 'gh' && arguments.first == 'api') return ok(response);
     if (executable != 'gh' ||
