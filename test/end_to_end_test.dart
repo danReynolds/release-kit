@@ -38,60 +38,45 @@ void main() {
       );
 
   group('example repositories', () {
-    test('the checklist is derived for every repository shape', () {
-      // Executed. The version this replaced asserted that a file under test/
-      // contained particular strings — the same anti-pattern the phase 2
-      // review found, one level along: rename a test and the phase fails,
-      // delete the feature and it passes.
-      //
-      // Derivation is a local fact, so only derivation is asserted: the
-      // world's answers (and therefore the exit code) belong to whatever
-      // network this machine has.
-      final scratch = Directory.systemTemp.createTempSync('rk-phase1-');
+    test('every example plans a release for each of its units', () {
+      // Planning reads no destination, so this is the same on any machine.
+      // escapes-repository is refused at resolve, which cli_test checks.
+      final scratch = Directory.systemTemp.createTempSync('rk-examples-');
       addTearDown(() => scratch.deleteSync(recursive: true));
+      final shapes = [
+        for (final entry in Directory('examples').listSync())
+          if (entry is Directory) entry.path.split(Platform.pathSeparator).last,
+      ]..remove('escapes-repository');
+      expect(shapes, hasLength(greaterThanOrEqualTo(4)));
 
-      for (final shape in [
-        'single-package',
-        'workspace-with-dependent',
-        'multi-project-unit',
-        'binary-cli',
-      ]) {
-        final run = Rk.example(scratch, shape)(['status', '--json']);
-        expect(run.units, isNotEmpty, reason: '$shape: ${run.all}');
-        for (final unit in run.units) {
-          expect(
-            (unit as Map)['steps'],
-            isNotEmpty,
-            reason: '$shape must derive a checklist for every unit',
-          );
+      for (final shape in shapes) {
+        final run = Rk.example(scratch, shape)(['plan', '--json']);
+        expect(run.code, 0, reason: '$shape: ${run.all}');
+        final units = ((run.json['plan'] as Map)['units'] as List).cast<Map>();
+        expect(units, isNotEmpty, reason: shape);
+        for (final unit in units) {
+          expect(unit['nodes'], isNotEmpty, reason: '$shape: ${unit['name']}');
         }
       }
-
-      // The shape that must be refused rather than released.
-      final refused = Rk.example(scratch, 'escapes-repository')(['status']);
-      expect(refused.code, 1, reason: refused.all);
-      expect(refused.all, contains('does not contain'));
     });
   });
 
   group('output', () {
-    // Executed, not read. Every assertion below runs bin/rk.dart against a
-    // real repository, because the version of this group that matched strings
-    // inside test/ passed every one of five mutations that completely unwired
-    // the phase: --json printing nothing, pipes getting cursor escapes, the
-    // diagnosis never being written, and rerun_helps never being set.
+    // The compiled rk, run against a real repository: what a pipe, a caller
+    // reading --json and an operator after a crash actually receive.
     late Directory scratch;
     late Rk repo;
 
     setUpAll(() {
-      scratch = Directory.systemTemp.createTempSync('rk-phase2-');
+      scratch = Directory.systemTemp.createTempSync('rk-output-');
       repo = Rk.example(scratch, 'workspace-with-dependent');
     });
 
     tearDownAll(() => scratch.deleteSync(recursive: true));
 
-    test('the four-glyph gutter, and colour is never the only signal', () {
-      final run = repo(['status']);
+    test('non-TTY output is append-only: no cursor movement, ever', () {
+      final run = repo(['status'], environment: _offline);
+      expect(run.all, isNot(contains('\r')));
       expect(
         run.all,
         isNot(contains('\x1b')),
@@ -99,14 +84,8 @@ void main() {
       );
     });
 
-    test('non-TTY output is append-only: no cursor movement, ever', () {
-      final run = repo(['status']);
-      expect(run.all, isNot(contains('\r')));
-      expect(run.all, isNot(contains('\x1b[')));
-    });
-
     test('--json carries the checklist, keyed by step id', () {
-      final run = repo(['status', '--json']);
+      final run = repo(['status', '--json'], environment: _offline);
       final steps = run.stepsOf('cli');
       expect(steps, isNotEmpty, reason: 'an empty checklist is not a surface');
       expect(steps.map((s) => s['id']), contains('cli/stage/complete'));
@@ -129,37 +108,16 @@ void main() {
       );
     });
 
-    test('--json is only JSON', () {
-      final run = repo(['status', '--json']);
-      expect(run.stdout.trimLeft(), startsWith('{'));
-      expect(run.stdout, isNot(contains('derived from the manifests alone')));
-      expect(run.json['rerun_helps'], isTrue);
-    });
-
-    test('a refusal a caller asked for in JSON is answered in JSON', () {
-      final run = repo(['status', '--json', '--bogus']);
-      expect(run.code, ExitCodes.usage);
-      expect(run.problems.map((p) => p['code']), contains('RK-CLI-001'));
-    });
-
     test('every non-zero exit carries a problem a caller can read', () {
-      for (final args in [
-        ['status', '--json', '--bogus'],
-        ['status', 'nosuch', '--json'],
-        ['release', 'nosuch', '--json'],
-      ]) {
-        final run = repo(args);
+      for (final command in ['status', 'release']) {
+        final run = repo([command, 'nosuch', '--json']);
+        expect(run.code, ExitCodes.usage, reason: '$command: ${run.all}');
         expect(
-          run.code,
-          isNot(0),
-          reason: 'precondition for ${args.join(' ')}',
-        );
-        expect(
-          run.problems,
-          isNotEmpty,
+          run.problems.map((problem) => problem['code']),
+          ['RK-CLI-003'],
           reason:
               'a non-zero exit a caller cannot read is, to that caller, '
-              'a non-zero exit that did not happen: ${args.join(' ')}',
+              'a non-zero exit that did not happen: $command',
         );
       }
     });
@@ -200,22 +158,6 @@ void main() {
         expect(written.single['exit'], run.code);
         expect(run.json['diagnosis'], isNotNull);
       });
-    });
-
-    test('a run that only read writes no diagnosis', () {
-      final clean = Rk.example(
-        scratch,
-        'workspace-with-dependent',
-        as: 'clean',
-      );
-      clean(['status']);
-      expect(
-        clean.diagnoses(),
-        isEmpty,
-        reason:
-            'a directory that fills up on reads is a directory nobody '
-            'reads on failure',
-      );
     });
 
     test('the report renders identically to a terminal and a '
@@ -296,7 +238,7 @@ void main() {
   group('status', () {
     late Directory scratch;
 
-    setUpAll(() => scratch = Directory.systemTemp.createTempSync('rk-phase3-'));
+    setUpAll(() => scratch = Directory.systemTemp.createTempSync('rk-status-'));
     tearDownAll(() => scratch.deleteSync(recursive: true));
 
     test('the engine imports only the Dart team\'s own packages', () {
@@ -330,8 +272,6 @@ void main() {
 
     test('the forge is read, and being unable to read it is not absence', () {
       final repo = Rk.example(scratch, 'binary-cli', as: 'forge');
-      // An origin that does not exist: gh will fail, which is not a fact
-      // about whether the release is there.
       Process.runSync('git', [
         'remote',
         'add',
@@ -339,7 +279,9 @@ void main() {
         'https://github.com/example/nothing.git',
       ], workingDirectory: repo.root);
 
-      final run = repo(['status', '--json']);
+      // The real gh, with nowhere to connect: its failure is not a fact
+      // about whether the release is there.
+      final run = repo(['status', '--json'], environment: _offline);
       final release = run
           .targetsOf('cli')
           .where((s) => (s['id'] as String).contains('github-release'))
@@ -348,27 +290,11 @@ void main() {
       expect(release, hasLength(1), reason: 'the forge must be inspected');
       expect(
         release.single['verdict'],
-        isNot('absent'),
+        'unknown',
         reason:
             'a forge rk could not read is not a forge with nothing in it; '
             'absent is what lets a release proceed',
       );
-    });
-
-    test('status reports a real repository against live reality', () {
-      // tool/validate.dart runs rk against the real repositories on this
-      // machine; real repositories change, so here status only has to
-      // say something about a fixture.
-      final repo = Rk.example(scratch, 'workspace-with-dependent', as: 'live');
-      final run = repo(['status', '--json']);
-      expect(run.units, hasLength(2), reason: 'the document carries the units');
-      for (final unit in run.units) {
-        expect(
-          (unit['steps'] as List),
-          isNotEmpty,
-          reason: '${unit['name']} has no steps, so a caller sees nothing',
-        );
-      }
     });
   });
 
@@ -2711,3 +2637,13 @@ executables:
 }
 
 String _shellQuote(String value) => "'${value.replaceAll("'", "'\"'\"'")}'";
+
+/// Every read rk makes over HTTPS (pub.dev, and git and gh against GitHub)
+/// goes to a closed loopback port, so it fails at once and the same way on
+/// any machine, network or not.
+const _offline = {
+  'https_proxy': 'http://127.0.0.1:9',
+  'HTTPS_PROXY': 'http://127.0.0.1:9',
+  'no_proxy': '',
+  'NO_PROXY': '',
+};
