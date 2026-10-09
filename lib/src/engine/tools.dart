@@ -62,18 +62,18 @@ class ToolResult {
 
   /// What a process wrote, decoded only if it is read as text: the bytes of
   /// a whole commit are not.
-  ToolResult._captured(this.exitCode, List<int> bytes, this.stderr)
+  ToolResult._captured(this.exitCode, Uint8List bytes, this.stderr)
     : _bytes = bytes;
 
   final int exitCode;
   final String stderr;
   String? _stdout;
-  List<int>? _bytes;
+  Uint8List? _bytes;
 
   String get stdout => _stdout ??= _lenient.decode(_bytes!);
 
   /// [stdout] exactly as written, for output framed by byte counts.
-  List<int> get bytes => _bytes ??= utf8.encode(_stdout!);
+  Uint8List get bytes => _bytes ??= utf8.encode(_stdout!);
 
   bool get ok => exitCode == 0;
 

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:io';
 import 'timings.dart';
+import 'tools.dart';
 
 /// Read access to the repository being released.
 ///
@@ -161,115 +162,24 @@ class GitSourceTree implements SourceTree {
         (result.stderr as String).trim(),
       );
     }
-    final entries = <GitTreeEntry>[];
-    for (final record
-        in (result.stdout as String)
-            .split('\u0000')
-            .where((r) => r.isNotEmpty)) {
-      final separator = record.indexOf('\t');
-      if (separator <= 0 || separator == record.length - 1) {
-        throw SourceUnreadable(
-          'the source tree at $commit',
-          'git returned a malformed tree entry',
-        );
-      }
-      final metadata = record.substring(0, separator).split(' ');
-      final path = record.substring(separator + 1);
-      if (metadata.length != 3 ||
-          !RegExp(r'^[0-7]{6}$').hasMatch(metadata[0]) ||
-          !_CommittedObjects.isObjectId(metadata[2])) {
-        throw SourceUnreadable(
-          'the source tree at $commit',
-          'git returned malformed mode, type, or object metadata for $path',
-        );
-      }
-      _resolve(path);
-      entries.add(
-        GitTreeEntry(path: path, mode: metadata[0], type: metadata[1]),
-      );
-    }
-    return entries;
+    return _treeEntries(result.stdout as String, commit);
   }
 
   List<String> trackedFilesAt(String commit) =>
       trackedEntriesAt(commit).map((entry) => entry.path).toList();
 
   /// Every tracked blob at [commit], in one `git cat-file --batch`.
-  ///
-  /// One `git show` per file is a subprocess per file: measured at 2.44s for
-  /// this repository's 165 tracked files, against 0.065s batched. Staging
-  /// reads the whole snapshot at once, so it asks once.
-  ///
-  /// A path containing a newline cannot be expressed in the batch protocol
-  /// and is read on its own, so no path is silently skipped.
   Future<Map<String, Uint8List>> readBytesBatchAt(
     String commit,
     List<String> paths,
-  ) => Timings.timeTallyAsync(
-    'git cat-file --batch',
-    () => _readBytesBatchAt(commit, paths),
-  );
-
-  Future<Map<String, Uint8List>> _readBytesBatchAt(
-    String commit,
-    List<String> paths,
   ) async {
-    final result = <String, Uint8List>{};
-    final batched = <String>[];
-    for (final path in paths) {
-      _resolve(path); // validates that [path] cannot escape the repository.
-      if (path.contains('\n')) {
-        result[path] = Uint8List.fromList(readBytesAt(commit, path));
-      } else {
-        batched.add(path);
-      }
-    }
-    if (batched.isEmpty) return result;
-
-    final process = await Process.start('git', const [
-      'cat-file',
-      '--batch',
-    ], workingDirectory: root);
-    // Copies as it accumulates. `copy: false` would retain the stream's own
-    // buffers, and the snapshot every release verifies is not the place to
-    // depend on dart:io never reusing one.
-    final incoming = BytesBuilder();
-    final collected = process.stdout.forEach(incoming.add);
-    final failure = process.stderr.transform(utf8.decoder).join();
-    for (final path in batched) {
-      process.stdin.write('$commit:$path\n');
-    }
-    await process.stdin.close();
-    final code = await process.exitCode;
-    await collected;
-    if (code != 0) {
-      throw SourceUnreadable(batched.first, (await failure).trim());
-    }
-    final stdoutBytes = incoming.takeBytes();
-
-    // Each answer is `<oid> <type> <size>\n`, then exactly size bytes, then
-    // a newline. Answers arrive in the order asked.
-    var at = 0;
-    for (final path in batched) {
-      final endOfHeader = stdoutBytes.indexOf(0x0a, at);
-      if (endOfHeader < 0) {
-        throw SourceUnreadable(path, 'git cat-file ended early');
-      }
-      final header = utf8.decode(stdoutBytes.sublist(at, endOfHeader));
-      final fields = header.split(' ');
-      if (fields.length != 3) {
-        throw SourceUnreadable(path, header);
-      }
-      final size = int.tryParse(fields[2]);
-      if (size == null) throw SourceUnreadable(path, header);
-      final start = endOfHeader + 1;
-      if (start + size > stdoutBytes.length) {
-        throw SourceUnreadable(path, 'git cat-file returned a short object');
-      }
-      result[path] = Uint8List.sublistView(stdoutBytes, start, start + size);
-      at = start + size + 1; // the newline that closes the object
-    }
-    return result;
+    final objects = await CommitFiles(root, commit).read(paths);
+    return {
+      for (final path in paths)
+        path:
+            objects[path]?.bytes ??
+            (throw SourceUnreadable(path, 'the commit has no such file')),
+    };
   }
 
   List<int> readBytesAt(String commit, String path) {
@@ -299,6 +209,160 @@ class GitSourceTree implements SourceTree {
     if (result.exitCode != 0) return null;
     return (result.stdout as String).trim();
   }
+}
+
+/// An object in a commit: its type (`blob`, `tree`, `commit`) and its bytes.
+typedef GitObject = ({String type, Uint8List bytes});
+
+/// One immutable commit's files, read through [tools], never the worktree's.
+///
+/// Reading a whole commit, as a stage does, or a few release inputs, as
+/// status and plan do, is one `git cat-file --batch` either way. One
+/// `git show` per file is a process per file: 2.44s for this repository's
+/// 165 files, against 0.065s batched.
+final class CommitFiles {
+  CommitFiles(this.root, this.commit, {this.tools = const SystemTools()});
+
+  final String root;
+
+  /// The commit's full object id.
+  final String commit;
+  final Tools tools;
+
+  /// Every tracked entry with its mode (`git ls-tree -r -z`), read once.
+  late final Future<List<GitTreeEntry>> entries = _listEntries();
+
+  Future<List<GitTreeEntry>> _listEntries() async {
+    final listed = await tools.run('git', [
+      'ls-tree',
+      '-r',
+      '-z',
+      commit,
+    ], workingDirectory: root);
+    if (!listed.ok) {
+      throw SourceUnreadable(
+        'the source tree at $commit',
+        listed.stderr.trim(),
+      );
+    }
+    return _treeEntries(listed.stdout, commit);
+  }
+
+  /// The object at each path (`<commit>:<path>`; '' is the root tree), in
+  /// one `git cat-file --batch`, or null where the commit has none. A path
+  /// that contains a newline, which the protocol cannot carry, is read
+  /// alone, and must be there.
+  Future<Map<String, GitObject?>> read(Iterable<String> paths) async {
+    final found = <String, GitObject?>{};
+    final batched = <String>[];
+    for (final path in paths) {
+      // Git ends the whole batch at a path that climbs out of the commit.
+      if (path.split('/').contains('..')) {
+        throw ArgumentError('path escapes the commit: $path');
+      }
+      if (path.contains('\n')) {
+        found[path] = await _readAlone(path);
+      } else {
+        batched.add(path);
+      }
+    }
+    if (batched.isEmpty) return found;
+    final answer = await tools.run(
+      'git',
+      const ['cat-file', '--batch'],
+      workingDirectory: root,
+      stdin: utf8.encode(batched.map((path) => '$commit:$path\n').join()),
+    );
+    if (!answer.ok) {
+      throw SourceUnreadable('the commit $commit', answer.stderr.trim());
+    }
+    // In the order asked, each answer is `<name> missing`, or
+    // `<oid> <type> <size>` followed by exactly size bytes and a newline.
+    final out = answer.bytes;
+    var at = 0;
+    for (final path in batched) {
+      final end = out.indexOf(0x0a, at);
+      final header = end < 0
+          ? ''
+          : utf8.decode(out.sublist(at, end), allowMalformed: true);
+      final fields = header.split(' ');
+      final size = int.tryParse(fields.last);
+      if (header.endsWith(' missing')) {
+        found[path] = null;
+        at = end + 1;
+      } else if (fields.length != 3 ||
+          size == null ||
+          end + 1 + size > out.length) {
+        throw SourceUnreadable(path, 'git cat-file answered "$header"');
+      } else {
+        found[path] = (
+          type: fields[1],
+          bytes: Uint8List.sublistView(out, end + 1, end + 1 + size),
+        );
+        at = end + 2 + size;
+      }
+    }
+    return found;
+  }
+
+  Future<GitObject> _readAlone(String path) async {
+    final name = '$commit:$path';
+    final type = await tools.run('git', [
+      'cat-file',
+      '-t',
+      name,
+    ], workingDirectory: root);
+    final content = type.ok
+        ? await tools.run('git', [
+            'cat-file',
+            type.stdout.trim(),
+            name,
+          ], workingDirectory: root)
+        : type;
+    if (!content.ok) throw SourceUnreadable(path, content.stderr.trim());
+    return (type: type.stdout.trim(), bytes: content.bytes);
+  }
+
+  /// The entries of [tree], a tree object read from this commit, by name,
+  /// with their modes as `git ls-tree` writes them.
+  Map<String, String> modesIn(GitObject tree) {
+    // Each entry is `<mode> <name>\0` and the raw object id, as wide as the
+    // commit's: 20 bytes for SHA-1, 32 for SHA-256.
+    final bytes = tree.bytes;
+    final modes = <String, String>{};
+    var at = 0;
+    while (at < bytes.length) {
+      final space = bytes.indexOf(0x20, at);
+      final end = space < 0 ? -1 : bytes.indexOf(0x00, space);
+      if (end < 0) break;
+      modes[utf8.decode(bytes.sublist(space + 1, end), allowMalformed: true)] =
+          ascii.decode(bytes.sublist(at, space)).padLeft(6, '0');
+      at = end + 1 + commit.length ~/ 2;
+    }
+    return modes;
+  }
+}
+
+/// `git ls-tree -r -z` output as entries.
+List<GitTreeEntry> _treeEntries(String listing, String commit) => [
+  for (final record in listing.split('\u0000'))
+    if (record.isNotEmpty) _treeEntry(record, commit),
+];
+
+GitTreeEntry _treeEntry(String record, String commit) {
+  final tab = record.indexOf('\t');
+  final metadata = record.substring(0, tab < 0 ? 0 : tab).split(' ');
+  if (tab < 0 || metadata.length != 3) {
+    throw SourceUnreadable(
+      'the source tree at $commit',
+      'git returned a malformed tree entry',
+    );
+  }
+  return GitTreeEntry(
+    path: record.substring(tab + 1),
+    mode: metadata[0],
+    type: metadata[1],
+  );
 }
 
 /// A directory with no Git identity, read as it is: status, plan and init
