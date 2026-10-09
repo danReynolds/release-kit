@@ -4,6 +4,7 @@ One complete JSON document on stdout, nothing else. It survives every
 non-zero exit, is never truncated, and is written by the same calls that
 print the human output, so the two surfaces cannot drift. Schema version
 rides in `"rk"` and is bumped only when a key changes meaning.
+`rk --version --json` is the exception: it prints `{"version": "<version>"}`.
 
 This is the surface an agent drives a release through. The loop it
 supports, end to end:

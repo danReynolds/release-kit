@@ -229,6 +229,10 @@ void main() {
     expect(run.stdout, 'rk $manifestVersion\n');
     expect(run.stderr, isEmpty);
     expect(Directory('${loose.path}/.rk').existsSync(), isFalse);
+
+    final json = Rk(loose.path)(['--version', '--json']);
+    expect(json.code, 0, reason: json.all);
+    expect(jsonDecode(json.stdout), {'version': manifestVersion});
   });
 
   group('plan is a source-only command', () {

@@ -242,14 +242,15 @@ first claims, signing identities and preparation warnings, and asks once:
 
 ```console
 $ rk release
-Releasing core 0.3.0
-  ...
+Releasing core 0.3.0 and cli 0.1.0
+  example · main@3f2a91c
+
 2 units staged
     core 0.3.0 · pub.dev · example_core
-✓     package archive                              staged
+    ✓ package archive                              staged
     cli 0.1.0 · pub.dev · example_cli
-✓     package archive                              staged
-Release order: core 0.3.0 -> cli 0.1.0
+    ✓ package archive                              staged
+Release order: core 0.3.0 › cli 0.1.0
 
   Release core 0.3.0
     pub.dev                  example_core 0.3.0 · permanent · first claim

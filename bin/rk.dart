@@ -12,6 +12,7 @@
 /// models to the engine, keeping source discovery outside its policy layer.
 library;
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:rk/src/builds/capability.dart';
@@ -252,8 +253,13 @@ Future<void> runRk(
   // This is deliberately self-contained: smoke tests, Homebrew, and a user
   // holding only the compiled artifact must be able to identify its bytes
   // without a repository, release.toml, network, or credential access.
-  if (args.length == 1 && args.single == '--version') {
-    stdout.writeln('rk $rkVersion');
+  if (args.contains('--version') &&
+      args.every((arg) => arg == '--version' || arg == '--json')) {
+    stdout.writeln(
+      args.contains('--json')
+          ? jsonEncode({'version': rkVersion})
+          : 'rk $rkVersion',
+    );
     return;
   }
 
