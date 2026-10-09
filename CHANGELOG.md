@@ -162,6 +162,9 @@ published finishes with 0.1.14.
   | `RK-RES-005`, `RK-RES-015` | `RK-RES-004` |
   | `RK-RES-007` | `RK-RES-006` |
   | `RK-RES-017` | `RK-RES-009`, once for a unit whose release several projects build |
+  | `RK-YAML-001` | `RK-PKG-001` |
+  | `RK-PKG-003` | `RK-RES-002` |
+  | `RK-CHG-002` | `RK-CHG-001` |
 
 ### rk use
 

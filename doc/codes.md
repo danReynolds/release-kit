@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `test/codes_index_test.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-108 codes across 28 families.
+105 codes across 27 families.
 
 
 ## RK-AUTH — Authorization
@@ -44,8 +44,7 @@ fails, and the count below is checked against the rows.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-CHG-001` | "$packageName" has no changelog | `lib/src/engine/changelog.dart` |
-| `RK-CHG-002` | the changelog has no entry for $version | `lib/src/engine/changelog.dart` |
+| `RK-CHG-001` | the changelog has no entry for this version, or there is no changelog | `lib/src/engine/changelog.dart` |
 | `RK-CHG-003` | the release body was not prepared | `lib/src/targets/github_release/module.dart`, `lib/src/targets/github_release/release_notes_stage.dart` |
 | `RK-CHG-004` | the changelog entry for ${project.version} is empty | `lib/src/targets/github_release/release_notes_stage.dart` |
 
@@ -162,9 +161,8 @@ meanings and are not reused.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-PKG-001` | this manifest declares no package name | `lib/src/engine/cargo.dart`, `lib/src/engine/pubspec.dart` |
+| `RK-PKG-001` | the manifest is not one rk can read: YAML it cannot parse, or no package name | `lib/src/engine/cargo.dart`, `lib/src/engine/pubspec.dart`, `lib/src/engine/yaml.dart` |
 | `RK-PKG-002` | — | `lib/src/engine/cargo.dart`, `lib/src/engine/pubspec.dart` |
-| `RK-PKG-003` | a crate declares no literal version in its [package] table | `lib/src/engine/cargo.dart` |
 
 ## RK-PUB — Publishing to pub.dev
 
@@ -199,7 +197,7 @@ RK-STAGE-004, the checks a release once repeated between staging and each act.
 | code | says | declared in |
 |---|---|---|
 | `RK-RES-001` | no package at "${declared.path}" | `lib/src/engine/resolve.dart` |
-| `RK-RES-002` | "${pubspec.name}" declares no version, so there is nothing to release | `lib/src/engine/resolve.dart` |
+| `RK-RES-002` | a manifest declares no version rk can release, such as a workspace root's or a crate's inherited one | `lib/src/engine/cargo.dart`, `lib/src/engine/resolve.dart` |
 | `RK-RES-003` | a package that sets publish_to: none, or names a custom registry, is asked to publish to pub.dev | `lib/src/engine/resolve.dart` |
 | `RK-RES-004` | a binary project's pubspec lacks what its build reads: exactly one executable, and each dart_defines field | `lib/src/engine/resolve.dart` |
 | `RK-RES-006` | a package is declared twice, by path or by name, or projects nest | `lib/src/engine/resolve.dart` |
@@ -265,12 +263,6 @@ that read back signatures rk had just written, are retired and not reused.
 | code | says | declared in |
 |---|---|---|
 | `RK-WORK-001` | the staged workspace has no required target artifact | `lib/src/binary_chain.dart`, `lib/src/targets/github_release/module.dart`, `lib/src/targets/homebrew/formula_stage.dart` |
-
-## RK-YAML — A YAML file rk reads
-
-| code | says | declared in |
-|---|---|---|
-| `RK-YAML-001` | — | `lib/src/engine/yaml.dart` |
 
 ## Executable installations
 

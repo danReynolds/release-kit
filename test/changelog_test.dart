@@ -119,7 +119,7 @@ void main() {
         version: v('0.2.0'),
         diagnostics: diagnostics,
       );
-      expect(diagnostics.found.single.code, 'RK-CHG-002');
+      expect(diagnostics.found.single.code, 'RK-CHG-001');
       expect(diagnostics.found.single.remedy, contains('## 0.2.0'));
     });
   });

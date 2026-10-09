@@ -33,8 +33,7 @@ class Changelog {
         ? 'CHANGELOG.md'
         : '$manifestDirectory/CHANGELOG.md';
 
-    final source = changelog;
-    if (source == null) {
+    if (changelog == null) {
       diagnostics.add(
         'RK-CHG-001',
         '"$packageName" has no changelog',
@@ -46,9 +45,9 @@ class Changelog {
       return;
     }
 
-    if (!mentions(source, version)) {
+    if (!mentions(changelog, version)) {
       diagnostics.add(
-        'RK-CHG-002',
+        'RK-CHG-001',
         'the changelog has no entry for $version',
         source: SourceLocation(path, 1),
         remedy: 'add a heading beginning with $version, as in "## $version"',

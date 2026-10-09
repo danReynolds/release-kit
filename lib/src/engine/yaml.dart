@@ -67,7 +67,7 @@ YamlMap? parseYaml(String source, String path, Diagnostics diagnostics) {
     document = yaml.loadYamlNode(source);
   } on yaml.YamlException catch (error) {
     diagnostics.add(
-      'RK-YAML-001',
+      'RK-PKG-001',
       error.message,
       source: SourceLocation(path, (error.span?.start.line ?? 0) + 1),
     );
@@ -79,7 +79,7 @@ YamlMap? parseYaml(String source, String path, Diagnostics diagnostics) {
   if (root is YamlMap) return root;
   // Read as an empty map, a list would declare nothing where Pub refuses.
   diagnostics.add(
-    'RK-YAML-001',
+    'RK-PKG-001',
     'the document is not a map of keys',
     source: SourceLocation(path, root.line),
     remedy: 'a pubspec and its overrides file are maps of keys',

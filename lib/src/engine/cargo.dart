@@ -53,7 +53,7 @@ Pubspec? readCargoManifest(
   final declared = values['version'];
   if (declared?.text == null) {
     diagnostics.add(
-      'RK-PKG-003',
+      'RK-RES-002',
       '"${name.text}" declares no version rk reads',
       source: SourceLocation(path, declared?.line ?? name.line),
       remedy:
