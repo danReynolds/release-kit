@@ -151,13 +151,6 @@ class ReleaseCommand {
     }
   }
 
-  /// The package a prerequisite step waits for: its coordinate is
-  /// `pub.dev/<package>/<version>`.
-  static String? _prerequisitePackage(Step step) {
-    final parts = step.coordinate?.split('/');
-    return parts == null || parts.length < 3 ? null : parts[1];
-  }
-
   final Map<String, String> Function() _refreshEnvironment;
 
   late final ReleaseStageCoordinator _stages = ReleaseStageCoordinator(
@@ -398,7 +391,7 @@ class ReleaseCommand {
       if (step.kind == StepKind.prerequisite &&
           (read.released ||
               stageOnly ||
-              _releasing.contains(_prerequisitePackage(step)))) {
+              _releasing.contains(step.requires?.package))) {
         return false;
       }
       final state = read.states[step.id]!;

@@ -158,24 +158,16 @@ class Inspector {
     }
   }
 
-  static ({String name, String version})? _prerequisiteCoordinate(Step step) {
-    // The coordinate is carried by the step so nothing here has to know how an
-    // id is spelled: `pub.dev/<package>/<version>`.
-    final parts = step.coordinate?.split('/');
-    if (parts == null || parts.length < 3) return null;
-    return (name: parts[parts.length - 2], version: parts.last);
-  }
-
   /// A package another unit publishes, which must already be live.
   Future<Inspection> _prerequisite(Step step) async {
     if (registry == null) {
       return const Inspection.unknown('the registry reader is not configured');
     }
-    final coordinate = _prerequisiteCoordinate(step);
-    if (coordinate == null) {
+    final requires = step.requires;
+    if (requires == null) {
       return const Inspection.unknown('the prerequisite could not be read');
     }
-    final (:name, :version) = coordinate;
+    final (package: name, :version) = requires;
 
     final RegistryPackage? package;
     try {

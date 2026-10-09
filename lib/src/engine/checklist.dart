@@ -54,6 +54,10 @@ class Checklist {
           kind: StepKind.prerequisite,
           unit: unit.name,
           coordinate: prerequisite.coordinate,
+          requires: (
+            package: prerequisite.package,
+            version: '${prerequisite.version}',
+          ),
           summary:
               '${prerequisite.package} ${prerequisite.version} must be '
               'live on pub.dev',
@@ -374,6 +378,7 @@ class Step {
     this.project,
     this.platform,
     this.coordinate,
+    this.requires,
     this.target,
   }) {
     if (kind.isPublic && target == null) {
@@ -396,6 +401,7 @@ class Step {
     project: project,
     platform: platform,
     coordinate: coordinate,
+    requires: requires,
     target: target,
   );
 
@@ -410,6 +416,9 @@ class Step {
   /// What this step acts on, so an executor never has to take an id apart to
   /// recover it.
   final String? coordinate;
+
+  /// The package and version a prerequisite waits for on pub.dev.
+  final ({String package, String version})? requires;
 
   /// The concrete destination identity. [kind] describes lifecycle mechanics;
   /// several registry providers can therefore share one step kind without

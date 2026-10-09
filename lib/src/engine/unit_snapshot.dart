@@ -264,7 +264,8 @@ final class UnitSnapshot {
       return null;
     }
     for (final project in _resolution.allProjects) {
-      if (step.coordinate == 'pub.dev/${project.name}/${project.version}') {
+      if (step.requires ==
+          (package: project.name, version: '${project.version}')) {
         return project;
       }
     }
