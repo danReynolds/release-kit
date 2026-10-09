@@ -720,13 +720,14 @@ final class Publication {
 
   /// The platforms [run]'s stage built and could not run, from what its
   /// receipt records: a reused stage may have been smoke-tested elsewhere.
+  /// The receipt is the one staging checked or wrote; a run that finishes
+  /// from public inputs built nothing.
   List<({String platform, String reason})> _unprovable(UnitRun run) {
-    final checked = run.read.stage!.check(run.read.release);
-    if (!checked.reusable) return const [];
+    final receipt = run.recovering ? null : run.read.stage!.receipt;
     return [
       for (final work in run.read.release.work)
         if (work.kind == StepKind.build)
-          if (checked.receipt!.producers[work.name]?['smoke'] case {
+          if (receipt?.producers[work.name]?['smoke'] case {
             'status': 'not-executed',
             'reason': final String reason,
           } when reason.isNotEmpty)
