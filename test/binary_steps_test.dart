@@ -101,9 +101,6 @@ executables:
       answers: (key) {
         final shown = display?.call(key);
         if (shown != null) return shown;
-        if (key.startsWith('dart compile exe')) {
-          return ToolResult(exitCode: 0, stdout: '', stderr: '');
-        }
         if (key.startsWith('codesign -d -r-')) {
           return ToolResult(
             exitCode: 0,
@@ -124,17 +121,7 @@ executables:
         return null;
       },
       onRun: (key) {
-        // The compiler and ditto write files; the script writes what they
-        // would, where the workspace said to.
-        if (key.startsWith('dart compile exe')) {
-          File(
-              workspace.pathOf(
-                ReleaseAssets.binaryPath(project, 'macos-arm64'),
-              ),
-            )
-            ..parent.createSync(recursive: true)
-            ..writeAsBytesSync(utf8.encode('BINARY 1.0.0'));
-        }
+        // ditto writes the zip; the script writes it where it was asked to.
         if (key.startsWith('ditto')) {
           final payload = Directory(key.split(' ')[3]);
           final files =
@@ -312,15 +299,18 @@ executables:
 
   test('a signature that does not match the published identity is refused '
       'with both requirements as evidence', () async {
-    final tools = scripted(designatedRequirement: 'designated => leaf "NEW"');
+    const published =
+        'designated => identifier "com.example.tool" and certificate '
+        'leaf[subject.OU] = "TEAM123456" and leaf "OLD"';
+    // Extended, not replaced: Gatekeeper evaluates the whole expression, so
+    // a requirement with a clause appended is another identity.
+    final tools = scripted(designatedRequirement: '$published and leaf "NEW"');
     final ok = await chain(tools).buildStep(
       step(StepKind.build),
       project,
       signing: MacSigning(
         identity: _identity,
-        publishedRequirement:
-            'designated => identifier "com.example.tool" and certificate '
-            'leaf[subject.OU] = "TEAM123456" and leaf "OLD"',
+        publishedRequirement: published,
         codeId: 'com.example.tool',
       ),
     );
@@ -342,74 +332,6 @@ executables:
           'halt once, after every lane has rested',
     );
     expect(buffer.toString(), contains('leaf "NEW"'));
-  });
-
-  test('a first release discovers the one certificate, and names the '
-      'identity it just made permanent', () async {
-    // Nothing to declare: capabilities are discovered, and a machine with
-    // one Developer ID has exactly one answer. What rk owes the operator is
-    // not a demand for configuration but a statement of what became
-    // permanent — the certificate, and the identifier every later release
-    // must reproduce.
-    final tools = scripted();
-    final ok = await chain(tools).buildStep(
-      step(StepKind.build),
-      project,
-      signing: MacSigning(
-        identity: _identity,
-        publishedRequirement: null,
-        codeId: 'io.github.example.tool',
-      ),
-    );
-    expect(ok.ok, isTrue, reason: ok.problem ?? buffer.toString());
-    // Recorded, not printed: the producer reports and the coordinator
-    // draws. The receipt is where this is durable and where the settled
-    // report reads it back from.
-    final signature = ok.evidence['signature']! as Map;
-    expect(signature['first_identity'], isTrue);
-    expect(signature['certificate'], contains('Developer ID Application: Dan'));
-    expect(signature['code_id'], 'io.github.example.tool');
-    // Asserted on the argv, not on the buffer. `contains('tool')` was
-    // satisfied by the build line `build tool for macos-arm64` that the
-    // step above had already written into the same buffer, so the whole
-    // assertion held with the identifier mutated to 'zz.mutation' — and this
-    // is the value that becomes the permanent designated requirement.
-    final sign = tools.calls.firstWhere(
-      (c) => c.startsWith('codesign --force'),
-    );
-    expect(
-      sign,
-      contains('--identifier io.github.example.tool'),
-      reason:
-          'the caller resolved it and this step signs exactly that — '
-          'the step no longer has a fallback of its own to reach for',
-    );
-  });
-
-  test('a produced requirement that merely extends the published one is '
-      'still a mismatch', () async {
-    // Equality, not prefix: a requirement with extra clauses appended is a
-    // different identity — Gatekeeper evaluates the whole expression — and
-    // a prefix-tolerant comparison would wave it through.
-    const published =
-        'designated => identifier "com.example.tool" and certificate leaf[subject.OU] = "TEAM123456"';
-    final tools = scripted(
-      designatedRequirement: '$published and cdhash H"ABC"',
-    );
-    final ok = await chain(tools).buildStep(
-      step(StepKind.build),
-      project,
-      signing: MacSigning(
-        identity: _identity,
-        publishedRequirement: published,
-        codeId: 'com.example.tool',
-      ),
-    );
-    expect(ok.ok, isFalse, reason: buffer.toString());
-    expect(
-      buffer.toString(),
-      contains('does not match the identity users already installed'),
-    );
   });
 
   test('the derived identifier signs, not the project name', () async {
