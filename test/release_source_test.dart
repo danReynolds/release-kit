@@ -297,6 +297,32 @@ publish = ["pub.dev"]
     },
   );
 
+  test('a project path is a POSIX path: a colon is part of a name', () async {
+    _write(root, 'release.toml', '''
+schema = 2
+
+[release.tool]
+path = "c:tool"
+publish = ["pub.dev"]
+''');
+    _write(root, 'c:tool/pubspec.yaml', 'name: tool\nversion: 1.0.0\n');
+    Future<void> expectResolved(String where) async {
+      final read = await (await ReleaseSource.open(root.path)).readConfig();
+      expect(
+        read,
+        isA<ConfigResolved>(),
+        reason: '$where: ${read is ConfigProblems ? read.problems : ''}',
+      );
+    }
+
+    await expectResolved('outside Git');
+    commitAll();
+    await expectResolved('at the commit');
+    _write(root, 'README.md', 'uncommitted\n');
+    await expectResolved('in the working tree');
+    expect(relativeSegments(r'a\b:c'), [r'a\b:c'], reason: 'so is a backslash');
+  });
+
   test('a repository without release.toml is not onboarded', () async {
     File('${root.path}/release.toml').deleteSync();
     commitAll();

@@ -569,6 +569,13 @@ assets = ["libparser.so"]
         refusal(unit('build = ["b"]\nassets = []\n')),
         'RK-CONF-005 8 assets: is empty',
       );
+      expect(
+        accepted(
+          unit('build = ["b"]\nassets = ["a:b.bin"]\n'),
+        ).units.single.projects.single.assets,
+        ['a:b.bin'],
+        reason: 'on POSIX, where rk runs, a colon is part of a file name',
+      );
     });
 
     test('publishes each asset under a name of its own', () {

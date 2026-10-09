@@ -420,12 +420,11 @@ String parentOf(String path) {
 }
 
 /// The segments of [path] when it names a place inside a directory: relative,
-/// with no empty, `.` or `..` segment, backslash, NUL or drive letter.
+/// with no empty, `.` or `..` segment, or NUL. rk runs on POSIX, where a
+/// backslash or a colon is part of a name.
 List<String>? relativeSegments(String path) {
   final parts = path.split('/');
-  if (path.contains('\\') ||
-      path.contains('\u0000') ||
-      RegExp(r'^[A-Za-z]:').hasMatch(path) ||
+  if (path.contains('\u0000') ||
       parts.any((part) => part.isEmpty || part == '.' || part == '..')) {
     return null;
   }
