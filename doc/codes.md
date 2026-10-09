@@ -13,7 +13,7 @@ Hand-maintained, and checked both ways by `test/codes_index_test.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-150 codes across 28 families.
+114 codes across 28 families.
 
 
 ## RK-AUTH — Authorization
@@ -74,46 +74,10 @@ fails, and the count below is checked against the rows.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-CONF-001` | release.toml must declare its schema version | `lib/src/engine/config.dart` |
-| `RK-CONF-002` | this rk understands schema ${ReleaseConfig.supportedSchema},  and this file declares $va… | `lib/src/engine/config.dart` |
-| `RK-CONF-003` | unknown setting "$key" | `lib/src/engine/config.dart` |
-| `RK-CONF-004` | release.toml declares no release units | `lib/src/engine/config.dart` |
-| `RK-CONF-005` | "release" must hold units, as in [release.core] | `lib/src/engine/config.dart` |
-| `RK-CONF-006` | unit name "$name" is not usable | `lib/src/engine/config.dart` |
-| `RK-CONF-007` | unit "$name" must be a table, as in [release.$name] | `lib/src/engine/config.dart` |
-| `RK-CONF-008` | unknown setting "$key" in unit "$name" | `lib/src/engine/config.dart` |
-| `RK-CONF-009` | unit "$name" declares a project inline and also as rows | `lib/src/engine/config.dart` |
-| `RK-CONF-010` | unit "$name" has a malformed project list | `lib/src/engine/config.dart` |
-| `RK-CONF-011` | unit "$name" releases nothing | `lib/src/engine/config.dart` |
-| `RK-CONF-012` | unit "$name" releases several projects, so its tag cannot be derived | `lib/src/engine/config.dart` |
-| `RK-CONF-013` | the tag pattern for "$unit" must be text | `lib/src/engine/config.dart` |
-| `RK-CONF-014` | the tag pattern for "$unit" must contain {version} exactly once | `lib/src/engine/config.dart` |
-| `RK-CONF-015` | the tag pattern for "$unit" uses a placeholder rk does not have | `lib/src/engine/config.dart` |
-| `RK-CONF-016` | — | `lib/src/engine/config.dart` |
-| `RK-CONF-017` | a project path in "$unit" must be text | `lib/src/engine/config.dart` |
-| `RK-CONF-018` | the project path "$value" leaves the repository | `lib/src/engine/config.dart` |
-| `RK-CONF-019` | unit "$name" selects no release output | `lib/src/engine/config.dart` |
-| `RK-CONF-020` | publish must be a list of channels | `lib/src/engine/config.dart` |
-| `RK-CONF-022` | unknown channel "$channel" | `lib/src/engine/config.dart` |
-| `RK-CONF-023` | "$channel" is listed twice | `lib/src/engine/config.dart` |
-| `RK-CONF-024` | homebrew needs github-release, which hosts the archives it points at | `lib/src/engine/config.dart` |
-| `RK-CONF-025` | a project in "$unit" ships binaries but names no platforms | `lib/src/engine/config.dart` |
-| `RK-CONF-027` | binary_platforms must be a non-empty list | `lib/src/engine/config.dart` |
-| `RK-CONF-028` | unknown platform "$platform" | `lib/src/engine/config.dart` |
-| `RK-CONF-029` | "$platform" is listed twice | `lib/src/engine/config.dart` |
-| `RK-CONF-032` | $key must be text | `lib/src/engine/config.dart` |
-| `RK-CONF-033` | git will not accept the tag pattern for "$unit": $issue | `lib/src/engine/config.dart` |
-| `RK-CONF-034` | release.toml is there and rk could not read it | `lib/src/commands/init.dart`, `lib/src/engine/release_source.dart` |
-| `RK-CONF-036` | unit "$name" declares homebrew_tap but does not publish to  homebrew | `lib/src/engine/config.dart` |
-| `RK-CONF-037` | $key is empty | `lib/src/engine/config.dart` |
-| `RK-CONF-038` | a target is declared at the wrong unit or project scope | `lib/src/engine/config.dart` |
-| `RK-CONF-039` | a unit declares a tag without selecting git-tag | `lib/src/engine/config.dart` |
-| `RK-CONF-040` | homebrew_tap is not a GitHub owner/repository coordinate | `lib/src/engine/config.dart` |
-| `RK-CONF-041` | dart_defines_from_pubspec must select unique dotted metadata fields on a binary project | `lib/src/engine/config.dart` |
-| `RK-CONF-042` | build must list a command and its arguments, with no placeholder but {out} | `lib/src/engine/config.dart` |
-| `RK-CONF-043` | assets must name distinct files inside the build's output | `lib/src/engine/config.dart` |
-| `RK-CONF-044` | a project declares build and assets together, and not with binary_platforms | `lib/src/engine/config.dart` |
-| `RK-CONF-045` | a unit that builds release assets must publish a GitHub release | `lib/src/engine/config.dart` |
+| `RK-CONF-002` | the schema line is missing, or names a schema this rk cannot read | `lib/src/engine/config.dart` |
+| `RK-CONF-003` | a setting or a target is in a table that does not hold it | `lib/src/engine/config.dart` |
+| `RK-CONF-005` | a value is missing, the wrong shape, or not one rk accepts | `lib/src/engine/config.dart` |
+| `RK-CONF-009` | settings that require or exclude one another | `lib/src/engine/config.dart` |
 
 ## RK-DART — Dart-specific facts
 
@@ -275,7 +239,7 @@ that read back signatures rk had just written, are retired and not reused.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-SRC-003` | the source could not be read | `lib/src/engine/release_source.dart` |
+| `RK-SRC-003` | release.toml or another release input is there and could not be read | `lib/src/engine/release_source.dart` |
 | `RK-SRC-004` | there is no commit to stage or release | `lib/src/engine/git.dart` |
 
 ## RK-STAGE — The private release stage

@@ -243,7 +243,7 @@ void main() {
       final report = Report('release')
         ..problem(
           const Diagnostic(
-            code: 'RK-CONF-019',
+            code: 'RK-CONF-009',
             message: 'a project does not say where to publish',
           ),
         );

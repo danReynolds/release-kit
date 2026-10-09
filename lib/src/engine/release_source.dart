@@ -98,7 +98,7 @@ final class ReleaseSource {
       if (text == null) {
         return config.exists('release.toml')
             ? ConfigProblems([
-                wrongReleaseConfig('release.toml must be a regular file'),
+                _wrongReleaseConfig('release.toml must be a regular file'),
               ])
             : const ConfigMissing();
       }
@@ -123,7 +123,7 @@ final class ReleaseSource {
   /// What a release input that is there and could not be read is.
   static Diagnostic unreadable(SourceUnreadable error) =>
       error.path == 'release.toml'
-      ? wrongReleaseConfig(error.reason)
+      ? _wrongReleaseConfig(error.reason)
       : Diagnostic(
           code: 'RK-SRC-003',
           message: 'the source could not be read',
@@ -133,8 +133,8 @@ final class ReleaseSource {
               'repository, then run rk again.',
         );
 
-  static Diagnostic wrongReleaseConfig(String reason) => Diagnostic(
-    code: 'RK-CONF-034',
+  static Diagnostic _wrongReleaseConfig(String reason) => Diagnostic(
+    code: 'RK-SRC-003',
     message: 'release.toml is there and rk could not read it',
     source: const SourceLocation('release.toml', 1),
     remedy: reason,

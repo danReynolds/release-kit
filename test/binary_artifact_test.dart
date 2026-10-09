@@ -203,7 +203,7 @@ $metadata
         );
         expect(
           diagnostics.found.map((item) => item.code),
-          contains('RK-CONF-041'),
+          contains('RK-CONF-005'),
         );
       }
     });

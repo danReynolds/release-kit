@@ -136,6 +136,28 @@ published finishes with 0.1.14.
 - `rk clean` removes what it showed, and leaves alone an entry that changed
   while you answered.
 
+### Configuration and diagnostics
+
+- A clean commit's release inputs are read in two `git cat-file --batch`
+  calls: release.toml with the root tree, then each project's directory,
+  pubspec.yaml, Cargo.toml and CHANGELOG.md. `rk plan` on Fleury's four
+  packages reads them in about 0.03s instead of 0.1s.
+- `rk status` and `rk release` check the changelog of the commit they
+  release, not the working tree's. A changelog committed as a link to
+  another file in the commit is read through it, as a stage reads it.
+- A diagnostic code names the kind of mistake; the message names the
+  setting, and the location its line. Codes that named one setting each are
+  merged:
+
+  | was | now |
+  |---|---|
+  | `RK-CONF-001` | `RK-CONF-002` |
+  | `RK-CONF-008`, `RK-CONF-016`, `RK-CONF-038` | `RK-CONF-003` |
+  | `RK-CONF-004`, `006`, `007`, `010`, `013`, `014`, `015`, `017`, `018`, `020`, `022`, `023`, `027`, `028`, `029`, `032`, `033`, `037`, `040`, `042`, `043`; `RK-CONF-041` for a malformed list | `RK-CONF-005` |
+  | `RK-CONF-012`, `019`, `024`, `025`, `036`, `039`, `044`, `045`; `RK-CONF-041` without binary_platforms | `RK-CONF-009` |
+  | `RK-CONF-011` | removed: it only followed another refusal |
+  | `RK-CONF-034` | `RK-SRC-003` |
+
 ### rk use
 
 - `rk use` opens and lists in about 0.1s, down from about 1s with a Homebrew

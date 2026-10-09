@@ -428,7 +428,7 @@ publish = ["pub.dev"]
       manifestLink.commit();
 
       for (final (repo, expected) in [
-        (configLink, 'RK-CONF-034'),
+        (configLink, 'RK-SRC-003'),
         (manifestLink, 'RK-SRC-003'),
       ]) {
         final run = repo(['plan', '--json']);
@@ -547,7 +547,7 @@ publish = ["pub.dev"]
         final run = repo(['plan', '--json']);
 
         expect(run.code, 1, reason: '${repo.root}: ${run.all}');
-        expect(run.problems.map((problem) => problem['code']), ['RK-CONF-034']);
+        expect(run.problems.map((problem) => problem['code']), ['RK-SRC-003']);
         expect(run.json, isNot(contains('plan')));
       }
     });

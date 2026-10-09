@@ -470,7 +470,7 @@ void main() {
 
   group('problems', () {
     final diagnostic = Diagnostic(
-      code: 'RK-CONF-019',
+      code: 'RK-CONF-009',
       message: 'a project in "core" does not say where to publish',
       source: SourceLocation('release.toml', 4),
       remedy: 'add publish = ["git-tag", "pub.dev"]',
@@ -487,9 +487,9 @@ void main() {
     test('hide the code from prose and preserve it in JSON', () {
       final (out, captured) = make();
       out.problem(diagnostic);
-      expect(captured.text, isNot(contains('RK-CONF-019')));
+      expect(captured.text, isNot(contains('RK-CONF-009')));
       final json = jsonDecode(out.report.encode(exit: 1)) as Map;
-      expect(((json['problems'] as List).single as Map)['code'], 'RK-CONF-019');
+      expect(((json['problems'] as List).single as Map)['code'], 'RK-CONF-009');
     });
 
     test('are reported in one pass', () {
