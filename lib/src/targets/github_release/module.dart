@@ -138,7 +138,7 @@ final class GithubReleaseTargetModule extends TargetModule {
       return TargetActOutcome(
         ok: false,
         diagnostic: Diagnostic(
-          code: 'RK-GIT-002',
+          code: 'RK-GIT-003',
           message:
               'github-release needs an origin remote, and this '
               'repository has none',

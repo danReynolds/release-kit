@@ -121,7 +121,7 @@ void main() {
     () {
       final unknown = rk(['target', 'npm', '--json']);
       expect(unknown.code, 2, reason: unknown.all);
-      expect(unknown.problems.single['code'], 'RK-CLI-009');
+      expect(unknown.problems.single['code'], 'RK-CLI-003');
       expect(unknown.problems.single['message'], contains('"npm"'));
       expect(unknown.problems.single['remedy'], contains('rk target list'));
 

@@ -121,7 +121,7 @@ void main() {
 
       final unknown = loose(['help', 'verify', '--json']);
       expect(unknown.code, 2, reason: unknown.all);
-      expect(unknown.problems.single['code'], 'RK-CLI-008');
+      expect(unknown.problems.single['code'], 'RK-CLI-003');
     });
 
     test('the index leads with the release loop, and says each thing once', () {
@@ -152,12 +152,12 @@ void main() {
       // file in the repository would be uncommitted, and refuse the release.
       final flag = repo(['stage', '--timings=run.json', '--json']);
       expect(flag.code, 2, reason: flag.all);
-      expect(flag.problems.map((p) => p['code']), ['RK-CLI-001']);
+      expect(flag.problems.map((p) => p['code']), ['RK-CLI-005']);
 
       // A unit name is scoped through a command, never read as one.
       final command = repo(['lib', '--json']);
       expect(command.code, 2, reason: command.all);
-      expect(command.problems.map((p) => p['code']), ['RK-CLI-008']);
+      expect(command.problems.map((p) => p['code']), ['RK-CLI-003']);
       expect(command.all, contains('rk status [unit]'));
       expect(Directory('${repo.root}/.rk').existsSync(), isFalse);
     });
@@ -700,13 +700,13 @@ publish = ["git-tag"]
       );
       expect(
         status.problems.map((problem) => problem['code']),
-        contains('RK-SRC-004'),
+        contains('RK-GIT-001'),
       );
 
       for (final command in ['stage', 'release']) {
         final run = Rk(loose.path)([command, '--json']);
         expect(run.code, 1, reason: '$command: ${run.all}');
-        expect(run.problems.map((problem) => problem['code']), ['RK-SRC-004']);
+        expect(run.problems.map((problem) => problem['code']), ['RK-GIT-001']);
         expect(run.all, contains('git init'));
       }
       expect(Directory('${loose.path}/.rk').existsSync(), isFalse);

@@ -294,7 +294,7 @@ Future<void> runRk(
   if (!_verbs.contains(command)) {
     output.problem(
       Diagnostic(
-        code: 'RK-CLI-008',
+        code: 'RK-CLI-003',
         message: 'rk has no command named "$command"',
         remedy: _commands,
       ),
@@ -313,7 +313,7 @@ Future<void> runRk(
     // asked for in JSON is not answered in prose it cannot read.
     output.problem(
       Diagnostic(
-        code: 'RK-CLI-001',
+        code: 'RK-CLI-005',
         message: 'rk does not have ${unknown.join(', ')}',
         remedy: _takes(command),
       ),
@@ -504,7 +504,7 @@ Future<void> _help(
   if (usage == null) {
     return refuse(
       Diagnostic(
-        code: 'RK-CLI-008',
+        code: 'RK-CLI-003',
         message: 'rk has no command named "$named"',
         remedy: _commands,
       ),

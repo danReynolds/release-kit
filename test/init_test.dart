@@ -153,7 +153,7 @@ void main() {
     expect(code, ExitCodes.refused);
     expect(written, isEmpty);
     expect(ignored, 0);
-    expect(problemCodes(output.report, exit: code), contains('RK-INIT-005'));
+    expect(problemCodes(output.report, exit: code), contains('RK-INIT-004'));
   });
 
   test(

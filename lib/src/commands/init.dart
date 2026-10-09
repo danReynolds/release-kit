@@ -229,7 +229,7 @@ class InitCommand {
         } on SourceUnreadable catch (error) {
           output.problem(
             Diagnostic(
-              code: 'RK-INIT-005',
+              code: 'RK-INIT-004',
               message: '.gitignore changed or became unreadable during init',
               remedy:
                   '${error.reason}\nnothing was written; review it and '
@@ -241,7 +241,7 @@ class InitCommand {
         if (current != gitignore) {
           output.problem(
             const Diagnostic(
-              code: 'RK-INIT-005',
+              code: 'RK-INIT-004',
               message: '.gitignore changed while init was being reviewed',
               remedy: 'nothing was written; review it and run rk init again',
             ),

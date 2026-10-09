@@ -341,7 +341,7 @@ void main() {
       );
 
       expect(run.code, ExitCodes.refused, reason: run.text);
-      expect(run.problemCodes, ['RK-SRC-004']);
+      expect(run.problemCodes, ['RK-GIT-001']);
       expect(run.text, contains('git init'));
       expect(run.publicMutations, isEmpty);
       expect(

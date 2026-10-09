@@ -13,8 +13,8 @@ published finishes with 0.1.14.
 ### Releasing
 
 - A release is of a commit. `rk stage` and `rk release` refuse uncommitted
-  changes for every unit (`RK-GIT-001`, "commit first") and a directory
-  outside Git (`RK-SRC-004`); `RK-SRC-001` and `RK-SRC-002` are gone.
+  changes for every unit and a directory outside Git (`RK-GIT-001`,
+  "commit first"); `RK-SRC-001` and `RK-SRC-002` are gone.
   `rk stage` no longer needs HEAD on origin; only the tag `rk release` pushes
   does.
 - A release reads public state once and asks one question for every unit's
@@ -144,10 +144,14 @@ published finishes with 0.1.14.
   packages reads them in about 0.03s instead of 0.1s.
 - `rk status` and `rk release` check the changelog of the commit they
   release, not the working tree's. A changelog committed as a link to
-  another file in the commit is read through it, as a stage reads it.
+  another file in the commit is read through it, as a stage reads it; one
+  that cannot be read is refused up front (`RK-SRC-003`), as an unreadable
+  pubspec is. `rk use` does not read changelogs.
+- A table header inside an array of tables, such as
+  `[release.core.project.x]`, is a TOML error (`RK-TOML-001`).
 - A diagnostic code names the kind of mistake; the message names the
-  setting, and the location its line. Codes that named one setting each are
-  merged:
+  setting, and the location its line. Codes that repeat another are merged,
+  and doc/codes.md lists 96 codes, down from 150:
 
   | was | now |
   |---|---|
@@ -165,6 +169,13 @@ published finishes with 0.1.14.
   | `RK-YAML-001` | `RK-PKG-001` |
   | `RK-PKG-003` | `RK-RES-002` |
   | `RK-CHG-002` | `RK-CHG-001` |
+  | `RK-CLI-001` | `RK-CLI-005` |
+  | `RK-CLI-008`, `RK-CLI-009` | `RK-CLI-003` |
+  | `RK-CLEAN-001`, `RK-CLEAN-002` | `RK-STAGE-006` |
+  | `RK-CLEAN-004` | `RK-AUTH-001` |
+  | `RK-GIT-002` | `RK-GIT-003` |
+  | `RK-SRC-004` | `RK-GIT-001` |
+  | `RK-INIT-005` | `RK-INIT-004` |
 
 ### rk use
 

@@ -32,7 +32,7 @@ Example: rk target pub.dev
     if (choice == null) {
       output.problem(
         Diagnostic(
-          code: 'RK-CLI-009',
+          code: 'RK-CLI-003',
           message: 'rk does not support a release choice named "$name"',
           remedy:
               'Supported: ${ReleaseChoice.values.map((item) => item.id).join(', ')}\n'

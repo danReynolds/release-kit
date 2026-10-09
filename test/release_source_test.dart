@@ -194,7 +194,7 @@ publish = ["pub.dev"]
 
       expect(source.inRepository, isFalse);
       expect(read.resolution.units.map((unit) => unit.name), ['tool']);
-      expect(source.git.stagingProblem()?.code, 'RK-SRC-004');
+      expect(source.git.stagingProblem()?.code, 'RK-GIT-001');
       expect(source.git.unpushedProblem(), isNull);
     },
   );

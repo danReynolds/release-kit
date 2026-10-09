@@ -13,14 +13,14 @@ Hand-maintained, and checked both ways by `test/codes_index_test.dart`: a
 declared code missing from this table fails, a row here that nothing declares
 fails, and the count below is checked against the rows.
 
-105 codes across 27 families.
+96 codes across 27 families.
 
 
 ## RK-AUTH — Authorization
 
 | code | says | declared in |
 |---|---|---|
-| `RK-AUTH-001` | nobody is here to authorize this release | `lib/src/commands/release_publication_coordinator.dart` |
+| `RK-AUTH-001` | nobody is here to authorize this release or cleanup | `lib/src/commands/clean.dart`, `lib/src/commands/release_publication_coordinator.dart` |
 | `RK-AUTH-002` | the release was not authorized | `lib/src/commands/release_publication_coordinator.dart` |
 
 ## RK-BREW — The Homebrew tap
@@ -48,26 +48,28 @@ fails, and the count below is checked against the rows.
 | `RK-CHG-003` | the release body was not prepared | `lib/src/targets/github_release/module.dart`, `lib/src/targets/github_release/release_notes_stage.dart` |
 | `RK-CHG-004` | the changelog entry for ${project.version} is empty | `lib/src/targets/github_release/release_notes_stage.dart` |
 
+RK-CHG-002 (no entry for the version) is now RK-CHG-001, and is not reused.
+
 ## RK-CLEAN — Local staged release work
 
 | code | says | declared in |
 |---|---|---|
-| `RK-CLEAN-001` | the local stage path is not safe to clean | `lib/src/commands/clean.dart` |
-| `RK-CLEAN-002` | another rk command is using staged work | `lib/src/commands/clean.dart` |
 | `RK-CLEAN-003` | staged work changed or could not be completely removed | `lib/src/commands/clean.dart` |
-| `RK-CLEAN-004` | nobody is here to authorize cleanup | `lib/src/commands/clean.dart` |
 | `RK-CLEAN-005` | partially completed releases may need the staged bytes | `lib/src/commands/clean.dart` |
+
+RK-CLEAN-001 and RK-CLEAN-002 are now RK-STAGE-006, and RK-CLEAN-004 is
+RK-AUTH-001; none is reused.
 
 ## RK-CLI — How rk was invoked
 
 | code | says | declared in |
 |---|---|---|
-| `RK-CLI-001` | rk does not have ${unknown.join( | `bin/rk.dart` |
-| `RK-CLI-003` | no unit named "$only" | `lib/src/commands/plan.dart`, `lib/src/commands/release.dart`, `lib/src/commands/status.dart` |
-| `RK-CLI-005` | rk $command does not have ${inapplicable.join( | `bin/installations.dart`, `bin/rk.dart` |
+| `RK-CLI-003` | no unit, command or release choice has that name; the names it could be are listed | `bin/rk.dart`, `lib/src/commands/plan.dart`, `lib/src/commands/release.dart`, `lib/src/commands/status.dart`, `lib/src/commands/target.dart` |
+| `RK-CLI-005` | a flag rk, or this command, does not take | `bin/installations.dart`, `bin/rk.dart` |
 | `RK-CLI-007` | — | `bin/rk.dart` |
-| `RK-CLI-008` | rk has no command named "$command" | `bin/rk.dart` |
-| `RK-CLI-009` | rk does not support a release choice named "$name" | `lib/src/commands/target.dart` |
+
+RK-CLI-001 is now RK-CLI-005, and RK-CLI-008 and RK-CLI-009 are RK-CLI-003;
+none is reused.
 
 ## RK-CONF — release.toml, structurally
 
@@ -77,6 +79,9 @@ fails, and the count below is checked against the rows.
 | `RK-CONF-003` | a setting or a target is in a table that does not hold it | `lib/src/engine/config.dart` |
 | `RK-CONF-005` | a value is missing, the wrong shape, or not one rk accepts | `lib/src/engine/config.dart` |
 | `RK-CONF-009` | settings that require or exclude one another | `lib/src/engine/config.dart` |
+
+The other RK-CONF codes, up to RK-CONF-045, each named one setting; they
+are merged into these four, as the changelog lists, and are not reused.
 
 ## RK-DART — Dart-specific facts
 
@@ -98,15 +103,16 @@ stages the package) is retired and not reused.
 
 | code | says | declared in |
 |---|---|---|
-| `RK-GIT-001` | — | `lib/src/engine/git.dart` |
-| `RK-GIT-002` | a publishing target needs an origin remote, and this repository has none | `lib/src/targets/github_release/module.dart`, `lib/src/targets/homebrew/formula_stage.dart`, `lib/src/targets/homebrew/module.dart` |
-| `RK-GIT-003` | this repository has no remote | `lib/src/engine/git.dart` |
+| `RK-GIT-001` | there is no commit to release: uncommitted paths, or no commit at all | `lib/src/engine/git.dart` |
+| `RK-GIT-003` | origin cannot fetch this commit: no remote, no upstream, or HEAD is ahead of it | `lib/src/engine/git.dart`, `lib/src/targets/github_release/module.dart`, `lib/src/targets/homebrew/formula_stage.dart`, `lib/src/targets/homebrew/module.dart` |
 | `RK-GIT-004` | ${unit.version} is already published, and the tag  ${unit.tag} does not exist | `lib/src/engine/inspect.dart` |
 | `RK-GIT-005` | the tag ${unit.tag} points at ${_short(target)}, and this  release would publish from ${… | `lib/src/commands/status.dart`, `lib/src/engine/inspect.dart` |
 | `RK-GIT-007` | the tag exists, and rk could not read which commit it names | `lib/src/engine/inspect.dart` |
 | `RK-GIT-008` | the worktree state could not be read | `lib/src/engine/git.dart` |
 | `RK-GIT-009` | $tag was released from ${_short(releasedFrom)}, and its release is unfinished | `lib/src/engine/inspect.dart` |
 | `RK-GIT-006` | the repository could not be listed | `lib/src/commands/init.dart` |
+
+RK-GIT-002 (no origin remote) is now RK-GIT-003, and is not reused.
 
 ## RK-GITHUB — GitHub Releases
 
@@ -126,9 +132,11 @@ stages the package) is retired and not reused.
 |---|---|---|
 | `RK-INIT-001` | the config rk would propose is one rk itself refuses | `lib/src/commands/init.dart` |
 | `RK-INIT-003` | nothing here can be released | `lib/src/commands/init.dart` |
-| `RK-INIT-004` | release.toml appeared before rk could write it | `lib/src/commands/init.dart` |
-| `RK-INIT-005` | .gitignore changed while init was being reviewed | `lib/src/commands/init.dart` |
+| `RK-INIT-004` | a file changed while init was reviewing; nothing was written | `lib/src/commands/init.dart` |
 | `RK-INIT-006` | release.toml was written but .gitignore was not updated | `lib/src/commands/init.dart` |
+
+RK-INIT-005 (.gitignore changed during review) is now RK-INIT-004, and is
+not reused.
 
 ## RK-INT — rk itself
 
@@ -163,6 +171,9 @@ meanings and are not reused.
 |---|---|---|
 | `RK-PKG-001` | the manifest is not one rk can read: YAML it cannot parse, or no package name | `lib/src/engine/cargo.dart`, `lib/src/engine/pubspec.dart`, `lib/src/engine/yaml.dart` |
 | `RK-PKG-002` | — | `lib/src/engine/cargo.dart`, `lib/src/engine/pubspec.dart` |
+
+RK-PKG-003 (a crate with no literal version) is now RK-RES-002, and
+RK-YAML-001 (YAML rk cannot parse) is RK-PKG-001; neither is reused.
 
 ## RK-PUB — Publishing to pub.dev
 
@@ -206,6 +217,9 @@ RK-STAGE-004, the checks a release once repeated between staging and each act.
 | `RK-RES-010` | the units "${first.name}" and "${unit.name}" would share the tag  "${unit.tagPattern}" | `lib/src/engine/resolve.dart` |
 | `RK-RES-016` | a Cargo crate is released only through its declared build | `lib/src/engine/resolve.dart` |
 
+RK-RES-005, RK-RES-007, RK-RES-014, RK-RES-015 and RK-RES-017 are merged
+into the codes above, and RK-RES-012 is RK-CONF-009; none is reused.
+
 ## RK-SIGN — Signing identity
 
 | code | says | declared in |
@@ -232,7 +246,8 @@ that read back signatures rk had just written, are retired and not reused.
 | code | says | declared in |
 |---|---|---|
 | `RK-SRC-003` | release.toml or another release input is there and could not be read | `lib/src/engine/release_source.dart` |
-| `RK-SRC-004` | there is no commit to stage or release | `lib/src/engine/git.dart` |
+
+RK-SRC-004 (no commit to release) is now RK-GIT-001, and is not reused.
 
 ## RK-STAGE — The private release stage
 
@@ -242,7 +257,7 @@ that read back signatures rk had just written, are retired and not reused.
 | `RK-STAGE-002` | the reviewed release stage no longer validates, or changed before an act | `lib/src/commands/release_publication_coordinator.dart`, `lib/src/commands/release_stage_coordinator.dart`, `lib/src/commands/status.dart` |
 | `RK-STAGE-003` | committed release bytes could not be staged or did not remain valid | `lib/src/commands/release.dart`, `lib/src/commands/release_stage_coordinator.dart` |
 | `RK-STAGE-005` | a partial release of built assets lost the exact stage it needs, or the public inputs that let it finish without one changed | `lib/src/commands/release.dart`, `lib/src/commands/release_publication_coordinator.dart`, `lib/src/commands/status.dart` |
-| `RK-STAGE-006` | staged work is locked or its fixed path is unsafe | `bin/rk.dart` |
+| `RK-STAGE-006` | staged work is locked or its fixed path is unsafe | `bin/rk.dart`, `lib/src/commands/clean.dart` |
 
 ## RK-TAG — The tag
 

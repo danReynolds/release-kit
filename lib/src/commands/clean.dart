@@ -115,7 +115,7 @@ Example: rk clean
           output.blank();
           output.problem(
             const Diagnostic(
-              code: 'RK-CLEAN-004',
+              code: 'RK-AUTH-001',
               message: 'nobody is here to authorize cleanup',
               remedy: 'review the staged work above, then run rk clean --yes',
             ),
@@ -171,7 +171,7 @@ Example: rk clean
     } on StageStoreBusy {
       output.problem(
         const Diagnostic(
-          code: 'RK-CLEAN-002',
+          code: 'RK-STAGE-006',
           message: 'another rk command is using staged work',
           remedy: 'let that command finish, then run rk clean again',
         ),
@@ -180,7 +180,7 @@ Example: rk clean
     } on StageStoreUnsafe catch (error) {
       output.problem(
         Diagnostic(
-          code: 'RK-CLEAN-001',
+          code: 'RK-STAGE-006',
           message: 'the local stage path is not safe to clean',
           remedy: '$error\nRK did not follow or remove the unexpected path.',
         ),

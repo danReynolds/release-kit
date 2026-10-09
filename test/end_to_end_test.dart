@@ -1153,7 +1153,7 @@ publish = ["git-tag", "pub.dev"]
         expect(
           accepted,
           contains(flag),
-          reason: '$path names $flag, which rk refuses with RK-CLI-001',
+          reason: '$path names $flag, which rk refuses with RK-CLI-005',
         );
       }
     }
